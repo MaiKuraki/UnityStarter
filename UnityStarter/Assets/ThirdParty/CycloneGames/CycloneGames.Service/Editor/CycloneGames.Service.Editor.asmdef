@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.Service.Editor",
+    "rootNamespace": "",
+    "references": [
+        "GUID:4e750223365adef42a40d5d94bb440dc",
+        "GUID:84651a3751eca9349aac36a66bba901b"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

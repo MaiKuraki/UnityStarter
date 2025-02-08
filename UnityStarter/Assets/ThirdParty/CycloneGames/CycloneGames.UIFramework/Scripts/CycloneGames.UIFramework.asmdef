@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.UIFramework",
+    "rootNamespace": "",
+    "references": [
+        "GUID:f51ebe6a0ceec4240a699833d6309b23",
+        "GUID:a61d364006d5941e7ac75e73dd6b0df3",
+        "GUID:72b199b81924c407d9c6b5889ab7da1c",
+        "GUID:4e750223365adef42a40d5d94bb440dc"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

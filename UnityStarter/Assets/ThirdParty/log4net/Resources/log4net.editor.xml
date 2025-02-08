@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<log4net>
+    <appender name="unityConsole" type="log4net.Unity.UnityDefaultLogAppender">
+        <layout type="log4net.Layout.PatternLayout">
+            <conversionPattern value="%message"/>
+        </layout>
+    </appender>
+    <root>
+        <level value="INFO"/>
+        <appender-ref ref="unityConsole"/>
+    </root>
+</log4net>
