@@ -1,0 +1,9 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:TextField placeholder-text="Search..." name="text-search" style="margin-top: 5px; margin-right: 2px; margin-bottom: 8px; margin-left: 2px;" />
+    <ui:ScrollView name="scroll-overview-popup">
+        <ui:VisualElement name="container-search" style="padding-left: 20px;" />
+        <ui:Foldout text="Imported scenes" name="foldout-imported" value="true" />
+        <ui:Foldout text="ASM scenes" name="foldout-asm" value="true" toggle-on-label-click="true" />
+        <ui:Foldout text="Unimported scenes" name="foldout-unimported" />
+    </ui:ScrollView>
+</ui:UXML>

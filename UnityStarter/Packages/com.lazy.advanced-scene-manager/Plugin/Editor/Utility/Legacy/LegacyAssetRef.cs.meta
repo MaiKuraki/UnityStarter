@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: a744da6216a3f214fa94c8752792e9b5
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {fileID: 2800000, guid: ae148f0565e612b429a7de68d08ffa89, type: 3}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/Utility/Legacy/LegacyAssetRef.cs
+  uploadId: 722961

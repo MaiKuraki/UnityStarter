@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: cb6f43d30079341ef96bbe08a7e0a924
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Mac/PlayStation4SteamLinkMacUnityProfile.cs
+  uploadId: 657724

@@ -1,0 +1,23 @@
+<engine:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:engine="UnityEngine.UIElements" xmlns:editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True">
+    <Style src="project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Styles/Base.uss?fileID=7433441132597879392&amp;guid=8c978e9125bc4004586816a89051e397&amp;type=3#Base" />
+    <Style src="project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Styles/Overrides.uss?fileID=7433441132597879392&amp;guid=87c7679e74299ee4b8508609eae33b4b&amp;type=3#Overrides" />
+    <Style src="project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Views/ASMUtilityFunctionWindow.uss?fileID=7433441132597879392&amp;guid=3bdf42e02ab3e004fa038b39e46b71f9&amp;type=3#ASMUtilityFunctionWindow" />
+    <engine:VisualElement style="flex-grow: 1; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0; padding-top: 12px; padding-right: 12px; padding-bottom: 12px; padding-left: 12px;">
+        <engine:VisualElement name="tab-list" style="flex-grow: 1; display: flex;">
+            <engine:VisualElement name="header" style="flex-grow: 0; flex-direction: row; flex-shrink: 0; margin-bottom: 0; border-top-left-radius: 3px; border-top-right-radius: 3px; border-bottom-right-radius: 3px; border-bottom-left-radius: 3px; margin-top: 0; margin-right: 0; margin-left: 0;">
+                <engine:TextField placeholder-text="Search" name="text-search" style="flex-grow: 1; height: 32px; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0;" />
+            </engine:VisualElement>
+            <engine:ScrollView style="flex-grow: 1; flex-shrink: 1; margin-left: 0; margin-top: 0; margin-right: 0; margin-bottom: 0;">
+                <engine:VisualElement name="list-functions" style="flex-grow: 1; flex-direction: row; flex-wrap: wrap; flex-shrink: 0; align-items: flex-start; padding-left: 0; margin-left: 0; margin-right: 0; padding-top: 0; padding-right: 0; padding-bottom: 0;" />
+            </engine:ScrollView>
+            <engine:Label text="Hover over a button for more information" name="text-info" style="opacity: 0.6; padding-top: 8px; margin-top: 0; margin-bottom: 0; margin-right: 0; margin-left: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; white-space: normal;" />
+        </engine:VisualElement>
+        <engine:VisualElement name="tab-options" style="flex-grow: 1; display: none;">
+            <engine:VisualElement name="header" style="flex-grow: 0; flex-direction: row; flex-shrink: 0; margin-bottom: 12px;">
+                <engine:Button text="" name="button-back" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&amp;guid=0ba460244a244ed449201ed8e8680e50&amp;type=3#Font Awesome 6 Free-Solid-900&quot;); width: 22px; height: 22px;" />
+                <engine:Label text="Label" name="label-name" style="flex-grow: 1; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 6px; padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; -unity-text-align: middle-left;" />
+            </engine:VisualElement>
+            <engine:VisualElement name="options-content" style="flex-grow: 1; flex-shrink: 0;" />
+        </engine:VisualElement>
+    </engine:VisualElement>
+</engine:UXML>

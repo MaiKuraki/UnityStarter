@@ -1,0 +1,12 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:ScrollView name="CollectionScroll" style="flex-shrink: 1; flex-grow: 1; height: 64px;">
+        <ui:VisualElement style="flex-grow: 0; background-color: rgba(0, 0, 0, 0); display: flex; padding-top: 0; padding-right: 8px; padding-bottom: 0; padding-left: 8px;">
+            <ui:Label tabindex="-1" text="No collections added, you can add one below!" display-tooltip-when-elided="true" name="label-no-items" style="align-self: center; margin-top: 20px;" />
+            <ui:Label tabindex="-1" text="No active profile, you can select, or create, one below!" display-tooltip-when-elided="true" name="label-no-profile" style="align-self: center; margin-top: 0; position: absolute;" />
+            <ui:ListView focusable="true" name="list-collections" reorderable="true" reorder-mode="Animated" selection-type="None" show-bound-collection-size="false" virtualization-method="DynamicHeight" binding-path="m_scenes" style="padding-right: 0; flex-grow: 0; flex-shrink: 0; min-height: 0; max-height: none;" />
+            <ui:VisualElement name="line" style="height: 1px; background-color: rgba(100, 100, 100, 0.59); margin-top: 22px; margin-bottom: 34px; margin-left: 0; margin-right: 0; width: 120px; align-self: center; flex-shrink: 0; flex-grow: 0;" />
+            <ui:VisualElement name="list-standalone" style="flex-grow: 0; background-color: rgba(0, 0, 0, 0); flex-shrink: 0; padding-right: 0; min-height: 0; margin-bottom: 0;" />
+            <ui:ListView focusable="true" name="list-dynamic-collections" reorderable="false" selection-type="None" show-bound-collection-size="false" virtualization-method="DynamicHeight" style="padding-right: 0; flex-shrink: 0; flex-grow: 0; margin-bottom: 0; min-height: 0; max-height: none;" />
+        </ui:VisualElement>
+    </ui:ScrollView>
+</ui:UXML>

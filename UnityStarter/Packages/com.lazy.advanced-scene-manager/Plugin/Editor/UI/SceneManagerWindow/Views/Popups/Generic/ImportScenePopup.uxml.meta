@@ -1,0 +1,17 @@
+fileFormatVersion: 2
+guid: a2ce4979b1900ae4fb787e7dae0280cc
+ScriptedImporter:
+  internalIDToNameTable: []
+  externalObjects: {}
+  serializedVersion: 2
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+  script: {fileID: 13804, guid: 0000000000000000e000000000000000, type: 0}
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Views/Popups/Generic/ImportScenePopup.uxml
+  uploadId: 722961

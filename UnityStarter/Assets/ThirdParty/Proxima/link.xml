@@ -1,0 +1,8 @@
+<linker>
+    <assembly fullname="System.Configuration">
+      <type fullname="System.Configuration.ExeConfigurationHost" preserve="all" />
+    </assembly>
+    <assembly fullname="System">
+      <type fullname="System.Net.Configuration.*" preserve="all" />
+    </assembly>
+</linker>

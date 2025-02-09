@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: e7d6815456a7346148d40524ce4b3e9e
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Other/RazerServalForgeTVUnityProfile.cs
+  uploadId: 657724

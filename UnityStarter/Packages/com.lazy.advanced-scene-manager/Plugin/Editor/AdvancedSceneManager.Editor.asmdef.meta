@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 5eaa382c0effb4b46a72fd1adc51cfc0
+AssemblyDefinitionImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/AdvancedSceneManager.Editor.asmdef
+  uploadId: 722961

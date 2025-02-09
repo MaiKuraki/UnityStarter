@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 7a21ac272c6b4cd5b655f418bcc36a52
+timeCreated: 1602685388
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Mouse/UnityMouseProvider.cs
+  uploadId: 657724

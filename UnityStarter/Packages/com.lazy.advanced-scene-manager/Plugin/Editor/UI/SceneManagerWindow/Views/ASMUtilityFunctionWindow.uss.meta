@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 3bdf42e02ab3e004fa038b39e46b71f9
+ScriptedImporter:
+  internalIDToNameTable: []
+  externalObjects: {}
+  serializedVersion: 2
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+  script: {fileID: 12385, guid: 0000000000000000e000000000000000, type: 0}
+  disableValidation: 0
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Views/ASMUtilityFunctionWindow.uss
+  uploadId: 722961

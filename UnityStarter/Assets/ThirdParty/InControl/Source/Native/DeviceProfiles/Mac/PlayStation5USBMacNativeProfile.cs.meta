@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 3b72f8c2c5aa441caa0605ab7715aa58
+timeCreated: 1605460461
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Mac/PlayStation5USBMacNativeProfile.cs
+  uploadId: 657724

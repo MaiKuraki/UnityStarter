@@ -1,0 +1,23 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:GroupBox name="group-loading-scene">
+        <ui:VisualElement name="section-profile" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0);">
+            <ui:DropdownField label="Default collection loading screen:" index="-1" name="dropdown-loading-scene" />
+            <ui:DropdownField label="Default fade screen:" index="-1" name="dropdown-fade-scene" tooltip="Specifies the fade scene to use for certain methods, such as LoadingScreenUtility.FadeOut(..)." />
+        </ui:VisualElement>
+    </ui:GroupBox>
+    <ui:GroupBox name="group-toggles">
+        <ui:VisualElement name="section-project-settings" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0);">
+            <ui:Toggle label="Reverse unload order, when closing collections" name="toggle-reverse-unload-order" binding-path="m_reverseUnloadOrderOnCollectionClose" />
+            <ui:Toggle label="Prevent duplicate scene operations" name="toggle-prevent-duplicate-scene-operations" binding-path="m_checkForDuplicateSceneOperations" />
+        </ui:VisualElement>
+    </ui:GroupBox>
+    <ui:GroupBox name="group-references" text="References">
+        <ui:Toggle label="Enable cross-scene references" name="toggle-cross-scene-references" binding-path="m_enableCrossSceneReferences" tooltip="Tooltip set in code..." />
+        <ui:Toggle label="Enable GUID references" name="toggle-guid-references" binding-path="m_enableGUIDReferences" tooltip="GUID references can be used to easily find game objects. See also API for this: GUIDReferenceUtility." />
+    </ui:GroupBox>
+    <ui:GroupBox name="group-event-methods" text="Event methods">
+        <ui:Label text="Event methods, prefixed with &apos;_&apos;, meant to be used in UnityEvent, use spam protection by default.&#10;&#10;Note this spam protection this may not be 100% foolproof, and you may want to disable buttons manually anyways." style="white-space: normal; -unity-font-style: bold-and-italic; font-size: 11.5px;" />
+        <ui:Toggle label="Enable spam protection" name="toggle-enable-spam-protection" binding-path="m_preventSpammingEventMethods" style="margin-top: 8px; margin-bottom: 8px;" />
+        <ui:FloatField label="Cooldown duration (s)" binding-path="m_spamCheckCooldown" name="float-duration" />
+    </ui:GroupBox>
+</ui:UXML>

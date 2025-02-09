@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 6c43d7af44d624607a26e3a67a87b9ab
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/UnityInputDevice.cs
+  uploadId: 657724

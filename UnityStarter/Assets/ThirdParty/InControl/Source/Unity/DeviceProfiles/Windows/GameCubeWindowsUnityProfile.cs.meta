@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 30c8dc32f85ff4298b6da141b26a8d5a
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Windows/GameCubeWindowsUnityProfile.cs
+  uploadId: 657724

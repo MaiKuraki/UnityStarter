@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 3c8bb315256f40f5a25781a828a29aba
+timeCreated: 1629663422
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Mac/PlayStation5BluetoothMacNativeProfile.cs
+  uploadId: 657724

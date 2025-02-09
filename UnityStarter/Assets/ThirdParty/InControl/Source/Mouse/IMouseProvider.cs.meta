@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 97bf0be7994f4947a76a428d80af9a3b
+timeCreated: 1602685103
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Mouse/IMouseProvider.cs
+  uploadId: 657724

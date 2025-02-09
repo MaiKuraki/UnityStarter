@@ -1,0 +1,10 @@
+fileFormatVersion: 2
+guid: f6c7641ca25b2084aaa872bef715cb1f
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/System/Utility/Callbacks/Scene
+    loading callbacks/Async.cs
+  uploadId: 722961

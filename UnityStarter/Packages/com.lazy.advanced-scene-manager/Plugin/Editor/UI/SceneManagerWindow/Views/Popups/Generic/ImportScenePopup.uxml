@@ -1,0 +1,22 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:ScrollView name="scroll-import-popup">
+        <ui:VisualElement name="popup-import-scene" style="padding-left: 12px; padding-right: 12px; padding-top: 12px; padding-bottom: 12px; max-height: 600px;">
+            <ui:VisualElement name="header" style="flex-grow: 0; flex-direction: row; flex-shrink: 0; width: 100%; margin-top: -6px; margin-bottom: 6px; flex-wrap: wrap;">
+                <ui:Label tabindex="-1" text="Unimported scenes:" display-tooltip-when-elided="true" name="label-title" style="font-size: 18px; margin-left: 0; margin-right: 12px; margin-top: 0; margin-bottom: 0; flex-grow: 1; -unity-text-align: middle-left; padding-left: 0; padding-right: 0; padding-top: 0; padding-bottom: 0;" />
+                <ui:VisualElement name="import-option-field" style="flex-grow: 0; flex-direction: row; flex-shrink: 0; margin-top: 0;">
+                    <ui:Label tabindex="-1" text="Auto import:" display-tooltip-when-elided="true" name="label-enum" style="height: 100%; -unity-text-align: middle-right; margin-left: 0; margin-right: 6px; margin-top: 0; margin-bottom: 0; padding-left: 0; padding-right: 0; padding-top: 0; padding-bottom: 0; flex-grow: 0;" />
+                    <ui:EnumField type="AdvancedSceneManager.Models.Enums.SceneImportOption, AdvancedSceneManager" name="enumfield-import-option" binding-path="m_sceneImportOption" style="flex-shrink: 0; flex-grow: 0; margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0; height: 28px;" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:Label tabindex="-1" text="* Right click a scene to access blacklist options" display-tooltip-when-elided="true" name="label-subtitle" style="margin-top: 8px; margin-bottom: 8px; -unity-font-style: normal;" />
+            <ui:Toggle name="toggle-all" label="(toggle all)" style="margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0;" />
+            <ui:ListView focusable="true" header-title="Scenes ready to import:" show-bound-collection-size="false" fixed-item-height="22" selection-type="None" style="flex-shrink: 0; flex-grow: 1; max-height: 200px;" />
+            <ui:Label tabindex="-1" text="No scenes available..." display-tooltip-when-elided="true" name="label-no-items" style="color: rgb(255, 255, 255); opacity: 0.4; margin-top: -18px; margin-bottom: -12px; display: none;" />
+            <ui:VisualElement name="footer" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row-reverse; margin-bottom: -12px; margin-top: 8px; flex-shrink: 0;">
+                <ui:Button text="Apply" display-tooltip-when-elided="true" name="button-2" style="padding-left: 6px; padding-top: 6px; padding-bottom: 6px; padding-right: 6px;" />
+                <ui:Button text="Remove" display-tooltip-when-elided="true" name="button-1" style="padding-left: 6px; padding-top: 6px; padding-bottom: 6px; padding-right: 6px;" />
+                <ui:Button text="Cancel" display-tooltip-when-elided="true" name="button-cancel" style="padding-left: 6px; padding-right: 6px; padding-top: 6px; padding-bottom: 6px;" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:ScrollView>
+</ui:UXML>

@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: f12bed910133d4ae58a4d89d76fc7952
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Windows/GoogleStadiaWindowsUnityProfile.cs
+  uploadId: 657724

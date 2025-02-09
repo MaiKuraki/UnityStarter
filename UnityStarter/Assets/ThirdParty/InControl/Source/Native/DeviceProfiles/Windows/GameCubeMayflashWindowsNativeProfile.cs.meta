@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: bb4cdd24c480442508bad63020bd9513
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Windows/GameCubeMayflashWindowsNativeProfile.cs
+  uploadId: 657724

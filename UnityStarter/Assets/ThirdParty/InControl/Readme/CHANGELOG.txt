@@ -1,0 +1,494 @@
+
+### v1.8.10
+* Added visionOS native plugin supporting the GameController framework.
+* Various Unity API deprecation fixes.
+* Minor bug fixes and refactoring.
+
+### v1.8.9
+* Built NativeInput plugins for macOS with Xcode 14.2.
+* Fixed issue where `InControlInputModule` was not working with GameCore.
+* Fixed face button mappings when using Unity's New Input System.
+* OUYA support completely removed. It's dead Jim.
+* Some minor refactoring.
+
+### v1.8.8
+* Various Android profiles added and fixed (thanks Chris!)
+* Renamed `BindingSourceRejectionType.DuplicateBindingOnActionSet` to `BindingSourceRejectionType.DuplicateBindingOnAction`
+* Minor bug fixes.
+
+### v1.8.7
+* Fixed `UnityMouseProvider` to include horizontal scroll value in `GetDeltaScroll()`
+* Fixed an issue causing GC alloc in `UnityMouseProvider`.
+* Various fixes to 8Bitdo controller profiles.
+* Potential fix for crash when disconnecting controllers on macOS with MFi enabled.
+
+### v1.8.6
+* Added rate throttling for haptic and light updates in native plugin to help mitigate latency buildup.
+* Added build post-processor for Apple platforms to include CoreHaptics.framework, which is now required.
+* Fixed switched triggers on DualSense (PS5) controllers connected over bluetooth in Windows in native input.
+* Fixed DualSense (PS5) incorrectly having `PlayStation4` device style set on Apple platforms with native input and MFi enabled.
+* Fixed DualSense (PS5) incorrect d-pad mappings when connected over bluetooth with native input enabled and MFi disabled.
+
+### v1.8.5
+* Added support for additional Game Controller framework (MFi) controllers.
+* Added vibration support for Game Controller framework (MFi).
+* Fixed issue with PS5 controllers connected with bluetooth on Windows with native input plugin.
+* Fixed PS4 and PS5 bumper and trigger names on Windows native input to match controller labels: L1, R1, L2 and R2.
+* Fixed regression in managed XInput plugin that switched `View` and `Menu` controls.
+* Added `Ipega PG9129` profile for Android.
+* Updated a few Linux profiles.
+
+### v1.8.4
+* Added `InputControlType.LeftCommand` and `InputControlType.RightCommand` aliases. Where possible, for devices with a correct `DeviceStyle`, it will map appropriately to the command buttons based on location, for example: `Back` and `Right` for Xbox 360, `View` and `Menu` for Xbox One, `Share` and `Options` for Dual Shock 4, etc.
+* Added support for querying control glyph names for controllers using Apple's Game Controller framework exposed through the native input module. To use, cast the device to `NativeInputDevice` and call the `GetAppleGlyphNameForControl()` method. Note: some controls may have no glyph name, but primary controls generally do.
+* Added beta support for using new Unity input system as a backend for gamepad, keyboard and mouse input (touch input coming later). This will be enabled when the Input System package (com.unity.inputsystem >= 1.0.0) is installed in Package Manager. You will also need to set Project Settings > Player > Active Input Handling to Both.
+* Added LED color support for compatible (Dual Shock 4) controllers using Apple's Game Controller framework exposed through the native input module.
+* Added PlayStation 5 controller support for native module (no rumble or LED features yet).
+* Added "BindingsMenu" example demonstrating how to use the bindings API with Unity UI.
+* Made `Device.RequestActivation()` public.
+* Fixed error that can happen on application quit.
+* Fixed duplicate device with Switch Pro Controller on newer macOS versions.
+* Properly enable Unity UI `InControlInputModule` on PS5, GameCore and Stadia.
+* Changed `TouchSprite.CreateSpriteRenderer()` to use a shared material for potential drawcall reduction.
+
+### v1.8.3
+* Fixed crash in native plugin for devices that declare an unusually high number of buttons.
+* Fixed crash in native plugin for Windows x86 IL2CPP builds.
+* Fixed issue with macOS native plugin where (non-MFi) controllers not detect attach/detach events.
+* Fixed issue with macOS native plugin (MFi enabled) where pause button on Nimbus was not detected.
+* Added Apple Silicon support to macOS native plugin binary.
+* Added basic Game Core and PS5 input profiles.
+* Added SteelSeries Nimbus Plus profile for macOS.
+
+### v1.8.2
+* Fixed regression (since 1.8.0) in device matching logic causing some devices not to be identified correctly.
+* Fixed PlayStation 4 controller profile for Android and NVidia Shield devices.
+* Fixed NVidia Shield controller profile for Android and NVidia Shield devices.
+* Fixed various `Debug` logging calls to use `InControl.Logger` instead.
+
+### v1.8.1
+* Added armv7 support to Native Input plugin for iOS.
+* Fixed error in version parsing with some alpha and beta versions of Unity.
+
+### v1.8.0
+* Added MFi support through Apple's Game Controller framework for iOS and tvOS in the Native Input module. This will always be used when Native Input is enabled.
+* Added MFi support through Apple's Game Controller framework for macOS in the Native Input module. This is currently BETA and must be explicitly enabled.
+* Added `InputDeviceClass.TouchScreen` which is also set on the default touch device.
+* Added `InControlManager.updateMode` which allows triggering custom updates (with `InputManager.Update()`), or using `MonoBehaviour.Update()` (default) or `MonoBehaviour.FixedUpdate()` as before. `InControlManager.useFixedUpdate` has been removed.
+* Added additional Google Stadia controller model to the Windows native profile.
+* Added additional GameCube adapter native profile on Windows.
+* Added `byte[] SaveData()` and `LoadData( byte[] data )` to `PlayerActionSet` which works like `Save()` and `Load()`, but deals in byte arrays.
+* Fixed issue related to Unity calling `Update()` after `OnApplicationQuit()`.
+* Fixed bugs occurring when multiple `PlayerActionSet` instances listen simultaneously.
+* Fixed compilation errors in Xcode build with iCade support in Unity 2019.3+
+* Removed the now unnecessary iOS Xcode Preprocessor. This breaks compatibility with old versions of Unity, but should work with Unity 2017 LTS onward, and future proof support for the newer iOS pipeline going forward.
+* Removed deprecated `CustomInputDeviceProfile`.
+* Removed deprecated `InputManager.Setup()` and `InputManager.Reset()`.
+* Removed deprecated `InputDeviceProfile.SupportedPlatforms` (use `IncludePlatforms` instead).
+* Significant refactoring of `InputDeviceProfile` subclasses to unify how profiles definitions work between Unity profiles and Native profiles, and move toward serializable profiles in the future.
+
+### v1.7.4
+* Added support for a few common controller/browser combinations in WebGL:
+* WebGL Chrome (Mac): Xbox 360, Xbox One, PlayStation 4 and Nintendo Switch Pro controllers.
+* WebGL FireFox (Mac): Xbox 360, Xbox One and PlayStation 4 controllers.
+* WebGL Safari (Mac): Xbox 360 and Xbox One controllers.
+* WebGL Chrome (Windows): Xbox (XInput), PlayStation 4 and Nintendo Switch Pro controllers.
+* WebGL FireFox (Windows): Xbox (XInput) and PlayStation 4 controllers.
+* Added additional controllers supported by 360Controller 1.0.0-alpha.3 on Mac.
+* Added `Preserve` attribute to profiles to prevent IL2CPP max stripping from removing them.
+* Added 8bitdo SF30 Pro Windows native input profile.
+* Added Kiwitata NES Windows native input profile.
+* Fixed touch control animations to use `Time.unscaledDeltaTime` to work consistently when games are paused.
+* Fixed deprecated references to `UnityEngine.Apple.TV`.
+* Fixed error that can happen in Unity Editor on first launch after Library folder is deleted.
+
+### v1.7.3
+* Added SteelSeries Nimbus native profile on Mac (but d-pad doesn't work).
+* Added additional controllers supported by 360Controller 0.16.11 on Mac.
+* Added OUYA controller native profile on Windows.
+* Added public setter to `InputManager.SuspendInBackground` property.
+* Added touch emulation for right and middle mouse buttons.
+* Added `Touch.startPosition` field to record where touches started.
+* Added `Touch.mouseButton` field to indicate which mouse button was used for touch emulation.
+* Fixed an issue where `WasRepeated` doesn’t work for managed XInput, ICade and in Virtual Device example.
+* Fixed an issue detecting proper Windows version on Windows 7.
+* Fixed Xbox 360 & One triggers issue both firing at the same time on Windows since Unity 2018.3
+* Fixed an issue with offscreen touches on Android.
+* Prevent certain editor scripts from running when entering play mode.
+* Added `BetopBTP2175sWinProfile`
+* Added `EightBitdoGenericAndroidProfile`
+* Added `EightBitdoN30Pro2AndroidProfile`
+* Added `EightBitdoSF30ProAndroidProfile`
+* Added `EightBitdoSN30ProAndroidProfile`
+* Added `HavitHVG95WLinuxProfile`
+* Added `IpegaPG9021AndroidProfile`
+* Added `IpegaPG9037AndroidProfile`
+* Added `IpegaPG9055AndroidProfile`
+* Added `NVidiaShieldWin81Profile`
+* Added `PlayStation2LinuxProfile`
+
+### v1.7.2
+* Added assembly definition support where available. Make sure you add InControl as a reference to your project where necessary.
+* Added additional controllers supported by 360Controller 0.16.10 on Mac.
+* Added support for some keys that may be on non-US keyboards.
+* Added PowerA Nintendo Switch native profile on Mac.
+* Added `EnabledInHeirarchy` (readonly) to controls and changed `Enabled` (read/write) to be independent of owner. This primarily affects `PlayerAction` allowing individual actions to be disabled while the PlayerActionSet as a whole is still enabled.
+* Fixed issue with menu items not showing up by moving them to a new InControl top-level menu.
+* Fixed issue in native input module to correctly detect disconnected controllers.
+* Fixed movement repeating logic in `InControlInputModule`.
+* Fixed touch controls targeting `Action5` thru `Action12`.
+* Fixed warnings showing up in Unity's experimental incremental compiler.
+
+### v1.7.1
+* Added additional controllers supported by 360Controller 0.16.8 on Mac.
+* Added NVIDIA Shield remote Android profile.
+* Fixed PlayStation 4 profile for console.
+* BREAKING CHANGE: The singleton enforcement for InControlManager and TouchManager components was far too aggressive. It will now no longer destroy duplicate components automatically and, if redundant instances are detected in play mode, a warning will be shown in the console and the components will be disabled.
+
+### v1.7.0
+* Added additional controllers supported by 360Controller 0.16.6 on Mac.
+* Added Xiaomi Remote profile for Android TV.
+* Added `InputManager.ActiveDevices` that contains all devices active during the last update tick.
+* Added `BindingListenOptions.OnBindingEnded`, called after listening for bindings is ended (for any reason).
+* Added iCade support for tvOS.
+* Added UWP support using the `Windows.Gaming.Input` framework.
+* Added `TwoAxisInputControl.DeadZoneFunc` which may be set to `DeadZone.Circular` (default), `DeadZone.Separate` or a custom deadzone function.
+* Added more performance optimizations.
+* Fixed `XboxOneInputDevice` to properly clamp vibration values.
+* Removed beta label from Native Input module. It's time.
+* BREAKING CHANGE: Removed 32-bit Native Input plugin on macOS.
+* BREAKING CHANGE: Removed custom profiles functionality deprecated in v1.5.12.
+* BREAKING CHANGE: `InputDevice.LastChangeTick` has been replaced with `InputDevice.LastInputTick`
+* BREAKING CHANGE: `InputDevice.LastChangedAfter()` has been replaced with `InputDevice.LastInputAfter()`
+* BREAKING CHANGE: Whether a device is considered active is now determined by whether any control gives nonzero input rather than whether the control value changed. Controls or devices with their `Passive` property set will never be considered active. This makes device activation more intuitive and properly handles multiple devices being active simultaneously, enabling `InputManager.ActiveDevices` to exist. `InputManager.ActiveDevice` can now also be more "sticky" and will only be changed if the device is inactive, which helps mitigate certain broken situations where a mirrored virtual device exists in the OS.
+
+### v1.6.17
+* Added another device to Xbox 360 Windows profile.
+* Fixed Unity 2017.2 compatibility issues.
+* Fixed various problems with `InControlInputModule` in Unity 2017.x
+
+### v1.6.16
+* Added prevent sleep / screensaver option to native module.
+* Added `InputDevice.Passive` which causes a device to never be considered active (defaults to `false`).
+* Fixed a few profiles that were missing `DeviceClass` and/or `DeviceStyle` settings.
+* Fixed touch swipe control's "one swipe per touch" setting to work with analog targets.
+* Fixed `PlayerAction.RemoveBinding` to be more robust and never throw an exception.
+* Fixed issue where native module caused certain keyboards (especially Logitech G110) to lock up.
+* Fixed crash in native module that occurred when connecting/disconnecting devices (thanks Matthew!).
+
+### v1.6.15
+* Added NVIDIA Shield 2017 support.
+* Added BETOP BTP controller on Android.
+* Added BETOP BTP-AX1T controller on Android.
+* Added BEBONCOOL DA015-CA controller on Android.
+* Added PC Twin Shock controller on Windows (native module).
+* Fixed `UnityInputDeviceProfile` not working in Unity 2017.
+* Fixed touch controls having incorrect z-position (and thus being invisible in game view).
+* Fixed Apple TV remote profile detection instead of controller profile.
+
+### v1.6.14
+* Added additional controllers supported by 360Controller 0.16.5 on Mac.
+* Added support for Nintendo Switch Pro Controller for Windows & Mac (native module only).
+* Added support for GameCube controllers via MAYFLASH adapter.
+* Added `BindingListenOptions.IncludeMouseScrollWheel` (defaults to `false`).
+* Added `PlayerActionSet.PreventInputWhileListeningForBinding` to prevent input to all actions while any action in the set is listening for a binding (defaults to `true`).
+* Added `InputControlType.Plus`, `InputControlType.Minus` and `InputControlType.Capture`.
+* Added `InputDeviceStyle.NintendoGameCube`.
+* Fixed touch controls not always reconfiguring properly on resolution changes.
+* Fixed issue where submitting to Mac App Store results in `CFBundleIdentifier Collision` error.
+* Fixed issue where `PlayerAction` won’t zero out when the last binding is removed while being held.
+* Fixed `PlayerAction` to not receive input while listening for a binding.
+* Fixed error in `NativeInputDevice` for devices with more than 20 buttons.
+
+### v1.6.13
+* Fixed some Unity 2017 compatibility issues.
+* Fixed `XboxOneInputDevice.ControllerId` not being set correctly on reconnect.
+* Added ability to add exclusive keyboard bindings to `PlayerAction` with: `AddDefaultBinding( KeyCombo.With( Key.Tab ).AndNot( Key.Shift ) );`
+* Changed `PlayerAction` to accept a redundant binding and silently ignore it instead of rejecting it.
+* Added `BindingListenOptions.RejectRedundantBindings` to allow legacy behavior of `PlayerAction` rejecting a redundant binding.
+* Added support for MFi controllers to potentially support analog triggers on iOS (but Unity still doesn't).
+* Added support for GameSir G4s controller on Android.
+
+### v1.6.12
+* Added `LastDeviceClass` and `LastDeviceStyle` property to `PlayerActionSet` and `PlayerAction`.
+* Added support for 8Bitdo SFC30 controller on Mac and Windows (Unity and Native modules).
+* Added support for 8Bitdo SNES30 controller on Mac and Windows (Unity and Native modules).
+* Added support for 8Bitdo NES30 Pro controller on Mac and Windows (Unity and Native modules).
+* Added support for 8Bitdo SFC30 controller on Android.
+* Added support for 8Bitdo SNES30 controller on Android.
+* Added support for 8Bitdo NES30 Pro controller on Android.
+* Added support for 8Bitdo FC30 Pro controller on Android.
+* Added support for FIX XBG-301 controller on Android.
+* Fixed support for newer Sony DUALSHOCK 4 controllers (CUH-ZCT2U/E) on macOS Sierra (Unity module).
+
+### v1.6.11
+* Added support for Xiaomi bluetooth controller on Windows and Mac (Unity module).
+* Added support for Xbox One bluetooth controller on Android.
+* Added touch pressure option to `TouchButtonControl`.
+* Fixed unresponsive controls on Xbox One.
+* Fixed `InControlInputModule` error on Unity 5.1.
+* Fixed rumble and LED control on Mac native input for newer Sony DUALSHOCK 4 controllers (CUH-ZCT2U/E).
+* Fixed rumble and LED control on Mac native input for Sony DUALSHOCK 4 Wireless Adapter.
+* Fixed product name detection on Windows native input.
+
+### v1.6.10
+* Added support for Xbox One S controller on Windows 7/8.
+* Added support for GameSir G3s controller on Android.
+* Added support for GameSir G3w controller on Android.
+* Added support for Mad Catz C.T.R.L.R controller on Android.
+* Added support for DroidBox on Android.
+* Added NVIDIA Shield controller support on Windows 8.
+* Added additional support for PlayStation 4 controller on Android.
+* Added support for Xbox One Wireless Adapter in Windows 7 and 8 (Native module).
+* Fixed error in `XboxOneInputDevice.cs`.
+* Fixed MFi controller support on Apple TV.
+* Fixed issue in `InControlInputModule` preventing touch input from working with Unity GUI.
+
+### v1.6.9
+* Added collection `PlayerAction.UnfilteredBindings` as an alternative to `PlayerAction.Bindings`. Use at your own discretion.
+* Added `PlayerActionSet.ActiveDevice` and `PlayerAction.ActiveDevice` which returns the last device that provided input, when relevant.
+* Added `InputDeviceClass` and `InputDeviceStyle` enums and `DeviceClass` and `DeviceStyle` properties for profiles/devices.
+* Added support for newer Sony DUALSHOCK 4 controllers (CUH-ZCT2U/E) to native input.
+* Added support for Sony DUALSHOCK 4 Wireless Adapter.
+* Fixed GC leak in `XboxOneInputDevice`.
+* Fixed error that displays on non-Window/Mac build settings when native input is enabled.
+* Fixed `AppleMFiProfile` not working on iPads.
+* Fixed `PlayerAction.HasBinding` method to be public.
+
+### v1.6.8
+* Added support for newer PlayStation 4 controller (Product ID: 0x9cc).
+* Added `Key.CapsLock`.
+* Fixed `XboxOneInputDevice.Vibrate()` to not set trigger vibration by default.
+* Fixed compilation error on Windows Store builds in `InputManager.cs`.
+* Fixed compilation error on Unity <= 5.1.2 in `InControlInputModule.cs`.
+
+### v1.6.7
+* Added support for Xbox One S controller on Windows 10.
+* Fixed compilation error on Windows Store builds.
+* Fixed build errors on platforms other than Windows and macOS.
+* DEPRECATION: `InputControlType.TouchPadTap` replaced by `InputControlType.TouchPadButton` to match Sony's naming scheme.
+
+### v1.6.6
+* Fixed issue where standard XInput is not disabled if native input is enabled.
+* Fixed issue where native module crashed Unity when debugging a breakpoint.
+
+### v1.6.5
+* Added `GetPlayerActionByName` method to `PlayerActionSet` to complement the `[]` operator.
+* Added `MouseBindingSource.JitterThreshold` which controls how much the mouse must move to trigger a change in `LastInputType`.
+* Added `Key.AltGr`.
+* Added an option to specify which axes allow dragging in `TouchStickControl`.
+* Fixed issue where iCade plugin was being added to tvOS builds.
+* Fixed (yet more) Xbox One controller issues due to Windows 10 anniversary edition.
+
+### v1.6.4
+* Added support for Xbox One controller changes in Windows 10 anniversary edition.
+* Added additional controllers supported by 360Controller 0.16.4 on Mac.
+* Added warning on actions that setting dead zones should be done directly on device controls.
+* Added `UserData` object field to `PlayerActionSet` and actions to allow storing arbitrary game data.
+* Added `OnLastInputTypeChanged` event to `PlayerActionSet` and actions.
+* Fixed `TouchStickControl` to display knob position correctly when input curve is non-linear.
+* Fixed native input module to only attempt loading DLLs on Windows and Mac.
+* Fixed native input DLLs to be statically linked to runtime components on Windows. This should make it more compatible on systems without the latest Windows platform redistributables installed.
+* Fixed compilation error (ambiguous == operand) in `OneAxisInputControl`.
+* Fixed compilation error in `XboxOneInputDevice.cs` on Xbox One platform.
+* Fixed PlayStation 4 profile to have more cert-compatible control names.
+* Fixed `TwoAxisInputControl.ClearInputState()` to properly zero out the `X` and `Y` properties.
+* Fixed `PlayerAction` to ignore `BindingSourceType.None` in serialization.
+* Fixed an issue where Action controls are hidden by default on action sets.
+
+### v1.6.3
+* Added tap target to `TouchTrackControl`.
+* Fixed crash in `TouchManager` on some Android devices.
+* Fixed issue with scene changes not cleaning up correctly in Unity 5.4+
+* Fixed issue where scene changes start producing duplicate log messages.
+* Fixed issue where `Action5` to `Action12` targets in `TouchButtonControl` were not working.
+
+### v1.6.2
+* Added `PlayerActionSet.IncludeDevices` to provide a list of devices which an action set should include when searching for an active device.
+* Added `PlayerActionSet.ExcludeDevices` to provide a list of devices which an action set should exclude when searching for an active device.
+* Added `InputManager.Enabled` to allow global disabling of input.
+* Added `AnyButtonIsPressed`, `AnyButtonWasPressed` and `AnyButtonWasReleased` to `InputDevice`.
+* Added `CommandIsPressed`, `CommandWasPressed` and `CommandWasReleased` to `InputDevice` (replacing `MenuWasPressed`).
+* Fixed touch control gizmos not displaying correctly in Unity 5.4
+* Fixed touch camera not being set up correctly when manually adding the `TouchManager` component.
+
+### v1.6.1
+* Added additional controllers supported by 360Controller 0.16.2 on Mac.
+* Fixed Xbox One native profiles on Windows 7.
+* Fixed `InControlManager` inspector font for Unity Pro dark theme.
+
+### v1.6.0
+* Added native input module for Windows (BETA) with support for DirectInput and XInput devices. Enable it in `InControlManager`. Note: it is mutually exclusive to using `UnityInputDeviceManager`, so the latter will be disabled when native is enabled. You should also ensure `InControl/Plugins/InControlNative.bundle` is properly configured for OS X x86_64 in Unity 5's plugin inspector. XInput support is optional for cases where more than 4 XInput controllers (an XInput limitation) is required and proper trigger support is not required (a limitation of DirectInput).
+* Added native input module for Mac (BETA). Enable it in `InControlManager`. Note: it is mutually exclusive to using `UnityInputDeviceManager`, so the latter will be disabled when native is enabled. You should also ensure `InControl/Plugins/InControlNative.bundle` is properly configured for OS X x86_64 in Unity 5's plugin inspector.
+* Added much improved Xbox One console support.
+* Added improved Virtual Device example to demonstrate implementing a keyboard virtual controller.
+* Added some basic PlayMaker actions (see InControl/Extras/PlayMaker.zip).
+* Added `PlayerOneAxisAction.LastInputType` and `PlayerTwoAxisAction.LastInputType`.
+* Added `PlayerOneAxisAction.UpdateTick` and `PlayerTwoAxisAction.UpdateTick`.
+* Added `PlayerTwoAxisAction.InvertXAxis`.
+* Fixed `BindingSource.BindingSourceType` to be public.
+* Fixed issue where `BindingListenOptions.IncludeModifiersAsFirstClassKeys` does the opposite of what it's supposed to.
+* Fixed issue in DPad deadzone applications which affected certain devices with DPad on analogs mappings.
+* Fixed DPad mappings in `XboxOneWin10Profile`.
+* Added `TouchPadTap` to `PlayStation4Profile`.
+* Added `Passive` property to `InputControlMapping` and `InputControl` which prevents changing device focus or update tick for some controls. Useful for preventing some input like gyro from stealing continual focus.
+* Added `InputManager.SuspendInBackground` to pause input when app loses focus.
+* Added steering controls to `InputControlType`.
+* Added GUID property to `InputDevice` (unique to the object, not hardware).
+* Added `SetLightColor()` and `SetLightFlash()` methods to InputDevice.
+* Added `Touch.type` (`enum TouchType`) and other stylus/pressure properties to match Unity 5.3
+* Added `TouchType.Mouse` for touches emulated by mouse input.
+* Added `InputDevice[]` to look up controls by `InputControlType`.
+* Added `PlayerActionSet[]` to look up actions by name.
+* Added `LeftStickX`, `LeftStickY`, `RightStickX`, `RightStickY`, `DPadX` and `DPadY` to `InputControlType`. These can now be queried by `InputDevice.GetControl()`.
+* Added "lock to axis" option to `TouchStickControl`.
+* Added Touchpad button to PlayStation4Profile.
+* Added Apple TV remote and controller profiles.
+* Added Flare profile for Android.
+* Added SteelSeries Stratus XL profile for Windows.
+* Added improved SteelSeries Stratus XL profile for Android.
+* Added PlayStation 4 Steam Link profile for Mac.
+* Added preprocessor guards for Unity 4.7 to `InControlInputModule`.
+* Fixed `BindingListenOptions.IncludeModifiersAsFirstClassKeys` to behave properly and made it default to `true`.
+* Fixed issue where `UNITY_WSA` was not included in platforms that disable mouse touch emulation.
+* Fixed optimization issues in circular deadzone calculation.
+* DEPRECATION: `InputDeviceProfile.SupportedPlatforms` renamed to `IncludePlatforms`.
+* BREAKING CHANGE: iCade now maps actions to `Action1` to `Action8`, not `Action1` to `Action4` and `Button0` to `Action3`.
+* BREAKING CHANGE: Changed some values in `InputControlType` to make room for new entries (preparing for native plugin). Check the targets on you touch controls and other dependencies on `InputControlType` values such as variables on scripts.
+* BREAKING CHANGE: Removed `UnknownUnityInputDevice` and `UnknownUnityInputDeviceProfile` classes. This functionality was rolled into `InputDevice` and `UnityInputDevice`.
+
+### v1.5.12
+* Added ability to specify a binding to replace when listening for new bindings. See `BindingListenOptions.ReplaceBinding` and `PlayerAction.ListenForBindingReplacing()`.
+* Added internal update tick on scene load so `WasPressed` and `WasReleased` is reset after scene load.
+* Added `ClearInputState()` method to InputManager, devices, controls, action sets and actions.
+* Added Moga Pro profile for Android.
+* Added SteelSeries Free profile on Android.
+* Added Logitech F710 Mode D profile for Amazon Fire TV.
+* Added PlayStation 4 profile for Amazon Fire TV.
+* Added Nyko PlayPad Pro profile for Amazon Fire TV.
+* Fixed Logitech Mode X profile for Amazon Fire TV.
+* Fixed regression in `TouchTrackControl`.
+* Fixed bug in iOS post processor for when InControl is in a subfolder.
+* Fixed a few control names in various profiles.
+* DEPRECATION: Custom profiles are now marked deprecated.
+
+### v1.5.11
+* Added Level Up Black Hawk profile for Windows.
+* Added Moga Pro Power profile for Android.
+* Added Xbox 360 Rock Candy profile for Android.
+* Added an example of how to create a custom virtual device.
+* Added `PlayerAction.InsertBindingAt()` and `PlayerAction.RemoveBindingAt()`.
+* Added option to snap to 4, 8 or 16 angles on `TouchStickControl`.
+* Fixed NVIDIA Shield profile for Windows 8 and 10.
+* Fixed controller vibration to stop when InControl resets or shuts down.
+* Fixed DPad in Valve Streaming profile on Windows.
+* Fixed `InControlInputModule` to hopefully be a bit more future proof.
+* Fixed compilation error for webplayer build target on Windows.
+
+### v1.5.10
+* Added iCade support (iOS only).
+* Added `MouseBindingSource.ScaleX`, `.ScaleY` and `.ScaleZ` to control mouse axis sensitivity.
+* Added Nexus Player Mac profile.
+* Fixed Xbox One profile mappings on Windows 10.
+* Fixed compilation error in `InControlInputModule` in Unity 5.1.3
+* Fixed issue where having `InControlInputModule.allowMouseInput` enabled on iOS causes problems with uGUI buttons.
+* Fixed `PlayerActionSet.Enabled` so `WasPressed` and `WasReleased` work as expected after toggling.
+
+### v1.5.9
+* Added support for up to 9 mouse buttons in bindings.
+* Added Red Samurai Android profile.
+* Added Moga Hero Power Android profile.
+* Added Saitek AV8R Windows profile.
+* Added Air Flo Wired PS3 controller Windows and Mac profiles.
+* Added `TwoAxisInputControl.Angle` to query 360 degree angle of stick.
+* Fixed GC overhead in `KeyCombo` and increase key bindings performance.
+* Fixed `InControlManager` to better enforce its singleton status.
+* Fixed mouse touch emulation to be enabled in WebGL builds.
+* Fixed single axis controls on devices to have proper circular deadzones.
+* Improved some internal processing.
+
+### v1.5.8
+* Fixed broken sticks and triggers in XInput.
+* Fixed issue where `Key.Plus` should be `Key.Equals`.
+* Fixed `LoadAssetAtPath` compilation errors for Unity 5.0.0 and 5.0.1
+* Fixed `ReorderableList` compilation errors for some project configurations.
+
+### v1.5.7
+* Added tap button target to `TouchSwipeControl`.
+* Fixed errors in editor scripts related to `LoadAssetAtPath()`.
+
+### v1.5.6
+* Added `BindingListenOptions.UnsetDuplicateBindingsOnSet` (defaults to `false`).
+* Added `BindingListenOptions.IncludeUnknownControllers` (defaults to `false`). Caveat: triggers don't always work so well because Unity.
+* Added GameCube Windows profile.
+* Added better multiplayer examples.
+* Added Razer Serval Forge TV profile.
+* Added Razer Serval Mac profile (USB and Bluetooth, but no trigger support).
+* Added Steel Series XL Android profile.
+* Added Logitech Android profile.
+* Added Ipega PG9023 Android profile.
+* Added Buffolo Classic Mac, Windows and Amazon profiles.
+* Added `InputControlType.Power`.
+* Added several more performance optimizations.
+* Fixed `OneAxisInputControl` to return 0 if sides are equal.
+* Fixed issue where TouchTrackControl didn't provide correct input.
+* Fixed flipped controls in example custom profile.
+* Fixed Valve Streaming profile.
+* Fixed more WSA compatibility errors.
+* Fixed `InControlInputModule.IsModuleSupported()` not returning true on consoles.
+* Fixed `InControlInputModule` not present in Unity 5.1 and 5.2
+* Fixed `PlayerTwoAxisAction` to correctly account for `InputManager.InvertYAxis`.
+* Fixed `DeviceBindingSourceListener` to use a threshold for analog presses.
+* Fixed XInput controllers to apply deadzones like normal devices.
+
+### v1.5.5
+* Added Mad Catz C.T.R.L.R support on Amazon Fire TV.
+* Added Mad Catz Micro C.T.R.L.R support on Amazon Fire TV.
+* Added OUYA controller support on Amazon Fire TV.
+* Added Xbox 360 controller support on Amazon Fire TV.
+* Added menu button to Amazon Fire TV remote and controller profiles.
+* Added support for the Logitech F510 controller on Windows and Mac in both D and X modes.
+* Added `PlayerActionSet.Enabled` (defaults to `true`).
+* Added `BindingListenOptions.OnBindingRejected` callback.
+* Added `BindingSourceRejectionType` enum.
+* Moved `BindingListenOptions.OnBindingFound` callback to happen before binding rejection.
+* Optimized internal math to lower CPU overhead per controller.
+* Optimized XInput support by moving polling to a background thread.
+* Added advanced options to tune polling frequency and buffer size for XInput.
+* Include both XInput 32 bit and 64 bit DLLs in InControl/Plugins folder.
+* Ignore empty controller slots on PS4 for better performance.
+* Fixed issue where PlayStation Vita has flipped DPad verticals.
+* Removed code in `InControlException` conflicting with Windows Store / Phone compilation.
+* Removed code causing `EventSystem.lastSelectedGameObject` deprecation warning.
+
+### v1.5.4
+* Added `BindingListenOptions.AllowDuplicateBindingsPerSet` (defaults to `false`).
+* Exposed readonly `PlayerAction.Owner` property (of type `PlayerActionSet`).
+* Removed code (TinyJSON) conflicting with Windows Store / Phone compilation.
+* Fixed issue with triggers in Xbox One controller (on console) sharing same axis.
+* Fixed issue where controls always enabled on touch regardless of `TouchManager.enableControlsOnTouch`.
+* Replaced `LessThan`, `GreaterThan` and `QuestionMark` with `Comma`, `Period` and `Slash` respectively in both `Key` enum and `KeyInfo.KeyList`.
+
+### v1.5.3
+* Added `BindingListenOptions.MaxAllowedBindingsPerType`.
+* Added `InputManager.AnyKeyIsPressed` to check for any keyboard press. For more flexibility, use `KeyCombo.Detect()`.
+* Added ability to use bindings API with `InControlInputModule` by setting `SubmitAction`, `CancelAction` and `MoveAction` properties on the component.
+* Fixed issue with `InControlInputModule` where first item is not selected after mouse motion removes focus.
+* Fixed issue where Xbox One controller (on console) has flipped DPad verticals.
+* Fixed issue where PlayStation 4 controller (on console) has flipped DPad verticals.
+* Change of note: `InputManager.ActiveDevice` will now be `InputDevice.Null` immediately after setup or a disconnect, not a random device.
+* Added `TouchManager.enableControlsOnTouch` (defaults to `false`).
+* Fixed issue where touch controls were created on setup even if `TouchManager.controlsEnabled` was `false`.
+* Added warnings that appear on the `TouchManager` inspector when common mistakes with touch camera and controls using incorrect layers are detected.
+* Fixed various warnings on Windows (especially default values on parameters).
+
+### v1.5.2
+* Fixed issue where `PlayerOneActionAxis` spewed errors.
+* Exposed Control property in `DeviceBindingSource` (of type `InputControlType`).
+
+### v1.5.1
+* Fixed several issues that occurred after `InputManager` reset (usually after scene changes).
+
+### v1.5.0
+* User bindings are now supported! See `PlayerActionSet`, `PlayerAction` and the Bindings example. Note: while custom profiles will still work, they will be deprecated soon in lieu of using `PlayerActionSet` to accomplish the same thing more elegantly.
+

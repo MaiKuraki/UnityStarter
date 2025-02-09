@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: a067438c46b74c4b945dac4cf8731450
+timeCreated: 1579054396
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Device/InputDeviceProfileType.cs
+  uploadId: 657724

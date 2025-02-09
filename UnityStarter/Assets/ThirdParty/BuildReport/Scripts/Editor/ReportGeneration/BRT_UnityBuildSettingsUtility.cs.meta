@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 90bf8676d542e63418cadd96fce890c4
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+AssetOrigin:
+  serializedVersion: 1
+  productId: 8162
+  packageName: Build Report Tool
+  packageVersion: 3.11.12
+  assetPath: Assets/ThirdParty/BuildReport/Scripts/Editor/ReportGeneration/BRT_UnityBuildSettingsUtility.cs
+  uploadId: 729276

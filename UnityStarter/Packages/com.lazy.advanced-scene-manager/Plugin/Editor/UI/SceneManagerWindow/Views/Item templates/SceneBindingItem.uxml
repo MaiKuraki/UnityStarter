@@ -1,0 +1,6 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:VisualElement name="binding" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row;">
+        <ui:Button display-tooltip-when-elided="true" name="button-set-binding" text="ctrl enter" tooltip="Click to change. Note that duplicated bindings will not be active." style="flex-direction: row; -unity-text-align: middle-left;" />
+        <ui:Button text="" display-tooltip-when-elided="true" tooltip="Clear binding" name="button-clear-binding" style="-unity-font-definition: url(&apos;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900%20SDF.asset?fileID=11400000&amp;guid=747dc63c4036f3945ba6f469bbed12b3&amp;type=2#Font Awesome 6 Free-Solid-900 SDF&apos;);" />
+    </ui:VisualElement>
+</ui:UXML>

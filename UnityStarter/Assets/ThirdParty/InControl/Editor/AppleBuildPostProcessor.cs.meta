@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 0f5609e24b5143a6ac08b5405ff39455
+timeCreated: 1629655696
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Editor/AppleBuildPostProcessor.cs
+  uploadId: 657724

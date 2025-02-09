@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 3d599cb4625b74ae7990b1b3de5e8dfa
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Other/AppleMFiUnityProfile.cs
+  uploadId: 657724

@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 3c5fedc8c122abb4fb36273c2aa1e28e
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Documentation/Scene helper.md
+  uploadId: 722961

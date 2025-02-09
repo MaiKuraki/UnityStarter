@@ -1,0 +1,33 @@
+:root {
+    --border-radius: 3px;
+    --button-normal: transparent;
+    --button-hover: rgba(0, 0, 0, 0.15);
+    --button-click: rgba(0, 0, 0, 0.3);
+    --button-checked: rgba(0, 0, 0, 0.15);
+    --button-border: rgba(0, 0, 0, 0.25);
+    --expander-normal: rgba(0, 0, 0, 0.15);
+    --expander-hover: rgb(90, 90, 90);
+    --expander-selected: rgb(110, 110, 110);
+    --expander-selected2: rgb(80, 80, 80);
+    --primary-background: var(--unity-colors-window-background);
+}
+
+.fontAwesome {
+    -unity-font-definition: url("project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&guid=0ba460244a244ed449201ed8e8680e50&type=3#Font Awesome 6 Free-Solid-900");
+}
+
+.fontAwesome.fontAwesomeBrands {
+    -unity-font-definition: url("project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Brands-Regular-400.otf?fileID=12800000&guid=305eec1dd1d88be4d86aa9b23ebcc090&type=3#Font Awesome 6 Brands-Regular-400");
+}
+
+.fontAwesome.fontAwesomeRegular {
+    -unity-font-definition: url("project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Regular-400.otf?fileID=12800000&guid=06a9843bdb59b0c48ae859852230c9e0&type=3#Font Awesome 6 Free-Regular-400");
+}
+
+.primary-background-color {
+    background-color: var(--primary-background);
+}
+
+.cursor-link {
+    cursor: link;
+}

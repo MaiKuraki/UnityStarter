@@ -1,0 +1,24 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True">
+    <ui:GroupBox text="Scene import:" name="group-scene-import">
+        <ui:Label tabindex="-1" text="In order to use a scene in ASM, it must first be imported.&#10;You have a couple of options of when this should happen.&#10;&#10;&lt;b&gt;Manual&lt;/b&gt;: Only import scenes from import popup.&#10;&lt;b&gt;SceneCreated:&lt;/b&gt; Automatically import a scene when it is created." display-tooltip-when-elided="true" class="description" />
+        <ui:EnumField type="AdvancedSceneManager.Models.Enums.SceneImportOption, AdvancedSceneManager" binding-path="m_sceneImportOption" name="enum-scene-import" style="margin-top: 12px;" />
+    </ui:GroupBox>
+    <ui:GroupBox name="group-settings-location">
+        <ui:Label tabindex="-1" text="Generate profiles and scenes to:" display-tooltip-when-elided="true" style="margin-bottom: 4px; margin-top: 4px; font-size: 14px;" />
+        <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row; flex-shrink: 0; margin-top: 8px;">
+            <ui:TextField focusable="true" name="text-path" style="flex-grow: 1;" />
+            <ui:Button text="" display-tooltip-when-elided="true" name="button-cancel" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900%20SDF.asset?fileID=11400000&amp;guid=747dc63c4036f3945ba6f469bbed12b3&amp;type=2#Font Awesome 6 Free-Solid-900 SDF&quot;);" />
+            <ui:Button text="" display-tooltip-when-elided="true" name="button-apply" enable-rich-text="true" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900%20SDF.asset?fileID=11400000&amp;guid=747dc63c4036f3945ba6f469bbed12b3&amp;type=2#Font Awesome 6 Free-Solid-900 SDF&quot;);" />
+        </ui:VisualElement>
+    </ui:GroupBox>
+    <ui:GroupBox text="Blacklisted scenes:" name="group-blocklist">
+        <ui:Label tabindex="-1" text="The scene paths that match any items in this list will not be automatically imported, and they won&apos;t show up in import popup." display-tooltip-when-elided="true" class="description" style="white-space: normal; margin-bottom: 6px;" />
+        <ui:ListView focusable="true" binding-path="m_blacklist.list" show-bound-collection-size="false" show-add-remove-footer="true" show-border="true" name="list-blacklist" fixed-item-height="26" style="min-height: 0;" />
+        <ui:Label tabindex="-1" text="* paths are case insensitive &#10;* paths must be prefixed by assets/&#10;* paths may point to a folder, or a .unity file" parse-escape-sequences="true" display-tooltip-when-elided="true" picking-mode="Ignore" style="white-space: normal; opacity: 0.6; margin-top: -12px; margin-bottom: 6px;" />
+        <ui:GroupBox text="Whitelisted scenes:" name="group-whitelist" style="margin-top: 12px; margin-right: 0; margin-bottom: 0; margin-left: 0; padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; background-color: rgba(0, 0, 0, 0);">
+            <ui:Label tabindex="-1" text="Only scene paths that match any items in this list will show up in import popup.&#10;&#10;Whitelist is disabled if empty." display-tooltip-when-elided="true" class="description" style="margin-bottom: 6px; white-space: normal;" />
+            <ui:ListView focusable="true" binding-path="m_whitelist.list" show-bound-collection-size="false" show-add-remove-footer="true" show-border="true" name="list-whitelist" fixed-item-height="26" style="min-height: 0;" />
+            <ui:Label tabindex="-1" text="* paths are case insensitive &#10;* paths must be prefixed by assets/&#10;* paths may point to a folder, or a .unity file" parse-escape-sequences="true" display-tooltip-when-elided="true" picking-mode="Ignore" style="white-space: normal; opacity: 0.6; margin-top: -12px;" />
+        </ui:GroupBox>
+    </ui:GroupBox>
+</ui:UXML>

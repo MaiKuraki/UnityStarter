@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Proxima Inspector</title>
+		<link rel="icon" href="../icons/favicon.ico" />
+		<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1">
+		<meta property="og:type" content="website">
+		<meta name="description" property="og:description" content="Proxima Inspector lets you connect to your live game from a web browser to inspect and edit any property. Just like the Unity editor!">
+		<meta name="image" property="og:image" content="../images/proxima-1200x630.png">
+		<meta http-equiv="content-security-policy" content="">
+		<link href="../_app/immutable/assets/_layout-1f0a7e97.css" rel="stylesheet">
+		<link href="../_app/immutable/assets/_layout-6847360b.css" rel="stylesheet">
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+		
+	</head>
+	<body>
+		<div>
+
+
+<div class="flex flex-col items-center text-gray-300 w-full min-h-screen bg-[#222]"><div class="flex w-full justify-center items-start bg-[#111] text-white fixed z-20"><div class="flex grow justify-between items-center max-w-[1600px] p-4"><a href="https://www.unityproxima.com"><img src="../images/proxima_logo.png" class="w-[150px]" alt="Logo"></a>
+            <button class="lg:hidden"><img class="w-10" src="../icons/menu.png" alt="Menu"></button>
+            <div class="flex gap-10 items-center max-lg:hidden">
+<a href="https://assetstore.unity.com/publishers/72095?aid=1101lqSYn" class="text-xl font-logo" referrerpolicy="origin" target="_blank" rel="external">Store</a>
+                
+<a href="https://app.unityproxima.com/connection" class="text-xl font-logo" referrerpolicy="origin" target="_blank" rel="external">Demo</a>
+                
+                <a class="text-xl font-logo" href="../docs.html">Docs</a>
+                
+<a href="https://discord.gg/VM9cWJ9rjH" class="" referrerpolicy="origin" target="_blank" rel="external"><img width="100px" class="mt-1" src="../icons/discord.png" alt=""></a></div></div>
+        </div>
+
+    <div class="pt-[83px] w-full h-full flex flex-col items-center"><div class="w-full flex flex-col items-start min-h-screen max-w-[1600px] px-4"><button class="text-white font-body pt-5 lg:hidden">Go to page &gt;</button>
+    <div class="flex w-full min-h-full relative"><div class="h-full fixed border-r-orange-400 bg-[#222] border-r-2 max-lg:hidden"><div class="flex pt-10 flex-col w-[300px] gap-2 border-[#21a6f0] min-h-0 h-full overflow-auto"><b class="text-orange-400">Getting Started</b>
+                <a href="../docs.html" class="svelte-yue6wq">Installation</a>
+                <a href="../docs/features.html" class="svelte-yue6wq">Feature Overview</a>
+
+                <b class="text-orange-400 mt-5">Connection</b>
+                <a href="../docs/supported_platforms.html" class="svelte-yue6wq">Supported Platforms</a>
+                <a href="../docs/connect.html" class="svelte-yue6wq">Connect to Your Game</a>
+                <a href="../docs/security.html" class="svelte-yue6wq">Security Considerations</a>
+                <a href="../docs/all_config.html" class="svelte-yue6wq">All Configuration Options</a>
+
+                <b class="text-orange-400 mt-5">Inspector</b>
+                <a href="../docs/inspector.html" class="svelte-yue6wq">GameObject Inspector</a>
+                <a href="../docs/buttons.html" class="svelte-yue6wq">Adding Buttons</a>
+                <a href="../docs/faq.html" class="svelte-yue6wq">Frequently Asked Questions</a>
+
+                <b class="text-orange-400 mt-5">Logs</b>
+                <a href="../docs/logs.html" class="svelte-yue6wq">Log Viewer</a>
+                <a href="../docs/viewing_logs_offline.html" class="svelte-yue6wq">Viewing Logs Offline</a>
+
+                <b class="text-orange-400 mt-5">Console</b>
+                <a href="../docs/console.html" class="svelte-yue6wq">Console Window</a>
+                <a href="../docs/console_built_in.html" class="svelte-yue6wq">Built-in Commands</a>
+                <a href="../docs/console_custom.html" class="svelte-yue6wq">Custom Commands</a>
+
+                <b class="text-orange-400 mt-5">Extras</b>
+                <a href="../docs/deeplinks.html" class="svelte-yue6wq">Deep Links</a>
+
+                <div class="h-[200px] shrink-0"></div></div></div>
+
+        
+        <div class="flex flex-col w-full lg:pl-10 py-10 lg:ml-[300px]"><div class="doc flex flex-col gap-5 svelte-yue6wq"><h1>Custom Commands</h1>
+
+<h2 class="text-zing-100 text-xl mt-5">Simple Example: Get the position of a gameObject by name.</h2>
+
+<p>Define a new command GetPosition to take the name of the gameObject as an argument and return its position.</p>
+
+<div class="bg-[#1d1d1d] p-3 text-zinc-300 font-mono"><span class="text-blue-300">public static class</span> <span class="text-green-400">MyCommands</span><br>
+   {<br>
+          [<span class="text-green-400">ProximaCommand</span>(<span class="text-orange-400">&quot;My&quot;</span>, <span class="text-orange-400">&quot;gp&quot;</span>)]<br>
+      <span class="text-blue-300">    public static</span> <span class="text-green-400">Vector3</span> <span class="text-yellow-200">GetPosition</span>(<span class="text-blue-300">string</span> name)<br>
+          {<br>
+      <span class="text-blue-300">        var</span> go = <span class="text-green-400">GameObject</span>.<span class="text-yellow-200">Find</span>(name);<br>
+      <span class="text-pink-500">        if</span> (go == null) <span class="text-pink-500">throw new</span> <span class="text-green-400">Exception</span>(<span class="text-orange-400">&quot;GameObject not found.&quot;</span>);<br>
+      <span class="text-pink-500">        return</span> go.transform.position;<br>
+          }<br>
+   }<br></div>
+
+<p>The first argument to ProximaCommand is the category which will appear when the user types &quot;?&quot;.
+   The second argument is an alias, or shortcut you can use instead of the full command name.</p>
+
+<p>In order for Proxima to find your command, you need to register its class. For example, you can do this in Awake() of one of your components:</p>
+
+<div class="bg-[#1d1d1d] p-3 text-zinc-300 font-mono"><span class="text-blue-300">void</span> <span class="text-yellow-200">Awake</span>()<br>
+   {<br>
+      <span class="text-green-400">    ProximaInspector</span>.<span class="text-yellow-200">RegisterCommands</span>&lt;<span class="text-green-400">MyComands</span>&gt;();<br>
+   }<br></div>
+
+<p>Now you can invoke your command in the Console by typing:</p>
+
+<div class="bg-[#1d1d1d] p-3 text-zinc-300 font-mono">&gt; GetPosition &quot;Main Camera&quot;<br>
+   [0,1,-10]
+</div>
+<p>or</p>
+<div class="bg-[#1d1d1d] p-3 text-zinc-300 font-mono">&gt; gp &quot;Main Camera&quot;<br>
+   [0,1,-10]
+</div>
+
+<h2 class="text-zinc-100 text-xl mt-5">Pattern matching gameObjects</h2>
+<p>Often, scenes have multiple gameObjects with the same name. Sometimes, the user doesn&#39;t know or doesn&#39;t want to type the full name.
+   Instead of <b>GameObject.Find</b>, you can use <b>ProximaCommandHelpers.FindGameObject</b> to pattern match the user input.
+</p>
+<div class="bg-[#1d1d1d] p-3 text-zinc-300 font-mono">[<span class="text-green-400">ProximaCommand</span>(<span class="text-orange-400">&quot;My&quot;</span>, <span class="text-orange-400">&quot;gp&quot;</span>)]<br>
+   <span class="text-blue-300">public static string </span><span class="text-yellow-200">GetPosition</span>(<span class="text-blue-300">string</span> name)<br>
+   {<br>
+   <span class="text-blue-300">    var</span> gameObjects = <span class="text-green-400">ProximaCommandHelpers</span>.<span class="text-yellow-200">FindGameObjects</span>(name);<br>
+   <span class="text-pink-500">    if</span> (gameObjects.Count == 0)<br>
+   <span>    {</span><br>
+   <span class="text-pink-500">        throw new Exception</span>(<span class="text-orange-400">$&quot;No game object found with name &#39;{<span class="text-white">name</span>}&#39;&quot;</span>);<br>
+   <span>    }</span><br>
+   <br>
+   <span class="text-blue-300">    var </span>sb = <span class="text-blue-300">new</span> <span class="text-green-400">StringBuilder</span>();<br>
+   <span class="text-pink-500">    foreach</span> (<span class="text-blue-300">var</span> go <span class="text-blue-300">in</span> gameObjects)<br>
+   <span>    {</span><br>
+   <span>        </span>sb.<span class="text-yellow-200">AppendLine</span>(go.name + <span class="text-orange-400">&quot; [&quot;</span> + go.<span class="text-yellow-200">GetInstanceID</span>() + <span class="text-orange-400">&quot;] &quot;</span> +<br>
+      <span class="text-green-400">            ProximaSerialization</span>.<span class="text-yellow-200">Serialize</span>(go.transform.position, true));<br>
+   <span>    }</span><br><br>
+   <span class="text-pink-500">    return </span>sb.<span class="text-yellow-200">ToString</span>();<br>
+   }<br></div>
+
+<div class="bg-[#1d1d1d] p-3 text-zinc-300 font-mono">&gt; gp *camera<br>
+   Main Camera [23162] [0, 1, -10]
+</div>
+
+
+<h2 class="text-zinc-100 text-xl mt-5">Command Parameters</h2>
+<p>Add parameters to your command by adding arguments to your method.</p>
+
+<div class="bg-[#1d1d1d] p-3 text-zinc-300 font-mono">[<span class="text-green-400">ProximaCommand</span>(<span class="text-orange-400">&quot;My&quot;</span>, <span class="text-orange-400">&quot;addv&quot;</span>)]<br>
+   <span class="text-blue-300">public static</span> <span class="text-green-400">Vector3</span> <span class="text-yellow-200">AddVectors</span>(<span class="text-green-400">Vector3</span> lhs, <span class="text-green-400">Vector3</span> rhs)<br>
+   {<br>
+      <span class="text-pink-500">    return</span> lhs + rhs;<br>
+   }<br></div>
+
+<div class="bg-[#1d1d1d] p-3 text-zinc-300 font-mono">&gt; addv [1, 2, 3] [4, 5, 6]<br>
+   [5,7,9]
+</div>
+
+<h2 class="text-zinc-100 text-xl mt-5">Pattern matching parameters</h2>
+<p>Instead of explicitly taking a <b>Vector3</b> as an argument, you can use the <b>PropertyOrValue</b> wrapper to accept either a Vector3 or a property.</p>
+
+<div class="bg-[#1d1d1d] p-3 text-zinc-300 font-mono">[<span class="text-green-400">ProximaCommand</span>(<span class="text-orange-400">&quot;My&quot;</span>, <span class="text-orange-400">&quot;addv&quot;</span>)]<br>
+   <span class="text-blue-300">public static</span> <span class="text-green-400">Vector3</span> <span class="text-yellow-200">AddVectors</span>(<span class="text-green-400">PropertyOrValue</span>&lt;<span class="text-green-400">Vector3</span>&gt; lhs, <span class="text-green-400">PropertyOrValue</span>&lt;<span class="text-green-400">Vector3</span>&gt; rhs)<br>
+   {<br>
+      <span class="text-pink-500">    return</span> lhs.Get() + rhs.Get();<br>
+   }<br></div>
+
+<div class="bg-[#1d1d1d] p-3 text-zinc-300 font-mono">&gt; addv *camera.transform.position panel.transform.position<br>
+   [474.5,1,-10]
+</div></div></div></div>
+</div>
+        <div class="h-[200px] flex flex-col"><p class="text-gray-400 m-10">© 2023 Virtual Maker Corporation</p></div></div></div>
+
+
+		
+	</div>
+	</body>
+</html>

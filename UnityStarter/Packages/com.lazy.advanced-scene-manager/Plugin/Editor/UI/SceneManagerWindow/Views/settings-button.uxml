@@ -1,0 +1,9 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:Button display-tooltip-when-elided="true" name="button-experimental" class="section-button" style="flex-direction: row; margin-left: 4px; margin-right: 4px; margin-top: 4px; margin-bottom: 4px;">
+        <ui:VisualElement name="icon-container" picking-mode="Ignore" style="flex-grow: 0; background-color: rgba(0, 0, 0, 0); justify-content: center; align-items: center; width: 24px;">
+            <ui:Label tabindex="-1" text="" display-tooltip-when-elided="true" name="icon" picking-mode="Ignore" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&amp;guid=0ba460244a244ed449201ed8e8680e50&amp;type=3#Font Awesome 6 Free-Solid-900&quot;); margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0;" />
+        </ui:VisualElement>
+        <ui:Label tabindex="-1" text="Experimental" display-tooltip-when-elided="true" picking-mode="Ignore" name="text" style="flex-grow: 1;" />
+        <ui:Label tabindex="-1" text="" display-tooltip-when-elided="true" name="arrow-right" picking-mode="Ignore" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900%20SDF.asset?fileID=11400000&amp;guid=747dc63c4036f3945ba6f469bbed12b3&amp;type=2#Font Awesome 6 Free-Solid-900 SDF&quot;); margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0;" />
+    </ui:Button>
+</ui:UXML>

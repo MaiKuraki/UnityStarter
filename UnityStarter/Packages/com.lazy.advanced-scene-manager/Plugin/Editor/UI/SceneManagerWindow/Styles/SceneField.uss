@@ -1,0 +1,97 @@
+﻿ObjectField, SceneField {
+    margin-top: 4px;
+    margin-bottom: 4px;
+    cursor: link;
+    min-width: 88px;
+    flex-shrink: 1;
+}
+
+SceneField {
+    flex-direction: row;
+    padding-bottom: 0;
+}
+
+SceneField ObjectField:disabled .unity-object-field__selector {
+    opacity: 0.2;
+}
+
+SceneField > Button {
+    -unity-font-definition: url(project://?fileID=11400000&guid=747dc63c4036f3945ba6f469bbed12b3&type=2#Font%20Awesome%206%20Free-Solid-900%20SDF);
+    opacity: 0.5;
+}
+
+SceneField #button-open {
+    margin-right: 0;
+}
+
+SceneField #button-additive {
+    font-size: 14px;
+    margin-left: 0;
+    margin-right: 2px;
+}
+
+SceneField ObjectField {
+    flex-grow: 1;
+    margin: 0;
+}
+
+ObjectField Label, SceneField Label {
+    -unity-text-align: middle-left;
+    text-overflow: ellipsis;
+}
+
+ObjectField Button, SceneField Button {
+    border-radius: 3px;
+    width: 20px;
+    height: 20px;
+}
+
+ObjectField Button:hover, SceneField Button:hover {
+    background-color: rgba(0, 0, 0, 40);
+}
+
+ObjectField Button:hover:disabled, SceneField Button:hover:disabled {
+    background-color: transparent;
+}
+
+ObjectField Button:active, SceneField Button:active {
+    background-color: rgb(32, 32, 32);
+}
+
+ObjectFieldDisplay {
+    -unity-text-align: middle-left;
+    cursor: link;
+    margin: 2px;
+}
+
+ObjectFieldSelector {
+    margin: 2px;
+    margin-left: 0px;
+    cursor: link;
+    border-radius: 3px;
+}
+
+ObjectFieldSelector:hover {
+    background-color: rgb(72, 72, 72);
+}
+
+ObjectField.unity-base-field__input {
+    margin-left: 4px;
+}
+
+ObjectField {
+    margin: 2px;
+}
+
+ObjectFieldDisplay {
+    background-color: transparent;
+}
+
+#collection ObjectField:disabled {
+    opacity: 1;
+}
+
+.scene-open-button {
+    margin: 0;
+    color: #8E8E8E;
+}

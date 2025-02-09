@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 4df4f0e9ea84d4a22b6a2d489b09b6a7
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Android/MadCatzCTRLRAndroidUnityProfile.cs
+  uploadId: 657724

@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: ba3a30c2aeb8b474fb4f8f76b18f71b5
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Mac/EightBitdoSNES30MacNativeProfile.cs
+  uploadId: 657724

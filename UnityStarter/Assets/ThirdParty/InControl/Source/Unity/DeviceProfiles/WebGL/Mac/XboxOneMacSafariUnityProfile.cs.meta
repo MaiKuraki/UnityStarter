@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 22af16d2113e14a77bc8ebeed3c9aba0
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/WebGL/Mac/XboxOneMacSafariUnityProfile.cs
+  uploadId: 657724

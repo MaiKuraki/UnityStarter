@@ -1,0 +1,19 @@
+fileFormatVersion: 2
+guid: 9dc9fc5e2c6b696468c43d3847370dec
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Windows/PlayStation5BluetoothWindowsNativeProfile
+    .cs
+  uploadId: 657724

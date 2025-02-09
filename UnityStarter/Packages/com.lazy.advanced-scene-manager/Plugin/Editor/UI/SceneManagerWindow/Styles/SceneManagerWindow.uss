@@ -1,0 +1,345 @@
+﻿.notification {
+    border-radius: 3px;
+    color: #ffffff;
+    margin: 8px;
+    margin-bottom: 4px;
+    flex-shrink: 0;
+    flex-direction: row;
+}
+
+.notification #text {
+    flex-shrink: 1;
+    white-space: normal;
+    cursor: link;
+    margin: 12px;
+}
+
+.notification .spacer {
+    flex-grow: 1;
+}
+
+.notification #button-container {
+    margin-left: 8px;
+    margin-right: 0px;
+    flex-direction: row;
+    align-self: flex-start;
+    flex-shrink: 0;
+}
+
+.notification #button-container * {
+    margin: 0;
+    margin-right: 2px;
+    padding: 6px;
+    flex-grow: 0;
+    flex-shrink: 0;
+    align-self: flex-start;
+    cursor: link;
+    -unity-text-align: middle-center;
+}
+
+.notification #button-container Button {
+    width: 26px;
+    height: 26px;
+}
+
+.notification #button-container Label {
+}
+
+.notification Button:active {
+    background-color: #003d79;
+}
+
+.notification Button:hover {
+    background-color: rgb(0, 76, 137);
+}
+
+.notification Button:active {
+    background-color: rgb(0, 60, 108);
+}
+
+/* Base notification styles */
+.notification {
+    background-color: #007bff;
+}
+
+.notification:hover {
+    background-color: #0056b3;
+}
+
+.notification:active {
+    background-color: #003d79;
+}
+
+/* Info Notification */
+.notification.info {
+    background-color: #007BFF;
+}
+
+.notification.info:hover {
+    background-color: #0056b3; /* Darker blue for hover */
+}
+
+.notification.info:active {
+    background-color: #003d79; /* Even darker for active */
+}
+
+/* Warning Notification */
+.notification.warning {
+    background-color: #BF360C; /* Much darker orange */
+}
+
+.notification.warning:hover {
+    background-color: #A52A00; /* Even darker for hover */
+}
+
+.notification.warning:active {
+    background-color: #8B2200; /* Darkest for active */
+}
+
+/* Warning Notification */
+.notification.scene {
+    background-color: #BF360C; /* Much darker orange */
+}
+
+.notification.scene:hover {
+    background-color: #A52A00; /* Even darker for hover */
+}
+
+.notification.scene:active {
+    background-color: #8B2200; /* Darkest for active */
+}
+
+/* Link Notification */
+.notification.link {
+    background-color: #007BFF;
+}
+
+.notification.link:hover {
+    background-color: #0056b3; /* Same darker blue for hover as info */
+}
+
+.notification.link:active {
+    background-color: #003d79; /* Same darker blue for active as info */
+}
+
+#template-import-scene > Label:hover {
+    cursor: link;
+}
+
+#template-import-scene Toggle:hover {
+    background-color: transparent;
+}
+
+#list-notifications Button > Button {
+    height: 22px;
+    width: 22px;
+}
+
+#group-search RadioButton Label {
+    min-width: 0px;
+}
+
+#popup-upgrade .header {
+    font-size: 18px;
+}
+
+#popup-upgrade > Label {
+    margin-left: 22px;
+    margin-right: 22px;
+}
+
+#OverviewPopup Foldout > Toggle {
+    margin: 0;
+}
+
+#menu-buttons > Button {
+    opacity: 0.6;
+}
+
+#menu-buttons > Button:hover {
+    opacity: 1;
+}
+
+#button-scene-helper {
+    opacity: 0.4;
+}
+
+#button-scene-helper:hover {
+    opacity: 1;
+}
+
+#button-settings:disabled {
+    color: gray;
+}
+
+#button-search:disabled {
+    color: gray;
+}
+
+#list-undo TemplateContainer:hover {
+    background-color: transparent;
+}
+
+#template-import-scene:hover {
+    cursor: link;
+    background-color: var(--button-hover);
+}
+
+.section {
+    border-radius: 3px;
+    background-color: rgb(64, 64, 64);
+    margin-bottom: 16px;
+    padding: 12px;
+    flex-shrink: 1;
+    flex-grow: 0;
+}
+
+.section-button {
+    border-radius: 8px;
+    font-size: 16px;
+    background-color: var(--button-hover);
+    margin: 4px;
+    padding: 12px;
+    justify-content: center;
+}
+
+.section-button Label {
+    font-size: 15px;
+    -unity-text-align: middle-center;
+}
+
+.section-button:hover {
+    background-color: rgba(0, 0, 0, 0.3);
+}
+
+.section-button:active {
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+#label-placeholder {
+    padding-left: 2px;
+    padding-top: 2px;
+}
+
+#button-lock > #icon {
+    background-image: resource("Unlocked@2x");
+}
+
+#button-unlock > #icon {
+    background-image: resource("Locked@2x");
+}
+
+.extendable-button-toggle {
+    opacity: 0.1;
+}
+
+.extendable-button-toggle.active {
+    opacity: 0.6;
+}
+
+.extendable-button-toggle::hover {
+    opacity: 1;
+}
+
+.extendable-button.visible
+{
+    opacity: 1;
+    transition: opacity 1s ease;
+}
+
+.extendable-button.hidden
+{
+    opacity: 0;
+    transition: opacity 1s ease;
+}
+
+GroupBox.accent {
+    background-color: #2A2A2A;
+    border-radius: 3px;
+}
+
+InputBindingField ScrollView {
+    border-radius: 3px;
+}
+
+InputBindingField .unity-list-view__item {
+    border-radius: 3px;
+}
+
+InputBindingField .unity-list-view__item VisualElement {
+    cursor: link;
+}
+
+InputBindingField .unity-list-view__item Label {
+    cursor: link;
+}
+
+InputBindingField .unity-list-view__item:hover {
+    background-color: #2C5D87;
+}
+
+#list-auto-open-scenes .unity-list-view__item:hover {
+    background-color: #2C5D87;
+}
+
+InputBindingField EnumField {
+    margin: 2px;
+}
+
+InputBindingField .unity-list-view__item Button {
+    margin: 2px;
+    margin-right: 0px;
+}
+
+.unity-list-view__footer {
+    border-width: 0;
+    background-color: #464646;
+    padding: 0;
+}
+
+.unity-list-view__footer Button {
+    padding: 2px;
+}
+
+ListView > ScrollView {
+    border-width: 0;
+}
+
+#list-auto-open-scenes SceneField {
+    margin: 0px;
+    padding: 2px;
+    padding-top: 10px;
+    align-items: center;
+    border-radius: 3px;
+}
+
+#list-auto-open-scenes SceneField VisualElement {
+    margin-top: 2px;
+}
+
+#list-auto-open-scenes ScrollView {
+    border-radius: 3px;
+    padding: 0;
+}
+
+#list-auto-open-scenes {
+    min-height: 48px;
+}
+
+#CollectionPopup #group-header #button-rename {
+    opacity: 0;
+    transition: opacity .05s ease;
+}
+
+#CollectionPopup #group-header:hover #button-rename {
+    opacity: 1;
+}
+
+#ScenePopup #group-header #button-rename {
+    opacity: 0;
+    transition: opacity .05s ease;
+}
+
+#ScenePopup #group-header:hover #button-rename {
+    opacity: 1;
+}

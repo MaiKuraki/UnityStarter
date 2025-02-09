@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: deed3e59925274ef9adcd0de49a14191
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Mac/PlayStation4MacUSBUnityProfile.cs
+  uploadId: 657724

@@ -1,0 +1,30 @@
+fileFormatVersion: 2
+guid: a4a50e56cbc6249b999c1292c593f6c8
+PluginImporter:
+  externalObjects: {}
+  serializedVersion: 3
+  iconMap: {}
+  executionOrder: {}
+  defineConstraints: []
+  isPreloaded: 0
+  isOverridable: 0
+  isExplicitlyReferenced: 0
+  validateReferences: 1
+  platformData:
+    Any:
+      enabled: 0
+      settings: {}
+    iOS:
+      enabled: 1
+      settings:
+        FrameworkDependencies: CoreHaptics
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Plugins/iOS/InControlNative.a
+  uploadId: 657724

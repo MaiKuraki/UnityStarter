@@ -1,0 +1,19 @@
+fileFormatVersion: 2
+guid: 6d78c9f200de14030a5b8e8def2f2d27
+timeCreated: 1446429116
+licenseType: Store
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/NativeInputDevice.cs
+  uploadId: 657724

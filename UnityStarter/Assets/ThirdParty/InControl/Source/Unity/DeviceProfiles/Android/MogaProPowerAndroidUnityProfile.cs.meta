@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: db1d49d63a72d423991ce6a8e85f1555
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Android/MogaProPowerAndroidUnityProfile.cs
+  uploadId: 657724

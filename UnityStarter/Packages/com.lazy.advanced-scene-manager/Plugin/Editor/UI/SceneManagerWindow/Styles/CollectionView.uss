@@ -1,0 +1,240 @@
+﻿#scene.duplicate {
+    border-width: 1px;
+    border-color: red;
+    background-color: rgba(255, 0, 0, 0.1);
+}
+
+#label-reorder-collection, #label-reorder-scene {
+    cursor: link;
+}
+
+#label-scene-loader-indicator {
+    opacity: 0.4;
+}
+
+#collection-header {
+    background-color: rgba(0, 0, 0, 0.15);
+    border-radius: 3px;
+}
+
+#collection-header:hover {
+    background-color: var(--expander-hover);
+}
+
+#collection-header:selected {
+    background-color: var(--expander-selected);
+}
+
+#collection #scene-drop-zone {
+    display: none;
+}
+
+#collection:hover #scene-drop-zone.isDragging {
+    display: flex;
+}
+
+#scene {
+    border-radius: 3px;
+}
+
+#scene:hover {
+    background-color: var(--expander-hover);
+}
+
+TemplateContainer:checked > #scene {
+    background-color: transparent;
+}
+
+TemplateContainer:selected > #scene {
+    background-color: var(--expander-selected);
+}
+
+TemplateContainer:selected > #scene .unity-base-field__input {
+    background-color: var(--expander-selected2);
+}
+
+TemplateContainer:selected > #scene ObjectFieldSelector {
+    background-color: var(--expander-selected2);
+}
+
+TemplateContainer:checked #collection-header {
+    background-color: #666666;
+}
+
+#collection-header Button {
+    width: 22px;
+    height: 22px;
+    align-self: center;
+}
+
+#collection-header #button-header {
+    width: auto;
+}
+
+#collection-header Label {
+    cursor: link;
+}
+
+#collection-header #extendable-button-container Button {
+    width: auto;
+}
+
+#collection-header Toggle {
+    width: 22px;
+    height: 22px;
+    align-self: center;
+    margin-bottom: 0;
+}
+
+#collection-header > #button-header {
+    opacity: 1;
+}
+
+#button-header {
+    background-color: transparent;
+}
+
+#button-header:hover {
+    background-color: transparent;
+}
+
+#collection-header.selected {
+    background-color: #636363;
+}
+
+#scene.selected {
+    background-color: #5A5A5A;
+}
+
+TemplateContainer #collection.expanded #collection-content {
+    padding-bottom: 8px;
+} 
+
+TemplateContainer.last #collection #collection-content {
+    padding-bottom: 8px;
+} 
+
+TemplateContainer.last #collection.expanded #collection-content {
+    padding-bottom: 8px;
+} 
+
+#scene Toggle {
+    width: 20px;
+    height: 20px;
+    align-self: center;
+}
+
+#collection-header Button {
+    opacity: 0.4;
+}
+
+#collection-header #label-reorder-collection {
+    opacity: 0.4;
+}
+
+#collection-header Button:hover {
+    opacity: 1;
+}
+
+#collection-header Button:disabled {
+    opacity: 0.2;
+}
+
+#collection-content {
+    display: none;
+}
+
+#collection.expanded #collection-content {
+    display: flex;
+}
+
+#collection.expanded #collection-header {
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+#unity-list-view__reorderable-item {
+    border-radius: 3px;
+}
+
+.unity-list-view__reorderable-item {
+    border-radius: 3px;
+}
+
+#unity-list-view__reorderable-handle {
+    display: none;
+}
+
+#unity-list-view__reorderable-item__container {
+    padding: 0;
+    background-color: transparent;
+}
+
+#collection SceneField {
+    height: 20px;
+}
+
+#collection SceneField .unity-object-field__input {
+    border-width: 0;
+    background-color: rgba(0, 0, 0, 0.2);
+    -unity-text-align: middle-left;
+}
+
+#collection SceneField Image {
+    margin-left: 4px;
+    margin-right: 4px;
+}
+
+#collection SceneField .unity-object-field__input:hover {
+    background-color: rgba(0, 0, 0, 0.2);
+}
+
+#collection SceneField ObjectFieldSelector {
+    background-color: rgba(255, 255, 255, 0.15);
+}
+
+#scene > VisualElement > Button {
+    border-radius: 3px;
+    width: 20px;
+    height: 20px;
+    align-self: center;
+    opacity: 0.5;
+}
+
+#scene Button:hover {
+    background-color: rgb(56, 56, 56);
+    color: white;
+    opacity: 1;
+}
+
+#scene Button:active {
+    background-color: rgb(72, 72, 72);
+    opacity: 0.8;
+}
+
+#list-custom-dynamic-collections #collection {
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+#scene-drop-zone {
+    background-color: #666666;
+}
+
+#scene-drop-zone:hover {
+    background-color: #383838;
+}
+
+#label-reorder-scene {
+    opacity: 0.5;
+    cursor: link;
+}
+
+#label-reorder-scene:disabled {
+    opacity: 0.2;
+    cursor: arrow;
+}
+
+#button-collection-header-unlock > #icon {
+    background-image: resource("Locked@2x");
+}

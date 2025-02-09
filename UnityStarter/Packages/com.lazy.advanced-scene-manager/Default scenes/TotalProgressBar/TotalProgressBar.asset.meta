@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: a6d3d5a736e108f4cace9930d6b4cd2b
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 11400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Default scenes/TotalProgressBar/TotalProgressBar.asset
+  uploadId: 722961

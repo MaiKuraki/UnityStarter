@@ -1,0 +1,26 @@
+{
+    "name": "AdvancedSceneManager.Editor.ASMUtilityFunctions",
+    "rootNamespace": "",
+    "references": [
+        "GUID:2c6f01f5d27984343bd2e98e1116e8fd"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "ASM"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.lazy.advanced-scene-manager",
+            "expression": "1.0.0",
+            "define": "ASM"
+        }
+    ],
+    "noEngineReferences": false
+}

@@ -1,0 +1,6 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="False">
+    <ui:VisualElement name="template-import-scene" style="flex-grow: 1; flex-shrink: 0; flex-direction: row; height: 22px; border-top-left-radius: 3px; border-bottom-left-radius: 3px; border-top-right-radius: 3px; border-bottom-right-radius: 3px;">
+        <ui:Toggle style="margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0; text-overflow: ellipsis;" />
+        <ui:Label tabindex="-1" text="[path]" name="label-item-text" display-tooltip-when-elided="true" style="-unity-text-align: middle-left; margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0; padding-left: 0; padding-right: 0; padding-top: 0; padding-bottom: 0; text-overflow: ellipsis; overflow: hidden; flex-shrink: 1; display: none;" />
+    </ui:VisualElement>
+</ui:UXML>

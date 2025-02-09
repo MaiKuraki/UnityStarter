@@ -1,0 +1,29 @@
+{
+    "name": "Proxima.Editor",
+    "rootNamespace": "",
+    "references": [
+        "Proxima"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.modules.unitywebrequest",
+            "expression": "",
+            "define": "UNITY_WEB_REQUEST"
+        },
+        {
+            "name": "com.unity.xr.management",
+            "expression": "",
+            "define": "UNITY_XR_MANAGEMENT"
+        }
+    ],
+    "noEngineReferences": false
+}

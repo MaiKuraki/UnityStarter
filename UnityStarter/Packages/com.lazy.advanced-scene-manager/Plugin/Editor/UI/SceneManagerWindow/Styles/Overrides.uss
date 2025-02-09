@@ -1,0 +1,353 @@
+﻿Button {
+    border-radius: var(--border-radius);
+    border-color: var(--button-border);
+    background-color: var(--button-normal);
+    -unity-text-align: middle-center;
+    border-width: 0;
+    cursor: link;
+    padding: 6px;
+}
+
+Button:hover {
+    background-color: var(--button-hover);
+}
+
+Button:active {
+    background-color: var(--button-click);
+}
+
+Button:disabled {
+    cursor: arrow;
+    opacity: 0.5;
+}
+
+GroupBox {
+    padding: 12px;
+    border-radius: 3px;
+    background-color: rgba(0, 0, 0, 0.15);
+}
+
+GroupBox Toggle {
+    margin-left: -6px;
+}
+
+GroupBox > .unity-group-box__label {
+    padding-top: 8px;
+    padding-left: 4px;
+    padding-bottom: 10px;
+    font-size: 16px;
+    white-space: normal;
+}
+
+RadioButton {
+    flex-direction: row-reverse;
+}
+
+RadioButtonGroup > .unity-base-field__label {
+    margin-top: 4px;
+    margin-bottom: 10px;
+    font-size: 16px;
+    margin-left: 6px;
+    white-space: normal;
+}
+
+RadioButtonGroup {
+    padding: 8px;
+    border-radius: 3px;
+    flex-direction: column;
+}
+
+#scene-binding > VisualElement > RadioButtonGroup {
+    background-color: transparent;
+    padding: 0;
+}
+
+#unity-radio-button-group__container {
+    flex-direction: column;
+    flex-wrap: wrap;
+}
+
+RadioButtonGroup.vertical #unity-radio-button-group__container {
+    flex-direction: column;
+}
+
+Label {
+    -unity-text-align: middle-left;
+}
+
+Toggle {
+    flex-direction: row-reverse;
+    border-radius: 3px;
+    padding: 4px;
+    padding-left: 8px;
+    padding-right: 6px;
+    margin-right: 12px;
+    cursor: link;
+    align-self: flex-start;
+}
+
+Toggle:hover {
+    background-color: rgba(0,0,0,0.15);
+}
+
+Toggle:active {
+    background-color: rgba(0,0,0,0.3);
+}
+
+Toggle .unity-toggle__input {
+    cursor: link;
+}
+
+Toggle > Label {
+    flex-grow: 1;
+    cursor: link;
+    white-space: normal;
+    margin-left: 4px;
+}
+
+Toggle > VisualElement {
+    flex-grow: 0;
+    margin-left: 0px;
+    margin-right: 2px;
+}
+
+Toggle > Label {
+    margin-right: auto;
+    flex-shrink: 1;
+    flex-grow: 0;
+}
+
+RadioButton Label {
+    margin-left: 4px;
+    cursor: link;
+}
+
+RadioButton {
+    border-radius: 3px;
+    margin-right: auto;
+    padding: 4px;
+    cursor: link;
+}
+
+RadioButton:hover {
+    background-color: #353535;
+}
+
+RepeatButton {
+    visibility: hidden;
+}
+
+Scroller {
+    border-width: 0px;
+    background-color: transparent;
+    margin-left: 2px;
+}
+
+ScrollerSlider {
+    margin: 0px;
+    width: 14px;
+}
+
+unity-slider {
+    width: 14px;
+}
+
+#unity-drag-container {
+    align-self: center;
+}
+
+.unity-base-slider__input TextField {
+    margin-bottom: 0;
+}
+
+Foldout Toggle {
+    flex-direction: row;
+    margin-right: 0;
+    margin-bottom: 6px;
+    font-size: 16px;
+}
+
+.unity-foldout__text {
+    cursor: link;
+}
+
+Toggle > Label {
+    min-width: 0px;
+}
+
+DropdownField {
+    cursor: link;
+}
+
+DropdownField .unity-label {
+    flex-shrink: 1;
+    flex-grow: 1;
+    min-width: 22px;
+}
+
+DropdownField .unity-base-field__input {
+    min-width: 64px;
+    flex-grow: 3;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    padding-left: 2px;
+    padding-right: 6px;
+}
+
+PopupTextElement {
+    padding-top: 4px;
+    padding-bottom: 4px;
+    padding-left: 6px;
+    padding-right: 6px;
+    text-overflow: ellipsis;
+}
+
+EnumField .unity-enum-field__text {
+    text-overflow: ellipsis;
+}
+
+EnumField .unity-label {
+    flex-shrink: 1;
+    flex-grow: 1;
+    min-width: 22px;
+}
+
+EnumField .unity-base-field__input {
+    min-width: 64px;
+    flex-grow: 3;
+}
+
+EnumField {
+    margin-bottom: 4px;
+    cursor: link;
+}
+
+EnumField .unity-enum-field__input {
+    padding-top: 6px;
+    padding-bottom: 6px;
+    padding-left: 6px;
+    padding-right: 6px;
+}
+
+EnumField .unity-enum-field__arrow {
+    margin-left: 4px;
+}
+
+EnumField, DropdownField {
+    margin: 0;
+    margin-top: 1px;
+    margin-bottom: 4px; 
+}
+
+TextField {
+    margin-bottom: 4px;
+    height: 22px;
+}
+
+TextInput {
+    padding-left: 4px;
+    padding-right: 4px;
+}
+
+.unity-list-view__empty-label {
+    display: none;
+}
+
+ObjectField {
+    margin: 2px;
+}
+
+TemplateContainer {
+    background-color: transparent;
+}
+
+TemplateContainer:checked {
+    background-color: transparent;
+    color: white;
+}
+
+InputBindingField #text-hotkey {
+    margin-left: 6px;
+}
+
+InputBindingField EnumField {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+InputBindingField EnumField .unity-enum-field__input {
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+InputBindingField EnumField TextElement {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+InputBindingField Toggle {
+    margin-top: 0;
+    margin-bottom: 0;
+    margin-left: 0;
+    margin-right: 0;
+}
+
+InputBindingField #text-no-items {
+    margin: 4px;
+}
+
+#unity-radio-button-group__container {
+    flex-direction: row;
+}
+
+.unity-popup-field__input {
+    cursor: link;
+}
+
+UnityEventItem {
+    padding: 4px;
+    padding-right: 6px;
+}
+
+UnityEventItem DropdownField {
+    margin: 0;
+    margin-top: 1px;
+    margin-bottom: 4px; 
+}
+
+UnityEventItem DropdownField .unity-base-field__input {
+    min-width: 0;
+    flex-grow: 1;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    padding-left: 6px;
+    padding-right: 6px;
+}
+
+UnityEventItem PopupTextElement {
+    padding-top: 4px;
+    padding-bottom: 4px;
+    padding-left: 4px;
+    padding-right: 4px;
+    text-overflow: ellipsis;
+}
+
+UnityEventItem DropdownField {
+    padding: 0;
+}
+
+UnityEventItem .unity-base-popup-field__arrow {
+    margin-right: 4px;
+}
+
+PropertyField #unity-list-view__reorderable-handle {
+    display: flex;
+}
+
+#list-collections #unity-list-view__reorderable-item:hover {
+    background-color: transparent;
+}
+
+#list-collections #unity-list-view__reorderable-item:checked {
+    background-color: transparent;
+}

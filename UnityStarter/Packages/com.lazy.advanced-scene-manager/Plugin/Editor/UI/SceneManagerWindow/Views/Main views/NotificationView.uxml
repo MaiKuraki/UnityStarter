@@ -1,0 +1,3 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True" asm="AdvancedSceneManager.Editor.UI">
+    <ui:VisualElement name="list-notifications" style="flex-grow: 0; flex-shrink: 0; flex-direction: column-reverse;" />
+</ui:UXML>

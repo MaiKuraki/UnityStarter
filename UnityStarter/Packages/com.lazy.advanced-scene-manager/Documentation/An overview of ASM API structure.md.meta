@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: c3b6848563f32314abe81f3fefbe90c3
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Documentation/An overview of
+    ASM API structure.md
+  uploadId: 722961

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: a654daa8c4f94e76a661c48bf431b002
+timeCreated: 1577917563
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Compatibility/InspectorNameAttribute.cs
+  uploadId: 657724

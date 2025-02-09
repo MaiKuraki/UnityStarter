@@ -1,0 +1,15 @@
+<engine:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:engine="UnityEngine.UIElements" xmlns:editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <Style src="project://database/Packages/com.lazy.advanced-scene-manager/Default%20Utility%20Functions/GenerateScenes/GenerateScenes.uss?fileID=7433441132597879392&amp;guid=71c2ab9f1263aaa4294675a97add6999&amp;type=3#GenerateScenes" />
+    <editor:ObjectField label="Scene Collection" name="SceneCollectionPicker" type="AdvancedSceneManager.Models.SceneCollection, AdvancedSceneManager" enabled="true" tooltip="Can&apos;t assign unimported scenes to a collection" />
+    <engine:TextField label="Folder" name="Folder" hide-placeholder-on-focus="true" value="Assets/" />
+    <engine:TextField label="Name Prefix" placeholder-text="Level_{1}_{2}_{3}" name="Prefix" />
+    <engine:TextField label="Count" placeholder-text="1;2;3" name="Count" />
+    <engine:Toggle label="Auto Import" value="false" name="Import" style="flex-shrink: 0;" />
+    <engine:Toggle label="Create Parent" name="CreateParent" />
+    <engine:Vector3Field label="Parent Pivot" name="ParentPivot" tooltip="This will multiply the count value. Example: (10,10,10) for Level_1_2 would set the pivot to (10, 20, 0)" value="1,1,1" enabled="false" />
+    <engine:Vector3Field label="Pivot Offset" name="PivotOffset" tooltip="Pivot offset will offset all parent pivots. If we had (10,10,0) and offset (-100,-100,-100) we will get (-90,-90,-100)" value="-1,-1,-1" enabled="false" />
+    <engine:Button text="Generate" name="GenerateBtn" />
+    <engine:Label text="You can generate a 2d grid by assigning x;y in count, for example 4;4 - 4x4, i recommend name prefix it for easier handling. We compile as many as you like, but beware, the more the slower. " style="flex-wrap: wrap; white-space: normal;" />
+    <engine:Label text="I also recommend to NOT auto import if you do not need to reference them individually. Instead use a dynamic collection." style="white-space: normal;" />
+    <engine:Label text="You can subscribe to GenerateScenes.OnProcessSceneAssets, and handle the scenes yourself after. like adding gameobjects etc." style="white-space: normal;" />
+</engine:UXML>

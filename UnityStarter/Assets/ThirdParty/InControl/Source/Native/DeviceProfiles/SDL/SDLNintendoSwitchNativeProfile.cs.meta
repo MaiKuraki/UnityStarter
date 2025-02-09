@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 3738bcae1ad3455e8051bfc7d6c7730c
+timeCreated: 1615913196
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/SDL/SDLNintendoSwitchNativeProfile.cs
+  uploadId: 657724

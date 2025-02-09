@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 84f79d86c93d42cb93b86bc933a5a650
+timeCreated: 1615909717
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/SDL/SDLPlayStation3NativeProfile.cs
+  uploadId: 657724

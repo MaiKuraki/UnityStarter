@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: bf5a8db0eba34147b5a5a899aa449412
+timeCreated: 1577738776
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Device/InputDeviceMatcher.cs
+  uploadId: 657724

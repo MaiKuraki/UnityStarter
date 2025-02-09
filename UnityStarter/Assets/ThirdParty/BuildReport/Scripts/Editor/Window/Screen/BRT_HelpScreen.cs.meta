@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: cc69ea23bc7ed484cb7609b6e3779145
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+AssetOrigin:
+  serializedVersion: 1
+  productId: 8162
+  packageName: Build Report Tool
+  packageVersion: 3.11.12
+  assetPath: Assets/ThirdParty/BuildReport/Scripts/Editor/Window/Screen/BRT_HelpScreen.cs
+  uploadId: 729276

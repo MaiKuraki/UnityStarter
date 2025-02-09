@@ -1,0 +1,6 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:VisualElement name="profile" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row;">
+        <ui:Button display-tooltip-when-elided="true" name="button-name" style="flex-grow: 1; -unity-text-align: middle-left; margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0; width: 32px; height: 32px; text-overflow: ellipsis; padding-left: 12px;" />
+        <ui:Button text="" display-tooltip-when-elided="true" name="button-menu" tooltip="View more options" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&amp;guid=0ba460244a244ed449201ed8e8680e50&amp;type=3#Font Awesome 6 Free-Solid-900&quot;); height: 32px; width: 32px; margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0;" />
+    </ui:VisualElement>
+</ui:UXML>

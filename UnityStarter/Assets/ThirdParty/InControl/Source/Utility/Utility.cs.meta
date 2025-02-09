@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 9c16c380ccbab49f0a636bd5ec1fce50
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Utility/Utility.cs
+  uploadId: 657724

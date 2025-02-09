@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: c80c7fbff37e466eb91d75e65d3f8df5
+timeCreated: 1581907590
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/MFi/XboxOneMFiNativeProfile.cs
+  uploadId: 657724

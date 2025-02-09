@@ -1,0 +1,109 @@
+{
+    "name": "Proxima",
+    "rootNamespace": "",
+    "references": [
+        "Unity.TextMeshPro"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "proxima-websocket-sharp.dll"
+    ],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.modules.ai",
+            "expression": "",
+            "define": "UNITY_AI"
+        },
+        {
+            "name": "com.unity.modules.cloth",
+            "expression": "",
+            "define": "UNITY_CLOTH"
+        },
+        {
+            "name": "com.unity.modules.animation",
+            "expression": "",
+            "define": "UNITY_ANIMATION"
+        },
+        {
+            "name": "com.unity.modules.particlesystem",
+            "expression": "",
+            "define": "UNITY_PARTICLE_SYSTEM"
+        },
+        {
+            "name": "com.unity.modules.director",
+            "expression": "",
+            "define": "UNITY_DIRECTOR"
+        },
+        {
+            "name": "com.unity.modules.physics2d",
+            "expression": "",
+            "define": "UNITY_PHYSICS_2D"
+        },
+        {
+            "name": "com.unity.modules.audio",
+            "expression": "",
+            "define": "UNITY_AUDIO"
+        },
+        {
+            "name": "com.unity.modules.terrainphysics",
+            "expression": "",
+            "define": "UNITY_TERRAIN_PHYSICS"
+        },
+        {
+            "name": "com.unity.modules.tilemap",
+            "expression": "",
+            "define": "UNITY_TILEMAP"
+        },
+        {
+            "name": "com.unity.modules.video",
+            "expression": "",
+            "define": "UNITY_VIDEO"
+        },
+        {
+            "name": "com.unity.modules.physics",
+            "expression": "",
+            "define": "UNITY_PHYSICS"
+        },
+        {
+            "name": "com.unity.modules.wind",
+            "expression": "",
+            "define": "UNITY_WIND"
+        },
+        {
+            "name": "com.unity.modules.vehicles",
+            "expression": "",
+            "define": "UNITY_VEHICLES"
+        },
+        {
+            "name": "com.unity.textmeshpro",
+            "expression": "",
+            "define": "UNITY_TMPRO"
+        },
+        {
+            "name": "com.unity.ugui",
+            "expression": "2.0.0",
+            "define": "UNITY_TMPRO"
+        },
+        {
+            "name": "com.unity.modules.ui",
+            "expression": "",
+            "define": "UNITY_UI"
+        },
+        {
+            "name": "com.unity.ugui",
+            "expression": "",
+            "define": "UNITY_GUI"
+        },
+        {
+            "name": "com.unity.modules.uielements",
+            "expression": "",
+            "define": "UNITY_UIELEMENTS"
+        }
+    ],
+    "noEngineReferences": false
+}

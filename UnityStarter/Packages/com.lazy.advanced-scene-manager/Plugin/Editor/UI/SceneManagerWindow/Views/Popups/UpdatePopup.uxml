@@ -1,0 +1,18 @@
+<engine:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:engine="UnityEngine.UIElements" xmlns:editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <engine:VisualElement name="header" style="flex-grow: 0; flex-direction: row; flex-shrink: 0; margin-top: -2px;">
+        <engine:Label text="Patch 1.0.0" name="text-status" style="flex-grow: 1; -unity-text-align: middle-left; -unity-font-style: bold; font-size: 14px;" />
+        <engine:Button text="" name="button-settings" tooltip="Change update settings" class="fontAwesome solid" style="width: 22px; height: 22px; padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; margin-top: -4px;" />
+        <engine:Button text="" tooltip="Close" name="button-close" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&amp;guid=0ba460244a244ed449201ed8e8680e50&amp;type=3#Font Awesome 6 Free-Solid-900&quot;); padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; margin-top: -4px; margin-right: -4px; margin-bottom: 0; margin-left: 0; width: 22px; height: 22px;" />
+    </engine:VisualElement>
+    <engine:ScrollView name="scroll-update-popup" style="padding-top: 2px; padding-right: 2px; padding-bottom: 2px; padding-left: 2px; margin-top: 6px; margin-right: 0; margin-bottom: 6px; margin-left: 0; background-color: rgba(0, 0, 0, 0.4); border-top-left-radius: 3px; border-top-right-radius: 3px; border-bottom-right-radius: 3px; border-bottom-left-radius: 3px;">
+        <engine:Label name="text-patch-notes" style="white-space: normal; margin-top: 12px; margin-right: 12px; margin-bottom: 12px; margin-left: 12px;" />
+    </engine:ScrollView>
+    <engine:Label text="Note: Patches are not subject to the same amount of testing asset store updates are, and may contain new bugs. Please notify us if you find any!" name="text-warning-patch-notes" style="white-space: normal; font-size: 11.5px; -unity-font-style: bold; margin-top: 4px; margin-right: 4px; margin-bottom: 4px; margin-left: 4px;" />
+    <engine:Label text="Note: Asset store updates must be downloaded manually through the package manager (My Assets &gt; Advanced Scene Manager)." name="text-warning-asset-store" style="white-space: normal; font-size: 11.5px; -unity-font-style: bold; margin-top: 4px; margin-right: 4px; margin-bottom: 4px; margin-left: 4px;" />
+    <engine:VisualElement style="flex-grow: 0; flex-shrink: 0; flex-direction: row; margin-bottom: -2px;">
+        <engine:Button text="Cancel" name="button-cancel" />
+        <engine:VisualElement name="spacer" style="flex-grow: 1; flex-shrink: 0;" />
+        <engine:Button text="View on github" name="button-github" />
+        <engine:Button text="Download" name="button-download" />
+    </engine:VisualElement>
+</engine:UXML>

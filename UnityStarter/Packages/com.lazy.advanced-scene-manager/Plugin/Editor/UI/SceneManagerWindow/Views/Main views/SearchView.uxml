@@ -1,0 +1,13 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True" asm="AdvancedSceneManager.Editor.UI">
+    <ui:GroupBox name="group-search" style="padding-top: 5px; padding-right: 5px; padding-bottom: 5px; padding-left: 5px; margin-top: 0; margin-right: 8px; margin-bottom: 5px; margin-left: 8px;">
+        <ui:VisualElement style="flex-grow: 1; flex-direction: row;">
+            <ui:TextField picking-mode="Ignore" name="text-search" style="opacity: 0.6; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0; flex-grow: 1; flex-shrink: 1;">
+                <ui:Label tabindex="-1" text="Search..." parse-escape-sequences="true" display-tooltip-when-elided="true" name="label-placeholder" style="position: absolute; top: 0; left: 5px; bottom: 0; opacity: 0.6;" />
+            </ui:TextField>
+            <ui:Button text="" parse-escape-sequences="true" display-tooltip-when-elided="true" tooltip="Save search" name="button-save-search" class="fontAwesome fontAwesomeRegular" style="opacity: 0.6; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 5px; width: 22px; height: 22px;" />
+            <ui:RadioButton label="Collections" name="toggle-collections" value="true" style="flex-shrink: 1; margin-top: 0; margin-right: 5px; margin-bottom: 0; margin-left: 5px;" />
+            <ui:RadioButton label="Scenes" name="toggle-scenes" style="flex-shrink: 1; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0;" />
+        </ui:VisualElement>
+        <ui:VisualElement name="list-saved" style="align-items: flex-start; flex-direction: row; flex-wrap: wrap; justify-content: flex-start; align-self: flex-start; flex-grow: 1; margin-top: 5px;" />
+    </ui:GroupBox>
+</ui:UXML>

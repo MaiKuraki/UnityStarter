@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 260ec4b9a4ff4c1381f898c5561a97b3
+timeCreated: 1578442018
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/UnityInputDeviceProfileAttribute.cs
+  uploadId: 657724

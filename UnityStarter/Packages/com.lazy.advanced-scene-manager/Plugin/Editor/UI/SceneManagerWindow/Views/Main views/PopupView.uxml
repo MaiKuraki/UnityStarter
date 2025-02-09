@@ -1,0 +1,9 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True" asm="AdvancedSceneManager.Editor.UI">
+    <ui:VisualElement name="PopupView" style="flex-grow: 1; position: absolute; top: 0; right: 0; bottom: 0; left: 0; flex-direction: row; align-items: flex-end; background-color: rgba(0, 0, 0, 0.59);">
+        <ui:VisualElement picking-mode="Ignore" style="flex-grow: 1; border-top-width: 0; border-right-width: 0; border-bottom-width: 0; border-left-width: 0; flex-direction: row; padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; background-color: rgba(200, 200, 200, 0);">
+            <ui:VisualElement picking-mode="Ignore" style="flex-grow: 1; flex-shrink: 0;" />
+            <ui:VisualElement name="contentContainer" class="primary-background-color" style="flex-grow: 1; margin-right: 20px; padding-top: 12px; padding-right: 12px; padding-bottom: 12px; padding-left: 12px; flex-shrink: 1; border-top-left-radius: 8px; border-top-right-radius: 8px; border-bottom-right-radius: 8px; border-bottom-left-radius: 8px; max-width: 800px; overflow: hidden; margin-top: 20px; margin-bottom: 20px; margin-left: 20px; left: 0; top: auto; right: 0; bottom: 0; align-self: center;" />
+            <ui:VisualElement picking-mode="Ignore" style="flex-grow: 1; flex-shrink: 0;" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

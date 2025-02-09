@@ -1,0 +1,79 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True">
+    <ui:GroupBox name="group-toolbar" text="Toolbar:">
+        <ui:VisualElement name="group-not-installed" style="background-color: rgba(0, 0, 0, 0);">
+            <ui:Label tabindex="-1" display-tooltip-when-elided="true" text="&lt;a href=&quot;https://github.com/marijnz/unity-toolbar-extender&quot;&gt;https://github.com/marijnz/unity-toolbar-extender&lt;/a&gt;" style="white-space: normal;" />
+            <ui:Label tabindex="-1" text="must be installed in order to put a play button in toolbar.&#10;&#10;Note: must be installed as a package." display-tooltip-when-elided="true" />
+        </ui:VisualElement>
+        <ui:VisualElement name="group-installed" style="background-color: rgba(0, 0, 0, 0); display: none;">
+            <ui:SliderInt picking-mode="Ignore" label="Button count:" value="1" high-value="5" name="slider-toolbar-button-count" show-input-field="true" low-value="0" inverted="false" binding-path="m_toolbarButtonCount" style="display: none;" />
+            <ui:Slider picking-mode="Ignore" label="Buttons offset:" value="0" high-value="100" name="slider-toolbar-button-offset" binding-path="m_toolbarPlayButtonOffset" show-input-field="true" low-value="-100" style="display: none;" />
+        </ui:VisualElement>
+    </ui:GroupBox>
+    <ui:GroupBox name="group-indicators">
+        <ui:Toggle label="Display hierarchy indicators" name="toggle-display-hierarchy-indicators" binding-path="m_displayHierarchyIndicators" tooltip="Displays indicators in the scene hierarchy, to indicate things like whatever a scene is persistent, or what collection it belongs to." />
+        <ui:Slider label="Offset" value="42" high-value="0" binding-path="m_hierarchyIndicatorsOffset" show-input-field="true" low-value="-1000" name="slider-indicator-offset" style="margin-top: 6px; margin-bottom: 12px;" />
+        <ui:VisualElement style="flex-grow: 1; flex-direction: row; flex-wrap: wrap; justify-content: space-between;">
+            <ui:Toggle label="Fallback scene" name="toggle-defaultSceneIndicator" binding-path="m_defaultSceneIndicator" style="width: 150px;" />
+            <ui:Toggle label="Addressables" name="toggle-addressableIndicator" binding-path="m_addressableIndicator" style="width: 150px;" />
+            <ui:Toggle label="Netcode" name="toggle-netcodeIndicator" binding-path="m_netcodeIndicator" style="width: 150px;" />
+            <ui:Toggle label="Collection scene" name="toggle-collectionIndicator" binding-path="m_collectionIndicator" style="width: 150px;" />
+            <ui:Toggle label="Persistent scene" name="toggle-persistentIndicator" binding-path="m_persistentIndicator" style="width: 150px;" />
+            <ui:Toggle label="Input binding" name="toggle-bindingIndicator" binding-path="m_bindingIndicator" style="width: 150px;" />
+            <ui:Toggle label="Untracked scene" name="toggle-untrackedIndicator" binding-path="m_untrackedIndicator" style="width: 150px;" />
+            <ui:Toggle label="Unimported scene" name="toggle-unimportedIndicator" binding-path="m_unimportedIndicator" style="width: 150px;" />
+            <ui:Toggle label="Test scene" name="toggle-testIndicator" binding-path="m_testIndicator" style="width: 150px;" />
+            <ui:Toggle label="Lock" name="toggle-lockIndicator" binding-path="m_lockIndicator" tooltip="Only has an effect if scene locking has been enabled in editor settings." style="width: 150px;" />
+        </ui:VisualElement>
+    </ui:GroupBox>
+    <ui:GroupBox name="group-display">
+        <ui:Toggle label="Always display search" name="toggle-always-display-search" binding-path="m_alwaysDisplaySearch" />
+        <ui:Toggle label="Display tooltips on SceneFields" binding-path="m_displaySceneTooltips" name="toggle-scene-tooltips" />
+    </ui:GroupBox>
+    <ui:GroupBox name="group-buttons-header" text="Header" style="flex-direction: column;">
+        <ui:VisualElement name="extendable-buttons-group" style="flex-grow: 1; margin-bottom: -12px; margin-top: -36px;">
+            <ui:Label text="Click to toggle visibility&lt;br&gt;Drag and drop to re-order" name="label-instructions" style="opacity: 0.4; -unity-text-align: upper-right;" />
+            <ui:ScrollView name="scroll-extendable-buttons" style="align-self: flex-end; height: 42px;">
+                <ui:VisualElement style="flex-grow: 1; padding-top: 5px; padding-right: 5px; padding-bottom: 5px; padding-left: 5px; flex-direction: row;">
+                    <ui:VisualElement name="extendable-element-container" style="flex-grow: 0; flex-wrap: nowrap; flex-direction: row-reverse; flex-shrink: 0;" />
+                </ui:VisualElement>
+            </ui:ScrollView>
+        </ui:VisualElement>
+    </ui:GroupBox>
+    <ui:GroupBox name="group-buttons-collection" text="Collection buttons">
+        <ui:Toggle label="Play button" name="toggle-play-button" binding-path="m_displayCollectionPlayButton" />
+        <ui:Toggle label="Open button" name="toggle-open-button" binding-path="m_displayCollectionOpenButton" />
+        <ui:Toggle label="Open additive button" name="toggle-open-additive-button" binding-path="m_displayCollectionAdditiveButton" />
+        <ui:Toggle label="Include in build toggle" name="toggle-include-in-build-toggle" binding-path="m_displayIncludeInBuildToggle" style="display: none;" />
+        <ui:VisualElement name="separator" style="flex-grow: 1; background-color: rgb(95, 95, 95); height: 1px; border-top-left-radius: 3px; border-top-right-radius: 3px; border-bottom-right-radius: 3px; border-bottom-left-radius: 3px; margin-top: 12px; margin-bottom: 12px; margin-right: 12px; margin-left: 12px;" />
+        <ui:VisualElement name="extendable-buttons-group" style="flex-grow: 1; margin-bottom: -12px;">
+            <ui:IntegerField label="Display button count" binding-path="m_maxExtendableButtonsOnCollection" name="int-extendable-button-max-count" tooltip="The amount of buttons that should be visible on the collection header before overflowing into collection popup." keyboard-type="NumberPad" style="margin-bottom: 8px;" />
+            <ui:Label text="Click to toggle visibility&lt;br&gt;Drag and drop to re-order" name="label-instructions" style="opacity: 0.4; -unity-text-align: upper-right;" />
+            <ui:ScrollView name="scroll-extendable-buttons" style="align-self: flex-end; height: 42px;">
+                <ui:VisualElement style="flex-grow: 1; padding-top: 5px; padding-right: 5px; padding-bottom: 5px; padding-left: 5px; flex-direction: row;">
+                    <ui:VisualElement name="extendable-element-container" style="flex-grow: 0; flex-wrap: nowrap; flex-direction: row-reverse; flex-shrink: 0;" />
+                </ui:VisualElement>
+            </ui:ScrollView>
+        </ui:VisualElement>
+    </ui:GroupBox>
+    <ui:GroupBox name="group-buttons-scene" text="Scene buttons">
+        <ui:VisualElement name="extendable-buttons-group" style="flex-grow: 1; margin-bottom: -12px;">
+            <ui:IntegerField label="Display button count" name="int-extendable-button-max-count" binding-path="m_maxExtendableButtonsOnScene" tooltip="The amount of buttons that should be visible on the collection header before overflowing into scene popup." keyboard-type="NumberPad" style="margin-bottom: 8px;" />
+            <ui:Label text="Click to toggle visibility&lt;br&gt;Drag and drop to re-order" name="label-instructions" style="opacity: 0.4; -unity-text-align: upper-right;" />
+            <ui:ScrollView name="scroll-extendable-buttons" style="align-self: flex-end; height: 42px;">
+                <ui:VisualElement style="flex-grow: 1; padding-top: 5px; padding-right: 5px; padding-bottom: 5px; padding-left: 5px; flex-direction: row;">
+                    <ui:VisualElement name="extendable-element-container" style="flex-grow: 0; flex-wrap: nowrap; flex-direction: row-reverse; flex-shrink: 0;" />
+                </ui:VisualElement>
+            </ui:ScrollView>
+        </ui:VisualElement>
+    </ui:GroupBox>
+    <ui:GroupBox name="group-buttons-footer" text="Footer">
+        <ui:VisualElement name="extendable-buttons-group" style="flex-grow: 1; margin-bottom: -12px; margin-top: -36px;">
+            <ui:Label text="Click to toggle visibility&lt;br&gt;Drag and drop to re-order" name="label-instructions" style="opacity: 0.4; -unity-text-align: upper-right;" />
+            <ui:ScrollView name="scroll-extendable-buttons" style="align-self: flex-end; height: 42px;">
+                <ui:VisualElement style="flex-grow: 1; padding-top: 5px; padding-right: 5px; padding-bottom: 5px; padding-left: 5px; flex-direction: row;">
+                    <ui:VisualElement name="extendable-element-container" style="flex-grow: 0; flex-wrap: nowrap; flex-direction: row-reverse; flex-shrink: 0;" />
+                </ui:VisualElement>
+            </ui:ScrollView>
+        </ui:VisualElement>
+    </ui:GroupBox>
+</ui:UXML>

@@ -1,0 +1,9 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:GroupBox text="Startup:" name="group-startup">
+        <ui:DropdownField label="Splash screen:" index="-1" name="dropdown-splash-scene" />
+    </ui:GroupBox>
+    <ui:GroupBox text="Advanced:" name="group-startup-scene">
+        <ui:Label tabindex="-1" text="The startup scene is the scene that your game will start with, which will trigger ASM startup process. It may also be used as fallback scene for some time after startup, but note that ASM could switch to its own at any time.&#10;&#10;For more info, check the common questions article of the documentation.&#10;&#10;&lt;b&gt;If none, then &apos;ASM - Fallback scene&apos; will be used.&lt;/b&gt;" display-tooltip-when-elided="true" style="white-space: normal; margin-left: 6px; margin-right: 6px; margin-top: 0; margin-bottom: 12px;" />
+        <AdvancedSceneManager.Editor.SceneField focusable="true" name="scene-startup" label="Startup scene" binding-path="m_startupScene" Binding-path="m_startupScene" Label="Startup scene:" />
+    </ui:GroupBox>
+</ui:UXML>

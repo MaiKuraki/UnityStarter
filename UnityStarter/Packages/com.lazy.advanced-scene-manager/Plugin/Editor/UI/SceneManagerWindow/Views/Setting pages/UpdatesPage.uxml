@@ -1,0 +1,19 @@
+<engine:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:engine="UnityEngine.UIElements" xmlns:editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <engine:GroupBox>
+        <engine:Label text="You are currently up to date!" name="text-status" style="-unity-font-style: bold; margin-bottom: 12px; text-overflow: ellipsis; overflow: hidden; white-space: normal;" />
+        <engine:Label text="Current version 1.0.0" name="text-version-current" style="overflow: hidden; text-overflow: ellipsis; white-space: normal;" />
+        <engine:Label text="Available version 1.0.0" name="text-version-available" style="overflow: hidden; text-overflow: ellipsis; white-space: normal; margin-top: 4px;" />
+        <engine:VisualElement style="flex-grow: 1; position: absolute; top: 8px; right: 8px; flex-direction: row;">
+            <engine:Button text="" name="button-check" tooltip="Check for updates" class="fontAwesome" style="margin-top: 8px; margin-right: 8px;" />
+            <engine:Button text="" name="button-download" tooltip="Download" class="fontAwesome" style="margin-top: 8px; margin-right: 8px;" />
+            <engine:Button text="" name="button-view-patches" tooltip="View patches" class="fontAwesome" style="margin-top: 8px; margin-right: 8px;" />
+        </engine:VisualElement>
+        <engine:Label text="The latest update is a asset store update, this means it has to be installed manually through the package manager (My Assets &gt; Advanced Scene Manager)." name="text-asset-store" style="margin-top: 12px; -unity-font-style: bold-and-italic; font-size: 11.5px; white-space: normal; background-color: rgba(0, 0, 0, 0.28); border-top-left-radius: 3px; border-top-right-radius: 3px; border-bottom-right-radius: 3px; border-bottom-left-radius: 3px; padding-top: 8px; padding-right: 8px; padding-bottom: 8px; padding-left: 8px; margin-right: 0; margin-bottom: 0; margin-left: 0;" />
+    </engine:GroupBox>
+    <engine:GroupBox style="margin-top: 12px;">
+        <engine:Label text="How often should we check for updates?" style="margin-top: 8px; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis;" />
+        <engine:DropdownField choices="Auto,Never,Every hour,Every 3 hours,Every 6 hours,Every 12 hours,Every 24 hours,Every 48 hours,Every week" index="0" name="dropdown-interval" binding-path="m_updateInterval" />
+        <engine:Toggle label="Allow update check (project wide)" name="toggle-default" binding-path="m_allowUpdateCheck" style="margin-top: 16px;" />
+        <engine:Label text="The above toggle determines if update check is enabled or disabled when Auto is selected. Can be used to allow a single person to be responsible for updating ASM, for example.&#10;&#10;The dropdown above function as a local override.&#10;(Enabled Auto is 3 hours)" style="white-space: normal; margin-top: 8px;" />
+    </engine:GroupBox>
+</engine:UXML>

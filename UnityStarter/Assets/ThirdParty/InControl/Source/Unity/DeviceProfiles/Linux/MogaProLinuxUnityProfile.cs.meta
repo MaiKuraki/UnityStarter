@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 42d4d1a8b480b4ac99ecf0a7f6d0639c
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Linux/MogaProLinuxUnityProfile.cs
+  uploadId: 657724

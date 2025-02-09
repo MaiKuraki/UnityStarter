@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 58bd499660b9b44c0a911c84a954d520
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Mac/XboxWirelessMacNativeProfile.cs
+  uploadId: 657724

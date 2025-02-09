@@ -1,0 +1,5 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True" asm="AdvancedSceneManager.Editor.UI">
+    <ui:VisualElement name="ProgressSpinnerView" picking-mode="Ignore" style="position: absolute; left: 0; top: 0; right: 0; bottom: 0; align-items: center; justify-content: center; background-color: rgb(56, 56, 56);">
+        <ui:Label tabindex="-1" text="◠" display-tooltip-when-elided="true" name="progress-spinner" picking-mode="Ignore" class="active" style="font-size: 64px; align-self: center; margin-left: auto; margin-right: auto; margin-top: auto; margin-bottom: auto; color: rgb(255, 255, 255);" />
+    </ui:VisualElement>
+</ui:UXML>

@@ -1,0 +1,74 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True">
+    <ui:VisualElement name="group-header" style="flex-grow: 1; flex-direction: row; margin-top: 8px; margin-bottom: 8px; flex-shrink: 0;">
+        <ui:Label binding-path="m_title" name="text-title" style="margin-top: 0; margin-right: 4px; margin-bottom: 0; margin-left: 8px; padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; font-size: 18px; overflow: hidden; text-overflow: ellipsis; flex-shrink: 1; flex-grow: 0;" />
+        <ui:Button text="" name="button-rename" tooltip="Rename" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&amp;guid=0ba460244a244ed449201ed8e8680e50&amp;type=3#Font Awesome 6 Free-Solid-900&quot;);" />
+        <ui:VisualElement class="spacer" style="flex-grow: 1;" />
+        <ui:VisualElement style="flex-grow: 1; flex-shrink: 2;">
+            <ui:VisualElement name="group-scene-loader-toggles" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row-reverse; margin-right: -3px; flex-wrap: wrap;">
+                <ui:Toggle label="Netcode" name="toggle-netcode" tooltip="Flags scene to be loaded and unloaded through ASM netcode scene loader." style="display: none;" />
+                <ui:Toggle label="Addressable" name="toggle-addressable" tooltip="Adds scene to addressables. Note that it won&apos;t work out of the box, some configuration in addressables is required." style="display: none;" />
+            </ui:VisualElement>
+            <ui:VisualElement name="extendable-button-container" style="flex-grow: 1; flex-wrap: wrap; opacity: 0.6; flex-direction: row-reverse;" />
+        </ui:VisualElement>
+        <ui:Button text="" tooltip="Close" name="button-close" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&amp;guid=0ba460244a244ed449201ed8e8680e50&amp;type=3#Font Awesome 6 Free-Solid-900&quot;); padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; margin-top: -16px; margin-right: -8px; margin-bottom: 0; margin-left: 0; width: 22px; height: 22px; position: absolute; top: 0; right: 0;" />
+    </ui:VisualElement>
+    <ui:ScrollView horizontal-scroller-visibility="Hidden" name="scroll-collection-popup">
+        <uie:ObjectField label="User data:" binding-path="m_extraData" name="object-user-data" type="UnityEngine.ScriptableObject, UnityEngine.CoreModule" tooltip="Custom user data, this can be any scriptable object. Can be retrieved in code using SceneCollection.UserData&lt;T&gt;()." class="lockable" style="margin-left: 6px; margin-right: 6px; margin-top: 4px; margin-bottom: 4px;" />
+        <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row;">
+            <ui:VisualElement name="group-lock" style="flex-grow: 0; flex-shrink: 0; flex-direction: row;">
+                <ui:Button display-tooltip-when-elided="true" name="button-lock" tooltip="Lock collection..." style="display: none; width: 22px; height: 22px; margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0; padding-left: 0; padding-right: 0; padding-top: 0; padding-bottom: 0;">
+                    <ui:VisualElement name="icon" picking-mode="Ignore" style="flex-grow: 1;" />
+                </ui:Button>
+                <ui:Button display-tooltip-when-elided="true" name="button-unlock" tooltip="Unlock collection..." text="" style="display: none; width: 22px; height: 22px; margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0; padding-left: 0; padding-right: 0; padding-top: 0; padding-bottom: 0; -unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900%20SDF.asset?fileID=11400000&amp;guid=747dc63c4036f3945ba6f469bbed12b3&amp;type=2#Font Awesome 6 Free-Solid-900 SDF&quot;);">
+                    <ui:VisualElement name="icon" picking-mode="Ignore" style="flex-grow: 1;" />
+                </ui:Button>
+            </ui:VisualElement>
+            <ui:VisualElement name="group-scene-loader-toggles" class="lockable" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row-reverse; flex-shrink: 0;" />
+        </ui:VisualElement>
+        <ui:GroupBox name="group-startup" class="lockable" style="flex-direction: row; margin-left: 4px; margin-right: 4px; margin-top: 4px; margin-bottom: 0; padding-left: 12px; padding-right: 0; padding-top: 0; padding-bottom: 0;">
+            <ui:Label tabindex="-1" text="Startup:" display-tooltip-when-elided="true" style="-unity-text-align: middle-left; flex-grow: 1;" />
+            <ui:RadioButtonGroup value="-1" choices="Auto,Open,Do Not Open" name="radio-group-startup" binding-path="m_startupOption" style="margin-top: 0; margin-bottom: -2px; flex-wrap: wrap; flex-shrink: 1;" />
+        </ui:GroupBox>
+        <ui:GroupBox text="Open options:" name="group-open">
+            <ui:Toggle label="Unload unused assets" name="toggle-unload-unused-assets" binding-path="m_unloadUnusedAssets" tooltip="Specifies if Resources.UnloadUnusedAssets() should be called after scene loading / unloading is done." class="lockable" />
+            <ui:Toggle label="Open persistent" name="toggle-open-persistent" binding-path="m_openAsPersistent" tooltip="Open scenes as persistent when collection is opened." class="lockable" />
+            <ui:Toggle label="Set active scene when collection opened as additive" name="toggle-set-active-scene-when-additive" binding-path="m_setActiveSceneWhenOpenedAsAdditive" />
+            <ui:DropdownField label="Active scene:" index="-1" name="dropdown-active-scene" />
+        </ui:GroupBox>
+        <ui:GroupBox name="group-input-bindings" text="Input bindings">
+            <AdvancedSceneManager.Editor.InputBindingField binding-path="m_inputBindings" />
+            <ui:ListView name="list-input-bindings-ignore" reorderable="true" reorder-mode="Animated" binding-path="m_ignoreInputBindingsForScenes" show-bound-collection-size="false" show-border="false" show-add-remove-footer="true" show-foldout-header="true" header-title="Scenes to ignore:" virtualization-method="DynamicHeight" />
+        </ui:GroupBox>
+        <ui:GroupBox text="Loading:" name="group-loading" class="lockable">
+            <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row;">
+                <ui:Label tabindex="-1" text="Loading screen usage:" display-tooltip-when-elided="true" />
+                <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0);" />
+                <ui:EnumField type="AdvancedSceneManager.Models.Enums.LoadingScreenUsage, AdvancedSceneManager" name="enum-loading-screen" binding-path="m_loadingScreenUsage" />
+            </ui:VisualElement>
+            <ui:DropdownField label="Loading scene:" index="-1" name="dropdown-loading-scene" />
+        </ui:GroupBox>
+        <ui:GroupBox name="group-load-priority" text="Load priority" style="padding-top: 12px; padding-right: 12px; padding-bottom: 12px; padding-left: 12px;">
+            <ui:VisualElement name="description-collapsed" style="flex-grow: 0; flex-shrink: 0; margin-top: -6px; background-color: rgb(38, 38, 38); border-top-left-radius: 3px; border-top-right-radius: 3px; border-bottom-right-radius: 3px; border-bottom-left-radius: 3px; margin-right: 2px; margin-bottom: 8px; margin-left: 0; padding-top: 4px; padding-right: 4px; padding-bottom: 4px; padding-left: 4px;">
+                <ui:Label text="Load priority will set the &lt;b&gt;ThreadPriority&lt;/b&gt; to use when opening the scenes." style="white-space: normal; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0; opacity: 1; padding-top: 8px; padding-right: 8px; padding-bottom: 0; padding-left: 8px;" />
+                <ui:Button text="Read more" name="button-description" style="align-self: flex-end; padding-top: 4px; padding-right: 4px; padding-bottom: 4px; padding-left: 4px; margin-top: 2px;" />
+            </ui:VisualElement>
+            <ui:VisualElement name="description-expanded" style="flex-grow: 0; flex-shrink: 0; margin-top: -6px; background-color: rgb(38, 38, 38); border-top-left-radius: 3px; border-top-right-radius: 3px; border-bottom-right-radius: 3px; border-bottom-left-radius: 3px; margin-right: 2px; margin-bottom: 8px; margin-left: 0; padding-top: 4px; padding-right: 4px; padding-bottom: 4px; padding-left: 4px; display: none;">
+                <ui:Label text="Load priority will set the &lt;b&gt;ThreadPriority&lt;/b&gt; to use when opening the scenes.&#10;&#10;Lower means slower loading, but faster means more lag when attempting to do other stuff, such as gameplay.&#10;&lt;b&gt;BelowNormal&lt;/b&gt; is unity default.&#10;&#10;&lt;b&gt;Auto&lt;/b&gt; means that ASM will use either scene setting or operation setting. If none are set, then unity default will be used." style="white-space: normal; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0; opacity: 1; padding-top: 8px; padding-right: 8px; padding-bottom: 0; padding-left: 8px;" />
+                <ui:Button text="Read less" name="button-description" style="align-self: flex-end; padding-top: 4px; padding-right: 4px; padding-bottom: 4px; padding-left: 4px; margin-top: 2px;" />
+            </ui:VisualElement>
+            <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row;">
+                <ui:Label tabindex="-1" text="Load priority:" display-tooltip-when-elided="true" />
+                <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0);" />
+                <ui:EnumField name="enum-loading-priority" binding-path="m_loadPriority" />
+            </ui:VisualElement>
+        </ui:GroupBox>
+        <ui:GroupBox name="group-events" text="Events">
+            <ui:Foldout text="On Opened" name="group-event-OnOpened" view-data-key="group-event-OnOpened">
+                <uie:PropertyField name="property-OnOpen" binding-path="m_events.OnOpen" />
+            </ui:Foldout>
+            <ui:Foldout text="On Closed" name="group-event-OnClosed" view-data-key="group-event-OnClosed">
+                <uie:PropertyField name="property-OnClose" binding-path="m_events.OnClose" style="margin-top: 12px;" />
+            </ui:Foldout>
+        </ui:GroupBox>
+    </ui:ScrollView>
+</ui:UXML>

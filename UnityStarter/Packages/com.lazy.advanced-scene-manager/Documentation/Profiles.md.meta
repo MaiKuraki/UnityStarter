@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: a7e58c7dcdfcd214f9b4222753ac28ea
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Documentation/Profiles.md
+  uploadId: 722961

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 702424244b6a42ea8b3d310fc6745436
+timeCreated: 1604942767
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Device/InputDeviceStyleExtensions.cs
+  uploadId: 657724

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: b9fe9c28dbdc4090b9d8bcd8e5d6c1dc
+timeCreated: 1581907722
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/MFi/DualShock4MFiNativeProfile.cs
+  uploadId: 657724

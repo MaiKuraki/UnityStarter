@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: e34356e695cc141a0979b8a9c599839d
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Binding/UnknownDeviceBindingSource.cs
+  uploadId: 657724

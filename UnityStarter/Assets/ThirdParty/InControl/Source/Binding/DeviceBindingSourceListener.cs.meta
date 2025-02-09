@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: ac2c561d800544baeb31d8371a8f74eb
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Binding/DeviceBindingSourceListener.cs
+  uploadId: 657724

@@ -1,0 +1,85 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True">
+    <ui:VisualElement name="group-header" style="flex-grow: 1; flex-direction: row; margin-top: 8px; margin-bottom: 8px; flex-shrink: 0;">
+        <ui:Label name="text-title" binding-path="m_name" style="margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 8px; padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; font-size: 18px;" />
+        <ui:Button text="" name="button-rename" tooltip="Rename" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&amp;guid=0ba460244a244ed449201ed8e8680e50&amp;type=3#Font Awesome 6 Free-Solid-900&quot;);" />
+        <ui:VisualElement class="spacer" style="flex-grow: 1;" />
+        <ui:VisualElement style="flex-grow: 1;">
+            <ui:VisualElement name="group-scene-loader-toggles" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row-reverse; margin-right: -3px; flex-wrap: wrap;">
+                <ui:Toggle label="Netcode" name="toggle-netcode" tooltip="Flags scene to be loaded and unloaded through ASM netcode scene loader." style="display: none;" />
+                <ui:Toggle label="Addressable" name="toggle-addressable" tooltip="Adds scene to addressables. Note that it won&apos;t work out of the box, some configuration in addressables is required." style="display: none;" />
+            </ui:VisualElement>
+            <ui:VisualElement name="extendable-button-container" style="flex-grow: 1; flex-wrap: wrap; opacity: 0.6; flex-direction: row-reverse;" />
+        </ui:VisualElement>
+        <ui:Button text="" tooltip="Close" name="button-close" style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&amp;guid=0ba460244a244ed449201ed8e8680e50&amp;type=3#Font Awesome 6 Free-Solid-900&quot;); padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; margin-top: -16px; margin-right: -8px; margin-bottom: 0; margin-left: 0; width: 22px; height: 22px; position: absolute; top: 0; right: 0;" />
+    </ui:VisualElement>
+    <ui:ScrollView horizontal-scroller-visibility="Hidden" name="scroll-scene-popup">
+        <ui:GroupBox name="group-collection" class="accent" style="display: none; padding-top: 12px; padding-right: 12px; padding-bottom: 12px; padding-left: 12px;">
+            <ui:VisualElement style="flex-grow: 1; flex-direction: row; margin-bottom: 12px; margin-top: 0; margin-right: 0; margin-left: 0;">
+                <ui:Label text="" tooltip="These settings affect how the scene behaves within this collection" style="-unity-text-align: middle-left; -unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&amp;guid=0ba460244a244ed449201ed8e8680e50&amp;type=3#Font Awesome 6 Free-Solid-900&quot;); opacity: 0.6; font-size: 16px;" />
+                <ui:Label text="Label" name="text-collection-title" style="margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 6px; padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; font-size: 16px; -unity-text-align: middle-left;" />
+            </ui:VisualElement>
+            <ui:Toggle label="Don&apos;t open automatically" name="toggle-dontOpen" tooltip="Don&apos;t open this scene automatically with this collection." />
+        </ui:GroupBox>
+        <ui:GroupBox name="group-standalone" class="accent" style="display: none; padding-top: 12px; padding-right: 12px; padding-bottom: 12px; padding-left: 12px;">
+            <ui:VisualElement style="flex-grow: 1; flex-direction: row; margin-bottom: 12px; margin-top: 4px; margin-right: 6px; margin-left: 6px;">
+                <ui:Label text="" tooltip="These settings affect how the scene behaves when used from the standalone collection." style="-unity-text-align: middle-left; -unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900.otf?fileID=12800000&amp;guid=0ba460244a244ed449201ed8e8680e50&amp;type=3#Font Awesome 6 Free-Solid-900&quot;); opacity: 0.6; font-size: 16px;" />
+                <ui:Label text="Standalone" style="margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 6px; padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; font-size: 16px; -unity-text-align: middle-left;" />
+            </ui:VisualElement>
+            <ui:Toggle label="Open at startup" name="toggle-startup" binding-path="m_openOnStartup" />
+            <ui:Toggle label="Open when entering play mode" name="toggle-playmode-open" binding-path="m_openOnPlayMode" />
+            <ui:GroupBox name="group-input-bindings" text="Input bindings" style="padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; background-color: rgba(0, 0, 0, 0);">
+                <AdvancedSceneManager.Editor.InputBindingField binding-path="m_inputBindings" />
+                <ui:DropdownField label="Loading scene:" index="-1" name="dropdown-input-loading-scene" style="margin-top: 12px;" />
+                <ui:ListView name="list-input-bindings-ignore" reorderable="true" reorder-mode="Animated" binding-path="m_ignoreInputBindingsForScenes" show-bound-collection-size="false" show-border="false" show-add-remove-footer="true" show-foldout-header="true" header-title="Scenes to ignore" virtualization-method="DynamicHeight" />
+            </ui:GroupBox>
+        </ui:GroupBox>
+        <ui:GroupBox name="group-persistent" text="Persistence" style="padding-top: 12px; padding-right: 12px; padding-bottom: 12px; padding-left: 12px;">
+            <ui:Toggle label="Keep scene open on collection close (persistent)" name="toggle-persistent" binding-path="m_keepOpenWhenCollectionsClose" style="margin-top: -6px;" />
+            <ui:VisualElement style="flex-grow: 1; flex-direction: row; margin-top: 2px; margin-bottom: 4px; flex-wrap: wrap;">
+                <ui:Label text="When collection opens scene, but it is already open:" enable-rich-text="true" style="flex-grow: 1; flex-shrink: 1; margin-right: 8px; overflow: hidden; text-overflow: clip; white-space: normal; margin-left: 3px; -unity-text-align: middle-left;" />
+                <ui:DropdownField choices="Re-open,Remain open" name="dropdown-half-persistent" style="align-items: center;" />
+            </ui:VisualElement>
+        </ui:GroupBox>
+        <ui:GroupBox name="group-load-priority" text="Load priority" style="padding-top: 12px; padding-right: 12px; padding-bottom: 12px; padding-left: 12px;">
+            <ui:VisualElement name="description-collapsed" style="flex-grow: 0; flex-shrink: 0; margin-top: -6px; background-color: rgb(38, 38, 38); border-top-left-radius: 3px; border-top-right-radius: 3px; border-bottom-right-radius: 3px; border-bottom-left-radius: 3px; margin-right: 2px; margin-bottom: 8px; margin-left: 0; padding-top: 4px; padding-right: 4px; padding-bottom: 4px; padding-left: 4px;">
+                <ui:Label text="Load priority will set the &lt;b&gt;ThreadPriority&lt;/b&gt; to use when opening the scene." style="white-space: normal; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0; opacity: 1; padding-top: 8px; padding-right: 8px; padding-bottom: 0; padding-left: 8px;" />
+                <ui:Button text="Read more" name="button-description" style="align-self: flex-end; padding-top: 4px; padding-right: 4px; padding-bottom: 4px; padding-left: 4px; margin-top: 2px;" />
+            </ui:VisualElement>
+            <ui:VisualElement name="description-expanded" style="flex-grow: 0; flex-shrink: 0; margin-top: -6px; background-color: rgb(38, 38, 38); border-top-left-radius: 3px; border-top-right-radius: 3px; border-bottom-right-radius: 3px; border-bottom-left-radius: 3px; margin-right: 2px; margin-bottom: 8px; margin-left: 0; padding-top: 4px; padding-right: 4px; padding-bottom: 4px; padding-left: 4px; display: none;">
+                <ui:Label text="Load priority will set the &lt;b&gt;ThreadPriority&lt;/b&gt; to use when opening the scene.&#10;&#10;Lower means slower loading, but faster means more lag when attempting to do other stuff, such as gameplay.&#10;&lt;b&gt;BelowNormal&lt;/b&gt; is unity default.&#10;&#10;&lt;b&gt;Auto&lt;/b&gt; means that ASM will use either collection setting or operation setting. If none are set, then unity default will be used." style="white-space: normal; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0; opacity: 1; padding-top: 8px; padding-right: 8px; padding-bottom: 0; padding-left: 8px;" />
+                <ui:Button text="Read less" name="button-description" style="align-self: flex-end; padding-top: 4px; padding-right: 4px; padding-bottom: 4px; padding-left: 4px; margin-top: 2px;" />
+            </ui:VisualElement>
+            <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row;">
+                <ui:Label tabindex="-1" text="Load priority:" display-tooltip-when-elided="true" />
+                <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0);" />
+                <ui:EnumField name="enum-loading-priority" binding-path="m_loadPriority" />
+            </ui:VisualElement>
+        </ui:GroupBox>
+        <ui:GroupBox name="group-editor" text="Editor:" style="padding-top: 12px; padding-right: 12px; padding-bottom: 12px; padding-left: 12px;">
+            <ui:Label tabindex="-1" text="Open scene outside of play-mode automatically:" display-tooltip-when-elided="true" style="margin-top: -4px; margin-bottom: 8px; margin-left: 5px; margin-right: 10px;" />
+            <ui:EnumField type="AdvancedSceneManager.Models.Enums.EditorPersistentOption, AdvancedSceneManager" binding-path="m_autoOpenInEditor" name="enum-auto-open-in-editor" />
+            <ui:ListView focusable="true" name="list-auto-open-scenes" binding-path="m_autoOpenInEditorScenes" show-bound-collection-size="false" reorderable="true" show-add-remove-footer="true" show-border="true" fixed-item-height="26" virtualization-method="FixedHeight" />
+        </ui:GroupBox>
+        <ui:GroupBox name="group-events" text="Events">
+            <ui:Foldout text="On Opened" name="group-event-OnOpened" view-data-key="group-event-OnOpened">
+                <uie:PropertyField name="property-OnOpen" binding-path="m_events.OnOpen" />
+            </ui:Foldout>
+            <ui:Foldout text="On Closed" name="group-event-OnClosed" view-data-key="group-event-OnClosed">
+                <uie:PropertyField name="property-OnClose" binding-path="m_events.OnClose" style="margin-top: 12px;" />
+            </ui:Foldout>
+            <ui:Foldout text="On Preloaded" name="group-event-OnPreloaded" view-data-key="group-event-OnPreloaded">
+                <uie:PropertyField name="property-OnPreload" binding-path="m_events.OnPreload" style="margin-top: 12px;" />
+            </ui:Foldout>
+            <ui:Foldout text="On Preload Finished" name="group-event-OnPreloadFinished" view-data-key="group-event-OnPreloadFinished">
+                <uie:PropertyField name="property-OnPreloadFinished" binding-path="m_events.OnPreloadFinished" style="margin-top: 12px;" />
+            </ui:Foldout>
+            <ui:VisualElement name="separator" style="flex-grow: 1; height: 1px; background-color: rgba(255, 255, 255, 0.2); margin-top: 22px; margin-right: 22px; margin-bottom: 22px; margin-left: 22px;" />
+            <ui:Foldout text="On Collection Opened" name="group-event-OnCollectionOpened" view-data-key="group-event-OnCollectionOpened">
+                <uie:PropertyField name="property-OnCollectionOpened" binding-path="m_events.OnCollectionOpened" />
+            </ui:Foldout>
+            <ui:Foldout text="On Collection Closed" name="group-event-OnCollectionClosed" view-data-key="group-event-OnCollectionClosed">
+                <uie:PropertyField name="property-OnCollectionClosed" binding-path="m_events.OnCollectionClosed" style="margin-top: 12px;" />
+            </ui:Foldout>
+        </ui:GroupBox>
+    </ui:ScrollView>
+</ui:UXML>

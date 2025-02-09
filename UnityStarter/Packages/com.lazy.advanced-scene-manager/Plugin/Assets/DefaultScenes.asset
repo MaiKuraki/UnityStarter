@@ -1,0 +1,34 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 91a868910607d4141b4b45022f166c39, type: 3}
+  m_Name: DefaultScenes
+  m_EditorClassIdentifier: 
+  m_splashASMScene: {fileID: 11400000, guid: 657ba7dc4a81ddc42a1ec79263dbbb31, type: 2}
+  m_splashFadeScene: {fileID: 11400000, guid: 0497cb6a1f4bf0141a0a53530f2ebda8, type: 2}
+  m_fadeScene: {fileID: 11400000, guid: 83b108229be1dca4796fac9d2ac50e85, type: 2}
+  m_progressBarScene: {fileID: 11400000, guid: bff92060bb2f4484090ec57c0df8d58a, type: 2}
+  m_totalProgressBarScene: {fileID: 11400000, guid: a6d3d5a736e108f4cace9930d6b4cd2b, type: 2}
+  m_iconBounceScene: {fileID: 11400000, guid: 8fc0371d451df594fb8d37227e3cf856, type: 2}
+  m_pressAnyKeyScene: {fileID: 11400000, guid: 94bd0d1dd271b6448bbc713bc425c4d9, type: 2}
+  m_quoteScene: {fileID: 11400000, guid: c87aa9646fa3f7440a538ce07ff62850, type: 2}
+  m_pauseScene: {fileID: 11400000, guid: f079e2f3357f08e4090733008284fea5, type: 2}
+  m_inGameToolbarScene: {fileID: 11400000, guid: b2103fc68aa76264f9fecd6322d5fabe, type: 2}
+  m_splashASMAsset: {fileID: 102900000, guid: d8ac8f99a18230449b778006fc9a8795, type: 3}
+  m_splashFadeAsset: {fileID: 102900000, guid: 0d1c68e78977ca4468fac62172a4b14e, type: 3}
+  m_fadeAsset: {fileID: 102900000, guid: cbffd398304640d4ab3cb4e7f79b7bdf, type: 3}
+  m_progressBarAsset: {fileID: 102900000, guid: 3810c2d0fb51ffb4b945d605f10782a5, type: 3}
+  m_totalProgressBarAsset: {fileID: 102900000, guid: 97ad617393205f847b0f62e4d735bfc9, type: 3}
+  m_iconBounceAsset: {fileID: 102900000, guid: 76635b856d46593498d486a865203344, type: 3}
+  m_pressAnyKeyAsset: {fileID: 102900000, guid: 0ad62d312b15063489bd01a22c89b0e8, type: 3}
+  m_quoteAsset: {fileID: 102900000, guid: a60bdb19550b79e4780c5e21533b274f, type: 3}
+  m_pauseAsset: {fileID: 102900000, guid: 226e5a6f57e81cc4e81e2d464fe798b3, type: 3}
+  m_inGameToolbarAsset: {fileID: 102900000, guid: f7a5075cf01fb72449b4bd0b944f86a5, type: 3}

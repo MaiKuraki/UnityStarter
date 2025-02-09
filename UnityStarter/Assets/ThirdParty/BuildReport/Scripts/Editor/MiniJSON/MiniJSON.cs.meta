@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 5b3621adf6fd24d4f9cc9b73338492c2
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 8162
+  packageName: Build Report Tool
+  packageVersion: 3.11.12
+  assetPath: Assets/ThirdParty/BuildReport/Scripts/Editor/MiniJSON/MiniJSON.cs
+  uploadId: 729276

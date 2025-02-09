@@ -1,0 +1,65 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &1
+MonoBehaviour:
+  m_ObjectHideFlags: 53
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 00a3dfc3979b132458a8f7f06f6b0d5e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  sceneData:
+    dict:
+      m_throw: 1
+      m_keys: []
+      m_values: []
+  m_profiles: []
+  m_scenes:
+  - {fileID: 11400000, guid: 657ba7dc4a81ddc42a1ec79263dbbb31, type: 2}
+  - {fileID: 11400000, guid: 83b108229be1dca4796fac9d2ac50e85, type: 2}
+  - {fileID: 11400000, guid: 8fc0371d451df594fb8d37227e3cf856, type: 2}
+  - {fileID: 11400000, guid: c87aa9646fa3f7440a538ce07ff62850, type: 2}
+  - {fileID: 11400000, guid: b2103fc68aa76264f9fecd6322d5fabe, type: 2}
+  - {fileID: 11400000, guid: 0497cb6a1f4bf0141a0a53530f2ebda8, type: 2}
+  - {fileID: 11400000, guid: 94bd0d1dd271b6448bbc713bc425c4d9, type: 2}
+  - {fileID: 11400000, guid: bff92060bb2f4484090ec57c0df8d58a, type: 2}
+  - {fileID: 11400000, guid: f079e2f3357f08e4090733008284fea5, type: 2}
+  - {fileID: 11400000, guid: a6d3d5a736e108f4cace9930d6b4cd2b, type: 2}
+  m_collections: []
+  m_collectionTemplates: []
+  m_sceneHelper: {fileID: 11400000, guid: 76b7bbebc13f0914d9760382f86bf158, type: 2}
+  m_defaultScenes: {fileID: 11400000, guid: b09d893c6dbacf541906e890a0840393, type: 2}
+  m_defaultProfile: {fileID: 0}
+  m_forceProfile: {fileID: 0}
+  m_buildProfile: {fileID: 0}
+  m_checkForDuplicateSceneOperations: 1
+  m_preventSpammingEventMethods: 0
+  m_spamCheckCooldown: 0.5
+  m_blacklist:
+    list: []
+  m_whitelist:
+    list: []
+  m_enableCrossSceneReferences: 0
+  m_enableGUIDReferences: 1
+  m_sceneImportOption: 0
+  m_allowExcludingCollectionsFromBuild: 0
+  m_reverseUnloadOrderOnCollectionClose: 1
+  m_autoUpdateBuildScenes: 1
+  m_assetPath: Assets/Settings/AdvancedSceneManager
+  m_customData:
+    dict:
+      m_throw: 1
+      m_keys: []
+      m_values: []
+  m_unitySplashScreenColor: {r: 0.13725491, g: 0.12156863, b: 0.1254902, a: 1}
+  m_allowSceneLocking: 1
+  m_allowCollectionLocking: 1
+  m_openCollection: {fileID: 0}
+  m_additiveCollections: []
+  m_fadeScene: {fileID: 11400000, guid: 83b108229be1dca4796fac9d2ac50e85, type: 2}
+  m_allowLoadingScenesInParallel: 0
+  m_allowUpdateCheck: 1

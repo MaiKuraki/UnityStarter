@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 7d78a08ea8f9eef439d153ab49166236
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 11400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font
+    Awesome 6 Brands-Regular-400 SDF.asset
+  uploadId: 722961

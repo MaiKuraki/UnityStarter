@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 657ba7dc4a81ddc42a1ec79263dbbb31
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 11400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Default scenes/Splash ASM/Splash
+    ASM.asset
+  uploadId: 722961

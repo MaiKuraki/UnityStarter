@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 1e536a29403c28f479da249218b27ee2
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 8162
+  packageName: Build Report Tool
+  packageVersion: 3.11.12
+  assetPath: Assets/ThirdParty/BuildReport/Scripts/Editor/Utility/DldUtil_GetRspDefines.cs
+  uploadId: 729276

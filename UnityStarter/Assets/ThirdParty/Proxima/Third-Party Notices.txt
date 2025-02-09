@@ -1,0 +1,14 @@
+Proxima uses third party code under their own
+respective licenses:
+
+Proxima/Runtime/HttpDateParse.cs:
+
+    https://github.com/dotnet/runtime/blob/main/src/libraries/Common/src/System/Net/HttpDateParser.cs
+    Copyright (c) .NET Foundation and Contributors
+    MIT License
+
+Proxima/WebSocketSharp
+
+    https://github.com/sta/websocket-sharp
+    Copyright (c) 2010-2023 sta.blockhead
+    MIT License

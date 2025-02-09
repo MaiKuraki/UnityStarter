@@ -1,0 +1,15 @@
+﻿Build Report Tool uses the following:
+
+FuzzyString, an approximate string comparision library.
+https://github.com/kdjones/fuzzystring
+FuzzyString is licensed under the Eclipse Public License -v 1.0.
+A copy of the license can be found in BuildReport/Scripts/Editor/FuzzyString/FuzzyStringLicense.txt
+
+----
+
+MiniJSON, a small JSON parser. Copyright (c) 2013 Calvin Rien
+https://github.com/AnomalousUnderdog/MiniJSON.cs
+MiniJSON is licensed under the MIT License.
+A copy of the license can be found in BuildReport/Scripts/Editor/MiniJSON/MiniJSON.cs
+
+----

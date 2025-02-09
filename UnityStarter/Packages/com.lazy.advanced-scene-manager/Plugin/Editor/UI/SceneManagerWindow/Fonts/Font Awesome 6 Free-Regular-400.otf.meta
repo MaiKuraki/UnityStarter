@@ -1,0 +1,31 @@
+fileFormatVersion: 2
+guid: 06a9843bdb59b0c48ae859852230c9e0
+TrueTypeFontImporter:
+  externalObjects: {}
+  serializedVersion: 4
+  fontSize: 16
+  forceTextureCase: -2
+  characterSpacing: 0
+  characterPadding: 1
+  includeFontData: 1
+  fontNames:
+  - Font Awesome 6 Free
+  fallbackFontReferences:
+  - {fileID: 12800000, guid: 0ba460244a244ed449201ed8e8680e50, type: 3}
+  - {fileID: 12800000, guid: 532cd0dfade8e7c4fa109891b7c83a01, type: 3}
+  customCharacters: 
+  fontRenderingMode: 0
+  ascentCalculationMode: 1
+  useLegacyBoundsCalculation: 0
+  shouldRoundAdvanceValue: 1
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font
+    Awesome 6 Free-Regular-400.otf
+  uploadId: 722961

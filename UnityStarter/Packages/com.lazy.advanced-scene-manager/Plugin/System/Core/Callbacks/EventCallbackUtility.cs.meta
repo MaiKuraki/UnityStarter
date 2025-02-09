@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: 5dc8ae56a9e8c5d44ae510d3d6174d02
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/System/Core/Callbacks/EventCallbackUtility.cs
+  uploadId: 722961

@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: f8873a5a065e46c4983469fdc3611786
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 11400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Default scenes/InGameToolbar/InGameToolbarSettings.asset
+  uploadId: 722961

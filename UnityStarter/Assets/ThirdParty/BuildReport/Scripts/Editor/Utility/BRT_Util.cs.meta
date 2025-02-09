@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: f528fefa626a0440daf1137d5a319f28
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+AssetOrigin:
+  serializedVersion: 1
+  productId: 8162
+  packageName: Build Report Tool
+  packageVersion: 3.11.12
+  assetPath: Assets/ThirdParty/BuildReport/Scripts/Editor/Utility/BRT_Util.cs
+  uploadId: 729276

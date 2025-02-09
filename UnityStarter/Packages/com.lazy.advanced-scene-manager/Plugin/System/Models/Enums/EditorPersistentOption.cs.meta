@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: cd687e78f994fd94f9dba1f1f2c4d3f8
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/System/Models/Enums/EditorPersistentOption.cs
+  uploadId: 722961

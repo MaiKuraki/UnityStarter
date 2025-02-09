@@ -1,0 +1,21 @@
+fileFormatVersion: 2
+guid: 87ef033d072a44a4081be662b906f1f9
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - m_ViewDataDictionary: {instanceID: 0}
+  - styleSheet: {fileID: 7433441132597879392, guid: f7a81c0125240e544a30e96c1fbaf06a,
+      type: 3}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/System/Utility/CrossSceneReferences/Editor/CrossSceneDebugger.cs
+  uploadId: 722961

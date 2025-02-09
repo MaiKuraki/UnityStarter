@@ -1,0 +1,30 @@
+fileFormatVersion: 2
+guid: 98ffa2511cba51248ac87c5bb18f61b1
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - sceneBindingTemplate: {fileID: 9197481963319205126, guid: 1455621b22c2f0a409e19146333ad90b,
+      type: 3}
+  - style1: {fileID: 7433441132597879392, guid: f7a81c0125240e544a30e96c1fbaf06a,
+      type: 3}
+  - style2: {fileID: 7433441132597879392, guid: 344072e549a415e4c881969338448e8f,
+      type: 3}
+  - style3: {fileID: 7433441132597879392, guid: cfeea3704ae9c1b45a6906d21fa7b903,
+      type: 3}
+  - style4: {fileID: 7433441132597879392, guid: 75423e3cdd2aa8f40bbf0ded5d684526,
+      type: 3}
+  - style5: {fileID: 7433441132597879392, guid: 89f717c2eb5149d41a51c3b1f991b185,
+      type: 3}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneAssetEditor.cs
+  uploadId: 722961

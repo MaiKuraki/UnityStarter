@@ -1,0 +1,10 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True">
+    <ui:VisualElement style="padding-top: 20px; padding-right: 20px; padding-bottom: 0; padding-left: 20px;">
+        <ui:Label text="You may view the folder by pressing AssetRef below.&#10;The entire folder that it is contained within will be deleted.&#10;&#10;This is your last chance to revert to earlier version using git or similar. Earlier versions of ASM are not provided." display-tooltip-when-elided="true" style="white-space: normal;" />
+        <uie:ObjectField style="margin-top: 12px;" />
+        <ui:VisualElement style="flex-direction: row-reverse; margin-top: 12px;">
+            <ui:Button text="Delete" display-tooltip-when-elided="true" name="button-delete" />
+            <ui:Button text="Cancel" display-tooltip-when-elided="true" name="button-cancel" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

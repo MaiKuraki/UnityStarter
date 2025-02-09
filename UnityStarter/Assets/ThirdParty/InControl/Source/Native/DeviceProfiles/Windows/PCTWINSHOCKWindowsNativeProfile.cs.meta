@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 8af4d826179e44c70816bc3fe45abe6e
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Windows/PCTWINSHOCKWindowsNativeProfile.cs
+  uploadId: 657724

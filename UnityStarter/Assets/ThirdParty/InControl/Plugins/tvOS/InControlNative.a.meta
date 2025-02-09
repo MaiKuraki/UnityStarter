@@ -1,0 +1,30 @@
+fileFormatVersion: 2
+guid: 82062f435c1eb4e68baa8700c28e7ed2
+PluginImporter:
+  externalObjects: {}
+  serializedVersion: 3
+  iconMap: {}
+  executionOrder: {}
+  defineConstraints: []
+  isPreloaded: 0
+  isOverridable: 0
+  isExplicitlyReferenced: 0
+  validateReferences: 1
+  platformData:
+    Any:
+      enabled: 0
+      settings: {}
+    tvOS:
+      enabled: 1
+      settings:
+        FrameworkDependencies: CoreHaptics
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Plugins/tvOS/InControlNative.a
+  uploadId: 657724

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: c1edfcfabe854677bdce75d61aa4b31d
+timeCreated: 1615859324
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/SDL/SDLPlayStation5NativeProfile.cs
+  uploadId: 657724

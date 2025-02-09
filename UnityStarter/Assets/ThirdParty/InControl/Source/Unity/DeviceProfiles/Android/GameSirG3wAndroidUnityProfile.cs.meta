@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 8d1d040496ae24916a1f91d093cb6ef4
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Android/GameSirG3wAndroidUnityProfile.cs
+  uploadId: 657724

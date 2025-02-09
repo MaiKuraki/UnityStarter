@@ -1,0 +1,16 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="False">
+    <ui:Template name="SceneBindingItem" src="project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Views/Item%20templates/SceneBindingItem.uxml?fileID=9197481963319205126&amp;guid=c3e8ee20dae76744fb87f29db3698c5f&amp;type=3#SceneBindingItem" />
+    <ui:GroupBox text="Input binding:" name="group-scene-binding">
+        <ui:VisualElement name="scene-binding" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: column; -unity-text-align: middle-left;">
+            <ui:ListView reorderable="true" show-add-remove-footer="true" />
+            <ui:VisualElement name="list" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); display: none;" />
+            <ui:VisualElement name="interaction" style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row; display: none;">
+                <ui:Label tabindex="-1" text="Interaction:" display-tooltip-when-elided="true" name="Label" style="display: none;" />
+                <ui:RadioButtonGroup value="-1" tooltip="Specifies interaction type for bindings." style="margin-bottom: 0; display: none;" />
+            </ui:VisualElement>
+            <ui:Toggle label="Open additive" name="toggle-collection-additive" tooltip="Open collection as additive" style="display: none;" />
+            <ui:Instance template="SceneBindingItem" name="SceneBindingItem" style="display: none;" />
+        </ui:VisualElement>
+        <ui:Label tabindex="-1" text="Only available when using InputSystem" display-tooltip-when-elided="true" name="text-disabled" />
+    </ui:GroupBox>
+</ui:UXML>

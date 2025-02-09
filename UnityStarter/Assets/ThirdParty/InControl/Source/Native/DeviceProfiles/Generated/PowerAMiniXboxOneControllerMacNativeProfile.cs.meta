@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 8ade1d4aba4414349a888e3d0e09b0e5
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Generated/PowerAMiniXboxOneControllerMacNativeProfile.cs
+  uploadId: 657724

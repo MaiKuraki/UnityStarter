@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: c7b8d843635e449e3b0a4ca8c986b443
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Generated/MicrosoftXbox360ControllerMacNativeProfile.cs
+  uploadId: 657724

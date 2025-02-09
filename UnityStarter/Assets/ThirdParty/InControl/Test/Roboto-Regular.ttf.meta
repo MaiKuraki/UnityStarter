@@ -1,0 +1,21 @@
+fileFormatVersion: 2
+guid: 0410ad49c91d744308a3357425d86f3a
+TrueTypeFontImporter:
+  serializedVersion: 2
+  fontSize: 12
+  forceTextureCase: -2
+  characterSpacing: 1
+  characterPadding: 0
+  includeFontData: 1
+  use2xBehaviour: 0
+  fontNames: []
+  customCharacters: 
+  fontRenderingMode: 0
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 
+  assetPath: Assets/ThirdParty/InControl/Test/Roboto-Regular.ttf
+  uploadId: 0

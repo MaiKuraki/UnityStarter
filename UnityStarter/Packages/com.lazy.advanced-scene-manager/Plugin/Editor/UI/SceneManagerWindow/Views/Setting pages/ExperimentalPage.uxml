@@ -1,0 +1,7 @@
+<engine:UXML xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:engine="UnityEngine.UIElements" xmlns:editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <engine:Label text="Experiments are potentially unstable features that are available for testing. Since we cannot track usage, we would greatly appreciate feedback or suggestions on these!&#10;&#10;You may find a link to our discord in the upper right menu of the window." style="white-space: normal; margin-top: 12px; margin-right: 12px; margin-bottom: 4px; margin-left: 12px;" />
+    <engine:GroupBox>
+        <engine:Toggle label="Allow loading scenes in parallel" name="toggle-parallel-loading" binding-path="m_allowLoadingScenesInParallel" />
+        <engine:Label text="This enables parallel scene loading for scene operations. Note that you will lose the ability to cancel scene operations when scenes are being loaded." style="white-space: normal; opacity: 0.4;" />
+    </engine:GroupBox>
+</engine:UXML>

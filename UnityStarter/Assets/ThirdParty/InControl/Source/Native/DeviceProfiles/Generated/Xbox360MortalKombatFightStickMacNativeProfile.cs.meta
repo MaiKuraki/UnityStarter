@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: c839e8d368bb2448fb277be5a8f1020a
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Generated/Xbox360MortalKombatFightStickMacNativeProfile.cs
+  uploadId: 657724

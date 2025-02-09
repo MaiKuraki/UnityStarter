@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 76635b856d46593498d486a865203344
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Default scenes/IconBounce/IconBounce.unity
+  uploadId: 722961

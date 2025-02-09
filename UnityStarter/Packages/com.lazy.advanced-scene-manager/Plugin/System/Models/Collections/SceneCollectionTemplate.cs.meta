@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: b26c05d56a92d5448b93f8c3a271b6cf
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/System/Models/Collections/SceneCollectionTemplate.cs
+  uploadId: 722961

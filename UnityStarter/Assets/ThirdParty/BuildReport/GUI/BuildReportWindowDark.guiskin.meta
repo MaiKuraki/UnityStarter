@@ -1,0 +1,11 @@
+fileFormatVersion: 2
+guid: a83ea98aba103134fa3413925488bb89
+NativeFormatImporter:
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 8162
+  packageName: Build Report Tool
+  packageVersion: 3.11.12
+  assetPath: Assets/ThirdParty/BuildReport/GUI/BuildReportWindowDark.guiskin
+  uploadId: 729276

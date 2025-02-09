@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: 56821b02812e34d4b812ccb4b6d70e86
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Layouts/VerticalLayout.cs
+  uploadId: 722961

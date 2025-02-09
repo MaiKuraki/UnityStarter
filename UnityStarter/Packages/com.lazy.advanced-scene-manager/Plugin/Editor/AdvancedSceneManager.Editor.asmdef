@@ -1,0 +1,63 @@
+{
+    "name": "AdvancedSceneManager.Editor",
+    "rootNamespace": "",
+    "references": [
+        "GUID:2c6f01f5d27984343bd2e98e1116e8fd",
+        "GUID:9e24947de15b9834991c9d8411ea37cf",
+        "GUID:69448af7b92c7f342b298e06a37122aa",
+        "GUID:75469ad4d38634e559750d17036d5f7c",
+        "GUID:478a2357cc57436488a56e564b08d223",
+        "GUID:0a0471484b079be408cb3a0d7fe94736"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "UNITY_2021_3_OR_NEWER",
+        "UNITY_EDITOR",
+        "ASM"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.lazy.advanced-scene-manager",
+            "expression": "1.0",
+            "define": "ASM"
+        },
+        {
+            "name": "com.unity.editorcoroutines",
+            "expression": "1.0",
+            "define": "COROUTINES"
+        },
+        {
+            "name": "com.unity.addressables",
+            "expression": "1.0",
+            "define": "ADDRESSABLES"
+        },
+        {
+            "name": "com.unity.inputsystem",
+            "expression": "1.0",
+            "define": "INPUTSYSTEM"
+        },
+        {
+            "name": "com.unity.netcode.gameobjects",
+            "expression": "1.0",
+            "define": "NETCODE"
+        },
+        {
+            "name": "com.marijnzwemmer.unity-toolbar-extender",
+            "expression": "1.0",
+            "define": "TOOLBAR_EXTENDER"
+        },
+        {
+            "name": "com.unity.inputsystem",
+            "expression": "1.0",
+            "define": "INPUTSYSTEM"
+        }
+    ],
+    "noEngineReferences": false
+}

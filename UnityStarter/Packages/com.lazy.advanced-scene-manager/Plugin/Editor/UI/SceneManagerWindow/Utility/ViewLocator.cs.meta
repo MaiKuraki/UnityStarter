@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: 047bff71e1d119549ad7901d149fced5
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Utility/ViewLocator.cs
+  uploadId: 722961

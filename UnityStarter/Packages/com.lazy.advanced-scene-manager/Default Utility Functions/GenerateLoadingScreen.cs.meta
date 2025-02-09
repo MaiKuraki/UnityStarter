@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: 3fc72f9b5d0ac88488cb228647310e9b
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Default Utility Functions/GenerateLoadingScreen.cs
+  uploadId: 722961

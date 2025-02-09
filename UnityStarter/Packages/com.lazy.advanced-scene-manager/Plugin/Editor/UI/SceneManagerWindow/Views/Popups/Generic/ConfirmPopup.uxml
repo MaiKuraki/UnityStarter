@@ -1,0 +1,9 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:Label text="Are you sure?" name="label-message" style="margin-top: 12px; margin-right: 12px; margin-bottom: 12px; margin-left: 12px; padding-top: 0; padding-right: 0; padding-bottom: 0; padding-left: 0; -unity-text-align: upper-center; overflow: hidden; white-space: normal;" />
+    <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-direction: row; height: 26px; margin-top: 6px; flex-shrink: 0;">
+        <ui:Button text="Cancel" display-tooltip-when-elided="true" name="button-cancel" style="flex-grow: 1;" />
+        <ui:VisualElement style="flex-grow: 1; flex-shrink: 1;" />
+        <ui:Button text="Secondary" display-tooltip-when-elided="true" name="button-secondary" style="flex-grow: 1;" />
+        <ui:Button text="Continue..." display-tooltip-when-elided="true" name="button-confirm" style="flex-grow: 1;" />
+    </ui:VisualElement>
+</ui:UXML>

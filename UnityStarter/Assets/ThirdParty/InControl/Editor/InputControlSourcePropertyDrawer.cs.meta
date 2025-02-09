@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 072d0b04fca04b24be86fb0978b3615c
+timeCreated: 1578588761
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Editor/InputControlSourcePropertyDrawer.cs
+  uploadId: 657724

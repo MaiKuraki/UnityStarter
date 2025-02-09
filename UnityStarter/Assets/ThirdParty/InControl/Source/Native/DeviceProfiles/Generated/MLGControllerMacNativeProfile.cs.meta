@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 5d16b82ae95d147d1b8c1e20cb5afd77
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Generated/MLGControllerMacNativeProfile.cs
+  uploadId: 657724

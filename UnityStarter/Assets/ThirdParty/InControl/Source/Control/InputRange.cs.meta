@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: f13e8f49bd10846e08f4751074893994
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Control/InputRange.cs
+  uploadId: 657724

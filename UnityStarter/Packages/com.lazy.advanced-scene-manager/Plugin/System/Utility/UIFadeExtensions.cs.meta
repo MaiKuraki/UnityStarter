@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: f3022ce62553c994cb14484e01c78528
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/System/Utility/UIFadeExtensions.cs
+  uploadId: 722961

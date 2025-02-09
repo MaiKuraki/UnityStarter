@@ -1,0 +1,16 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <ui:ScrollView horizontal-scroller-visibility="Hidden" name="scroll-list-popup">
+        <ui:GroupBox>
+            <ui:VisualElement style="flex-grow: 0; background-color: rgba(0, 0, 0, 0); flex-shrink: 0; flex-direction: row;">
+                <ui:Label tabindex="-1" text="Header" display-tooltip-when-elided="true" name="text-header" style="flex-grow: 1; -unity-text-align: middle-left; margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0; padding-left: 0; padding-right: 0; padding-top: 0; padding-bottom: 0; font-size: 16px;" />
+                <ui:VisualElement style="flex-grow: 0; flex-direction: row;">
+                    <ui:Button text="+" display-tooltip-when-elided="true" name="button-add" tooltip="Create..." style="-unity-font-definition: url(&quot;project://database/Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/Fonts/Font%20Awesome%206%20Free-Solid-900%20SDF.asset?fileID=11400000&amp;guid=747dc63c4036f3945ba6f469bbed12b3&amp;type=2#Font Awesome 6 Free-Solid-900 SDF&quot;); width: 32px; height: 32px; margin-right: 0;" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+            <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0);">
+                <ui:ListView focusable="true" show-bound-collection-size="false" selection-type="None" virtualization-method="DynamicHeight" style="flex-grow: 1; flex-shrink: 0; margin-bottom: 0; margin-top: 0; min-height: 0;" />
+                <ui:Label tabindex="-1" text="No profiles, you can add one using the + button above" display-tooltip-when-elided="true" name="text-no-items" style="position: relative; left: 0; top: 0; right: 0; bottom: 0; -unity-text-align: upper-center; white-space: normal; margin-top: 12px; margin-right: 12px; margin-bottom: 12px; margin-left: 12px;" />
+            </ui:VisualElement>
+        </ui:GroupBox>
+    </ui:ScrollView>
+</ui:UXML>

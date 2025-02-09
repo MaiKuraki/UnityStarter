@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: df84ec68c90f475d96a12fad4c00240a
+timeCreated: 1630203170
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Mac/XboxSeriesXBluetoothMacNativeProfile.cs
+  uploadId: 657724

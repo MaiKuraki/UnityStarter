@@ -1,0 +1,30 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True">
+    <ui:GroupBox name="group-profiles">
+        <uie:ObjectField label="Force profile" type="AdvancedSceneManager.Models.Profile, AdvancedSceneManager" binding-path="m_forceProfile" name="profile-force" tooltip="When assigned, profile will be forced for everyone on this project." />
+        <uie:ObjectField label="Default profile" binding-path="m_defaultProfile" type="AdvancedSceneManager.Models.Profile, AdvancedSceneManager" name="profile-default" tooltip="If profile is unset when ASM is initialized, it will default to profile. No effect if force profile is assigned." />
+    </ui:GroupBox>
+    <ui:GroupBox name="group-startup" text="ASM Play / Startup">
+        <ui:Toggle label="Run ASM startup process when using collection play button" name="toggle-startup-process-on-collection-play" binding-path="m_startupProcessOnCollectionPlay" />
+        <ui:Toggle label="Auto save scenes when using ASM play button" name="toggle-auto-save-scenes-when-entering-play-mode" binding-path="m_alwaysSaveScenesWhenEnteringPlayMode" />
+    </ui:GroupBox>
+    <ui:GroupBox>
+        <ui:Toggle label="Open collection when opening SceneAsset" name="toggle-open-collection-on-scene-asset-open" binding-path="m_openCollectionOnSceneAssetOpen" tooltip="Open first found collection when SceneAsset is opened in editor." />
+        <ui:Toggle label="Automatically manage build scene list" tooltip="Specifies whatever ASM should automatically manage build scene list" binding-path="m_autoUpdateBuildScenes" name="toggle-autoUpdateBuildScenes" />
+    </ui:GroupBox>
+    <ui:GroupBox name="group-configurable-enter-playmode" text="Configurable enter play mode">
+        <ui:Label text="Configurable play mode can be used to greatly reduce lengthy delays when entering play mode.&#10;&#10;Note that choosing to reload scene may cause double scene reload when using ASM play button, due to startup process.&#10;&#10;May not be compatible with all assets or packages.&#10;Read more &lt;a href=&quot;https://docs.unity3d.com/Manual/ConfigurableEnterPlayMode.html&quot;&gt;here&lt;/a&gt;." style="white-space: normal; margin-bottom: 12px; margin-top: 4px; margin-right: 8px; margin-left: 8px;" />
+        <ui:DropdownField name="enum-play-mode-option" choices="Reload Domain and Scene,Reload Scene only,Reload Domain only,Do not reload Domain or Scene" index="0" style="flex-shrink: 1;" />
+    </ui:GroupBox>
+    <ui:GroupBox name="group-locking">
+        <ui:Toggle label="Allow locking collections" name="toggle-collection-lock" binding-path="m_allowCollectionLocking" tooltip="Allows collections to be locked." />
+        <ui:Toggle label="Allow locking scenes" name="toggle-scene-lock" binding-path="m_allowSceneLocking" tooltip="Allows scenes to be locked. Prevents saving, and will prompt for either discard or to save as a new scene instead." />
+    </ui:GroupBox>
+    <ui:GroupBox name="group-logging" text="Logging">
+        <ui:Toggle label="Asset import" name="toggle-log-import" binding-path="m_logImport" />
+        <ui:Toggle label="Scene loading" name="toggle-log-loading" binding-path="m_logLoading" />
+        <ui:Toggle label="Open scene tracking" name="toggle-log-tracking" binding-path="m_logTracking" />
+        <ui:Toggle label="Startup" name="toggle-log-startup" binding-path="m_logStartup" />
+        <ui:Toggle label="Scene operations" name="toggle-log-operation" binding-path="m_logOperation" />
+        <ui:Toggle label="Build scene list updated" name="toggle-log-build-scenes" binding-path="m_logBuildScenes" />
+    </ui:GroupBox>
+</ui:UXML>

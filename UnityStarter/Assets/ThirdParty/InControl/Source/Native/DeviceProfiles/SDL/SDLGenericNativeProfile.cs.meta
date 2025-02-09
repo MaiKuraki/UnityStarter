@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 6072c7a30c8a44c9a0d806149cf4a10f
+timeCreated: 1615910372
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/SDL/SDLGenericNativeProfile.cs
+  uploadId: 657724

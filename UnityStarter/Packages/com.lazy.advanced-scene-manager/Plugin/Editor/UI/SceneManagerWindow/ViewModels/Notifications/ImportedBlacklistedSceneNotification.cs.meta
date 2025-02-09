@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: ac74e5794cce10f4abc067618b0f3478
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/ViewModels/Notifications/ImportedBlacklistedSceneNotification.cs
+  uploadId: 722961

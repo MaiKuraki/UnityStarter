@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 3810c2d0fb51ffb4b945d605f10782a5
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Default scenes/ProgressBar/ProgressBar.unity
+  uploadId: 722961

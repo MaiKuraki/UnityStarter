@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 8fc7ae13378f7a74894d654740f69717
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 11400000
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Default scenes/Default ASM
+    scenes.asset
+  uploadId: 722961

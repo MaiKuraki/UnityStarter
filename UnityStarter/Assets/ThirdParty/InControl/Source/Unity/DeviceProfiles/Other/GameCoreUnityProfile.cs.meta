@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 61e403bff6de45cda87326a623ae2b8b
+timeCreated: 1596043909
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Other/GameCoreUnityProfile.cs
+  uploadId: 657724

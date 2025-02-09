@@ -1,0 +1,40 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <Style src="project://database/Packages/com.lazy.advanced-scene-manager/Default%20scenes/InGameToolbar/InGameToolbar.uss?fileID=7433441132597879392&amp;guid=12d7c7fa2d8a4a9498da97b5799b9c18&amp;type=3#InGameToolbar" />
+    <ui:VisualElement picking-mode="Ignore" style="flex-grow: 1;">
+        <ui:VisualElement name="panel" style="flex-grow: 1; margin-left: 0; margin-right: 0; margin-top: 0; margin-bottom: 0; border-left-width: 1px; border-right-width: 1px; border-top-width: 1px; border-bottom-width: 1px; border-top-left-radius: 3px; border-bottom-left-radius: 3px; border-top-right-radius: 3px; border-bottom-right-radius: 3px; border-left-color: rgb(76, 76, 76); border-right-color: rgb(76, 76, 76); border-top-color: rgb(76, 76, 76); border-bottom-color: rgb(76, 76, 76); padding-left: 12px; padding-right: 12px; padding-top: 12px; padding-bottom: 12px; color: rgb(155, 155, 155); background-color: rgb(48, 48, 48); position: absolute; top: 21px; right: 22px; bottom: 24px; flex-shrink: 0; flex-direction: row;">
+            <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0); flex-shrink: 0; overflow: hidden;">
+                <ui:VisualElement style="flex-grow: 0; background-color: rgba(0, 0, 0, 0); flex-direction: row; flex-shrink: 0;">
+                    <ui:Button text="Restart game" display-tooltip-when-elided="true" name="button-restart" style="align-self: center; flex-grow: 1; flex-shrink: 1;" />
+                </ui:VisualElement>
+                <ui:VisualElement style="flex-grow: 0; background-color: rgba(0, 0, 0, 0); flex-direction: row; flex-shrink: 0;">
+                    <ui:Button display-tooltip-when-elided="true" name="button-reopen-collection" enable-rich-text="true" text="Reopen collection" style="flex-direction: row; justify-content: center; align-self: center; flex-grow: 1; flex-shrink: 1;" />
+                </ui:VisualElement>
+                <ui:VisualElement style="flex-grow: 0; background-color: rgba(0, 0, 0, 0); flex-direction: row; flex-shrink: 0; color: rgb(155, 155, 155);">
+                    <ui:Button text="Quit" display-tooltip-when-elided="true" name="button-quit" style="align-self: center; flex-shrink: 1; flex-grow: 1;" />
+                </ui:VisualElement>
+                <ui:GroupBox name="operations" style="margin-bottom: 12px; margin-left: 4px; padding-left: 12px;">
+                    <ui:Label tabindex="-1" text="Scene operations:" display-tooltip-when-elided="true" style="align-self: center; margin-top: 12px; margin-bottom: 12px; font-size: 16px;" />
+                    <ui:VisualElement style="flex-grow: 0; background-color: rgba(0, 0, 0, 0); flex-direction: row; max-width: 200px; align-self: center; flex-shrink: 0;">
+                        <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0);">
+                            <ui:Label tabindex="-1" text="Queued:" display-tooltip-when-elided="true" style="-unity-text-align: upper-center;" />
+                            <ui:Label tabindex="-1" text="0" display-tooltip-when-elided="true" name="text-queued" style="flex-grow: 0; -unity-text-align: upper-center;" />
+                        </ui:VisualElement>
+                        <ui:VisualElement style="flex-grow: 1; background-color: rgba(0, 0, 0, 0);">
+                            <ui:Label tabindex="-1" text="Running:" display-tooltip-when-elided="true" style="-unity-text-align: upper-center;" />
+                            <ui:Label tabindex="-1" text="0" display-tooltip-when-elided="true" enable-rich-text="true" name="text-running" style="-unity-text-align: upper-center;" />
+                        </ui:VisualElement>
+                    </ui:VisualElement>
+                </ui:GroupBox>
+                <ui:ScrollView name="scenes" style="flex-shrink: 1; flex-grow: 1;">
+                    <ui:Foldout text="Persistent:" name="group-persistent" style="margin-right: 22px; display: none;" />
+                    <ui:Foldout name="group-splash-scenes" text="Splash screens:" style="margin-top: 12px; margin-right: 22px; display: none;" />
+                    <ui:Foldout name="group-loading-scenes" text="Loading screens:" style="margin-top: 12px; margin-right: 22px; display: none;" />
+                    <ui:Foldout name="group-binding-scenes" text="Binding scenes:" style="margin-top: 12px; margin-right: 22px; display: none;" />
+                    <ui:Foldout name="group-collections" text="Collections:" style="margin-top: 12px; margin-right: 22px; display: none;" />
+                    <ui:Foldout name="group-standalone" text="Standalone scenes:" style="margin-top: 12px; margin-right: 22px; display: none;" />
+                    <ui:Foldout name="group-untracked" text="Untracked scenes:" style="margin-top: 12px; margin-right: 22px; display: none;" />
+                </ui:ScrollView>
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

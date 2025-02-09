@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: cd5672a47761481e965bf7f95d4776a1
+timeCreated: 1577915210
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/Utility/OptionalTypes/OptionalUInt16.cs
+  uploadId: 657724

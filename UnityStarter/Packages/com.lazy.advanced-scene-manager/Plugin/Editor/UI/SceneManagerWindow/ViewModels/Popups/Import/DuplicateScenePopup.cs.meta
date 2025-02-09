@@ -1,0 +1,9 @@
+fileFormatVersion: 2
+guid: d2a436460f4d7c8469493db9a41f32f7
+AssetOrigin:
+  serializedVersion: 1
+  productId: 174152
+  packageName: Advanced Scene Manager
+  packageVersion: 2.5.0
+  assetPath: Packages/com.lazy.advanced-scene-manager/Plugin/Editor/UI/SceneManagerWindow/ViewModels/Popups/Import/DuplicateScenePopup.cs
+  uploadId: 722961

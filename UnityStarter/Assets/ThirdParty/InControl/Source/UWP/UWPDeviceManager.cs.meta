@@ -1,0 +1,20 @@
+fileFormatVersion: 2
+guid: c503db98b133533468193fe470a65a79
+timeCreated: 1511836970
+licenseType: Store
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.10
+  assetPath: Assets/ThirdParty/InControl/Source/UWP/UWPDeviceManager.cs
+  uploadId: 657724
