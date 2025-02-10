@@ -1,4 +1,4 @@
-namespace CycloneGames.GameplayFramework
+namespace CycloneGames.GameplayFramework.Example.PureUnity
 {
     public class UnityExampleGameMode : GameMode
     {
