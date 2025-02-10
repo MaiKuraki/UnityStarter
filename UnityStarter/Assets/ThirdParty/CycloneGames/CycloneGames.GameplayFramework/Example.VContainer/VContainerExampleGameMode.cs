@@ -2,7 +2,7 @@
 using CycloneGames.Core;
 using VContainer;
 
-namespace CycloneGames.GameplayFramework.VContainer
+namespace CycloneGames.GameplayFramework.Example.VContainer
 {
     public class VContainerExampleGameMode : GameMode
     {

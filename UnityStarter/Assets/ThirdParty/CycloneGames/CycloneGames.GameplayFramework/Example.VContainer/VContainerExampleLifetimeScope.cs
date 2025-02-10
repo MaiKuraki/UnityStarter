@@ -3,7 +3,7 @@ using VContainer.Unity;
 using UnityEngine;
 using CycloneGames.Core;
 
-namespace CycloneGames.GameplayFramework.VContainer
+namespace CycloneGames.GameplayFramework.Example.VContainer
 {
     public class VContainerExampleLifetimeScope : LifetimeScope
     {
@@ -11,7 +11,7 @@ namespace CycloneGames.GameplayFramework.VContainer
 
         protected override void Configure(IContainerBuilder builder)
         {
-            builder.Register<IObjectSpawner, VcontainerExampleObjectSpawner>(Lifetime.Singleton);
+            builder.Register<IObjectSpawner, VContainerExampleObjectSpawner>(Lifetime.Singleton);
             builder.RegisterInstance<IWorldSettings>(worldSettings); //  Register the instance as interface, don't register as class
             builder.RegisterComponentInNewPrefab<IGameMode, VContainerExampleGameMode>(prefab => (VContainerExampleGameMode)worldSettings.GameModeClass, Lifetime.Singleton);
   

@@ -1,7 +1,7 @@
 using VContainer;
 using VContainer.Unity;
 
-namespace CycloneGames.GameplayFramework.VContainer
+namespace CycloneGames.GameplayFramework.Example.VContainer
 {
     public class VContainerExampleEntryPoints : IStartable
     {
