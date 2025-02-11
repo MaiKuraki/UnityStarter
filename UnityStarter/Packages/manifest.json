@@ -6,6 +6,7 @@
     "com.cysharp.unitask": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
     "com.github-glitchenzo.nugetforunity": "https://github.com/GlitchEnzo/NuGetForUnity.git?path=/src/NuGetForUnity",
     "com.holyshovelsoft.opensource.log4uni": "https://github.com/HolyShovelSoft/log4uni.git#upm",
+    "com.svermeulen.extenject": "https://github.com/Mathijs-Bakker/Extenject.git?path=UnityProject/Assets/Plugins/Zenject/Source",
     "com.tayx.graphy": "https://github.com/Tayx94/graphy.git",
     "com.unity.2d.sprite": "1.0.0",
     "com.unity.2d.tilemap": "1.0.0",
