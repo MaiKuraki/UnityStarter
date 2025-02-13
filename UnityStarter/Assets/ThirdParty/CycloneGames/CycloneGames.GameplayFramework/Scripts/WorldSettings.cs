@@ -31,10 +31,7 @@ namespace CycloneGames.GameplayFramework
 
         void OnEnable()
         {
-            if (!MLogger.Instance.ContainsLoggerOfType<UnityLogger>())
-            {
-                MLogger.Instance.AddLogger(new UnityLogger());
-            }
+            MLogger.Instance.AddLoggerUnique(new UnityLogger());
         }
     }
 }
