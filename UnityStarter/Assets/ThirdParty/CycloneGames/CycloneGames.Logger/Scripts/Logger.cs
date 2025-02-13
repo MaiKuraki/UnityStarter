@@ -88,6 +88,28 @@ namespace CycloneGames.Logger
             }
         }
 
+        public void AddLoggerUnique(ILogger logger)
+        {
+            if (logger == null) throw new ArgumentNullException(nameof(logger));
+            lock (_lock)
+            {
+                Type loggerType = logger.GetType();
+                bool alreadyExists = false;
+                foreach (var existingLogger in _loggers)
+                {
+                    if (existingLogger.GetType() == loggerType)
+                    {
+                        alreadyExists = true;
+                        break;
+                    }
+                }
+                if (!alreadyExists)
+                {
+                    _loggers.Add(logger);
+                }
+            }
+        }
+
         public void RemoveLogger(ILogger logger)
         {
             if (logger == null) throw new ArgumentNullException(nameof(logger));
@@ -227,7 +249,7 @@ namespace CycloneGames.Logger
                             }
                             catch
                             {
-                                // 处理日志记录错误（如果需要）
+
                             }
                         }
                     }
@@ -235,7 +257,7 @@ namespace CycloneGames.Logger
             }
             catch (OperationCanceledException)
             {
-                // 处理取消操作
+
             }
         }
 
