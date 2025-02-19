@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Threading.Tasks;
 using CycloneGames.Logger;
 
-namespace CycloneGames.Utility
+namespace CycloneGames.Utility.Runtime
 {
     public static class FileUtility
     {
