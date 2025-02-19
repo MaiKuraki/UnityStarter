@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace CycloneGames.Utility
+namespace CycloneGames.Utility.Runtime
 {
     public class DontDestroyOnLoad : MonoBehaviour
     {
