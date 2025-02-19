@@ -2,7 +2,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-namespace CycloneGames.Utility
+namespace CycloneGames.Utility.Runtime
 {
     public class SkipUnitySplashScreen
     {

@@ -1,7 +1,7 @@
 using UnityEngine;
 using System.Collections.Generic;
 
-namespace CycloneGames.Utility
+namespace CycloneGames.Utility.Runtime
 {
     /// <summary>
     /// Add this component to any object and it'll display the frame rate.
