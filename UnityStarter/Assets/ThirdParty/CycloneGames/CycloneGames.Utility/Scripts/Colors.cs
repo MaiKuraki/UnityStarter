@@ -6,7 +6,7 @@ namespace CycloneGames.Utility.Runtime
 	/// <summary>
 	/// Color helpers
 	/// </summary>
-	public static class MColors
+	public static class Colors
 	{
 		// via https://gist.github.com/LotteMakesStuff/f7ce43f11e545a151b95b5e87f76304c
 		// NOTE: The follwing color names come from the CSS3 specification, Section 4.3 Extended Color Keywords

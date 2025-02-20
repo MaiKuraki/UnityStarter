@@ -132,11 +132,11 @@ namespace CycloneGames.Utility.Editor
 							{
 								if (!cacheFolds.TryGetValue(prevFold.GroupName, out c))
 								{
-									cacheFolds.Add(prevFold.GroupName, new CacheFoldProp { atr = prevFold, types = new HashSet<string> { objectFields[i].Name }, groupColor = MColors.GetColorAt(prevFold.GroupColorIndex) });
+									cacheFolds.Add(prevFold.GroupName, new CacheFoldProp { atr = prevFold, types = new HashSet<string> { objectFields[i].Name }, groupColor = Colors.GetColorAt(prevFold.GroupColorIndex) });
 								}
 								else
 								{
-									c.groupColor = MColors.GetColorAt(prevFold.GroupColorIndex);
+									c.groupColor = Colors.GetColorAt(prevFold.GroupColorIndex);
 									c.types.Add(objectFields[i].Name);
 								}
 							}
@@ -149,11 +149,11 @@ namespace CycloneGames.Utility.Editor
 						if (!cacheFolds.TryGetValue(fold.GroupName, out c))
 						{
 							var expanded = EditorPrefs.GetBool(string.Format($"{fold.GroupName}{objectFields[i].Name}{target.name}"), false);
-							cacheFolds.Add(fold.GroupName, new CacheFoldProp { atr = fold, types = new HashSet<string> { objectFields[i].Name }, expanded = expanded, groupColor = MColors.GetColorAt(prevFold.GroupColorIndex) });
+							cacheFolds.Add(fold.GroupName, new CacheFoldProp { atr = fold, types = new HashSet<string> { objectFields[i].Name }, expanded = expanded, groupColor = Colors.GetColorAt(prevFold.GroupColorIndex) });
 						}
 						else
 						{
-							c.groupColor = MColors.GetColorAt(prevFold.GroupColorIndex);
+							c.groupColor = Colors.GetColorAt(prevFold.GroupColorIndex);
 							c.types.Add(objectFields[i].Name);
 						}
 
