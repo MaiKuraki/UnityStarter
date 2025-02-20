@@ -24,14 +24,10 @@ namespace CycloneGames.Utility.Runtime
         public bool AdjustForSafeArea = true; // Option to adjust position for safe area
         public float UpdateInterval = 0.3f;
         public Modes Mode = Modes.Instant;
-
         public Color DefaultForegroundColor = Color.green; // Default foreground color
         private Color ForegroundColor;
         public Color OutlineColor = Color.black; // Background color
-        Color? foundColor = null; // Color in the 'FPSColors' list
         public Vector2 OutlineOffset = new Vector2(1, 1); // Offset for simulating text outline
-
-        public int FontSize = 48; // Font size
         public ScreenPosition PositionPreset = ScreenPosition.TopLeft; // Preset for screen position
         public Vector2 CustomPosition = new Vector2(0, 0); // Coordinates for a custom position
 
@@ -59,6 +55,8 @@ namespace CycloneGames.Utility.Runtime
         private Vector2 _labelPosition;
         private GUIStyle _style = new GUIStyle();
         private GUIContent _content = new GUIContent();
+        private Color? foundColor = null; // Color in the 'FPSColors' list
+        private float _fontSizeRatio = 0.04f;
 
         static string[] _stringsFrom00To300 = {
             "00", "01", "02", "03", "04", "05", "06", "07", "08", "09",
@@ -107,7 +105,8 @@ namespace CycloneGames.Utility.Runtime
             MakeUnique();
 
             _timeLeft = UpdateInterval;
-            _style.fontSize = FontSize;
+            int shortestScreenSide = Mathf.Min(Screen.width, Screen.height);
+            _style.fontSize = Mathf.RoundToInt(shortestScreenSide * _fontSizeRatio);
             ForegroundColor = DefaultForegroundColor;
         }
 
@@ -127,7 +126,7 @@ namespace CycloneGames.Utility.Runtime
 
             if (_timeLeft <= 0.0f)
             {
-                _currentFPS = (int)Mathf.Clamp(_framesAccumulated / _framesDrawnInTheInterval, 0, 300);
+                _currentFPS = Mathf.RoundToInt(Mathf.Clamp(_framesAccumulated / _framesDrawnInTheInterval, 0, 300));
                 _framesDrawnInTheInterval = 0;
                 _framesAccumulated = 0f;
                 _timeLeft = UpdateInterval;
@@ -196,7 +195,8 @@ namespace CycloneGames.Utility.Runtime
                 return;
             }
 
-            _style.fontSize = FontSize;
+            int shortestScreenSide = Mathf.Min(Screen.width, Screen.height);
+            _style.fontSize = Mathf.RoundToInt(shortestScreenSide * _fontSizeRatio);
             _content.text = _displayedText;
             Vector2 labelSize = _style.CalcSize(_content); // Calculate the actual width and height of the text
 
