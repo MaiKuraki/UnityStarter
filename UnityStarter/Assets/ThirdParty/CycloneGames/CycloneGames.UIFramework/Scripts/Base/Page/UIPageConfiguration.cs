@@ -8,9 +8,9 @@ namespace CycloneGames.UIFramework
     {
         //TODO: Maybe there is a better way to implement this, to resolve the dependency of UIPageConfiguration and UIPage
         [SerializeField] private UIPage pagePrefab;
-        [SerializeField] private UILayerConfirguration layer;
+        [SerializeField] private UILayerConfiguration layer;
 
         public UIPage PagePrefab => pagePrefab;
-        public UILayerConfirguration Layer => layer;
+        public UILayerConfiguration Layer => layer;
     }
 }

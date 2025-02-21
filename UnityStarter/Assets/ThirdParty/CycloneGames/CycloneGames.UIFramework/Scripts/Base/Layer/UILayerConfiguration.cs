@@ -4,7 +4,7 @@ namespace CycloneGames.UIFramework
 {
     [CreateAssetMenu(menuName = "CycloneGames/UIFramework/UILayer")]
     [System.Serializable]
-    public class UILayerConfirguration : ScriptableObject
+    public class UILayerConfiguration : ScriptableObject
     {
         //  This layerName must be same as UILayer's LayerName in UIRoot
         [SerializeField] private string layerName;
