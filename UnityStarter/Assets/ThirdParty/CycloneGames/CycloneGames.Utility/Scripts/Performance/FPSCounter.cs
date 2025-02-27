@@ -21,6 +21,7 @@ namespace CycloneGames.Utility.Runtime
             BottomRight, // Bottom right corner
             Custom       // Custom position
         }
+        public bool IsVisible = true;   // sometimes, you dont want to show the fps by default, uncheck this to hide the FPSCounter
         public bool AdjustForSafeArea = true; // Option to adjust position for safe area
         public float UpdateInterval = 0.3f;
         public Modes Mode = Modes.Instant;
@@ -33,7 +34,7 @@ namespace CycloneGames.Utility.Runtime
 
         // Dictionary to hold FPS thresholds and corresponding colors
         [System.Serializable]
-        public class FPSColor
+        public struct FPSColor
         {
             [Tooltip("The FPS threshold. When the current FPS is below this value, the text color will change to the associated color.")]
             public int FPSValue; // The FPS threshold
@@ -120,6 +121,8 @@ namespace CycloneGames.Utility.Runtime
         /// </summary>
         protected virtual void Update()
         {
+            if(!IsVisible) return;
+
             _framesDrawnInTheInterval++;
             _framesAccumulated += Time.timeScale / Time.deltaTime;
             _timeLeft -= Time.deltaTime;
@@ -190,6 +193,8 @@ namespace CycloneGames.Utility.Runtime
         /// </summary>
         private void OnGUI()
         {
+            if(!IsVisible) return;
+
             if (string.IsNullOrEmpty(_displayedText))
             {
                 return;
