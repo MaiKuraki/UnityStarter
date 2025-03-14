@@ -1,9 +1,9 @@
 using VContainer;
 using VContainer.Unity;
 
-namespace CycloneGames.GameplayFramework.Example.VContainer
+namespace CycloneGames.GameplayFramework.Sample.VContainer
 {
-    public class VContainerExampleEntryPoints : IStartable
+    public class VContainerSampleEntryPoints : IStartable
     {
         [Inject] private IGameMode gameMode;
 

@@ -1,9 +1,9 @@
 using CycloneGames.Core;
 using VContainer;
 
-namespace CycloneGames.GameplayFramework.Example.VContainer
+namespace CycloneGames.GameplayFramework.Sample.VContainer
 {
-    public class VContainerExampleObjectSpawner : IObjectSpawner
+    public class VContainerSampleObjectSpawner : IObjectSpawner
     {
         [Inject] IObjectResolver objectResolver;
         public UnityEngine.Object SpawnObject(UnityEngine.Object original)

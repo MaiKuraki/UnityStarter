@@ -10,7 +10,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 950828dd1b813e94bbe7d4509357a651, type: 3}
-  m_Name: VContainerExampleWorldSettings
+  m_Name: VContainerSampleWorldSettings
   m_EditorClassIdentifier: 
   gameModeClass: {fileID: -5824009819465676935, guid: 32efb7a5053239949b936917322a4990,
     type: 3}

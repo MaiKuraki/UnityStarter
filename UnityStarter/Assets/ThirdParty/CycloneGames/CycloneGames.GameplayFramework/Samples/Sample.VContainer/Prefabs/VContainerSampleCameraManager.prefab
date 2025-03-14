@@ -13,7 +13,7 @@ GameObject:
   - component: {fileID: 3595799904591616280}
   - component: {fileID: 5629420044122895474}
   m_Layer: 0
-  m_Name: VContainerExampleCameraManager
+  m_Name: VContainerSampleCameraManager
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0

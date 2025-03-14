@@ -2,9 +2,9 @@
 using CycloneGames.Core;
 using VContainer;
 
-namespace CycloneGames.GameplayFramework.Example.VContainer
+namespace CycloneGames.GameplayFramework.Sample.VContainer
 {
-    public class VContainerExampleGameMode : GameMode
+    public class VContainerSampleGameMode : GameMode
     {
         //  NOTE: In VContainer, we use the 'Inject' attribute to inject the dependencies, not use base.Initialize
         [Inject]

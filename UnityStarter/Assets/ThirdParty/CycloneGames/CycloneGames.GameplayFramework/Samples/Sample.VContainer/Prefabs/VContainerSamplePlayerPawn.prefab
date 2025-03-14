@@ -14,7 +14,7 @@ GameObject:
   - component: {fileID: 5017422156320519821}
   - component: {fileID: 1320795803974720323}
   m_Layer: 0
-  m_Name: VContainerExamplePlayerPawn
+  m_Name: VContainerSamplePlayerPawn
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
