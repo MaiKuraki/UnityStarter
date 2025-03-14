@@ -1,0 +1,25 @@
+{
+  "name": "com.cyclone-games.gameplay-framework",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.GameplayFramework",
+  "description": "A simple gameplay framework similiar with Unreal Engine's GameplayFramework code structure.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.unity.cinemachine": "3.0.0",
+    "com.cysharp.unitask": "2.0.0",
+    "com.cyclone-games.core": "1.0.0",
+    "com.cyclone-games.logger": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Gameplay",
+    "GameplayFramework"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

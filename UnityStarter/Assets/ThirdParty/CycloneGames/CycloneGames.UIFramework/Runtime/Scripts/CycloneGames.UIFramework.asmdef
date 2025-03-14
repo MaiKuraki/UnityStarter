@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.UIFramework",
+    "rootNamespace": "",
+    "references": [
+        "UniTask",
+        "CycloneGames.Logger",
+        "CycloneGames.Core",
+        "CycloneGames.Service"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
