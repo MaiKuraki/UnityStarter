@@ -18,7 +18,7 @@ namespace CycloneGames.Service
 
             if (_urpCameraData == null)
             {
-                MLogger.LogInfo($"{DEBUG_FLAG} invlaid URP Camera Data");
+                CLogger.LogInfo($"{DEBUG_FLAG} invlaid URP Camera Data");
                 return;
             }
 
@@ -34,7 +34,7 @@ namespace CycloneGames.Service
 
             if (_urpCameraData == null)
             {
-                MLogger.LogInfo($"{DEBUG_FLAG} invlaid URP Camera Data");
+                CLogger.LogInfo($"{DEBUG_FLAG} invlaid URP Camera Data");
                 return;
             }
 

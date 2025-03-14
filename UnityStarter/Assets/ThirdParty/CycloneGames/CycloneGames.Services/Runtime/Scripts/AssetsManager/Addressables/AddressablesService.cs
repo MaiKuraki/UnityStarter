@@ -28,7 +28,7 @@ namespace CycloneGames.Service
             }
             else
             {
-                MLogger.LogWarning($"{DEBUG_FLAG} AddressablesManager is already initialized.");
+                CLogger.LogWarning($"{DEBUG_FLAG} AddressablesManager is already initialized.");
             }
         }
 

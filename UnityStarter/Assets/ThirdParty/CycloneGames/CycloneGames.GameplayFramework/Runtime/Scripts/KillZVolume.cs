@@ -18,7 +18,7 @@ namespace CycloneGames.GameplayFramework
         private void OnTriggerEnter(Collider other)
         {
             //  Target Actor require a 'Collision' component and 'Rigidbody' component
-            MLogger.LogInfo($"{DEBUG_FLAG} {other.gameObject.name} Enter Kill Z");
+            CLogger.LogInfo($"{DEBUG_FLAG} {other.gameObject.name} Enter Kill Z");
             Actor otherActor = other.GetComponent<Actor>();
             otherActor.FellOutOfWorld();
         }

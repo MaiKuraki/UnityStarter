@@ -104,7 +104,7 @@ namespace CycloneGames.GameplayFramework
             playerState = objectSpawner?.SpawnObject(worldSettings?.PlayerStateClass) as PlayerState;
             if (playerState == null)
             {
-                MLogger.LogError("Spawn PlayerState Failed, please check your spawn pipeline");
+                CLogger.LogError("Spawn PlayerState Failed, please check your spawn pipeline");
             }
         }
 
