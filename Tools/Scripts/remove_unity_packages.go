@@ -20,6 +20,7 @@ func main() {
 
 	// List of packages to remove
 	packagesToRemove := []string{
+		"com.unity.2d.tilemap",
 		"com.unity.ai.navigation",
 		"com.unity.collab-proxy",
 		"com.unity.multiplayer.center",
@@ -28,14 +29,20 @@ func main() {
 		"com.unity.modules.ai",
 		"com.unity.modules.cloth",
 		"com.unity.modules.jsonserialize",
+		"com.unity.modules.physics",
+		"com.unity.modules.physics2d",
 		"com.unity.modules.terrain",
 		"com.unity.modules.terrainphysics",
+		"com.unity.modules.tilemap",
+		"com.unity.modules.uielements",
 		"com.unity.modules.umbra",
 		"com.unity.modules.unityanalytics",
+		"com.unity.modules.video",
 		"com.unity.modules.vehicles",
 		"com.unity.modules.vr",
 		"com.unity.modules.wind",
 		"com.unity.modules.xr",
+		"com.unity.timeline",
 		"com.unity.visualscripting",
 	}
 
