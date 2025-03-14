@@ -1,0 +1,19 @@
+{
+  "name": "com.cyclone-games.gameplay-tags",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.GameplayTags",
+  "description": "A simple gameplay tags module similiar with UnrealEngine's GameplayTags.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {},
+  "keywords": [
+    "CycloneGames",
+    "GameplayTags"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

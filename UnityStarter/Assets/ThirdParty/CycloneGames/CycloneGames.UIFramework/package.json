@@ -1,0 +1,24 @@
+{
+  "name": "com.cyclone-games.simple-ui-framework",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.UIFramework",
+  "description": "A simple ui framework for CycloneGames develope",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.0.0",
+    "com.cyclone-games.core": "1.0.0",
+    "com.cyclone-games.logger": "1.0.0",
+    "com.cyclone-games.service": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "UIFramework"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}
