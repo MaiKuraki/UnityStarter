@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 950828dd1b813e94bbe7d4509357a651, type: 3}
+  m_Name: ZenjectSampleWorldSettings
+  m_EditorClassIdentifier: 
+  gameModeClass: {fileID: 4543643679273829455, guid: 0901740533264744aadc6db63b98040a,
+    type: 3}
+  playerControllerClass: {fileID: 6624734826815063554, guid: f26eeeaf1f78ba14981473235aad0301,
+    type: 3}
+  pawnClass: {fileID: 1320795803974720323, guid: a14f7233419dc4c4395befd578b1cc36,
+    type: 3}
+  playerStateClass: {fileID: 2294852402867437646, guid: a3907b90de37989439dc86dc5eae7ddc,
+    type: 3}
+  cameraManagerClass: {fileID: 5629420044122895474, guid: 2a44ae1fee3548845a18b20a7f5f376b,
+    type: 3}
+  spectatorPawnClass: {fileID: 1587810061556121190, guid: 048ff853756b95c4399fb004019758d0,
+    type: 3}
