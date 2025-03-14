@@ -24,13 +24,13 @@ namespace CycloneGames.GameplayFramework
         {
             if (NewPlayerController == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid PlayerController");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid PlayerController");
                 return;
             }
 
             if (NewPlayerController.GetPlayerState() == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid PlayerState");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid PlayerState");
                 return;
             }
 
@@ -58,7 +58,7 @@ namespace CycloneGames.GameplayFramework
 
             if(playerStartArray == null || playerStartArray.Length == 0)
             {
-                MLogger.LogWarning($"{DEBUG_FLAG} No PlayerStart found in the scene");
+                CLogger.LogWarning($"{DEBUG_FLAG} No PlayerStart found in the scene");
                 return null;
             }
 
@@ -87,14 +87,14 @@ namespace CycloneGames.GameplayFramework
         {
             if (NewPlayer == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
                 return;
             }
 
             Actor StartSpot = FindPlayerStart(NewPlayer);
             if (StartSpot == null)
             {
-                MLogger.LogWarning($"{DEBUG_FLAG} Invalid Player Start, player will spawn at Vector3(0, 0, 0)");
+                CLogger.LogWarning($"{DEBUG_FLAG} Invalid Player Start, player will spawn at Vector3(0, 0, 0)");
                 RestartPlayerAtLocation(NewPlayer, Vector3.zero);
                 return;
             }
@@ -106,13 +106,13 @@ namespace CycloneGames.GameplayFramework
         {
             if (NewPlayer == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
                 return;
             }
 
             if (StartSpot == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid Player Start");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Start");
                 return;
             }
 
@@ -132,7 +132,7 @@ namespace CycloneGames.GameplayFramework
 
             if (!NewPlayer.GetPawn())
             {
-                MLogger.LogError($"{DEBUG_FLAG} Failed to restart player at PlayerStart, Invalid Pawn");
+                CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at PlayerStart, Invalid Pawn");
             }
             else
             {
@@ -144,7 +144,7 @@ namespace CycloneGames.GameplayFramework
         {
             if (NewPlayer == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
                 return;
             }
 
@@ -164,7 +164,7 @@ namespace CycloneGames.GameplayFramework
 
             if (!NewPlayer.GetPawn())
             {
-                MLogger.LogError($"{DEBUG_FLAG} Failed to restart player at Transform");
+                CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at Transform");
             }
             else
             {
@@ -176,7 +176,7 @@ namespace CycloneGames.GameplayFramework
         {
             if (NewPlayer == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
                 return;
             }
 
@@ -196,7 +196,7 @@ namespace CycloneGames.GameplayFramework
 
             if (!NewPlayer.GetPawn())
             {
-                MLogger.LogError($"{DEBUG_FLAG} Failed to restart player at Transform");
+                CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at Transform");
             }
             else
             {
@@ -210,7 +210,7 @@ namespace CycloneGames.GameplayFramework
 
             if (!NewPlayer.GetPawn())
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid Player Pawn");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Pawn");
             }
             else
             {
@@ -229,12 +229,12 @@ namespace CycloneGames.GameplayFramework
             Pawn p = objectSpawner?.SpawnObject(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
             if (p == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn, please check your spawn pipeline");
+                CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn, please check your spawn pipeline");
                 return null;
             }
             if (SpawnTransform == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid target transform, please check your spawn pipeline");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid target transform, please check your spawn pipeline");
                 return null;
             }
             p.transform.position = SpawnTransform.position;
@@ -248,7 +248,7 @@ namespace CycloneGames.GameplayFramework
             Pawn p = objectSpawner?.SpawnObject(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
             if (p == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn");
+                CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn");
                 return null;
             }
             p.transform.SetParent(null);
@@ -265,7 +265,7 @@ namespace CycloneGames.GameplayFramework
             cachedPlayerController = objectSpawner?.SpawnObject(worldSettings?.PlayerControllerClass) as PlayerController;
             if (cachedPlayerController == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Spawn PlayerController Failed, please check your spawn pipeline");
+                CLogger.LogError($"{DEBUG_FLAG} Spawn PlayerController Failed, please check your spawn pipeline");
                 return null;
             }
             cachedPlayerController.Initialize(objectSpawner, worldSettings);
@@ -281,7 +281,7 @@ namespace CycloneGames.GameplayFramework
 
         public virtual void LaunchGameMode()
         {
-            MLogger.LogInfo($"{DEBUG_FLAG} Launch GameMode");
+            CLogger.LogInfo($"{DEBUG_FLAG} Launch GameMode");
 
             PlayerController PC = SpawnPlayerController();
             RestartPlayer(PC);
