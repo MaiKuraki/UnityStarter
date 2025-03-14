@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 950828dd1b813e94bbe7d4509357a651, type: 3}
+  m_Name: UnitySampleWorldSettings
+  m_EditorClassIdentifier: 
+  gameModeClass: {fileID: 5441401193615185144, guid: fa506f2a75318d047805357c754a5529,
+    type: 3}
+  playerControllerClass: {fileID: 6624734826815063554, guid: 7fa6440aaf52cd242a7a336dcb4d1b16,
+    type: 3}
+  pawnClass: {fileID: 1320795803974720323, guid: 68ce904ec701fa244ae9b6293603b3ca,
+    type: 3}
+  playerStateClass: {fileID: 2294852402867437646, guid: 5f32b3dc971e3ca4089bda68cfed9ea1,
+    type: 3}
+  cameraManagerClass: {fileID: 5629420044122895474, guid: b4d721692cc08944a8bde5c2d8258887,
+    type: 3}
+  spectatorPawnClass: {fileID: 1587810061556121190, guid: 2037c07e2d6e4bf4ea65b9bde5b7061f,
+    type: 3}
