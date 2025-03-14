@@ -10,7 +10,7 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 950828dd1b813e94bbe7d4509357a651, type: 3}
-  m_Name: ZenjectExampleWorldSettings
+  m_Name: ZenjectSampleWorldSettings
   m_EditorClassIdentifier: 
   gameModeClass: {fileID: 4543643679273829455, guid: 0901740533264744aadc6db63b98040a,
     type: 3}
