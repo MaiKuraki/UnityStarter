@@ -9,9 +9,9 @@ namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
         [SerializeField] WorldSettings worldSettings;
         void Awake()
         {
-            if (!MLogger.Instance.ContainsLoggerOfType<UnityLogger>())
+            if (!CLogger.Instance.ContainsLoggerOfType<UnityLogger>())
             {
-                MLogger.Instance.AddLogger(new UnityLogger());
+                CLogger.Instance.AddLogger(new UnityLogger());
             }
 
             context = new StrangeIoCSampleMainContext(this, worldSettings);
