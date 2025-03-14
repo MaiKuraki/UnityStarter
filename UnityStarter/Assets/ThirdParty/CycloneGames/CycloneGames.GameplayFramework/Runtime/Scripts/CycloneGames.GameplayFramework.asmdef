@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.GameplayFramework",
+    "rootNamespace": "",
+    "references": [
+        "UniTask",
+        "Unity.Cinemachine",
+        "CycloneGames.Logger",
+        "CycloneGames.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

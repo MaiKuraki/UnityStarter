@@ -1,0 +1,21 @@
+{
+  "name": "com.cyclone-games.gameplay-utility",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Utility",
+  "description": "A common utility module for Unity develope.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.logger": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Utility"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

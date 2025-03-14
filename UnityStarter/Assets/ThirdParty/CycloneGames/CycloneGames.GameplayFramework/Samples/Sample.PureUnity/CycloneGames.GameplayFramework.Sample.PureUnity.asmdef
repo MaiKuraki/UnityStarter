@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.GameplayFramework.Sample.PureUnity",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.Core",
+        "CycloneGames.GameplayFramework"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
