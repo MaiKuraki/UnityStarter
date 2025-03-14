@@ -23,11 +23,11 @@ namespace CycloneGames.Logger
         LogNoBlackList
     }
 
-    public sealed class MLogger : IDisposable
+    public sealed class CLogger : IDisposable
     {
-        private static readonly Lazy<MLogger> _instance = new Lazy<MLogger>(() => new MLogger());
+        private static readonly Lazy<CLogger> _instance = new Lazy<CLogger>(() => new CLogger());
 
-        public static MLogger Instance => _instance.Value;
+        public static CLogger Instance => _instance.Value;
 
         private readonly List<ILogger> _loggers = new List<ILogger>();
         private readonly object _lock = new object();
@@ -43,7 +43,7 @@ namespace CycloneGames.Logger
         private readonly CancellationTokenSource _cancellationTokenSource = new CancellationTokenSource();
         private readonly Task _processingTask;
 
-        private MLogger()
+        private CLogger()
         {
             _processingTask = Task.Run(ProcessQueueAsync);
         }
@@ -123,6 +123,13 @@ namespace CycloneGames.Logger
         {
             lock (_lock)
             {
+                foreach (var logger in _loggers)
+                {
+                    if (logger is IDisposable disposable)
+                    {
+                        disposable.Dispose();
+                    }
+                }
                 _loggers.Clear();
             }
         }
@@ -264,9 +271,21 @@ namespace CycloneGames.Logger
         public void Dispose()
         {
             _cancellationTokenSource.Cancel();
-            _processingTask.Wait();
-            _signal.Dispose();
+            try
+            {
+                _processingTask.Wait();
+            }
+            catch (Exception)
+            {
+                throw;
+            }
+            finally
+            {
+                _signal.Dispose();
+            }
             _cancellationTokenSource.Dispose();
+
+            ClearLoggers();
         }
 
         private class LogMessage

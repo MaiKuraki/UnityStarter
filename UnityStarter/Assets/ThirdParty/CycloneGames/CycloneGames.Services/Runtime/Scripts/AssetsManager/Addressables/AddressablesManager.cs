@@ -48,7 +48,7 @@ namespace CycloneGames.Service
                 }
                 catch (Exception ex)
                 {
-                    MLogger.LogError($"{DEBUG_FLAG} Exception occurred during asset load: {ex.Message}");
+                    CLogger.LogError($"{DEBUG_FLAG} Exception occurred during asset load: {ex.Message}");
                     completionSource.TrySetException(ex);
                 }
             };
@@ -69,12 +69,12 @@ namespace CycloneGames.Service
                 }
                 else
                 {
-                    MLogger.LogWarning($"{DEBUG_FLAG} Attempted to release an invalid handle for key: {key}");
+                    CLogger.LogWarning($"{DEBUG_FLAG} Attempted to release an invalid handle for key: {key}");
                 }
             }
             else
             {
-                MLogger.LogWarning($"{DEBUG_FLAG} No active handle found for key: {key}");
+                CLogger.LogWarning($"{DEBUG_FLAG} No active handle found for key: {key}");
             }
         }
 
@@ -111,7 +111,7 @@ namespace CycloneGames.Service
                 errorMessage += $", Exception: {operation.OperationException.Message}";
             }
 
-            MLogger.LogError($"{DEBUG_FLAG} {errorMessage}");
+            CLogger.LogError($"{DEBUG_FLAG} {errorMessage}");
         }
     }
 }

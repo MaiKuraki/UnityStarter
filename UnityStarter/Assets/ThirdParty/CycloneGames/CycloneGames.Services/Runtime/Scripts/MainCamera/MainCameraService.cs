@@ -30,7 +30,7 @@ namespace CycloneGames.Service
         {
             if (mainCamera == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid MainCamera");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid MainCamera");
                 return;
             }
 
@@ -41,7 +41,7 @@ namespace CycloneGames.Service
         {
             if (mainCamera == null)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid MainCamera");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid MainCamera");
                 return;
             }
 

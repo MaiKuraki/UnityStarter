@@ -94,7 +94,7 @@ namespace CycloneGames.Utility.Runtime
             {
                 if (!File.Exists(sourceFilePath))
                 {
-                    MLogger.LogError($"{DEBUG_FLAG} Source file does not exist: {sourceFilePath}");
+                    CLogger.LogError($"{DEBUG_FLAG} Source file does not exist: {sourceFilePath}");
                     return;
                 }
 
@@ -102,14 +102,14 @@ namespace CycloneGames.Utility.Runtime
 
                 if (File.Exists(destinationFilePath) && await AreFilesEqualAsync(sourceFilePath, destinationFilePath))
                 {
-                    MLogger.LogInfo($"{DEBUG_FLAG} The files are identical. No copy needed.");
+                    CLogger.LogInfo($"{DEBUG_FLAG} The files are identical. No copy needed.");
                     return;
                 }
 
                 if (File.Exists(destinationFilePath))
                 {
                     File.Delete(destinationFilePath);
-                    MLogger.LogInfo($"{DEBUG_FLAG} Destination file deleted as it differs from the source.");
+                    CLogger.LogInfo($"{DEBUG_FLAG} Destination file deleted as it differs from the source.");
                 }
 
                 using (FileStream sourceStream = new FileStream(sourceFilePath, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -118,19 +118,19 @@ namespace CycloneGames.Utility.Runtime
                     await sourceStream.CopyToAsync(destinationStream);
                 }
 
-                MLogger.LogInfo($"{DEBUG_FLAG} File copied successfully from '{sourceFilePath}' to '{destinationFilePath}'.");
+                CLogger.LogInfo($"{DEBUG_FLAG} File copied successfully from '{sourceFilePath}' to '{destinationFilePath}'.");
             }
             catch (IOException ex)
             {
-                MLogger.LogError($"{DEBUG_FLAG} I/O error during async file copy: {ex.Message}");
+                CLogger.LogError($"{DEBUG_FLAG} I/O error during async file copy: {ex.Message}");
             }
             catch (UnauthorizedAccessException ex)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Access error during async file copy: {ex.Message}");
+                CLogger.LogError($"{DEBUG_FLAG} Access error during async file copy: {ex.Message}");
             }
             catch (Exception ex)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Unexpected error during async file copy: {ex.Message}");
+                CLogger.LogError($"{DEBUG_FLAG} Unexpected error during async file copy: {ex.Message}");
             }
         }
     }
