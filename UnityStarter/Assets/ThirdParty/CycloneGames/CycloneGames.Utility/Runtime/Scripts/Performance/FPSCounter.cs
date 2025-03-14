@@ -30,6 +30,7 @@ namespace CycloneGames.Utility.Runtime
         public Color OutlineColor = Color.black; // Background color
         public Vector2 OutlineOffset = new Vector2(1, 1); // Offset for simulating text outline
         public ScreenPosition PositionPreset = ScreenPosition.TopLeft; // Preset for screen position
+        public int PresetPositionMargin = 10; // Margin
         public Vector2 CustomPosition = new Vector2(0, 0); // Coordinates for a custom position
 
         // Dictionary to hold FPS thresholds and corresponding colors
@@ -121,7 +122,7 @@ namespace CycloneGames.Utility.Runtime
         /// </summary>
         protected virtual void Update()
         {
-            if(!IsVisible) return;
+            if (!IsVisible) return;
 
             _framesDrawnInTheInterval++;
             _framesAccumulated += Time.timeScale / Time.deltaTime;
@@ -193,7 +194,7 @@ namespace CycloneGames.Utility.Runtime
         /// </summary>
         private void OnGUI()
         {
-            if(!IsVisible) return;
+            if (!IsVisible) return;
 
             if (string.IsNullOrEmpty(_displayedText))
             {
@@ -248,25 +249,25 @@ namespace CycloneGames.Utility.Runtime
             switch (PositionPreset)
             {
                 case ScreenPosition.TopLeft:
-                    return new Vector2(safeAreaXMin + 10, safeAreaYMin + 10); // Top left with safe area
+                    return new Vector2(safeAreaXMin + PresetPositionMargin, safeAreaYMin + PresetPositionMargin); // Top left with safe area
                 case ScreenPosition.TopCenter:
-                    return new Vector2((safeAreaXMin + safeAreaXMax) / 2 - (labelSize.x / 2), safeAreaYMin + 10); // Top center with safe area
+                    return new Vector2((safeAreaXMin + safeAreaXMax) / 2 - (labelSize.x / 2), safeAreaYMin + PresetPositionMargin); // Top center with safe area
                 case ScreenPosition.TopRight:
-                    return new Vector2(safeAreaXMax - labelSize.x - 10, safeAreaYMin + 10); // Top right with safe area
+                    return new Vector2(safeAreaXMax - labelSize.x - PresetPositionMargin, safeAreaYMin + PresetPositionMargin); // Top right with safe area
                 case ScreenPosition.MiddleLeft:
-                    return new Vector2(safeAreaXMin + 10, (safeAreaYMin + safeAreaYMax) / 2 - (labelSize.y / 2)); // Middle left with safe area
+                    return new Vector2(safeAreaXMin + PresetPositionMargin, (safeAreaYMin + safeAreaYMax) / 2 - (labelSize.y / 2)); // Middle left with safe area
                 case ScreenPosition.MiddleRight:
-                    return new Vector2(safeAreaXMax - labelSize.x - 10, (safeAreaYMin + safeAreaYMax) / 2 - (labelSize.y / 2)); // Middle right with safe area
+                    return new Vector2(safeAreaXMax - labelSize.x - PresetPositionMargin, (safeAreaYMin + safeAreaYMax) / 2 - (labelSize.y / 2)); // Middle right with safe area
                 case ScreenPosition.BottomLeft:
-                    return new Vector2(safeAreaXMin + 10, safeAreaYMax - labelSize.y - 10); // Bottom left with safe area
+                    return new Vector2(safeAreaXMin + PresetPositionMargin, safeAreaYMax - labelSize.y - PresetPositionMargin); // Bottom left with safe area
                 case ScreenPosition.BottomCenter:
-                    return new Vector2((safeAreaXMin + safeAreaXMax) / 2 - (labelSize.x / 2), safeAreaYMax - labelSize.y - 10); // Bottom center with safe area
+                    return new Vector2((safeAreaXMin + safeAreaXMax) / 2 - (labelSize.x / 2), safeAreaYMax - labelSize.y - PresetPositionMargin); // Bottom center with safe area
                 case ScreenPosition.BottomRight:
-                    return new Vector2(safeAreaXMax - labelSize.x - 10, safeAreaYMax - labelSize.y - 10); // Bottom right with safe area
+                    return new Vector2(safeAreaXMax - labelSize.x - PresetPositionMargin, safeAreaYMax - labelSize.y - PresetPositionMargin); // Bottom right with safe area
                 case ScreenPosition.Custom:
                     return CustomPosition; // Custom position (no safe area adjustment)
                 default:
-                    return new Vector2(safeAreaXMin + 10, safeAreaYMin + 10); // Default to top left with safe area
+                    return new Vector2(safeAreaXMin + PresetPositionMargin, safeAreaYMin + PresetPositionMargin); // Default to top left with safe area
             }
         }
     }
