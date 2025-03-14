@@ -41,7 +41,7 @@ namespace CycloneGames.GameplayFramework
         {
             base.Awake();
 
-            MLogger.LogInfo($"{DEBUG_FLAG}\nYour working camera for CameraManager must have a 'CinemachineBrain' component, this is just a notice.\nIf your camera not following the PlayerController by default, check your Camera.\n");
+            CLogger.LogInfo($"{DEBUG_FLAG}\nYour working camera for CameraManager must have a 'CinemachineBrain' component, this is just a notice.\nIf your camera not following the PlayerController by default, check your Camera.\n");
         }
     }
 }

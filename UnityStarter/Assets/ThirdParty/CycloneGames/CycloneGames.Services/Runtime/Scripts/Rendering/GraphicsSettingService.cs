@@ -69,11 +69,11 @@ namespace CycloneGames.Service
         {
             if (newQualityLevel < 0 || newQualityLevel >= QualityLevels.Count)
             {
-                MLogger.LogError($"{DEBUG_FLAG} Invalid quality level: {newQualityLevel}");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid quality level: {newQualityLevel}");
                 return;
             }
 
-            MLogger.LogInfo($"{DEBUG_FLAG} CurrentQualityLevel: {CurrentQualityLevel}, NewQualityLevel: {newQualityLevel}");
+            CLogger.LogInfo($"{DEBUG_FLAG} CurrentQualityLevel: {CurrentQualityLevel}, NewQualityLevel: {newQualityLevel}");
             QualitySettings.SetQualityLevel(newQualityLevel, true);
             currentQualityLevel = newQualityLevel;
         }
@@ -90,7 +90,7 @@ namespace CycloneGames.Service
         public void ChangeApplicationFrameRate(int targetFramerate)
         {
             Application.targetFrameRate = targetFramerate;
-            MLogger.LogInfo($"{DEBUG_FLAG} Application target frame rate set to: {targetFramerate}");
+            CLogger.LogInfo($"{DEBUG_FLAG} Application target frame rate set to: {targetFramerate}");
         }
 
         private void CancelResolutionChange()
@@ -117,18 +117,18 @@ namespace CycloneGames.Service
                 (newScreenWidth, newScreenHeight) = CalculateNewResolution(newShortEdgeResolution, screenOrientation, aspectRatio);
 
                 Screen.SetResolution(newScreenWidth, newScreenHeight, true);
-                MLogger.LogInfo($"{DEBUG_FLAG} Changed resolution to: {newScreenWidth}x{newScreenHeight}");
+                CLogger.LogInfo($"{DEBUG_FLAG} Changed resolution to: {newScreenWidth}x{newScreenHeight}");
 
                 await UniTask.Delay(500, DelayType.Realtime, PlayerLoopTiming.Update, cancelToken);
-                MLogger.LogInfo($"{DEBUG_FLAG} Current resolution after change: {Screen.currentResolution.width}x{Screen.currentResolution.height}");
+                CLogger.LogInfo($"{DEBUG_FLAG} Current resolution after change: {Screen.currentResolution.width}x{Screen.currentResolution.height}");
             }
             catch (OperationCanceledException)
             {
-                MLogger.LogInfo($"{DEBUG_FLAG} Resolution change was canceled.");
+                CLogger.LogInfo($"{DEBUG_FLAG} Resolution change was canceled.");
             }
             catch (Exception ex)
             {
-                MLogger.LogError($"{DEBUG_FLAG} An error occurred while changing the resolution: {ex.Message}");
+                CLogger.LogError($"{DEBUG_FLAG} An error occurred while changing the resolution: {ex.Message}");
             }
         }
 
