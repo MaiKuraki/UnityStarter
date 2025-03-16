@@ -1,7 +1,7 @@
 using CycloneGames.Logger;
 using UnityEngine;
 
-public class LoggerExample : MonoBehaviour
+public class LoggerSample : MonoBehaviour
 {
     void Awake()
     {
