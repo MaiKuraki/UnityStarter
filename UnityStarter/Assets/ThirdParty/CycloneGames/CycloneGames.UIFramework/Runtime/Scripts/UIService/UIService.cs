@@ -17,27 +17,25 @@ namespace CycloneGames.UIFramework
         private UIManager uiManager;
 
         private readonly IAssetPathBuilderFactory assetPathBuilderFactory;
-        private readonly IAssetLoader assetLoader;
         private readonly IObjectSpawner objectSpawner;
         private readonly IMainCameraService mainCamera;
 
         public UIService() { }
 
-        public UIService(IAssetPathBuilderFactory assetPathBuilderFactory, IAssetLoader assetLoader, IObjectSpawner objectSpawner, IMainCameraService mainCamera)
+        public UIService(IAssetPathBuilderFactory assetPathBuilderFactory, IObjectSpawner objectSpawner, IMainCameraService mainCamera)
         {
             this.assetPathBuilderFactory = assetPathBuilderFactory;
-            this.assetLoader = assetLoader;
             this.objectSpawner = objectSpawner;
             this.mainCamera = mainCamera;
             
-            Initialize(assetPathBuilderFactory, assetLoader, objectSpawner, mainCamera);
+            Initialize(assetPathBuilderFactory, objectSpawner, mainCamera);
         }
 
-        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IAssetLoader assetLoader, IObjectSpawner objectSpawner, IMainCameraService mainCamera)
+        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IObjectSpawner objectSpawner, IMainCameraService mainCamera)
         {
             uiManager = new UnityEngine.GameObject("UIManager").AddComponent<UIManager>(); //   TODO: maybe use objectSpawner to create this object
             UnityEngine.MonoBehaviour.DontDestroyOnLoad(uiManager.gameObject);
-            uiManager.Initialize(assetPathBuilderFactory, assetLoader, objectSpawner, mainCamera);
+            uiManager.Initialize(assetPathBuilderFactory, objectSpawner, mainCamera);
         }
 
         public bool IsUIPageValid(string PageName)
