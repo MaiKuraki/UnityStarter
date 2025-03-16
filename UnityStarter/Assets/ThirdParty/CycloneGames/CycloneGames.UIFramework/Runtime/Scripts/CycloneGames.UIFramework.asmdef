@@ -2,7 +2,10 @@
     "name": "CycloneGames.UIFramework",
     "rootNamespace": "",
     "references": [
+        "Unity.ResourceManager",
+        "Unity.Addressables",
         "UniTask",
+        "Addler",
         "CycloneGames.Logger",
         "CycloneGames.Core",
         "CycloneGames.Service"
