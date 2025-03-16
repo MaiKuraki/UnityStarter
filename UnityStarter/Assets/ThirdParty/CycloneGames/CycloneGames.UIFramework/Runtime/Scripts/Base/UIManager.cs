@@ -5,6 +5,8 @@ using CycloneGames.Logger;
 using CycloneGames.Core;
 using CycloneGames.Service;
 using Object = UnityEngine.Object;
+using UnityEngine.AddressableAssets;
+using Addler.Runtime.Core.LifetimeBinding;
 
 namespace CycloneGames.UIFramework
 {
@@ -12,12 +14,11 @@ namespace CycloneGames.UIFramework
     {
         private const string DEBUG_FLAG = "[UIManager]";
         private IAssetPathBuilder assetPathBuilder;
-        private IAssetLoader assetLoader;
         private IObjectSpawner objectSpawner;
         private IMainCameraService mainCamera;
         private UIRoot uiRoot;
         private Dictionary<string, UniTaskCompletionSource<bool>> uiOpenTasks = new Dictionary<string, UniTaskCompletionSource<bool>>();
-        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IAssetLoader assetLoader, IObjectSpawner objectSpawner, IMainCameraService mainCamera)
+        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IObjectSpawner objectSpawner, IMainCameraService mainCamera)
         {
             this.assetPathBuilder = assetPathBuilderFactory.Create("UI");   // TODO: maybe there is a better way implement this
             if (this.assetPathBuilder == null)
@@ -25,7 +26,6 @@ namespace CycloneGames.UIFramework
                 CLogger.LogError($"{DEBUG_FLAG} Invalid AssetPathBuilder, Check your [AssetPathBuilderFactory], make sure it contains 'UI' key.");
                 return;
             }
-            this.assetLoader = assetLoader;
             this.objectSpawner = objectSpawner;
             this.mainCamera = mainCamera;
         }
@@ -65,30 +65,32 @@ namespace CycloneGames.UIFramework
 
             CLogger.LogInfo($"{DEBUG_FLAG} Attempting to open UI: {PageName}");
             string configPath = assetPathBuilder.GetAssetPath(PageName);
-            UIPageConfiguration pageConfig = null;
             Object pagePrefab = null;
+            UnityEngine.ResourceManagement.AsyncOperations.AsyncOperationHandle<UIPageConfiguration> pageHandle = default;
 
             try
             {
                 // Attempt to load the configuration
-                pageConfig = await assetLoader.LoadAssetAsync<UIPageConfiguration>(configPath);
+                pageHandle = Addressables.LoadAssetAsync<UIPageConfiguration>(configPath);
+                await pageHandle;
 
-                // If the configuration load fails, log the error and exit
-                if (pageConfig == null)
+                if (pageHandle.Result == null)
                 {
-                    CLogger.LogError($"{DEBUG_FLAG} Failed to load UI Config, PageName: {PageName}");
+                    CLogger.LogError($"{DEBUG_FLAG} Invalid UI Prefab in PageConfig, PageName: {PageName}");
                     uiOpenTasks.Remove(PageName);
+                    pageHandle.Release();
                     return;
                 }
 
                 // Attempt to load the Prefab
-                pagePrefab = pageConfig.PagePrefab;
+                pagePrefab = pageHandle.Result?.PagePrefab;
 
                 // If the Prefab load fails, log the error and exit
                 if (pagePrefab == null)
                 {
                     CLogger.LogError($"{DEBUG_FLAG} Invalid UI Prefab in PageConfig, PageName: {PageName}");
                     uiOpenTasks.Remove(PageName);
+                    pageHandle.Release();
                     return;
                 }
             }
@@ -102,12 +104,13 @@ namespace CycloneGames.UIFramework
             }
 
             // If there are no exceptions and the resources have been successfully loaded, proceed to instantiate and setup the UI page
-            string layerName = pageConfig.Layer.LayerName;
+            string layerName = pageHandle.Result.Layer.LayerName;
             UILayer uiLayer = uiRoot.GetUILayer(layerName);
             if (uiLayer == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} UILayer not found: {layerName}");
                 uiOpenTasks.Remove(PageName);
+                pageHandle.Release();
                 return;
             }
 
@@ -118,6 +121,7 @@ namespace CycloneGames.UIFramework
                 // that is, UI pages similar to Notifications should be managed within the page itself and should not be opened repeatedly for the same UI page.
                 CLogger.LogError($"{DEBUG_FLAG} Page already exists: {PageName}, layer: {uiLayer.LayerName}");
                 uiOpenTasks.Remove(PageName);
+                pageHandle.Release();
                 return;
             }
 
@@ -126,9 +130,10 @@ namespace CycloneGames.UIFramework
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to instantiate UIPage prefab: {PageName}");
                 uiOpenTasks.Remove(PageName);
+                pageHandle.Release();
                 return;
             }
-
+            await pageHandle.BindTo(uiPage.gameObject);
             uiPage.SetPageName(PageName);
             uiLayer.AddPage(uiPage);
             OnPageCreated?.Invoke(uiPage);
@@ -155,13 +160,11 @@ namespace CycloneGames.UIFramework
                 {
                     CLogger.LogError($"{DEBUG_FLAG} Layer not found, but page exists: {PageName}");
                     preRemovePage.ClosePage();
-                    assetLoader.ReleaseAssetHandle(preReleaseConfigPath);
                 }
                 return;
             }
 
             layer.RemovePage(PageName);
-            assetLoader.ReleaseAssetHandle(preReleaseConfigPath);
         }
 
         internal bool IsUIPageValid(string PageName)

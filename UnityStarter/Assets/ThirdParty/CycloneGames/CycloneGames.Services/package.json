@@ -6,7 +6,6 @@
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
-    "com.unity.addressables": "2.3.16",
     "com.unity.render-pipelines.universal": "14.0.0",
     "com.cysharp.unitask": "2.0.0",
     "com.cyclone-games.core": "1.0.0",
