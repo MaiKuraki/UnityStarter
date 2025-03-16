@@ -6,6 +6,7 @@
     "com.cysharp.r3": "https://github.com/Cysharp/R3.git?path=src/R3.Unity/Assets/R3.Unity",
     "com.cysharp.unitask": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
     "com.github-glitchenzo.nugetforunity": "https://github.com/GlitchEnzo/NuGetForUnity.git?path=/src/NuGetForUnity",
+    "com.harumak.addler": "https://github.com/Haruma-K/Addler.git?path=/Assets/Addler",
     "com.harumak.upalette": "https://github.com/Haruma-K/uPalette.git?path=/Assets/uPalette",
     "com.holyshovelsoft.opensource.log4uni": "https://github.com/HolyShovelSoft/log4uni.git#upm",
     "com.unity.2d.sprite": "1.0.0",
