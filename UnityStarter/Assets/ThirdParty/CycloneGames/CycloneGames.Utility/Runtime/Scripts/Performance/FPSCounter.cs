@@ -1,5 +1,6 @@
 using UnityEngine;
 using System.Collections.Generic;
+using System.Text;
 
 namespace CycloneGames.Utility.Runtime
 {
@@ -53,7 +54,7 @@ namespace CycloneGames.Utility.Runtime
         private int _currentFPS;
         private int _totalFrames = 0;
         private int _average;
-        private string _displayedText;
+        private StringBuilder _displayedTextSB = new StringBuilder();
         private Vector2 _labelPosition;
         private GUIStyle _style = new GUIStyle();
         private GUIContent _content = new GUIContent();
@@ -139,16 +140,17 @@ namespace CycloneGames.Utility.Runtime
 
                 if (_currentFPS >= 0 && _currentFPS <= 300)
                 {
+                    _displayedTextSB.Clear();
                     switch (Mode)
                     {
                         case Modes.Instant:
-                            _displayedText = _stringsFrom00To300[_currentFPS];
+                            _displayedTextSB.Append(_stringsFrom00To300[_currentFPS]);
                             break;
                         case Modes.MovingAverage:
-                            _displayedText = _stringsFrom00To300[_average];
+                            _displayedTextSB.Append(_stringsFrom00To300[_average]);
                             break;
                         case Modes.InstantAndMovingAverage:
-                            _displayedText = _stringsFrom00To300[_currentFPS] + " / " + _stringsFrom00To300[_average];
+                            _displayedTextSB.Append(_stringsFrom00To300[_currentFPS] + " / " + _stringsFrom00To300[_average]);
                             break;
                     }
                 }
@@ -196,14 +198,14 @@ namespace CycloneGames.Utility.Runtime
         {
             if (!IsVisible) return;
 
-            if (string.IsNullOrEmpty(_displayedText))
+            if (_displayedTextSB.Length == 0)
             {
                 return;
             }
 
             int shortestScreenSide = Mathf.Min(Screen.width, Screen.height);
             _style.fontSize = Mathf.RoundToInt(shortestScreenSide * _fontSizeRatio);
-            _content.text = _displayedText;
+            _content.text = _displayedTextSB.ToString();
             Vector2 labelSize = _style.CalcSize(_content); // Calculate the actual width and height of the text
 
             // Set position
@@ -218,7 +220,7 @@ namespace CycloneGames.Utility.Runtime
 
             // Draw foreground (main text)
             _style.normal.textColor = ForegroundColor;
-            GUI.Label(new Rect(_labelPosition.x, _labelPosition.y, labelSize.x, labelSize.y), _displayedText, _style);
+            GUI.Label(new Rect(_labelPosition.x, _labelPosition.y, labelSize.x, labelSize.y), _content, _style);
         }
 
         private void DrawOutlineText(GUIStyle style, Vector2 labelSize, float offsetX, float offsetY)
@@ -230,7 +232,7 @@ namespace CycloneGames.Utility.Runtime
                     labelSize.x,  // Use dynamic width
                     labelSize.y   // Use dynamic height
                 ),
-                _displayedText,
+                _content,
                 style
             );
         }
