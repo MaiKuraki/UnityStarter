@@ -172,6 +172,7 @@ MonoBehaviour:
     m_StyleName: Regular
     m_PointSize: 86
     m_Scale: 1
+    m_UnitsPerEM: 2048
     m_LineHeight: 98.8916
     m_AscentLine: 77.853516
     m_CapLine: 59
