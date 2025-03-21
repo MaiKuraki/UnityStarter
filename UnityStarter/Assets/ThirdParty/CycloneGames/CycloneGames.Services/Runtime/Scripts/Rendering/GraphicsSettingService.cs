@@ -1,9 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
-using Cysharp.Threading.Tasks;
 using CycloneGames.Logger;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 namespace CycloneGames.Service
@@ -18,7 +17,7 @@ namespace CycloneGames.Service
     {
         void SetQualityLevel(int newQualityLevel);
         int CurrentQualityLevel { get; }
-        List<string> QualityLevels { get; }
+        IReadOnlyList<string> QualityLevels { get; }
         void ChangeRenderResolution(int newShortEdgeResolution, ScreenOrientation screenOrientation = ScreenOrientation.Landscape);
         void ChangeApplicationFrameRate(int targetFramerate);
     }
@@ -26,32 +25,31 @@ namespace CycloneGames.Service
     public class GraphicsSettingService : IGraphicsSettingService
     {
         private const string DEBUG_FLAG = "[GraphicsSetting]";
-        private int currentQualityLevel = int.MinValue;
-        private CancellationTokenSource cancelChangeResolution;
+        private int _currentQualityLevel = -1;
+        private CancellationTokenSource _cancelChangeResolution;
+        private IReadOnlyList<string> _qualityLevels;
 
         public int CurrentQualityLevel
         {
             get
             {
-                if (currentQualityLevel == int.MinValue)
+                if (_currentQualityLevel == -1)
                 {
-                    currentQualityLevel = QualitySettings.GetQualityLevel();
+                    _currentQualityLevel = QualitySettings.GetQualityLevel();
                 }
-                return currentQualityLevel;
+                return _currentQualityLevel;
             }
         }
 
-        private List<string> qualitySettingsList;
-
-        public List<string> QualityLevels
+        public IReadOnlyList<string> QualityLevels
         {
             get
             {
-                if (qualitySettingsList == null)
+                if (_qualityLevels == null)
                 {
-                    qualitySettingsList = QualitySettings.names.ToList();
+                    _qualityLevels = QualitySettings.names;
                 }
-                return qualitySettingsList;
+                return _qualityLevels;
             }
         }
 
@@ -75,16 +73,15 @@ namespace CycloneGames.Service
 
             CLogger.LogInfo($"{DEBUG_FLAG} CurrentQualityLevel: {CurrentQualityLevel}, NewQualityLevel: {newQualityLevel}");
             QualitySettings.SetQualityLevel(newQualityLevel, true);
-            currentQualityLevel = newQualityLevel;
+            _currentQualityLevel = newQualityLevel;
         }
 
         public void ChangeRenderResolution(int newShortEdgeResolution, ScreenOrientation screenOrientation = ScreenOrientation.Landscape)
         {
-            // Cancel ongoing resolution change
             CancelResolutionChange();
 
-            cancelChangeResolution = new CancellationTokenSource();
-            ChangeScreenResolutionAsync(cancelChangeResolution.Token, newShortEdgeResolution, screenOrientation).Forget();
+            _cancelChangeResolution = new CancellationTokenSource();
+            ChangeScreenResolutionAsync(_cancelChangeResolution.Token, newShortEdgeResolution, screenOrientation).Forget();
         }
 
         public void ChangeApplicationFrameRate(int targetFramerate)
@@ -95,14 +92,14 @@ namespace CycloneGames.Service
 
         private void CancelResolutionChange()
         {
-            if (cancelChangeResolution != null)
+            if (_cancelChangeResolution != null)
             {
-                if (cancelChangeResolution.Token.CanBeCanceled)
+                if (_cancelChangeResolution.Token.CanBeCanceled)
                 {
-                    cancelChangeResolution.Cancel();
+                    _cancelChangeResolution.Cancel();
                 }
-                cancelChangeResolution.Dispose();
-                cancelChangeResolution = null;
+                _cancelChangeResolution.Dispose();
+                _cancelChangeResolution = null;
             }
         }
 
@@ -111,15 +108,12 @@ namespace CycloneGames.Service
             try
             {
                 float aspectRatio = (float)Screen.width / Screen.height;
-                int newScreenWidth;
-                int newScreenHeight;
-
-                (newScreenWidth, newScreenHeight) = CalculateNewResolution(newShortEdgeResolution, screenOrientation, aspectRatio);
+                var (newScreenWidth, newScreenHeight) = CalculateNewResolution(newShortEdgeResolution, screenOrientation, aspectRatio);
 
                 Screen.SetResolution(newScreenWidth, newScreenHeight, true);
-                CLogger.LogInfo($"{DEBUG_FLAG} Changed resolution to: {newScreenWidth}x{newScreenHeight}");
+                CLogger.LogInfo($"{DEBUG_FLAG} Change resolution to: {newScreenWidth}x{newScreenHeight}");
 
-                await UniTask.Delay(500, DelayType.Realtime, PlayerLoopTiming.Update, cancelToken);
+                await UniTask.Delay(200, DelayType.Realtime, PlayerLoopTiming.Update, cancelToken);
                 CLogger.LogInfo($"{DEBUG_FLAG} Current resolution after change: {Screen.currentResolution.width}x{Screen.currentResolution.height}");
             }
             catch (OperationCanceledException)
@@ -134,21 +128,12 @@ namespace CycloneGames.Service
 
         private (int width, int height) CalculateNewResolution(int newShortEdgeResolution, ScreenOrientation screenOrientation, float aspectRatio)
         {
-            int newScreenHeight, newScreenWidth;
-            switch (screenOrientation)
+            return screenOrientation switch
             {
-                case ScreenOrientation.Landscape:
-                    newScreenHeight = newShortEdgeResolution;
-                    newScreenWidth = (int)(newScreenHeight * aspectRatio);
-                    break;
-                case ScreenOrientation.Portrait:
-                    newScreenWidth = newShortEdgeResolution;
-                    newScreenHeight = (int)(newScreenWidth / aspectRatio);
-                    break;
-                default:
-                    throw new ArgumentOutOfRangeException(nameof(screenOrientation), screenOrientation, null);
-            }
-            return (newScreenWidth, newScreenHeight);
+                ScreenOrientation.Landscape => (width: (int)(newShortEdgeResolution * aspectRatio), height: newShortEdgeResolution),
+                ScreenOrientation.Portrait => (width: newShortEdgeResolution, height: (int)(newShortEdgeResolution / aspectRatio)),
+                _ => throw new ArgumentOutOfRangeException(nameof(screenOrientation), screenOrientation, null)
+            };
         }
     }
 }
