@@ -30,6 +30,7 @@
     "com.wooshii.hierarchydecorator": "https://github.com/WooshiiDev/HierarchyDecorator.git",
     "jp.hadashikick.vcontainer": "https://github.com/hadashiA/VContainer.git?path=VContainer/Assets/VContainer",
     "jp.hadashikick.vitalrouter": "https://github.com/hadashiA/VitalRouter.git?path=/src/VitalRouter.Unity/Assets/VitalRouter",
+    "jp.hadashikick.vyaml": "https://github.com/hadashiA/VYaml.git?path=VYaml.Unity/Assets/VYaml",
     "com.unity.modules.androidjni": "1.0.0",
     "com.unity.modules.animation": "1.0.0",
     "com.unity.modules.assetbundle": "1.0.0",
