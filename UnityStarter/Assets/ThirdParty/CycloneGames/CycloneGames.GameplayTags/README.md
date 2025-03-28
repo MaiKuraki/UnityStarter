@@ -2,7 +2,7 @@
 [URL](https://github.com/BandoWare/GameplayTags)
 
 ## Version
-[0.1.0-beta.4]
+[developement branch]
 
 ## What Modify
 `GameplayTagManager`->`RegisterDynamicTags` Pipeline

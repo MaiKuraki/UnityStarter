@@ -98,7 +98,7 @@ namespace CycloneGames.GameplayTags
       public int TagCount => m_Indices.Implicit.Count;
 
       /// <inheritdoc />
-      public GameplayTagContainerIndexes Indexes => m_Indices;
+      public GameplayTagContainerIndices Indices => m_Indices;
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       [SuppressMessage("CodeQuality", "IDE0051:Remove unused private members", Justification = "It's used for debugging")]
@@ -110,7 +110,7 @@ namespace CycloneGames.GameplayTags
       private Dictionary<GameplayTag, GameplayTagDelegateInfo> m_TagDelegateInfoMap = new();
       private Dictionary<GameplayTag, int> m_TagCountMap = new();
       private Dictionary<GameplayTag, int> m_ExplicitTagCountMap = new();
-      private GameplayTagContainerIndexes m_Indices = GameplayTagContainerIndexes.Create();
+      private GameplayTagContainerIndices m_Indices = GameplayTagContainerIndices.Create();
 
       /// <inheritdoc />
       public GameplayTagEnumerator GetExplicitTags()
