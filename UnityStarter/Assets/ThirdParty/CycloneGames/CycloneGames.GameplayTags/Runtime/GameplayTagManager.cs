@@ -126,7 +126,7 @@ namespace CycloneGames.GameplayTags
       /// --------------------------------------------------------------------------------
       /// </code>
       /// </example>
-      private static void InternalRegisterDynamicTag(string name, string? description = null, GameplayTagFlags flags = GameplayTagFlags.None)
+      private static void InternalRegisterDynamicTag(string name, string description = null, GameplayTagFlags flags = GameplayTagFlags.None)
       {
          // Check if the tag is already registered
          if (s_TagDefinitionsByName.ContainsKey(name))
@@ -174,7 +174,7 @@ namespace CycloneGames.GameplayTags
       /// <param name="name"></param>
       /// <param name="description"></param>
       /// <param name="flags"></param>
-      public static void RegisterDynamicTag(string name, string? description = null, GameplayTagFlags flags = GameplayTagFlags.None)
+      public static void RegisterDynamicTag(string name, string description = null, GameplayTagFlags flags = GameplayTagFlags.None)
       {
          PreRegisterDynamicTags();
          InternalRegisterDynamicTag(name, description, flags);
