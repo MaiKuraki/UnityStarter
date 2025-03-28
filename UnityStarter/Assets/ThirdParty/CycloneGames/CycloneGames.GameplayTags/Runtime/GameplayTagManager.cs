@@ -27,6 +27,11 @@ namespace CycloneGames.GameplayTags
 
       public static GameplayTag RequestTag(string name)
       {
+         if (string.IsNullOrEmpty(name))
+         {
+            return GameplayTag.None;
+         }
+
          if (!TryGetDefinition(name, out GameplayTagDefinition definition))
          {
             Debug.LogWarning($"No tag registered with name \"{name}\".");
@@ -61,7 +66,7 @@ namespace CycloneGames.GameplayTags
             return;
          }
 
-         GamplayTagRegistrationContext context = new();
+         GameplayTagRegistrationContext context = new();
 
          foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
          {
@@ -94,7 +99,7 @@ namespace CycloneGames.GameplayTags
          s_IsInitialized = true;
       }
    
-      static GamplayTagRegistrationContext dynContext;
+      static GameplayTagRegistrationContext dynContext;
       private static void PreRegisterDynamicTags()
       {
          InitializeIfNeeded();

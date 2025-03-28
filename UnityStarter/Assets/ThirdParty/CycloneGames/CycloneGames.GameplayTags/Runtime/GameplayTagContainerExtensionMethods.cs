@@ -7,22 +7,22 @@ namespace CycloneGames.GameplayTags
    {
       public static bool HasTag<T>(this T container, GameplayTag gameplayTag) where T : IGameplayTagContainer
       {
-         return container.Indexes.Implicit != null && BinarySearchUtility.Search(container.Indexes.Implicit, gameplayTag.RuntimeIndex) >= 0;
+         return container.Indices.Implicit != null && BinarySearchUtility.Search(container.Indices.Implicit, gameplayTag.RuntimeIndex) >= 0;
       }
 
       public static bool HasTagExact<T>(this T container, GameplayTag gameplayTag) where T : IGameplayTagContainer
       {
-         return container.Indexes.Explicit != null && BinarySearchUtility.Search(container.Indexes.Explicit, gameplayTag.RuntimeIndex) >= 0;
+         return container.Indices.Explicit != null && BinarySearchUtility.Search(container.Indices.Explicit, gameplayTag.RuntimeIndex) >= 0;
       }
 
       public static bool HasAny<T, U>(this T container, in U other) where T : IGameplayTagContainer where U : IGameplayTagContainer
       {
-         return HasAnyInternal(container.Indexes.Implicit, other?.Indexes.Explicit);
+         return HasAnyInternal(container.Indices.Implicit, other?.Indices.Explicit);
       }
 
       public static bool HasAnyExact<T, U>(this T container, in U other) where T : IGameplayTagContainer where U : IGameplayTagContainer
       {
-         return HasAnyInternal(container.Indexes.Explicit, other?.Indexes.Explicit);
+         return HasAnyInternal(container.Indices.Explicit, other?.Indices.Explicit);
       }
 
       private static bool HasAnyInternal(List<int> tagIndexes, List<int> otherTagIndexes)
@@ -127,7 +127,7 @@ namespace CycloneGames.GameplayTags
 
       public static bool HasAll<T, U>(this T container, in U other) where T : IGameplayTagContainer where U : IGameplayTagContainer
       {
-         return HasAllInternal(container.Indexes.Implicit, other?.Indexes.Explicit);
+         return HasAllInternal(container.Indices.Implicit, other?.Indices.Explicit);
       }
 
       public static bool HasAll<T, U, V>(this T container, in U otherA, in V otherB) where T : IGameplayTagContainer where U : IGameplayTagContainer where V : IGameplayTagContainer
@@ -159,7 +159,7 @@ namespace CycloneGames.GameplayTags
 
       public static bool HasAllExact<T, U>(this T container, in U other) where T : IGameplayTagContainer where U : IGameplayTagContainer
       {
-         return HasAllInternal(container.Indexes.Explicit, other?.Indexes.Explicit);
+         return HasAllInternal(container.Indices.Explicit, other?.Indices.Explicit);
       }
    }
 }
