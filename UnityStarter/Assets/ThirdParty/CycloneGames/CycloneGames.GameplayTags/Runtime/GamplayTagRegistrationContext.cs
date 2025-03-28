@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace CycloneGames.GameplayTags
 {
-   internal class GamplayTagRegistrationContext
+   internal class GameplayTagRegistrationContext
    {
       private List<GameplayTagDefinition> m_Definition = new();
       private Dictionary<string, GameplayTagDefinition> m_TagsByName = new();

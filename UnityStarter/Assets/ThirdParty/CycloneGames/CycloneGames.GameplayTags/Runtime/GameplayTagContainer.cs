@@ -8,52 +8,48 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayTags
 {
-   public struct GameplayTagContainerIndexes
+public struct GameplayTagContainerIndices
    {
       public readonly bool IsCreated => Explicit != null && Implicit != null;
+      public readonly bool IsEmpty => !IsCreated || Explicit.Count == 0;
+      public readonly int TagCount => IsCreated ? Implicit.Count : 0;
+      public readonly int ExplicitTagCount => IsCreated ? Explicit.Count : 0;
 
       internal List<int> Explicit { get; private set; }
       internal List<int> Implicit { get; private set; }
 
-      public static void Create(ref GameplayTagContainerIndexes indexes)
+      public static void Create(ref GameplayTagContainerIndices indices)
       {
-         if (indexes.IsCreated)
-         {
+         if (indices.IsCreated)
             return;
-         }
 
-         indexes = new GameplayTagContainerIndexes()
+         indices = new GameplayTagContainerIndices()
          {
             Explicit = new(),
             Implicit = new()
          };
       }
 
-      public static GameplayTagContainerIndexes Create()
+      public static GameplayTagContainerIndices Create()
       {
-         return new GameplayTagContainerIndexes()
+         return new GameplayTagContainerIndices()
          {
             Explicit = new(),
             Implicit = new()
          };
-      }
-
-      internal readonly void Add(in GameplayTagContainerIndexes other)
-      {
-         Explicit.AddRange(other.Explicit);
-         Implicit.AddRange(other.Implicit);
       }
 
       internal readonly void Clear()
       {
-         Explicit.Clear();
-         Implicit.Clear();
+         Explicit?.Clear();
+         Implicit?.Clear();
       }
 
-      internal readonly void CopyTo(in GameplayTagContainerIndexes other)
+      internal readonly void CopyTo(in GameplayTagContainerIndices other)
       {
          other.Clear();
-         other.Add(this);
+         other.Explicit.AddRange(this.Explicit);
+         other.Implicit.AddRange(this.Implicit);
       }
    }
 
@@ -79,9 +75,9 @@ namespace CycloneGames.GameplayTags
       public int TagCount { get; }
 
       /// <summary>
-      /// Gets the indexes of tags in this container.
+      /// Gets the indeces of tags in this container.
       /// </summary>
-      GameplayTagContainerIndexes Indexes { get; }
+      GameplayTagContainerIndices Indices { get; }
 
       /// <summary>
       /// Adds a tag to this container.
@@ -160,17 +156,19 @@ namespace CycloneGames.GameplayTags
    [DebuggerDisplay("{DebuggerDisplay,nq}")]
    public class GameplayTagContainer : IGameplayTagContainer, ISerializationCallbackReceiver, IEnumerable<GameplayTag>
    {
-      /// <inheritdoc />
-      public bool IsEmpty => m_Indices.Explicit.Count == 0;
+      public static GameplayTagContainer Empty { get; } = new();
 
       /// <inheritdoc />
-      public int ExplicitTagCount => m_Indices.Explicit.Count;
+      public bool IsEmpty => m_Indices.IsEmpty;
 
       /// <inheritdoc />
-      public int TagCount => m_Indices.Implicit.Count;
+      public int ExplicitTagCount => m_Indices.ExplicitTagCount;
 
       /// <inheritdoc />
-      public GameplayTagContainerIndexes Indexes => m_Indices;
+      public int TagCount => m_Indices.TagCount;
+
+      /// <inheritdoc />
+      public GameplayTagContainerIndices Indices => m_Indices;
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       [SuppressMessage("CodeQuality", "IDE0051:Remove unused private members", Justification = "It's used for debugging")]
@@ -179,7 +177,7 @@ namespace CycloneGames.GameplayTags
       [SerializeField]
       private List<string> m_SerializedExplicitTags;
 
-      private GameplayTagContainerIndexes m_Indices = new();
+      private GameplayTagContainerIndices m_Indices = new();
 
       /// <summary>
       /// Default constructor.
@@ -201,16 +199,7 @@ namespace CycloneGames.GameplayTags
       public GameplayTagContainer Clone()
       {
          GameplayTagContainer clone = new();
-
-         if (IsEmpty)
-         {
-            return clone;
-         }
-
-         GameplayTagContainerIndexes.Create(ref clone.m_Indices);
-
-         clone.m_Indices.CopyTo(m_Indices);
-         m_Indices.CopyTo(clone.m_Indices);
+         Copy(clone, this);
 
          return clone;
       }
@@ -222,7 +211,11 @@ namespace CycloneGames.GameplayTags
       /// <param name="src">The source container.</param>
       public static void Copy<T>(GameplayTagContainer dest, in T src) where T : IGameplayTagContainer
       {
-         dest.m_Indices.CopyTo(src.Indexes);
+         if (src.IsEmpty)
+            return;
+
+         GameplayTagContainerIndices.Create(ref dest.m_Indices);
+         src.Indices.CopyTo(dest.m_Indices);
       }
 
       /// <summary>
@@ -240,6 +233,17 @@ namespace CycloneGames.GameplayTags
          return intersection;
       }
 
+      public static void Intersection<T, U>(GameplayTagContainer output, in T lhs, in U rhs) where T : IGameplayTagContainer where U : IGameplayTagContainer
+      {
+         if (output == null)
+            throw new ArgumentNullException(nameof(output));
+
+         if (!output.IsEmpty)
+            throw new ArgumentException("Output container must be empty.", nameof(output));
+
+         output.AddIntersection(lhs, rhs);
+      }
+
       /// <summary>
       /// Adds the intersection of two containers to this container.
       /// </summary>
@@ -251,8 +255,6 @@ namespace CycloneGames.GameplayTags
       {
          static void OrderedListIntersection(List<int> a, List<int> b, List<int> dst)
          {
-            dst.Capacity = Mathf.Max(dst.Capacity, Mathf.Min(a.Count, b.Count));
-
             int i = 0, j = 0;
             while (i < a.Count && j < b.Count)
             {
@@ -276,12 +278,13 @@ namespace CycloneGames.GameplayTags
          }
 
          if (lhs.IsEmpty || rhs.IsEmpty)
-         {
             return;
-         }
 
-         OrderedListIntersection(lhs.Indexes.Explicit, rhs.Indexes.Explicit, m_Indices.Explicit);
-         OrderedListIntersection(lhs.Indexes.Implicit, rhs.Indexes.Implicit, m_Indices.Implicit);
+         if (!m_Indices.IsCreated)
+            m_Indices = GameplayTagContainerIndices.Create();
+
+         OrderedListIntersection(lhs.Indices.Explicit, rhs.Indices.Explicit, m_Indices.Explicit);
+         OrderedListIntersection(lhs.Indices.Implicit, rhs.Indices.Implicit, m_Indices.Implicit);
       }
 
       /// <summary>
@@ -322,37 +325,85 @@ namespace CycloneGames.GameplayTags
             }
 
             for (; i < a.Count; i++)
-            {
                dst.Add(a[i]);
-            }
 
             for (; j < b.Count; j++)
-            {
                dst.Add(b[j]);
-            }
          }
 
          GameplayTagContainer union = new();
+         GameplayTagContainerIndices.Create(ref union.m_Indices);
 
-         if (lhs.IsEmpty || rhs.IsEmpty)
-         {
+         if (lhs.IsEmpty && rhs.IsEmpty)
             return union;
-         }
 
          if (lhs.IsEmpty)
-         {
             return new GameplayTagContainer(rhs);
-         }
 
          if (rhs.IsEmpty)
-         {
             new GameplayTagContainer(lhs);
-         }
 
-         OrderedListUnion(lhs.Indexes.Explicit, rhs.Indexes.Explicit, union.m_Indices.Explicit);
-         OrderedListUnion(lhs.Indexes.Implicit, rhs.Indexes.Implicit, union.m_Indices.Implicit);
+         OrderedListUnion(lhs.Indices.Explicit, rhs.Indices.Explicit, union.m_Indices.Explicit);
+         OrderedListUnion(lhs.Indices.Implicit, rhs.Indices.Implicit, union.m_Indices.Implicit);
 
          return union;
+      }
+
+      /// <summary>
+      /// Compares the explicit tags between this instance and another <see cref="IGameplayTagContainer"/> instance.
+      /// It populates the lists of added and removed tags based on the comparison.
+      /// </summary>
+      /// <typeparam name="T">Type that implements <see cref="IGameplayTagContainer"/>.</typeparam>
+      /// <param name="other">The other tag container to compare against.</param>
+      /// <param name="added">The list that will be populated with tags that are in this container but not in the other.</param>
+      /// <param name="removed">The list that will be populated with tags that are in the other container but not in this one.</param>
+      public void GetDiffExplicitTags<T>(T other, List<GameplayTag> added, List<GameplayTag> removed) where T : IGameplayTagContainer
+      {
+         // Get the indices of the explicit tags from the other container.
+         GameplayTagContainerIndices otherIndices = other.Indices;
+
+         // Get the explicit tag indices from both containers.
+         List<int> currentContainerTagIndices = Indices.Explicit;
+         List<int> otherContainerTagIndices = otherIndices.Explicit;
+
+         // Initialize counters for both lists.
+         int currentIndex = 0, otherIndex = 0;
+
+         // Traverse both lists of explicit tag indices.
+         while (currentIndex < Indices.ExplicitTagCount && otherIndex < otherIndices.ExplicitTagCount)
+         {
+            int currentTagIndex = currentContainerTagIndices[currentIndex], otherTagIndex = otherContainerTagIndices[otherIndex];
+
+            // If both indices match, the tag is present in both containers. Move to the next element in both lists.
+            if (currentTagIndex == otherTagIndex)
+            {
+               currentIndex++;
+               otherIndex++;
+               continue;
+            }
+
+            // If the tag index in this container is smaller, it means the tag is present here but not in the other container.
+            // Add it to the added list and increment the index for this container.
+            if (currentTagIndex < otherTagIndex)
+            {
+               added.Add(GameplayTagManager.GetDefinitionFromRuntimeIndex(currentTagIndex).Tag);
+               currentIndex++;
+               continue;
+            }
+
+            // If the tag index in the other container is smaller, it means the tag is present in the other container but not in this one.
+            // Add it to the removed list and increment the index for the other container.
+            removed.Add(GameplayTagManager.GetDefinitionFromRuntimeIndex(otherTagIndex).Tag);
+            otherIndex++;
+         }
+
+         // If there are remaining elements in this container's explicit tags, they are considered added.
+         for (; currentIndex < Indices.ExplicitTagCount; currentIndex++)
+            added.Add(GameplayTagManager.GetDefinitionFromRuntimeIndex(currentContainerTagIndices[currentIndex]).Tag);
+
+         // If there are remaining elements in the other container's explicit tags, they are considered removed.
+         for (; otherIndex < otherIndices.ExplicitTagCount; otherIndex++)
+            removed.Add(GameplayTagManager.GetDefinitionFromRuntimeIndex(otherContainerTagIndices[otherIndex]).Tag);
       }
 
       /// <summary>
@@ -405,12 +456,10 @@ namespace CycloneGames.GameplayTags
       /// <inheritdoc />
       public void AddTag(GameplayTag tag)
       {
-         GameplayTagContainerIndexes.Create(ref m_Indices);
+         GameplayTagContainerIndices.Create(ref m_Indices);
          int index = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
          if (index >= 0)
-         {
             return;
-         }
 
          m_Indices.Explicit.Insert(~index, tag.RuntimeIndex);
          AddImplicitTagsFor(tag);
@@ -420,18 +469,14 @@ namespace CycloneGames.GameplayTags
       public void AddTags<T>(in T container) where T : IGameplayTagContainer
       {
          foreach (GameplayTag tag in container.GetExplicitTags())
-         {
             AddTag(tag);
-         }
       }
 
       /// <inheritdoc />
       public void RemoveTag(GameplayTag tag)
       {
          if (!m_Indices.IsCreated)
-         {
             return;
-         }
 
          int index = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
          if (index < 0)
@@ -448,9 +493,7 @@ namespace CycloneGames.GameplayTags
       public void RemoveTags<T>(in T other) where T : IGameplayTagContainer
       {
          if (!m_Indices.IsCreated)
-         {
             return;
-         }
 
          foreach (GameplayTag tag in other.GetExplicitTags())
          {
@@ -475,9 +518,7 @@ namespace CycloneGames.GameplayTags
             GameplayTag parent = tags[i];
             int index = BinarySearchUtility.Search(m_Indices.Implicit, parent.RuntimeIndex);
             if (index >= 0)
-            {
                break;
-            }
 
             m_Indices.Implicit.Insert(~index, parent.RuntimeIndex);
          }
@@ -494,9 +535,7 @@ namespace CycloneGames.GameplayTags
             foreach (GameplayTag tag in definition.HierarchyTags)
             {
                if (m_Indices.Implicit.Count > 0 && m_Indices.Implicit[^1] >= tag.RuntimeIndex)
-               {
                   continue;
-               }
 
                m_Indices.Implicit.Add(tag.RuntimeIndex);
             }
@@ -509,16 +548,12 @@ namespace CycloneGames.GameplayTags
 
          m_SerializedExplicitTags.Clear();
          if (m_Indices.Explicit == null)
-         {
             return;
-         }
 
          foreach (GameplayTag tag in new GameplayTagEnumerator(m_Indices.Explicit))
          {
             if (tag == GameplayTag.None)
-            {
                continue;
-            }
 
             m_SerializedExplicitTags.Add(tag.Name);
          }
@@ -526,11 +561,9 @@ namespace CycloneGames.GameplayTags
 
       void ISerializationCallbackReceiver.OnAfterDeserialize()
       {
-         m_Indices = GameplayTagContainerIndexes.Create();
+         m_Indices = GameplayTagContainerIndices.Create();
          if (m_SerializedExplicitTags == null || m_SerializedExplicitTags.Count == 0)
-         {
             return;
-         }
 
          for (int i = 0; i < m_SerializedExplicitTags.Count;)
          {

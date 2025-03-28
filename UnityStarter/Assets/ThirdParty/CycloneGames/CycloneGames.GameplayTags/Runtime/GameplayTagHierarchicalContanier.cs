@@ -20,7 +20,7 @@ namespace CycloneGames.GameplayTags
       public bool IsEmpty => m_UnderlyingContainer.IsEmpty;
       public int ExplicitTagCount => m_UnderlyingContainer.ExplicitTagCount;
       public int TagCount => m_UnderlyingContainer.TagCount;
-      public GameplayTagContainerIndexes Indexes => m_UnderlyingContainer.Indexes;
+      public GameplayTagContainerIndices Indices => m_UnderlyingContainer.Indices;
 
       public IGameplayTagCountContainer Parent
       {
