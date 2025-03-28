@@ -25,7 +25,9 @@ MonoBehaviour:
   m_TransformSensitivity: 1
   m_HideGeneratedComponents: 1
   m_ShaderVariantRegistry:
-    m_OptionalShaders: []
+    m_OptionalShaders:
+    - key: Hidden/UI/Default (UIEffect)
+      value: Hidden/UI/Default (UIEffect)
     m_Asset: {fileID: -2882679736722620349}
     m_ErrorOnUnregisteredVariant: 0
     m_UnregisteredVariants: []
