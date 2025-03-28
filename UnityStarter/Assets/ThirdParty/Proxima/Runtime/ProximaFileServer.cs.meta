@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: dce0888077c784c189d600369cd05786
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Runtime/ProximaFileServer.cs
+  uploadId: 743661

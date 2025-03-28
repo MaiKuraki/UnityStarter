@@ -17,7 +17,7 @@ namespace Proxima
         public event Action OnConnect;
         public event Action OnClose;
 
-        private ConcurrentQueue<(ProximaConnection, string)> _receiveQueue;
+        private ConcurrentQueue<(ProximaConnection, ProximaRequest)> _receiveQueue;
 
         private string _password;
         private bool _passwordProvided = false;
@@ -55,7 +55,9 @@ namespace Proxima
         [DllImport("__Internal")]
         private static extern void ProximaWebGLDestroy(string connectionId);
 
-        public ProximaWebGLConnection(string displayName, string password, ProximaDispatcher dispatcher, ProximaStatus status, ConcurrentQueue<(ProximaConnection, string)> queue)
+        public ProximaWebGLConnection(string displayName,
+            string password, ProximaDispatcher dispatcher,
+            ProximaStatus status, ConcurrentQueue<(ProximaConnection, ProximaRequest)> queue)
         {
             _receiveQueue = queue;
             _dispatcher = dispatcher;
@@ -132,56 +134,53 @@ namespace Proxima
         {
             Log.Verbose("Received: " + message);
 
+            ProximaRequest request;
+
+            try
+            {
+                request = JsonUtility.FromJson<ProximaRequest>(message);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Failed to parse request: " + ex.Message);
+                return;
+            }
+
             if (_passwordProvided)
             {
-                _receiveQueue.Enqueue((this, message));
+                _receiveQueue.Enqueue((this, request));
             }
-            else
+            else if (request.Type == ProximaRequestType.Select)
             {
-                ProximaRequest request;
-
-                try
+                if (_lastSelectTime != null && DateTime.Now - _lastSelectTime < TimeSpan.FromSeconds(1))
                 {
-                    request = JsonUtility.FromJson<ProximaRequest>(message);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error("Failed to parse request: " + ex.Message);
+                    SendMessage(ProximaSerialization.ErrorResponse(request, "Too many requests."));
                     return;
                 }
 
-                if (request.Type == ProximaRequestType.Select)
+                MemoryStream response;
+                if (request.Cmd != _hello.InstanceId)
                 {
-                    if (_lastSelectTime != null && DateTime.Now - _lastSelectTime < TimeSpan.FromSeconds(1))
-                    {
-                        SendMessage(ProximaSerialization.ErrorResponse(request, "Too many requests."));
-                        return;
-                    }
-
-                    MemoryStream response;
-                    if (request.Cmd != _hello.InstanceId)
-                    {
-                        response = ProximaSerialization.ErrorResponse(request, "Invalid selection.");
-                    }
-                    else if (request.Args.Length != 1 || request.Args[0] != _password)
-                    {
-                        response = ProximaSerialization.ErrorResponse(request, "Invalid password.");
-                    }
-                    else
-                    {
-                        response = ProximaSerialization.DataResponse(request, "OK");
-                        _open = true;
-                        _passwordProvided = true;
-                        _dispatcher.Dispatch(() => OnConnect?.Invoke());
-                    }
-
-                    SendMessage(response);
-                    _lastSelectTime = DateTime.Now;
+                    response = ProximaSerialization.ErrorResponse(request, "Invalid selection.");
+                }
+                else if (request.Args.Length != 1 || request.Args[0] != _password)
+                {
+                    response = ProximaSerialization.ErrorResponse(request, "Invalid password.");
                 }
                 else
                 {
-                    Log.Info("Unknown request: " + request.Type);
+                    response = ProximaSerialization.DataResponse(request, "OK");
+                    _open = true;
+                    _passwordProvided = true;
+                    _dispatcher.Dispatch(() => OnConnect?.Invoke());
                 }
+
+                SendMessage(response);
+                _lastSelectTime = DateTime.Now;
+            }
+            else
+            {
+                Log.Info("Unknown request: " + request.Type);
             }
         }
 

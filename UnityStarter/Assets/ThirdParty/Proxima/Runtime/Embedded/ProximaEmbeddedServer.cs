@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Security.Cryptography.X509Certificates;
 using UnityEngine;
@@ -14,14 +12,14 @@ namespace Proxima
 {
     internal class ProximaEmbeddedServer : ProximaServer
     {
-        private ConcurrentQueue<(ProximaConnection, string)> _receiveQueue;
+        private ConcurrentQueue<(ProximaConnection, ProximaRequest)> _receiveQueue;
         private HttpServer _server;
         private ProximaDispatcher _dispatcher;
         private int _port;
         private bool _useHttps;
         private PfxAsset _cert;
         private string _certPass;
-        private Dictionary<string, ProximaStatic.StaticFile> _pathToFile;
+        private ProximaFileServer _fileServer;
         private ProximaStatus _status;
 
         public ProximaEmbeddedServer(ProximaDispatcher dispatcher, ProximaStatus status, int port, bool useHttps, PfxAsset cert, string certPass)
@@ -39,12 +37,7 @@ namespace Proxima
                 _certPass = "proximapass";
             }
 
-            var staticFiles = Resources.Load<ProximaStatic>("Proxima/web");
-            _pathToFile = new Dictionary<string, ProximaStatic.StaticFile>();
-            foreach (var file in staticFiles.Files)
-            {
-                _pathToFile.Add(file.Path, file);
-            }
+            _fileServer = new ProximaFileServer();
         }
 
         public void Start(string displayName, string password)
@@ -64,39 +57,24 @@ namespace Proxima
             {
                 var req = e.Request;
                 var res = e.Response;
-                var path = req.RawUrl.Split('?')[0];
+                var fileResp = _fileServer.GetFileResponse(req.RawUrl, req.Headers["If-Modified-Since"]);
 
-                path = path == "/" ? "index.html" : path.Substring(1);
-
-                if (_pathToFile.TryGetValue(path, out var file) || _pathToFile.TryGetValue(path + ".html", out file))
+                if (fileResp.HasValue)
                 {
-                    var lastModifiedDt = epoch.AddMilliseconds(file.LastModified);
-                    if (req.Headers.AllKeys.Contains("If-Modified-Since"))
+                    if (fileResp.Value.FileChanged)
                     {
-                        var ifModifiedSince = req.Headers["If-Modified-Since"];
-
-                        try
-                        {
-                            if (HttpDateParse.ParseHttpDate(ifModifiedSince, out var ifModifiedSinceDt))
-                            {
-                                ifModifiedSinceDt = ifModifiedSinceDt.ToUniversalTime();
-                                if (lastModifiedDt <= ifModifiedSinceDt)
-                                {
-                                    res.StatusCode = 304;
-                                    res.Close();
-                                    return;
-                                }
-                            }
-                        } catch (Exception) {}
+                        res.AppendHeader("Last-Modified", fileResp.Value.LastModifiedTime);
+                        res.ContentEncoding = System.Text.Encoding.UTF8;
+                        res.ContentType = fileResp.Value.ContentType;
+                        res.ContentLength64 = fileResp.Value.Bytes.Length;
+                        res.OutputStream.Write(fileResp.Value.Bytes, 0, fileResp.Value.Bytes.Length);
+                        res.Close();
                     }
-
-                    var lastModified = string.Format("{0:ddd, dd MMM yyyy HH:mm:ss} GMT", lastModifiedDt);
-                    res.AppendHeader("Last-Modified", lastModified);
-                    res.ContentEncoding = System.Text.Encoding.UTF8;
-                    res.ContentType = ProximaMimeTypes.Get(Path.GetExtension(file.Path));
-                    res.ContentLength64 = file.Bytes.Length;
-                    res.OutputStream.Write(file.Bytes, 0, file.Bytes.Length);
-                    res.Close();
+                    else
+                    {
+                        res.StatusCode = 304;
+                        res.Close();
+                    }
                 }
                 else
                 {
@@ -105,7 +83,7 @@ namespace Proxima
                 }
             };
 
-            _receiveQueue = new ConcurrentQueue<(ProximaConnection, string)>();
+            _receiveQueue = new ConcurrentQueue<(ProximaConnection, ProximaRequest)>();
             _server.AddWebSocketService<ProximaEmbeddedConnection>("/api", (api) => api.Initialize(displayName, password, _dispatcher, _status, _receiveQueue));
 
 
@@ -113,7 +91,7 @@ namespace Proxima
             UpdateConnectionInfo();
         }
 
-        public async void UpdateConnectionInfo()
+        private async void UpdateConnectionInfo()
         {
             var ip = await GetIpAddress();
             var connectionInfo = (_useHttps ? "https" : "http") + "://" + ip + ":" + _port;
@@ -155,7 +133,7 @@ namespace Proxima
             _receiveQueue = null;
         }
 
-        public bool TryGetMessage(out (ProximaConnection, string) message)
+        public bool TryGetMessage(out (ProximaConnection, ProximaRequest) message)
         {
             if (_receiveQueue != null)
             {
@@ -163,7 +141,7 @@ namespace Proxima
             }
             else
             {
-                message = (null, "");
+                message = (null, null);
                 return false;
             }
         }

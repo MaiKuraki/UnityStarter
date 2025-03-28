@@ -71,5 +71,35 @@ namespace Proxima
                 Changed?.Invoke();
             }
         }
+
+        public string GetStatusMessage(bool shortVersion)
+        {
+            if (Connections > 0)
+            {
+                if (shortVersion)
+                {
+                    return "Connected: " + Connections;
+                }
+                else
+                {
+                    return "Proxima connected to " + Connections +
+                        (Connections > 1 ? " clients." : " client.");
+                }
+            }
+            else if (Error != null)
+            {
+                return Error;
+            }
+            else if (Listening)
+            {
+                return shortVersion ? "Listening" : "Proxima is listening for connections.";
+            }
+            else if (_isRunning)
+            {
+                return shortVersion ? "Connecting..." : "Connecting to Proxima server";
+            }
+
+            return shortVersion ? "Not running" : "Proxima is not running.";
+        }
     }
 }

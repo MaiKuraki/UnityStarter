@@ -1,7 +1,3 @@
-// #define DISABLE_REMOTE
-
-using System;
-using System.Linq;
 using UnityEngine;
 using UnityEditor;
 
@@ -10,8 +6,10 @@ namespace Proxima.Editor
     [CustomEditor(typeof(ProximaInspector))]
     internal class ProximaInspectorEditor : UnityEditor.Editor
     {
-        private SerializedProperty _serverType;
+        private SerializedProperty _connectionType;
         private SerializedProperty _serverUrl;
+        private SerializedProperty _appId;
+        private SerializedProperty _uniqueName;
         private SerializedProperty _port;
         private SerializedProperty _password;
         private SerializedProperty _displayName;
@@ -24,12 +22,14 @@ namespace Proxima.Editor
         private SerializedProperty _instantiateConnectUI;
         private SerializedProperty _dontDestroyOnLoad;
         private SerializedProperty _setRunInBackground;
-        private bool _remoteAvailable;
+        private SerializedProperty _uploadLogs;
 
         void OnEnable()
         {
-            _serverType = serializedObject.FindProperty("_serverType");
+            _connectionType = serializedObject.FindProperty("_connectionType");
             _serverUrl = serializedObject.FindProperty("_serverUrl");
+            _appId = serializedObject.FindProperty("_appId");
+            _uniqueName = serializedObject.FindProperty("_uniqueName");
             _port = serializedObject.FindProperty("_port");
             _displayName = serializedObject.FindProperty("_displayName");
             _password = serializedObject.FindProperty("_password");
@@ -42,11 +42,7 @@ namespace Proxima.Editor
             _instantiateConnectUI = serializedObject.FindProperty("_instantiateConnectUI");
             _dontDestroyOnLoad = serializedObject.FindProperty("_dontDestroyOnLoad");
             _setRunInBackground = serializedObject.FindProperty("_setRunInBackground");
-
-            #if !DISABLE_REMOTE
-                _remoteAvailable = AppDomain.CurrentDomain.GetAssemblies().First(
-                    assembly => assembly.GetName().Name == "Proxima").GetType("Proxima.ProximaRemoteServer") != null;
-            #endif
+            _uploadLogs = serializedObject.FindProperty("_uploadLogs");
         }
 
         public override void OnInspectorGUI()
@@ -55,16 +51,31 @@ namespace Proxima.Editor
 
             EditorGUILayout.PropertyField(_displayName);
 
-            if (_remoteAvailable)
+            if (ProximaInspector.ProxyAvailable)
             {
-                EditorGUILayout.PropertyField(_serverType);
-                if (_serverType.enumValueIndex == (int)ProximaInspector.ServerTypes.Remote)
-                {
-                    EditorGUILayout.PropertyField(_serverUrl);
-                }
+                EditorGUILayout.PropertyField(_connectionType);
             }
 
-            if (!_remoteAvailable || _serverType.enumValueIndex == (int)ProximaInspector.ServerTypes.Embedded)
+            if (_connectionType.intValue == (int)ProximaInspector.ConnectionTypes.Internet)
+            {
+#if PROXIMA_DEBUG
+                EditorGUILayout.PropertyField(_serverUrl);
+#endif
+                EditorGUILayout.PropertyField(_appId);
+                EditorGUILayout.PropertyField(_uniqueName);
+#if PROXIMA_ALPHA
+                EditorGUILayout.PropertyField(_uploadLogs);
+#endif
+            }
+
+#if PROXIMA_DEBUG
+            if (_connectionType.intValue == (int)ProximaInspector.ConnectionTypes.Debug)
+            {
+                EditorGUILayout.PropertyField(_serverUrl);
+            }
+#endif
+
+            if (_connectionType.intValue == (int)ProximaInspector.ConnectionTypes.LocalNetwork)
             {
                 EditorGUILayout.PropertyField(_port);
                 EditorGUILayout.PropertyField(_useHttps);
@@ -100,6 +111,41 @@ namespace Proxima.Editor
             EditorGUILayout.PropertyField(_setRunInBackground);
 
             serializedObject.ApplyModifiedProperties();
+
+            if (Application.isPlaying)
+            {
+                var proxima = target as ProximaInspector;
+
+                EditorGUILayout.Space();
+
+                var statusMessage = proxima.Status.GetStatusMessage(false);
+                if (!string.IsNullOrWhiteSpace(statusMessage))
+                {
+                    EditorGUILayout.HelpBox(statusMessage, proxima.Status.Error != null ? MessageType.Error : MessageType.Info);
+                    EditorGUILayout.Space();
+                }
+
+                if (proxima.Status.IsRunning)
+                {
+                    if (proxima.Status.Listening)
+                    {
+                        GUILayout.TextField(proxima.Status.ConnectInfo);
+                        EditorGUILayout.Space();
+                    }
+
+                    if (GUILayout.Button("Stop"))
+                    {
+                        proxima.Stop();
+                    }
+                }
+                else
+                {
+                    if (GUILayout.Button("Start"))
+                    {
+                        proxima.Run();
+                    }
+                }
+            }
         }
     }
 }

@@ -4,6 +4,6 @@ namespace Proxima
     {
         void Start(string displayName, string password);
         void Stop();
-        bool TryGetMessage(out (ProximaConnection, string) message);
+        bool TryGetMessage(out (ProximaConnection, ProximaRequest) message);
     }
 }

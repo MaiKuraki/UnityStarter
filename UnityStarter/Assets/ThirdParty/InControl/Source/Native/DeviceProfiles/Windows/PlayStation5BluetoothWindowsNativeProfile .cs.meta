@@ -13,7 +13,7 @@ AssetOrigin:
   serializedVersion: 1
   productId: 14695
   packageName: InControl
-  packageVersion: 1.8.10
-  assetPath: Assets/ThirdParty/InControl/Source/Native/DeviceProfiles/Windows/PlayStation5BluetoothWindowsNativeProfile
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Windows/PlayStation5BluetoothWindowsNativeProfile
     .cs
-  uploadId: 657724
+  uploadId: 744175

@@ -2,7 +2,7 @@ fileFormatVersion: 2
 guid: 22bff6006cebb4e67a5c277d8442edb9
 PluginImporter:
   externalObjects: {}
-  serializedVersion: 3
+  serializedVersion: 2
   iconMap: {}
   executionOrder: {}
   defineConstraints: []
@@ -11,14 +11,20 @@ PluginImporter:
   isExplicitlyReferenced: 0
   validateReferences: 1
   platformData:
-    Any:
+  - first:
+      Any: 
+    second:
       enabled: 0
       settings: {}
-    Editor:
+  - first:
+      Editor: Editor
+    second:
       enabled: 0
       settings:
         DefaultValueInitialized: true
-    Win:
+  - first:
+      Standalone: Win
+    second:
       enabled: 1
       settings:
         CPU: x86
@@ -29,6 +35,6 @@ AssetOrigin:
   serializedVersion: 1
   productId: 14695
   packageName: InControl
-  packageVersion: 1.8.10
-  assetPath: Assets/ThirdParty/InControl/Plugins/x86/InControlNative.dll
-  uploadId: 657724
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Plugins/x86/InControlNative.dll
+  uploadId: 744175

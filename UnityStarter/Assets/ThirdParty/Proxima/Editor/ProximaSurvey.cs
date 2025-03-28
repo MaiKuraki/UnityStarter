@@ -187,7 +187,7 @@ namespace Proxima.Editor
 
                 EditorGUILayout.BeginHorizontal();
                 GUILayout.FlexibleSpace();
-                WindowUtil.DrawProximaIcon(128);
+                ProximaGUI.Image("834e6e3f5b2f6fd479051cdddf01f4b1", 128);
                 GUILayout.FlexibleSpace();
                 EditorGUILayout.EndHorizontal();
 

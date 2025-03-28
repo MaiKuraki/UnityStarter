@@ -1,5 +1,5 @@
 fileFormatVersion: 2
-guid: c93ac46350ab2f14ba1ea87cd2d9e3ba
+guid: 52d3248a98519364ea2f5b146d752121
 ScriptedImporter:
   internalIDToNameTable: []
   externalObjects: {}
@@ -8,3 +8,10 @@ ScriptedImporter:
   assetBundleName: 
   assetBundleVariant: 
   script: {fileID: 11500000, guid: 6516416497f676b4aba8328116af0c65, type: 3}
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Resources/Proxima/web.proximastatic
+  uploadId: 743661

@@ -1,5 +1,6 @@
 #if UNITY_TMPRO
 
+using System.Linq;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -35,6 +36,15 @@ namespace Proxima
         {
             get => _passwordInputField;
             set => _passwordInputField = value;
+        }
+
+        // Connection type dropdown
+        [SerializeField]
+        private TMP_Dropdown  _connectionTypeDropdown;
+        public TMP_Dropdown ConnectionTypeDropdown
+        {
+            get => _connectionTypeDropdown;
+            set => _connectionTypeDropdown = value;
         }
 
         // Text to display errors.
@@ -100,7 +110,7 @@ namespace Proxima
             set => _showHideButton = value;
         }
 
-        void Start()
+        void OnEnable()
         {
             if (EventSystem.current == null)
             {
@@ -110,6 +120,18 @@ namespace Proxima
 
             _proximaInspector.Status.Changed += OnStatusChanged;
             _displayNameInputField.text = _proximaInspector.DisplayName;
+
+            if (!ProximaInspector.ProxyAvailable)
+            {
+                _connectionTypeDropdown.gameObject.SetActive(false);
+            }
+
+            var connectionTypes = ProximaInspector.ConnectionType.GetType().GetEnumNames();
+            _connectionTypeDropdown.ClearOptions();
+            var options = connectionTypes.Select(x => new TMP_Dropdown.OptionData(x)).ToList();
+            _connectionTypeDropdown.AddOptions(options);
+
+            _connectionTypeDropdown.onValueChanged.AddListener((i) => OnConnectionTypeChanged());
             _displayNameInputField.onSubmit.AddListener((s) => _passwordInputField.Select());
             _startButton.onClick.AddListener(OnStartButtonClicked);
 
@@ -137,7 +159,7 @@ namespace Proxima
             OnStatusChanged();
         }
 
-        private void OnDestroy()
+        private void OnDisable()
         {
             if (_proximaInspector)
             {
@@ -167,6 +189,21 @@ namespace Proxima
             }
         }
 
+        private void OnConnectionTypeChanged()
+        {
+            if (System.Enum.TryParse<ProximaInspector.ConnectionTypes>(
+                _connectionTypeDropdown.options[_connectionTypeDropdown.value].text,
+                true,
+                out var connectionType))
+            {
+                _proximaInspector.ConnectionType = connectionType;
+            }
+            else
+            {
+                _proximaInspector.ConnectionType = ProximaInspector.ConnectionTypes.LocalNetwork;
+            }
+        }
+
         private void OnStartButtonClicked()
         {
             if (_proximaInspector != null &&
@@ -190,7 +227,13 @@ namespace Proxima
 
         private void Update()
         {
-            if (Input.GetKeyDown(KeyCode.Escape))
+            if (
+#if UNITY_INPUT_SYSTEM
+                UnityEngine.InputSystem.Keyboard.current.escapeKey.wasPressedThisFrame
+#else
+                Input.GetKeyDown(KeyCode.Escape)
+#endif
+            )
             {
                 HidePanel();
             }

@@ -11,7 +11,7 @@ namespace Proxima
     {
         public bool Open => ReadyState == WebSocketState.Open;
 
-        private ConcurrentQueue<(ProximaConnection, string)> _receiveQueue;
+        private ConcurrentQueue<(ProximaConnection, ProximaRequest)> _receiveQueue;
 
         private string _password;
         private bool _passwordProvided = false;
@@ -22,7 +22,9 @@ namespace Proxima
         private ProximaStatus _status;
         private ProximaDispatcher _dispatcher;
 
-        public void Initialize(string displayName, string password, ProximaDispatcher dispatcher, ProximaStatus status, ConcurrentQueue<(ProximaConnection, string)> queue)
+        public void Initialize(string displayName, string password,
+            ProximaDispatcher dispatcher, ProximaStatus status,
+            ConcurrentQueue<(ProximaConnection, ProximaRequest)> queue)
         {
             _displayName = displayName;
             _receiveQueue = queue;
@@ -58,27 +60,27 @@ namespace Proxima
         {
             Log.Verbose("Received: " + e.Data);
 
+            ProximaRequest request;
+
+            try
+            {
+                request = JsonUtility.FromJson<ProximaRequest>(e.Data);
+            }
+            catch (Exception ex)
+            {
+                Log.Error("Failed to parse request: " + ex.Message);
+                return;
+            }
+
             if (_passwordProvided)
             {
-                _receiveQueue.Enqueue((this, e.Data));
+                _receiveQueue.Enqueue((this, request));
             }
             else
             {
-                ProximaRequest request;
-
-                try
-                {
-                    request = JsonUtility.FromJson<ProximaRequest>(e.Data);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error("Failed to parse request: " + ex.Message);
-                    return;
-                }
-
                 if (request.Type == ProximaRequestType.List)
                 {
-                    if (_lastListTime != null && DateTime.Now - _lastListTime < TimeSpan.FromSeconds(1))
+                    if (_lastListTime != null && DateTime.UtcNow - _lastListTime < TimeSpan.FromSeconds(1))
                     {
                         SendMessage(ProximaSerialization.ErrorResponse(request, "Too many requests."));
                         return;
@@ -88,11 +90,11 @@ namespace Proxima
                         SendMessage(ProximaSerialization.DataResponse(request, new ProximaInstanceHello[] { _hello }));
                     });
 
-                    _lastListTime = DateTime.Now;
+                    _lastListTime = DateTime.UtcNow;
                 }
                 else if (request.Type == ProximaRequestType.Select)
                 {
-                    if (_lastSelectTime != null && DateTime.Now - _lastSelectTime < TimeSpan.FromSeconds(1))
+                    if (_lastSelectTime != null && DateTime.UtcNow - _lastSelectTime < TimeSpan.FromSeconds(1))
                     {
                         SendMessage(ProximaSerialization.ErrorResponse(request, "Too many requests."));
                         return;
@@ -115,7 +117,7 @@ namespace Proxima
                     }
 
                     SendMessage(response);
-                    _lastSelectTime = DateTime.Now;
+                    _lastSelectTime = DateTime.UtcNow;
                 }
                 else
                 {

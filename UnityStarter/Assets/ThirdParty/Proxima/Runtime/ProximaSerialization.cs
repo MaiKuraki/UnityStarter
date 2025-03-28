@@ -43,6 +43,24 @@ namespace Proxima
         public string Error;
     }
 
+    [Serializable]
+    internal class ProximaFileRequest
+    {
+        public string Id;
+        public string Path;
+        public string IfModifiedSince;
+    }
+
+    [Serializable]
+    internal class ProximaFileResponse
+    {
+        public string Id;
+        public int StatusCode;
+        public string LastModifiedTime;
+        public string ContentType;
+        public string EncodedBytes;
+    }
+
     [System.Serializable]
     internal struct ProximaInstanceHello
     {

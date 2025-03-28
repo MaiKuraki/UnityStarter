@@ -9,6 +9,6 @@ AssetOrigin:
   serializedVersion: 1
   productId: 14695
   packageName: InControl
-  packageVersion: 1.8.10
-  assetPath: Assets/ThirdParty/InControl/Editor/InControl.Editor.asmdef
-  uploadId: 657724
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Editor/InControl.Editor.asmdef
+  uploadId: 744175

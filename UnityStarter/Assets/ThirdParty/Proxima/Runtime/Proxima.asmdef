@@ -2,7 +2,8 @@
     "name": "Proxima",
     "rootNamespace": "",
     "references": [
-        "Unity.TextMeshPro"
+        "Unity.TextMeshPro",
+        "Unity.InputSystem"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -103,6 +104,11 @@
             "name": "com.unity.modules.uielements",
             "expression": "",
             "define": "UNITY_UIELEMENTS"
+        },
+        {
+            "name": "com.unity.inputsystem",
+            "expression": "1.0.2",
+            "define": "UNITY_INPUT_SYSTEM"
         }
     ],
     "noEngineReferences": false

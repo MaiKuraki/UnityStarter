@@ -150,21 +150,21 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e277581af68d4604da056e460b819656, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
+  m_Name:
+  m_EditorClassIdentifier:
   _displayName: My App
   _port: 7759
-  _password: 
+  _password:
   _useHttps: 0
   _certificate: {fileID: 0}
-  _certificatePassword: 
+  _certificatePassword:
   _runOnEnable: 0
   _logBufferSize: 1000
   _instantiateStatusUI: 1
   _instantiateConnectUI: 1
   _dontDestroyOnLoad: 1
-  _serverType: 1
-  _serverUrl: 
+  _connectionType: 1
+  _serverUrl:
 --- !u!4 &129971645
 Transform:
   m_ObjectHideFlags: 0
@@ -483,8 +483,8 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 9541d86e2fd84c1d9990edf0852d74ab, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
+  m_Name:
+  m_EditorClassIdentifier:
   m_Material: {fileID: 0}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_RaycastTarget: 1

@@ -46,13 +46,13 @@ namespace Proxima
 
         private bool _isPortrait;
 
-        void Start()
+        void OnEnable()
         {
             _proximaInspector.Status.Changed += UpdateUI;
             UpdateUI();
         }
 
-        void OnDestroy()
+        void OnDisable()
         {
             if (_proximaInspector)
             {
@@ -74,26 +74,7 @@ namespace Proxima
 
             if (_statusLabel)
             {
-                if (_proximaInspector.Status.Connections > 0)
-                {
-                    if (_isPortrait)
-                    {
-                        _statusLabel.text = "Connected: " + _proximaInspector.Status.Connections;
-                    }
-                    else
-                    {
-                        _statusLabel.text = "Proxima connected to " + _proximaInspector.Status.Connections +
-                            (_proximaInspector.Status.Connections > 1 ? " clients." : " client.");
-                    }
-                }
-                else if (_proximaInspector.Status.Error != null)
-                {
-                    _statusLabel.text = _proximaInspector.Status.Error;
-                }
-                else if (_proximaInspector.Status.Listening)
-                {
-                    _statusLabel.text = _isPortrait ? "Listening" : "Proxima is listening for connections.";
-                }
+                _statusLabel.text = _proximaInspector.Status.GetStatusMessage(_isPortrait);
             }
         }
 

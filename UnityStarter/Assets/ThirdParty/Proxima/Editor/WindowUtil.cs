@@ -39,27 +39,5 @@ namespace Proxima.Editor
 
             return _version;
         }
-
-        public static void DrawProximaIcon(float width)
-        {
-            if (!_proximaIcon)
-            {
-                var proximaIconPath = AssetDatabase.GUIDToAssetPath("834e6e3f5b2f6fd479051cdddf01f4b1");
-                _proximaIcon = AssetDatabase.LoadAssetAtPath<Texture2D>(proximaIconPath);
-            }
-
-            GUILayout.Label(_proximaIcon, GUILayout.Width(width), GUILayout.Height(width * 0.361f));
-        }
-
-        public static bool DrawFlexalonButton(float width, GUIStyle style)
-        {
-            if (!_flexalonIcon)
-            {
-                var flexalonIconPath = AssetDatabase.GUIDToAssetPath("9c4086f38f8e37949978f4861eee5e47");
-                _flexalonIcon = AssetDatabase.LoadAssetAtPath<Texture2D>(flexalonIconPath);
-            }
-
-            return GUILayout.Button(_flexalonIcon, style, GUILayout.Width(width), GUILayout.Height(width * 0.337f));
-        }
     }
 }

@@ -2,7 +2,7 @@ fileFormatVersion: 2
 guid: a2a055dc25bdb4062abb93a5bf9e31c6
 PluginImporter:
   externalObjects: {}
-  serializedVersion: 3
+  serializedVersion: 2
   iconMap: {}
   executionOrder: {}
   defineConstraints: []
@@ -11,13 +11,19 @@ PluginImporter:
   isExplicitlyReferenced: 0
   validateReferences: 1
   platformData:
-    Any:
+  - first:
+      Any: 
+    second:
       enabled: 0
       settings: {}
-    iOS:
+  - first:
+      iPhone: iOS
+    second:
       enabled: 1
       settings: {}
-    tvOS:
+  - first:
+      tvOS: tvOS
+    second:
       enabled: 1
       settings: {}
   userData: 
@@ -27,6 +33,6 @@ AssetOrigin:
   serializedVersion: 1
   productId: 14695
   packageName: InControl
-  packageVersion: 1.8.10
-  assetPath: Assets/ThirdParty/InControl/Plugins/iOS_tvOS/ICadeReaderView.m
-  uploadId: 657724
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Plugins/iOS_tvOS/ICadeReaderView.m
+  uploadId: 744175

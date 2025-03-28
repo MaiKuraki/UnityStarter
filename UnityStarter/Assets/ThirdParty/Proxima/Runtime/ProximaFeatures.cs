@@ -54,9 +54,9 @@ namespace Proxima
             }
         }
 
-        public static bool AllFeaturesInstalled()
+        public static bool IsProInstalled()
         {
-            return GetInstalledFeatures().Count == 3;
+            return GetInstalledFeatures().Contains("inspectorEdit");
         }
     }
 }

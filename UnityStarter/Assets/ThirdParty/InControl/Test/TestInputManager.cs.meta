@@ -10,6 +10,6 @@ AssetOrigin:
   serializedVersion: 1
   productId: 14695
   packageName: InControl
-  packageVersion: 
-  assetPath: Assets/ThirdParty/InControl/Test/TestInputManager.cs
-  uploadId: 0
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Test/TestInputManager.cs
+  uploadId: 744175

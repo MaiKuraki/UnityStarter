@@ -96,3 +96,10 @@ TextureImporter:
   userData: 
   assetBundleName: 
   assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Documentation/docs/logs.png
+  uploadId: 743661

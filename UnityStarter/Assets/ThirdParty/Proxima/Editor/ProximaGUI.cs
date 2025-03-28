@@ -7,7 +7,12 @@ namespace Proxima.Editor
 {
     internal static class ProximaGUI
     {
+        public static int StyleFontSize;
+        public static string StyleTag;
+        public static Font StyleFont;
+
         private static Dictionary<string, List<Texture2D>> _bgTextures = new Dictionary<string, List<Texture2D>>();
+        private static Dictionary<string, Texture2D> _textures = new Dictionary<string, Texture2D>();
 
         internal static void Vertical(Action action)
         {
@@ -44,6 +49,22 @@ namespace Proxima.Editor
             EditorGUILayout.EndVertical();
         }
 
+        internal static void VerticalExpanded(Action action)
+        {
+            EditorGUILayout.BeginVertical(GUILayout.ExpandHeight(true));
+            action();
+            EditorGUILayout.EndVertical();
+        }
+
+        internal static void VerticalCentered(Action action)
+        {
+            EditorGUILayout.BeginVertical();
+            GUILayout.FlexibleSpace();
+            action();
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndVertical();
+        }
+
         internal static void Horizontal(Action action)
         {
             EditorGUILayout.BeginHorizontal();
@@ -58,6 +79,20 @@ namespace Proxima.Editor
             EditorGUILayout.EndHorizontal();
         }
 
+        internal static void Horizontal(float height, Action action)
+        {
+            EditorGUILayout.BeginHorizontal(GUILayout.Height(height));
+            action();
+            EditorGUILayout.EndHorizontal();
+        }
+
+        internal static void HorizontalExpanded(GUIStyle style, Action action)
+        {
+            EditorGUILayout.BeginHorizontal(style, GUILayout.ExpandWidth(true));
+            action();
+            EditorGUILayout.EndHorizontal();
+        }
+
         internal static void HorizontalExpanded(Action action)
         {
             EditorGUILayout.BeginHorizontal(GUILayout.ExpandWidth(true));
@@ -67,7 +102,7 @@ namespace Proxima.Editor
 
         internal static void HorizontalCentered(Action action)
         {
-            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.BeginHorizontal(GUILayout.ExpandWidth(true));
             GUILayout.FlexibleSpace();
             action();
             GUILayout.FlexibleSpace();
@@ -114,21 +149,32 @@ namespace Proxima.Editor
             EditorGUI.EndDisabledGroup();
         }
 
-        private static Dictionary<string, Texture2D> _textures = new Dictionary<string, Texture2D>();
+        internal static bool ImageButton(string guid, GUIStyle style, int width, int height)
+            => Button(ImageContent(guid), style, width, height);
 
-        internal static bool ImageButton(string guid, int width, int height)
+        public static void Image(string guid, int? width = null, int? height = null)
         {
-            if (!_textures.TryGetValue(guid, out var texture))
-            {
-                var path = AssetDatabase.GUIDToAssetPath(guid);
-                texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
-                _textures[guid] = texture;
-            }
+            var content = ImageContent(guid);
 
-            return GUILayout.Button(texture, GUILayout.Width(width), GUILayout.Height(height));
+            if (width.HasValue && height.HasValue)
+            {
+                GUILayout.Label(content, GUILayout.Width(width.Value), GUILayout.Height(height.Value));
+            }
+            else if (width.HasValue)
+            {
+                GUILayout.Label(content, GUILayout.Width(width.Value), GUILayout.Height((float)content.image.height / content.image.width * width.Value));
+            }
+            else if (height.HasValue)
+            {
+                GUILayout.Label(content, GUILayout.Width((float)content.image.width / content.image.height * height.Value), GUILayout.Height(height.Value));
+            }
+            else
+            {
+                GUILayout.Label(ImageContent(guid), GUILayout.ExpandWidth(true));
+            }
         }
 
-        public static void Image(string guid, int width, int height)
+        public static GUIContent ImageContent(string guid)
         {
             if (!_textures.TryGetValue(guid, out var texture))
             {
@@ -137,7 +183,7 @@ namespace Proxima.Editor
                 _textures[guid] = texture;
             }
 
-            GUILayout.Label(texture, GUILayout.Width(width), GUILayout.Height(height));
+            return new GUIContent(texture);
         }
 
         public static bool Checkbox(bool value, Action action)
@@ -158,11 +204,51 @@ namespace Proxima.Editor
         }
 
         public static bool Button(string label, GUIStyle style, int width, int height)
+            => Button(new GUIContent(label), style, width, height);
+
+        public static bool Button(GUIContent content, GUIStyle style, int width, int height)
         {
-            var labelContent = new GUIContent(label);
             var position = GUILayoutUtility.GetRect(width, height, style);
             EditorGUIUtility.AddCursorRect(position, MouseCursor.Link);
-            return GUI.Button(position, labelContent, style);
+            return GUI.Button(position, content, style);
+        }
+
+        public static bool LinkButton(string label, string url, GUIStyle style, int? width = null, int? height = null)
+            => LinkButton(new GUIContent(label), url, style, width, height);
+
+        public static bool LinkButton(GUIContent content, string url, GUIStyle style, int? width, int? height)
+        {
+            Rect position;
+
+            if (width.HasValue && height.HasValue)
+            {
+                position = GUILayoutUtility.GetRect(width.Value, height.Value, style, GUILayout.ExpandWidth(false));
+            }
+            else
+            {
+                position = GUILayoutUtility.GetRect(content, style, GUILayout.ExpandWidth(false));
+            }
+
+            EditorGUIUtility.AddCursorRect(position, MouseCursor.Link);
+            if (GUI.Button(position, content, style))
+            {
+                Application.OpenURL(url);
+                return true;
+            }
+
+            return false;
+        }
+
+        public static bool LinkImageButton(string guid, string url, GUIStyle style, int width, int height)
+        {
+            if (!_textures.TryGetValue(guid, out var texture))
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+                _textures[guid] = texture;
+            }
+
+            return LinkButton(new GUIContent(texture), url, style, width, height);
         }
 
         public static Rect GetLinkRect(GUIContent labelContent, GUIStyle style, Vector2 position)
@@ -229,10 +315,6 @@ namespace Proxima.Editor
             EditorGUI.DrawRect(new Rect(x - thickness / 2, startY, thickness, endY - startY), color);
         }
 
-        public static int StyleFontSize;
-        public static string StyleTag;
-        public static Font StyleFont = null;
-
         public static GUIStyle CreateStyle()
         {
             var style = new GUIStyle();
@@ -240,6 +322,7 @@ namespace Proxima.Editor
             style.richText = true;
             style.fontSize = StyleFontSize;
             style.font = StyleFont;
+            style.stretchWidth = false;
             return style;
         }
 

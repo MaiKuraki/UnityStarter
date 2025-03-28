@@ -10,8 +10,7 @@ namespace Proxima
     [HelpURL("https://www.unityproxima.com/docs")]
     public class ProximaInspector : MonoBehaviour
     {
-        // The name displayed to show in the browser when connected.
-        [SerializeField]
+        [SerializeField, Tooltip("The name displayed to show in the browser when connected.")]
         private string _displayName;
         public string DisplayName
         {
@@ -19,8 +18,7 @@ namespace Proxima
             set => _displayName = value;
         }
 
-        // The port number to host the embedded Proxima server.
-        [SerializeField]
+        [SerializeField, Tooltip("The port number to host the embedded Proxima server.")]
         private int _port = 7759;
         public int Port
         {
@@ -28,8 +26,7 @@ namespace Proxima
             set => _port = value;
         }
 
-        // The password required to connect to Proxima. See unityproxima.com/docs/security for more information.
-        [SerializeField]
+        [SerializeField, Tooltip("The password required to connect to Proxima. See unityproxima.com/docs/security for more information.")]
         private string _password = "";
         public string Password
         {
@@ -37,8 +34,7 @@ namespace Proxima
             set => _password = value;
         }
 
-        // Enables and disables HTTPS for encryption. See unityproxima.com/docs/security for more information.
-        [SerializeField]
+        [SerializeField, Tooltip("Enables and disables HTTPS for encryption. See unityproxima.com/docs/security for more information.")]
         private bool _useHttps = false;
         public bool UseHttps
         {
@@ -46,8 +42,7 @@ namespace Proxima
             set => _useHttps = value;
         }
 
-        // Optional TLS certificate. By default Proxima uses Proxima/Resources/Proxima/ProximaEmbeddedCert.pfx.
-        [SerializeField]
+        [SerializeField, Tooltip("Optional TLS certificate. By default Proxima uses Proxima/Resources/Proxima/ProximaEmbeddedCert.pfx.")]
         private PfxAsset _certificate;
         public PfxAsset Certificate
         {
@@ -55,8 +50,7 @@ namespace Proxima
             set => _certificate = value;
         }
 
-        // Password for the TLS certificate.
-        [SerializeField]
+        [SerializeField, Tooltip("Password for the TLS certificate.")]
         private string _certificatePassword;
         public string CertificatePassword
         {
@@ -64,8 +58,7 @@ namespace Proxima
             set => _certificatePassword = value;
         }
 
-        // Automatically starts the Proxima server when this component is enabled.
-        [SerializeField]
+        [SerializeField, Tooltip("Automatically starts the Proxima server when this component is enabled.")]
         private bool _runOnEnable = true;
         public bool StartOnEnable
         {
@@ -73,8 +66,7 @@ namespace Proxima
             set => _runOnEnable = value;
         }
 
-        // Maximum number of log messages to keep in memory.
-        [SerializeField]
+        [SerializeField, Tooltip("Maximum number of log messages to keep in memory.")]
         private int _logBufferSize = 1000;
         public int LogBufferSize
         {
@@ -83,8 +75,7 @@ namespace Proxima
         }
 
         // Instantiates Proxima/Resources/Proxima/ProximaStatusUI.prefab on startup.
-        // This UI lets you see the current status of Proxima at the bottom of your screen.
-        [SerializeField]
+        [SerializeField, Tooltip("Instantiates UI that shows the current status of Proxima at the bottom of your screen.")]
         private bool _instantiateStatusUI = true;
         public bool InstantiateStatusUI
         {
@@ -93,9 +84,7 @@ namespace Proxima
         }
 
         // Instantiates Proxima/Resources/Proxima/ProximaConnectUI.prefab on startup.
-        // This UI appears when the user presses F2 and allows the user to start and stop the server
-        // with a display name and password.
-        [SerializeField]
+        [SerializeField, Tooltip("Instantiates UI that allows the user to start and stop Proxima.")]
         private bool _instantiateConnectUI = false;
         public bool InstantiateConnectUI
         {
@@ -105,40 +94,39 @@ namespace Proxima
 
         // Adds the gameObject with the Proxima Inspector to the DontDestroyOnLoad scene,
         // which keeps connections alive when transitioning between scenes.
-        [SerializeField]
+        [SerializeField, Tooltip("Adds the gameObject with the Proxima Inspector to the DontDestroyOnLoad scene.")]
         private bool _dontDestroyOnLoad = true;
 
         // When Proxima starts, sets Application.runInBackground to true. When Proxima stops,
         // sets Application.runInBackground back to its previous value. This allows Proxima
         // to work when connecting from a browseer on the same device, since normally Unity
         // will pause the app when focus is set to the browser.
-        [SerializeField]
+        [SerializeField, Tooltip("When Proxima starts, sets Application.runInBackground to true.")]
         private bool _setRunInBackground = true;
 
         // Stores the current status of Proxima and raises events when it changes.
         public ProximaStatus Status = new ProximaStatus();
 
-        public enum ServerTypes
+        public enum ConnectionTypes
         {
-            Remote,
-            Embedded,
-#if PROXIMA_DEMO
-            Demo
+            LocalNetwork = 1,
+            Internet = 3,
+#if PROXIMA_DEBUG
+            Demo = 2,
+            Debug = 0
 #endif
         }
 
-        // Is the Proxima server embedded or hosted remotely?
-        // This feature is a work in progress, and so is disabled.
-        [SerializeField, HideInInspector]
-        private ServerTypes _serverType = ServerTypes.Embedded;
-        public ServerTypes ServerType
+        [SerializeField, Tooltip("Is the Proxima server running on the local network or proxied through the internet?")]
+        private ConnectionTypes _connectionType = ConnectionTypes.LocalNetwork;
+        public ConnectionTypes ConnectionType
         {
-            get => _serverType;
-            set => _serverType = value;
+            get => _connectionType;
+            set => _connectionType = value;
         }
 
         /// URL of the remote Proxima Server.
-        [SerializeField, HideInInspector]
+        [SerializeField, Tooltip("URL of the Proxima Proxy Server.")]
         private string _serverUrl = "";
         public string ServerUrl
         {
@@ -146,7 +134,35 @@ namespace Proxima
             set => _serverUrl = value;
         }
 
-        // Performance options
+        /// AppId used for remote access. Create an app at unityproxima.com
+        [SerializeField, Tooltip("AppId used for remote access. Create an app at unityproxima.com")]
+        private long _appId;
+        public long AppId
+        {
+            get => _appId;
+            set => _appId = value;
+        }
+
+        /// Unique to add to URL for internet connections. This should be unique PER DEVICE.
+        /// If unset, a random code will be generated.
+        [SerializeField, Tooltip("Unique to add to URL for internet connections. This should be unique PER DEVICE.")]
+        private string _uniqueName = "";
+        public string UniqueName
+        {
+            get => _uniqueName;
+            set => _uniqueName = value;
+        }
+
+        /// Automatically upload logs to the Proxima server.
+        [SerializeField, Tooltip("Automatically upload logs to the Proxima server.")]
+        private bool _uploadLogs = false;
+        public bool UploadLogs
+        {
+            get => _uploadLogs;
+            set => _uploadLogs = value;
+        }
+
+        /// Performance options
         public static int MaxGameObjectUpdatesPerFrame = 10;
         public static int MaxComponentUpdateFrequency = 10;
 
@@ -180,6 +196,9 @@ namespace Proxima
         private ProximaConnectUI _connectUI;
         private bool _wasRunInBackgroundSet;
 
+        internal static Type ProxyClass = typeof(ProximaInspector).Assembly.GetType("Proxima.ProximaProxyServer");
+        internal static bool ProxyAvailable => ProxyClass != null;
+
         void Awake()
         {
             if (!_staticInitialized)
@@ -211,17 +230,25 @@ namespace Proxima
 
             if (_instantiateStatusUI)
             {
-                _statusUI = Instantiate(Resources.Load<ProximaStatusUI>("Proxima/ProximaStatusUI"));
+                var resource = Resources.Load<ProximaStatusUI>("Proxima/ProximaStatusUI");
+                resource.gameObject.SetActive(false);
+                _statusUI = Instantiate(resource);
                 _statusUI.ProximaInspector = this;
                 _statusUI.transform.SetParent(transform);
+                _statusUI.gameObject.SetActive(true);
+                resource.gameObject.SetActive(true);
             }
 
             if (_instantiateConnectUI)
             {
-                _connectUI = Instantiate(Resources.Load<ProximaConnectUI>("Proxima/ProximaConnectUI"));
+                var resource = Resources.Load<ProximaConnectUI>("Proxima/ProximaConnectUI");
+                resource.gameObject.SetActive(false);
+                _connectUI = Instantiate(resource);
                 _connectUI.ProximaInspector = this;
                 _connectUI.GetComponent<ProximaStatusUI>().ProximaInspector = this;
                 _connectUI.transform.SetParent(transform);
+                _connectUI.gameObject.SetActive(true);
+                resource.gameObject.SetActive(true);
             }
         }
 
@@ -289,29 +316,45 @@ namespace Proxima
             Status.Reset();
             Status.SetRunning(true);
 
-            var remoteServerType = Type.GetType("Proxima.ProximaRemoteServer");
-            var demoServerType = Type.GetType("Proxima.ProximaDemoServer");
-            if (remoteServerType != null && _serverType == ServerTypes.Remote)
-            {
-                _server = (ProximaServer)Activator.CreateInstance(remoteServerType, _dispatcher, Status, _serverUrl);
-            }
-#if PROXIMA_DEMO
-            else if (demoServerType != null && _serverType == ServerTypes.Demo)
-            {
-                _server = (ProximaServer)Activator.CreateInstance(demoServerType, _dispatcher, Status);
-            }
-#endif
-            else
-            {
-#if UNITY_WEBGL && !UNITY_EDITOR
-                _server = new ProximaWebGLServer(_dispatcher, Status);
-#else
-                _server = new ProximaEmbeddedServer(_dispatcher, Status, _port, _useHttps, _certificate, _certificatePassword);
-#endif
-            }
-
             try
             {
+                switch (_connectionType)
+                {
+                    case ConnectionTypes.Internet:
+                    {
+                        var proxyClass = ProxyClass;
+                        if (proxyClass == null)
+                        {
+                            throw new Exception("Internet connection type is only available in Proxima Pro.");
+                        }
+                        else
+                        {
+                            _server = Activator.CreateInstance(proxyClass, _dispatcher, Status,
+                                _serverUrl, _appId, _uniqueName, _uploadLogs) as ProximaServer;
+                        }
+                        break;
+                    }
+                    case ConnectionTypes.LocalNetwork:
+#if UNITY_WEBGL && !UNITY_EDITOR
+                        _server = new ProximaWebGLServer(_dispatcher, Status);
+#else
+                        _server = new ProximaEmbeddedServer(_dispatcher, Status, _port, _useHttps, _certificate, _certificatePassword);
+#endif
+                        break;
+#if PROXIMA_DEBUG
+#if UNITY_WEBGL
+                    case ConnectionTypes.Demo:
+                        _server = new ProximaDemoServer(_dispatcher, Status);
+                        break;
+#endif
+                    case ConnectionTypes.Debug:
+                        _server = new ProximaRemoteServer(_dispatcher, Status, _serverUrl);
+                        break;
+#endif
+                    default:
+                        throw new Exception("Unknown proxima server type: " + _connectionType);
+                }
+
                 _server.Start(_displayName, _password);
             }
             catch (Exception e)
@@ -371,27 +414,22 @@ namespace Proxima
                 var response = HandleMessage(connection, message);
                 if (response != null)
                 {
-                    connection.SendMessage(response);
+                    try
+                    {
+                        connection.SendMessage(response);
+                    }
+                    catch
+                    {
+                        // Connection was likely closed
+                    }
                 }
             }
 
             UpdateStreams();
         }
 
-        private MemoryStream HandleMessage(ProximaConnection connection, string message)
+        private MemoryStream HandleMessage(ProximaConnection connection, ProximaRequest request)
         {
-            ProximaRequest request;
-
-            try
-            {
-                request = JsonUtility.FromJson<ProximaRequest>(message);
-            }
-            catch (Exception ex)
-            {
-                Log.Error("Failed to parse request: " + ex.Message);
-                return ProximaSerialization.ErrorResponse(message, "Invalid request.");
-            }
-
             if (request.Type == ProximaRequestType.StartStream)
             {
                 return HandleStreamStartRequest(connection, request);

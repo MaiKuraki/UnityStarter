@@ -15,23 +15,26 @@ namespace Proxima.Editor
         private static readonly string _discord = "https://discord.gg/VM9cWJ9rjH";
         private static readonly string _docs = "https://www.unityproxima.com/docs?utm_source=pxmenu";
         private static readonly string _buildalon = "https://www.buildalon.com?utm_source=pxmenu";
+        private static readonly string _flexalon = "https://www.flexalon.com?utm_source=pxmenu";
 
         private static readonly string _showOnStartKey = "ProximaMenu_ShowOnStart";
         private static readonly string _versionKey = "ProximaMenu_Version";
 
-        private bool _allFeaturesInstalled = false;
+        private bool _isProInstalled = false;
 
         private const string ProximaStartScreenTag = "ProximaStartScreen";
 
         private GUIStyle _errorStyle;
+        private GUIStyle _bgStyle;
         private GUIStyle _buttonStyle;
         private GUIStyle _bodyStyle;
         private GUIStyle _versionStyle;
         private GUIStyle _boldStyle;
+        private GUIStyle _boldStyleNoWrap;
         private GUIStyle _semiboldStyle;
-        private GUIStyle _moreToolsButtonStyle;
         private GUIStyle _proStyle;
         private GUIStyle _buildalonStyle;
+        private GUIStyle _discordButtonStyle;
 
         private static ShowOnStart _showOnStart;
         private static readonly string[] _showOnStartOptions = {
@@ -103,7 +106,7 @@ namespace Proxima.Editor
         public static void StartScreen()
         {
             ProximaMenu window = GetWindow<ProximaMenu>(true, "Proxima Start Screen", true);
-            window.minSize = new Vector2(800, 600);
+            window.minSize = new Vector2(850, 600);
             window.maxSize = window.minSize;
             window.Show();
         }
@@ -133,78 +136,49 @@ namespace Proxima.Editor
             ProximaGUI.StyleTag = ProximaStartScreenTag;
             ProximaGUI.StyleFontSize = 14;
 
-            _bodyStyle = new GUIStyle(EditorStyles.label);
-            _bodyStyle.wordWrap = true;
-            _bodyStyle.fontSize = 14;
-            _bodyStyle.margin.left = 10;
-            _bodyStyle.margin.top = 10;
-            _bodyStyle.stretchWidth = false;
-            _bodyStyle.richText = true;
+            _bgStyle = ProximaGUI.CreateStyle(Color.white, ProximaGUI.HexColor("#222222"));
 
-            _boldStyle = new GUIStyle(_bodyStyle);
+            _bodyStyle = ProximaGUI.CreateStyle(Color.white);
+
+            _boldStyle = ProximaGUI.CreateStyle(Color.white);
             _boldStyle.fontStyle = FontStyle.Bold;
             _boldStyle.fontSize = 16;
 
-            _semiboldStyle = new GUIStyle(_bodyStyle);
+            _boldStyleNoWrap = new GUIStyle(_boldStyle);
+            _boldStyleNoWrap.wordWrap = false;
+
+            _semiboldStyle = ProximaGUI.CreateStyle(Color.white);
             _semiboldStyle.fontStyle = FontStyle.Bold;
 
-            _errorStyle = new GUIStyle(_bodyStyle);
+            _errorStyle = ProximaGUI.CreateStyle(new Color(1, 0.2f, 0));
             _errorStyle.fontStyle = FontStyle.Bold;
             _errorStyle.margin.top = 10;
-            _errorStyle.normal.textColor = new Color(1, 0.2f, 0);
 
-            _buttonStyle = new GUIStyle(_bodyStyle);
-            _buttonStyle.fontSize = 14;
-            _buttonStyle.margin.bottom = 5;
-            _buttonStyle.padding.top = 5;
+            _buttonStyle = ProximaGUI.CreateStyle(Color.white, ProximaGUI.HexColor("#515151"));
+            _buttonStyle.padding.top = 6;
             _buttonStyle.padding.left = 10;
-            _buttonStyle.padding.right = 10;
+            _buttonStyle.padding.right = 11;
             _buttonStyle.padding.bottom = 5;
-            _buttonStyle.hover.background = Texture2D.grayTexture;
-            _buttonStyle.hover.textColor = Color.white;
-            _buttonStyle.active.background = Texture2D.grayTexture;
-            _buttonStyle.active.textColor = Color.white;
-            _buttonStyle.focused.background = Texture2D.grayTexture;
-            _buttonStyle.focused.textColor = Color.white;
-            _buttonStyle.normal.background = Texture2D.grayTexture;
-            _buttonStyle.normal.textColor = Color.white;
-            _buttonStyle.wordWrap = false;
-            _buttonStyle.stretchWidth = false;
+            _buttonStyle.fontStyle = FontStyle.Bold;
 
             _versionStyle = new GUIStyle(EditorStyles.label);
             _versionStyle.padding.right = 10;
 
-            _moreToolsButtonStyle = new GUIStyle(_buttonStyle);
-            _moreToolsButtonStyle.normal.background = Texture2D.blackTexture;
-            _moreToolsButtonStyle.hover.background = Texture2D.blackTexture;
-            _moreToolsButtonStyle.focused.background = Texture2D.blackTexture;
-            _moreToolsButtonStyle.active.background = Texture2D.blackTexture;
-            _moreToolsButtonStyle.padding.left = 0;
-            _moreToolsButtonStyle.padding.right = 0;
-            _moreToolsButtonStyle.padding.bottom = 0;
-            _moreToolsButtonStyle.padding.top = 0;
-            _moreToolsButtonStyle.margin.bottom = 10;
-
             _proStyle = new GUIStyle(_buttonStyle);
-            _proStyle.normal.background = new Texture2D(1, 1);
-            _proStyle.normal.background.SetPixel(0, 0, new Color(.94f, .42f, .13f));
-            _proStyle.normal.background.Apply();
-            _proStyle.hover.background = _proStyle.normal.background;
-            _proStyle.focused.background = _proStyle.normal.background;
-            _proStyle.active.background = _proStyle.normal.background;
-            _proStyle.normal.textColor = Color.white;
-            _proStyle.fontStyle = FontStyle.Bold;
+            ProximaGUI.SetBackgroundColor(_proStyle, new Color(.94f, .42f, .13f));
+            _proStyle.wordWrap = false;
 
-            _buildalonStyle = ProximaGUI.CreateStyle(ProximaGUI.HexColor("#FF1E6F"));
+            _buildalonStyle = ProximaGUI.CreateStyle(Color.white, ProximaGUI.HexColor("#FF1E6F"));
             _buildalonStyle.fontStyle = FontStyle.Bold;
-            _buildalonStyle.margin.left = 10;
-            _buildalonStyle.margin.top = 10;
+
+            _discordButtonStyle = new GUIStyle(_buttonStyle);
+            ProximaGUI.SetBackgroundColor(_discordButtonStyle, ProximaGUI.HexColor("#5865f2"));
 
             WindowUtil.CenterOnEditor(this);
 
             ReadChangeLog();
 
-            _allFeaturesInstalled = ProximaFeatures.AllFeaturesInstalled();
+            _isProInstalled = ProximaFeatures.IsProInstalled();
         }
 
         private void ReadChangeLog()
@@ -213,7 +187,7 @@ namespace Proxima.Editor
             var changelogPath = AssetDatabase.GUIDToAssetPath("53c7cf36ddcf17b4da75df27231f866e");
             var changelogAsset = AssetDatabase.LoadAssetAtPath<TextAsset>(changelogPath);
             _changelog = changelogAsset.text.Split('\n')
-            .Select(x => Regex.Replace(x.TrimEnd(), @"`(.*?)`", "<b>$1</b>"))
+                .Select(x => Regex.Replace(x.TrimEnd(), @"`(.*?)`", "<b>$1</b>"))
                 .Select(x => Regex.Replace(x.TrimEnd(), @"\*\*(.*?)\*\*", "<b>$1</b>"))
                 .Where(x => !string.IsNullOrEmpty(x))
                 .ToList();
@@ -221,45 +195,23 @@ namespace Proxima.Editor
             _changelog = _changelog.GetRange(start, _changelog.Count - start);
         }
 
-        private void LinkButton(string label, string url, GUIStyle style = null, int width = 170)
-        {
-            if (style == null) style = _buttonStyle;
-            var labelContent = new GUIContent(label);
-            var position = GUILayoutUtility.GetRect(width, 35, style);
-            EditorGUIUtility.AddCursorRect(position, MouseCursor.Link);
-            if (GUI.Button(position, labelContent, style))
-            {
-                Application.OpenURL(url);
-            }
-        }
-
-        private bool Button(string label, GUIStyle style = null, int width = 170)
-        {
-            if (style == null) style = _buttonStyle;
-            var labelContent = new GUIContent(label);
-            var position = GUILayoutUtility.GetRect(width, 35, style);
-            EditorGUIUtility.AddCursorRect(position, MouseCursor.Link);
-            return GUI.Button(position, labelContent, style);
-        }
-
         private void Bullet(string text)
         {
             var ws = 1 + text.IndexOf('-');
-            EditorGUILayout.BeginHorizontal();
-            for (int i = 0; i < ws; i++)
+            ProximaGUI.Horizontal(() =>
             {
+                for (int i = 0; i < ws; i++)
+                {
+                    GUILayout.Space(10);
+                }
+                GUILayout.Label("•", _bodyStyle);
                 GUILayout.Space(10);
-            }
-            GUILayout.Label("•", _bodyStyle);
-
-            GUILayout.Label(text.Substring(ws + 1), _bodyStyle, GUILayout.ExpandWidth(true));
-
-            EditorGUILayout.EndHorizontal();
+                GUILayout.Label(text.Substring(ws + 1), _bodyStyle, GUILayout.ExpandWidth(true));
+            });
         }
 
         private void WhatsNew()
         {
-            EditorGUILayout.Space();
             EditorGUILayout.Space();
             GUILayout.Label("What's New in Proxima", _boldStyle, GUILayout.ExpandWidth(true));
             EditorGUILayout.Space();
@@ -293,105 +245,120 @@ namespace Proxima.Editor
         {
             InitStyles();
 
-            GUILayout.BeginHorizontal("In BigTitle", GUILayout.ExpandWidth(true));
+            ProximaGUI.Vertical(_bgStyle, () =>
             {
-                WindowUtil.DrawProximaIcon(128);
-                GUILayout.FlexibleSpace();
-                GUILayout.Label("Version: " + WindowUtil.GetVersion(), _versionStyle, GUILayout.ExpandHeight(true));
-            }
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal(GUILayout.ExpandHeight(true));
-            {
-                GUILayout.BeginVertical();
+                ProximaGUI.HorizontalExpanded(() =>
                 {
-                    GUILayout.Label("Resources", _boldStyle);
-                    LinkButton("Discord Invite", _discord);
-                    LinkButton("Documentation", _docs);
-                    LinkButton("Write a Review", _review);
-                    if (!_allFeaturesInstalled)
-                    {
-                        LinkButton("Upgrade to Pro", _website, _proStyle);
-                    }
+                    EditorGUILayout.Space(8);
 
-                    if (!ProximaSurvey.Completed)
+                    ProximaGUI.Vertical(150, () =>
                     {
-                        if (Button("Feedback"))
+                        GUILayout.Space(12);
+                        ProximaGUI.Horizontal(() =>
                         {
-                            ProximaSurvey.ShowSurvey();
-                        }
-                    }
+                            GUILayout.Space(11);
+                            ProximaGUI.Image("834e6e3f5b2f6fd479051cdddf01f4b1", 128);
+                        });
 
+                        GUILayout.Space(20);
+                        ProximaGUI.LinkButton("Discord Server", _discord, _discordButtonStyle, 150, 30);
+                        GUILayout.Space(8);
+                        ProximaGUI.LinkButton("Documentation", _docs, _buttonStyle, 150, 30);
+                        GUILayout.Space(8);
+                        ProximaGUI.LinkButton("Write a Review", _review, _buttonStyle, 150, 30);
+                        GUILayout.Space(8);
+
+                        if (!_isProInstalled)
+                        {
+                            ProximaGUI.LinkButton("Upgrade to Pro", _website, _proStyle, 150, 30);
+                            GUILayout.Space(8);
+                        }
+
+                        if (!ProximaSurvey.Completed)
+                        {
+                            if (ProximaGUI.Button("Feedback", _buttonStyle, 150, 30))
+                            {
+                                ProximaSurvey.ShowSurvey();
+                            }
+                        }
+
+                        GUILayout.FlexibleSpace();
+
+                        ProximaGUI.HorizontalCentered(() => GUILayout.Label("More Tools", _boldStyleNoWrap));
+                        GUILayout.Space(20);
+                        ProximaGUI.HorizontalCentered(() =>
+                        {
+                            if (ProximaGUI.ImageButton("3a8828df6dcaca540b6fee70da9c4697", GUIStyle.none, 100, (int)(165 * 0.3483f)))
+                            {
+                                Application.OpenURL(_buildalon);
+                            }
+                        });
+
+                        ProximaGUI.HorizontalCentered(() =>
+                        {
+                            if (ProximaGUI.ImageButton("9c4086f38f8e37949978f4861eee5e47", GUIStyle.none, 100, (int)(148 * 0.525f)))
+                            {
+                                Application.OpenURL(_flexalon);
+                            }
+                        });
+
+                        ProximaGUI.HorizontalCentered(() => GUILayout.Label("  Version: " + WindowUtil.GetVersion(), _versionStyle));
+                    });
+
+                    EditorGUILayout.Space();
+                    ProximaGUI.VerticalLine(ProximaGUI.HexColor("#515151"));
+                    GUILayout.Space(24);
+
+                    ProximaGUI.Vertical(() =>
+                    {
+                        _scrollPosition = ProximaGUI.Scroll(_scrollPosition, () =>
+                        {
+                            GUILayout.Space(24);
+
+                            GUILayout.Label("Introducing Proxima Remote Access Beta!", _boldStyle);
+
+                            GUILayout.Space(24);
+
+                            GUILayout.Label("Hello Proxima users! We're excited to announce an upcoming feature called Proxima Remote Access. Get ready to debug your game from anywhere in the world!", _bodyStyle);
+
+                            GUILayout.Space(24);
+
+                            ProximaGUI.HorizontalCentered(() => ProximaGUI.Image("020f2dd7432168a4eb4d830a209e54e5", 630));
+
+                            GUILayout.Space(24);
+
+                            GUILayout.Label("Today, to connect to a device running Proxima Inspector, you need to be on the same local network. With Proxima Remote Access, you can connect to users anywhere over the internet through a Proxima server.", _bodyStyle);
+
+                            GUILayout.Space(24);
+
+                            ProximaGUI.LinkButton("Join the Beta", "https://www.unityproxima.com/beta?utm_source=pxmenu", _proStyle);
+
+                            GUILayout.Space(24);
+
+                            GUILayout.Label("By the way, if you're enjoying Proxima, please consider writing a review. It helps a ton!", _semiboldStyle);
+
+                            GUILayout.Space(24);
+
+                            ProximaGUI.HorizontalLine();
+
+                            WhatsNew();
+                        });
+                    });
+                    EditorGUILayout.Space();
+                });
+
+                ProximaGUI.HorizontalExpanded(() =>
+                {
                     GUILayout.FlexibleSpace();
-                    GUILayout.Label("More Tools", _boldStyle);
-                    if (ProximaGUI.ImageButton("3a8828df6dcaca540b6fee70da9c4697", 165, (int)(165 * 0.525f)))
+                    GUILayout.Label("Show On Start: ");
+                    var newShowOnStart = (ShowOnStart)EditorGUILayout.Popup((int)_showOnStart, _showOnStartOptions);
+                    if (_showOnStart != newShowOnStart)
                     {
-                        Application.OpenURL(_buildalon);
+                        _showOnStart = newShowOnStart;
+                        EditorPrefs.SetInt(_showOnStartKey, (int)_showOnStart);
                     }
-
-                    EditorGUIUtility.AddCursorRect(GUILayoutUtility.GetLastRect(), MouseCursor.Link);
-                }
-                GUILayout.EndVertical();
-
-                EditorGUILayout.Separator();
-
-                GUILayout.BeginVertical();
-                {
-                    _scrollPosition = GUILayout.BeginScrollView(_scrollPosition);
-
-                    GUILayout.Label("Thank you for using Proxima Inspector!", _boldStyle);
-
-                    EditorGUILayout.Space();
-
-                    GUILayout.Label("You're invited to join the Discord community for support and feedback. Let us know how to make Proxima better for you!", _bodyStyle);
-
-                    EditorGUILayout.Space();
-                    EditorGUILayout.Space();
-
-                    ProximaGUI.Vertical(EditorStyles.helpBox, () =>
-                    {
-                        GUILayout.Label("Unveiling our new tool for Unity developers:", _bodyStyle);
-                        EditorGUILayout.Space();
-                        if (ProximaGUI.Link("Buildalon: Automate Unity!", _buildalonStyle))
-                        {
-                            Application.OpenURL(_buildalon);
-                        }
-                        EditorGUILayout.Space();
-                        GUILayout.Label("Buildalon is a comprehensive suite of build, test, and deploy automation solutions for Unity developers.", _bodyStyle);
-                        EditorGUILayout.Space();
-                    });
-
-                    EditorGUILayout.Space();
-                    EditorGUILayout.Space();
-
-                    ProximaGUI.Vertical(EditorStyles.helpBox, () =>
-                    {
-                        GUILayout.Label("If you're enjoying Proxima, please consider writing a review. It helps a ton!", _bodyStyle);
-                        EditorGUILayout.Space();
-                    });
-
-                    WhatsNew();
-
-                    EditorGUILayout.EndScrollView();
-                }
-                GUILayout.EndVertical();
-                EditorGUILayout.Space();
-            }
-            GUILayout.EndHorizontal();
-
-            GUILayout.BeginHorizontal("In BigTitle", GUILayout.ExpandHeight(true));
-            {
-                GUILayout.Label("Tools/Proxima/Start Screen");
-                GUILayout.FlexibleSpace();
-                GUILayout.Label("Show On Start: ");
-                var newShowOnStart = (ShowOnStart)EditorGUILayout.Popup((int)_showOnStart, _showOnStartOptions);
-                if (_showOnStart != newShowOnStart)
-                {
-                    _showOnStart = newShowOnStart;
-                    EditorPrefs.SetInt(_showOnStartKey, (int)_showOnStart);
-                }
-            }
-            GUILayout.EndHorizontal();
+                });
+            });
         }
     }
 }

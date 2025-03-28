@@ -9,3 +9,10 @@ MonoImporter:
   userData: 
   assetBundleName: 
   assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Runtime/Pro/ProximaProComponentCommands.cs
+  uploadId: 743661

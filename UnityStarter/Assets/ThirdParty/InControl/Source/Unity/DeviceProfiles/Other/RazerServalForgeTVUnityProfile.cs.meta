@@ -13,6 +13,6 @@ AssetOrigin:
   serializedVersion: 1
   productId: 14695
   packageName: InControl
-  packageVersion: 1.8.10
-  assetPath: Assets/ThirdParty/InControl/Source/Unity/DeviceProfiles/Other/RazerServalForgeTVUnityProfile.cs
-  uploadId: 657724
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Other/RazerServalForgeTVUnityProfile.cs
+  uploadId: 744175

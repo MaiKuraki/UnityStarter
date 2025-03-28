@@ -1,3 +1,5 @@
+### v1.8.11
+* Re-added missing macOS native plugin to Asset Store.
 
 ### v1.8.10
 * Added visionOS native plugin supporting the GameController framework.

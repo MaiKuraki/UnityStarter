@@ -178,6 +178,9 @@ namespace Proxima
             private int _lastUpdateFrame;
             private int _lastUpdatedIndex;
 
+            private const int MaxStackDepth = 10;
+            private List<object> _stack = new List<object>(MaxStackDepth);
+
             public ComponentList Update(string id)
             {
                 UpdateChangeList();
@@ -275,6 +278,8 @@ namespace Proxima
                     return;
                 }
 
+                _stack.Clear();
+
                 var id = component.GetInstanceID();
                 if (!_idToComponentInfo.TryGetValue(id, out var ci))
                 {
@@ -311,9 +316,20 @@ namespace Proxima
                 else if (property.Getter != null)
                 {
                     var value = property.Getter(parent);
+
+                    if (ArrayOrList.IsArrayOrList(property.PropertyType))
+                    {
+                        property.Value = value;
+                        return UpdateArrayItemProperties(property);
+                    }
+
                     if (!AreEqual(value, property.Value))
                     {
                         property.Value = value;
+
+                        // We have to redo this because the type of the object may have changed.
+                        AddMaterialOrScriptableObjectProperties(property);
+
                         return true;
                     }
                 }
@@ -321,22 +337,14 @@ namespace Proxima
                 return false;
             }
 
-            private bool UpdateProperty(object parent, PropertyInfo property)
+            private bool UpdatePropertyRecursively(object parent, PropertyInfo property)
             {
                 bool changed = UpdatePropertyValue(parent, property, false);
-                if (property.Value != null && property.Children != null)
+                if (property.Value != null && property.ChildProps != null)
                 {
-                    if (ArrayOrList.IsArrayOrList(property.PropertyType))
+                    foreach (var child in property.ChildProps)
                     {
-                        changed = UpdateArrayItemProperties(property) || changed;
-                    }
-
-                    if (property.ChildProps != null)
-                    {
-                        foreach (var child in property.ChildProps)
-                        {
-                            changed = UpdateProperty(property.Value, child) || changed;
-                        }
+                        changed |= UpdatePropertyRecursively(property.Value, child);
                     }
                 }
 
@@ -349,7 +357,7 @@ namespace Proxima
                 for (int i = 0; i < ci.Props.Count; i++)
                 {
                     var property = ci.Props[i];
-                    if (UpdateProperty(ci.Component, property))
+                    if (UpdatePropertyRecursively(ci.Component, property))
                     {
                         if (clci == null)
                         {
@@ -371,18 +379,6 @@ namespace Proxima
                     }
 
                     clci.Order = order;
-                }
-            }
-
-            private void UpdateChildProperties(PropertyGetter parentGetter, List<PropertyInfo> list)
-            {
-                var parent = parentGetter(null);
-                if (parent != null)
-                {
-                    foreach (var property in list)
-                    {
-                        UpdatePropertyValue(parent, property, false);
-                    }
                 }
             }
 
@@ -507,21 +503,7 @@ namespace Proxima
                 if (HasEditor(type))
                 {
                     var propInfo = AddPropertyToList(parent, list, name, type, setter, getter, updater);
-
-                    if (type.IsSubclassOf(typeof(UnityEngine.Object)) && (propInfo.Value as UnityEngine.Object) != null)
-                    {
-                        var valueType = propInfo.Value.GetType();
-                        if (type == typeof(Material))
-                        {
-                            propInfo.Children = new List<PropertyInfo>();
-                            AddMaterialProperties(propInfo.Value as Material, propInfo.ChildProps);
-                        }
-                        else if (valueType.IsSubclassOf(typeof(ScriptableObject)))
-                        {
-                            propInfo.Children = new List<PropertyInfo>();
-                            AddChildProperties(propInfo.Value, valueType, propInfo.ChildProps);
-                        }
-                    }
+                    AddMaterialOrScriptableObjectProperties(propInfo);
                 }
                 else if (ArrayOrList.IsArrayOrList(type))
                 {
@@ -592,6 +574,26 @@ namespace Proxima
                 }
             }
 
+            private void AddMaterialOrScriptableObjectProperties(PropertyInfo property)
+            {
+                var type = property.PropertyType;
+
+                if (type.IsSubclassOf(typeof(UnityEngine.Object)) && (property.Value as UnityEngine.Object) != null)
+                {
+                    var valueType = property.Value.GetType();
+                    if (type == typeof(Material))
+                    {
+                        property.Children = new List<PropertyInfo>();
+                        AddMaterialProperties(property.Value as Material, property.ChildProps);
+                    }
+                    else if (valueType.IsSubclassOf(typeof(ScriptableObject)))
+                    {
+                        property.Children = new List<PropertyInfo>();
+                        AddChildProperties(property.Value, valueType, property.ChildProps);
+                    }
+                }
+            }
+
             private void AddPropertyRecursively(object parent, List<PropertyInfo> list, string name, System.Reflection.PropertyInfo property, FieldInfo field)
             {
                 var type = property != null ? property.PropertyType : field.FieldType;
@@ -628,10 +630,25 @@ namespace Proxima
 
             private void AddChildProperties(object parent, Type type, List<PropertyInfo> list)
             {
+                if (_stack.Contains(parent))
+                {
+                    // Log.Warning($"Circular reference detected: {string.Join(" -> ", _stack)}");
+                    return;
+                }
+
+                _stack.Add(parent);
+
+                if (_stack.Count == MaxStackDepth)
+                {
+                    Log.Error($"Stack depth limit reached: {string.Join(" -> ", _stack)}");
+                    _stack.RemoveAt(_stack.Count - 1);
+                    return;
+                }
+
                 foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
                 {
                     if ((field.IsPublic || field.GetCustomAttribute<SerializeField>() != null) &&
-                        field.GetCustomAttribute<HideInInspector>() == null)
+                        (ProximaGameObjectCommands.ShowHidden || field.GetCustomAttribute<HideInInspector>() == null))
                     {
                         // If there's a custom editor, often just changing a field will have no effect.
                         // Search for a corresponding property we can use instead.
@@ -665,6 +682,8 @@ namespace Proxima
                         }
                     }
                 }
+
+                _stack.RemoveAt(_stack.Count - 1);
             }
 
             private void CreatePropertiesForMonoBehaviour(Component component, ComponentInfo ci)

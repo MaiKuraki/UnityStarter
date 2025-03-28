@@ -2,7 +2,7 @@ fileFormatVersion: 2
 guid: 8b2fc870f011c4ca993c29b701c21ea7
 PluginImporter:
   externalObjects: {}
-  serializedVersion: 3
+  serializedVersion: 2
   iconMap: {}
   executionOrder: {}
   defineConstraints: []
@@ -11,14 +11,11 @@ PluginImporter:
   isExplicitlyReferenced: 0
   validateReferences: 1
   platformData:
-    Any:
+  - first:
+      Any: 
+    second:
       enabled: 0
       settings: {}
-    VisionOS:
-      enabled: 1
-      settings:
-        CPU: AnyCPU
-        FrameworkDependencies: CoreHaptics
   userData: 
   assetBundleName: 
   assetBundleVariant: 
@@ -26,6 +23,6 @@ AssetOrigin:
   serializedVersion: 1
   productId: 14695
   packageName: InControl
-  packageVersion: 1.8.10
-  assetPath: Assets/ThirdParty/InControl/Plugins/visionOS/InControlNative.a
-  uploadId: 657724
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Plugins/visionOS/InControlNative.a
+  uploadId: 744175

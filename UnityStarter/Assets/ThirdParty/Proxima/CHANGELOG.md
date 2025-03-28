@@ -1,5 +1,20 @@
 # Proxima Changelog
 
+## Version 1.5.0
+
+### [BETA] Proxima Remote Access (Pro Only)
+- Proxima now supports connecting to your game through the internet! Join the beta at https://unityproxima.com/beta
+
+### Fixes
+- Fix editor freezing on Unity 6000.1 Beta.
+- Fix materials and scriptable objects not updating child properties correctly.
+- Support New Input System for the Proxima built-in UI.
+- Switch to from DateTime.Now to DateTime.UtcNow for better performance.
+- Prevent stack overflow error from circluarly referenced types.
+- Fix "Upgrade to Pro" appearing when you have Pro installed.
+- Downloaded Proxima log files now have indented stack traces.
+- Fix warnings in Unity 2023.2
+
 ## Version 1.4.0
 
 ### New Features
@@ -22,6 +37,7 @@
 ## Version 1.3.1
 
 ### Fixes
+
 - Fix Unity 2023.2 warnings.
 - Disable start screen in batch mode.
 - Fix float parsing breaking in some cultures.
@@ -80,9 +96,7 @@
 - Add "Run Script" button to run a sequence of commands in the console. See https://www.unityproxima.com/docs/console
 - Added a button to collapse the navigation panel to just icons for smaller screens.
 - Added touch-drag support for modifying numbers and arrays in the proxima inspector.
-- Added an option "Set Run In Background" to Proxima Inspector to have Unity continue running when not in focus while
-  Proxima is running. This is useful if you are connecting to Proxima from a browser on the same device, since the
-  browser will cause Unity to lose focus.
+- Added an option "Set Run In Background" to Proxima Inspector to have Unity continue running when not in focus while Proxima is running. This is useful if you are connecting to Proxima from a browser on the same device, since the browser will cause Unity to lose focus.
 - Prevent messages from sending when the connection is closed to avoid logged exceptions.
 
 ## Version 1.0.0

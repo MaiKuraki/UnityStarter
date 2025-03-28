@@ -85,7 +85,7 @@ namespace Proxima
 
             var logInfo = new LogInfo
             {
-                LogTime = (long) System.DateTime.UtcNow.Subtract(new System.DateTime(1970, 1, 1)).TotalMilliseconds,
+                LogTime = System.DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 LogString = message,
                 StackTrace = stackTrace,
                 Type = type

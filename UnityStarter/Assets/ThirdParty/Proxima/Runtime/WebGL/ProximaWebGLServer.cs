@@ -9,7 +9,7 @@ namespace Proxima
 {
     internal class ProximaWebGLServer : ProximaServer
     {
-        private ConcurrentQueue<(ProximaConnection, string)> _receiveQueue;
+        private ConcurrentQueue<(ProximaConnection, ProximaRequest)> _receiveQueue;
         private ProximaDispatcher _dispatcher;
         private WaitForSeconds _wait = new WaitForSeconds(1);
         private ProximaStatus _status;
@@ -29,7 +29,7 @@ namespace Proxima
             Log.Info("Proxima Inspector started for WebGL.");
             _displayName = displayName;
             _password = password;
-            _receiveQueue = new ConcurrentQueue<(ProximaConnection, string)>();
+            _receiveQueue = new ConcurrentQueue<(ProximaConnection, ProximaRequest)>();
             _status.SetConnectInfo(Application.streamingAssetsPath + "/proxima/index.html");
             CreateNewConnection();
         }
@@ -103,7 +103,7 @@ namespace Proxima
             _receiveQueue = null;
         }
 
-        public bool TryGetMessage(out (ProximaConnection, string) message)
+        public bool TryGetMessage(out (ProximaConnection, ProximaRequest) message)
         {
             if (_receiveQueue != null)
             {
@@ -111,7 +111,7 @@ namespace Proxima
             }
             else
             {
-                message = (null, "");
+                message = (null, null);
                 return false;
             }
         }
