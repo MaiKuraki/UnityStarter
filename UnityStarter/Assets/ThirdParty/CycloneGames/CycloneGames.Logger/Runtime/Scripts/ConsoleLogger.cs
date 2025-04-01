@@ -4,34 +4,41 @@ namespace CycloneGames.Logger
 {
     public class ConsoleLogger : ILogger
     {
+        private static readonly object _consoleLock = new object();
+
         public void LogInfo(string message)
         {
-            Console.WriteLine($"INFO: {message}");
+            lock (_consoleLock) Console.WriteLine($"INFO: {message}");
         }
 
         public void LogWarning(string message)
         {
-            Console.WriteLine($"WARNING: {message}");
+            lock (_consoleLock) Console.WriteLine($"WARNING: {message}");
         }
 
         public void LogError(string message)
         {
-            Console.Error.WriteLine($"ERROR: {message}");
+            lock (_consoleLock) Console.Error.WriteLine($"ERROR: {message}");
         }
 
         public void LogTrace(string message)
         {
-            Console.WriteLine($"TRACE: {message}");
+            lock (_consoleLock) Console.WriteLine($"TRACE: {message}");
         }
 
         public void LogDebug(string message)
         {
-            Console.WriteLine($"DEBUG: {message}");
+            lock (_consoleLock) Console.WriteLine($"DEBUG: {message}");
         }
 
         public void LogFatal(string message)
         {
-            Console.Error.WriteLine($"FATAL: {message}");
+            lock (_consoleLock) Console.Error.WriteLine($"FATAL: {message}");
+        }
+
+        public void Dispose()
+        {
+            
         }
     }
 }
