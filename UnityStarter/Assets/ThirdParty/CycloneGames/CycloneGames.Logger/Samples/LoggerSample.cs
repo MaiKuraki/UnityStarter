@@ -10,11 +10,17 @@ public class LoggerSample : MonoBehaviour
         //  if there are no FileLogger, remove this line
         CLogger.Instance.AddLogger(new FileLogger("./AppLog.txt"));
     }
+    
     void Start()
     {
         CLogger.LogInfo("This is Info!");
         CLogger.LogWarning("This is Warning!");
         CLogger.LogError("This is Error!");
+    }
+
+    void OnDestroy() 
+    { 
+        CLogger.Instance.Dispose(); 
     }
 
     void Update()
