@@ -1,37 +1,15 @@
 using UnityEngine;
-
+ 
 namespace CycloneGames.Logger
 {
-public class UnityLogger : ILogger
-{
-    public void LogTrace(string message)
+    public sealed class UnityLogger : ILogger
     {
-        Debug.Log($"TRACE: {message}");
+        public void LogTrace(string message) => Debug.Log($"TRACE: {message}");
+        public void LogDebug(string message) => Debug.Log($"DEBUG: {message}");
+        public void LogInfo(string message) => Debug.Log(message);
+        public void LogWarning(string message) => Debug.LogWarning(message);
+        public void LogError(string message) => Debug.LogError(message);
+        public void LogFatal(string message) => Debug.LogError($"FATAL: {message}");
+        public void Dispose() { /* No resources to dispose */ }
     }
-
-    public void LogDebug(string message)
-    {
-        Debug.Log($"DEBUG: {message}");
-    }
-
-    public void LogInfo(string message)
-    {
-        Debug.Log(message);
-    }
-
-    public void LogWarning(string message)
-    {
-        Debug.LogWarning(message);
-    }
-
-    public void LogError(string message)
-    {
-        Debug.LogError(message);
-    }
-
-    public void LogFatal(string message)
-    {
-        Debug.LogError($"FATAL: {message}");
-    }
-}
 }

@@ -1,6 +1,8 @@
+using System;
+
 namespace CycloneGames.Logger
 {
-    public interface ILogger
+    public interface ILogger : IDisposable
     {
         void LogTrace(string message);
         void LogDebug(string message);
