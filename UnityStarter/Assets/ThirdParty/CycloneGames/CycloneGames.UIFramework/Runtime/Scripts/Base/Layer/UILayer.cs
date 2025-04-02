@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -10,162 +9,181 @@ namespace CycloneGames.UIFramework
     public class UILayer : MonoBehaviour
     {
         private const string DEBUG_FLAG = "[UILayer]";
-        
         [SerializeField] private string layerName;
+
+        [Tooltip("The amount of pages to expand when the page array is full")]
+        [SerializeField] private int expansionAmount = 3;
 
         private Canvas uiCanvas;
         public Canvas UICanvas => uiCanvas;
         private GraphicRaycaster graphicRaycaster;
-        private GraphicRaycaster PageGraphicRaycaster => graphicRaycaster;
+        public GraphicRaycaster PageGraphicRaycaster => graphicRaycaster;
         public string LayerName => layerName;
-
-        private List<UIPage> uiPagesList = new List<UIPage>();
-        private bool bFinishedLayerInit = false;
+        private UIPage[] uiPagesArray;
+        public UIPage[] UIPageArray => uiPagesArray;
+        public int PageCount { get; private set; }
+        public bool IsFinishedLayerInit { get; private set; }
 
         protected void Awake()
         {
             uiCanvas = GetComponent<Canvas>();
             graphicRaycaster = GetComponent<GraphicRaycaster>();
-            
             PageGraphicRaycaster.blockingMask = LayerMask.GetMask("UI");
-
             InitLayer();
         }
 
         private void InitLayer()
         {
-            // If there are no children, the initialization is considered complete.
             if (transform.childCount == 0)
             {
-                bFinishedLayerInit = true;
+                IsFinishedLayerInit = true;
                 Debug.Log($"{DEBUG_FLAG} Finished init Layer: {LayerName}");
                 return;
             }
-            
-            // Ensure the page's Name matches its associated prefab name,
-            // and that the page's Name is defined within the PageName class.
-            uiPagesList = GetComponentsInChildren<UIPage>().ToList();
-            foreach (UIPage page in uiPagesList)
+
+            var tempPages = GetComponentsInChildren<UIPage>();
+            uiPagesArray = new UIPage[tempPages.Length];
+            PageCount = 0;
+
+            foreach (UIPage page in tempPages)
             {
                 page.SetPageName(page.gameObject.name);
                 page.SetUILayer(this);
+                uiPagesArray[PageCount++] = page;
             }
-            
+
             SortPagesByPriority();
-            bFinishedLayerInit = true;
+            IsFinishedLayerInit = true;
             Debug.Log($"{DEBUG_FLAG} Finished init Layer: {LayerName}");
         }
 
         public UIPage GetUIPage(string InPageName)
         {
-            if(string.IsNullOrEmpty(InPageName)) return null;
-            
-            return uiPagesList.FirstOrDefault(page => page.PageName == InPageName);
+            if (string.IsNullOrEmpty(InPageName)) return null;
+            for (int i = 0; i < PageCount; i++)
+            {
+                if (uiPagesArray[i].PageName == InPageName)
+                {
+                    return uiPagesArray[i];
+                }
+            }
+            return null;
         }
 
         public bool HasPage(string InPageName)
         {
-            return uiPagesList.Any(page => page.PageName.Equals(InPageName, System.StringComparison.OrdinalIgnoreCase));
+            for (int i = 0; i < PageCount; i++)
+            {
+                if (uiPagesArray[i].PageName.Equals(InPageName, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
+
         public void AddPage(UIPage newPage)
         {
-            // NOTE: Ensure the uiPageList is sorted before adding.
-            if (!bFinishedLayerInit)
+            if (!IsFinishedLayerInit)
             {
                 Debug.LogError($"{DEBUG_FLAG} layer not init, current layer: {LayerName}");
                 return;
             }
-            
-            // Check for the existence of a page with the same name before adding.
-            if (uiPagesList.Any(page => page.PageName == newPage.PageName))
-            {
-                Debug.LogError($"{DEBUG_FLAG} Page already exists: {newPage.PageName}");
-                return;
-            }
-            
-            newPage.gameObject.name = newPage.PageName;
-            newPage.SetUILayer(this); // Assign layer to page
-            newPage.transform.SetParent(transform, false);
-            
-            // If the list is empty, simply add the new page.
-            if (uiPagesList.Count == 0)
-            {
-                uiPagesList.Add(newPage);
-                return;
-            }
-            
-            // Reverse iterate through the list to find the last index with Priority equal to the new page's Priority.
-            int insertIndex = uiPagesList.Count; // Initialize as the end of the list.
 
-            for (int i = uiPagesList.Count - 1; i >= 0; i--) 
+            for (int i = 0; i < PageCount; i++)
             {
-                if (uiPagesList[i].Priority > newPage.Priority) 
+                if (uiPagesArray[i].PageName == newPage.PageName)
                 {
-                    // Found a page with a greater Priority, insert the new page before it.
-                    insertIndex = i;
-                } 
-                else if (uiPagesList[i].Priority == newPage.Priority) 
-                {
-                    // Found a page with the same Priority, insert after this page.
-                    insertIndex = i + 1;
-                    break; // List is sorted so we can break the loop.
+                    Debug.LogError($"{DEBUG_FLAG} Page already exists: {newPage.PageName}");
+                    return;
                 }
             }
 
-            // Insert the new page at the calculated index.
-            uiPagesList.Insert(insertIndex, newPage);
+            newPage.gameObject.name = newPage.PageName;
+            newPage.SetUILayer(this);
+            newPage.transform.SetParent(transform, false);
 
-            // Only need to update the sibling index for the new page and any after it.
-            for (int i = insertIndex; i < uiPagesList.Count; i++) 
+            if (PageCount == (uiPagesArray?.Length ?? 0))
             {
-                uiPagesList[i].transform.SetSiblingIndex(i);
+                int newSize = (uiPagesArray?.Length ?? 0) + expansionAmount;
+                System.Array.Resize(ref uiPagesArray, newSize);
+            }
+
+            int insertIndex = PageCount;
+            for (int i = PageCount - 1; i >= 0; i--)
+            {
+                if (uiPagesArray[i].Priority > newPage.Priority)
+                {
+                    insertIndex = i;
+                }
+                else if (uiPagesArray[i].Priority == newPage.Priority)
+                {
+                    insertIndex = i + 1;
+                    break;
+                }
+            }
+
+            for (int i = PageCount; i > insertIndex; i--)
+            {
+                uiPagesArray[i] = uiPagesArray[i - 1];
+            }
+
+            uiPagesArray[insertIndex] = newPage;
+            PageCount++;
+
+            for (int i = insertIndex; i < PageCount; i++)
+            {
+                uiPagesArray[i].transform.SetSiblingIndex(i);
             }
         }
 
         public void RemovePage(string InPageName)
         {
-            // NOTE: Ensure the uiPageList is initialized.
-            if (!bFinishedLayerInit)
+            if (!IsFinishedLayerInit)
             {
                 Debug.LogError($"{DEBUG_FLAG} layer not init, current layer: {LayerName}");
                 return;
             }
-            
-            UIPage page = GetUIPage(InPageName);
-            if (page == null)
+
+            for (int i = 0; i < PageCount; i++)
             {
-                return;
+                if (uiPagesArray[i].PageName == InPageName)
+                {
+                    UIPage page = uiPagesArray[i];
+                    for (int j = i; j < PageCount - 1; j++)
+                    {
+                        uiPagesArray[j] = uiPagesArray[j + 1];
+                    }
+                    PageCount--;
+
+                    page.ClosePage();
+                    page.SetUILayer(null);
+                    return;
+                }
             }
-            
-            uiPagesList.Remove(page);
-            page.ClosePage();
-            page.SetUILayer(null); // Clear layer reference
         }
-        
+
         private void SortPagesByPriority()
         {
-            // If there's only one or no page, no need to sort.
-            if(uiPagesList.Count <= 1) return;
-            
-            uiPagesList = uiPagesList.OrderBy(page => page.Priority).ToList();
+            if (PageCount <= 1) return;
+            System.Array.Sort(uiPagesArray, 0, PageCount, Comparer<UIPage>.Create((a, b) => a.Priority.CompareTo(b.Priority)));
 
-            // Update the sibling index according to the new order.
-            for (int i = 0; i < uiPagesList.Count; i++)
+            for (int i = 0; i < PageCount; i++)
             {
-                uiPagesList[i].transform.SetSiblingIndex(i);
+                uiPagesArray[i].transform.SetSiblingIndex(i);
             }
         }
 
         public void OnDestroy()
         {
-            foreach(var page in uiPagesList)
+            for (int i = 0; i < PageCount; i++)
             {
-                if(page != null)
+                if (uiPagesArray[i] != null)
                 {
-                    page.SetUILayer(null);
+                    uiPagesArray[i].SetUILayer(null);
                 }
             }
-            uiPagesList.Clear();
+            PageCount = 0;
         }
     }
 }
