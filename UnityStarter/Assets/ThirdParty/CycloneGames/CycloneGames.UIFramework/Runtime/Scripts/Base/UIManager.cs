@@ -18,9 +18,10 @@ namespace CycloneGames.UIFramework
         private IMainCameraService mainCamera;
         private UIRoot uiRoot;
         private Dictionary<string, UniTaskCompletionSource<bool>> uiOpenTasks = new Dictionary<string, UniTaskCompletionSource<bool>>();
+
         public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IObjectSpawner objectSpawner, IMainCameraService mainCamera)
         {
-            this.assetPathBuilder = assetPathBuilderFactory.Create("UI");   // TODO: maybe there is a better way implement this
+            this.assetPathBuilder = assetPathBuilderFactory.Create("UI");
             if (this.assetPathBuilder == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Invalid AssetPathBuilder, Check your [AssetPathBuilderFactory], make sure it contains 'UI' key.");
@@ -33,8 +34,6 @@ namespace CycloneGames.UIFramework
         private void Awake()
         {
             uiRoot = GameObject.FindFirstObjectByType<UIRoot>();
-
-            // UnityEngine.Debug.Log($"{DEBUG_FLAG} UIRootValid: {uiRoot != null}");
         }
 
         private void Start()
@@ -54,7 +53,6 @@ namespace CycloneGames.UIFramework
 
         async UniTask OpenUIAsync(string PageName, System.Action<UIPage> OnPageCreated = null)
         {
-            // Avoid duplicated open same UI
             if (uiOpenTasks.ContainsKey(PageName))
             {
                 CLogger.LogError($"{DEBUG_FLAG} Duplicated Open! PageName: {PageName}");
@@ -65,28 +63,14 @@ namespace CycloneGames.UIFramework
 
             CLogger.LogInfo($"{DEBUG_FLAG} Attempting to open UI: {PageName}");
             string configPath = assetPathBuilder.GetAssetPath(PageName);
-            Object pagePrefab = null;
-            UnityEngine.ResourceManagement.AsyncOperations.AsyncOperationHandle<UIPageConfiguration> pageHandle = default;
-
+            UIPageConfiguration pageConfig = null;
+            var pageHandle = Addressables.LoadAssetAsync<UIPageConfiguration>(configPath);
             try
             {
-                // Attempt to load the configuration
-                pageHandle = Addressables.LoadAssetAsync<UIPageConfiguration>(configPath);
-                await pageHandle;
-
-                if (pageHandle.Result == null)
-                {
-                    CLogger.LogError($"{DEBUG_FLAG} Invalid UI Prefab in PageConfig, PageName: {PageName}");
-                    uiOpenTasks.Remove(PageName);
-                    pageHandle.Release();
-                    return;
-                }
-
-                // Attempt to load the Prefab
-                pagePrefab = pageHandle.Result?.PagePrefab;
-
-                // If the Prefab load fails, log the error and exit
-                if (pagePrefab == null)
+                await pageHandle.Task;
+                pageConfig = pageHandle.Result;
+                
+                if (pageConfig == null || pageConfig.PagePrefab == null)
                 {
                     CLogger.LogError($"{DEBUG_FLAG} Invalid UI Prefab in PageConfig, PageName: {PageName}");
                     uiOpenTasks.Remove(PageName);
@@ -96,15 +80,13 @@ namespace CycloneGames.UIFramework
             }
             catch (System.Exception ex)
             {
-                // Catch any exceptions, log the error message
                 CLogger.LogError($"{DEBUG_FLAG} An exception occurred while loading the UI: {PageName}: {ex.Message}");
-                // Perform any necessary cleanup here
                 uiOpenTasks.Remove(PageName);
-                return; // Handle the exception here instead of re-throwing it
+                pageHandle.Release();
+                return;
             }
 
-            // If there are no exceptions and the resources have been successfully loaded, proceed to instantiate and setup the UI page
-            string layerName = pageHandle.Result.Layer.LayerName;
+            string layerName = pageConfig.Layer.LayerName;
             UILayer uiLayer = uiRoot.GetUILayer(layerName);
             if (uiLayer == null)
             {
@@ -114,7 +96,6 @@ namespace CycloneGames.UIFramework
                 return;
             }
 
-            // UnityEngine.Debug.Log($"{DEBUG_FLAG} uiLayerValid: {uiLayer != null}, layerName: {layerName}");
             if (uiLayer.HasPage(PageName))
             {
                 // Please note that within this framework, the opening of a UIPage must be unique;
@@ -125,7 +106,7 @@ namespace CycloneGames.UIFramework
                 return;
             }
 
-            UIPage uiPage = objectSpawner.SpawnObject(pagePrefab) as UIPage;
+            UIPage uiPage = objectSpawner.SpawnObject(pageConfig.PagePrefab) as UIPage;
             if (uiPage == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to instantiate UIPage prefab: {PageName}");
@@ -145,7 +126,6 @@ namespace CycloneGames.UIFramework
         {
             if (uiOpenTasks.TryGetValue(PageName, out var openTask))
             {
-                // Waiting Open Task Finished
                 await openTask.Task;
                 uiOpenTasks.Remove(PageName);
             }
@@ -169,11 +149,9 @@ namespace CycloneGames.UIFramework
 
         internal bool IsUIPageValid(string PageName)
         {
-            // Check if the UI Root has a layer containing the page with the given name.
             UILayer layer = uiRoot.TryGetUILayerFromPageName(PageName);
             if (layer == null)
             {
-                // If the layer doesn't exist, the page is not valid.
                 CLogger.LogError($"{DEBUG_FLAG} Can not find layer from PageName: {PageName}");
                 return false;
             }
@@ -184,16 +162,11 @@ namespace CycloneGames.UIFramework
 
         internal UIPage GetUIPage(string PageName)
         {
-            // Check if the UI Root has a layer containing the page with the given name.
             UILayer layer = uiRoot.TryGetUILayerFromPageName(PageName);
             if (layer == null)
             {
-                // If the layer doesn't exist, the page is not valid.
-                // Debug.LogError($"{DEBUG_FLAG} Can not find layer from PageName: {PageName}");
                 return null;
             }
-
-            // If the page doesn't exist or isn't active, it's not valid.
             return layer.GetUIPage(PageName);
         }
 
