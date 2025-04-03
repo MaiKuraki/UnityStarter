@@ -1,0 +1,23 @@
+{
+  "name": "com.cyclone-games.cheat",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Cheat",
+  "description": "A simple Cheat module using VitalRouter technology",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.0.0",
+    "jp.hadashikick.vitalrouter": "1.6.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Debug",
+    "Cheat"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}
