@@ -1,2 +1,0 @@
-## Note
-You should ensure that all C# scripts in this folder have the namespace set to Assembly-CSharp.dll. Additionally, the folder _CHEAT should not be placed in any directory that is included in or contains a Unity asmdef.
