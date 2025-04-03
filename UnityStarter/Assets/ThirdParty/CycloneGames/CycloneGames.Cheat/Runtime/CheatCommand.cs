@@ -1,13 +1,92 @@
+using System;
+using System.Runtime.CompilerServices;
+
 namespace CycloneGames.Cheat
 {
-    public struct CheatCommand : VitalRouter.ICommand
+    public interface ICheatCommand : VitalRouter.ICommand
     {
-        public CheatCommand(string inID, string[] inParams)
+        string CommandID { get; }
+    }
+
+    public readonly struct CheatCommand : ICheatCommand
+    {
+        public string CommandID { get; }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public CheatCommand(string inCommandId)
         {
-            ID = inID;
-            Params = inParams;
+            CommandID = inCommandId;
         }
-        public string ID { get; set; }
-        public string[] Params { get; set; }
+    }
+
+    public readonly struct CheatCommand<T> : ICheatCommand where T : struct
+    {
+        public string CommandID { get; }
+        public readonly T Arg;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public CheatCommand(string inCommandId, in T arg)
+        {
+            CommandID = inCommandId;
+            Arg = arg;
+        }
+    }
+
+    public sealed class CheatCommandClass<T> : ICheatCommand where T : class
+    {
+        public string CommandID { get; }
+        public readonly T Arg;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public CheatCommandClass(string inCommandId, T arg)
+        {
+            CommandID = inCommandId;
+            Arg = arg ?? throw new ArgumentNullException(nameof(arg));
+        }
+    }
+
+    public readonly struct CheatCommand<T1, T2> : ICheatCommand
+        where T1 : struct where T2 : struct
+    {
+        public string CommandID { get; }
+        public readonly T1 Arg1;
+        public readonly T2 Arg2;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public CheatCommand(string inCommandId, in T1 arg1, in T2 arg2)
+        {
+            CommandID = inCommandId;
+            Arg1 = arg1;
+            Arg2 = arg2;
+        }
+    }
+
+    public static class CheatCommandFactory
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ICheatCommand Create(string inCommandId)
+        {
+            return new CheatCommand(inCommandId);
+        }
+        
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ICheatCommand Create<T>(string inCommandId, in T arg) where T : struct
+        {
+            return new CheatCommand<T>(inCommandId, arg);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ICheatCommand Create<T>(string inCommandId, T arg) where T : class
+        {
+            if (arg == null) throw new ArgumentNullException(nameof(arg));
+            return new CheatCommandClass<T>(inCommandId, arg);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ICheatCommand Create<T1, T2>(string inCommandId, in T1 arg1, in T2 arg2)
+            where T1 : struct where T2 : struct
+        {
+            return new CheatCommand<T1, T2>(inCommandId, arg1, arg2);
+        }
     }
 }
