@@ -2,7 +2,7 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd">
   <metadata>
     <id>System.Runtime.CompilerServices.Unsafe</id>
-    <version>6.1.1</version>
+    <version>6.1.2</version>
     <authors>Microsoft</authors>
     <requireLicenseAcceptance>true</requireLicenseAcceptance>
     <license type="expression">MIT</license>
@@ -13,7 +13,7 @@
     <description>Provides the System.Runtime.CompilerServices.Unsafe class, which provides generic, low-level functionality for manipulating pointers.</description>
     <copyright>© Microsoft Corporation. All rights reserved.</copyright>
     <serviceable>true</serviceable>
-    <repository type="git" url="https://github.com/dotnet/maintenance-packages" commit="ab95a1f103b49919ba02577a99f3173405bb50ca" />
+    <repository type="git" url="https://github.com/dotnet/maintenance-packages" commit="f62ca0009b038cab4725a720f386623a969d73ad" />
     <dependencies>
       <group targetFramework=".NETFramework4.6.2" />
       <group targetFramework="net6.0" />
