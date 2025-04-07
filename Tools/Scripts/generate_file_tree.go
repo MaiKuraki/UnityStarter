@@ -20,34 +20,44 @@ import (
 )
 
 // isBlacklisted checks if the path or file name is in the blacklist.
+// isBlacklisted checks if the path or file name is in the blacklist.
 func isBlacklisted(path, name string, blacklist []string) bool {
+	// First convert path to absolute and normalize separators
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path // Fallback to original path if conversion fails
+	}
+	absPath = filepath.ToSlash(absPath) // Standardize to forward slashes
+
+	fullPath := filepath.ToSlash(filepath.Join(absPath, name))
+
 	for _, item := range blacklist {
+		item = filepath.ToSlash(item)
+
 		if strings.HasSuffix(item, "/") {
+			// Process directory blacklist items
 			folder := strings.TrimSuffix(item, "/")
-			if strings.HasPrefix(path, folder) || name == folder {
+
+			// Check for full path or subpath matches
+			if strings.HasPrefix(fullPath, folder+"/") ||
+				fullPath == folder ||
+				strings.HasPrefix(absPath, folder+"/") ||
+				absPath == folder {
+				return true
+			}
+
+			// Check for current directory name match
+			if name == filepath.Base(folder) {
 				return true
 			}
 		} else if strings.HasPrefix(item, "*.") {
+			// Process extension blacklist
 			ext := strings.TrimPrefix(item, "*.")
 			if strings.HasSuffix(name, "."+ext) {
 				return true
 			}
 		} else if item == name {
-			return true
-		}
-	}
-	return false
-}
-
-// isCollapsed checks if the path or file name is in the collapsible list.
-func isCollapsed(path, name string, collapselist []string) bool {
-	for _, item := range collapselist {
-		if strings.HasSuffix(item, "/") {
-			folder := strings.TrimSuffix(item, "/")
-			if strings.HasPrefix(path, folder) || name == folder {
-				return true
-			}
-		} else if item == name {
+			// Process exact filename match
 			return true
 		}
 	}
@@ -69,15 +79,70 @@ func isWhitelisted(name string, whitelist []string) bool {
 	return false
 }
 
-// traverseDir recursively traverses the directory and generates a Markdown-formatted tree structure.
+// canCollapseEntry checks if a single entry (file/dir) can be collapsed
+func canCollapseEntry(path, name string, isDir bool, blacklist, collapselist, whitelist []string) bool {
+	fullPath := filepath.Join(path, name)
+
+	if isBlacklisted(fullPath, name, blacklist) {
+		return true // Blacklisted items are always treated as collapsible
+	}
+
+	if !isDir {
+		// Files are collapsible if they're not whitelisted
+		return !isWhitelisted(name, whitelist)
+	}
+
+	// For directories, check if marked for collapsing or if all contents are collapsible
+	return shouldCollapseDir(fullPath, blacklist, collapselist, whitelist)
+}
+
+// shouldCollapseDir determines if a directory and ALL its contents can be collapsed
+func shouldCollapseDir(path string, blacklist, collapselist, whitelist []string) bool {
+	// First check if directory itself is in the collapsible list
+	for _, item := range collapselist {
+		item = filepath.ToSlash(item)
+		pathSlash := filepath.ToSlash(path)
+
+		if strings.HasSuffix(item, "/") {
+			folder := strings.TrimSuffix(item, "/")
+			if strings.HasPrefix(pathSlash, folder+"/") || pathSlash == folder {
+				return true
+			}
+		} else if filepath.Base(path) == item {
+			return true
+		}
+	}
+
+	// Then check all contents
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if !canCollapseEntry(path, entry.Name(), entry.IsDir(), blacklist, collapselist, whitelist) {
+			return false
+		}
+	}
+
+	return len(entries) > 0 // Empty folders won't be collapsed
+}
+
 func traverseDir(path string, prefix string, isLastParent bool, blacklist, collapselist, whitelist []string) string {
+	if shouldCollapseDir(path, blacklist, collapselist, whitelist) {
+		connector := "└── "
+		if !isLastParent {
+			connector = "├── "
+		}
+		return fmt.Sprintf("%s%s...\n", prefix, connector)
+	}
+
 	var markdown string
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		return fmt.Sprintf("Error reading directory %s: %v\n", path, err)
 	}
 
-	// Filter entries and track non-whitelisted files.
 	var filteredEntries []os.DirEntry
 	var hasNonWhitelisted bool
 	for _, entry := range entries {
@@ -92,58 +157,34 @@ func traverseDir(path string, prefix string, isLastParent bool, blacklist, colla
 		}
 	}
 
-	// If all files in the folder are ignored, display it in a collapsed manner.
-	if len(filteredEntries) == 0 && len(entries) > 0 {
-		connector := "└── "
-		if !isLastParent {
-			connector = "├── "
-		}
-		markdown += fmt.Sprintf("%s%s...\n", prefix, connector)
-		return markdown
-	}
-
-	// Process the filtered entries.
 	for i, entry := range filteredEntries {
-		fullPath := filepath.Join(path, entry.Name())
 		isLast := i == len(filteredEntries)-1
+		fullPath := filepath.Join(path, entry.Name())
 
-		// Determine the connector symbol.
-		var connector string
+		connector := "├── "
 		if isLast {
 			connector = "└── "
-		} else {
-			connector = "├── "
 		}
 
-		// Handle empty folders, keep the trailing /.
-		entryName := entry.Name()
-		if entry.IsDir() && len(entryName) > 0 && !strings.HasSuffix(entryName, "/") {
-			entriesInDir, err := os.ReadDir(fullPath)
-			if err == nil && len(entriesInDir) == 0 {
-				entryName += "/"
+		displayName := entry.Name()
+		if entry.IsDir() {
+			if dirEntries, _ := os.ReadDir(fullPath); len(dirEntries) == 0 {
+				displayName += "/"
 			}
 		}
 
-		markdown += fmt.Sprintf("%s%s%s\n", prefix, connector, entryName)
+		markdown += fmt.Sprintf("%s%s%s\n", prefix, connector, displayName)
 
 		if entry.IsDir() {
-			var nextPrefix string
+			nextPrefix := prefix + "│   "
 			if isLast {
 				nextPrefix = prefix + "    "
-			} else {
-				nextPrefix = prefix + "│   "
 			}
-
-			if isCollapsed(fullPath, entry.Name(), collapselist) {
-				markdown += fmt.Sprintf("%s└── ...\n", nextPrefix)
-			} else {
-				markdown += traverseDir(fullPath, nextPrefix, isLast, blacklist, collapselist, whitelist)
-			}
+			markdown += traverseDir(fullPath, nextPrefix, isLast, blacklist, collapselist, whitelist)
 		}
 	}
 
-	// Add ... for non-whitelisted files at the root level.
-	if prefix == "" && hasNonWhitelisted {
+	if prefix == "" && hasNonWhitelisted && len(filteredEntries) > 0 {
 		markdown += fmt.Sprintf("%s└── ...\n", prefix)
 	}
 
@@ -159,6 +200,7 @@ func main() {
 		"Library/", "SceneBackups/", "MemoryCaptures/",
 		"Build/", "Packages/", "ProjectSettings/",
 		"UserSettings/", "*.tmp", "*.log", "temp",
+		"./Assets/ThirdParty/InControl/",
 	}
 	collapselist := []string{"Library/", "Temp/", "Build/"}
 
@@ -193,4 +235,11 @@ func main() {
 	writer.Flush()
 
 	fmt.Println("The directory structure has been generated in directory_structure.md")
+	waitForKeyPress()
+}
+
+// waitForKeyPress waits for the user to press any key before closing
+func waitForKeyPress() {
+	fmt.Println("Press any key to continue...")
+	bufio.NewReader(os.Stdin).ReadBytes('\n')
 }
