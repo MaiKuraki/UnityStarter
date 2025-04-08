@@ -157,8 +157,17 @@ func traverseDir(path string, prefix string, isLastParent bool, blacklist, colla
 		}
 	}
 
+	if hasNonWhitelisted && len(filteredEntries) > 0 {
+		filteredEntries = append(filteredEntries, nil)
+	}
+
 	for i, entry := range filteredEntries {
 		isLast := i == len(filteredEntries)-1
+		if entry == nil {
+			markdown += fmt.Sprintf("%s└── ...\n", prefix)
+			continue
+		}
+
 		fullPath := filepath.Join(path, entry.Name())
 
 		connector := "├── "
@@ -182,10 +191,6 @@ func traverseDir(path string, prefix string, isLastParent bool, blacklist, colla
 			}
 			markdown += traverseDir(fullPath, nextPrefix, isLast, blacklist, collapselist, whitelist)
 		}
-	}
-
-	if prefix == "" && hasNonWhitelisted && len(filteredEntries) > 0 {
-		markdown += fmt.Sprintf("%s└── ...\n", prefix)
 	}
 
 	return markdown
