@@ -1,9 +1,0 @@
-fileFormatVersion: 2
-guid: a2f841654b107c84287eb9b647fcfb5f
-AssetOrigin:
-  serializedVersion: 1
-  productId: 8162
-  packageName: Build Report Tool
-  packageVersion: 3.11.12
-  assetPath: Assets/ThirdParty/BuildReport/GUI/BuildReportWindow.guiskin
-  uploadId: 729276
