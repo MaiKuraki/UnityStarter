@@ -22,11 +22,11 @@ public class LoggerPerformanceTest : MonoBehaviour
         startTime = Time.time;
     }
 
-    void OnDestroy() 
-    { 
-        CLogger.Instance.Dispose(); 
+    void OnDestroy()
+    {
+        CLogger.Instance.Dispose();
     }
-    
+
     void Update()
     {
         if (logCount < MaxLogCount)
