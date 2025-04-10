@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
 namespace CycloneGames.Logger
 {
-    public enum LogLevel
+    public enum LogLevel : byte
     {
         Trace,
         Debug,
@@ -17,7 +18,7 @@ namespace CycloneGames.Logger
         Fatal
     }
 
-    public enum LogFilter
+    public enum LogFilter : byte
     {
         LogAll,
         LogWhiteList,
@@ -26,21 +27,21 @@ namespace CycloneGames.Logger
 
     public sealed class CLogger : IDisposable
     {
-        private static readonly Lazy<CLogger> _instance = new Lazy<CLogger>(() => new CLogger());
+        private static readonly Lazy<CLogger> _instance = new(() => new CLogger());
         public static CLogger Instance => _instance.Value;
 
-        private readonly List<ILogger> _loggers = new List<ILogger>();
-        private readonly ReaderWriterLockSlim _loggersLock = new ReaderWriterLockSlim();
-
-        private readonly BlockingCollection<LogMessage> _messageQueue = new BlockingCollection<LogMessage>(new ConcurrentQueue<LogMessage>());
-        private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+        private readonly List<ILogger> _loggers = new();
+        private readonly ReaderWriterLockSlim _loggersLock = new();
+        private readonly BlockingCollection<LogMessage> _messageQueue = new(new ConcurrentQueue<LogMessage>());
+        private readonly CancellationTokenSource _cts = new();
         private readonly Task _processingTask;
 
         private LogLevel _currentLogLevel = LogLevel.Info;
         private LogFilter _currentFilter = LogFilter.LogAll;
-        private readonly HashSet<string> _whiteList = new HashSet<string>();
-        private readonly HashSet<string> _blackList = new HashSet<string>();
-        private readonly object _filterLock = new object();
+        private readonly HashSet<string> _whiteList = new();
+        private readonly HashSet<string> _blackList = new();
+        private readonly object _filterLock = new();
+        private readonly StringBuilder _formatBuilder = new(256);
 
         private CLogger()
         {
@@ -80,19 +81,14 @@ namespace CycloneGames.Logger
             try
             {
                 Type loggerType = logger.GetType();
-                bool alreadyExists = false;
                 foreach (var existingLogger in _loggers)
                 {
                     if (existingLogger.GetType() == loggerType)
                     {
-                        alreadyExists = true;
-                        break;
+                        return; // Already exists 
                     }
                 }
-                if (!alreadyExists)
-                {
-                    _loggers.Add(logger);
-                }
+                _loggers.Add(logger);
             }
             finally
             {
@@ -164,26 +160,47 @@ namespace CycloneGames.Logger
             }
         }
 
-        private static string FormatMessage(string message, string category)
+        private string FormatMessage(in string message, in string category)
         {
             if (string.IsNullOrEmpty(category)) return message;
 
-            var sb = new StringBuilder();
-            sb.Append("[");
-            sb.Append(category);
-            sb.Append("] ");
-            sb.Append(message);
-            return sb.ToString();
+            lock (_formatBuilder)
+            {
+                _formatBuilder.Clear();
+                _formatBuilder.Append('[');
+                _formatBuilder.Append(category);
+                _formatBuilder.Append("] ");
+                _formatBuilder.Append(message);
+                return _formatBuilder.ToString();
+            }
         }
 
-        public static void LogTrace(string message, string category = "") => Instance.EnqueueMessage(LogLevel.Trace, message, category);
-        public static void LogDebug(string message, string category = "") => Instance.EnqueueMessage(LogLevel.Debug, message, category);
-        public static void LogInfo(string message, string category = "") => Instance.EnqueueMessage(LogLevel.Info, message, category);
-        public static void LogWarning(string message, string category = "") => Instance.EnqueueMessage(LogLevel.Warning, message, category);
-        public static void LogError(string message, string category = "") => Instance.EnqueueMessage(LogLevel.Error, message, category);
-        public static void LogFatal(string message, string category = "") => Instance.EnqueueMessage(LogLevel.Fatal, message, category);
+        // Public logging methods with aggressive inlining 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogTrace(string message, string category = "") =>
+            Instance.EnqueueMessage(LogLevel.Trace, message, category);
 
-        private void EnqueueMessage(LogLevel level, string message, string category)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogDebug(string message, string category = "") =>
+            Instance.EnqueueMessage(LogLevel.Debug, message, category);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogInfo(string message, string category = "") =>
+            Instance.EnqueueMessage(LogLevel.Info, message, category);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogWarning(string message, string category = "") =>
+            Instance.EnqueueMessage(LogLevel.Warning, message, category);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogError(string message, string category = "") =>
+            Instance.EnqueueMessage(LogLevel.Error, message, category);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogFatal(string message, string category = "") =>
+            Instance.EnqueueMessage(LogLevel.Fatal, message, category);
+
+        private void EnqueueMessage(LogLevel level, in string message, in string category)
         {
             if (!ShouldLog(level, category)) return;
 
@@ -214,7 +231,7 @@ namespace CycloneGames.Logger
                                     case LogLevel.Fatal: logger.LogFatal(logMessage.Message); break;
                                 }
                             }
-                            catch { /* Prevent logger exceptions from breaking the loop */ }
+                            catch { /* Prevent logger exceptions from crashing the system */ }
                         }
                     }
                     finally
@@ -223,7 +240,7 @@ namespace CycloneGames.Logger
                     }
                 }
             }
-            catch (OperationCanceledException) { /* Shutdown requested */ }
+            catch (OperationCanceledException) { /* Normal shutdown */ }
         }
 
         public void Dispose()
@@ -232,7 +249,7 @@ namespace CycloneGames.Logger
             _messageQueue.CompleteAdding();
 
             try { _processingTask.Wait(); }
-            catch { /* Ignore */ }
+            catch { /* Ensure we don't throw during dispose */ }
 
             _cts.Dispose();
             _messageQueue.Dispose();

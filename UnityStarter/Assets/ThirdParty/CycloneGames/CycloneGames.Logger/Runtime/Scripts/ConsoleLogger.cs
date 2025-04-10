@@ -1,44 +1,42 @@
 using System;
+using System.IO;
+using System.Runtime.CompilerServices;
 
 namespace CycloneGames.Logger
 {
-    public class ConsoleLogger : ILogger
+    public sealed class ConsoleLogger : ILogger
     {
-        private static readonly object _consoleLock = new object();
+        private static readonly object _consoleLock = new();
 
-        public void LogInfo(string message)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void LogTrace(in string message) => LogInternal("TRACE", message, Console.Out);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void LogDebug(in string message) => LogInternal("DEBUG", message, Console.Out);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void LogInfo(in string message) => LogInternal("INFO", message, Console.Out);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void LogWarning(in string message) => LogInternal("WARNING", message, Console.Out);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void LogError(in string message) => LogInternal("ERROR", message, Console.Error);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void LogFatal(in string message) => LogInternal("FATAL", message, Console.Error);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void LogInternal(in string level, in string message, TextWriter writer)
         {
-            lock (_consoleLock) Console.WriteLine($"INFO: {message}");
+            lock (_consoleLock)
+            {
+                writer.Write(level);
+                writer.Write(": ");
+                writer.WriteLine(message);
+            }
         }
 
-        public void LogWarning(string message)
-        {
-            lock (_consoleLock) Console.WriteLine($"WARNING: {message}");
-        }
-
-        public void LogError(string message)
-        {
-            lock (_consoleLock) Console.Error.WriteLine($"ERROR: {message}");
-        }
-
-        public void LogTrace(string message)
-        {
-            lock (_consoleLock) Console.WriteLine($"TRACE: {message}");
-        }
-
-        public void LogDebug(string message)
-        {
-            lock (_consoleLock) Console.WriteLine($"DEBUG: {message}");
-        }
-
-        public void LogFatal(string message)
-        {
-            lock (_consoleLock) Console.Error.WriteLine($"FATAL: {message}");
-        }
-
-        public void Dispose()
-        {
-            
-        }
+        public void Dispose() { }
     }
 }
