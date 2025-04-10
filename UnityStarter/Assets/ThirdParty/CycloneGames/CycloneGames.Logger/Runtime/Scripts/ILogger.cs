@@ -4,11 +4,11 @@ namespace CycloneGames.Logger
 {
     public interface ILogger : IDisposable
     {
-        void LogTrace(string message);
-        void LogDebug(string message);
-        void LogInfo(string message);
-        void LogWarning(string message);
-        void LogError(string message);
-        void LogFatal(string message);
+        void LogTrace(in string message);
+        void LogDebug(in string message);
+        void LogInfo(in string message);
+        void LogWarning(in string message);
+        void LogError(in string message);
+        void LogFatal(in string message);
     }
 }

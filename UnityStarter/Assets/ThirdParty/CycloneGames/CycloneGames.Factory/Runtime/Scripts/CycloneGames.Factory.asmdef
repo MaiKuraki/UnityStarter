@@ -1,0 +1,16 @@
+{
+    "name": "CycloneGames.Factory",
+    "rootNamespace": "",
+    "references": [
+        "GUID:a61d364006d5941e7ac75e73dd6b0df3"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
