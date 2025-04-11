@@ -24,6 +24,16 @@ namespace CycloneGames.Cheat.Sample
         void OnMsg(CheatCommand simpleMsg)
         {
             UnityEngine.Debug.Log($"Receive Cheat: {simpleMsg.CommandID}");
+
+            switch (simpleMsg.CommandID)
+            {
+                case "Protocol_CheatMessage_A": 
+                UnityEngine.Debug.Log("Execute Command A"); 
+                    break;
+                case "Protocol_CheatMessage_B": 
+                UnityEngine.Debug.Log("Execute Command B"); 
+                    break;
+            }
         }
 
         [VitalRouter.Route]
