@@ -367,7 +367,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 0
     m_LineSpacing: 1
-  m_Text: Press 'F1', 'F2', 'F3' to test method
+  m_Text: Press 'F1', 'F2', 'F3', 'F4' to test method
 --- !u!222 &219694131
 CanvasRenderer:
   m_ObjectHideFlags: 0
