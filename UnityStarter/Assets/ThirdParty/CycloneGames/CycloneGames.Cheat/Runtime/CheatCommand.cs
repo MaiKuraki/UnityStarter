@@ -61,6 +61,24 @@ namespace CycloneGames.Cheat
         }
     }
 
+    public readonly struct CheatCommand<T1, T2, T3> : ICheatCommand
+        where T1 : struct where T2 : struct where T3 : struct
+    {
+        public string CommandID { get; }
+        public readonly T1 Arg1;
+        public readonly T2 Arg2;
+        public readonly T3 Arg3;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public CheatCommand(string inCommandId, in T1 arg1, in T2 arg2, in T3 arg3)
+        {
+            CommandID = inCommandId;
+            Arg1 = arg1;
+            Arg2 = arg2;
+            Arg3 = arg3;
+        }
+    }
+
     public static class CheatCommandFactory
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -68,7 +86,7 @@ namespace CycloneGames.Cheat
         {
             return new CheatCommand(inCommandId);
         }
-        
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ICheatCommand Create<T>(string inCommandId, in T arg) where T : struct
         {
@@ -87,6 +105,13 @@ namespace CycloneGames.Cheat
             where T1 : struct where T2 : struct
         {
             return new CheatCommand<T1, T2>(inCommandId, arg1, arg2);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ICheatCommand Create<T1, T2, T3>(string inCommandId, in T1 arg1, in T2 arg2, in T3 arg3)
+            where T1 : struct where T2 : struct where T3 : struct
+        {
+            return new CheatCommand<T1, T2, T3>(inCommandId, arg1, arg2, arg3);
         }
     }
 }
