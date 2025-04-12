@@ -78,40 +78,4 @@ namespace CycloneGames.Cheat
             Arg3 = arg3;
         }
     }
-
-    public static class CheatCommandFactory
-    {
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static ICheatCommand Create(string inCommandId)
-        {
-            return new CheatCommand(inCommandId);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static ICheatCommand Create<T>(string inCommandId, in T arg) where T : struct
-        {
-            return new CheatCommand<T>(inCommandId, arg);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static ICheatCommand Create<T>(string inCommandId, T arg) where T : class
-        {
-            if (arg == null) throw new ArgumentNullException(nameof(arg));
-            return new CheatCommandClass<T>(inCommandId, arg);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static ICheatCommand Create<T1, T2>(string inCommandId, in T1 arg1, in T2 arg2)
-            where T1 : struct where T2 : struct
-        {
-            return new CheatCommand<T1, T2>(inCommandId, arg1, arg2);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static ICheatCommand Create<T1, T2, T3>(string inCommandId, in T1 arg1, in T2 arg2, in T3 arg3)
-            where T1 : struct where T2 : struct where T3 : struct
-        {
-            return new CheatCommand<T1, T2, T3>(inCommandId, arg1, arg2, arg3);
-        }
-    }
 }
