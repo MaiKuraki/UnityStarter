@@ -32,7 +32,6 @@ namespace CycloneGames.Cheat
 
             try
             {
-                // await VitalRouter.Router.Default.PublishAsync(CheatCommandFactory.Create(commandId), cts.Token); //  Not working
                 await VitalRouter.Router.Default.PublishAsync(new CheatCommand(commandId), cts.Token);
             }
             catch (OperationCanceledException)
@@ -77,7 +76,6 @@ namespace CycloneGames.Cheat
 
             try
             {
-                // await VitalRouter.Router.Default.PublishAsync(CheatCommandFactory.Create(commandId, inArg), cts.Token); //  Not working
                 await VitalRouter.Router.Default.PublishAsync(new CheatCommand<T>(commandId, inArg), cts.Token);
             }
             catch (OperationCanceledException)
@@ -125,7 +123,6 @@ namespace CycloneGames.Cheat
             try
             {
                 if (inArg == null) throw new ArgumentNullException(nameof(inArg));
-                // await VitalRouter.Router.Default.PublishAsync(CheatCommandFactory.Create(commandId, inArg), cts.Token); // Not working
                 await VitalRouter.Router.Default.PublishAsync(new CheatCommandClass<T>(commandId, inArg), cts.Token);
             }
             catch (OperationCanceledException)
