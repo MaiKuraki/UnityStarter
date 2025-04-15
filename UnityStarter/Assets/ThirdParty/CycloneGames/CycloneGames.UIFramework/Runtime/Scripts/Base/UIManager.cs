@@ -2,11 +2,10 @@ using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using CycloneGames.Logger;
-using CycloneGames.Core;
 using CycloneGames.Service;
-using Object = UnityEngine.Object;
 using UnityEngine.AddressableAssets;
 using Addler.Runtime.Core.LifetimeBinding;
+using CycloneGames.Factory;
 
 namespace CycloneGames.UIFramework
 {
@@ -14,12 +13,12 @@ namespace CycloneGames.UIFramework
     {
         private const string DEBUG_FLAG = "[UIManager]";
         private IAssetPathBuilder assetPathBuilder;
-        private IObjectSpawner objectSpawner;
+        private IFactory objectSpawner;
         private IMainCameraService mainCamera;
         private UIRoot uiRoot;
         private Dictionary<string, UniTaskCompletionSource<bool>> uiOpenTasks = new Dictionary<string, UniTaskCompletionSource<bool>>();
 
-        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IObjectSpawner objectSpawner, IMainCameraService mainCamera)
+        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IFactory objectSpawner, IMainCameraService mainCamera)
         {
             this.assetPathBuilder = assetPathBuilderFactory.Create("UI");
             if (this.assetPathBuilder == null)
@@ -69,7 +68,7 @@ namespace CycloneGames.UIFramework
             {
                 await pageHandle.Task;
                 pageConfig = pageHandle.Result;
-                
+
                 if (pageConfig == null || pageConfig.PagePrefab == null)
                 {
                     CLogger.LogError($"{DEBUG_FLAG} Invalid UI Prefab in PageConfig, PageName: {PageName}");
@@ -106,7 +105,7 @@ namespace CycloneGames.UIFramework
                 return;
             }
 
-            UIPage uiPage = objectSpawner.SpawnObject(pageConfig.PagePrefab) as UIPage;
+            UIPage uiPage = ((IFactory<MonoBehaviour, MonoBehaviour>)objectSpawner).Create(pageConfig.PagePrefab) as UIPage;
             if (uiPage == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to instantiate UIPage prefab: {PageName}");
