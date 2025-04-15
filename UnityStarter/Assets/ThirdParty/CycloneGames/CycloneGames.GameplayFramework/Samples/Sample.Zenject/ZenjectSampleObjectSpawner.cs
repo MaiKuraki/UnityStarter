@@ -1,31 +1,22 @@
-using CycloneGames.Core;
 using Zenject;
 using UnityEngine;
+using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayFramework.Sample.Zenject
 {
-    public class ZenjectSampleObjectSpawner : IObjectSpawner
+    public class ZenjectSampleObjectSpawner : CycloneGames.Factory.IFactory<MonoBehaviour, MonoBehaviour>
     {
         [Inject] DiContainer diContainer;
 
-        public Object SpawnObject(Object original)
+        public MonoBehaviour Create(MonoBehaviour prefab)
         {
-            var obj = diContainer.InstantiatePrefab(original);
-            return obj;
-        }
+            if (prefab == null)
+            {
+                CLogger.LogError("Invalid prefab to spawn");
+                return null;
+            }
 
-        public Object SpawnObject<T>(T original) where T : Object
-        {
-            var obj = diContainer.InstantiatePrefabForComponent<T>(original);
-            return obj;
-        }
-
-        public GameObject SpawnObjectOnNewGameObject<TComponent>(string name = "") where TComponent : Component
-        {
-            var component = diContainer.InstantiateComponentOnNewGameObject<TComponent>();
-            GameObject go = component.gameObject;
-            go.name = name;
-            return go;
+            return diContainer.InstantiatePrefabForComponent<MonoBehaviour>(prefab);
         }
     }
 }
