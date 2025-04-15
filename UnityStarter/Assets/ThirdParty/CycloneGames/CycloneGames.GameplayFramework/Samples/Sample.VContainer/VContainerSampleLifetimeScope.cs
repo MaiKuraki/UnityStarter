@@ -11,10 +11,10 @@ namespace CycloneGames.GameplayFramework.Sample.VContainer
 
         protected override void Configure(IContainerBuilder builder)
         {
-            builder.Register<IFactory<MonoBehaviour, MonoBehaviour>, VContainerSampleObjectSpawner>(Lifetime.Singleton);
+            builder.Register<IFactory, VContainerSampleObjectSpawner>(Lifetime.Singleton);
             builder.RegisterInstance<IWorldSettings>(worldSettings); //  Register the instance as interface, don't register as class
             builder.RegisterComponentInNewPrefab<IGameMode, VContainerSampleGameMode>(prefab => (VContainerSampleGameMode)worldSettings.GameModeClass, Lifetime.Singleton);
-  
+
             builder.UseEntryPoints(Lifetime.Singleton, entryPoints =>
             {
                 //  Start Game Logic
