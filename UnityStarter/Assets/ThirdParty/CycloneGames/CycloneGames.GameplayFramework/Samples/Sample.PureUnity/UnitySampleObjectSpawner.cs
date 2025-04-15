@@ -4,17 +4,17 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Sample.PureUnity
 {
-    public class UnitySampleObjectSpawner : IFactory<MonoBehaviour, MonoBehaviour>
+    public class UnitySampleObjectSpawner : IUnityObjectSpawner
     {
-        public MonoBehaviour Create(MonoBehaviour prefab)
+        public T Create<T>(T origin) where T : UnityEngine.Object
         {
-            if(prefab == null)
+            if (origin == null)
             {
                 CLogger.LogError("Invalid prefab to spawn");
                 return null;
             }
 
-            return Object.Instantiate(prefab);
+            return Object.Instantiate(origin);
         }
     }
 }
