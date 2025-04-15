@@ -105,7 +105,7 @@ namespace CycloneGames.UIFramework
                 return;
             }
 
-            UIPage uiPage = ((IFactory<MonoBehaviour, MonoBehaviour>)objectSpawner).Create(pageConfig.PagePrefab) as UIPage;
+            UIPage uiPage = objectSpawner.Create(pageConfig.PagePrefab) as UIPage;
             if (uiPage == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to instantiate UIPage prefab: {PageName}");
