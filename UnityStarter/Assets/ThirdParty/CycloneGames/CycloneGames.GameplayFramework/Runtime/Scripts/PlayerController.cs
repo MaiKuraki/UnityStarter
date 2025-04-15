@@ -1,5 +1,7 @@
+using CycloneGames.Factory;
 using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
+using UnityEngine;
 
 namespace CycloneGames.GameplayFramework
 {
@@ -11,7 +13,7 @@ namespace CycloneGames.GameplayFramework
         public CameraManager GetCameraManager() => cameraManager;
         public SpectatorPawn SpawnSpectatorPawn()
         {
-            spectatorPawn = objectSpawner?.Create(worldSettings?.SpectatorPawnClass) as SpectatorPawn;
+            spectatorPawn = ((IFactory<MonoBehaviour, MonoBehaviour>)objectSpawner)?.Create(worldSettings?.SpectatorPawnClass) as SpectatorPawn;
             if (spectatorPawn == null)
             {
                 CLogger.LogError("Spawn Spectator Failed, please check your spawn pipeline");
@@ -22,7 +24,7 @@ namespace CycloneGames.GameplayFramework
 
         void SpawnCameraManager()
         {
-            cameraManager = objectSpawner?.Create(worldSettings?.CameraManagerClass) as CameraManager;
+            cameraManager = ((IFactory<MonoBehaviour, MonoBehaviour>)objectSpawner)?.Create(worldSettings?.CameraManagerClass) as CameraManager;
             if (cameraManager == null)
             {
                 CLogger.LogError("Spawn CameraManager Failed, please check your spawn pipeline");
