@@ -1,6 +1,6 @@
-
-using CycloneGames.Core;
+using UnityEngine;
 using VContainer;
+using CycloneGames.Factory;
 
 namespace CycloneGames.GameplayFramework.Sample.VContainer
 {
@@ -8,7 +8,7 @@ namespace CycloneGames.GameplayFramework.Sample.VContainer
     {
         //  NOTE: In VContainer, we use the 'Inject' attribute to inject the dependencies, not use base.Initialize
         [Inject]
-        public override void Initialize(IObjectSpawner objectSpawner, IWorldSettings worldSettings)
+        public override void Initialize(in IFactory<MonoBehaviour, MonoBehaviour> objectSpawner, in IWorldSettings worldSettings)
         {
             base.Initialize(objectSpawner, worldSettings);
         }

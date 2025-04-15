@@ -1,7 +1,7 @@
 using VContainer;
 using VContainer.Unity;
 using UnityEngine;
-using CycloneGames.Core;
+using CycloneGames.Factory;
 
 namespace CycloneGames.GameplayFramework.Sample.VContainer
 {
@@ -11,7 +11,7 @@ namespace CycloneGames.GameplayFramework.Sample.VContainer
 
         protected override void Configure(IContainerBuilder builder)
         {
-            builder.Register<IObjectSpawner, VContainerSampleObjectSpawner>(Lifetime.Singleton);
+            builder.Register<IFactory<MonoBehaviour, MonoBehaviour>, VContainerSampleObjectSpawner>(Lifetime.Singleton);
             builder.RegisterInstance<IWorldSettings>(worldSettings); //  Register the instance as interface, don't register as class
             builder.RegisterComponentInNewPrefab<IGameMode, VContainerSampleGameMode>(prefab => (VContainerSampleGameMode)worldSettings.GameModeClass, Lifetime.Singleton);
   
