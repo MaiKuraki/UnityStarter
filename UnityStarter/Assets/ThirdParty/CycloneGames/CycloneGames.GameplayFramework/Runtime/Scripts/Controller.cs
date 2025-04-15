@@ -6,7 +6,7 @@ namespace CycloneGames.GameplayFramework
 {
     public class Controller : Actor
     {
-        protected IFactory<MonoBehaviour, MonoBehaviour> objectSpawner;
+        protected IFactory objectSpawner;
         protected IWorldSettings worldSettings;
         protected bool IsInitialized { get; private set; } = false;
         private Actor StartSpot;
@@ -15,12 +15,12 @@ namespace CycloneGames.GameplayFramework
         private Quaternion controlRotation = Quaternion.identity;
 
         public Pawn GetDefaultPawnPrefab() => worldSettings.PawnClass;
-        public void Initialize(in IFactory<MonoBehaviour, MonoBehaviour> objectSpawner, in IWorldSettings worldSettings)
+        public void Initialize(in IFactory objectSpawner, in IWorldSettings worldSettings)
         {
             this.objectSpawner = objectSpawner;
             this.worldSettings = worldSettings;
             IsInitialized = true;
-        }  
+        }
 
         public void SetInitialLocationAndRotation(Vector3 NewLocation, Quaternion NewRotation)
         {
@@ -32,12 +32,12 @@ namespace CycloneGames.GameplayFramework
         {
             StartSpot = NewStartSpot;
         }
-        
+
         public Pawn GetPawn()
         {
             return pawn;
         }
-        
+
         public void SetPawn(Pawn InPawn)
         {
             pawn = InPawn;
@@ -61,10 +61,10 @@ namespace CycloneGames.GameplayFramework
             {
                 InPawn.Controller.UnPossess();
             }
-            
+
             InPawn.PossessedBy(this);
             SetPawn(InPawn);
-            
+
             SetControlRotation(GetPawn().GetActorRotation());
             GetPawn().DispatchRestart();
         }
@@ -75,10 +75,10 @@ namespace CycloneGames.GameplayFramework
             {
                 return;
             }
-            
+
             OnUnPossess();
         }
-        
+
         public virtual void OnUnPossess()
         {
             if (GetPawn())
@@ -100,7 +100,7 @@ namespace CycloneGames.GameplayFramework
 
         protected void InitPlayerState()
         {
-            playerState = objectSpawner?.Create(worldSettings?.PlayerStateClass) as PlayerState;
+            playerState = ((IFactory<MonoBehaviour, MonoBehaviour>)objectSpawner)?.Create(worldSettings?.PlayerStateClass) as PlayerState;
             if (playerState == null)
             {
                 CLogger.LogError("Spawn PlayerState Failed, please check your spawn pipeline");

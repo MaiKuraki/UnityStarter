@@ -7,7 +7,7 @@
         "UniTask",
         "Addler",
         "CycloneGames.Logger",
-        "CycloneGames.Core",
+        "CycloneGames.Factory",
         "CycloneGames.Service"
     ],
     "includePlatforms": [],
