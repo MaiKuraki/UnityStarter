@@ -13,12 +13,12 @@ namespace CycloneGames.UIFramework
     {
         private const string DEBUG_FLAG = "[UIManager]";
         private IAssetPathBuilder assetPathBuilder;
-        private IFactory<MonoBehaviour, MonoBehaviour> objectSpawner;
+        private IFactory objectSpawner;
         private IMainCameraService mainCamera;
         private UIRoot uiRoot;
         private Dictionary<string, UniTaskCompletionSource<bool>> uiOpenTasks = new Dictionary<string, UniTaskCompletionSource<bool>>();
 
-        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IFactory<MonoBehaviour, MonoBehaviour> objectSpawner, IMainCameraService mainCamera)
+        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IFactory objectSpawner, IMainCameraService mainCamera)
         {
             this.assetPathBuilder = assetPathBuilderFactory.Create("UI");
             if (this.assetPathBuilder == null)
@@ -26,7 +26,7 @@ namespace CycloneGames.UIFramework
                 CLogger.LogError($"{DEBUG_FLAG} Invalid AssetPathBuilder, Check your [AssetPathBuilderFactory], make sure it contains 'UI' key.");
                 return;
             }
-            this.objectSpawner = objectSpawner as IFactory<MonoBehaviour, MonoBehaviour>;
+            this.objectSpawner = objectSpawner;
             this.mainCamera = mainCamera;
         }
 
@@ -105,7 +105,7 @@ namespace CycloneGames.UIFramework
                 return;
             }
 
-            UIPage uiPage = objectSpawner.Create(pageConfig.PagePrefab) as UIPage;
+            UIPage uiPage = ((IFactory<MonoBehaviour, MonoBehaviour>)objectSpawner).Create(pageConfig.PagePrefab) as UIPage;
             if (uiPage == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to instantiate UIPage prefab: {PageName}");
