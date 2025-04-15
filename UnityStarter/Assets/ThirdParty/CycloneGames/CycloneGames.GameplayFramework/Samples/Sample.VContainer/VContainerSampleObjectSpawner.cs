@@ -5,13 +5,13 @@ using CycloneGames.Factory;
 
 namespace CycloneGames.GameplayFramework.Sample.VContainer
 {
-    public class VContainerSampleObjectSpawner : IFactory<MonoBehaviour, MonoBehaviour>
+    public class VContainerSampleObjectSpawner : IUnityObjectSpawner
     {
         [Inject] IObjectResolver objectResolver;
 
-        public MonoBehaviour Create(MonoBehaviour prefab)
+        public UnityEngine.Object Create(in UnityEngine.Object prefab)
         {
-            if(prefab == null)
+            if (prefab == null)
             {
                 CLogger.LogError($"Invalid prefab to spawn");
                 return null;
