@@ -9,15 +9,15 @@ namespace CycloneGames.GameplayFramework.Sample.VContainer
     {
         [Inject] IObjectResolver objectResolver;
 
-        public UnityEngine.Object Create(in UnityEngine.Object prefab)
+        public T Create<T>(T origin) where T : UnityEngine.Object
         {
-            if (prefab == null)
+            if (origin == null)
             {
                 CLogger.LogError($"Invalid prefab to spawn");
                 return null;
             }
 
-            var obj = UnityEngine.Object.Instantiate(prefab);
+            var obj = UnityEngine.Object.Instantiate(origin);
             objectResolver.Inject(obj);
             return obj;
         }
