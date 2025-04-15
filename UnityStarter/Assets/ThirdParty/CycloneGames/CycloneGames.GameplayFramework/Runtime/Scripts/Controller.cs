@@ -6,7 +6,7 @@ namespace CycloneGames.GameplayFramework
 {
     public class Controller : Actor
     {
-        protected IFactory objectSpawner;
+        protected IFactory<MonoBehaviour, MonoBehaviour> objectSpawner;
         protected IWorldSettings worldSettings;
         protected bool IsInitialized { get; private set; } = false;
         private Actor StartSpot;
@@ -15,7 +15,7 @@ namespace CycloneGames.GameplayFramework
         private Quaternion controlRotation = Quaternion.identity;
 
         public Pawn GetDefaultPawnPrefab() => worldSettings.PawnClass;
-        public void Initialize(in IFactory objectSpawner, in IWorldSettings worldSettings)
+        public void Initialize(in IFactory<MonoBehaviour, MonoBehaviour> objectSpawner, in IWorldSettings worldSettings)
         {
             this.objectSpawner = objectSpawner;
             this.worldSettings = worldSettings;
