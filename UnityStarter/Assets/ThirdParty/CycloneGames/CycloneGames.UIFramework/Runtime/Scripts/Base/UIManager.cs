@@ -13,12 +13,12 @@ namespace CycloneGames.UIFramework
     {
         private const string DEBUG_FLAG = "[UIManager]";
         private IAssetPathBuilder assetPathBuilder;
-        private IFactory objectSpawner;
+        private IUnityObjectSpawner objectSpawner;
         private IMainCameraService mainCamera;
         private UIRoot uiRoot;
         private Dictionary<string, UniTaskCompletionSource<bool>> uiOpenTasks = new Dictionary<string, UniTaskCompletionSource<bool>>();
 
-        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IFactory objectSpawner, IMainCameraService mainCamera)
+        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IUnityObjectSpawner objectSpawner, IMainCameraService mainCamera)
         {
             this.assetPathBuilder = assetPathBuilderFactory.Create("UI");
             if (this.assetPathBuilder == null)

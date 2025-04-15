@@ -4,9 +4,9 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Sample.PureUnity
 {
-    public class UnitySampleObjectSpawner : IFactory<MonoBehaviour, MonoBehaviour>
+    public class UnitySampleObjectSpawner : IUnityObjectSpawner
     {
-        public MonoBehaviour Create(MonoBehaviour prefab)
+        public UnityEngine.Object Create(in UnityEngine.Object prefab)
         {
             if(prefab == null)
             {
