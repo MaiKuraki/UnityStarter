@@ -1,5 +1,6 @@
 using Zenject;
 using UnityEngine;
+using CycloneGames.Factory;
 
 namespace CycloneGames.GameplayFramework.Sample.Zenject
 {
@@ -9,14 +10,14 @@ namespace CycloneGames.GameplayFramework.Sample.Zenject
 
         public override void InstallBindings()
         {
-            Container.Bind<CycloneGames.Factory.IFactory<MonoBehaviour, MonoBehaviour>>().To<ZenjectSampleObjectSpawner>().AsSingle().NonLazy();
+            Container.Bind<IUnityObjectSpawner>().To<ZenjectSampleObjectSpawner>().AsSingle().NonLazy();
             Container.BindInstance<IWorldSettings>(worldSettings).AsSingle().NonLazy();
             Container.Bind<IGameMode>().FromComponentInNewPrefab((ZenjectSampleGameMode)worldSettings.GameModeClass).AsSingle().NonLazy();
             UnityEngine.Debug.Log($"Install bindings for Zenject");
 
             //  Initialize GameMode
             IWorldSettings zenjectWorldSettings = Container.Resolve<IWorldSettings>();
-            CycloneGames.Factory.IFactory<MonoBehaviour, MonoBehaviour> objectSpawner = Container.Resolve<CycloneGames.Factory.IFactory<MonoBehaviour, MonoBehaviour>>();
+            IUnityObjectSpawner objectSpawner = Container.Resolve<IUnityObjectSpawner>();
             IGameMode gameMode = Container.Resolve<IGameMode>();
             ((ZenjectSampleGameMode)gameMode).Initialize(objectSpawner, zenjectWorldSettings);
         }
