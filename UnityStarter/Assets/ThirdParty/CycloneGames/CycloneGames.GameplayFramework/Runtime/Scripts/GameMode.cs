@@ -11,10 +11,10 @@ namespace CycloneGames.GameplayFramework
     public class GameMode : Actor, IGameMode
     {
         private const string DEBUG_FLAG = "<color=cyan>[GameMode]</color>";
-        private IFactory<MonoBehaviour, MonoBehaviour> objectSpawner;
+        private IUnityObjectSpawner objectSpawner;
         private IWorldSettings worldSettings;
-        
-        public virtual void Initialize(in IFactory<MonoBehaviour, MonoBehaviour> objectSpawner, in IWorldSettings worldSettings)
+
+        public virtual void Initialize(in IUnityObjectSpawner objectSpawner, in IWorldSettings worldSettings)
         {
             this.objectSpawner = objectSpawner;
             this.worldSettings = worldSettings;
@@ -56,7 +56,7 @@ namespace CycloneGames.GameplayFramework
         {
             PlayerStart[] playerStartArray = GameObject.FindObjectsByType<PlayerStart>(FindObjectsSortMode.InstanceID);
 
-            if(playerStartArray == null || playerStartArray.Length == 0)
+            if (playerStartArray == null || playerStartArray.Length == 0)
             {
                 CLogger.LogWarning($"{DEBUG_FLAG} No PlayerStart found in the scene");
                 return null;

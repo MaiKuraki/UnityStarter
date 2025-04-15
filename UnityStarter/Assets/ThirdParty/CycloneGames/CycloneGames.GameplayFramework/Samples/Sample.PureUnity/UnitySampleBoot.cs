@@ -5,7 +5,7 @@ namespace CycloneGames.GameplayFramework.Sample.PureUnity
 {
     public class UnitySampleBoot : MonoBehaviour
     {
-        private IFactory<MonoBehaviour, MonoBehaviour> objectSpawner;
+        private IUnityObjectSpawner objectSpawner;
 
         void Start()
         {
@@ -15,7 +15,7 @@ namespace CycloneGames.GameplayFramework.Sample.PureUnity
 
             // This WorldSettings' ScriptableObject is Located at /Samples/Sample.PureUnity/UnitySampleWorldSettings.asset
             // Maybe you should implement your own AssetLoader
-            WorldSettings exampleWorldSettings = Resources.Load<WorldSettings>("UnitySampleWorldSettings");            
+            WorldSettings exampleWorldSettings = Resources.Load<WorldSettings>("UnitySampleWorldSettings");
             IGameMode exampleGameMode = objectSpawner.Create(exampleWorldSettings.GameModeClass) as IGameMode;
             ((GameMode)exampleGameMode).Initialize(objectSpawner, exampleWorldSettings);
             // Set the GameMode for the World
