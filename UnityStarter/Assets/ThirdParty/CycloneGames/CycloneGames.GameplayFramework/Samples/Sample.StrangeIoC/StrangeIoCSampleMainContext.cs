@@ -1,8 +1,8 @@
-using CycloneGames.Core;
 using strange.extensions.context.api;
 using strange.extensions.context.impl;
 using UnityEngine;
 using strange.extensions.signal.impl;
+using CycloneGames.Factory;
 
 namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
 {
@@ -27,10 +27,10 @@ namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
         {
             base.mapBindings();
 
-            injectionBinder.Bind<IObjectSpawner>().To<StrangeIoCSampleObjectSpawner>().ToSingleton();
+            injectionBinder.Bind<IFactory<MonoBehaviour, MonoBehaviour>>().To<StrangeIoCSampleObjectSpawner>().ToSingleton();
             injectionBinder.Bind<IWorldSettings>().ToValue(worldSettingsInst);
-            var objectSpawner = injectionBinder.GetInstance<IObjectSpawner>();
-            StrangeIoCSampleGameMode strangeIoCSampleGameMode = objectSpawner.SpawnObject(((WorldSettings)worldSettingsInst).GameModeClass) as StrangeIoCSampleGameMode;
+            IFactory<MonoBehaviour, MonoBehaviour> objectSpawner = injectionBinder.GetInstance<IFactory<MonoBehaviour, MonoBehaviour>>();
+            StrangeIoCSampleGameMode strangeIoCSampleGameMode = objectSpawner.Create(((WorldSettings)worldSettingsInst).GameModeClass) as StrangeIoCSampleGameMode;
             injectionBinder.Bind<IGameMode>().ToValue(strangeIoCSampleGameMode);
 
             injectionBinder.Bind<StartGameSignal>().ToSingleton();
@@ -41,7 +41,7 @@ namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
         {
             base.Launch();
             var gameMode = injectionBinder.GetInstance<IGameMode>();
-            var objectSpawner = injectionBinder.GetInstance<IObjectSpawner>();
+            IFactory<MonoBehaviour, MonoBehaviour> objectSpawner = injectionBinder.GetInstance<IFactory<MonoBehaviour, MonoBehaviour>>();
             ((StrangeIoCSampleGameMode)gameMode).Initialize(objectSpawner, worldSettingsInst);
             var startGameSignal = injectionBinder.GetInstance<StartGameSignal>();
             startGameSignal.Dispatch();
