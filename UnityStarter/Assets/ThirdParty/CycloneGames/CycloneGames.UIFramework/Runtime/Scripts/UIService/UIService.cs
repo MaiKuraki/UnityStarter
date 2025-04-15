@@ -1,6 +1,7 @@
 using System;
 using CycloneGames.Factory;
 using CycloneGames.Service;
+using UnityEngine;
 
 namespace CycloneGames.UIFramework
 {
@@ -17,21 +18,21 @@ namespace CycloneGames.UIFramework
         private UIManager uiManager;
 
         private readonly IAssetPathBuilderFactory assetPathBuilderFactory;
-        private readonly IFactory objectSpawner;
+        private readonly IFactory<MonoBehaviour, MonoBehaviour> objectSpawner;
         private readonly IMainCameraService mainCamera;
 
         public UIService() { }
 
-        public UIService(IAssetPathBuilderFactory assetPathBuilderFactory, IFactory objectSpawner, IMainCameraService mainCamera)
+        public UIService(IAssetPathBuilderFactory assetPathBuilderFactory, IFactory<MonoBehaviour, MonoBehaviour> objectSpawner, IMainCameraService mainCamera)
         {
             this.assetPathBuilderFactory = assetPathBuilderFactory;
             this.objectSpawner = objectSpawner;
             this.mainCamera = mainCamera;
-            
+
             Initialize(assetPathBuilderFactory, objectSpawner, mainCamera);
         }
 
-        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IFactory objectSpawner, IMainCameraService mainCamera)
+        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IFactory<MonoBehaviour, MonoBehaviour> objectSpawner, IMainCameraService mainCamera)
         {
             uiManager = new UnityEngine.GameObject("UIManager").AddComponent<UIManager>(); //   TODO: maybe use objectSpawner to create this object
             UnityEngine.MonoBehaviour.DontDestroyOnLoad(uiManager.gameObject);
