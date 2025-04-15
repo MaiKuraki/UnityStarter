@@ -11,7 +11,7 @@ namespace CycloneGames.GameplayFramework
         public CameraManager GetCameraManager() => cameraManager;
         public SpectatorPawn SpawnSpectatorPawn()
         {
-            spectatorPawn = objectSpawner?.SpawnObject(worldSettings?.SpectatorPawnClass) as SpectatorPawn;
+            spectatorPawn = objectSpawner?.Create(worldSettings?.SpectatorPawnClass) as SpectatorPawn;
             if (spectatorPawn == null)
             {
                 CLogger.LogError("Spawn Spectator Failed, please check your spawn pipeline");
@@ -22,7 +22,7 @@ namespace CycloneGames.GameplayFramework
 
         void SpawnCameraManager()
         {
-            cameraManager = objectSpawner?.SpawnObject(worldSettings?.CameraManagerClass) as CameraManager;
+            cameraManager = objectSpawner?.Create(worldSettings?.CameraManagerClass) as CameraManager;
             if (cameraManager == null)
             {
                 CLogger.LogError("Spawn CameraManager Failed, please check your spawn pipeline");
