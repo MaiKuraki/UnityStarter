@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 65378d4b1a0f3004082b228aa7a3dca1
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Runtime/csc.rsp
+  uploadId: 743661

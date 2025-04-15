@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: ee3173f976d9546f3bb5536922f8d6df
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Android/EightBitdoSNES30AndroidUnityProfile.cs
+  uploadId: 744175

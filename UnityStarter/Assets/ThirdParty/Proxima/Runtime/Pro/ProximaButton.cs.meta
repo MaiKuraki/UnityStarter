@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 104c6d5c798130c44ad9e4c98ae18a5c
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Runtime/Pro/ProximaButton.cs
+  uploadId: 743661

@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 333a38a5ecf774c14a9a56d464d0f2e0
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Generated/EASportsControllerMacNativeProfile.cs
+  uploadId: 744175

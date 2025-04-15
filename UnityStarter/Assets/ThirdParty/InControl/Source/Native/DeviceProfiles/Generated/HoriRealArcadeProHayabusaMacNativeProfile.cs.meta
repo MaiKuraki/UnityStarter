@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 96601362c626d4d7d889af0355d6a410
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Generated/HoriRealArcadeProHayabusaMacNativeProfile.cs
+  uploadId: 744175

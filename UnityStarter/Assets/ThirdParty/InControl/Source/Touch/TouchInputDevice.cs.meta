@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: c5d5186e09d7845ccb38079a6f15f81f
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Touch/TouchInputDevice.cs
+  uploadId: 744175

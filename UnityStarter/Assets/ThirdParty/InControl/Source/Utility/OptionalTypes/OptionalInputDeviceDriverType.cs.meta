@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 7b515d14a9af4f789a3f27c80176ec28
+timeCreated: 1577915392
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Utility/OptionalTypes/OptionalInputDeviceDriverType.cs
+  uploadId: 744175

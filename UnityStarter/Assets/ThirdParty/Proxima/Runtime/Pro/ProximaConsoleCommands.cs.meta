@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: a1c56ebccc207bc4fa262a73cc6263e8
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Runtime/Pro/ProximaConsoleCommands.cs
+  uploadId: 743661

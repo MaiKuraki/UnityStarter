@@ -1,0 +1,19 @@
+fileFormatVersion: 2
+guid: 5fd2b4a8ee7d56449849f7a4a7f68fb6
+timeCreated: 1490231520
+licenseType: Store
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Windows/EightBitdoNES30ProWindowsUnityProfile.cs
+  uploadId: 744175

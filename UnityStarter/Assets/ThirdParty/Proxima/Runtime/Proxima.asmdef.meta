@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 5aecca43f8b5ec34dbb52f863bdf0e59
+AssemblyDefinitionImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Runtime/Proxima.asmdef
+  uploadId: 743661

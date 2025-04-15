@@ -1,0 +1,19 @@
+fileFormatVersion: 2
+guid: 022d404eddde1426d8ee896b42f109c1
+timeCreated: 1551029349
+licenseType: Store
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Linux/PlayStation2LinuxUnityProfile.cs
+  uploadId: 744175

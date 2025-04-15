@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 1f1778bed9a034b838c3dbfb5be0ce90
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Utility/CodeWriter.cs
+  uploadId: 744175

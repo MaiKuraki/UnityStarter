@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 01bb39d8958ad4feaa2a70545ac2d9f7
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Linux/LogitechF310LinuxUnityProfile.cs
+  uploadId: 744175

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 4bcfb893268d442cb574bfd549f4835a
+timeCreated: 1557959508
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Utility/PreserveAttribute.cs
+  uploadId: 744175

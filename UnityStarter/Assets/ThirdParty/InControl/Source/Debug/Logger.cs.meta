@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 5e434901b21a544b58614da9f38cb261
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Debug/Logger.cs
+  uploadId: 744175

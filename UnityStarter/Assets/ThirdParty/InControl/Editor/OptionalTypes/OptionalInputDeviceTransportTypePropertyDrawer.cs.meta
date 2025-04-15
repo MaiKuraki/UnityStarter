@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 4bd02f764ef44933a2bf67d596db9e1b
+timeCreated: 1577916601
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Editor/OptionalTypes/OptionalInputDeviceTransportTypePropertyDrawer.cs
+  uploadId: 744175

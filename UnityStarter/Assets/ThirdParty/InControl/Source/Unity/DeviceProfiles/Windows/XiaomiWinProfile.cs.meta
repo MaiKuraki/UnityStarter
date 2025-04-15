@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 9591ef9af30f74d1a88953378b1b6f09
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Windows/XiaomiWinProfile.cs
+  uploadId: 744175

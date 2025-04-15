@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 94e0f95263ab344deac5f6a5a2be2871
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Mac/BuffaloClassicMacNativeProfile.cs
+  uploadId: 744175

@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: a689a62d348e649ac8a47d2e9dc8497d
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Editor/Touch/Controls/TouchStickControlEditor.cs
+  uploadId: 744175

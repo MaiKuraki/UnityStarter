@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 8b82bac90ff3148efbe3e137fa5403cc
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Generated/RazerWildcatControllerMacNativeProfile.cs
+  uploadId: 744175

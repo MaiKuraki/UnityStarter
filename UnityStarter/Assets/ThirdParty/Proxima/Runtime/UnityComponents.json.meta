@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: d6f93b674e30e4fc0bfa22e0880c4c87
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Runtime/UnityComponents.json
+  uploadId: 743661

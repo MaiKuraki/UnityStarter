@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 1682a457a9da4c08afd170afaf69a248
+timeCreated: 1578590933
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Editor/InputControlMappingPropertyDrawer.cs
+  uploadId: 744175

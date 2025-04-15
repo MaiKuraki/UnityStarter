@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: a825016bd4a9f4a31b19ffece40d0b33
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Windows/BuffaloClassicWindowsUnityProfile.cs
+  uploadId: 744175

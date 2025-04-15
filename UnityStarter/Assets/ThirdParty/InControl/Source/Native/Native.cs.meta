@@ -1,0 +1,19 @@
+fileFormatVersion: 2
+guid: c4d0b30df095842fe922b5d8279594f8
+timeCreated: 1445805635
+licenseType: Store
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/Native.cs
+  uploadId: 744175

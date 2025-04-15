@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: af9781d94bf494f1ab3af96d5470bf62
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Windows/XTR55_G2_WindowsUnityProfile.cs
+  uploadId: 744175

@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 55e1dfab07a24480b97dcae29e164f48
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Binding/BindingSourceType.cs
+  uploadId: 744175

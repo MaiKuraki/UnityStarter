@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: cb8a7fa0434b4e71ac6727ecceff2d22
+timeCreated: 1581907312
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/MFi/AppleMFiMicroGamepadNativeProfile.cs
+  uploadId: 744175

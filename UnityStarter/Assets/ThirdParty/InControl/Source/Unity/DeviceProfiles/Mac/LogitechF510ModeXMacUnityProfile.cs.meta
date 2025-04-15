@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 6d7e9b592b3ae458bbbb016ef0d86878
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Mac/LogitechF510ModeXMacUnityProfile.cs
+  uploadId: 744175

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: e300ecce65134254b1ba9cf0729ecaab
+timeCreated: 1577914735
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Utility/OptionalTypes/OptionalFloat.cs
+  uploadId: 744175

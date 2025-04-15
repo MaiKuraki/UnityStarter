@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 58cf4e5d7ace2464aa8c702d5e1907a8
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Generated/MadCatzInnoControllerMacNativeProfile.cs
+  uploadId: 744175

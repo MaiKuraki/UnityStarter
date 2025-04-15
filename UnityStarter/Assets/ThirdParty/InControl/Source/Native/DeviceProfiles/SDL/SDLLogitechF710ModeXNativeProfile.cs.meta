@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 7f58ed026e512b34c9c801751b655fa9
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/SDL/SDLLogitechF710ModeXNativeProfile.cs
+  uploadId: 744175

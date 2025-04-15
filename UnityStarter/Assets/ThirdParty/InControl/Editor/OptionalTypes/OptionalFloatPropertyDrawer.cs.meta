@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 34a5efcb18424317ab94001c421dcd23
+timeCreated: 1577915832
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Editor/OptionalTypes/OptionalFloatPropertyDrawer.cs
+  uploadId: 744175

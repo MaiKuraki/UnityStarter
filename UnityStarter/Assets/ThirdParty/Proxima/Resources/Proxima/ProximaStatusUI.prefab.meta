@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 936ae2105fa77a7448151fea10fa110f
+PrefabImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Resources/Proxima/ProximaStatusUI.prefab
+  uploadId: 743661

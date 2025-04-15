@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 3adce1a9bc62b4515979022e003e9e6b
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/WebSocketSharp/LICENSE.txt
+  uploadId: 743661

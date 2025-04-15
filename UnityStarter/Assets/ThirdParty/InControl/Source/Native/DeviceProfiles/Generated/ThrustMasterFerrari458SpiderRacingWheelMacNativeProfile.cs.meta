@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 699190e538e7f4592b4d0feee9f9231a
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Generated/ThrustMasterFerrari458SpiderRacingWheelMacNativeProfile.cs
+  uploadId: 744175

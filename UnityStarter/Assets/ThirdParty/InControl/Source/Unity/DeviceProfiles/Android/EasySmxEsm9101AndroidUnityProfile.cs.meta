@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 89e7ed1d50be94ed581f647fe66a6c2b
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Android/EasySmxEsm9101AndroidUnityProfile.cs
+  uploadId: 744175

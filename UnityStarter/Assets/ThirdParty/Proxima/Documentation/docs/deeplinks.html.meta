@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 844576d597f144ae0a2184f9ef68b223
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Documentation/docs/deeplinks.html
+  uploadId: 743661

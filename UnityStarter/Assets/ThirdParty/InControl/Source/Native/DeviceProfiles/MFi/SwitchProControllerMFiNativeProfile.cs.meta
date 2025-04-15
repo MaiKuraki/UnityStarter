@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 9a71ef46f08d4479a61344e73c80d4e4
+timeCreated: 1627839554
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/MFi/SwitchProControllerMFiNativeProfile.cs
+  uploadId: 744175

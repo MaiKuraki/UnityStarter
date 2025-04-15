@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: a357ca48b25c5744f8a3e484b2d8cf16
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Documentation/docs/faq.html
+  uploadId: 743661

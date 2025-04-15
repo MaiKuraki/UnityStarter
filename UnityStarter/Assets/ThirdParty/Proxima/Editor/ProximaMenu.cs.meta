@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 0adebfc0bc2e0894cb1c428bc9e0901b
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Editor/ProximaMenu.cs
+  uploadId: 743661

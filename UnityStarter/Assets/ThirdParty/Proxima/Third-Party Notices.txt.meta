@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 665ad43a4b3704868b3ad4406c5c3d5b
+TextScriptImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 244788
+  packageName: Proxima Runtime Inspector + Console
+  packageVersion: 1.5.0
+  assetPath: Assets/Proxima/Third-Party Notices.txt
+  uploadId: 743661

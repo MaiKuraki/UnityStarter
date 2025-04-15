@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 7d4414c1161d546f8b55d01fd94aea52
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Generated/HoriEdgeFightingStickMacNativeProfile.cs
+  uploadId: 744175

@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 657654af0e2c240809c8a3f6d31a4ab2
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Windows/LogitechF510ModeDWindowsNativeProfile.cs
+  uploadId: 744175

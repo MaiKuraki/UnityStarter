@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 5b716627cda0c4b0086a3aee9aacabb7
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Windows/NintendoSwitchProWindowsNativeProfile.cs
+  uploadId: 744175

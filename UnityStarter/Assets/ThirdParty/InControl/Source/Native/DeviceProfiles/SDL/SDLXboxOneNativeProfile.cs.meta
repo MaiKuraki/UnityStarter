@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 680884564a7446829a51f39d5ed09aa1
+timeCreated: 1615912679
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/SDL/SDLXboxOneNativeProfile.cs
+  uploadId: 744175

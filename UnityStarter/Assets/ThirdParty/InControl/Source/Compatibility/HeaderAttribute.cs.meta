@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: a6f9df388a384442bb101cc67126f194
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Compatibility/HeaderAttribute.cs
+  uploadId: 744175

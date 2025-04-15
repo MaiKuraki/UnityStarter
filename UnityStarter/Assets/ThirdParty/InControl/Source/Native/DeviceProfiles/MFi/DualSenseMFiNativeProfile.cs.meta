@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: f6d404576411402da6693f914e011d59
+timeCreated: 1626745142
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/MFi/DualSenseMFiNativeProfile.cs
+  uploadId: 744175

@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 985603f8831fc435d8b6c780e3d67f05
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Generated/MadCatzSF4FightStickSEMacNativeProfile.cs
+  uploadId: 744175

@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 73900660b5a54d7c805ce8013ddafee4
+timeCreated: 1577916520
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Editor/OptionalTypes/OptionalInt16PropertyDrawer.cs
+  uploadId: 744175

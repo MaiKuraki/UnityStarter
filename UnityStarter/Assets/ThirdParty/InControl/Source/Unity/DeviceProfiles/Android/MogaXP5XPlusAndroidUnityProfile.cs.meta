@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 5d0817a73aa0249c5aa24e3a0c97cd5a
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Android/MogaXP5XPlusAndroidUnityProfile.cs
+  uploadId: 744175

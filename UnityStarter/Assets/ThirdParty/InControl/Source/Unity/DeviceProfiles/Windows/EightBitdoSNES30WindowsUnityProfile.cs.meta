@@ -1,0 +1,19 @@
+fileFormatVersion: 2
+guid: 3635f9825838bc145817af08532482bd
+timeCreated: 1490229999
+licenseType: Store
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Unity/DeviceProfiles/Windows/EightBitdoSNES30WindowsUnityProfile.cs
+  uploadId: 744175

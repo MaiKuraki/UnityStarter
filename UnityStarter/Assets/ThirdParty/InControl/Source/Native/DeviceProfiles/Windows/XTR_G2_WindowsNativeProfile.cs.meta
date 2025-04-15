@@ -1,0 +1,19 @@
+fileFormatVersion: 2
+guid: f390e657835f51141813faaae0f560f9
+timeCreated: 1486340800
+licenseType: Store
+MonoImporter:
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Windows/XTR_G2_WindowsNativeProfile.cs
+  uploadId: 744175

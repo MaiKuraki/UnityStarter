@@ -1,0 +1,10 @@
+﻿fileFormatVersion: 2
+guid: 93efefd512854e06a3c2c72a70ddd71e
+timeCreated: 1577915506
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Utility/OptionalTypes/OptionalInputDeviceTransportType.cs
+  uploadId: 744175

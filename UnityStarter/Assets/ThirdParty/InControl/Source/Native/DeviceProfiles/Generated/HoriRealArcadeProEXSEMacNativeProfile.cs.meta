@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 278d1fa8997e9446787adaf0f0953bce
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 14695
+  packageName: InControl
+  packageVersion: 1.8.11
+  assetPath: Assets/InControl/Source/Native/DeviceProfiles/Generated/HoriRealArcadeProEXSEMacNativeProfile.cs
+  uploadId: 744175
