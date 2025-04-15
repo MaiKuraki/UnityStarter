@@ -5,7 +5,7 @@
         "UniTask",
         "Unity.Cinemachine",
         "CycloneGames.Logger",
-        "CycloneGames.Core"
+        "CycloneGames.Factory"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

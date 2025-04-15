@@ -1,5 +1,5 @@
 using CycloneGames.Logger;
-using CycloneGames.Core;
+using CycloneGames.Factory;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework
@@ -11,10 +11,10 @@ namespace CycloneGames.GameplayFramework
     public class GameMode : Actor, IGameMode
     {
         private const string DEBUG_FLAG = "<color=cyan>[GameMode]</color>";
-        private IObjectSpawner objectSpawner;
+        private IFactory<MonoBehaviour, MonoBehaviour> objectSpawner;
         private IWorldSettings worldSettings;
         
-        public virtual void Initialize(IObjectSpawner objectSpawner, IWorldSettings worldSettings)
+        public virtual void Initialize(in IFactory<MonoBehaviour, MonoBehaviour> objectSpawner, in IWorldSettings worldSettings)
         {
             this.objectSpawner = objectSpawner;
             this.worldSettings = worldSettings;
@@ -226,7 +226,7 @@ namespace CycloneGames.GameplayFramework
 
         Pawn SpawnDefaultPawnAtTransform(Controller NewPlayer, Transform SpawnTransform)
         {
-            Pawn p = objectSpawner?.SpawnObject(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
+            Pawn p = objectSpawner?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
             if (p == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn, please check your spawn pipeline");
@@ -245,7 +245,7 @@ namespace CycloneGames.GameplayFramework
 
         Pawn SpawnDefaultPawnAtLocation(Controller NewPlayer, Vector3 NewLocation)
         {
-            Pawn p = objectSpawner?.SpawnObject(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
+            Pawn p = objectSpawner?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
             if (p == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn");
@@ -262,7 +262,7 @@ namespace CycloneGames.GameplayFramework
         PlayerController SpawnPlayerController()
         {
             //  TODO: maybe should not bind in the DI framework, if you are using the DI to implement the IObjectSpawner?
-            cachedPlayerController = objectSpawner?.SpawnObject(worldSettings?.PlayerControllerClass) as PlayerController;
+            cachedPlayerController = objectSpawner?.Create(worldSettings?.PlayerControllerClass) as PlayerController;
             if (cachedPlayerController == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Spawn PlayerController Failed, please check your spawn pipeline");
