@@ -8,7 +8,7 @@
   "dependencies": {
     "com.unity.cinemachine": "3.0.0",
     "com.cysharp.unitask": "2.0.0",
-    "com.cyclone-games.core": "1.0.0",
+    "com.cyclone-games.factory": "1.0.0",
     "com.cyclone-games.logger": "1.0.0"
   },
   "keywords": [

@@ -1,24 +1,20 @@
-using CycloneGames.Core;
+using CycloneGames.Factory;
+using CycloneGames.Logger;
+using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Sample.PureUnity
 {
-    public class UnitySampleObjectSpawner : IObjectSpawner
+    public class UnitySampleObjectSpawner : IFactory<MonoBehaviour, MonoBehaviour>
     {
-        public UnityEngine.Object SpawnObject(UnityEngine.Object original)
+        public MonoBehaviour Create(MonoBehaviour prefab)
         {
-            return UnityEngine.Object.Instantiate(original);
-        }
+            if(prefab == null)
+            {
+                CLogger.LogError("Invalid prefab to spawn");
+                return null;
+            }
 
-        public UnityEngine.Object SpawnObject<T>(T original) where T : UnityEngine.Object
-        {
-            return UnityEngine.Object.Instantiate(original);
-        }
-
-        UnityEngine.GameObject IObjectSpawner.SpawnObjectOnNewGameObject<TComponent>(string name)
-        {
-            var go = new UnityEngine.GameObject(name);
-            var component = go.AddComponent<TComponent>();
-            return go;
+            return Object.Instantiate(prefab);
         }
     }
 }
