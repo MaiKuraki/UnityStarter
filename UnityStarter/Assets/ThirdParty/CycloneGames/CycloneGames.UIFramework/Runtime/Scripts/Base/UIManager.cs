@@ -18,7 +18,7 @@ namespace CycloneGames.UIFramework
         private UIRoot uiRoot;
         private Dictionary<string, UniTaskCompletionSource<bool>> uiOpenTasks = new Dictionary<string, UniTaskCompletionSource<bool>>();
 
-        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IFactory objectSpawner, IMainCameraService mainCamera)
+        public void Initialize(IAssetPathBuilderFactory assetPathBuilderFactory, IFactory<MonoBehaviour, MonoBehaviour> objectSpawner, IMainCameraService mainCamera)
         {
             this.assetPathBuilder = assetPathBuilderFactory.Create("UI");
             if (this.assetPathBuilder == null)
@@ -68,7 +68,7 @@ namespace CycloneGames.UIFramework
             {
                 await pageHandle.Task;
                 pageConfig = pageHandle.Result;
-                
+
                 if (pageConfig == null || pageConfig.PagePrefab == null)
                 {
                     CLogger.LogError($"{DEBUG_FLAG} Invalid UI Prefab in PageConfig, PageName: {PageName}");
