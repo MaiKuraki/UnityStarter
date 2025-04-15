@@ -11,10 +11,10 @@ namespace CycloneGames.GameplayFramework
     public class GameMode : Actor, IGameMode
     {
         private const string DEBUG_FLAG = "<color=cyan>[GameMode]</color>";
-        private IFactory<MonoBehaviour, MonoBehaviour> objectSpawner;
+        private IFactory objectSpawner;
         private IWorldSettings worldSettings;
         
-        public virtual void Initialize(in IFactory<MonoBehaviour, MonoBehaviour> objectSpawner, in IWorldSettings worldSettings)
+        public virtual void Initialize(in IFactory objectSpawner, in IWorldSettings worldSettings)
         {
             this.objectSpawner = objectSpawner;
             this.worldSettings = worldSettings;
