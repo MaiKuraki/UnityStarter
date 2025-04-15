@@ -6,7 +6,7 @@ namespace CycloneGames.GameplayFramework
 {
     public class Controller : Actor
     {
-        protected IFactory objectSpawner;
+        protected IUnityObjectSpawner objectSpawner;
         protected IWorldSettings worldSettings;
         protected bool IsInitialized { get; private set; } = false;
         private Actor StartSpot;
@@ -15,7 +15,7 @@ namespace CycloneGames.GameplayFramework
         private Quaternion controlRotation = Quaternion.identity;
 
         public Pawn GetDefaultPawnPrefab() => worldSettings.PawnClass;
-        public void Initialize(in IFactory objectSpawner, in IWorldSettings worldSettings)
+        public void Initialize(in IUnityObjectSpawner objectSpawner, in IWorldSettings worldSettings)
         {
             this.objectSpawner = objectSpawner;
             this.worldSettings = worldSettings;
@@ -100,7 +100,7 @@ namespace CycloneGames.GameplayFramework
 
         protected void InitPlayerState()
         {
-            playerState = ((IFactory<MonoBehaviour, MonoBehaviour>)objectSpawner)?.Create(worldSettings?.PlayerStateClass) as PlayerState;
+            playerState = objectSpawner?.Create(worldSettings?.PlayerStateClass) as PlayerState;
             if (playerState == null)
             {
                 CLogger.LogError("Spawn PlayerState Failed, please check your spawn pipeline");

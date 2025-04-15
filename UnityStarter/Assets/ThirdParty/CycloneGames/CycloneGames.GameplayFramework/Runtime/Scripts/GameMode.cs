@@ -11,10 +11,10 @@ namespace CycloneGames.GameplayFramework
     public class GameMode : Actor, IGameMode
     {
         private const string DEBUG_FLAG = "<color=cyan>[GameMode]</color>";
-        private IFactory objectSpawner;
+        private IUnityObjectSpawner objectSpawner;
         private IWorldSettings worldSettings;
-        
-        public virtual void Initialize(in IFactory objectSpawner, in IWorldSettings worldSettings)
+
+        public virtual void Initialize(in IUnityObjectSpawner objectSpawner, in IWorldSettings worldSettings)
         {
             this.objectSpawner = objectSpawner;
             this.worldSettings = worldSettings;
@@ -56,7 +56,7 @@ namespace CycloneGames.GameplayFramework
         {
             PlayerStart[] playerStartArray = GameObject.FindObjectsByType<PlayerStart>(FindObjectsSortMode.InstanceID);
 
-            if(playerStartArray == null || playerStartArray.Length == 0)
+            if (playerStartArray == null || playerStartArray.Length == 0)
             {
                 CLogger.LogWarning($"{DEBUG_FLAG} No PlayerStart found in the scene");
                 return null;
@@ -226,7 +226,7 @@ namespace CycloneGames.GameplayFramework
 
         Pawn SpawnDefaultPawnAtTransform(Controller NewPlayer, Transform SpawnTransform)
         {
-            Pawn p = ((IFactory<MonoBehaviour, MonoBehaviour>)objectSpawner)?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
+            Pawn p = objectSpawner?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
             if (p == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn, please check your spawn pipeline");
@@ -245,7 +245,7 @@ namespace CycloneGames.GameplayFramework
 
         Pawn SpawnDefaultPawnAtLocation(Controller NewPlayer, Vector3 NewLocation)
         {
-            Pawn p = ((IFactory<MonoBehaviour, MonoBehaviour>)objectSpawner)?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
+            Pawn p = objectSpawner?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
             if (p == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn");
@@ -262,7 +262,7 @@ namespace CycloneGames.GameplayFramework
         PlayerController SpawnPlayerController()
         {
             //  TODO: maybe should not bind in the DI framework, if you are using the DI to implement the IObjectSpawner?
-            cachedPlayerController = ((IFactory<MonoBehaviour, MonoBehaviour>)objectSpawner)?.Create(worldSettings?.PlayerControllerClass) as PlayerController;
+            cachedPlayerController = objectSpawner?.Create(worldSettings?.PlayerControllerClass) as PlayerController;
             if (cachedPlayerController == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Spawn PlayerController Failed, please check your spawn pipeline");
