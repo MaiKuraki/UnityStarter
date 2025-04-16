@@ -12,14 +12,14 @@ namespace CycloneGames.MeshRender
     [BurstCompile]
     public static class CircleCalculator
     {
-        // 1. Quarter circle with radius 1, centered at (0, 1)
+        // 1. Quarter circle with radius 1, centered at (0, 1) 
         [BurstCompile]
         public static float GetYFromX_C_0_1(float x)
         {
             return 1 - math.sqrt(1 - x * x);
         }
 
-        // 2. Quarter circle with radius 1, centered at (1, 0)
+        // 2. Quarter circle with radius 1, centered at (1, 0) 
         [BurstCompile]
         public static float GetYFromX_C_1_0(float x)
         {
@@ -32,7 +32,7 @@ namespace CycloneGames.MeshRender
     {
         // Calculate a point on a quadratic Bezier curve 
         [BurstCompile]
-        public static float3 GetQuadraticBezierPoint(float3 startPoint, float3 endPoint, float3 controlPoint, float t)
+        public static void GetQuadraticBezierPoint(ref float3 startPoint, ref float3 endPoint, ref float3 controlPoint, float t, out float3 result)
         {
             t = math.clamp(t, 0, 1);
             float oneMinusT = 1 - t;
@@ -40,7 +40,7 @@ namespace CycloneGames.MeshRender
             float tSquared = t * t;
             float twoTOneMinusT = 2 * oneMinusT * t;
 
-            return new float3(
+            result = new float3(
                 oneMinusTSquared * startPoint.x + twoTOneMinusT * controlPoint.x + tSquared * endPoint.x,
                 oneMinusTSquared * startPoint.y + twoTOneMinusT * controlPoint.y + tSquared * endPoint.y,
                 oneMinusTSquared * startPoint.z + twoTOneMinusT * controlPoint.z + tSquared * endPoint.z
@@ -131,6 +131,7 @@ namespace CycloneGames.MeshRender
         private float3 GetQuadraticBezierPoint2D(float3 startPoint, float3 endPoint, float t, CurveType curveType)
         {
             float3 controlPoint;
+            float3 result;
 
             switch (curveType)
             {
@@ -140,7 +141,8 @@ namespace CycloneGames.MeshRender
                         startPoint.y + (endPoint.y - startPoint.y) * 0.5f,
                         0
                     );
-                    return BezierCurve.GetQuadraticBezierPoint(startPoint, endPoint, controlPoint, t);
+                    BezierCurve.GetQuadraticBezierPoint(ref startPoint, ref endPoint, ref controlPoint, t, out result);
+                    return result;
 
                 case CurveType.Deceleration:
                     controlPoint = new float3(
@@ -148,7 +150,8 @@ namespace CycloneGames.MeshRender
                         startPoint.y + (endPoint.y - startPoint.y) * 0.5f,
                         0
                     );
-                    return BezierCurve.GetQuadraticBezierPoint(startPoint, endPoint, controlPoint, t);
+                    BezierCurve.GetQuadraticBezierPoint(ref startPoint, ref endPoint, ref controlPoint, t, out result);
+                    return result;
 
                 default:
                     // Linear interpolation 
@@ -351,21 +354,21 @@ namespace CycloneGames.MeshRender
                 vertices[totalPointCount + i] = new Vector3(rightPoint.x, rightPoint.y, rightPoint.z);
             }
 
-            // Update triangles 
+            // Update triangles
             for (int i = 0; i < totalPointCount - 1; i++)
             {
                 int start = i;
                 int startNext = i + 1;
 
-                // First triangle 
+                // First triangle (Clockwise)
                 triangles[i * 6] = start;
-                triangles[i * 6 + 1] = totalPointCount + start;
-                triangles[i * 6 + 2] = totalPointCount + startNext;
+                triangles[i * 6 + 1] = totalPointCount + startNext;
+                triangles[i * 6 + 2] = totalPointCount + start;
 
-                // Second triangle 
+                // Second triangle (Clockwise)
                 triangles[i * 6 + 3] = start;
-                triangles[i * 6 + 4] = totalPointCount + startNext;
-                triangles[i * 6 + 5] = startNext;
+                triangles[i * 6 + 4] = startNext;
+                triangles[i * 6 + 5] = totalPointCount + startNext;
             }
 
             // Update the mesh 
