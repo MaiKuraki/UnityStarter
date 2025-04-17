@@ -54,6 +54,15 @@ namespace CycloneGames.Utility.Runtime
         #region Unity Lifecycle 
         private void Reset() => GetRequiredComponents();
 
+        /*************  ✨ Windsurf Command ⭐  *************/
+        /// <summary>
+        /// OnEnable is called when the script is enabled.
+        /// 1. Get required components.
+        /// 2. Reset cache.
+        /// 3. Mark the fitter dirty.
+        /// 4. Try to update size.
+        /// </summary>
+        /*******  a4779488-d7d5-4b75-8c67-e174645bef28  *******/
         private void OnEnable()
         {
             GetRequiredComponents();
@@ -92,7 +101,7 @@ namespace CycloneGames.Utility.Runtime
 
         private void OnValidate()
         {
-            if (_isInValidation) return;
+            if (_isInValidation || !CanUpdate()) return;
 
             _isInValidation = true;
             SetDirty();
@@ -108,7 +117,10 @@ namespace CycloneGames.Utility.Runtime
                 return;
             }
 #endif 
-            StartCoroutine(DelayedUpdateCoroutine());
+            if (isActiveAndEnabled)
+            {
+                StartCoroutine(DelayedUpdateCoroutine());
+            }
         }
         #endregion
 
