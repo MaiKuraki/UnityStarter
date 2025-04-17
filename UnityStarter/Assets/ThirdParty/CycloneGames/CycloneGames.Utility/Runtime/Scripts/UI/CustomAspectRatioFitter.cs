@@ -1,4 +1,7 @@
 using UnityEngine;
+using CycloneGames.Logger;
+using UnityEngine.Rendering;
+
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -8,238 +11,266 @@ namespace CycloneGames.Utility.Runtime
 {
     /*
         IMPORTANT USAGE NOTE:
-        
+ 
         This script by default only works in Edit Mode. For runtime functionality:
-        
+ 
         Option 1 - Manual control:
-        Call UpdateSize() manually when the screen/canvas changes 
-        
+        Call TryUpdateSize() manually when the screen/canvas changes 
+ 
         Option 2 - Automatic runtime updates:
         Remove the #if UNITY_EDITOR preprocessor directive for the Update() method 
-        
+ 
         Note: Automatic updates will have a small performance impact as it checks 
         for screen size changes every frame.
     */
+
     [ExecuteInEditMode]
+    [DisallowMultipleComponent]
+    [RequireComponent(typeof(RectTransform))]
     public class CustomAspectRatioFitter : MonoBehaviour
     {
-        public enum EFitMode
+        public enum EFitMode { None, FitInTarget, EnvelopeTarget }
+
+        private const string DEBUG_FLAG = "[AspectRatioFitter]";
+        private const float MIN_ASPECT_RATIO = 0.001f;
+        private readonly Vector2 _sizeTolerance = new Vector2(0.01f, 0.01f);
+
+        [SerializeField][Min(MIN_ASPECT_RATIO)] private float _targetAspectRatio = 16f / 9f;
+        [SerializeField] private EFitMode _fitMode = EFitMode.FitInTarget;
+        [Tooltip("If empty, uses parent RectTransform")]
+        [SerializeField] private RectTransform _fitTarget; // Optional target, defaults to parent 
+
+        // Cache system 
+        private RectTransform _rt;
+        private EFitMode _lastFitMode;
+        private int _lastScreenWidth;
+        private int _lastScreenHeight;
+        private Vector2 _lastAppliedSize;
+
+        // Safety flags 
+        private bool _isInValidation;
+        private bool _isDelayedUpdatePending;
+
+        #region Unity Lifecycle 
+        private void Reset() => GetRequiredComponents();
+
+        private void OnEnable()
         {
-            FitInCanvas,
-            Envelope
-        };
+            GetRequiredComponents();
+            ResetCache();
+            SetDirty();
+            TryUpdateSize();
+        }
 
-        private const string DEBUG_FLAG = "[CustomAspectRatioFitter]";
-
-        // Serialized fields 
-        [SerializeField] private Canvas canvas;
-        [SerializeField] private float TargetAspectRatio = 1.777778f; // 16:9 aspect ratio 
-        [SerializeField] private Vector3 Offset = Vector3.zero;
-        [SerializeField] private EFitMode FitMode = EFitMode.FitInCanvas;
-
-        // Cached components and reusable arrays to prevent GC 
-        private RectTransform selfRTF;
-        private RectTransform canvasRTF;
-        private readonly Vector3[] corners = new Vector3[4];
-        private readonly Vector3[] canvasCorners = new Vector3[4];
-
-        // Optimization: Cache screen dimensions to avoid repeated calls 
-        private int lastScreenWidth;
-        private int lastScreenHeight;
-        private float lastCanvasScale;
-
-#if UNITY_EDITOR
-        void Update()
+        private void OnDisable()
         {
+#if UNITY_EDITOR 
+            if (!Application.isPlaying)
+                EditorApplication.delayCall -= DelayedUpdate;
+#endif 
+        }
 
+        private void OnDestroy()
+        {
+#if UNITY_EDITOR 
+            if (!Application.isPlaying)
+                EditorApplication.delayCall -= DelayedUpdate;
+#endif 
+        }
+
+        private void Update()
+        {
+#if UNITY_EDITOR 
             if (!Application.isPlaying)
             {
-                UpdateSize();
+                TryUpdateSize();
             }
+#endif 
+        }
+
+        private void OnRectTransformDimensionsChange() => SetDirty();
+
+        private void OnValidate()
+        {
+            if (_isInValidation) return;
+
+            _isInValidation = true;
+            SetDirty();
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                if (!_isDelayedUpdatePending)
+                {
+                    _isDelayedUpdatePending = true;
+                    EditorApplication.delayCall += DelayedUpdate;
+                }
+                return;
+            }
+#endif 
+            StartCoroutine(DelayedUpdateCoroutine());
+        }
+        #endregion
+
+        #region Core Functionality 
+        [ContextMenu("Update Size")]
+        public void SetDirty()
+        {
+            _lastScreenWidth = -1; // Force update 
+            _lastScreenHeight = -1;
+            _lastFitMode = EFitMode.None;
+        }
+
+        public void TryUpdateSize()
+        {
+            if (!CanUpdate()) return;
+
+            bool needsUpdate = CheckForChanges();
+            if (!needsUpdate && !SizeDifferenceExceedsTolerance()) return;
+
+            UpdateCache();
+            ApplyNewSize(CalculateTargetSize());
+        }
+
+        private Vector2 CalculateTargetSize()
+        {
+            RectTransform target = GetEffectiveFitTarget();
+            if (target == null || target.rect.size.magnitude < 0.001f)
+            {
+                CLogger.LogWarning($"{DEBUG_FLAG} No valid target found");
+                return _rt.sizeDelta;
+            }
+
+            Vector2 targetSize = target.rect.size;
+            float targetRatio = targetSize.x / targetSize.y;
+
+            switch (_fitMode)
+            {
+                case EFitMode.FitInTarget:
+                    return targetRatio >= _targetAspectRatio
+                        ? new Vector2(targetSize.y * _targetAspectRatio, targetSize.y)
+                        : new Vector2(targetSize.x, targetSize.x / _targetAspectRatio);
+
+                case EFitMode.EnvelopeTarget:
+                    return targetRatio <= _targetAspectRatio
+                        ? new Vector2(targetSize.y * _targetAspectRatio, targetSize.y)
+                        : new Vector2(targetSize.x, targetSize.x / _targetAspectRatio);
+
+                default: return _rt.sizeDelta;
+            }
+        }
+
+        private RectTransform GetEffectiveFitTarget()
+        {
+            if (_rt == null) return null;
+
+            // If a target is explicitly set, use that 
+            if (_fitTarget != null) return _fitTarget;
+
+            // Otherwise use parent if available 
+            if (_rt.parent != null)
+            {
+                RectTransform parentRT = _rt.parent.GetComponent<RectTransform>();
+                if (parentRT != null) return parentRT;
+            }
+
+            return null;
+        }
+        #endregion
+
+        #region Helper Methods 
+        private void GetRequiredComponents()
+        {
+            if (_rt == null) _rt = GetComponent<RectTransform>();
+        }
+
+        private void ResetCache()
+        {
+            _lastFitMode = _fitMode;
+            _lastScreenWidth = Screen.width;
+            _lastScreenHeight = Screen.height;
+            _lastAppliedSize = _rt.sizeDelta;
+        }
+
+        private bool CanUpdate()
+        {
+            if (_isInValidation) return false;
+            if (_rt == null || !isActiveAndEnabled) return false;
+            return true;
+        }
+
+        private bool CheckForChanges()
+        {
+            return Screen.width != _lastScreenWidth ||
+                   Screen.height != _lastScreenHeight ||
+                   _fitMode != _lastFitMode;
+        }
+
+        private bool SizeDifferenceExceedsTolerance()
+        {
+            return Mathf.Abs(_rt.sizeDelta.x - _lastAppliedSize.x) > _sizeTolerance.x ||
+                   Mathf.Abs(_rt.sizeDelta.y - _lastAppliedSize.y) > _sizeTolerance.y;
+        }
+
+        private void UpdateCache()
+        {
+            _lastScreenWidth = Screen.width;
+            _lastScreenHeight = Screen.height;
+            _lastFitMode = _fitMode;
+        }
+
+        private void ApplyNewSize(Vector2 newSize)
+        {
+            if (Vector2.Distance(newSize, _lastAppliedSize) < 0.01f) return;
+
+            _rt.sizeDelta = newSize;
+            _lastAppliedSize = newSize;
+        }
+        #endregion
+
+        #region Delayed Update Handlers 
+#if UNITY_EDITOR
+        private void DelayedUpdate()
+        {
+            _isDelayedUpdatePending = false;
+            _isInValidation = false;
+            EditorApplication.delayCall -= DelayedUpdate;
+            TryUpdateSize();
         }
 #endif
 
-        void OnEnable()
+        private System.Collections.IEnumerator DelayedUpdateCoroutine()
         {
-            // Cache components on enable 
-            if (selfRTF == null)
-            {
-                selfRTF = GetComponent<RectTransform>();
-            }
-
-            if (canvas != null && canvasRTF == null)
-            {
-                canvasRTF = canvas.GetComponent<RectTransform>();
-            }
+            yield return null;
+            _isInValidation = false;
+            TryUpdateSize();
         }
+        #endregion 
+    }
 
-        /// <summary>
-        /// Determines if we should use screen height for FitInCanvas mode 
-        /// </summary>
-        private bool UseCanvasHeightForFitIn()
+#if UNITY_EDITOR
+    [CustomPropertyDrawer(typeof(CustomAspectRatioFitter.EFitMode))]
+    public class EFitModeDrawer : PropertyDrawer
+    {
+        public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
-            return (float)Screen.width / Screen.height >= TargetAspectRatio;
-        }
+            EditorGUI.BeginProperty(position, label, property);
 
-        /// <summary>
-        /// Determines if we should use canvas height for Envelope mode 
-        /// </summary>
-        private bool UseCanvasHeightForEnvelope()
-        {
-            return (float)Screen.width / Screen.height <= TargetAspectRatio;
-        }
+            var options = new[] { "FitInTarget", "EnvelopeTarget" };
+            var values = new[] { 1, 2 }; // Skip None (0)
 
-        /// <summary>
-        /// Main method to update the size and position of the RectTransform 
-        /// </summary>
-        public void UpdateSize()
-        {
-            if (selfRTF == null) return;
+            int current = property.intValue;
+            int selected = current > 0 && current <= values.Length ? current - 1 : 0;
 
-            // Early exit if canvas is not set 
-            if (canvas == null)
+            EditorGUI.BeginChangeCheck();
+            selected = EditorGUI.Popup(position, label.text, selected, options);
+            if (EditorGUI.EndChangeCheck())
             {
-                if (Application.isPlaying)
-                {
-                    Debug.LogError($"{DEBUG_FLAG} Canvas reference is not set.");
-                }
-                return;
+                property.intValue = values[selected];
             }
 
-            // Validate aspect ratio 
-            if (TargetAspectRatio <= 0.0001f)
-            {
-                Debug.LogError($"{DEBUG_FLAG} Invalid SourceRatio: {TargetAspectRatio}");
-                return;
-            }
-
-            // Cache canvas scale factor 
-            float currentCanvasScale = canvas.scaleFactor;
-            if (currentCanvasScale <= 0.0001f)
-            {
-                Debug.LogError($"{DEBUG_FLAG} Invalid canvas scale: {currentCanvasScale}");
-                return;
-            }
-
-            // Check if we need to update (screen or canvas changed)
-            bool needsUpdate = Screen.width != lastScreenWidth ||
-                             Screen.height != lastScreenHeight ||
-                             !Mathf.Approximately(currentCanvasScale, lastCanvasScale);
-
-            if (!needsUpdate) return;
-
-            // Update cached values 
-            lastScreenWidth = Screen.width;
-            lastScreenHeight = Screen.height;
-            lastCanvasScale = currentCanvasScale;
-
-            // Get canvas RTF if not cached 
-            if (canvasRTF == null)
-            {
-                canvasRTF = canvas.GetComponent<RectTransform>();
-                if (canvasRTF == null) return;
-            }
-
-            // Calculate size based on fit mode 
-            if (FitMode == EFitMode.FitInCanvas)
-            {
-                if (UseCanvasHeightForFitIn())
-                {
-                    selfRTF.sizeDelta = new Vector2(
-                        Screen.height * TargetAspectRatio / currentCanvasScale,
-                        Screen.height / currentCanvasScale);
-                }
-                else
-                {
-                    selfRTF.sizeDelta = new Vector2(
-                        Screen.width / currentCanvasScale,
-                        Screen.width / (TargetAspectRatio * currentCanvasScale));
-                }
-                FitAspect_FitInCanvas();
-            }
-            else if (FitMode == EFitMode.Envelope)
-            {
-                if (UseCanvasHeightForEnvelope())
-                {
-                    selfRTF.sizeDelta = new Vector2(
-                        Screen.height * TargetAspectRatio / currentCanvasScale,
-                        Screen.height / currentCanvasScale);
-                }
-                else
-                {
-                    selfRTF.sizeDelta = new Vector2(
-                        Screen.width / currentCanvasScale,
-                        Screen.width / (TargetAspectRatio * currentCanvasScale));
-                }
-                FitAspect_Envelope();
-            }
-
-            // Apply offset 
-            selfRTF.localPosition += Offset;
-        }
-
-        /// <summary>
-        /// Adjusts position to fit within canvas bounds (FitInCanvas mode)
-        /// </summary>
-        private void FitAspect_FitInCanvas()
-        {
-            selfRTF.GetWorldCorners(corners);
-            canvasRTF.GetWorldCorners(canvasCorners);
-
-            float minX = canvasCorners[0].x;
-            float maxX = canvasCorners[2].x;
-            float minY = canvasCorners[0].y;
-            float maxY = canvasCorners[2].y;
-
-            Vector3 position = selfRTF.position;
-
-            // Adjust X position if out of bounds 
-            if (corners[0].x < minX)
-            {
-                position.x += minX - corners[0].x;
-            }
-            else if (corners[2].x > maxX)
-            {
-                position.x -= corners[2].x - maxX;
-            }
-
-            // Adjust Y position if out of bounds 
-            if (corners[0].y < minY)
-            {
-                position.y += minY - corners[0].y;
-            }
-            else if (corners[2].y > maxY)
-            {
-                position.y -= corners[2].y - maxY;
-            }
-
-            selfRTF.position = position;
-        }
-
-        /// <summary>
-        /// Scales and centers content to envelope the canvas (Envelope mode)
-        /// </summary>
-        private void FitAspect_Envelope()
-        {
-            selfRTF.GetWorldCorners(corners);
-            canvasRTF.GetWorldCorners(canvasCorners);
-
-            float canvasWidth = canvasCorners[2].x - canvasCorners[0].x;
-            float canvasHeight = canvasCorners[2].y - canvasCorners[0].y;
-            float contentWidth = corners[2].x - corners[0].x;
-            float contentHeight = corners[2].y - corners[0].y;
-
-            // Center the content 
-            Vector3 position = new Vector3(
-                (canvasCorners[0].x + canvasCorners[2].x) * 0.5f,
-                (canvasCorners[0].y + canvasCorners[2].y) * 0.5f,
-                selfRTF.position.z);
-
-            // Calculate scale to cover the canvas 
-            float scale = Mathf.Max(canvasWidth / contentWidth, canvasHeight / contentHeight);
-
-            selfRTF.localScale = new Vector3(scale, scale, 1f);
-            selfRTF.position = position;
+            EditorGUI.EndProperty();
         }
     }
+#endif 
 }
