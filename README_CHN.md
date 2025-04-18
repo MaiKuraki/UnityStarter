@@ -1,84 +1,85 @@
-# Unity Project Starter Template
+# Unity 项目启动模板
 <p align="center">
-    <br> English | <a href="README_CHN.md">中文</a>
+    <br> <a href="README.md">English</a> | 中文
 </p>
 
-## Overview
-A lightweight Unity starter template designed to serve as a foundation for new projects. This repository integrates:
+## 概述
+一个轻量级的 Unity 启动模板，旨在作为新项目的基础框架。本仓库整合了以下内容：
 
-- **Commonly used Unity Packages** (updated to recent versions).
-- **DI/IoC framework support** with pre-configured adapters for: (All framework listed are tested in production environments.)
+- **流行的开源 Unity Package 包**
+- **DI/IoC 框架支持**，预配置适配器：(列出的这些 DI/IoC 框架均为作者在商业项目中验证使用过的)
   - [VContainer](https://github.com/hadashiA/VContainer)
   - [StrangeIoC](https://github.com/strangeioc/strangeioc)
   - [Extenject(Zenject)](https://github.com/Mathijs-Bakker/Extenject) (no longer actively maintained.)
-## DI Framework Selection
-Switch between Git branches to explore implementation examples for each DI framework.</br>
+## DI 框架选择指南 
+通过切换 Git 分支可查看各 DI 框架的实现范例<br/>
 <img src="./Docs/ProjectDescription/Main/Des_01.png" alt="Branch Select" style="width: 50%; height: auto; max-width: 360px;" />
-## Project Structure
-The directory hierarchy follows a modular design, optimized for scalability and clear separation of concerns. Refer to the Assets/ folder for detailed organization.
+
+## 项目结构说明
+采用 **Unity Package** 形式开发，分离 asmdef 设计，可轻易的选择移除不需要的包，完整结构参见 **Assets/CycloneGames** 文件夹。
 
 ```
-├── Docs                                                    # Documentation
+├── Docs                                                    # 项目文档
 │   └── ...
-├── Tools                                                   # Utility tools, Includes project renaming, cleanup tools and etc.
+├── Tools                                                   #实用工具集 (含项目重命名、清理工具等)
 │   ├── Executable
 │   │   ├── ...
 │   └── Scripts
 │       └── ...
-├── UnityStarter                                            # Unity project
+├── UnityStarter                                            # Unity 主工程
 │   ├── Assets
 │   │   ├── AddressableAssetsData
 │   │   │   ├── ...
 │   │   ├── Editor
-│   │   │   ├── BuildData.cs                                # Project Build Data, you can crate ScriptableObject to store your build data
-│   │   │   ├── BuildScript.cs                              # BuildTools, check menu Build -> Game(NoHotUpdate) -> Execute Options...
+│   │   │   ├── BuildData.cs                                # 构建数据配置（通过 ScriptableObject 存储）
+│   │   │   ├── BuildScript.cs                              # 构建工具，CI 友好（菜单路径：Build -> Game(NoHotUpdate) -> Execute Options...）
 │   │   │   └── ...
 │   │   ├── Settings
 │   │   │   ├── ...
 │   │   ├── TextMesh Pro
 │   │   │   ├── ...
 │   │   ├── ThirdParty                                      
-│   │   │   ├── CycloneGames                                # A collection bundling all initial project templates with essential development utilities packages.
-│   │   │   │   ├── CycloneGames.Cheat                      # Simple Cheat System, using [VitalRouter](https://github.com/hadashiA/VitalRouter) for decoupled message handling.
+│   │   │   ├── CycloneGames                                # 开发套件（集成基础模板与必备工具包）
+│   │   │   │   ├── CycloneGames.Cheat                      # Cheat/Debug 模板，（基于 [VitalRouter](https://github.com/hadashiA/VitalRouter) 实现消息解耦）
 │   │   │   │   │   ├── README.md
 │   │   │   │   │   ├── Runtime
-│   │   │   │   │   │   ├── CheatCommand.cs                 # Cheat Command base
-│   │   │   │   │   │   ├── CheatCommandUtility.cs          # Using this static class to send Cheat command
+│   │   │   │   │   │   ├── CheatCommand.cs                 # Cheat 指令基类
+│   │   │   │   │   │   ├── CheatCommandUtility.cs          # 静态 Cheat 指令发送工具类 
 │   │   │   │   │   │   └── ...
-│   │   │   │   │   ├── Samples                             # a Simle Implementation of Cheat module.
+│   │   │   │   │   ├── Samples                             # Cheat 实现范例
 │   │   │   │   │   │   └── ...
 │   │   │   │   │   └── ...
 │   │   │   │   ├── CycloneGames.Core
 │   │   │   │   │   ├── ...
-│   │   │   │   ├── CycloneGames.Factory                    # Factory and ObjectPool
+│   │   │   │   ├── CycloneGames.Factory                    # 工厂模式与对象池
 │   │   │   │   │   ├── Runtime
 │   │   │   │   │   │   └── ...
 │   │   │   │   │   ├── Samples
 │   │   │   │   │   │   └── ...
 │   │   │   │   │   └── ...
-│   │   │   │   ├── CycloneGames.GameplayFramework          # A simple gameplay framework similiar with Unreal Engine's GameplayFramework code structure, with DI Framework adapter interface implemented, check other Branches' Sample.
+│   │   │   │   ├── CycloneGames.GameplayFramework          # 一个简单的游戏框架，类虚幻引擎的 GameplayFramework 框架
 │   │   │   │   │   ├── Runtime
 │   │   │   │   │   │   └── ...
 │   │   │   │   │   ├── Samples
 │   │   │   │   │   │   └── ...
 │   │   │   │   │   └── ...
-│   │   │   │   ├── CycloneGames.GameplayTags               # A simple gameplay tags module similiar with UnrealEngine's GameplayTags.
+│   │   │   │   ├── CycloneGames.GameplayTags               # 一个简单的类虚幻引擎的 GameplayTas 标签系统
 │   │   │   │   │   ├── Editor
 │   │   │   │   │   │   └── ...
 │   │   │   │   │   ├── Runtime
 │   │   │   │   │   │   └── ...
 │   │   │   │   │   └── ...
-│   │   │   │   ├── CycloneGames.Logger                     # A thread-safe C# logging utility with asynchronous processing and category filtering. 
+│   │   │   │   ├── CycloneGames.Logger                     # 线程安全日志系统(支持异步处理与分类过滤, GC 友好)
 │   │   │   │   │   ├── Runtime
 │   │   │   │   │   │   ├── Scripts
 │   │   │   │   │   │   │   ├── ConsoleLogger.cs
 │   │   │   │   │   │   │   ├── FileLogger.cs
 │   │   │   │   │   │   │   ├── ILogger.cs
-│   │   │   │   │   │   │   ├── Logger.cs                   # static class for Logging module
+│   │   │   │   │   │   │   ├── Logger.cs
 │   │   │   │   │   │   │   ├── UnityLogger.cs
 │   │   │   │   │   │   │   └── ...
 │   │   │   │   │   │   └── ...
-│   │   │   │   │   ├── Samples                             # Logging module sample
+│   │   │   │   │   ├── Samples                             # 日志系统性能测试与使用范例
 │   │   │   │   │   │   ├── LoggerBenchmark.cs
 │   │   │   │   │   │   ├── LoggerPerformanceTest.cs
 │   │   │   │   │   │   ├── LoggerSample.cs
@@ -86,9 +87,9 @@ The directory hierarchy follows a modular design, optimized for scalability and 
 │   │   │   │   │   └── ...
 │   │   │   │   ├── CycloneGames.Services   
 │   │   │   │   │   └── ...
-│   │   │   │   ├── CycloneGames.UIFramework                # A simple ui framework for CycloneGames develope
+│   │   │   │   ├── CycloneGames.UIFramework                # 一个简单的基于页面层级设计的 UI 框架。
 │   │   │   │   │   └── ...
-│   │   │   │   ├── CycloneGames.Utility                    # A common utility module for Unity develope, contains FPS Counter, InspectorDrawer utils, etc.
+│   │   │   │   ├── CycloneGames.Utility                    # 通用工具（含 FPS 计数器、Inspector 绘制器等）
 │   │   │   │   │   │   └── ...
 │   │   │   │   │   └── ...
 │   │   │   │   └── ...
