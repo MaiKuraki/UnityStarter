@@ -87,7 +87,7 @@ namespace CycloneGames.Service
         public void ChangeApplicationFrameRate(int targetFramerate)
         {
             Application.targetFrameRate = targetFramerate;
-            CLogger.LogInfo($"{DEBUG_FLAG} Application target frame rate set to: {targetFramerate}");
+            CLogger.LogInfo($"{DEBUG_FLAG} Change application target frame rate, current: {Application.targetFrameRate}, target: {targetFramerate}");
         }
 
         private void CancelResolutionChange()
@@ -111,10 +111,10 @@ namespace CycloneGames.Service
                 var (newScreenWidth, newScreenHeight) = CalculateNewResolution(newShortEdgeResolution, screenOrientation, aspectRatio);
 
                 Screen.SetResolution(newScreenWidth, newScreenHeight, true);
-                CLogger.LogInfo($"{DEBUG_FLAG} Change resolution to: {newScreenWidth}x{newScreenHeight}");
+                CLogger.LogInfo($"{DEBUG_FLAG} Pre-change screen resolution, current: {Screen.width}x{Screen.height}, target: {newScreenWidth}x{newScreenHeight}");
 
-                await UniTask.Delay(200, DelayType.Realtime, PlayerLoopTiming.Update, cancelToken);
-                CLogger.LogInfo($"{DEBUG_FLAG} Current resolution after change: {Screen.currentResolution.width}x{Screen.currentResolution.height}");
+                await UniTask.Delay(100, DelayType.Realtime, PlayerLoopTiming.Update, cancelToken);
+                CLogger.LogInfo($"{DEBUG_FLAG} Post-change screen resolution, final result: {Screen.width}x{Screen.height}");
             }
             catch (OperationCanceledException)
             {
