@@ -14,7 +14,7 @@ namespace CycloneGames.GameplayFramework
         private IUnityObjectSpawner objectSpawner;
         private IWorldSettings worldSettings;
 
-        public virtual void Initialize(in IUnityObjectSpawner objectSpawner, in IWorldSettings worldSettings)
+        public virtual void Initialize(IUnityObjectSpawner objectSpawner, IWorldSettings worldSettings)
         {
             this.objectSpawner = objectSpawner;
             this.worldSettings = worldSettings;
