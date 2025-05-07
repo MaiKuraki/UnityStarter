@@ -1,0 +1,26 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 950828dd1b813e94bbe7d4509357a651, type: 3}
+  m_Name: VContainerSampleWorldSettings
+  m_EditorClassIdentifier: 
+  gameModeClass: {fileID: -5824009819465676935, guid: 32efb7a5053239949b936917322a4990,
+    type: 3}
+  playerControllerClass: {fileID: 6624734826815063554, guid: 03ac3f773ebccd9428473566cca649f9,
+    type: 3}
+  pawnClass: {fileID: 1320795803974720323, guid: 80bdc94db0ac335439338cbacd056612,
+    type: 3}
+  playerStateClass: {fileID: 2294852402867437646, guid: ab97682d3cd6a5b4985ff11d266975aa,
+    type: 3}
+  cameraManagerClass: {fileID: 5629420044122895474, guid: d4f09741134c02a4593b2bddd3d6b6a5,
+    type: 3}
+  spectatorPawnClass: {fileID: 1587810061556121190, guid: 1e98021b591eea347bb3057dfb362d3f,
+    type: 3}

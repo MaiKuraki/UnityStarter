@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.GameplayFramework.Sample.VContainer",
+    "rootNamespace": "",
+    "references": [
+        "VContainer",
+        "CycloneGames.Logger",
+        "CycloneGames.Factory",
+        "CycloneGames.GameplayFramework"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
