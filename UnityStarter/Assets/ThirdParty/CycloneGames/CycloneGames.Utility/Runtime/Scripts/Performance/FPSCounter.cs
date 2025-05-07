@@ -22,17 +22,6 @@ namespace CycloneGames.Utility.Runtime
             BottomRight, // Bottom right corner
             Custom       // Custom position
         }
-        public bool IsVisible = true;   // sometimes, you dont want to show the fps by default, uncheck this to hide the FPSCounter
-        public bool AdjustForSafeArea = true; // Option to adjust position for safe area
-        public float UpdateInterval = 0.3f;
-        public Modes Mode = Modes.Instant;
-        public Color DefaultForegroundColor = Color.green; // Default foreground color
-        private Color ForegroundColor;
-        public Color OutlineColor = Color.black; // Background color
-        public Vector2 OutlineOffset = new Vector2(1, 1); // Offset for simulating text outline
-        public ScreenPosition PositionPreset = ScreenPosition.TopLeft; // Preset for screen position
-        public int PresetPositionMargin = 10; // Margin
-        public Vector2 CustomPosition = new Vector2(0, 0); // Coordinates for a custom position
 
         // Dictionary to hold FPS thresholds and corresponding colors
         [System.Serializable]
@@ -45,9 +34,22 @@ namespace CycloneGames.Utility.Runtime
             public Color Color; // The corresponding color
         }
 
+        public static FPSCounter Instance { get; private set; }
+        public bool IsVisible = true;   // sometimes, you dont want to show the fps by default, uncheck this to hide the FPSCounter
+        [SerializeField] private bool _singleton = true;
+        [SerializeField] private bool AdjustForSafeArea = true; // Option to adjust position for safe area
+        [SerializeField] private float UpdateInterval = 0.3f;
+        [SerializeField] private Modes Mode = Modes.Instant;
+        [SerializeField] private Color DefaultForegroundColor = Color.green; // Default foreground color
+        [SerializeField] private Color OutlineColor = Color.black; // Background color
+        [SerializeField] private Vector2 OutlineOffset = new Vector2(1, 1); // Offset for simulating text outline
+        [SerializeField] private ScreenPosition PositionPreset = ScreenPosition.TopLeft; // Preset for screen position
+        [SerializeField] private int PresetPositionMargin = 10; // Margin
+        [SerializeField] private Vector2 CustomPosition = new Vector2(0, 0); // Coordinates for a custom position
         [Tooltip("A list of FPS thresholds and their corresponding colors. When the current FPS is below a threshold, the text color will change to the associated color.")]
-        public List<FPSColor> FPSColors = new List<FPSColor>(); // List of FPS thresholds and colors
+        [SerializeField] private List<FPSColor> FPSColors = new List<FPSColor>(); // List of FPS thresholds and colors
 
+        private Color _foregroundColor;
         private float _framesAccumulated = 0f;
         private float _framesDrawnInTheInterval = 0f;
         private float _timeLeft;
@@ -60,44 +62,39 @@ namespace CycloneGames.Utility.Runtime
         private GUIContent _content = new GUIContent();
         private Color? foundColor = null; // Color in the 'FPSColors' list
         private float _fontSizeRatio = 0.04f;
+        private static int _fpsMax = 300;
+        private static string[] _fpsStrings = GenerateFPSTextArray(_fpsMax);
 
-        static string[] _stringsFrom00To300 = {
-            "00", "01", "02", "03", "04", "05", "06", "07", "08", "09",
-            "10", "11", "12", "13", "14", "15", "16", "17", "18", "19",
-            "20", "21", "22", "23", "24", "25", "26", "27", "28", "29",
-            "30", "31", "32", "33", "34", "35", "36", "37", "38", "39",
-            "40", "41", "42", "43", "44", "45", "46", "47", "48", "49",
-            "50", "51", "52", "53", "54", "55", "56", "57", "58", "59",
-            "60", "61", "62", "63", "64", "65", "66", "67", "68", "69",
-            "70", "71", "72", "73", "74", "75", "76", "77", "78", "79",
-            "80", "81", "82", "83", "84", "85", "86", "87", "88", "89",
-            "90", "91", "92", "93", "94", "95", "96", "97", "98", "99",
-            "100", "101", "102", "103", "104", "105", "106", "107", "108", "109",
-            "110", "111", "112", "113", "114", "115", "116", "117", "118", "119",
-            "120", "121", "122", "123", "124", "125", "126", "127", "128", "129",
-            "130", "131", "132", "133", "134", "135", "136", "137", "138", "139",
-            "140", "141", "142", "143", "144", "145", "146", "147", "148", "149",
-            "150", "151", "152", "153", "154", "155", "156", "157", "158", "159",
-            "160", "161", "162", "163", "164", "165", "166", "167", "168", "169",
-            "170", "171", "172", "173", "174", "175", "176", "177", "178", "179",
-            "180", "181", "182", "183", "184", "185", "186", "187", "188", "189",
-            "190", "191", "192", "193", "194", "195", "196", "197", "198", "199",
-            "200", "201", "202", "203", "204", "205", "206", "207", "208", "209",
-            "210", "211", "212", "213", "214", "215", "216", "217", "218", "219",
-            "220", "221", "222", "223", "224", "225", "226", "227", "228", "229",
-            "230", "231", "232", "233", "234", "235", "236", "237", "238", "239",
-            "240", "241", "242", "243", "244", "245", "246", "247", "248", "249",
-            "250", "251", "252", "253", "254", "255", "256", "257", "258", "259",
-            "260", "261", "262", "263", "264", "265", "266", "267", "268", "269",
-            "270", "271", "272", "273", "274", "275", "276", "277", "278", "279",
-            "280", "281", "282", "283", "284", "285", "286", "287", "288", "289",
-            "290", "291", "292", "293", "294", "295", "296", "297", "298", "299",
-            "300"
-        };
+        private static string[] GenerateFPSTextArray(int maxFPS)
+        {
+            string[] array = new string[maxFPS + 1];
+            for (int i = 0; i <= maxFPS; i++)
+            {
+                if (i < 100)
+                {
+                    array[i] = i.ToString("00");
+                }
+                else
+                {
+                    array[i] = i.ToString();
+                }
+            }
+            return array;
+        }
 
         void Awake()
         {
-            MakeUnique();
+            if (_singleton)
+            {
+                if (Instance == null)
+                {
+                    Instance = this;
+                    DontDestroyOnLoad(gameObject);
+                    return;
+                }
+
+                Destroy(gameObject);
+            }
         }
 
         /// <summary>
@@ -105,17 +102,13 @@ namespace CycloneGames.Utility.Runtime
         /// </summary>
         protected virtual void Start()
         {
-            MakeUnique();
-
+            FPSColors.Sort((a, b) => b.FPSValue.CompareTo(a.FPSValue));
             _timeLeft = UpdateInterval;
             int shortestScreenSide = Mathf.Min(Screen.width, Screen.height);
+            _style.normal.textColor = DefaultForegroundColor;
+            // _style.alignment  = TextAnchor.MiddleLeft;
             _style.fontSize = Mathf.RoundToInt(shortestScreenSide * _fontSizeRatio);
-            ForegroundColor = DefaultForegroundColor;
-        }
-
-        void OnEnable()
-        {
-            MakeUnique();
+            _foregroundColor = DefaultForegroundColor;
         }
 
         /// <summary>
@@ -131,7 +124,7 @@ namespace CycloneGames.Utility.Runtime
 
             if (_timeLeft <= 0.0f)
             {
-                _currentFPS = Mathf.RoundToInt(Mathf.Clamp(_framesAccumulated / _framesDrawnInTheInterval, 0, 300));
+                _currentFPS = Mathf.RoundToInt(Mathf.Clamp(_framesAccumulated / _framesDrawnInTheInterval, 0, _fpsMax));
                 _framesDrawnInTheInterval = 0;
                 _framesAccumulated = 0f;
                 _timeLeft = UpdateInterval;
@@ -144,13 +137,13 @@ namespace CycloneGames.Utility.Runtime
                     switch (Mode)
                     {
                         case Modes.Instant:
-                            _displayedTextSB.Append(_stringsFrom00To300[_currentFPS]);
+                            _displayedTextSB.Append(_fpsStrings[_currentFPS]);
                             break;
                         case Modes.MovingAverage:
-                            _displayedTextSB.Append(_stringsFrom00To300[_average]);
+                            _displayedTextSB.Append(_fpsStrings[_average]);
                             break;
                         case Modes.InstantAndMovingAverage:
-                            _displayedTextSB.Append(_stringsFrom00To300[_currentFPS] + " / " + _stringsFrom00To300[_average]);
+                            _displayedTextSB.Append(_fpsStrings[_currentFPS] + " / " + _fpsStrings[_average]);
                             break;
                     }
                 }
@@ -159,36 +152,25 @@ namespace CycloneGames.Utility.Runtime
             }
         }
 
-        private void MakeUnique()
-        {
-            var fpsCounters = GameObject.FindObjectsByType<FPSCounter>(FindObjectsSortMode.None);
-            int amount = 0;
-            if (fpsCounters != null) amount = fpsCounters.Length;
-            if (amount > 1) GameObject.Destroy(gameObject);
-        }
-
         private void UpdateForegroundColor()
         {
-            if (FPSColors == null || FPSColors.Count == 0)
-            {
-                ForegroundColor = DefaultForegroundColor;
-                return;
-            }
+            _foregroundColor = DefaultForegroundColor;
+            if (FPSColors == null || FPSColors.Count == 0) return;
 
-            // Initialize ForegroundColor to the default color
-            ForegroundColor = DefaultForegroundColor;
-
-            foundColor = null;
-            foreach (var fpsColor in FPSColors)
+            int left = 0, right = FPSColors.Count - 1;
+            while (left <= right)
             {
-                if (_currentFPS < fpsColor.FPSValue)
+                int mid = (left + right) / 2;
+                if (_currentFPS < FPSColors[mid].FPSValue)
                 {
-                    foundColor = fpsColor.Color;
+                    _foregroundColor = FPSColors[mid].Color;
+                    left = mid + 1;
+                }
+                else
+                {
+                    right = mid - 1;
                 }
             }
-
-            if (foundColor.HasValue) ForegroundColor = foundColor.Value;
-            else ForegroundColor = DefaultForegroundColor;
         }
 
         /// <summary>
@@ -219,7 +201,7 @@ namespace CycloneGames.Utility.Runtime
             DrawOutlineText(_style, labelSize, OutlineOffset.x, OutlineOffset.y);
 
             // Draw foreground (main text)
-            _style.normal.textColor = ForegroundColor;
+            _style.normal.textColor = _foregroundColor;
             GUI.Label(new Rect(_labelPosition.x, _labelPosition.y, labelSize.x, labelSize.y), _content, _style);
         }
 
