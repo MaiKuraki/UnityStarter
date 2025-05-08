@@ -12,8 +12,8 @@ namespace CycloneGames.Service
     public class MainCameraService : IMainCameraService
     {
         private const string DEBUG_FLAG = "[MainCameraService]";
-        public Camera MainCameraInst => mainCamera.Inst;
-        private MainCamera mainCamera;
+        public Camera MainCameraInst => mainCamera.CameraInst;
+        private MainCamera mainCamera => MainCamera.Instance ?? UnityEngine.GameObject.FindFirstObjectByType<MainCamera>();
 
         public MainCameraService()
         {
@@ -22,8 +22,12 @@ namespace CycloneGames.Service
 
         public void Initialize()
         {
-            mainCamera = UnityEngine.GameObject.FindFirstObjectByType<MainCamera>();
-            UnityEngine.MonoBehaviour.DontDestroyOnLoad(mainCamera.gameObject);
+
+        }
+
+        private MainCamera TryGetMainCamera()
+        {
+            return MainCamera.Instance ?? UnityEngine.GameObject.FindFirstObjectByType<MainCamera>();
         }
 
         public void AddCameraToStack(Camera camera)
@@ -49,4 +53,3 @@ namespace CycloneGames.Service
         }
     }
 }
-
