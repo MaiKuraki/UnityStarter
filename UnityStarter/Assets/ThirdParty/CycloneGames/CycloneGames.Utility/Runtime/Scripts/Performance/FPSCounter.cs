@@ -60,7 +60,6 @@ namespace CycloneGames.Utility.Runtime
         private Vector2 _labelPosition;
         private GUIStyle _style = new GUIStyle();
         private GUIContent _content = new GUIContent();
-        private Color? foundColor = null; // Color in the 'FPSColors' list
         private float _fontSizeRatio = 0.04f;
         private static int _fpsMax = 300;
         private static string[] _fpsStrings = GenerateFPSTextArray(_fpsMax);
