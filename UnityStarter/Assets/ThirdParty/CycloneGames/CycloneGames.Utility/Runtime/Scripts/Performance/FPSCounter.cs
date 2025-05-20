@@ -85,14 +85,14 @@ namespace CycloneGames.Utility.Runtime
         {
             if (_singleton)
             {
-                if (Instance == null)
+                if (Instance != null && Instance != this)
                 {
-                    Instance = this;
-                    DontDestroyOnLoad(gameObject);
+                    Destroy(gameObject);
                     return;
                 }
 
-                Destroy(gameObject);
+                Instance = this;
+                DontDestroyOnLoad(gameObject);
             }
         }
 

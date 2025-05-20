@@ -8,7 +8,7 @@ namespace CycloneGames.Service
     {
         private const string DEBUG_FLAG = "[MainCamera]";
         [SerializeField] private Camera _camera;
-        [SerializeField] private bool _isSingleton = true;
+        [SerializeField] private bool _singleton = true;
 
         public static MainCamera Instance { get; private set; }
         public Camera CameraInst => _camera;
@@ -16,29 +16,25 @@ namespace CycloneGames.Service
 
         void Awake()
         {
-            if (_isSingleton)
+            if (_singleton)
             {
-                MakeSingleton();
-            }
-        }
+                if (Instance != null && Instance != this)
+                {
+                    Destroy(gameObject);
+                    return;
+                }
 
-        void MakeSingleton()
-        {
-            if (Instance == null)
-            {
                 Instance = this;
                 DontDestroyOnLoad(gameObject);
-                return;
             }
-
-            //  TODO: mabye merge the stack to SingletonCamera?
-
-            Destroy(gameObject);
+            _urpCameraData = CameraInst?.GetUniversalAdditionalCameraData();
         }
 
         public void AddCameraToStack(Camera inCamera)
         {
-            if (_urpCameraData == null) _urpCameraData = CameraInst?.GetUniversalAdditionalCameraData();
+            if (!inCamera) return;
+
+            _urpCameraData ??= CameraInst?.GetUniversalAdditionalCameraData();
 
             if (_urpCameraData == null)
             {
@@ -54,7 +50,9 @@ namespace CycloneGames.Service
 
         public void RemoveCameraFromStack(Camera inCamera)
         {
-            if (_urpCameraData == null) _urpCameraData = CameraInst?.GetUniversalAdditionalCameraData();
+            if (!inCamera) return;
+
+            _urpCameraData ??= CameraInst?.GetUniversalAdditionalCameraData();
 
             if (_urpCameraData == null)
             {
