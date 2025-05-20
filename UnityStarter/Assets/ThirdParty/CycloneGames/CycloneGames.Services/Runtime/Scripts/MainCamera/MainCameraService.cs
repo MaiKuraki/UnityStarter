@@ -32,24 +32,12 @@ namespace CycloneGames.Service
 
         public void AddCameraToStack(Camera camera)
         {
-            if (mainCamera == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid MainCamera");
-                return;
-            }
-
-            mainCamera.AddCameraToStack(camera);
+            mainCamera?.AddCameraToStack(camera);
         }
 
         public void RemoveCameraFromStack(Camera camera)
         {
-            if (mainCamera == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid MainCamera");
-                return;
-            }
-
-            mainCamera.RemoveCameraFromStack(camera);
+            mainCamera?.RemoveCameraFromStack(camera);
         }
     }
 }
