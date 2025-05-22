@@ -15,11 +15,16 @@ namespace CycloneGames.Factory
 
         private void DestroyItem(ref PoolItem item)
         {
-            UnityEngine.Object.Destroy(item.Value.gameObject);
+            if (item.Value != null && item.Value.gameObject != null)
+            {
+                UnityEngine.Object.Destroy(item.Value.gameObject);
+            }
         }
 
         private readonly IFactory<TValue> _factory;
         private readonly IFactory<TParam1, TValue> _paramFactory;
+        private readonly IUnityObjectSpawner _unityFactory;
+        private readonly TValue _prefab;
         // Using arrays for better cache locality and performance 
         private PoolItem[] pool;
         private int[] availableIndices;
@@ -47,6 +52,13 @@ namespace CycloneGames.Factory
         public MonoObjectPool(IFactory<TParam1, TValue> paramFactory, int initialSize = 5, bool autoExpand = true)
         {
             _paramFactory = paramFactory ?? throw new ArgumentNullException(nameof(paramFactory));
+            Initialize(initialSize, autoExpand);
+        }
+
+        public MonoObjectPool(IUnityObjectSpawner spawner, TValue prefab, int initialSize = 5, bool autoExpand = true)
+        {
+            _unityFactory = spawner ?? throw new ArgumentNullException(nameof(spawner));
+            _prefab = prefab ?? throw new ArgumentNullException(nameof(prefab));
             Initialize(initialSize, autoExpand);
         }
 
@@ -132,6 +144,7 @@ namespace CycloneGames.Factory
                 activeCount++;
 
                 TValue value = item.Value;
+                value.gameObject.SetActive(true);
                 value.OnSpawned(param, this);
 
                 return value;
@@ -283,11 +296,16 @@ namespace CycloneGames.Factory
                     {
                         newItem = _paramFactory.Create(default(TParam1));
                     }
+                    else if (_unityFactory != null)
+                    {
+                        newItem = _unityFactory.Create<TValue>(_prefab);
+                    }
                     else
                     {
                         throw new InvalidOperationException("No factory provided for object creation");
                     }
 
+                    newItem?.gameObject?.SetActive(false);
                     pool[index] = new PoolItem { Value = newItem, IsAvailable = true };
                     availableIndices[availableCount++] = index;
                 }

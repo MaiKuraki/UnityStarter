@@ -30,7 +30,7 @@ namespace CycloneGames.Service
             _urpCameraData = CameraInst?.GetUniversalAdditionalCameraData();
         }
 
-        public void AddCameraToStack(Camera inCamera)
+        public void AddCameraToStack(Camera inCamera, int index = 0)
         {
             if (!inCamera) return;
 
@@ -44,7 +44,7 @@ namespace CycloneGames.Service
 
             if (!_urpCameraData.cameraStack.Contains(inCamera))
             {
-                _urpCameraData.cameraStack.Add(inCamera);
+                _urpCameraData.cameraStack.Insert(index, inCamera);
             }
         }
 

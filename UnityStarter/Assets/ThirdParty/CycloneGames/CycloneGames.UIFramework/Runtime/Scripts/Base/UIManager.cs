@@ -171,7 +171,7 @@ namespace CycloneGames.UIFramework
 
         public void AddUICameraToMainCameraStack()
         {
-            mainCamera?.AddCameraToStack(uiRoot.UICamera);
+            mainCamera?.AddCameraToStack(uiRoot.UICamera, 0);
         }
 
         public void RemoveUICameraFromMainCameraStack()
