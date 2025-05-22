@@ -6,7 +6,7 @@ namespace CycloneGames.Service
     public interface IMainCameraService
     {
         Camera MainCameraInst { get; }
-        void AddCameraToStack(Camera camera);
+        void AddCameraToStack(Camera camera, int index);
         void RemoveCameraFromStack(Camera camera);
     }
     public class MainCameraService : IMainCameraService
@@ -30,9 +30,9 @@ namespace CycloneGames.Service
             return MainCamera.Instance ?? UnityEngine.GameObject.FindFirstObjectByType<MainCamera>();
         }
 
-        public void AddCameraToStack(Camera camera)
+        public void AddCameraToStack(Camera camera, int index = 0)
         {
-            mainCamera?.AddCameraToStack(camera);
+            mainCamera?.AddCameraToStack(camera, index);
         }
 
         public void RemoveCameraFromStack(Camera camera)
