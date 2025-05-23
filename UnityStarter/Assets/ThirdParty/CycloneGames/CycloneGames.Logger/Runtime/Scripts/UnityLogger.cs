@@ -33,7 +33,7 @@ namespace CycloneGames.Logger
                 if (!string.IsNullOrEmpty(logMessage.FilePath))
                 {
                     // Unity typically expects " (at Assets/Path/To/File.cs:LINE)"
-                    sb.Append($" (at {logMessage.FilePath.Replace("\\", "/")}:{logMessage.LineNumber})");
+                    sb.Append($"\n(at {logMessage.FilePath.Replace("\\", "/")}:{logMessage.LineNumber})");
                 }
                 unityMessage = sb.ToString();
             }
