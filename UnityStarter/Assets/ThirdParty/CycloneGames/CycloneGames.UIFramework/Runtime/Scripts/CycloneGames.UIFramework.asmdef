@@ -5,7 +5,6 @@
         "Unity.ResourceManager",
         "Unity.Addressables",
         "UniTask",
-        "Addler",
         "CycloneGames.Logger",
         "CycloneGames.Factory",
         "CycloneGames.Service"
