@@ -32,10 +32,12 @@ namespace CycloneGames.UIFramework
         /// <param name="windowName">The name of the UI window.</param>
         /// <returns>The UIWindow instance if found and active, otherwise null.</returns>
         UIWindow GetUIWindow(string windowName); // Renamed from GetUIPage for consistency
-        
+
         // Optional: Methods to manage UI camera stacking if not handled internally by UIManager
         // void AddUICameraToMainCameraStack();
         // void RemoveUICameraFromMainCameraStack();
+
+        (float, float) GetRootCanvasSize();
     }
 
     public class UIService : IDisposable, IUIService
@@ -162,6 +164,16 @@ namespace CycloneGames.UIFramework
                 uiManagerInstance = null;
             }
             isInitialized = false;
+        }
+
+        public (float, float) GetRootCanvasSize()
+        {
+            if (!CheckInitialization())
+            {
+                UnityEngine.Debug.LogError($"{DEBUG_FLAG} UIService is not initialized. Operation aborted.");
+                return (0, 0);
+            }
+            return uiManagerInstance.GetRootCanvasSize();
         }
     }
 }

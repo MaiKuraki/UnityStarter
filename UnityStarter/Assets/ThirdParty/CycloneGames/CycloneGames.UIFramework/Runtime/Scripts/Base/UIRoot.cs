@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace CycloneGames.UIFramework // Added namespace
 {
@@ -7,10 +8,15 @@ namespace CycloneGames.UIFramework // Added namespace
     {
         private const string DEBUG_FLAG = "[UIRoot]";
         [SerializeField] private Camera uiCamera;
+        [SerializeField] private Canvas rootCanvas;
         [SerializeField] private List<UILayer> layerList = new List<UILayer>(); // Initialize to avoid null issues
 
         public Camera UICamera => uiCamera;
-        
+        public Canvas UIRootCanvas => rootCanvas;
+        private RectTransform uiRootRTF;
+        private CanvasScaler uiRootCanvasScaler;
+        private GraphicRaycaster graphicRaycaster;
+
         // For faster UILayer lookup by name
         private Dictionary<string, UILayer> layerMap;
 
@@ -25,19 +31,28 @@ namespace CycloneGames.UIFramework // Added namespace
             {
                 Debug.LogError($"{DEBUG_FLAG} UI Camera is not assigned in UIRoot!", this);
             }
-            
+
+            if (rootCanvas == null)
+            {
+                Debug.LogError($"{DEBUG_FLAG} Root Canvas is not assigned in UIRoot!", this);
+            }
+
+            uiRootRTF = rootCanvas.GetComponent<RectTransform>();
+            uiRootCanvasScaler = rootCanvas.GetComponent<CanvasScaler>();
+            graphicRaycaster = rootCanvas.GetComponent<GraphicRaycaster>();
+
             InitializeLayerMap();
             // Validation can still be in Start if it depends on components fully initialized in other Awakes (like UILayer's Canvas).
             // For now, keeping validation in Start as per original, as it accesses UILayer.UICanvas.
         }
-        
+
         protected void Start()
         {
             // ValidateLayers needs UILayer.UICanvas, which is set in UILayer.Awake().
             // Unity's execution order generally calls all Awakes before any Starts.
             ValidateLayers();
         }
-        
+
         private void InitializeLayerMap()
         {
             layerMap = new Dictionary<string, UILayer>(layerList.Count);
@@ -60,7 +75,7 @@ namespace CycloneGames.UIFramework // Added namespace
                 }
                 else // layer != null but LayerName is empty
                 {
-                     Debug.LogWarning($"{DEBUG_FLAG} Layer '{layer.gameObject.name}' has an empty LayerName property. It won't be accessible by name.", layer);
+                    Debug.LogWarning($"{DEBUG_FLAG} Layer '{layer.gameObject.name}' has an empty LayerName property. It won't be accessible by name.", layer);
                 }
             }
         }
@@ -71,7 +86,7 @@ namespace CycloneGames.UIFramework // Added namespace
             // The UILayer's canvas will be get in its Awake function.
             // These steps must be called in Start (or later) to ensure UILayer.Awake has run.
             // Do not call them in UIRoot.Awake if UILayer.UICanvas is needed.
-            
+
             // Create an array of validation checks
             System.Func<bool>[] checks = new System.Func<bool>[]
             {
@@ -106,7 +121,7 @@ namespace CycloneGames.UIFramework // Added namespace
             // For now, we just check if layerList itself has issues like duplicate entries if not handled by map.
             // The primary check here is that UILayers assigned in the list are indeed children of UIRoot.
             bool isValid = true;
-            for(int i=0; i < layerList.Count; i++)
+            for (int i = 0; i < layerList.Count; i++)
             {
                 UILayer layer = layerList[i];
                 if (layer == null)
@@ -147,11 +162,11 @@ namespace CycloneGames.UIFramework // Added namespace
                 // If we want to ensure all layers in list have unique names (even if map only takes first):
                 else if (!uniqueNames.Add(layer.LayerName))
                 {
-                     // This error means layerMap might not contain all layers if names collide.
-                     // The InitializeLayerMap already logs this for the map itself.
-                     // This specific log confirms list has non-unique names which is problematic.
-                     Debug.LogError($"{DEBUG_FLAG} Duplicate LayerName '{layer.LayerName}' detected in layerList. Ensure all names are unique.", layer);
-                     isValid = false;
+                    // This error means layerMap might not contain all layers if names collide.
+                    // The InitializeLayerMap already logs this for the map itself.
+                    // This specific log confirms list has non-unique names which is problematic.
+                    Debug.LogError($"{DEBUG_FLAG} Duplicate LayerName '{layer.LayerName}' detected in layerList. Ensure all names are unique.", layer);
+                    isValid = false;
                 }
             }
             return isValid;
@@ -164,7 +179,7 @@ namespace CycloneGames.UIFramework // Added namespace
             HashSet<int> uniqueSortingOrders = new HashSet<int>();
             foreach (var layer in layerList)
             {
-                if (layer == null) continue; 
+                if (layer == null) continue;
 
                 if (layer.UICanvas == null) // UICanvas is fetched in UILayer.Awake
                 {
@@ -172,13 +187,13 @@ namespace CycloneGames.UIFramework // Added namespace
                     isValid = false;
                     continue; // Skip further checks for this layer if canvas is null
                 }
-                
+
                 if (!layer.UICanvas.overrideSorting)
                 {
                     Debug.LogError($"{DEBUG_FLAG} UILayer '{layer.LayerName}' Canvas must have 'Override Sorting' enabled.", layer);
                     isValid = false;
                 }
-                
+
                 if (!uniqueSortingOrders.Add(layer.UICanvas.sortingOrder))
                 {
                     Debug.LogError($"{DEBUG_FLAG} Duplicate Canvas sortingOrder ({layer.UICanvas.sortingOrder}) found for UILayer '{layer.LayerName}'. Sorting orders must be unique.", layer);
@@ -210,7 +225,7 @@ namespace CycloneGames.UIFramework // Added namespace
             {
                 return layer;
             }
-            
+
             Debug.LogWarning($"{DEBUG_FLAG} UILayer with name '{layerNameKey}' not found in UIRoot.", this);
             return null;
         }
@@ -230,5 +245,15 @@ namespace CycloneGames.UIFramework // Added namespace
             return null;
         }
         */
+
+        public (float, float) GetRootCanvasSize()
+        {
+            if (uiRootRTF == null)
+            {
+                Debug.LogError($"{DEBUG_FLAG} Root Canvas is not assigned in UIRoot!", this);
+                return (0, 0);
+            }
+            return (uiRootRTF.rect.width, uiRootRTF.rect.height);
+        }
     }
 }
