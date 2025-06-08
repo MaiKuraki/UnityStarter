@@ -74,6 +74,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   layerName: Layer_FullScreenMovieOverlay
+  expansionAmount: 3
 --- !u!114 &2865434085828279891
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -198,6 +199,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   layerName: Layer6000
+  expansionAmount: 3
 --- !u!114 &2911650373100054099
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -289,6 +291,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   layerName: Layer_Notification
+  expansionAmount: 3
 --- !u!114 &1727528329762246845
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -430,6 +433,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   uiCamera: {fileID: 1643993822404064166}
+  rootCanvas: {fileID: 945591332131472377}
   layerList:
   - {fileID: 7508324921225359350}
   - {fileID: 8556924770057811444}
@@ -514,6 +518,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   layerName: Layer_Menu
+  expansionAmount: 3
 --- !u!114 &2369326159885096539
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -605,6 +610,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   layerName: Layer_2000
+  expansionAmount: 3
 --- !u!114 &6580461540839530937
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -696,6 +702,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   layerName: Layer_General
+  expansionAmount: 3
 --- !u!114 &8260918659598133950
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -787,6 +794,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   layerName: Layer_System
+  expansionAmount: 3
 --- !u!114 &3783364365939095699
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1006,6 +1014,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   layerName: Layer_Dialogue
+  expansionAmount: 3
 --- !u!114 &733768198402138887
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1097,6 +1106,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   layerName: Layer1000
+  expansionAmount: 3
 --- !u!114 &4285298805815521967
 MonoBehaviour:
   m_ObjectHideFlags: 0
