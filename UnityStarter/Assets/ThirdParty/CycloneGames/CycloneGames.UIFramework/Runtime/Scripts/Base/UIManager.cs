@@ -371,6 +371,11 @@ namespace CycloneGames.UIFramework // Added namespace
             }
         }
 
+        public (float, float) GetRootCanvasSize()
+        {
+            return uiRoot.GetRootCanvasSize();
+        }
+
         protected void OnDestroy()
         {
             // Clean up any remaining Addressable handles if the UIManager itself is destroyed.
