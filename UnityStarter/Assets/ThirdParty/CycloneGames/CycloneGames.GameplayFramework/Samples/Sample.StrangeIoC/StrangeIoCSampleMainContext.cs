@@ -2,7 +2,7 @@ using strange.extensions.context.api;
 using strange.extensions.context.impl;
 using UnityEngine;
 using strange.extensions.signal.impl;
-using CycloneGames.Factory;
+using CycloneGames.Factory.Runtime;
 
 namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
 {

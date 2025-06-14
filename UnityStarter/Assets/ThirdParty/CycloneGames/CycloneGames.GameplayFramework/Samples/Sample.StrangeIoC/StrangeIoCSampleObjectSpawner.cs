@@ -1,6 +1,6 @@
 using UnityEngine;
 using strange.extensions.injector.api;
-using CycloneGames.Factory;
+using CycloneGames.Factory.Runtime;
 using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
