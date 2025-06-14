@@ -1,18 +1,18 @@
 ﻿using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
+using CycloneGames.GameplayTags.Runtime;
 
 namespace CycloneGames.GameplayTags.Editor
 {
    [CustomPropertyDrawer(typeof(GameplayTag))]
    public class GameplayTagPropertyDrawer : PropertyDrawer
    {
-      private static GUIContent s_TempContent = new();
+      private static readonly GUIContent s_TempContent = new();
 
       public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
       {
          label = EditorGUI.BeginProperty(position, label, property);
-
          position = EditorGUI.PrefixLabel(position, label);
 
          int oldIndentLevel = EditorGUI.indentLevel;
@@ -35,9 +35,16 @@ namespace CycloneGames.GameplayTags.Editor
          {
             GameplayTagTreeView tagTreeView = new(new TreeViewState(), property, static () =>
             {
-               EditorWindow.GetWindow<PopupWindow>().Close();
+               EditorApplication.delayCall += () =>
+                   {
+                   if (EditorWindow.HasOpenInstances<PopupWindow>())
+                   {
+                      EditorWindow.GetWindow<PopupWindow>().Close();
+                   }
+                };
             });
-            tagTreeView.ShowPopupWindow(position, 280f);
+
+            TreeViewMethodExtensions.ShowPopupWindow(tagTreeView, position, 280f);
          }
 
          EditorGUI.indentLevel = oldIndentLevel;

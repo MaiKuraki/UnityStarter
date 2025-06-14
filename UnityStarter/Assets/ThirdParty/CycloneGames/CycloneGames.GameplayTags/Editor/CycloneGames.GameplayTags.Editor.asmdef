@@ -2,13 +2,13 @@
     "name": "CycloneGames.GameplayTags.Editor",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.GameplayTags"
+        "CycloneGames.GameplayTags.Runtime"
     ],
     "includePlatforms": [
         "Editor"
     ],
     "excludePlatforms": [],
-    "allowUnsafeCode": true,
+    "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": false,

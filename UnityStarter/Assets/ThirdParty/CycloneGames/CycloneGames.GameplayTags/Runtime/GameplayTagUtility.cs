@@ -1,14 +1,12 @@
 ﻿using System;
-using UnityEngine;
 
-namespace CycloneGames.GameplayTags
+namespace CycloneGames.GameplayTags.Runtime
 {
    internal class GameplayTagUtility
    {
       internal static void WarnNotExplictlyAddedTagRemoval(GameplayTag gameplayTag)
       {
-         Debug.LogWarningFormat("Attempted to remove tag {0} from tag count container," +
-            " but it is not explicitly added to the container.", gameplayTag);
+         GameplayTagLogger.LogWarning($"Attempted to remove tag {gameplayTag} from tag count container, but it is not explicitly added to the container.");
       }
 
       internal static void WarnNotExplicitTagsRemoval(GameplayTagEnumerator tags)

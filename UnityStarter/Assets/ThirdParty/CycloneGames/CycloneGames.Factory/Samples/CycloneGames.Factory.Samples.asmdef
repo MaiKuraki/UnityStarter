@@ -1,9 +1,7 @@
 {
-    "name": "CycloneGames.GameplayFramework.Sample.PureUnity",
+    "name": "CycloneGames.Factory.Samples",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.Logger",
-        "CycloneGames.GameplayFramework",
         "CycloneGames.Factory.Runtime"
     ],
     "includePlatforms": [],

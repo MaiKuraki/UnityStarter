@@ -1,8 +1,7 @@
 ﻿using System.Diagnostics;
 using System.Linq;
-using UnityEditor;
 
-namespace CycloneGames.GameplayTags
+namespace CycloneGames.GameplayTags.Runtime
 {
    internal class GameplayTagContainerDebugView
    {
