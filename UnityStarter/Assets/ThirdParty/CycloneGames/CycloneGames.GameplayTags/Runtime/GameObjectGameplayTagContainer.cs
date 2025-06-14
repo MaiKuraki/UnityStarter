@@ -1,6 +1,6 @@
 ﻿using UnityEngine;
 
-namespace CycloneGames.GameplayTags
+namespace CycloneGames.GameplayTags.Runtime
 {
    public class GameObjectGameplayTagContainer : MonoBehaviour
    {

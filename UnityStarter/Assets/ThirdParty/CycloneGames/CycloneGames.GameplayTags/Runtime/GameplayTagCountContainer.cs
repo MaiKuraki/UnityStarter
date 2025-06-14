@@ -3,9 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using UnityEngine.Pool;
 
-namespace CycloneGames.GameplayTags
+namespace CycloneGames.GameplayTags.Runtime
 {
    public delegate void OnTagCountChangedDelegate(GameplayTag gameplayTag, int newCount);
 
@@ -203,7 +202,7 @@ namespace CycloneGames.GameplayTags
       /// <inheritdoc />
       public void AddTag(GameplayTag tag)
       {
-         using (ListPool<DeferredTagChangedDelegate>.Get(out List<DeferredTagChangedDelegate> delegates))
+         using (Pools.ListPool<DeferredTagChangedDelegate>.Get(out List<DeferredTagChangedDelegate> delegates))
          {
             AddTagInternal(tag, delegates);
 
@@ -217,7 +216,7 @@ namespace CycloneGames.GameplayTags
       /// <inheritdoc />
       public void AddTags<T>(in T other) where T : IGameplayTagContainer
       {
-         using (ListPool<DeferredTagChangedDelegate>.Get(out List<DeferredTagChangedDelegate> delegates))
+         using (Pools.ListPool<DeferredTagChangedDelegate>.Get(out List<DeferredTagChangedDelegate> delegates))
          {
             foreach (GameplayTag gameplayTag in other.GetExplicitTags())
             {
@@ -279,7 +278,7 @@ namespace CycloneGames.GameplayTags
       /// <inheritdoc />
       public void RemoveTag(GameplayTag tag)
       {
-         using (ListPool<DeferredTagChangedDelegate>.Get(out List<DeferredTagChangedDelegate> tagChangeDelegates))
+         using (Pools.ListPool<DeferredTagChangedDelegate>.Get(out List<DeferredTagChangedDelegate> tagChangeDelegates))
          {
             RemoveTagInternal(tag, tagChangeDelegates);
 
@@ -293,7 +292,7 @@ namespace CycloneGames.GameplayTags
       /// <inheritdoc />
       public void RemoveTags<T>(in T other) where T : IGameplayTagContainer
       {
-         using (ListPool<DeferredTagChangedDelegate>.Get(out List<DeferredTagChangedDelegate> tagChangeDelegates))
+         using (Pools.ListPool<DeferredTagChangedDelegate>.Get(out List<DeferredTagChangedDelegate> tagChangeDelegates))
          {
             foreach (GameplayTag gameplayTag in other.GetExplicitTags())
             {
@@ -344,7 +343,6 @@ namespace CycloneGames.GameplayTags
                {
                   tagChangeDelegates.Add(new DeferredTagChangedDelegate(tagInHierarchy, 0, delegateInfo.OnNewOrRemove));
                }
-
                if (OnAnyTagNewOrRemove != null)
                {
                   tagChangeDelegates.Add(new DeferredTagChangedDelegate(tagInHierarchy, 0, OnAnyTagNewOrRemove));
@@ -357,14 +355,12 @@ namespace CycloneGames.GameplayTags
 
                if (OnAnyTagCountChange != null)
                {
-                  tagChangeDelegates.Add(new DeferredTagChangedDelegate(tagInHierarchy, 0, OnAnyTagNewOrRemove));
+                  tagChangeDelegates.Add(new DeferredTagChangedDelegate(tagInHierarchy, 0, OnAnyTagCountChange));
                }
-
                continue;
             }
 
             m_TagCountMap[tagInHierarchy] = tagCount - 1;
-
             if (delegateInfo.OnAnyChange != null)
             {
                tagChangeDelegates.Add(new DeferredTagChangedDelegate(tagInHierarchy, tagCount - 1, delegateInfo.OnAnyChange));
@@ -372,7 +368,7 @@ namespace CycloneGames.GameplayTags
 
             if (OnAnyTagCountChange != null)
             {
-               tagChangeDelegates.Add(new DeferredTagChangedDelegate(tagInHierarchy, tagCount - 1, OnAnyTagNewOrRemove));
+               tagChangeDelegates.Add(new DeferredTagChangedDelegate(tagInHierarchy, tagCount - 1, OnAnyTagCountChange));
             }
          }
       }
@@ -380,7 +376,7 @@ namespace CycloneGames.GameplayTags
       /// <inheritdoc />
       public void Clear()
       {
-         using (ListPool<DeferredTagChangedDelegate>.Get(out List<DeferredTagChangedDelegate> tagChangeDelegates))
+         using (Pools.ListPool<DeferredTagChangedDelegate>.Get(out List<DeferredTagChangedDelegate> tagChangeDelegates))
          {
             foreach (GameplayTag tag in GetTags())
             {
