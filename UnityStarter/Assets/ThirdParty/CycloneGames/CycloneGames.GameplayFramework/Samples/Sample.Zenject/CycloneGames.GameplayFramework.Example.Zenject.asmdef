@@ -4,7 +4,7 @@
     "references": [
         "Zenject",
         "CycloneGames.GameplayFramework",
-        "CycloneGames.Factory",
+        "CycloneGames.Factory.Runtime",
         "CycloneGames.Logger"
     ],
     "includePlatforms": [],

@@ -1,7 +1,7 @@
 using Zenject;
 using UnityEngine;
 using CycloneGames.Logger;
-using CycloneGames.Factory;
+using CycloneGames.Factory.Runtime;
 
 namespace CycloneGames.GameplayFramework.Sample.Zenject
 {

@@ -1,6 +1,6 @@
 using Zenject;
 using UnityEngine;
-using CycloneGames.Factory;
+using CycloneGames.Factory.Runtime;
 
 namespace CycloneGames.GameplayFramework.Sample.Zenject
 {
