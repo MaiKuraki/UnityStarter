@@ -1,5 +1,5 @@
 using System;
-using CycloneGames.Factory; // For IUnityObjectSpawner
+using CycloneGames.Factory.Runtime; // For IUnityObjectSpawner
 using CycloneGames.Service; // For IAssetPathBuilderFactory, IMainCameraService
 
 namespace CycloneGames.UIFramework

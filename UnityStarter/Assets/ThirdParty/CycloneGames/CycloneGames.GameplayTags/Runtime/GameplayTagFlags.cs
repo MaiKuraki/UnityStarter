@@ -1,4 +1,4 @@
-﻿namespace CycloneGames.GameplayTags
+﻿namespace CycloneGames.GameplayTags.Runtime
 {
    public enum GameplayTagFlags
    {

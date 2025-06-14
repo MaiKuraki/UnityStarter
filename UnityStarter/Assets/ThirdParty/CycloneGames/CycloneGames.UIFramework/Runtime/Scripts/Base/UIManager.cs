@@ -3,7 +3,7 @@ using Cysharp.Threading.Tasks;
 using UnityEngine;
 using CycloneGames.Logger;  // Assuming CLogger is your custom logger
 using CycloneGames.Service; // For IAssetPathBuilderFactory, IMainCameraService
-using CycloneGames.Factory; // For IUnityObjectSpawner
+using CycloneGames.Factory.Runtime; // For IUnityObjectSpawner
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations; // For AsyncOperationHandle
 

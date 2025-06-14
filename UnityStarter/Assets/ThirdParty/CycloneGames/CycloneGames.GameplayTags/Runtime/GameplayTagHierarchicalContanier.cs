@@ -1,7 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 
-namespace CycloneGames.GameplayTags
+namespace CycloneGames.GameplayTags.Runtime
 {
    public class GameplayTagHierarchicalContainer : IGameplayTagCountContainer
    {
@@ -127,11 +127,16 @@ namespace CycloneGames.GameplayTags
 
       public void RemoveTags<T>(in T other) where T : IGameplayTagContainer
       {
-         foreach (GameplayTag tag in GetExplicitTags())
-         {
-            m_ParentContainer?.RemoveTag(tag);
-         }
+         // foreach (GameplayTag tag in GetExplicitTags())
+         // {
+         //    m_ParentContainer?.RemoveTag(tag);
+         // }
 
+         // m_UnderlyingContainer.RemoveTags(other);
+
+         // MODIFIED: maybe should revert to above?
+         // Propagate the 'other' container to the parent for removal.
+         m_ParentContainer?.RemoveTags(other);
          m_UnderlyingContainer.RemoveTags(other);
       }
 

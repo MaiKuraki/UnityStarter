@@ -1,7 +1,6 @@
 ﻿using System.Collections.Generic;
-using UnityEngine.Pool;
 
-namespace CycloneGames.GameplayTags
+namespace CycloneGames.GameplayTags.Runtime
 {
    public static class GameplayTagContainerUtility
    {
@@ -23,7 +22,7 @@ namespace CycloneGames.GameplayTags
             return containerA.HasAll(other);
          }
 
-         using (GenericPool<GameplayTagContainer>.Get(out GameplayTagContainer intersection))
+         using (Pools.GameplayTagContainerPool.Get(out GameplayTagContainer intersection))
          {
             intersection.AddIntersection(containerA, containerB);
             bool hasAll = intersection.HasAll(other);
@@ -51,7 +50,7 @@ namespace CycloneGames.GameplayTags
             return containerA.HasAllExact(other);
          }
 
-         using (GenericPool<GameplayTagContainer>.Get(out GameplayTagContainer intersection))
+         using (Pools.GameplayTagContainerPool.Get(out GameplayTagContainer intersection))
          {
             intersection.AddIntersection(containerA, containerB);
             bool hasAllExact = intersection.HasAllExact(other);
