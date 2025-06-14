@@ -1,7 +1,7 @@
 using UnityEngine;
 using VContainer;
 using CycloneGames.Logger;
-using CycloneGames.Factory;
+using CycloneGames.Factory.Runtime;
 
 namespace CycloneGames.GameplayFramework.Sample.VContainer
 {

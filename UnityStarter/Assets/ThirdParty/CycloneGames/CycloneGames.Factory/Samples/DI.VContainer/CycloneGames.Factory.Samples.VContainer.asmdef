@@ -1,11 +1,9 @@
 {
-    "name": "CycloneGames.GameplayFramework.Sample.VContainer",
+    "name": "CycloneGames.Factory.Samples.VContainer",
     "rootNamespace": "",
     "references": [
         "VContainer",
-        "CycloneGames.Logger",
-        "CycloneGames.Factory.Runtime",
-        "CycloneGames.GameplayFramework"
+        "CycloneGames.Factory.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
