@@ -2,61 +2,69 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace CycloneGames.GameplayTags
+namespace CycloneGames.GameplayTags.Runtime
 {
-   public struct GameplayTagContainerBinds
-   {
-      private struct BindData
-      {
-         public OnTagCountChangedDelegate OnTagAddedOrRemved;
-         public GameplayTag Tag;
-      }
+    public class GameplayTagContainerBinds
+    {
+        private struct BindData
+        {
+            // Store the original user action to allow for proper unbinding.
+            public Action<bool> OriginalAction;
+            public OnTagCountChangedDelegate MappedAction;
+            public GameplayTag Tag;
+        }
 
-      private GameplayTagCountContainer m_Container;
-      private List<BindData> m_Binds;
+        private readonly GameplayTagCountContainer m_Container;
+        private List<BindData> m_Binds;
 
-      public GameplayTagContainerBinds(GameplayTagCountContainer container)
-      {
-         m_Container = container;
-         m_Binds = null;
-      }
+        // Cache for the mapping delegate to avoid GC allocation on every bind.
+        private readonly Dictionary<Action<bool>, OnTagCountChangedDelegate> actionMap =
+            new Dictionary<Action<bool>, OnTagCountChangedDelegate>();
 
-      public GameplayTagContainerBinds(GameObject gameObject)
-      {
-         GameObjectGameplayTagContainer component = gameObject.GetComponent<GameObjectGameplayTagContainer>();
-         m_Container = component.GameplayTagContainer;
-         m_Binds = null;
-      }
+        public GameplayTagContainerBinds(GameplayTagCountContainer container)
+        {
+            m_Container = container;
+        }
 
-      public void Bind(GameplayTag tag, Action<bool> onTagAddedOrRemoved)
-      {
-         m_Binds ??= new List<BindData>();
+        public GameplayTagContainerBinds(GameObject gameObject)
+        {
+            GameObjectGameplayTagContainer component = gameObject.GetComponent<GameObjectGameplayTagContainer>();
+            m_Container = component.GameplayTagContainer;
+        }
 
-         void OnTagAddedOrRemoved(GameplayTag gameplayTag, int newCount)
-         {
-            onTagAddedOrRemoved(newCount > 0);
-         }
+        public void Bind(GameplayTag tag, Action<bool> onTagAddedOrRemoved)
+        {
+            m_Binds ??= new List<BindData>();
 
-         m_Binds.Add(new BindData { Tag = tag, OnTagAddedOrRemved = OnTagAddedOrRemoved });
-         m_Container.RegisterTagEventCallback(tag, GameplayTagEventType.NewOrRemoved, OnTagAddedOrRemoved);
+            // Check if we've already created a mapped delegate for this action.
+            if (!actionMap.TryGetValue(onTagAddedOrRemoved, out var mappedAction))
+            {
+                // If not, create it once and cache it. This prevents new delegate allocations on subsequent binds.
+                mappedAction = (gameplayTag, newCount) => { onTagAddedOrRemoved(newCount > 0); };
+                actionMap[onTagAddedOrRemoved] = mappedAction;
+            }
 
-         int count = m_Container.GetTagCount(tag);
-         onTagAddedOrRemoved(count > 0);
-      }
+            m_Binds.Add(new BindData { Tag = tag, OriginalAction = onTagAddedOrRemoved, MappedAction = mappedAction });
+            m_Container.RegisterTagEventCallback(tag, GameplayTagEventType.NewOrRemoved, mappedAction);
 
-      public void UnbindAll()
-      {
-         if (m_Binds == null)
-         {
-            return;
-         }
+            int count = m_Container.GetTagCount(tag);
+            onTagAddedOrRemoved(count > 0);
+        }
 
-         foreach (BindData bind in m_Binds)
-         {
-            m_Container.RemoveTagEventCallback(bind.Tag, GameplayTagEventType.NewOrRemoved, bind.OnTagAddedOrRemved);
-         }
+        public void UnbindAll()
+        {
+            if (m_Binds == null)
+            {
+                return;
+            }
 
-         m_Binds.Clear();
-      }
-   }
+            foreach (BindData bind in m_Binds)
+            {
+                m_Container.RemoveTagEventCallback(bind.Tag, GameplayTagEventType.NewOrRemoved, bind.MappedAction);
+            }
+
+            m_Binds.Clear();
+            actionMap.Clear();
+        }
+    }
 }

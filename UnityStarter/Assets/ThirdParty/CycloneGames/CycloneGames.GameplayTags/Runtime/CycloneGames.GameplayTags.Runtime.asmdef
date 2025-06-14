@@ -1,9 +1,7 @@
 {
-    "name": "CycloneGames.Factory",
+    "name": "CycloneGames.GameplayTags.Runtime",
     "rootNamespace": "",
-    "references": [
-        "GUID:a61d364006d5941e7ac75e73dd6b0df3"
-    ],
+    "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

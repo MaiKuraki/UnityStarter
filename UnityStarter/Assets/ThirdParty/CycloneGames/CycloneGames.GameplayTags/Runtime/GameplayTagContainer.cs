@@ -4,11 +4,14 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using UnityEngine;
 
-namespace CycloneGames.GameplayTags
+#if UNITY_2017_1_OR_NEWER
+using UnityEngine;
+#endif
+
+namespace CycloneGames.GameplayTags.Runtime
 {
-public struct GameplayTagContainerIndices
+   public struct GameplayTagContainerIndices
    {
       public readonly bool IsCreated => Explicit != null && Implicit != null;
       public readonly bool IsEmpty => !IsCreated || Explicit.Count == 0;
@@ -154,7 +157,10 @@ public struct GameplayTagContainerIndices
    [Serializable]
    [DebuggerTypeProxy(typeof(GameplayTagContainerDebugView))]
    [DebuggerDisplay("{DebuggerDisplay,nq}")]
-   public class GameplayTagContainer : IGameplayTagContainer, ISerializationCallbackReceiver, IEnumerable<GameplayTag>
+   public class GameplayTagContainer : IGameplayTagContainer, IEnumerable<GameplayTag>
+#if UNITY_2017_1_OR_NEWER
+   , ISerializationCallbackReceiver
+#endif
    {
       public static GameplayTagContainer Empty { get; } = new();
 
@@ -174,7 +180,9 @@ public struct GameplayTagContainerIndices
       [SuppressMessage("CodeQuality", "IDE0051:Remove unused private members", Justification = "It's used for debugging")]
       private string DebuggerDisplay => $"Count (Explicit, Total) = ({ExplicitTagCount}, {TagCount})";
 
+#if UNITY_2017_1_OR_NEWER
       [SerializeField]
+#endif
       private List<string> m_SerializedExplicitTags;
 
       private GameplayTagContainerIndices m_Indices = new();
@@ -182,8 +190,7 @@ public struct GameplayTagContainerIndices
       /// <summary>
       /// Default constructor.
       /// </summary>
-      public GameplayTagContainer()
-      { }
+      public GameplayTagContainer() { }
 
       /// <summary>
       /// Initializes a new instance of the <see cref="GameplayTagContainer"/> class by copying tags from another container.
@@ -299,7 +306,7 @@ public struct GameplayTagContainerIndices
       {
          static void OrderedListUnion(List<int> a, List<int> b, List<int> dst)
          {
-            dst.Capacity = Mathf.Max(dst.Capacity, a.Count + b.Count);
+            dst.Capacity = Math.Max(dst.Capacity, a.Count + b.Count);
 
             int i = 0, j = 0;
             while (i < a.Count && j < b.Count)
@@ -422,38 +429,32 @@ public struct GameplayTagContainerIndices
          return new GameplayTagEnumerator(m_Indices.Implicit);
       }
 
-      /// <inheritdoc />
       public void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags)
       {
          GameplayTagContainerUtility.GetParentTags(m_Indices.Implicit, tag, parentTags);
       }
 
-      /// <inheritdoc />
       public void GetChildTags(GameplayTag tag, List<GameplayTag> childTags)
       {
          GameplayTagContainerUtility.GetChildTags(m_Indices.Implicit, tag, childTags);
       }
 
-      /// <inheritdoc />
       public void GetExplicitParentTags(GameplayTag tag, List<GameplayTag> parentTags)
       {
          GameplayTagContainerUtility.GetParentTags(m_Indices.Explicit, tag, parentTags);
       }
 
-      /// <inheritdoc />
       public void GetExplicitChildTags(GameplayTag tag, List<GameplayTag> childTags)
       {
          GameplayTagContainerUtility.GetChildTags(m_Indices.Explicit, tag, childTags);
       }
 
-      /// <inheritdoc />
       public void Clear()
       {
          m_Indices.Clear();
          m_SerializedExplicitTags?.Clear();
       }
 
-      /// <inheritdoc />
       public void AddTag(GameplayTag tag)
       {
          GameplayTagContainerIndices.Create(ref m_Indices);
@@ -465,14 +466,12 @@ public struct GameplayTagContainerIndices
          AddImplicitTagsFor(tag);
       }
 
-      /// <inheritdoc />
       public void AddTags<T>(in T container) where T : IGameplayTagContainer
       {
          foreach (GameplayTag tag in container.GetExplicitTags())
             AddTag(tag);
       }
 
-      /// <inheritdoc />
       public void RemoveTag(GameplayTag tag)
       {
          if (!m_Indices.IsCreated)
@@ -489,7 +488,6 @@ public struct GameplayTagContainerIndices
          FillImplictTags();
       }
 
-      /// <inheritdoc />
       public void RemoveTags<T>(in T other) where T : IGameplayTagContainer
       {
          if (!m_Indices.IsCreated)
@@ -542,34 +540,50 @@ public struct GameplayTagContainerIndices
          }
       }
 
-      void ISerializationCallbackReceiver.OnBeforeSerialize()
+      /// <summary>
+      /// Retrieves a list of tag names for serialization.
+      /// This replaces the Unity's OnBeforeSerialize callback.
+      /// </summary>
+      /// <returns>A list of strings representing the explicit tags in the container.</returns>
+      public List<string> GetTagsForSerialization()
       {
          m_SerializedExplicitTags ??= new();
-
          m_SerializedExplicitTags.Clear();
          if (m_Indices.Explicit == null)
-            return;
+         {
+            return m_SerializedExplicitTags;
+         }
 
          foreach (GameplayTag tag in new GameplayTagEnumerator(m_Indices.Explicit))
          {
-            if (tag == GameplayTag.None)
-               continue;
-
+            if (tag == GameplayTag.None) continue;
             m_SerializedExplicitTags.Add(tag.Name);
          }
+
+         return m_SerializedExplicitTags;
       }
 
-      void ISerializationCallbackReceiver.OnAfterDeserialize()
+      /// <summary>
+      /// Initializes the container from a list of serialized tag names.
+      /// This replaces the Unity's OnAfterDeserialize callback.
+      /// </summary>
+      /// <param name="serializedTags">A list of tag names to populate the container with.</param>
+      public void InitializeFromSerializedTags(List<string> serializedTags)
       {
          m_Indices = GameplayTagContainerIndices.Create();
-         if (m_SerializedExplicitTags == null || m_SerializedExplicitTags.Count == 0)
+         if (serializedTags == null || serializedTags.Count == 0)
+         {
             return;
+         }
+
+         m_SerializedExplicitTags = new List<string>(serializedTags);
 
          for (int i = 0; i < m_SerializedExplicitTags.Count;)
          {
             GameplayTag tag = GameplayTagManager.RequestTag(m_SerializedExplicitTags[i]);
             if (tag == GameplayTag.None)
             {
+               // This tag is no longer valid, remove it.
                m_SerializedExplicitTags.RemoveAt(i);
                continue;
             }
@@ -577,12 +591,15 @@ public struct GameplayTagContainerIndices
             int index = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
             if (index < 0)
             {
+               // It's a valid, new tag, add it to the runtime list.
                m_Indices.Explicit.Insert(~index, tag.RuntimeIndex);
                i++;
-               continue;
             }
-
-            m_SerializedExplicitTags.RemoveAt(i);
+            else
+            {
+               // It's a duplicate tag name in the serialized list, remove the duplicate.
+               m_SerializedExplicitTags.RemoveAt(i);
+            }
          }
 
          FillImplictTags();
@@ -607,5 +624,46 @@ public struct GameplayTagContainerIndices
       {
          return GetEnumerator();
       }
+
+#if UNITY_2017_1_OR_NEWER
+      public void OnBeforeSerialize()
+      {
+         m_SerializedExplicitTags ??= new();
+         m_SerializedExplicitTags.Clear();
+         if (m_Indices.Explicit == null)
+            return;
+         foreach (GameplayTag tag in new GameplayTagEnumerator(m_Indices.Explicit))
+         {
+            if (tag == GameplayTag.None)
+               continue;
+            m_SerializedExplicitTags.Add(tag.Name);
+         }
+      }
+
+      public void OnAfterDeserialize()
+      {
+         m_Indices = GameplayTagContainerIndices.Create();
+         if (m_SerializedExplicitTags == null || m_SerializedExplicitTags.Count == 0)
+            return;
+         for (int i = 0; i < m_SerializedExplicitTags.Count;)
+         {
+            GameplayTag tag = GameplayTagManager.RequestTag(m_SerializedExplicitTags[i]);
+            if (tag == GameplayTag.None)
+            {
+               m_SerializedExplicitTags.RemoveAt(i);
+               continue;
+            }
+            int index = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
+            if (index < 0)
+            {
+               m_Indices.Explicit.Insert(~index, tag.RuntimeIndex);
+               i++;
+               continue;
+            }
+            m_SerializedExplicitTags.RemoveAt(i);
+         }
+         FillImplictTags();
+      }
+#endif
    }
 }

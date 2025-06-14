@@ -6,8 +6,8 @@
         "Unity.Addressables",
         "UniTask",
         "CycloneGames.Logger",
-        "CycloneGames.Factory",
-        "CycloneGames.Service"
+        "CycloneGames.Service",
+        "CycloneGames.Factory.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

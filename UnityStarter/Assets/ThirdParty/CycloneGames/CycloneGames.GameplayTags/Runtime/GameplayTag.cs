@@ -1,16 +1,19 @@
 ﻿using System;
 using System.Diagnostics;
-using UnityEngine;
 
-namespace CycloneGames.GameplayTags
+#if UNITY_2017_1_OR_NEWER
+using UnityEngine;
+#endif
+
+namespace CycloneGames.GameplayTags.Runtime
 {
    [Serializable]
    [DebuggerDisplay("{m_Name,nq}")]
-   public struct GameplayTag : IEquatable<GameplayTag>, ISerializationCallbackReceiver
+   public struct GameplayTag : IEquatable<GameplayTag>
+#if UNITY_2017_1_OR_NEWER
+      , ISerializationCallbackReceiver
+#endif
    {
-      /// <summary>
-      /// Represents an invalid tag.
-      /// </summary>
       public static readonly GameplayTag None = new() { m_RuntimeIndex = 0 };
 
       public readonly int RuntimeIndex => m_RuntimeIndex;
@@ -24,27 +27,21 @@ namespace CycloneGames.GameplayTags
          }
       }
 
-      /// <inheritdoc cref="GameplayTagDefinition.ParentTags" />
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public readonly ReadOnlySpan<GameplayTag> ParentTags => Definition.ParentTags;
 
-      /// <inheritdoc cref="GameplayTagDefinition.ChildTags" />
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public readonly ReadOnlySpan<GameplayTag> ChildTags => Definition.ChildTags;
 
-      /// <inheritdoc cref="GameplayTagDefinition.HierarchyTags" />
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public readonly ReadOnlySpan<GameplayTag> HierarchyTags => Definition.HierarchyTags;
 
-      /// <inheritdoc cref="GameplayTagDefinition.Label" />
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public readonly string Label => Definition.Label;
 
-      /// <inheritdoc cref="GameplayTagDefinition.HierarchyLevel" />
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public readonly int HierarchyLevel => Definition.HierarchyLevel;
 
-      /// <inheritdoc cref="GameplayTagDefinition.Description" />
       public readonly string Description => Definition.Description;
 
       /// <summary>
@@ -65,7 +62,6 @@ namespace CycloneGames.GameplayTags
          }
       }
 
-      /// <inheritdoc cref="GameplayTagDefinition.Flags" />
       public readonly GameplayTagFlags Flags => Definition.Flags;
 
       public readonly string Name
@@ -73,12 +69,17 @@ namespace CycloneGames.GameplayTags
          get
          {
             ValidateIsNotNone();
+            // OnBeforeSerialize used to guarantee m_Name was up-to-date.
+            // Now, we ensure it's correct by looking it up if needed.
+            if (m_RuntimeIndex != 0)
+            {
+               return GameplayTagManager.GetDefinitionFromRuntimeIndex(m_RuntimeIndex).TagName;
+            }
             return m_Name;
          }
       }
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
-      [SerializeField]
       private string m_Name;
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
@@ -90,15 +91,12 @@ namespace CycloneGames.GameplayTags
          m_RuntimeIndex = runtimeTagIndex;
       }
 
-      /// <inheritdoc cref="GameplayTagDefinition.IsChildOf(GameplayTag)"/>/>
       public readonly bool IsParentOf(in GameplayTag tag)
       {
          ValidateIsNotNone();
          return Definition.IsParentOf(tag);
       }
 
-
-      /// <inheritdoc cref="GameplayTagDefinition.IsChildOf(GameplayTag)"/>/>
       public readonly bool IsChildOf(in GameplayTag parentTag)
       {
          ValidateIsNotNone();
@@ -136,45 +134,8 @@ namespace CycloneGames.GameplayTags
          {
             return "<None>";
          }
-
+         // Use the Name property to ensure the name is correct.
          return m_Name;
-      }
-
-      void ISerializationCallbackReceiver.OnAfterDeserialize()
-      {
-         if (string.IsNullOrEmpty(m_Name))
-         {
-            this = None;
-            return;
-         }
-
-         GameplayTag tag = GameplayTagManager.RequestTag(m_Name);
-         if (tag == None)
-         {
-            UnityEngine.Debug.LogWarning($"No tag registered with name \"{m_Name}\".");
-            this = None;
-            return;
-         }
-
-         this = tag;
-      }
-
-      void ISerializationCallbackReceiver.OnBeforeSerialize()
-      {
-         if (m_RuntimeIndex == 0)
-         {
-            m_Name = null;
-            return;
-         }
-
-         GameplayTagDefinition definiton = GameplayTagManager.GetDefinitionFromRuntimeIndex(m_RuntimeIndex);
-         if (definiton == null)
-         {
-            m_Name = null;
-            return;
-         }
-
-         m_Name = definiton.TagName;
       }
 
       private readonly void ValidateIsNotNone()
@@ -184,6 +145,40 @@ namespace CycloneGames.GameplayTags
             throw new InvalidOperationException("Cannot perform operation on GameplayTag.None.");
          }
       }
+#if UNITY_2017_1_OR_NEWER
+      public void OnBeforeSerialize()
+      {
+         if (m_RuntimeIndex == 0)
+         {
+            m_Name = null;
+            return;
+         }
+         GameplayTagDefinition definiton = GameplayTagManager.GetDefinitionFromRuntimeIndex(m_RuntimeIndex);
+         if (definiton == null)
+         {
+            m_Name = null;
+            return;
+         }
+         m_Name = definiton.TagName;
+      }
+
+      public void OnAfterDeserialize()
+      {
+         if (string.IsNullOrEmpty(m_Name))
+         {
+            this = None;
+            return;
+         }
+         GameplayTag tag = GameplayTagManager.RequestTag(m_Name);
+         if (tag == None)
+         {
+            UnityEngine.Debug.LogWarning($"No tag registered with name \"{m_Name}\".");
+            this = None;
+            return;
+         }
+         this = tag;
+      }
+#endif
 
       public static implicit operator GameplayTag(string tagName)
       {

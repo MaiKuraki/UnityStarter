@@ -1,5 +1,5 @@
 using CycloneGames.Logger;
-using CycloneGames.Factory;
+using CycloneGames.Factory.Runtime;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework

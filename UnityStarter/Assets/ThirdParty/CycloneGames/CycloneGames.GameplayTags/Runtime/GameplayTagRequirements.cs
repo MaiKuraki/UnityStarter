@@ -1,7 +1,10 @@
-﻿using System;
+﻿#if UNITY_2017_1_OR_NEWER
 using UnityEngine;
+#endif
 
-namespace CycloneGames.GameplayTags
+using System;
+
+namespace CycloneGames.GameplayTags.Runtime
 {
    [Serializable]
    public struct GameplayTagRequirements
@@ -9,10 +12,14 @@ namespace CycloneGames.GameplayTags
       public GameplayTagContainer ForbiddenTags => m_ForbiddenTags;
       public GameplayTagContainer RequiredTags => m_RequiredTags;
 
+#if UNITY_2017_1_OR_NEWER
       [SerializeField]
+#endif
       private GameplayTagContainer m_ForbiddenTags;
 
+#if UNITY_2017_1_OR_NEWER
       [SerializeField]
+#endif
       private GameplayTagContainer m_RequiredTags;
 
       public bool IsEmpty
