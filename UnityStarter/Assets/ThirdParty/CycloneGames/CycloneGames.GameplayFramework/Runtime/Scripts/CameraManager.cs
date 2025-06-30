@@ -18,6 +18,7 @@ namespace CycloneGames.GameplayFramework
         public CinemachineCamera ActiveVirtualCamera { get; private set; }
 
         private PlayerController PCOwner;
+        public bool IsInitialized { get; private set; }
         private float lockedFOV;
         public float GetLockedFOV() => lockedFOV;
         private Actor PendingViewTarget;
@@ -61,6 +62,7 @@ namespace CycloneGames.GameplayFramework
             PCOwner = PlayerController;
             SetFOV(DefaultFOV);
             SetViewTarget(PlayerController);
+            IsInitialized = true;
         }
 
         protected override void Awake()

@@ -1,7 +1,5 @@
 using System.Diagnostics;
-using System.IO;
-using Newtonsoft.Json;
-using UnityEngine;
+using UnityEditor;
 
 namespace CycloneGames.Editor.VersionControl
 {
@@ -27,38 +25,37 @@ namespace CycloneGames.Editor.VersionControl
             }
         }
 
-        public void RemoveVersionJson()
+        public void UpdateVersionInfoAsset(string assetPath, string commitHash)
         {
-            if (File.Exists(Path.Combine(Application.streamingAssetsPath, "VersionInfo.json")))
+            var versionInfoData = AssetDatabase.LoadAssetAtPath<VersionInfoData>(assetPath);
+            if (versionInfoData == null)
             {
-                File.Delete(Path.Combine(Application.streamingAssetsPath, "VersionInfo.json"));
-                UnityEngine.Debug.Log("Version information file removed.");
+                UnityEngine.Debug.LogError($"Could not find VersionInfoData asset at path: {assetPath}");
+                return;
             }
+
+            versionInfoData.commitHash = commitHash ?? "Unknown";
+            versionInfoData.buildDate = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+            // Mark the object as "dirty" so Unity knows it has changed
+            EditorUtility.SetDirty(versionInfoData);
+            // Save the changes to disk
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            UnityEngine.Debug.Log($"Version information updated in asset: {assetPath}");
         }
 
-        public void SaveVersionToJson(string commitHash)
+        public void ClearVersionInfoAsset(string assetPath)
         {
-            string finalCommitHash = commitHash ?? "Unknown";
-            RemoveVersionJson();
-
-            string directoryPath = Application.streamingAssetsPath;
-            if (!Directory.Exists(directoryPath))
+            var versionInfoData = AssetDatabase.LoadAssetAtPath<VersionInfoData>(assetPath);
+            if (versionInfoData != null)
             {
-                Directory.CreateDirectory(directoryPath);
-                UnityEngine.Debug.Log("Created directory: " + directoryPath);
+                versionInfoData.commitHash = string.Empty;
+                versionInfoData.buildDate = string.Empty;
+                EditorUtility.SetDirty(versionInfoData);
+                AssetDatabase.SaveAssets();
             }
-
-            string jsonFilePath = Path.Combine(directoryPath, "VersionInfo.json");
-
-            var versionInfo = new
-            {
-                CommitHash = finalCommitHash,
-                CreatedDate = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-            };
-
-            string jsonContent = JsonConvert.SerializeObject(versionInfo, Formatting.Indented);
-            File.WriteAllText(jsonFilePath, jsonContent);
-            UnityEngine.Debug.Log("Version information saved to " + jsonFilePath);
         }
     }
 }
