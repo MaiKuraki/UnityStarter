@@ -16,7 +16,7 @@ namespace CycloneGames.GameplayFramework
         {
             //  TODO: MAYBE BLOCK MOVEMENT
         }
-        public void PossessedBy(Controller NewController)
+        public virtual void PossessedBy(Controller NewController)
         {
             SetOwner(NewController);
             
@@ -28,7 +28,7 @@ namespace CycloneGames.GameplayFramework
             }
         }
 
-        public void UnPossessed()
+        public virtual void UnPossessed()
         {
             SetPlayerState(null);
             SetOwner(null);
