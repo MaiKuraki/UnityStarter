@@ -1,15 +1,13 @@
 {
-    "name": "CycloneGames.Service",
+    "name": "CycloneGames.GameplayFramework.Editor",
     "rootNamespace": "",
     "references": [
-        "UniTask",
-        "VYaml.Core",
-        "Unity.Addressables",
-        "Unity.ResourceManager",
-        "Unity.RenderPipelines.Universal.Runtime",
-        "CycloneGames.Logger"
+        "CycloneGames.GameplayFramework",
+        "Unity.Cinemachine"
     ],
-    "includePlatforms": [],
+    "includePlatforms": [
+        "Editor"
+    ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,

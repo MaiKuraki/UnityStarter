@@ -44,7 +44,7 @@ namespace CycloneGames.UIFramework
         /// <summary>
         /// Initiates the process of closing and destroying this window.
         /// </summary>
-        public void Close()
+        internal void Close()
         {
             if (_isDestroying) return; // Already in the process of closing/destroying
 

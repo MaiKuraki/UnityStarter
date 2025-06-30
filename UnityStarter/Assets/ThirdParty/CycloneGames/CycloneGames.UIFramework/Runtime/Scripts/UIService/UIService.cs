@@ -38,6 +38,8 @@ namespace CycloneGames.UIFramework
         // void RemoveUICameraFromMainCameraStack();
 
         (float, float) GetRootCanvasSize();
+
+        void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService);
     }
 
     public class UIService : IDisposable, IUIService
@@ -46,24 +48,34 @@ namespace CycloneGames.UIFramework
         private UIManager uiManagerInstance; // Renamed for clarity
 
         // Dependencies are injected via constructor
-        private readonly IAssetPathBuilderFactory assetPathBuilderFactory;
-        private readonly IUnityObjectSpawner objectSpawner;
-        private readonly IMainCameraService mainCameraService;
-        
+        private IAssetPathBuilderFactory assetPathBuilderFactory;
+        private IUnityObjectSpawner objectSpawner;
+        private IMainCameraService mainCameraService;
+
         private bool isInitialized = false;
 
         // Default constructor might be used if service locator pattern is used elsewhere to provide dependencies later.
         // However, constructor injection is generally preferred for clarity of dependencies.
-        public UIService() 
+        public UIService()
         {
             // This constructor implies dependencies will be set via properties or an Init method,
             // or that a parameterless constructor is needed for some DI frameworks.
             // For this example, assuming the parameterized constructor is primary.
-             UnityEngine.Debug.LogWarning($"{DEBUG_FLAG} UIService created with default constructor. Ensure Initialize or parameterized constructor is used.");
+            UnityEngine.Debug.LogWarning($"{DEBUG_FLAG} UIService created with default constructor. Ensure Initialize or parameterized constructor is used.");
         }
 
         public UIService(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService)
         {
+            Initialize(factory, spawner, cameraService);
+        }
+
+        public void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService)
+        {
+            if (isInitialized)
+            {
+                UnityEngine.Debug.LogWarning($"{DEBUG_FLAG} UIService already initialized. Operation aborted.");
+                return;
+            }
             if (factory == null) throw new ArgumentNullException(nameof(factory));
             if (spawner == null) throw new ArgumentNullException(nameof(spawner));
             // cameraService can be optional depending on requirements
@@ -82,7 +94,7 @@ namespace CycloneGames.UIFramework
         {
             // Try to find an existing UIManager in the scene.
             uiManagerInstance = UnityEngine.GameObject.FindFirstObjectByType<UIManager>();
-            
+
             if (uiManagerInstance == null)
             {
                 // If not found, create one. This UIManager GameObject should persist.
@@ -99,7 +111,7 @@ namespace CycloneGames.UIFramework
             // Initialize the UIManager instance with the provided dependencies.
             uiManagerInstance.Initialize(assetPathBuilderFactory, objectSpawner, mainCameraService);
         }
-        
+
         private bool CheckInitialization()
         {
             if (!isInitialized || uiManagerInstance == null)
