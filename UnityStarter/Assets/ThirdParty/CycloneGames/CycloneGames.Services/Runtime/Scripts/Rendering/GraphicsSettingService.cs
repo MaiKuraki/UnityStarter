@@ -20,7 +20,27 @@ namespace CycloneGames.Service
         IReadOnlyList<string> QualityLevels { get; }
         void ChangeRenderResolution(int newShortEdgeResolution, ScreenOrientation screenOrientation = ScreenOrientation.Landscape);
         Vector2Int TargetRenderResolution { get; }
+
+        /// <summary>
+        /// Sets the target frame rate for the application, suggesting a desired number of frames per second for rendering.
+        /// This can be used to limit CPU/GPU usage on powerful machines or to target a specific performance level on mobile to conserve battery.
+        /// </summary>
+        /// <param name="targetFramerate">The desired frames per second (FPS). A value of -1 indicates the platform's default target frame rate, which allows for uncapped performance where possible.</param>
+        /// <remarks>
+        /// <para><b>[CRITICAL] VSync Override Behavior:</b></para>
+        /// <para>This property is completely subordinate to the VSync setting. If VSync is enabled in any form (<c>QualitySettings.vSyncCount > 0</c>), this <c>targetFrameRate</c> value will be <b>ignored</b> entirely.</para>
+        /// <para>When VSync is active, the engine's primary goal is to synchronize frame rendering with the monitor's refresh cycle to prevent screen tearing. Consequently, the actual frame rate will be determined by the monitor's refresh rate (e.g., 60Hz, 120Hz, 144Hz) or an integer divisor of it (e.g., 60, 40, 30 on a 120Hz display).</para>
+        /// <para><b>To guarantee the effectiveness of this method, ensure VSync is disabled via code:</b></para>
+        /// <c>QualitySettings.vSyncCount = 0;</c>
+        /// </remarks>
+        /// <seealso cref="QualitySettings.vSyncCount"/>
         void ChangeApplicationFrameRate(int targetFramerate);
+
+        /// <summary>
+        /// Sets the vertical synchronization (VSync) count for the application. 0 indicates VSync is disabled.
+        /// </summary>
+        /// <param name="vSyncCount"></param>
+        void ChangeVSyncCount(int vSyncCount);
     }
 
     public class GraphicsSettingService : IGraphicsSettingService
@@ -140,7 +160,7 @@ namespace CycloneGames.Service
                 CLogger.LogInfo($"{DEBUG_FLAG} Current Screen.width/height before SetResolution: {Screen.width}x{Screen.height}");
 
                 Screen.SetResolution(newScreenWidth, newScreenHeight, Screen.fullScreen); // Using Screen.fullScreen to maintain current mode
-                
+
                 // Log what was commanded to Screen.SetResolution
                 CLogger.LogInfo($"{DEBUG_FLAG} Screen.SetResolution({newScreenWidth}, {newScreenHeight}, {Screen.fullScreen}) called.");
 
@@ -195,6 +215,12 @@ namespace CycloneGames.Service
             if (calculatedHeight <= 0) calculatedHeight = 1;
 
             return (calculatedWidth, calculatedHeight);
+        }
+
+        public void ChangeVSyncCount(int vSyncCount)
+        {
+            if(vSyncCount < 0 || vSyncCount > 2) throw new ArgumentOutOfRangeException(nameof(vSyncCount), vSyncCount, "VSyncCount must be between 0 and 2.");
+            QualitySettings.vSyncCount = vSyncCount;
         }
     }
 }
