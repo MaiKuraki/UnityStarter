@@ -15,7 +15,7 @@ namespace CycloneGames.GameplayFramework
             if (collision) collision.isTrigger = true;
         }
 
-        private void OnTriggerEnter(Collider other)
+        protected virtual void OnTriggerEnter(Collider other)
         {
             //  Target Actor require a 'Collision' component and 'Rigidbody' component
             CLogger.LogInfo($"{DEBUG_FLAG} {other.gameObject.name} Enter Kill Z");
