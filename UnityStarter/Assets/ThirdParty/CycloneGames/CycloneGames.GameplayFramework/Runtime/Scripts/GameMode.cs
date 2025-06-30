@@ -83,7 +83,7 @@ namespace CycloneGames.GameplayFramework
 
             return null;
         }
-        public void RestartPlayer(PlayerController NewPlayer)
+        public void RestartPlayer(PlayerController NewPlayer, string Portal = "")
         {
             if (NewPlayer == null)
             {
@@ -91,7 +91,7 @@ namespace CycloneGames.GameplayFramework
                 return;
             }
 
-            Actor StartSpot = FindPlayerStart(NewPlayer);
+            Actor StartSpot = FindPlayerStart(NewPlayer, Portal);
             if (StartSpot == null)
             {
                 CLogger.LogWarning($"{DEBUG_FLAG} Invalid Player Start, player will spawn at Vector3(0, 0, 0)");

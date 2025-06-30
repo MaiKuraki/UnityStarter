@@ -4,6 +4,8 @@ using UnityEngine;
 using UnityEditor;
 using UnityEditor.Build;
 using CycloneGames.Editor.VersionControl;
+using UnityEditor.SceneManagement;
+using UnityEditor.Build.Reporting;
 
 namespace CycloneGames.Editor.Build
 {
@@ -24,6 +26,7 @@ namespace CycloneGames.Editor.Build
         private const string ApplicationVersion = "v0.1";
         private const string OutputBasePath = "Build";
         private const string BuildDataConfig = "Assets/UnityStarter/Editor/Build/BuildData.asset";
+        private const string VersionInfoAssetPath = "Assets/Resources/VersionInfoData.asset";
 
         private static BuildData buildData;
 
@@ -234,63 +237,85 @@ namespace CycloneGames.Editor.Build
             ScriptingImplementation BackendScriptImpl, string OutputTarget, bool bCleanBuild = true, bool bDeleteDebugFiles = true,
             bool bOutputIsFolderTarget = true)
         {
-            if (bCleanBuild)
+            //  cache curernt scene
+            var sceneSetup = EditorSceneManager.GetSceneManagerSetup();
+            Debug.Log($"{DEBUG_FLAG} Saving current scene setup.");
+
+            //  force save open scenes.
+            EditorSceneManager.SaveOpenScenes();
+
+            //  new template scene for build
+            EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+
+            try
             {
-                DeletePlatformBuildFolder(TargetPlatform);
-            }
-
-            InitializeVersionControl(DefaultVersionControlType);
-            string commitHash = VersionControlProvider?.GetCommitHash();
-            VersionControlProvider?.SaveVersionToJson(commitHash);
-
-            Debug.Log($"{DEBUG_FLAG} Start Build, Platform: {EditorUserBuildSettings.activeBuildTarget}");
-            TryGetBuildData();
-            EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetName, TargetPlatform);
-
-            string originalVersion = PlayerSettings.bundleVersion;
-            string commitHashSuffix = string.IsNullOrEmpty(commitHash) 
-                                    ? ".Unknown" 
-                                    : (commitHash.Length < 8 ? $".{commitHash}" 
-                                    : $".{commitHash.Substring(0, 8)}");
-            string fullBuildVersion = $"{ApplicationVersion}{commitHashSuffix}";
-
-            PlayerSettings.SetScriptingBackend(BuildTargetName, BackendScriptImpl);
-            PlayerSettings.companyName = CompanyName;
-            PlayerSettings.productName = ApplicationName;
-            PlayerSettings.bundleVersion = fullBuildVersion;
-            PlayerSettings.SetApplicationIdentifier(BuildTargetName, $"com.{CompanyName}.{ApplicationName}");
-
-            UnityEditor.Build.Reporting.BuildReport buildReport;
-
-            {
-                var buildPlayerOptions = new BuildPlayerOptions();
-                buildPlayerOptions.scenes = GetBuildSceneList();
-                buildPlayerOptions.locationPathName = GetOutputTarget(TargetPlatform, OutputTarget, bOutputIsFolderTarget);
-                buildPlayerOptions.target = TargetPlatform;
-                buildPlayerOptions.options = BuildOptions.CleanBuildCache;
-                buildPlayerOptions.options |= BuildOptions.CompressWithLz4;
-                buildReport = BuildPipeline.BuildPlayer(buildPlayerOptions);
-            }
-
-            var summary = buildReport.summary;
-            if (summary.result == UnityEditor.Build.Reporting.BuildResult.Succeeded)
-            {
-                if (bDeleteDebugFiles)
+                if (bCleanBuild)
                 {
-                    string platformNameStr = GetPlatformFolderName(TargetPlatform);
-                    if (platformNameStr == "Windows" || platformNameStr == "Mac") // TODO: May Linux
-                    {
-                        DeleteDebugFiles(TargetPlatform);
-                    }
+                    DeletePlatformBuildFolder(TargetPlatform);
                 }
 
-                Debug.Log($"{DEBUG_FLAG} Build <color=#29ff50>SUCCESS</color>, size: {summary.totalSize} bytes, path: {summary.outputPath}\n");
+                InitializeVersionControl(DefaultVersionControlType);
+                string commitHash = VersionControlProvider?.GetCommitHash();
+                VersionControlProvider?.UpdateVersionInfoAsset(VersionInfoAssetPath, commitHash);
+
+                Debug.Log($"{DEBUG_FLAG} Start Build, Platform: {EditorUserBuildSettings.activeBuildTarget}");
+                TryGetBuildData();
+                EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetName, TargetPlatform);
+
+                string originalVersion = PlayerSettings.bundleVersion;
+                string commitHashSuffix = string.IsNullOrEmpty(commitHash)
+                                            ? ".Unknown"
+                                            : (commitHash.Length < 8 ? $".{commitHash}"
+                                            : $".{commitHash.Substring(0, 8)}");
+                string fullBuildVersion = $"{ApplicationVersion}{commitHashSuffix}";
+
+                PlayerSettings.SetScriptingBackend(BuildTargetName, BackendScriptImpl);
+                PlayerSettings.companyName = CompanyName;
+                PlayerSettings.productName = ApplicationName;
+                PlayerSettings.bundleVersion = fullBuildVersion;
+                PlayerSettings.SetApplicationIdentifier(BuildTargetName, $"com.{CompanyName}.{ApplicationName}");
+
+                BuildReport buildReport;
+
+                {
+                    var buildPlayerOptions = new BuildPlayerOptions();
+                    buildPlayerOptions.scenes = GetBuildSceneList();
+                    buildPlayerOptions.locationPathName = GetOutputTarget(TargetPlatform, OutputTarget, bOutputIsFolderTarget);
+                    buildPlayerOptions.target = TargetPlatform;
+                    buildPlayerOptions.options = BuildOptions.CleanBuildCache;
+                    buildPlayerOptions.options |= BuildOptions.CompressWithLz4;
+                    buildReport = BuildPipeline.BuildPlayer(buildPlayerOptions);
+                }
+
+                var summary = buildReport.summary;
+                if (summary.result == BuildResult.Succeeded)
+                {
+                    if (bDeleteDebugFiles)
+                    {
+                        string platformNameStr = GetPlatformFolderName(TargetPlatform);
+                        if (platformNameStr == "Windows" || platformNameStr == "Mac") // TODO: May Linux
+                        {
+                            DeleteDebugFiles(TargetPlatform);
+                        }
+                    }
+
+                    Debug.Log($"{DEBUG_FLAG} Build <color=#29ff50>SUCCESS</color>, size: {summary.totalSize} bytes, path: {summary.outputPath}\n");
+                }
+
+                if (summary.result == BuildResult.Failed) Debug.Log($"{DEBUG_FLAG} Build <color=red>FAILURE</color>");
+
+                PlayerSettings.bundleVersion = originalVersion;
+                VersionControlProvider?.ClearVersionInfoAsset(VersionInfoAssetPath);
             }
-
-            if (summary.result == UnityEditor.Build.Reporting.BuildResult.Failed) Debug.Log($"{DEBUG_FLAG} Build <color=red>FAILURE</color>");
-
-            PlayerSettings.bundleVersion = originalVersion;
-            VersionControlProvider?.RemoveVersionJson();
+            finally
+            {
+                Debug.Log($"{DEBUG_FLAG} Restoring original scene setup.");
+                //  In batch mode (CI/CD), the initial setup might be empty and invalid for restoration.
+                if (sceneSetup != null && sceneSetup.Length > 0)
+                {
+                    EditorSceneManager.RestoreSceneManagerSetup(sceneSetup);
+                }
+            }
         }
 
         private static string GetPlatformBuildOutputFolder(BuildTarget TargetPlatform)
