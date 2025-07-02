@@ -1,0 +1,21 @@
+{
+    "name": "CycloneGames.InputSystem.Runtime",
+    "rootNamespace": "",
+    "references": [
+        "Unity.InputSystem",
+        "R3.Unity",
+        "ReactiveInputSystem",
+        "VYaml.Core",
+        "CycloneGames.Utility.Runtime",
+        "CycloneGames.Logger"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
