@@ -13,7 +13,7 @@
     "com.harumak.upalette": "https://github.com/Haruma-K/uPalette.git?path=/Assets/uPalette",
     "com.holyshovelsoft.opensource.log4uni": "https://github.com/HolyShovelSoft/log4uni.git#upm",
     "com.unity.2d.sprite": "1.0.0",
-    "com.unity.addressables": "2.5.0",
+    "com.unity.addressables": "2.6.0",
     "com.unity.burst": "1.8.23",
     "com.unity.cinemachine": "3.1.4",
     "com.unity.collections": "2.5.7",
