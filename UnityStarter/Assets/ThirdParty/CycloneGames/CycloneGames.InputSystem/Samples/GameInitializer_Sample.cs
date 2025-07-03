@@ -1,27 +1,53 @@
 using CycloneGames.InputSystem.Runtime;
 using CycloneGames.Utility.Runtime;
-using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace CycloneGames.InputSystem.Sample
 {
     public class GameInitializer_Sample : MonoBehaviour
     {
+        public enum StartupMode
+        {
+            /// <summary>
+            /// Auto-joins Player 0 with all its required devices (e.g., Keyboard and Mouse) locked.
+            /// </summary>
+            AutoJoinLockedSinglePlayer,
+            /// <summary>
+            /// Auto-joins two players on a shared keyboard. Requires different keybindings in YAML.
+            /// </summary>
+            AutoJoinSharedKeyboard,
+            /// <summary>
+            /// Listens for any device to press 'Join', locking each device to the joining player.
+            /// </summary>
+            LobbyWithDeviceLocking,
+            /// <summary>
+            /// Listens for any device to press 'Join', allowing multiple players to use one device.
+            /// </summary>
+            LobbyWithSharedDevices,
+            /// <summary>
+            /// Explicitly locks Keyboard to Player 0 and Mouse to Player 1 for asymmetrical co-op.
+            /// </summary>
+            AsymmetricalKeyboardMouse
+        }
+
+        [Header("Game Mode")]
+        [SerializeField] private StartupMode startupMode = StartupMode.AutoJoinLockedSinglePlayer;
+
         [Header("Game Setup")]
         [SerializeField] private GameObject _playerPrefab;
         [SerializeField] private Transform[] _spawnPoints;
         [SerializeField] private Color[] _playerColors;
 
         [Header("Input Configuration")]
-        [Tooltip("The default, read-only config file (relative to StreamingAssets).")]
         [SerializeField] private string _defaultConfigName = "input_config.yaml";
-        
-        [Tooltip("The user-specific, writable config file (relative to PersistentDataPath).")]
         [SerializeField] private string _userConfigName = "user_input_settings.yaml";
 
         private static bool isInitialized = false;
 
-        private async void Awake()
+        // Use async UniTaskVoid for a fire-and-forget async Start method.
+        private async void Start()
         {
             if (isInitialized)
             {
@@ -31,25 +57,42 @@ namespace CycloneGames.InputSystem.Sample
             isInitialized = true;
             DontDestroyOnLoad(gameObject);
 
-            // 1. Use your FilePathUtility to generate the full, platform-correct URIs.
             string defaultConfigUri = FilePathUtility.GetUnityWebRequestUri(_defaultConfigName, UnityPathSource.StreamingAssets);
             string userConfigUri = FilePathUtility.GetUnityWebRequestUri(_userConfigName, UnityPathSource.PersistentData);
-
-            // 2. Call the pure C# loader with both paths to initialize the InputManager.
             await InputSystemLoader.InitializeAsync(defaultConfigUri, userConfigUri);
-            
-            // 3. Once initialized, subscribe to the player join event.
+
             InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
-            
-            // 4. Start listening for players.
-            InputManager.Instance.StartListeningForPlayers();
-            
-            Debug.Log("Game Initialized. Waiting for players to press 'Enter' or 'Start' to join...");
+
+            switch (startupMode)
+            {
+                case StartupMode.AutoJoinLockedSinglePlayer:
+                    // Await the new patient, asynchronous join method.
+                    InputManager.Instance.JoinSinglePlayer(0);
+                    break;
+
+                case StartupMode.AutoJoinSharedKeyboard:
+                    InputManager.Instance.JoinPlayerOnSharedDevice(0);
+                    InputManager.Instance.JoinPlayerOnSharedDevice(1);
+                    break;
+
+                case StartupMode.LobbyWithDeviceLocking:
+                    InputManager.Instance.StartListeningForPlayers(true);
+                    break;
+
+                case StartupMode.LobbyWithSharedDevices:
+                    InputManager.Instance.StartListeningForPlayers(false);
+                    break;
+
+                case StartupMode.AsymmetricalKeyboardMouse:
+                    if (Keyboard.current != null) InputManager.Instance.JoinPlayerAndLockDevice(0, Keyboard.current);
+                    if (Mouse.current != null) InputManager.Instance.JoinPlayerAndLockDevice(1, Mouse.current);
+                    break;
+            }
         }
 
         private void OnDestroy()
         {
-            if (InputManager.Instance != null)
+            if (isInitialized && InputManager.Instance != null)
             {
                 InputManager.Instance.OnPlayerJoined -= HandlePlayerJoined;
                 InputManager.Instance.Dispose();
@@ -58,24 +101,30 @@ namespace CycloneGames.InputSystem.Sample
 
         private void HandlePlayerJoined(IInputService playerInput)
         {
-            // This logic for spawning and setting up a player remains the same.
             int playerId = (playerInput as InputService).PlayerId;
-            // ... (Spawn player, get controller, etc.)
 
-            // Example: Set up commands and context
-            // ... (Create commands, create context, register, push context)
-        }
-
-        // --- EXAMPLE OF HOW TO SAVE ---
-        // You would call this from your settings UI, for example.
-        public async Task Example_OnKeyRebindFinished()
-        {
-            // Let's assume you have a UI that modified the _configuration object
-            // inside the InputManager (this would require making _configuration public
-            // or providing specific methods to alter it).
+            // Your game-specific code goes here.
             
-            Debug.Log("Settings changed, saving new user configuration...");
-            await InputManager.Instance.SaveUserConfigurationAsync();
+            //if (_playerPrefab == null || _spawnPoints.Length <= playerId) return;
+
+            // Transform spawnPoint = _spawnPoints[playerId];
+            // GameObject playerInstance = Instantiate(_playerPrefab, spawnPoint.position, spawnPoint.rotation);
+            // PlayerController controller = playerInstance.GetComponent<PlayerController>();
+
+            // if (controller)
+            // {
+            //     controller.Initialize(playerId, _playerColors[playerId]);
+
+            //     var moveCommand = new MoveCommand(controller.OnMove);
+            //     var jumpCommand = new ActionCommand(controller.OnJump);
+
+            //     var gameplayContext = new InputContext("Gameplay", "PlayerActions")
+            //         .AddBinding(playerInput.GetVector2Observable("Move"), moveCommand)
+            //         .AddBinding(playerInput.GetButtonObservable("Jump"), jumpCommand);
+
+            //     playerInput.RegisterContext(gameplayContext);
+            //     playerInput.PushContext("Gameplay");
+            // }
         }
     }
 }
