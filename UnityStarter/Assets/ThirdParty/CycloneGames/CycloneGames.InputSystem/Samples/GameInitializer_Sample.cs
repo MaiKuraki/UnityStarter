@@ -1,6 +1,6 @@
 using CycloneGames.InputSystem.Runtime;
 using CycloneGames.Utility.Runtime;
-using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -33,21 +33,21 @@ namespace CycloneGames.InputSystem.Sample
         }
 
         [Header("Game Mode")]
-        [Tooltip("Defines how players join at the start of the game.")]
         [SerializeField] private StartupMode startupMode = StartupMode.AutoJoinLockedSinglePlayer;
-        
+
         [Header("Game Setup")]
         [SerializeField] private GameObject _playerPrefab;
         [SerializeField] private Transform[] _spawnPoints;
         [SerializeField] private Color[] _playerColors;
-        
+
         [Header("Input Configuration")]
         [SerializeField] private string _defaultConfigName = "input_config.yaml";
         [SerializeField] private string _userConfigName = "user_input_settings.yaml";
-        
+
         private static bool isInitialized = false;
 
-        private async void Awake()
+        // Use async UniTaskVoid for a fire-and-forget async Start method.
+        private async void Start()
         {
             if (isInitialized)
             {
@@ -57,20 +57,19 @@ namespace CycloneGames.InputSystem.Sample
             isInitialized = true;
             DontDestroyOnLoad(gameObject);
 
-            // --- Initialization ---
             string defaultConfigUri = FilePathUtility.GetUnityWebRequestUri(_defaultConfigName, UnityPathSource.StreamingAssets);
             string userConfigUri = FilePathUtility.GetUnityWebRequestUri(_userConfigName, UnityPathSource.PersistentData);
             await InputSystemLoader.InitializeAsync(defaultConfigUri, userConfigUri);
-            
+
             InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
 
-            // --- Player Joining Logic ---
             switch (startupMode)
             {
                 case StartupMode.AutoJoinLockedSinglePlayer:
+                    // Await the new patient, asynchronous join method.
                     InputManager.Instance.JoinSinglePlayer(0);
                     break;
-                
+
                 case StartupMode.AutoJoinSharedKeyboard:
                     InputManager.Instance.JoinPlayerOnSharedDevice(0);
                     InputManager.Instance.JoinPlayerOnSharedDevice(1);
@@ -79,37 +78,21 @@ namespace CycloneGames.InputSystem.Sample
                 case StartupMode.LobbyWithDeviceLocking:
                     InputManager.Instance.StartListeningForPlayers(true);
                     break;
-                    
+
                 case StartupMode.LobbyWithSharedDevices:
                     InputManager.Instance.StartListeningForPlayers(false);
                     break;
-                    
+
                 case StartupMode.AsymmetricalKeyboardMouse:
-                    Debug.Log("Startup Mode: Locking Keyboard to P0 and Mouse to P1.");
-                    if (Keyboard.current != null)
-                    {
-                        InputManager.Instance.JoinPlayerAndLockDevice(0, Keyboard.current);
-                    }
-                    else
-                    {
-                        Debug.LogError("Asymmetrical Mode failed: No Keyboard found.");
-                    }
-                    
-                    if (Mouse.current != null)
-                    {
-                        InputManager.Instance.JoinPlayerAndLockDevice(1, Mouse.current);
-                    }
-                    else
-                    {
-                         Debug.LogError("Asymmetrical Mode failed: No Mouse found.");
-                    }
+                    if (Keyboard.current != null) InputManager.Instance.JoinPlayerAndLockDevice(0, Keyboard.current);
+                    if (Mouse.current != null) InputManager.Instance.JoinPlayerAndLockDevice(1, Mouse.current);
                     break;
             }
         }
 
         private void OnDestroy()
         {
-            if (InputManager.Instance != null)
+            if (isInitialized && InputManager.Instance != null)
             {
                 InputManager.Instance.OnPlayerJoined -= HandlePlayerJoined;
                 InputManager.Instance.Dispose();
@@ -120,13 +103,9 @@ namespace CycloneGames.InputSystem.Sample
         {
             int playerId = (playerInput as InputService).PlayerId;
 
-            //  Your Game logic here ...
+            // Your game-specific code goes here.
             
-            // if (_playerPrefab == null || _spawnPoints.Length <= playerId)
-            // {
-            //     Debug.LogError($"Cannot spawn Player {playerId}: Prefab or spawn point is missing.");
-            //     return;
-            // }
+            //if (_playerPrefab == null || _spawnPoints.Length <= playerId) return;
 
             // Transform spawnPoint = _spawnPoints[playerId];
             // GameObject playerInstance = Instantiate(_playerPrefab, spawnPoint.position, spawnPoint.rotation);
@@ -139,7 +118,6 @@ namespace CycloneGames.InputSystem.Sample
             //     var moveCommand = new MoveCommand(controller.OnMove);
             //     var jumpCommand = new ActionCommand(controller.OnJump);
 
-            //     // Assuming your YAML config has a "Gameplay" context defined in the PlayerSlots.
             //     var gameplayContext = new InputContext("Gameplay", "PlayerActions")
             //         .AddBinding(playerInput.GetVector2Observable("Move"), moveCommand)
             //         .AddBinding(playerInput.GetButtonObservable("Jump"), jumpCommand);

@@ -2,6 +2,7 @@ using R3;
 using ReactiveInputSystem;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -9,10 +10,6 @@ using UnityEngine.InputSystem.Users;
 
 namespace CycloneGames.InputSystem.Runtime
 {
-    /// <summary>
-    /// A non-singleton class representing a single player's input state and logic.
-    /// Each player in a local multiplayer setup will have their own instance of this service.
-    /// </summary>
     public sealed class InputService : IInputService, IDisposable
     {
         public ReadOnlyReactiveProperty<string> ActiveContextName { get; private set; }
@@ -25,8 +22,9 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly Dictionary<string, InputContext> _registeredContexts = new();
         private readonly Dictionary<string, Subject<Unit>> _buttonSubjects = new();
         private readonly Dictionary<string, Subject<Vector2>> _vector2Subjects = new();
+        private readonly HashSet<string> _requiredLayouts = new();
 
-        private CompositeDisposable _activeContextSubscriptions;
+        private CompositeDisposable _subscriptions;
         private readonly CancellationTokenSource _cancellation;
         private readonly InputActionAsset _inputActionAsset;
         private bool _isInputBlocked;
@@ -35,11 +33,66 @@ namespace CycloneGames.InputSystem.Runtime
         {
             PlayerId = playerId;
             User = user;
-            
+
             _cancellation = new CancellationTokenSource();
+            _subscriptions = new CompositeDisposable();
             ActiveContextName = _activeContextName;
             _inputActionAsset = BuildAssetFromConfig(config);
+
             User.AssociateActionsWithUser(_inputActionAsset);
+
+            // Listen for device changes to handle hot-swapping for this specific player.
+            UnityEngine.InputSystem.InputSystem.onDeviceChange += OnDeviceChanged;
+
+            // Ensure we unsubscribe when this service is disposed to prevent memory leaks.
+            _subscriptions.Add(Disposable.Create(() =>
+            {
+                UnityEngine.InputSystem.InputSystem.onDeviceChange -= OnDeviceChanged;
+            }));
+        }
+
+        /// <summary>
+        /// Handles device connection/disconnection events to enable hot-swapping.
+        /// </summary>
+        private void OnDeviceChanged(InputDevice device, InputDeviceChange change)
+        {
+            // We only care about devices being added, as removal is handled automatically by the InputUser.
+            if (change != InputDeviceChange.Added) return;
+
+            // Check if this newly added device is one that our player configuration requires
+            // AND that it hasn't already been claimed by another player.
+            if (IsDeviceRequiredAndAvailable(device))
+            {
+                Debug.Log($"[InputService P{PlayerId}] New required device '{device.displayName}' connected. Pairing...");
+                InputUser.PerformPairingWithDevice(device, User);
+            }
+        }
+
+        /// <summary>
+        /// Checks if a device matches a required layout and is not already in use by another player.
+        /// </summary>
+        private bool IsDeviceRequiredAndAvailable(InputDevice device)
+        {
+            // A device is not "available" if our own user already has it paired.
+            if (User.pairedDevices.Contains(device)) return false;
+
+            // Check if the device layout matches any of our required layouts.
+            // Using IsFirstLayoutBasedOnSecond is robust, as it handles inheritance (e.g., an XInputController is also a Gamepad).
+            bool isRequired = _requiredLayouts.Any(layout => UnityEngine.InputSystem.InputSystem.IsFirstLayoutBasedOnSecond(device.layout, layout));
+
+            if (!isRequired) return false;
+
+            // Final check: ensure no other player has already claimed this device.
+            foreach (var user in InputUser.all)
+            {
+                // If it's a different user and they have this device, it's not available.
+                if (user.id != User.id && user.pairedDevices.Contains(device))
+                {
+                    return false;
+                }
+            }
+
+            return true; // The device is required and available for us to claim.
         }
 
         public void RegisterContext(InputContext context)
@@ -57,7 +110,6 @@ namespace CycloneGames.InputSystem.Runtime
                 Debug.LogError($"[InputService] Context '{contextName}' is not registered for Player {PlayerId}.");
                 return;
             }
-
             DeactivateTopContext();
             _contextStack.Push(newContext);
             ActivateTopContext();
@@ -66,7 +118,6 @@ namespace CycloneGames.InputSystem.Runtime
         public void PopContext()
         {
             if (_contextStack.Count == 0) return;
-
             DeactivateTopContext();
             _contextStack.Pop();
             ActivateTopContext();
@@ -98,23 +149,30 @@ namespace CycloneGames.InputSystem.Runtime
                 _inputActionAsset.FindActionMap(_contextStack.Peek().ActionMapName)?.Enable();
             }
         }
-        
+
         public void Dispose()
         {
             _cancellation.Cancel();
             _cancellation.Dispose();
-            _activeContextSubscriptions?.Dispose();
+            _subscriptions?.Dispose();
             _inputActionAsset.Disable();
-            
-            foreach(var s in _buttonSubjects.Values) s.Dispose();
-            foreach(var s in _vector2Subjects.Values) s.Dispose();
+
+            foreach (var s in _buttonSubjects.Values) s.Dispose();
+            foreach (var s in _vector2Subjects.Values) s.Dispose();
 
             User.UnpairDevicesAndRemoveUser();
         }
 
         private void ActivateTopContext()
         {
-            _activeContextSubscriptions?.Dispose();
+            _subscriptions?.Dispose();
+            _subscriptions = new CompositeDisposable();
+            UnityEngine.InputSystem.InputSystem.onDeviceChange += OnDeviceChanged;
+            _subscriptions.Add(Disposable.Create(() =>
+            {
+                UnityEngine.InputSystem.InputSystem.onDeviceChange -= OnDeviceChanged;
+            }));
+
             if (_contextStack.Count == 0)
             {
                 _inputActionAsset.Disable();
@@ -124,26 +182,37 @@ namespace CycloneGames.InputSystem.Runtime
             }
 
             var topContext = _contextStack.Peek();
-            _activeContextSubscriptions = new CompositeDisposable();
-
-            _inputActionAsset.Disable(); 
+            _inputActionAsset.Disable();
             var actionMap = _inputActionAsset.FindActionMap(topContext.ActionMapName);
             actionMap?.Enable();
 
-            foreach (var (source, command) in topContext.ActionBindings) source.Subscribe(_ => command.Execute()).AddTo(_activeContextSubscriptions);
-            foreach (var (source, command) in topContext.MoveBindings) source.Subscribe(command.Execute).AddTo(_activeContextSubscriptions);
+            foreach (var (source, command) in topContext.ActionBindings) source.Subscribe(_ => command.Execute()).AddTo(_subscriptions);
+            foreach (var (source, command) in topContext.MoveBindings) source.Subscribe(command.Execute).AddTo(_subscriptions);
 
             _activeContextName.Value = topContext.Name;
             OnContextChanged?.Invoke(topContext.Name);
         }
 
-        private void DeactivateTopContext() => _activeContextSubscriptions?.Dispose();
+        private void DeactivateTopContext() => _subscriptions?.Dispose();
 
         private InputActionAsset BuildAssetFromConfig(PlayerSlotConfig config)
         {
             var asset = ScriptableObject.CreateInstance<InputActionAsset>();
             var token = _cancellation.Token;
             var allActions = new Dictionary<string, InputAction>();
+
+            _requiredLayouts.Clear();
+            foreach (var ctx in config.Contexts)
+                foreach (var binding in ctx.Bindings)
+                    foreach (var devBinding in binding.DeviceBindings)
+                    {
+                        int startIndex = devBinding.IndexOf('<');
+                        if (startIndex != -1)
+                        {
+                            int endIndex = devBinding.IndexOf('>');
+                            if (endIndex > startIndex) _requiredLayouts.Add(devBinding.Substring(startIndex + 1, endIndex - startIndex - 1));
+                        }
+                    }
 
             foreach (var ctxConfig in config.Contexts)
             {
@@ -154,10 +223,10 @@ namespace CycloneGames.InputSystem.Runtime
 
                     bool isVector2 = bindingConfig.ActionName.ToLower().Contains("move") || bindingConfig.ActionName.ToLower().Contains("navigate");
                     var action = map.AddAction(bindingConfig.ActionName, isVector2 ? InputActionType.Value : InputActionType.Button);
-                    foreach(var path in bindingConfig.DeviceBindings) action.AddBinding(path);
-                    
+                    foreach (var path in bindingConfig.DeviceBindings) action.AddBinding(path);
+
                     allActions[bindingConfig.ActionName] = action;
-                    
+
                     if (isVector2)
                     {
                         var subject = new Subject<Vector2>();
