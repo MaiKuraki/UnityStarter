@@ -33,11 +33,8 @@ namespace CycloneGames.InputSystem.Editor
 
         private void OnEnable()
         {
-            // Use your utility to resolve paths when the window is opened.
             _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(DefaultConfigFileName, UnityPathSource.StreamingAssets);
             _userConfigPath = FilePathUtility.GetUnityWebRequestUri(UserConfigFileName, UnityPathSource.PersistentData);
-            
-            // Attempt to load the user config automatically on open.
             LoadUserConfig();
         }
 
@@ -51,8 +48,8 @@ namespace CycloneGames.InputSystem.Editor
             if (_serializedConfig != null && _configSO != null)
             {
                 _serializedConfig.Update();
-                
-                // Draw the properties of the ScriptableObject, which gives us a nice, editable UI.
+
+                // This will now draw the entire hierarchy as expandable lists, as intended.
                 EditorGUILayout.PropertyField(_serializedConfig.FindProperty("_joinAction"), true);
                 EditorGUILayout.PropertyField(_serializedConfig.FindProperty("_playerSlots"), true);
 
@@ -69,48 +66,22 @@ namespace CycloneGames.InputSystem.Editor
         private void DrawToolbar()
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            
-            if (GUILayout.Button("Load User Config", EditorStyles.toolbarButton))
-            {
-                LoadUserConfig();
-            }
-
-            if (GUILayout.Button("Load Default Config", EditorStyles.toolbarButton))
-            {
-                LoadDefaultConfig();
-            }
-            
+            if (GUILayout.Button("Load User Config", EditorStyles.toolbarButton)) LoadUserConfig();
+            if (GUILayout.Button("Load Default Config", EditorStyles.toolbarButton)) LoadDefaultConfig();
             GUILayout.Space(10);
-            
-            // --- NEW: Generate Default Config Button ---
-            if (GUILayout.Button("Generate Default Config", EditorStyles.toolbarButton))
-            {
-                GenerateDefaultConfigFile();
-            }
-            
+            if (GUILayout.Button("Generate Default Config", EditorStyles.toolbarButton)) GenerateDefaultConfigFile();
             GUILayout.Space(20);
-            
-            // Save button is only enabled if a configuration is loaded.
             GUI.enabled = _configSO != null;
-            if (GUILayout.Button("Save to User Config", EditorStyles.toolbarButton))
-            {
-                SaveChanges();
-            }
+            if (GUILayout.Button("Save to User Config", EditorStyles.toolbarButton)) SaveChangesToUserConfig();
             GUI.enabled = true;
-
             GUILayout.FlexibleSpace();
-
-            // Reset button
             if (GUILayout.Button("Reset User to Default", EditorStyles.toolbarButton))
             {
-                if (EditorUtility.DisplayDialog("Reset User Configuration?", 
-                    "This will overwrite your user settings with the default configuration. This cannot be undone.", 
-                    "Reset", "Cancel"))
+                if (EditorUtility.DisplayDialog("Reset User Configuration?", "This will overwrite your user settings with the default configuration. This cannot be undone.", "Reset", "Cancel"))
                 {
                     ResetToDefault();
                 }
             }
-
             EditorGUILayout.EndHorizontal();
         }
 
@@ -149,17 +120,17 @@ namespace CycloneGames.InputSystem.Editor
                 ClearEditor();
             }
         }
-        
+
         private void LoadConfigFromPath(string path, string status)
         {
             try
             {
                 string yamlContent = File.ReadAllText(path);
                 var configModel = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(yamlContent));
-                
+
                 _configSO = CreateInstance<InputConfigurationSO>();
                 _configSO.FromData(configModel);
-                
+
                 _serializedConfig = new SerializedObject(_configSO);
                 SetStatus(status, MessageType.Info);
             }
@@ -170,7 +141,7 @@ namespace CycloneGames.InputSystem.Editor
             }
         }
 
-        private void SaveChanges()
+        private void SaveChangesToUserConfig()
         {
             if (_configSO == null)
             {
@@ -190,7 +161,7 @@ namespace CycloneGames.InputSystem.Editor
                 {
                     Directory.CreateDirectory(directory);
                 }
-                
+
                 File.WriteAllText(localPath, yamlContent);
                 SetStatus($"Successfully saved user configuration to: {localPath}", MessageType.Info);
                 EditorUtility.DisplayDialog("Save Successful", "User input configuration has been saved.", "OK");
@@ -206,14 +177,14 @@ namespace CycloneGames.InputSystem.Editor
             LoadDefaultConfig();
             if (_configSO != null)
             {
-                SaveChanges();
+                SaveChangesToUserConfig();
             }
             else
             {
                 SetStatus("Cannot reset because the default config file does not exist. Please generate one first.", MessageType.Error);
             }
         }
-        
+
         /// <summary>
         /// Generates a new default configuration file with a standard template.
         /// </summary>
@@ -223,15 +194,12 @@ namespace CycloneGames.InputSystem.Editor
 
             if (File.Exists(localPath))
             {
-                if (!EditorUtility.DisplayDialog("Overwrite Default Config?",
-                    "A default configuration file already exists. Overwriting it will discard its current content.",
-                    "Overwrite", "Cancel"))
+                if (!EditorUtility.DisplayDialog("Overwrite Default Config?", "A default configuration file already exists. Overwriting it will discard its current content.", "Overwrite", "Cancel"))
                 {
-                    return; // User cancelled the operation.
+                    return;
                 }
             }
 
-            // Create a new default configuration object in memory.
             InputConfiguration defaultConfig = CreateDefaultConfigTemplate();
 
             try
@@ -247,17 +215,16 @@ namespace CycloneGames.InputSystem.Editor
 
                 File.WriteAllText(localPath, yamlContent);
                 SetStatus($"Generated new default config at: {localPath}", MessageType.Info);
-                AssetDatabase.Refresh(); // Make sure Unity's asset database sees the new file.
+                AssetDatabase.Refresh();
 
-                // Automatically load the newly created file into the editor.
                 LoadDefaultConfig();
             }
-            catch(System.Exception e)
+            catch (System.Exception e)
             {
                 SetStatus($"Error generating default config: {e.Message}", MessageType.Error);
             }
         }
-        
+
         /// <summary>
         /// Creates a hardcoded template for a new default configuration.
         /// </summary>
@@ -268,30 +235,30 @@ namespace CycloneGames.InputSystem.Editor
                 JoinAction = new ActionBindingConfig
                 {
                     ActionName = "JoinGame",
-                    DeviceBindings = new List<string> { "<Keyboard>/enter", "<Gamepad>/start" }
+                    DeviceBindings = new System.Collections.Generic.List<string> { "<Keyboard>/enter", "<Gamepad>/start" }
                 },
-                PlayerSlots = new List<PlayerSlotConfig>
+                PlayerSlots = new System.Collections.Generic.List<PlayerSlotConfig>
                 {
                     new PlayerSlotConfig
                     {
                         PlayerId = 0,
-                        Contexts = new List<ContextDefinitionConfig>
+                        Contexts = new System.Collections.Generic.List<ContextDefinitionConfig>
                         {
                             new ContextDefinitionConfig
                             {
                                 Name = "Gameplay",
                                 ActionMap = "PlayerActions",
-                                Bindings = new List<ActionBindingConfig>
+                                Bindings = new System.Collections.Generic.List<ActionBindingConfig>
                                 {
                                     new ActionBindingConfig
                                     {
                                         ActionName = "Move",
-                                        DeviceBindings = new List<string> { "<Gamepad>/leftStick", "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)" }
+                                        DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/leftStick", "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)" }
                                     },
                                     new ActionBindingConfig
                                     {
                                         ActionName = "Confirm",
-                                        DeviceBindings = new List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" }
+                                        DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" }
                                     }
                                 }
                             }
@@ -300,23 +267,23 @@ namespace CycloneGames.InputSystem.Editor
                     new PlayerSlotConfig
                     {
                         PlayerId = 1,
-                        Contexts = new List<ContextDefinitionConfig>
+                        Contexts = new System.Collections.Generic.List<ContextDefinitionConfig>
                         {
-                            new ContextDefinitionConfig
+                             new ContextDefinitionConfig
                             {
                                 Name = "Gameplay",
                                 ActionMap = "PlayerActions",
-                                Bindings = new List<ActionBindingConfig>
+                                Bindings = new System.Collections.Generic.List<ActionBindingConfig>
                                 {
                                     new ActionBindingConfig
                                     {
                                         ActionName = "Move",
-                                        DeviceBindings = new List<string> { "<Gamepad>/leftStick", "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)" }
+                                        DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/leftStick", "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)" }
                                     },
                                     new ActionBindingConfig
                                     {
                                         ActionName = "Confirm",
-                                        DeviceBindings = new List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" }
+                                        DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" }
                                     }
                                 }
                             }
@@ -331,7 +298,7 @@ namespace CycloneGames.InputSystem.Editor
             _configSO = null;
             _serializedConfig = null;
         }
-        
+
         private void SetStatus(string message, MessageType type)
         {
             _statusMessage = message;

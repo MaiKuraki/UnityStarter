@@ -1,9 +1,5 @@
-// FILE: InputConfiguration.cs
-// Namespace: YourGame.Input
-
 using System.Collections.Generic;
 using VYaml.Annotations;
-using VYaml.Serialization;
 
 namespace CycloneGames.InputSystem.Runtime
 {

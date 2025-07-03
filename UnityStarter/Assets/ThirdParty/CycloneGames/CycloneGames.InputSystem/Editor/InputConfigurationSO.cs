@@ -5,9 +5,6 @@ using CycloneGames.InputSystem.Runtime;
 
 namespace CycloneGames.InputSystem.Editor
 {
-    // --- These classes are ScriptableObject mirrors of the pure C# data models ---
-    // --- This makes them easy to work with in a custom Unity Editor window ---
-
     [System.Serializable]
     public class ActionBindingSO
     {
@@ -30,7 +27,29 @@ namespace CycloneGames.InputSystem.Editor
             };
         }
     }
-    
+    [System.Serializable]
+    public class ActionBindingDrawerData
+    {
+        public string ActionName;
+        [StringAsConstSelector(typeof(InputBindingConstants))] // Uses the custom dropdown drawer
+        public List<string> DeviceBindings = new List<string>();
+
+        public void FromData(ActionBindingConfig data)
+        {
+            ActionName = data.ActionName;
+            DeviceBindings = new List<string>(data.DeviceBindings);
+        }
+
+        public ActionBindingConfig ToData()
+        {
+            return new ActionBindingConfig
+            {
+                ActionName = this.ActionName,
+                DeviceBindings = new List<string>(this.DeviceBindings)
+            };
+        }
+    }
+
     public class ContextDefinitionSO : ScriptableObject
     {
         public string Name;
@@ -41,13 +60,14 @@ namespace CycloneGames.InputSystem.Editor
         {
             Name = data.Name;
             ActionMap = data.ActionMap;
-            Bindings = data.Bindings.Select(b => {
+            Bindings = data.Bindings.Select(b =>
+            {
                 var so = new ActionBindingSO();
                 so.FromData(b);
                 return so;
             }).ToList();
         }
-        
+
         public ContextDefinitionConfig ToData()
         {
             return new ContextDefinitionConfig
@@ -58,22 +78,54 @@ namespace CycloneGames.InputSystem.Editor
             };
         }
     }
-    
+
+    [System.Serializable]
+    public class ContextDefinitionDrawerData
+    {
+        public string Name;
+        public string ActionMap;
+        public List<ActionBindingDrawerData> Bindings = new List<ActionBindingDrawerData>();
+
+        public void FromData(ContextDefinitionConfig data)
+        {
+            Name = data.Name;
+            ActionMap = data.ActionMap;
+            Bindings = data.Bindings.Select(b =>
+            {
+                var drawerData = new ActionBindingDrawerData();
+                drawerData.FromData(b);
+                return drawerData;
+            }).ToList();
+        }
+
+        public ContextDefinitionConfig ToData()
+        {
+            return new ContextDefinitionConfig
+            {
+                Name = this.Name,
+                ActionMap = this.ActionMap,
+                Bindings = this.Bindings.Select(b => b.ToData()).ToList()
+            };
+        }
+    }
+
+    [System.Serializable]
     public class PlayerSlotSO : ScriptableObject
     {
         public int PlayerId;
         public List<ContextDefinitionSO> Contexts = new List<ContextDefinitionSO>();
-        
+
         public void FromData(PlayerSlotConfig data)
         {
             PlayerId = data.PlayerId;
-            Contexts = data.Contexts.Select(c => {
+            Contexts = data.Contexts.Select(c =>
+            {
                 var so = CreateInstance<ContextDefinitionSO>();
                 so.FromData(c);
                 return so;
             }).ToList();
         }
-        
+
         public PlayerSlotConfig ToData()
         {
             return new PlayerSlotConfig
@@ -84,24 +136,54 @@ namespace CycloneGames.InputSystem.Editor
         }
     }
 
+    [System.Serializable]
+    public class PlayerSlotDrawerData
+    {
+        public int PlayerId;
+        public List<ContextDefinitionDrawerData> Contexts = new List<ContextDefinitionDrawerData>();
+
+        public void FromData(PlayerSlotConfig data)
+        {
+            PlayerId = data.PlayerId;
+            Contexts = data.Contexts.Select(c =>
+            {
+                var drawerData = new ContextDefinitionDrawerData();
+                drawerData.FromData(c);
+                return drawerData;
+            }).ToList();
+        }
+
+        public PlayerSlotConfig ToData()
+        {
+            return new PlayerSlotConfig
+            {
+                PlayerId = this.PlayerId,
+                Contexts = this.Contexts.Select(c => c.ToData()).ToList()
+            };
+        }
+    }
+
+    
     public class InputConfigurationSO : ScriptableObject
     {
         [Header("Action triggered by any device to join the game")]
-        [SerializeField] private ActionBindingSO _joinAction = new ActionBindingSO();
-        
+        [SerializeField] private ActionBindingDrawerData _joinAction = new ActionBindingDrawerData();
+
         [Header("Configuration templates for each player slot")]
-        [SerializeField] private List<PlayerSlotSO> _playerSlots = new List<PlayerSlotSO>();
+        [SerializeField] private List<PlayerSlotDrawerData> _playerSlots = new List<PlayerSlotDrawerData>();
 
         public void FromData(InputConfiguration data)
         {
+            // Now correctly creates simple class instances, NOT ScriptableObjects.
             _joinAction.FromData(data.JoinAction);
-            _playerSlots = data.PlayerSlots.Select(p => {
-                var so = CreateInstance<PlayerSlotSO>();
-                so.FromData(p);
-                return so;
+            _playerSlots = data.PlayerSlots.Select(p =>
+            {
+                var drawerData = new PlayerSlotDrawerData();
+                drawerData.FromData(p);
+                return drawerData;
             }).ToList();
         }
-        
+
         public InputConfiguration ToData()
         {
             return new InputConfiguration
