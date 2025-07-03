@@ -1,0 +1,19 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2012/06/nuspec.xsd">
+  <metadata>
+    <id>VYaml.Annotations</id>
+    <version>1.2.0</version>
+    <authors>hadashiA</authors>
+    <license type="expression">MIT</license>
+    <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
+    <projectUrl>https://github.com/hadashiA/VYaml</projectUrl>
+    <description>Package Description</description>
+    <repository type="git" url="https://github.com/hadashiA/VYaml" commit="236166f879049e040ef02c071bc1c1f0b4017a8f" />
+    <dependencies>
+      <group targetFramework="net6.0" />
+      <group targetFramework="net8.0" />
+      <group targetFramework=".NETStandard2.0" />
+      <group targetFramework=".NETStandard2.1" />
+    </dependencies>
+  </metadata>
+</package>
