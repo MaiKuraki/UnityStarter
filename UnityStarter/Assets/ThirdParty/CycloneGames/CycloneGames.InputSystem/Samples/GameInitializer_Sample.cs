@@ -15,7 +15,7 @@ namespace CycloneGames.InputSystem.Sample
         [Header("Input Configuration")]
         [Tooltip("The default, read-only config file (relative to StreamingAssets).")]
         [SerializeField] private string _defaultConfigName = "input_config.yaml";
-        
+
         [Tooltip("The user-specific, writable config file (relative to PersistentDataPath).")]
         [SerializeField] private string _userConfigName = "user_input_settings.yaml";
 
@@ -31,20 +31,21 @@ namespace CycloneGames.InputSystem.Sample
             isInitialized = true;
             DontDestroyOnLoad(gameObject);
 
-            // 1. Use your FilePathUtility to generate the full, platform-correct URIs.
             string defaultConfigUri = FilePathUtility.GetUnityWebRequestUri(_defaultConfigName, UnityPathSource.StreamingAssets);
             string userConfigUri = FilePathUtility.GetUnityWebRequestUri(_userConfigName, UnityPathSource.PersistentData);
 
-            // 2. Call the pure C# loader with both paths to initialize the InputManager.
             await InputSystemLoader.InitializeAsync(defaultConfigUri, userConfigUri);
-            
-            // 3. Once initialized, subscribe to the player join event.
+
             InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
-            
-            // 4. Start listening for players.
-            InputManager.Instance.StartListeningForPlayers();
-            
-            Debug.Log("Game Initialized. Waiting for players to press 'Enter' or 'Start' to join...");
+
+            #region EXAMPLE OF HOW TO WAIT FOR INPUT
+            {
+                // InputManager.Instance.StartListeningForPlayers();       //  With waiting input for lisitening multiple players.
+                // Debug.Log("Game Initialized. Waiting for players to press 'Enter' or 'Start' to join...");
+            }
+            #endregion
+
+            InputManager.Instance.JoinSinglePlayer();               //  No input waiting immediately let Player 0 join
         }
 
         private void OnDestroy()
@@ -73,7 +74,7 @@ namespace CycloneGames.InputSystem.Sample
             // Let's assume you have a UI that modified the _configuration object
             // inside the InputManager (this would require making _configuration public
             // or providing specific methods to alter it).
-            
+
             Debug.Log("Settings changed, saving new user configuration...");
             await InputManager.Instance.SaveUserConfigurationAsync();
         }

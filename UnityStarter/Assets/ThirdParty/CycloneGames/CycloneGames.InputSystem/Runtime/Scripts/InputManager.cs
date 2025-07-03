@@ -12,7 +12,7 @@ namespace CycloneGames.InputSystem.Runtime
 {
     /// <summary>
     /// The central Pure C# singleton that manages the dynamic joining of players.
-    /// It listens for input on un-paired devices and creates player services on demand.
+    /// It can listen for players joining dynamically or join a player programmatically.
     /// </summary>
     public sealed class InputManager : IDisposable
     {
@@ -24,9 +24,12 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly Dictionary<int, IInputService> _playerServices = new();
         private InputConfiguration _configuration;
         private InputAction _joinAction;
-        private string _userConfigUri; // Path to the writable user config file.
+        private string _userConfigUri;
         private bool _isInitialized = false;
         private bool _isListening = false;
+
+        // Caching for performance to avoid repeated string operations.
+        private static readonly char[] layoutDelimiters = { '<', '>' };
 
         public void Initialize(string yamlContent, string userConfigUri)
         {
@@ -43,10 +46,6 @@ namespace CycloneGames.InputSystem.Runtime
             catch (Exception e) { Debug.LogError($"[InputManager] Failed to parse YAML: {e.Message}"); }
         }
 
-        /// <summary>
-        /// Asynchronously saves the current input configuration to the user's config file path.
-        /// This should be called after settings are changed in-game.
-        /// </summary>
         public async Task SaveUserConfigurationAsync()
         {
             if (!_isInitialized || string.IsNullOrEmpty(_userConfigUri))
@@ -57,17 +56,10 @@ namespace CycloneGames.InputSystem.Runtime
 
             try
             {
-                // Serialize the current configuration object back into a YAML string.
                 byte[] yamlBytes = YamlSerializer.Serialize(_configuration).ToArray();
                 string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
-
-                // Asynchronously write the content to the file.
-                // Note: File I/O might not be suitable for all platforms (e.g., WebGL).
-                // This assumes a platform with a writable file system.
-                // The URI must be a local file path for this to work.
                 string filePath = new Uri(_userConfigUri).LocalPath;
                 await File.WriteAllTextAsync(filePath, yamlContent);
-
                 Debug.Log($"[InputManager] User configuration saved to: {filePath}");
             }
             catch (Exception e)
@@ -76,14 +68,10 @@ namespace CycloneGames.InputSystem.Runtime
             }
         }
 
-        /// <summary>
-        /// Starts listening for new players attempting to join.
-        /// </summary>
         public void StartListeningForPlayers()
         {
             if (!_isInitialized || _isListening) return;
 
-            // Build the special "join" action from the configuration.
             var joinActionConfig = _configuration.JoinAction;
             _joinAction = new InputAction(name: joinActionConfig.ActionName, type: InputActionType.Button);
             foreach (var binding in joinActionConfig.DeviceBindings)
@@ -91,16 +79,12 @@ namespace CycloneGames.InputSystem.Runtime
                 _joinAction.AddBinding(binding);
             }
 
-            // Subscribe to the action's 'performed' event. This is the core of the join logic.
             _joinAction.performed += OnJoinAction;
             _joinAction.Enable();
             _isListening = true;
             Debug.Log("[InputManager] Listening for new players to join...");
         }
 
-        /// <summary>
-        /// Stops listening for new players.
-        /// </summary>
         public void StopListeningForPlayers()
         {
             if (!_isListening) return;
@@ -114,37 +98,139 @@ namespace CycloneGames.InputSystem.Runtime
             _isListening = false;
         }
 
-        private void OnJoinAction(InputAction.CallbackContext context)
+        /// <summary>
+        /// Programmatically joins a player for a single-player context.
+        /// This method intelligently finds ALL devices required by the player's configuration
+        /// (e.g., Keyboard and Mouse) and pairs them together to the new user.
+        /// </summary>
+        /// <param name="playerIdToJoin">The ID for the player slot to use (typically 0 for single-player).</param>
+        /// <returns>The created IInputService for the new player, or null if it fails.</returns>
+        public IInputService JoinSinglePlayer(int playerIdToJoin = 0)
         {
-            // Check if the device that triggered the action is already in use.
-            if (InputUser.all.Any(user => user.pairedDevices.Contains(context.control.device)))
+            if (!_isInitialized)
             {
-                return; // Device is already paired, so ignore this join attempt.
+                Debug.LogError("[InputManager] Cannot join player, manager is not initialized.");
+                return null;
+            }
+            if (_playerServices.ContainsKey(playerIdToJoin))
+            {
+                Debug.LogWarning($"[InputManager] Player {playerIdToJoin} has already joined.");
+                return _playerServices[playerIdToJoin];
             }
 
-            // Find the next available player ID and its corresponding configuration.
+            var playerConfig = _configuration.PlayerSlots.FirstOrDefault(p => p.PlayerId == playerIdToJoin);
+            if (playerConfig == null)
+            {
+                Debug.LogError($"[InputManager] No configuration found for Player ID {playerIdToJoin}.");
+                return null;
+            }
+
+            // --- Intelligent Device Discovery ---
+            var requiredDeviceLayouts = new HashSet<string>();
+            foreach (var context in playerConfig.Contexts)
+            {
+                foreach (var binding in context.Bindings)
+                {
+                    foreach (var deviceBinding in binding.DeviceBindings)
+                    {
+                        int startIndex = deviceBinding.IndexOf('<');
+                        if (startIndex != -1)
+                        {
+                            int endIndex = deviceBinding.IndexOf('>');
+                            if (endIndex > startIndex)
+                            {
+                                string layout = deviceBinding.Substring(startIndex + 1, endIndex - startIndex - 1);
+                                requiredDeviceLayouts.Add(layout);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (requiredDeviceLayouts.Count == 0)
+            {
+                Debug.LogWarning($"[InputManager] No device bindings found for Player {playerIdToJoin}, cannot determine which devices to pair.");
+                return null;
+            }
+
+            // --- Group Device Pairing ---
+            var user = new InputUser();
+            bool atLeastOneDevicePaired = false;
+            foreach (string layout in requiredDeviceLayouts)
+            {
+                InputDevice deviceToPair = FindAvailableDeviceByLayout(layout);
+                if (deviceToPair != null)
+                {
+                    // Pair the found device to our user.
+                    user = InputUser.PerformPairingWithDevice(deviceToPair, user);
+                    atLeastOneDevicePaired = true;
+                }
+                else
+                {
+                    // This is no longer a fatal error. We just warn the developer.
+                    Debug.LogWarning($"[InputManager] Could not find an available device with layout '{layout}' for Player {playerIdToJoin}. This device will be ignored.");
+                }
+            }
+
+            // If we couldn't pair ANY device, then the join fails.
+            if (!atLeastOneDevicePaired)
+            {
+                Debug.LogError($"[InputManager] Failed to pair any devices for Player {playerIdToJoin}. Aborting join.");
+                user.UnpairDevicesAndRemoveUser(); // Safely clean up the invalid user.
+                return null;
+            }
+
+            // --- Finalize Player Creation ---
+            var inputService = new InputService(playerIdToJoin, user, playerConfig);
+            _playerServices[playerIdToJoin] = inputService;
+            
+            Debug.Log($"[InputManager] Programmatically joined Player {playerIdToJoin} with devices: {string.Join(", ", user.pairedDevices.Select(d => d.displayName))}");
+            
+            OnPlayerJoined?.Invoke(inputService);
+            return inputService;
+        }
+
+        private void OnJoinAction(InputAction.CallbackContext context)
+        {
+            var device = context.control.device;
+            if (InputUser.all.Any(user => user.pairedDevices.Contains(device))) return;
+
             int nextPlayerId = _playerServices.Count;
             var playerConfig = _configuration.PlayerSlots.FirstOrDefault(p => p.PlayerId == nextPlayerId);
             if (playerConfig == null)
             {
-                Debug.LogWarning("[InputManager] Max players reached. No available slot.");
-                // Optionally stop listening if all slots are filled.
-                if (_playerServices.Count >= _configuration.PlayerSlots.Count)
-                {
-                    StopListeningForPlayers();
-                }
+                Debug.LogWarning("[InputManager] Max players reached.");
                 return;
             }
 
-            // Pair the device to a new user and create the player's dedicated service.
-            var user = InputUser.PerformPairingWithDevice(context.control.device);
+            var user = InputUser.PerformPairingWithDevice(device);
             var inputService = new InputService(nextPlayerId, user, playerConfig);
             _playerServices[nextPlayerId] = inputService;
 
-            Debug.Log($"[InputManager] Player {nextPlayerId} joined with device '{context.control.device.displayName}'.");
-
-            // Fire the event to notify the rest of the game.
+            Debug.Log($"[InputManager] Player {nextPlayerId} joined with device '{device.displayName}'.");
             OnPlayerJoined?.Invoke(inputService);
+        }
+
+        private InputDevice FindAvailableDeviceByLayout(string layoutName)
+        {
+            // Use a direct foreach loop for performance and to avoid LINQ/delegate allocations.
+            foreach (var device in UnityEngine.InputSystem.InputSystem.devices)
+            {
+                if (device.layout.Equals(layoutName, StringComparison.OrdinalIgnoreCase))
+                {
+                    bool isPaired = false;
+                    foreach (var user in InputUser.all)
+                    {
+                        if (user.pairedDevices.Contains(device))
+                        {
+                            isPaired = true;
+                            break;
+                        }
+                    }
+                    if (!isPaired) return device;
+                }
+            }
+            return null;
         }
 
         public IInputService GetInputForPlayer(int playerId)
@@ -157,7 +243,7 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (_playerServices.TryGetValue(playerId, out var service))
             {
-                (service as IDisposable)?.Dispose(); // This also unpairs the device via InputService.Dispose()
+                (service as IDisposable)?.Dispose();
                 _playerServices.Remove(playerId);
             }
         }

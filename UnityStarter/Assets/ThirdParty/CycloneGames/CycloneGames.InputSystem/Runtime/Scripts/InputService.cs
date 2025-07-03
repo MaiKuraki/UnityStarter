@@ -141,7 +141,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         private InputActionAsset BuildAssetFromConfig(PlayerSlotConfig config)
         {
-            var asset = new InputActionAsset();
+            var asset = ScriptableObject.CreateInstance<InputActionAsset>();
             var token = _cancellation.Token;
             var allActions = new Dictionary<string, InputAction>();
 
