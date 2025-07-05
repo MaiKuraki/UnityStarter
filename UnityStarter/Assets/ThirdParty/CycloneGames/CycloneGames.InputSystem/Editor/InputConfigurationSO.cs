@@ -2,6 +2,7 @@ using UnityEngine;
 using System.Collections.Generic;
 using System.Linq;
 using CycloneGames.InputSystem.Runtime;
+using CycloneGames.Utility.Runtime;
 
 namespace CycloneGames.InputSystem.Editor
 {
