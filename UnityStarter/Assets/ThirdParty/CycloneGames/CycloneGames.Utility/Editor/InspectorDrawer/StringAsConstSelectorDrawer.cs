@@ -22,15 +22,24 @@ namespace CycloneGames.Utility.Editor
             public readonly string[] DisplayOptions;
             public readonly string[] ValueOptions;
             public readonly Dictionary<string, int> ValueToIndexMap;
+            public readonly Dictionary<string, string> ValueToDisplayMap;
 
             public CachedConstantData(List<FieldInfo> stringFields)
             {
                 DisplayOptions = stringFields.Select(f => f.Name).ToArray();
                 ValueOptions = stringFields.Select(f => (string)f.GetValue(null)).ToArray();
+
                 ValueToIndexMap = new Dictionary<string, int>(ValueOptions.Length);
+                ValueToDisplayMap = new Dictionary<string, string>(ValueOptions.Length);
+
                 for (int i = 0; i < ValueOptions.Length; i++)
                 {
                     ValueToIndexMap[ValueOptions[i]] = i;
+                    // handling potential duplicate values gracefully.
+                    if (!ValueToDisplayMap.ContainsKey(ValueOptions[i]))
+                    {
+                        ValueToDisplayMap.Add(ValueOptions[i], DisplayOptions[i]);
+                    }
                 }
             }
         }
@@ -62,18 +71,106 @@ namespace CycloneGames.Utility.Editor
 
             EditorGUI.BeginProperty(position, label, property);
 
-            // Find the current index of the property's value. Use the fast dictionary lookup.
-            cachedData.ValueToIndexMap.TryGetValue(property.stringValue, out int currentIndex);
+            string currentValue = property.stringValue;
+            bool isValueValid = string.IsNullOrEmpty(currentValue) || cachedData.ValueToDisplayMap.ContainsKey(currentValue);
 
-            int newIndex = EditorGUI.Popup(position, label.text, currentIndex, cachedData.DisplayOptions);
-
-            // If the user selected a new value, update the property.
-            if (newIndex != currentIndex)
+            if (!isValueValid)
             {
-                property.stringValue = cachedData.ValueOptions[newIndex];
+                DrawInvalidStateUI(position, property, label, attrib, cachedData);
+            }
+            else if (attrib.UseMenu)
+            {
+                DrawAsMenu(position, property, label, attrib, cachedData);
+            }
+            else
+            {
+                DrawAsPopup(position, property, label, cachedData);
             }
 
             EditorGUI.EndProperty();
+        }
+
+        private void DrawInvalidStateUI(Rect position, SerializedProperty property, GUIContent label, StringAsConstSelectorAttribute attrib, CachedConstantData cachedData)
+        {
+            var originalColor = GUI.backgroundColor;
+            GUI.backgroundColor = Color.red;
+
+            string buttonText = $"INVALID: '{property.stringValue}'";
+            if (EditorGUI.DropdownButton(position, new GUIContent(buttonText), FocusType.Keyboard))
+            {
+                ShowSelectionMenu(position, property, attrib, cachedData);
+            }
+
+            GUI.backgroundColor = originalColor;
+        }
+
+
+        private void DrawAsPopup(Rect position, SerializedProperty property, GUIContent label, CachedConstantData cachedData)
+        {
+            cachedData.ValueToIndexMap.TryGetValue(property.stringValue, out int currentIndex);
+
+            // The display options for popup should be the raw field names
+            int newIndex = EditorGUI.Popup(position, label.text, currentIndex, cachedData.DisplayOptions);
+
+            if (newIndex != currentIndex && newIndex >= 0 && newIndex < cachedData.ValueOptions.Length)
+            {
+                property.stringValue = cachedData.ValueOptions[newIndex];
+            }
+        }
+
+        private void DrawAsMenu(Rect position, SerializedProperty property, GUIContent label, StringAsConstSelectorAttribute attrib, CachedConstantData cachedData)
+        {
+            // Determine the text for the dropdown button.
+            string buttonText = "None";
+            if (!string.IsNullOrEmpty(property.stringValue) && cachedData.ValueToDisplayMap.TryGetValue(property.stringValue, out string currentDisplayName))
+            {
+                buttonText = currentDisplayName.Replace(attrib.Separator, '/');
+            }
+
+            // Draw the dropdown button
+            if (EditorGUI.DropdownButton(position, new GUIContent(buttonText), FocusType.Keyboard))
+            {
+                var menu = new GenericMenu();
+                for (int i = 0; i < cachedData.DisplayOptions.Length; i++)
+                {
+                    string displayName = cachedData.DisplayOptions[i];
+                    string value = cachedData.ValueOptions[i];
+                    string menuPath = displayName.Replace(attrib.Separator, '/');
+
+                    menu.AddItem(new GUIContent(menuPath), property.stringValue == value, () =>
+                    {
+                        property.stringValue = value;
+                        property.serializedObject.ApplyModifiedProperties();
+                    });
+                }
+                menu.DropDown(position);
+            }
+        }
+
+        private void ShowSelectionMenu(Rect position, SerializedProperty property, StringAsConstSelectorAttribute attrib, CachedConstantData cachedData)
+        {
+            var menu = new GenericMenu();
+
+            menu.AddItem(new GUIContent("None"), string.IsNullOrEmpty(property.stringValue), () =>
+            {
+                property.stringValue = string.Empty;
+                property.serializedObject.ApplyModifiedProperties();
+            });
+            menu.AddSeparator("");
+
+            for (int i = 0; i < cachedData.DisplayOptions.Length; i++)
+            {
+                string displayName = cachedData.DisplayOptions[i];
+                string value = cachedData.ValueOptions[i];
+                string menuPath = displayName.Replace(attrib.Separator, '/');
+
+                menu.AddItem(new GUIContent(menuPath), property.stringValue == value, () =>
+                {
+                    property.stringValue = value;
+                    property.serializedObject.ApplyModifiedProperties();
+                });
+            }
+            menu.DropDown(position);
         }
 
         /// <summary>
