@@ -10,7 +10,7 @@ namespace CycloneGames.InputSystem.Editor
     public class ActionBindingSO
     {
         public string ActionName;
-        [StringAsConstSelector(typeof(InputBindingConstants))] // Custom drawer for this list!
+        [StringAsConstSelector(typeof(InputBindingConstants), UseMenu = true)] // Custom drawer for this list!
         public List<string> DeviceBindings = new List<string>();
 
         public void FromData(ActionBindingConfig data)
@@ -32,7 +32,7 @@ namespace CycloneGames.InputSystem.Editor
     public class ActionBindingDrawerData
     {
         public string ActionName;
-        [StringAsConstSelector(typeof(InputBindingConstants))] // Uses the custom dropdown drawer
+        [StringAsConstSelector(typeof(InputBindingConstants), UseMenu = true)] // Uses the custom dropdown drawer
         public List<string> DeviceBindings = new List<string>();
 
         public void FromData(ActionBindingConfig data)
@@ -164,7 +164,7 @@ namespace CycloneGames.InputSystem.Editor
         }
     }
 
-    
+
     public class InputConfigurationSO : ScriptableObject
     {
         [Header("Action triggered by any device to join the game")]
