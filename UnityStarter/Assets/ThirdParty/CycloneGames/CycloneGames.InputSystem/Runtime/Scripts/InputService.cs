@@ -22,6 +22,7 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly Dictionary<string, InputContext> _registeredContexts = new();
         private readonly Dictionary<string, Subject<Unit>> _buttonSubjects = new();
         private readonly Dictionary<string, Subject<Vector2>> _vector2Subjects = new();
+        private readonly Dictionary<string, Subject<float>> _scalarSubjects = new();
         private readonly HashSet<string> _requiredLayouts = new();
 
         private CompositeDisposable _subscriptions;
@@ -133,6 +134,11 @@ namespace CycloneGames.InputSystem.Runtime
             return _buttonSubjects.TryGetValue(actionName, out var subject) ? subject : Observable.Empty<Unit>();
         }
 
+        public Observable<float> GetScalarObservable(string actionName)
+        {
+            return _scalarSubjects.TryGetValue(actionName, out var subject) ? subject : Observable.Empty<float>();
+        }
+
         public void BlockInput()
         {
             if (_isInputBlocked) return;
@@ -188,6 +194,7 @@ namespace CycloneGames.InputSystem.Runtime
 
             foreach (var (source, command) in topContext.ActionBindings) source.Subscribe(_ => command.Execute()).AddTo(_subscriptions);
             foreach (var (source, command) in topContext.MoveBindings) source.Subscribe(command.Execute).AddTo(_subscriptions);
+            foreach (var (source, command) in topContext.ScalarBindings) source.Subscribe(command.Execute).AddTo(_subscriptions);
 
             _activeContextName.Value = topContext.Name;
             OnContextChanged?.Invoke(topContext.Name);
@@ -222,7 +229,10 @@ namespace CycloneGames.InputSystem.Runtime
                     if (allActions.ContainsKey(bindingConfig.ActionName)) continue;
 
                     bool isVector2 = bindingConfig.ActionName.ToLower().Contains("move") || bindingConfig.ActionName.ToLower().Contains("navigate");
-                    var action = map.AddAction(bindingConfig.ActionName, isVector2 ? InputActionType.Value : InputActionType.Button);
+                    bool isScalar = bindingConfig.DeviceBindings.Any(b => b.Contains("Trigger"));
+                    var actionType = isVector2 ? InputActionType.Value : (isScalar ? InputActionType.Value : InputActionType.Button);
+                    var action = map.AddAction(bindingConfig.ActionName, actionType);
+
                     foreach (var path in bindingConfig.DeviceBindings) action.AddBinding(path);
 
                     allActions[bindingConfig.ActionName] = action;
@@ -233,6 +243,13 @@ namespace CycloneGames.InputSystem.Runtime
                         action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<Vector2>()).Subscribe(subject.AsObserver());
                         action.CanceledAsObservable(token).Select(_ => Vector2.zero).Subscribe(subject.AsObserver());
                         _vector2Subjects[action.name] = subject;
+                    }
+                    else if (isScalar)
+                    {
+                        var subject = new Subject<float>();
+                        action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<float>()).Subscribe(subject.AsObserver());
+                        action.CanceledAsObservable(token).Select(_ => 0f).Subscribe(subject.AsObserver());
+                        _scalarSubjects[action.name] = subject;
                     }
                     else
                     {

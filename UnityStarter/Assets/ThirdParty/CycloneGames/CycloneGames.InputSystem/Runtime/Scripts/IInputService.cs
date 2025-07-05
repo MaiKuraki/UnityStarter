@@ -35,6 +35,13 @@ namespace CycloneGames.InputSystem.Runtime
         Observable<Unit> GetButtonObservable(string actionName);
 
         /// <summary>
+        /// Gets a reactive stream for a scalar-based action (e.g., zoom, sensitivity).
+        /// </summary>
+        /// <param name="actionName"></param>
+        /// <returns></returns>
+        Observable<float> GetScalarObservable(string actionName);
+
+        /// <summary>
         /// Registers a pre-configured InputContext, making it available for activation.
         /// </summary>
         /// <param name="context">The context object to register.</param>
