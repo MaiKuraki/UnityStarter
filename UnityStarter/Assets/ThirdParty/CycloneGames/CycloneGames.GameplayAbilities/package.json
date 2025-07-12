@@ -1,0 +1,22 @@
+{
+  "name": "com.cyclone-games.gameplay-abilities",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.GameplayAbilities",
+  "description": "A simple gameplay abilities module similiar with UnrealEngine's Gameplay Abilities.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.gameplay-tags": "1.0.0",
+    "com.cyclone-games.logger": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "GameplayAbilities"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

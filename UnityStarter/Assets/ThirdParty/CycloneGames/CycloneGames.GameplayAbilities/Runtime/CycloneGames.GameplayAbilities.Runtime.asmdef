@@ -1,0 +1,18 @@
+{
+    "name": "CycloneGames.GameplayAbilities.Runtime",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.GameplayTags.Runtime",
+        "CycloneGames.Logger",
+        "CycloneGames.Factory.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
