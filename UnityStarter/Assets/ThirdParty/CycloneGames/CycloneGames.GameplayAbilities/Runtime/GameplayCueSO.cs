@@ -1,4 +1,3 @@
-using CycloneGames.GameplayTags.Runtime;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -8,12 +7,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// <summary>
     /// The base ScriptableObject for a self-contained Gameplay Cue.
     /// It defines the visual/audio effects and the logic to execute them.
+    /// A derived class can optionally implement IPersistentGameplayCue if it needs instance tracking.
     /// </summary>
     public abstract class GameplayCueSO : ScriptableObject
     {
-        [Tooltip("The unique GameplayTag that triggers this Cue.")]
-        public GameplayTag CueTag;
-
         /// <summary>
         /// Handles the execution of a one-shot, instant Gameplay Cue.
         /// </summary>
