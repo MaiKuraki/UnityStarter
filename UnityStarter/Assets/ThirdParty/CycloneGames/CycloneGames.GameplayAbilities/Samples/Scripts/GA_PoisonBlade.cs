@@ -2,50 +2,53 @@ using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.Logger;
 using UnityEngine;
 
-public class GA_PoisonBlade : GameplayAbility
+namespace CycloneGames.GameplayAbilities.Sample
 {
-    private readonly GameplayEffect poisonEffect;
-
-    public GA_PoisonBlade(GameplayEffect poisonEffect)
+    public class GA_PoisonBlade : GameplayAbility
     {
-        this.poisonEffect = poisonEffect;
-    }
+        private readonly GameplayEffect poisonEffect;
 
-    public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
-    {
-        if (CommitAbility(actorInfo, spec))
+        public GA_PoisonBlade(GameplayEffect poisonEffect)
         {
-            var caster = actorInfo.AvatarActor as GameObject;
-            // Similar targeting logic as Fireball
-            var target = FindTarget(caster);
+            this.poisonEffect = poisonEffect;
+        }
 
-            if (target != null && target.TryGetComponent<AbilitySystemComponent>(out var targetASC))
+        public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
+        {
+            if (CommitAbility(actorInfo, spec))
             {
-                CLogger.LogInfo($"{caster.name} applies Poison to {target.name}");
-                var poisonSpec = GameplayEffectSpec.Create(poisonEffect, AbilitySystemComponent, spec.Level);
-                targetASC.ApplyGameplayEffectSpecToSelf(poisonSpec);
+                var caster = actorInfo.AvatarActor as GameObject;
+                // Similar targeting logic as Fireball
+                var target = FindTarget(caster);
+
+                if (target != null && target.TryGetComponent<AbilitySystemComponent>(out var targetASC))
+                {
+                    CLogger.LogInfo($"{caster.name} applies Poison to {target.name}");
+                    var poisonSpec = GameplayEffectSpec.Create(poisonEffect, AbilitySystemComponent, spec.Level);
+                    targetASC.ApplyGameplayEffectSpecToSelf(poisonSpec);
+                }
             }
+            EndAbility();
         }
-        EndAbility();
-    }
 
-    // You can share targeting logic in a base class or utility class
-    private GameObject FindTarget(GameObject caster)
-    {
-        // Simple forward raycast
-        if (Physics.Raycast(caster.transform.position, caster.transform.forward, out RaycastHit hit, 10f))
+        // You can share targeting logic in a base class or utility class
+        private GameObject FindTarget(GameObject caster)
         {
-            if (hit.collider.CompareTag("Enemy")) return hit.collider.gameObject;
+            // Simple forward raycast
+            if (Physics.Raycast(caster.transform.position, caster.transform.forward, out RaycastHit hit, 10f))
+            {
+                if (hit.collider.CompareTag("Enemy")) return hit.collider.gameObject;
+            }
+            return null;
         }
-        return null;
+
+        public override GameplayAbility CreatePoolableInstance() => new GA_PoisonBlade(poisonEffect);
     }
 
-    public override GameplayAbility CreatePoolableInstance() => new GA_PoisonBlade(poisonEffect);
-}
-
-[CreateAssetMenu(fileName = "GA_PoisonBlade", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/PoisonBlade")]
-public class GA_PoisonBlade_SO : GameplayAbilitySO
-{
-    public GameplayEffectSO PoisonEffect;
-    public override GameplayAbility CreateAbility() => new GA_PoisonBlade(PoisonEffect.CreateGameplayEffect());
+    [CreateAssetMenu(fileName = "GA_PoisonBlade", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/PoisonBlade")]
+    public class GA_PoisonBlade_SO : GameplayAbilitySO
+    {
+        public GameplayEffectSO PoisonEffect;
+        public override GameplayAbility CreateAbility() => new GA_PoisonBlade(PoisonEffect.CreateGameplayEffect());
+    }
 }

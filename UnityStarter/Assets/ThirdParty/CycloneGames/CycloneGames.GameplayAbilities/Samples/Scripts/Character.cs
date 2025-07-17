@@ -3,88 +3,90 @@ using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.Logger;
 using UnityEngine;
 
-[RequireComponent(typeof(AbilitySystemComponentHolder))]
-public class Character : MonoBehaviour
+namespace CycloneGames.GameplayAbilities.Sample
 {
-    private AbilitySystemComponentHolder ascHolder;
-    public AbilitySystemComponent AbilitySystemComponent => ascHolder?.AbilitySystemComponent;
-    public CharacterAttributeSet AttributeSet { get; private set; }
-
-    [Header("Setup")]
-    public List<GameplayAbilitySO> InitialAbilities;
-    public GameplayEffectSO InitialAttributesEffect;
-    public LevelingSystem LevelingData;
-
-    // Runtime Stats
-    private int experience = 0;
-
-    void Awake()
+    [RequireComponent(typeof(AbilitySystemComponentHolder))]
+    public class Character : MonoBehaviour
     {
-        ascHolder = GetComponent<AbilitySystemComponentHolder>();
+        private AbilitySystemComponentHolder ascHolder;
+        public AbilitySystemComponent AbilitySystemComponent => ascHolder?.AbilitySystemComponent;
+        public CharacterAttributeSet AttributeSet { get; private set; }
 
-        // This is a common setup pattern.
-        AbilitySystemComponent.InitAbilityActorInfo(this, gameObject);
+        [Header("Setup")]
+        public List<GameplayAbilitySO> InitialAbilities;
+        public GameplayEffectSO InitialAttributesEffect;
+        public LevelingSystem LevelingData;
 
-        AttributeSet = new CharacterAttributeSet();
-        AbilitySystemComponent.AddAttributeSet(AttributeSet);
-    }
+        // Runtime Stats
+        private int experience = 0;
 
-    void Start()
-    {
-        // Apply initial attributes and abilities on Start to ensure all systems are ready.
-        ApplyInitialEffects();
-        GrantInitialAbilities();
-    }
-
-    private void ApplyInitialEffects()
-    {
-        if (InitialAttributesEffect != null && AbilitySystemComponent != null)
+        void Awake()
         {
-            var ge = InitialAttributesEffect.CreateGameplayEffect();
-            var spec = GameplayEffectSpec.Create(ge, AbilitySystemComponent);
-            AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
+            ascHolder = GetComponent<AbilitySystemComponentHolder>();
+
+            // This is a common setup pattern.
+            AbilitySystemComponent.InitAbilityActorInfo(this, gameObject);
+
+            AttributeSet = new CharacterAttributeSet();
+            AbilitySystemComponent.AddAttributeSet(AttributeSet);
         }
-    }
 
-    private void GrantInitialAbilities()
-    {
-        if (AbilitySystemComponent == null) return;
-        foreach (var abilitySO in InitialAbilities)
+        void Start()
         {
-            if (abilitySO != null)
+            // Apply initial attributes and abilities on Start to ensure all systems are ready.
+            ApplyInitialEffects();
+            GrantInitialAbilities();
+        }
+
+        private void ApplyInitialEffects()
+        {
+            if (InitialAttributesEffect != null && AbilitySystemComponent != null)
             {
-                AbilitySystemComponent.GrantAbility(abilitySO.CreateAbility());
+                var ge = InitialAttributesEffect.CreateGameplayEffect();
+                var spec = GameplayEffectSpec.Create(ge, AbilitySystemComponent);
+                AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
             }
         }
-    }
 
-    public void AddExperience(int amount)
-    {
-        experience += amount;
-        CLogger.LogInfo($"{name} gained {amount} XP. Total XP: {experience}");
-        CheckForLevelUp();
-    }
-
-    private void CheckForLevelUp()
-    {
-        if (LevelingData == null) return;
-        int currentLevel = (int)AttributeSet.GetCurrentValue(AttributeSet.Level);
-        if (currentLevel >= LevelingData.Levels.Count)
+        private void GrantInitialAbilities()
         {
-            return;
+            if (AbilitySystemComponent == null) return;
+            foreach (var abilitySO in InitialAbilities)
+            {
+                if (abilitySO != null)
+                {
+                    AbilitySystemComponent.GrantAbility(abilitySO.CreateAbility());
+                }
+            }
         }
 
-        LevelData currentLevelData = LevelingData.Levels[currentLevel - 1];
-        if (experience >= currentLevelData.XpToNextLevel)
+        public void AddExperience(int amount)
         {
-            LevelUp(currentLevelData);
+            experience += amount;
+            CLogger.LogInfo($"{name} gained {amount} XP. Total XP: {experience}");
+            CheckForLevelUp();
         }
-    }
 
-    private void LevelUp(LevelData gains)
-    {
-        // Create a dynamic, instant GE to grant the level-up bonuses.
-        var mods = new List<ModifierInfo>
+        private void CheckForLevelUp()
+        {
+            if (LevelingData == null) return;
+            int currentLevel = (int)AttributeSet.GetCurrentValue(AttributeSet.Level);
+            if (currentLevel >= LevelingData.Levels.Count)
+            {
+                return;
+            }
+
+            LevelData currentLevelData = LevelingData.Levels[currentLevel - 1];
+            if (experience >= currentLevelData.XpToNextLevel)
+            {
+                LevelUp(currentLevelData);
+            }
+        }
+
+        private void LevelUp(LevelData gains)
+        {
+            // Create a dynamic, instant GE to grant the level-up bonuses.
+            var mods = new List<ModifierInfo>
         {
             new ModifierInfo(AttributeSet.Level, EAttributeModifierOperation.Add, 1),
             new ModifierInfo(AttributeSet.MaxHealth, EAttributeModifierOperation.Add, gains.HealthGain),
@@ -95,16 +97,17 @@ public class Character : MonoBehaviour
             new ModifierInfo(AttributeSet.Defense, EAttributeModifierOperation.Add, gains.DefenseGain)
         };
 
-        var levelUpEffect = new GameplayEffect("GE_LevelUp", EDurationPolicy.Instant, 0, mods);
-        var spec = GameplayEffectSpec.Create(levelUpEffect, AbilitySystemComponent);
-        AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
+            var levelUpEffect = new GameplayEffect("GE_LevelUp", EDurationPolicy.Instant, 0, mods);
+            var spec = GameplayEffectSpec.Create(levelUpEffect, AbilitySystemComponent);
+            AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
 
-        CLogger.LogWarning($"{name} has reached Level {AttributeSet.GetCurrentValue(AttributeSet.Level)}!");
-    }
+            CLogger.LogWarning($"{name} has reached Level {AttributeSet.GetCurrentValue(AttributeSet.Level)}!");
+        }
 
-    void Update()
-    {
-        // The Tick needs to be manually called for the AbilitySystemComponent.
-        ascHolder?.Tick(Time.deltaTime);
+        void Update()
+        {
+            // The Tick needs to be manually called for the AbilitySystemComponent.
+            ascHolder?.Tick(Time.deltaTime);
+        }
     }
 }
