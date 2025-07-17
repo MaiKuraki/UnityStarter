@@ -2,6 +2,9 @@
     "name": "CycloneGames.GameplayAbilities.Runtime",
     "rootNamespace": "",
     "references": [
+        "UniTask",
+        "Unity.ResourceManager",
+        "Unity.Addressables",
         "CycloneGames.GameplayTags.Runtime",
         "CycloneGames.Logger",
         "CycloneGames.Factory.Runtime"

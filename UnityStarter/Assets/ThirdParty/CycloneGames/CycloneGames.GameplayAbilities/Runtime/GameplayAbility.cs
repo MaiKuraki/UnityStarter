@@ -163,7 +163,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 foreach (var mod in CostEffectDefinition.Modifiers)
                 {
-                    var attr = asc.GetAttribute(mod.Attribute.Name);
+                    var attr = asc.GetAttribute(mod.AttributeName);
                     float costMagnitude = mod.Magnitude.GetValueAtLevel(this.Spec.Level);
                     if (attr == null || attr.CurrentValue < -costMagnitude) // Cost is negative
                     {

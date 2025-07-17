@@ -10,7 +10,7 @@ public class GameplayEffectSO : ScriptableObject
     public EDurationPolicy DurationPolicy;
     [Tooltip("Only used if DurationPolicy is HasDuration.")]
     public float Duration;
-    public List<ModifierInfo> Modifiers;
+    public List<ModifierInfoSerializable> SerializableModifiers;
     public GameplayEffectExecutionCalculation Execution;
     public GameplayEffectStacking Stacking;
     public List<GameplayAbilitySO> GrantedAbilities;
@@ -31,12 +31,23 @@ public class GameplayEffectSO : ScriptableObject
                 grantedAbilities.Add(abilitySO.CreateAbility());
             }
         }
+        
+        // Convert the serializable modifier data into runtime ModifierInfo instances.
+        var runtimeModifiers = new List<ModifierInfo>();
+        if (SerializableModifiers != null)
+        {
+            foreach (var serializableMod in SerializableModifiers)
+            {
+                // Here we perform the translation from the editor data to the runtime data.
+                runtimeModifiers.Add(new ModifierInfo(serializableMod.AttributeName, serializableMod.Operation, serializableMod.Magnitude));
+            }
+        }
 
         return new GameplayEffect(
             EffectName,
             DurationPolicy,
             Duration,
-            Modifiers,
+            runtimeModifiers,
             Execution,
             Stacking,
             grantedAbilities,

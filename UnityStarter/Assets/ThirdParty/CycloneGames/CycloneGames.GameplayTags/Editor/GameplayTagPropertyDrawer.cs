@@ -19,6 +19,14 @@ namespace CycloneGames.GameplayTags.Editor
          EditorGUI.indentLevel = 0;
 
          SerializedProperty nameProperty = property.FindPropertyRelative("m_Name");
+         
+         if (nameProperty == null)
+         {
+            EditorGUI.LabelField(position, label, new GUIContent("Invalid Tag Property"));
+            EditorGUI.EndProperty();
+            return;
+         }
+
          GameplayTag tag = GameplayTagManager.RequestTag(nameProperty.stringValue);
 
          if (tag != GameplayTag.None)
@@ -37,11 +45,11 @@ namespace CycloneGames.GameplayTags.Editor
             {
                EditorApplication.delayCall += () =>
                    {
-                   if (EditorWindow.HasOpenInstances<PopupWindow>())
-                   {
-                      EditorWindow.GetWindow<PopupWindow>().Close();
-                   }
-                };
+                      if (EditorWindow.HasOpenInstances<PopupWindow>())
+                      {
+                         EditorWindow.GetWindow<PopupWindow>().Close();
+                      }
+                   };
             });
 
             TreeViewMethodExtensions.ShowPopupWindow(tagTreeView, position, 280f);
