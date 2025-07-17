@@ -1,63 +1,121 @@
-using System;
+using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
 using CycloneGames.GameplayTags.Runtime;
+using UnityEngine;
+using UnityEngine.AddressableAssets;
+using UnityEngine.ResourceManagement.AsyncOperations;
+using UnityEngine.ResourceManagement.ResourceLocations;
+using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
-    public enum EGameplayCueEvent
-    {
-        OnActive,    // Called when a GameplayCue is activated (added).
-        WhileActive, // Called when GameplayCue is active, even if it wasn't actually just applied (e.g. Join in progress).
-        Removed,     // Called when a GameplayCue is removed.
-        Executed     // Called when a GameplayCue is executed (for instant effects).
-    }
-
-    public interface IGameplayCueAgent
-    {
-        void HandleGameplayCue(GameplayTag cueTag, EGameplayCueEvent eventType, GameplayEffectSpec spec);
-    }
-
     /// <summary>
-    /// Manages the registration and execution of GameplayCues.
+    /// A manager for GameplayCues. It handles on-demand async loading,
+    /// execution, and robust lifetime management of Cue instances.
     /// </summary>
-    public class GameplayCueManager
+    public sealed class GameplayCueManager
     {
-        //  may integrate DI framework, not register here?
         private static readonly GameplayCueManager instance = new GameplayCueManager();
         public static GameplayCueManager Instance => instance;
-        
-        private readonly Dictionary<GameplayTag, List<Action<EGameplayCueEvent>>> tagToCueActions = new Dictionary<GameplayTag, List<Action<EGameplayCueEvent>>>();
 
-        // This would be replaced with a system that discovers agents, e.g., via component queries.
-        private readonly List<IGameplayCueAgent> registeredAgents = new List<IGameplayCueAgent>();
+        private IResourceLocator resourceLocator;
+        private IGameObjectPoolManager poolManager;
+        private bool isInitialized = false;
 
-        public void RegisterAgent(IGameplayCueAgent agent)
+        private readonly Dictionary<GameplayTag, string> tagToAddress = new Dictionary<GameplayTag, string>();
+        private readonly Dictionary<string, GameplayCueSO> loadedCues = new Dictionary<string, GameplayCueSO>();
+
+        private class ActiveCueInstance { public GameplayTag CueTag; public GameObject Instance; }
+        private readonly Dictionary<AbilitySystemComponent, List<ActiveCueInstance>> activeInstances = new Dictionary<AbilitySystemComponent, List<ActiveCueInstance>>();
+
+        private GameplayCueManager() { }
+
+        /// <summary>
+        /// Initializes all internal systems and discovers cue assets. Must be called once at game startup.
+        /// </summary>
+        public async UniTask InitializeAsync(List<string> labelsToDiscover)
         {
-            if (agent != null && !registeredAgents.Contains(agent))
-            {
-                registeredAgents.Add(agent);
-            }
-        }
+            if (isInitialized) return;
 
-        public void UnregisterAgent(IGameplayCueAgent agent)
-        {
-            if (agent != null)
+            resourceLocator = new AddressableResourceLocator();
+            poolManager = new GameObjectPoolManager(resourceLocator);
+
+            foreach (var label in labelsToDiscover)
             {
-                registeredAgents.Remove(agent);
+                AsyncOperationHandle<IList<IResourceLocation>> locationsHandle = Addressables.LoadResourceLocationsAsync(label, typeof(GameplayCueSO));
+
+                IList<IResourceLocation> locations = await locationsHandle.Task;
+
+                foreach (var loc in locations)
+                {
+                    if (GameplayTagManager.TryRequestTag(loc.PrimaryKey, out var tag))
+                    {
+                        tagToAddress[tag] = loc.PrimaryKey;
+                    }
+                }
+
+                Addressables.Release(locationsHandle);
             }
+
+            isInitialized = true;
+            CLogger.LogInfo($"[GameplayCueManager] Initialized. Discovered {tagToAddress.Count} addressable GameplayCues.");
         }
 
         /// <summary>
-        /// Triggers a gameplay cue event for all registered agents.
+        /// The main entry point to trigger a GameplayCue event.
         /// </summary>
-        public void TriggerCue(GameplayTag cueTag, EGameplayCueEvent eventType, GameplayEffectSpec spec)
+        public async UniTaskVoid HandleCue(GameplayTag cueTag, EGameplayCueEvent eventType, GameplayEffectSpec spec)
         {
-            // In a networked game, the server would RPC this call to clients.
-            // For now, we broadcast to all local agents. 
-            foreach (var agent in registeredAgents)
+            if (!isInitialized || cueTag == GameplayTag.None) return;
+
+            var cueSO = await GetCueSOAsync(cueTag);
+            if (cueSO == null) return;
+
+            var parameters = new GameplayCueParameters(spec);
+
+            switch (eventType)
             {
-                agent.HandleGameplayCue(cueTag, eventType, spec);
+                case EGameplayCueEvent.Executed:
+                    await cueSO.OnExecutedAsync(parameters, poolManager);
+                    break;
+                case EGameplayCueEvent.OnActive:
+                case EGameplayCueEvent.WhileActive:
+                    await cueSO.OnActiveAsync(parameters, poolManager);
+                    break;
+                case EGameplayCueEvent.Removed:
+                    await cueSO.OnRemovedAsync(parameters, poolManager);
+                    break;
             }
+        }
+
+        private async UniTask<GameplayCueSO> GetCueSOAsync(GameplayTag cueTag)
+        {
+            if (loadedCues.TryGetValue(cueTag.Name, out var cue)) return cue;
+
+            if (tagToAddress.TryGetValue(cueTag, out var address))
+            {
+                var loadedAsset = await resourceLocator.LoadAssetAsync<GameplayCueSO>(address);
+                if (loadedAsset) loadedCues[address] = loadedAsset;
+                return loadedAsset;
+            }
+            return null;
+        }
+
+        public void OnOwnerDestroyed(AbilitySystemComponent owner)
+        {
+            // Placeholder for future robust persistent Cue tracking and cleanup.
+        }
+
+        /// <summary>
+        /// Shuts down all systems, clearing pools and releasing assets. Call on application quit.
+        /// </summary>
+        public void Shutdown()
+        {
+            poolManager?.Shutdown();
+            resourceLocator?.ReleaseAll();
+            loadedCues.Clear();
+            tagToAddress.Clear();
+            isInitialized = false;
         }
     }
 }

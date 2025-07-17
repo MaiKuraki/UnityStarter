@@ -1,14 +1,13 @@
 using System.Collections.Generic;
-using CycloneGames.Factory.Runtime;
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.GameplayTags.Runtime;
 using CycloneGames.Logger;
 using UnityEngine;
 
-[RequireComponent(typeof(AbilitySystemComponent))]
+[RequireComponent(typeof(AbilitySystemComponentHolder))]
 public class Character : MonoBehaviour
 {
-    public AbilitySystemComponent AbilitySystemComponent { get; private set; }
+    private AbilitySystemComponentHolder ascHolder;
+    public AbilitySystemComponent AbilitySystemComponent => ascHolder?.AbilitySystemComponent;
     public CharacterAttributeSet AttributeSet { get; private set; }
 
     [Header("Setup")]
@@ -21,10 +20,7 @@ public class Character : MonoBehaviour
 
     void Awake()
     {
-        // For this sample, we manually create a factory.
-        // In a real project, this would likely come from a DI container like VContainer or Zenject.
-        var effectContextFactory = new GameplayEffectContextFactory();
-        AbilitySystemComponent = new AbilitySystemComponent(effectContextFactory);
+        ascHolder = GetComponent<AbilitySystemComponentHolder>();
 
         // This is a common setup pattern.
         AbilitySystemComponent.InitAbilityActorInfo(this, gameObject);
@@ -42,7 +38,7 @@ public class Character : MonoBehaviour
 
     private void ApplyInitialEffects()
     {
-        if (InitialAttributesEffect != null)
+        if (InitialAttributesEffect != null && AbilitySystemComponent != null)
         {
             var ge = InitialAttributesEffect.CreateGameplayEffect();
             var spec = GameplayEffectSpec.Create(ge, AbilitySystemComponent);
@@ -52,6 +48,7 @@ public class Character : MonoBehaviour
 
     private void GrantInitialAbilities()
     {
+        if (AbilitySystemComponent == null) return;
         foreach (var abilitySO in InitialAbilities)
         {
             if (abilitySO != null)
@@ -70,10 +67,10 @@ public class Character : MonoBehaviour
 
     private void CheckForLevelUp()
     {
+        if (LevelingData == null) return;
         int currentLevel = (int)AttributeSet.GetCurrentValue(AttributeSet.Level);
-        if (LevelingData == null || currentLevel >= LevelingData.Levels.Count)
+        if (currentLevel >= LevelingData.Levels.Count)
         {
-            // Max level reached
             return;
         }
 
@@ -108,6 +105,6 @@ public class Character : MonoBehaviour
     void Update()
     {
         // The Tick needs to be manually called for the AbilitySystemComponent.
-        AbilitySystemComponent?.Tick(Time.deltaTime, true); // Assuming this is server/single-player
+        ascHolder?.Tick(Time.deltaTime);
     }
 }
