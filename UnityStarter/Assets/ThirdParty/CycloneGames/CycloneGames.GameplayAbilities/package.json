@@ -6,8 +6,11 @@
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
+    "com.cysharp.unitask" : "2.5.0",
+    "com.unity.addressables": "2.4.0",
     "com.cyclone-games.gameplay-tags": "1.0.0",
-    "com.cyclone-games.logger": "1.0.0"
+    "com.cyclone-games.logger": "1.0.0",
+    "com.cyclone-games.factory": "1.0.0"
   },
   "keywords": [
     "CycloneGames",
