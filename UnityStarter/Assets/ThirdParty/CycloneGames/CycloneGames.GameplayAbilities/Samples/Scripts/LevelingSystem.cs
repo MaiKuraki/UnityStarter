@@ -11,7 +11,7 @@ public struct LevelData
     public float DefenseGain;
 }
 
-[CreateAssetMenu(fileName = "LevelUpData", menuName = "Cyclone/Level Up Data")]
+[CreateAssetMenu(fileName = "LevelUpData", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Level Up Data")]
 public class LevelingSystem : ScriptableObject
 {
     public List<LevelData> Levels;

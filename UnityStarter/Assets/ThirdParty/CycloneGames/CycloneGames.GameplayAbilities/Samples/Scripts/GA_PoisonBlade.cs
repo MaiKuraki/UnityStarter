@@ -43,7 +43,7 @@ public class GA_PoisonBlade : GameplayAbility
     public override GameplayAbility CreatePoolableInstance() => new GA_PoisonBlade(poisonEffect);
 }
 
-[CreateAssetMenu(fileName = "GA_PoisonBlade", menuName = "Cyclone/Abilities/PoisonBlade")]
+[CreateAssetMenu(fileName = "GA_PoisonBlade", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/PoisonBlade")]
 public class GA_PoisonBlade_SO : GameplayAbilitySO
 {
     public GameplayEffectSO PoisonEffect;
