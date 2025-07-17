@@ -495,6 +495,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
                 effectGrantedAbilities[effect] = grantedSpecs;
             }
+
+            if (effect.Spec.Def.GameplayCues.Count > 0)
+            {
+                var eventType = (effect.Spec.Def.DurationPolicy == EDurationPolicy.Instant) ? EGameplayCueEvent.Executed : EGameplayCueEvent.OnActive;
+                foreach (var cueSO in effect.Spec.Def.GameplayCues)
+                {
+                    if (cueSO == null || cueSO.CueTag == GameplayTag.None) continue;
+
+                    GameplayCueManager.Instance.HandleCue(cueSO.CueTag, eventType, effect.Spec).Forget();
+
+                    if (eventType == EGameplayCueEvent.OnActive)
+                    {
+                        GameplayCueManager.Instance.HandleCue(cueSO.CueTag, EGameplayCueEvent.WhileActive, effect.Spec).Forget();
+                    }
+                }
+            }
         }
 
         private void OnEffectRemoved(ActiveGameplayEffect effect, bool markDirty)
@@ -506,6 +522,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 foreach (var spec in specsToRemove) ClearAbility(spec);
                 effectGrantedAbilities.Remove(effect);
+            }
+
+            if (effect.Spec.Def.DurationPolicy != EDurationPolicy.Instant && effect.Spec.Def.GameplayCues.Count > 0)
+            {
+                foreach (var cueSO in effect.Spec.Def.GameplayCues)
+                {
+                    if (cueSO == null || cueSO.CueTag == GameplayTag.None) continue;
+                    GameplayCueManager.Instance.HandleCue(cueSO.CueTag, EGameplayCueEvent.Removed, effect.Spec).Forget();
+                }
             }
 
             if (markDirty) MarkAttributesDirtyFromEffect(effect);

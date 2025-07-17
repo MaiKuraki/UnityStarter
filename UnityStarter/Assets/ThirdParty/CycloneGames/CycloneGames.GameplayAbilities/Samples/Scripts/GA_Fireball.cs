@@ -86,7 +86,7 @@ public class GA_Fireball : GameplayAbility
 }
 
 // Corresponding ScriptableObject
-[CreateAssetMenu(fileName = "GA_Fireball", menuName = "Cyclone/Abilities/Fireball")]
+[CreateAssetMenu(fileName = "GA_Fireball", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Fireball")]
 public class GA_Fireball_SO : GameplayAbilitySO
 {
     public GameplayEffectSO FireballDamageEffect;
