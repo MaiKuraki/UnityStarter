@@ -5,6 +5,7 @@
         "UniTask",
         "Unity.ResourceManager",
         "Unity.Addressables",
+        "CycloneGames.Utility.Runtime",
         "CycloneGames.GameplayTags.Runtime",
         "CycloneGames.Logger",
         "CycloneGames.Factory.Runtime"

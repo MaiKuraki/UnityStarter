@@ -2,10 +2,13 @@
     "name": "CycloneGames.GameplayAbilities.Sample",
     "rootNamespace": "",
     "references": [
+        "UniTask",
+        "Unity.Addressables",
         "CycloneGames.Logger",
         "CycloneGames.Factory.Runtime",
         "CycloneGames.GameplayTags.Runtime",
-        "CycloneGames.GameplayAbilities.Runtime"
+        "CycloneGames.GameplayAbilities.Runtime",
+        "CycloneGames.Utility.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

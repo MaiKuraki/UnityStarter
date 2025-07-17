@@ -496,18 +496,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 effectGrantedAbilities[effect] = grantedSpecs;
             }
 
-            if (effect.Spec.Def.GameplayCues.Count > 0)
+            if (!effect.Spec.Def.GameplayCues.IsEmpty)
             {
                 var eventType = (effect.Spec.Def.DurationPolicy == EDurationPolicy.Instant) ? EGameplayCueEvent.Executed : EGameplayCueEvent.OnActive;
-                foreach (var cueSO in effect.Spec.Def.GameplayCues)
-                {
-                    if (cueSO == null || cueSO.CueTag == GameplayTag.None) continue;
 
-                    GameplayCueManager.Instance.HandleCue(cueSO.CueTag, eventType, effect.Spec).Forget();
+                // Iterate through the tags in the effect's cue container.
+                foreach (var cueTag in effect.Spec.Def.GameplayCues)
+                {
+                    if (cueTag == GameplayTag.None) continue;
+
+                    GameplayCueManager.Instance.HandleCue(cueTag, eventType, effect.Spec).Forget();
 
                     if (eventType == EGameplayCueEvent.OnActive)
                     {
-                        GameplayCueManager.Instance.HandleCue(cueSO.CueTag, EGameplayCueEvent.WhileActive, effect.Spec).Forget();
+                        GameplayCueManager.Instance.HandleCue(cueTag, EGameplayCueEvent.WhileActive, effect.Spec).Forget();
                     }
                 }
             }
@@ -524,12 +526,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 effectGrantedAbilities.Remove(effect);
             }
 
-            if (effect.Spec.Def.DurationPolicy != EDurationPolicy.Instant && effect.Spec.Def.GameplayCues.Count > 0)
+            if (effect.Spec.Def.DurationPolicy != EDurationPolicy.Instant && !effect.Spec.Def.GameplayCues.IsEmpty)
             {
-                foreach (var cueSO in effect.Spec.Def.GameplayCues)
+                foreach (var cueTag in effect.Spec.Def.GameplayCues)
                 {
-                    if (cueSO == null || cueSO.CueTag == GameplayTag.None) continue;
-                    GameplayCueManager.Instance.HandleCue(cueSO.CueTag, EGameplayCueEvent.Removed, effect.Spec).Forget();
+                    if (cueTag == GameplayTag.None) continue;
+                    GameplayCueManager.Instance.HandleCue(cueTag, EGameplayCueEvent.Removed, effect.Spec).Forget();
                 }
             }
 
