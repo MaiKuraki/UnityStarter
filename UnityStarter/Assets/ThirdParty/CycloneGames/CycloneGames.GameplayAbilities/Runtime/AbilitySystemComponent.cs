@@ -368,7 +368,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 spec.Def.Execution.Execute(spec, ref executionOutputScratchPad);
                 foreach (var modInfo in executionOutputScratchPad)
                 {
-                    var attribute = GetAttribute(modInfo.Attribute.Name);
+                    var attribute = GetAttribute(modInfo.AttributeName);
                     if (attribute != null)
                     {
                         float magnitude = modInfo.Magnitude.GetValueAtLevel(spec.Level);
@@ -379,7 +379,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             foreach (var mod in spec.Def.Modifiers)
             {
-                var attribute = GetAttribute(mod.Attribute.Name);
+                var attribute = GetAttribute(mod.AttributeName);
                 if (attribute != null)
                 {
                     ApplyModifier(spec, attribute, mod, spec.GetCalculatedMagnitude(mod), false);
@@ -445,7 +445,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                     foreach (var mod in effect.Spec.Def.Modifiers)
                     {
-                        if (mod.Attribute == attr)
+                        if (mod.AttributeName == attr.Name)
                         {
                             float magnitude = effect.Spec.GetCalculatedMagnitude(mod) * effect.StackCount;
                             switch (mod.Operation)
@@ -601,7 +601,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
         private void ApplyModifier(GameplayEffectSpec spec, GameplayAttribute attribute, ModifierInfo mod, float magnitude, bool isFromExecution)
         {
-            var targetAttributeSet = attribute.OwningSet;
+            // The 'attribute' parameter passed in is now found via string lookup before this call.
+            // The implementation can remain largely the same, but let's make it cleaner
+            // by ensuring we always look up the attribute inside.
+            var targetAttribute = GetAttribute(mod.AttributeName);
+            if (targetAttribute == null)
+            {
+                CLogger.LogWarning($"ApplyModifier failed: Attribute '{mod.AttributeName}' not found on ASC.");
+                return;
+            }
+
+            var targetAttributeSet = targetAttribute.OwningSet;
             if (targetAttributeSet == null) return;
 
             // Instant effects directly modify the BaseValue of an attribute.
@@ -648,14 +658,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
         private void MarkAttributesDirtyFromEffect(ActiveGameplayEffect activeEffect)
         {
+            // Ensure the effect and its definition are valid.
             if (activeEffect?.Spec?.Def?.Modifiers == null) return;
 
-            // Iterate through all modifiers of the effect and mark their corresponding attributes as dirty.
+            // Iterate through all modifiers defined in the effect.
             foreach (var modifier in activeEffect.Spec.Def.Modifiers)
             {
-                if (modifier.Attribute != null)
+                // We cannot just use modifier.Attribute directly anymore as it doesn't exist.
+                // We use the attribute's name string to find the actual attribute instance.
+                if (!string.IsNullOrEmpty(modifier.AttributeName))
                 {
-                    MarkAttributeDirty(modifier.Attribute);
+                    var attribute = GetAttribute(modifier.AttributeName);
+                    if (attribute != null)
+                    {
+                        // Mark the resolved attribute instance as dirty.
+                        MarkAttributeDirty(attribute);
+                    }
                 }
             }
         }
