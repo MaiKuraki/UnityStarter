@@ -108,7 +108,7 @@ public class GA_ChainLightning : GameplayAbility
 }
 
 
-[CreateAssetMenu(fileName = "GA_ChainLightning", menuName = "Cyclone/Abilities/ChainLightning")]
+[CreateAssetMenu(fileName = "GA_ChainLightning", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/ChainLightning")]
 public class GA_ChainLightning_SO : GameplayAbilitySO
 {
     public GameplayEffectSO LightningDamageEffect;
