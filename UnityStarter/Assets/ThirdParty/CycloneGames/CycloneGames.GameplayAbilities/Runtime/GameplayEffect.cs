@@ -22,7 +22,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public List<GameplayAbility> GrantedAbilities { get; }
 
         // --- GameplayCues ---
-        public List<GameplayTag> GameplayCues { get; }
+        public List<GameplayCueSO> GameplayCues { get; }
 
         // --- Tag-related properties ---
         /// <summary>
@@ -59,7 +59,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             GameplayTagRequirements applicationTagRequirements = default,
             GameplayTagRequirements ongoingTagRequirements = default,
             GameplayTagContainer removeGameplayEffectsWithTags = null,
-            List<GameplayTag> gameplayCues = null)
+            List<GameplayCueSO> gameplayCues = null)
         {
             Name = name;
             DurationPolicy = durationPolicy;
@@ -73,7 +73,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ApplicationTagRequirements = applicationTagRequirements;
             OngoingTagRequirements = ongoingTagRequirements;
             RemoveGameplayEffectsWithTags = removeGameplayEffectsWithTags ?? new GameplayTagContainer();
-            GameplayCues = gameplayCues ?? new List<GameplayTag>();
+            GameplayCues = gameplayCues ?? new List<GameplayCueSO>();
             
             if (DurationPolicy == EDurationPolicy.HasDuration && duration <= 0 && duration != GameplayEffectConstants.INFINITE_DURATION)
             {

@@ -45,7 +45,7 @@ public class GA_Purify : GameplayAbility
 }
 
 
-[CreateAssetMenu(fileName = "GA_Purify", menuName = "Cyclone/Abilities/Purify")]
+[CreateAssetMenu(fileName = "GA_Purify", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Purify")]
 public class GA_Purify_SO : GameplayAbilitySO
 {
     public override GameplayAbility CreateAbility() => new GA_Purify();
