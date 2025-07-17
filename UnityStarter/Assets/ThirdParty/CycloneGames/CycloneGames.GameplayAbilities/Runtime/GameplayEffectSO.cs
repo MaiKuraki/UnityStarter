@@ -20,7 +20,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public CycloneGames.GameplayAbilities.Runtime.GameplayTagRequirements ApplicationTagRequirements;
         public CycloneGames.GameplayAbilities.Runtime.GameplayTagRequirements OngoingTagRequirements;
         public GameplayTagContainer RemoveGameplayEffectsWithTags;
-        public List<GameplayCueSO> GameplayCues;
+        public GameplayTagContainer GameplayCues;
 
         public GameplayEffect CreateGameplayEffect()
         {
@@ -39,7 +39,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 foreach (var serializableMod in SerializableModifiers)
                 {
-                    // Here we perform the translation from the editor data to the runtime data.
                     runtimeModifiers.Add(new ModifierInfo(serializableMod.AttributeName, serializableMod.Operation, serializableMod.Magnitude));
                 }
             }
