@@ -53,7 +53,7 @@ public class GA_ChainLightning : GameplayAbility
                 // Here we override the magnitude. This requires a SetByCaller-like mechanism.
                 // For simplicity in this example, we'll create a temporary GE with modified magnitude.
                 // A better system would allow GameplayEffectSpec modification.
-                var tempMod = new ModifierInfo(lightningDamageEffect.Modifiers[0].Attribute,
+                var tempMod = new ModifierInfo(lightningDamageEffect.Modifiers[0].AttributeName,
                     lightningDamageEffect.Modifiers[0].Operation,
                     new ScalableFloat(lightningDamageEffect.Modifiers[0].Magnitude.BaseValue * damageMultiplier));
 

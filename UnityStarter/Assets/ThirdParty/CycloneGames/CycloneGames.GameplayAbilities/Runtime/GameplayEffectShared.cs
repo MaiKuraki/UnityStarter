@@ -108,7 +108,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class ModifierInfo
     {
-        public readonly GameplayAttribute Attribute;
+        public readonly string AttributeName;
         public readonly EAttributeModifierOperation Operation;
 
         // One of these two will be used for calculation.
@@ -118,20 +118,36 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Constructor for data-driven, scalable float modifiers.
         /// </summary>
-        public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, ScalableFloat magnitude)
+        public ModifierInfo(string attributeName, EAttributeModifierOperation operation, ScalableFloat magnitude)
         {
-            Attribute = attribute;
+            AttributeName = attributeName;
             Operation = operation;
             Magnitude = magnitude;
             CustomCalculation = null; // Ensure the other is null
         }
 
         /// <summary>
-        /// Constructor for complex, context-aware custom calculation modifiers.
+        /// Constructor for creating modifiers directly in C# code.
         /// </summary>
+        public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, ScalableFloat magnitude)
+        {
+            AttributeName = attribute.Name;
+            Operation = operation;
+            Magnitude = magnitude;
+            CustomCalculation = null;
+        }
+        
+        public ModifierInfo(string attributeName, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation)
+        {
+            AttributeName = attributeName;
+            Operation = operation;
+            Magnitude = default; // Ensure the other is default
+            CustomCalculation = customCalculation;
+        }
+
         public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation)
         {
-            Attribute = attribute;
+            AttributeName = attribute.Name;
             Operation = operation;
             Magnitude = default; // Ensure the other is default
             CustomCalculation = customCalculation;

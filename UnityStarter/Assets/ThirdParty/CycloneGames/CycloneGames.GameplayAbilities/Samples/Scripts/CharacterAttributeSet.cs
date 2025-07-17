@@ -52,7 +52,7 @@ public class CharacterAttributeSet : AttributeSet
 
         // We use a "meta attribute" for damage. This effect applies a temporary value to the 'Damage' attribute.
         // We then intercept that change here to perform the final health modification.
-        if (data.Modifier.Attribute == Damage)
+        if (data.Modifier.AttributeName == Damage.Name)
         {
             float incomingDamage = data.EvaluatedMagnitude;
 
