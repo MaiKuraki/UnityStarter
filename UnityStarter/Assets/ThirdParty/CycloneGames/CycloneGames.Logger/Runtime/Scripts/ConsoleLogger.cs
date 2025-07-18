@@ -1,9 +1,7 @@
 using System;
 using System.IO;
-using System.Runtime.CompilerServices;
-using System.Diagnostics; // For StackTraceHidden
 using System.Text;
-using CycloneGames.Logger; // For StringBuilderPool
+using CycloneGames.Logger.Util;
 
 namespace CycloneGames.Logger
 {

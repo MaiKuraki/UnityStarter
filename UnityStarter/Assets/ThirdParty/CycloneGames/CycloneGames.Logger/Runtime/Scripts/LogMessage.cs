@@ -44,8 +44,8 @@ namespace CycloneGames.Logger
         {
             Timestamp = timestamp;
             Level = level;
-            OriginalMessage = originalMessage ?? string.Empty; // Ensure not null
-            Category = category; // Allow null category
+            OriginalMessage = originalMessage ?? string.Empty;
+            Category = category;
             FilePath = filePath;
             LineNumber = lineNumber;
             MemberName = memberName;
