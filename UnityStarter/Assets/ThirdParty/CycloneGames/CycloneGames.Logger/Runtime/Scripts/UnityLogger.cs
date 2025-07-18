@@ -1,5 +1,5 @@
-using UnityEngine; // For UnityEngine.Debug
 using System.Text;
+using CycloneGames.Logger.Util;
 
 namespace CycloneGames.Logger
 {
@@ -69,6 +69,6 @@ namespace CycloneGames.Logger
         public void LogError(in LogMessage logMessage) => LogToUnity(logMessage);
         public void LogFatal(in LogMessage logMessage) => LogToUnity(logMessage);
 
-        public void Dispose() { /* No unmanaged resources specific to UnityLogger. */ }
+        public void Dispose() { }
     }
 }

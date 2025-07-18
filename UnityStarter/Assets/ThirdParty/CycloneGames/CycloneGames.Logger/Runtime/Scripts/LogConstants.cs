@@ -17,7 +17,7 @@ namespace CycloneGames.Logger
             _levelStrings[(int)LogLevel.Warning] = "WARNING";
             _levelStrings[(int)LogLevel.Error] = "ERROR";
             _levelStrings[(int)LogLevel.Fatal] = "FATAL";
-            _levelStrings[(int)LogLevel.None] = "NONE"; // Should ideally not be logged
+            _levelStrings[(int)LogLevel.None] = "NONE";
         }
 
         /// <summary>
