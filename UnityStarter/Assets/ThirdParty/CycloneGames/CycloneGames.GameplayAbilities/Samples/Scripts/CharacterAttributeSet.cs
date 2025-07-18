@@ -81,7 +81,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 {
                     // The 'data.Target' is the AbilitySystemComponent of the character being damaged.
                     // It's a good practice to use tags for state changes.
-                    data.Target.AddLooseGameplayTag(GameplayTagManager.RequestTag(ProjectGameplayTags.State_Dead));
+                    data.Target.AddLooseGameplayTag(GameplayTagManager.RequestTag(GASSampleTags.State_Dead));
                     CLogger.LogWarning($"{data.Target.OwnerActor} has died!");
                 }
             }
