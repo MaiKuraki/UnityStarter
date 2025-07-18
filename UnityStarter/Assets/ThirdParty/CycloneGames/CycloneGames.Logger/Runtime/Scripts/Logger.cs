@@ -64,8 +64,6 @@ namespace CycloneGames.Logger
             {
                 Type loggerType = logger.GetType();
                 bool exists = false;
-                // This iteration is acceptable for a small number of loggers.
-                // For a very large number, a HashSet<Type> could track added types.
                 for (int i = 0; i < _loggers.Count; i++)
                 {
                     if (_loggers[i].GetType() == loggerType)
@@ -147,14 +145,14 @@ namespace CycloneGames.Logger
             LogFilter currentFilter = _currentLogFilter; // Read volatile field once.
             if (currentFilter == LogFilter.LogAll || string.IsNullOrEmpty(category)) return true;
 
-            lock (_filterLock) // Lock only if category filtering is needed.
+            lock (_filterLock)
             {
                 switch (currentFilter) // Use the local copy of _currentLogFilter
                 {
                     case LogFilter.LogWhiteList: return _whiteList.Contains(category);
                     case LogFilter.LogNoBlackList: return !_blackList.Contains(category);
                     // LogAll already handled, default is redundant but safe.
-                    default: return true; 
+                    default: return true;
                 }
             }
         }
@@ -190,7 +188,7 @@ namespace CycloneGames.Logger
             if (!ShouldLog(level, category)) return;
 
             var logEntry = new LogMessage(
-                DateTime.Now, // Timestamp captured as close to call as possible.
+                DateTime.Now,
                 level,
                 originalMessage,
                 category,
@@ -198,9 +196,7 @@ namespace CycloneGames.Logger
                 lineNumber,
                 memberName
             );
-            
-            // Non-blocking add; BlockingCollection handles concurrency.
-            // Can throw if CompleteAdding() has been called and collection is full, though unlikely with ConcurrentQueue.
+
             if (!_messageQueue.IsAddingCompleted)
             {
                 try
@@ -210,7 +206,7 @@ namespace CycloneGames.Logger
                 catch (InvalidOperationException) { /* Queue is completed, ignore. */ }
             }
         }
-        
+
         private void ProcessQueue()
         {
             try
@@ -221,7 +217,6 @@ namespace CycloneGames.Logger
                     _loggersLock.EnterReadLock();
                     try
                     {
-                        // Iterate over current loggers. List is not modified while read lock is held.
                         for (int i = 0; i < _loggers.Count; i++)
                         {
                             var logger = _loggers[i];
@@ -239,7 +234,6 @@ namespace CycloneGames.Logger
                             }
                             catch (Exception ex)
                             {
-                                // Log sink itself failed. Report to console.
                                 Console.Error.WriteLine($"[CRITICAL] CLogger: Logger {logger.GetType().Name} failed. {ex.Message}");
                             }
                         }
@@ -257,7 +251,6 @@ namespace CycloneGames.Logger
             }
             catch (Exception ex)
             {
-                // Unexpected error in the processing loop.
                 Console.Error.WriteLine($"[CRITICAL] CLogger: ProcessQueue critical error. {ex}");
             }
         }
@@ -284,13 +277,13 @@ namespace CycloneGames.Logger
             }
             catch (Exception ex) // Other exceptions during task wait.
             {
-                 Console.Error.WriteLine($"[ERROR] CLogger: Error during task shutdown. {ex.Message}");
+                Console.Error.WriteLine($"[ERROR] CLogger: Error during task shutdown. {ex.Message}");
             }
 
             _cts.Dispose();
             _messageQueue.Dispose();
             _loggersLock.Dispose();
-            
+
             ClearLoggers(); // Dispose all registered loggers.
             Console.WriteLine("[INFO] CLogger: Shutdown complete.");
         }
