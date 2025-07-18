@@ -1,9 +1,27 @@
+//  NOTE: This line will rigister all const string tags definitions in 'CycloneGames.GameplayAbilities.Sample.ProjectGameplayTags'
+[assembly: CycloneGames.GameplayTags.Runtime.RegisterGameplayTagsFrom(typeof(CycloneGames.GameplayAbilities.Sample.GASSampleTags))]
+
 namespace CycloneGames.GameplayAbilities.Sample
 {
-    public static class ProjectGameplayTags
+    public static class GASSampleTags
     {
+        // ==================================================================================
+        // TAG DEFINITION ROOTS
+        // Define all top-level categories here. Child tags MUST be defined by
+        // concatenating from these constants to ensure compile-time safety.
+        // ==================================================================================
+
+        // root nodes for optimize, also if you dont want to use it, you can remove it
+        public const string Attribute = "Attribute";
+        public const string State = "State";
+        public const string Debuff = "Debuff";
+        public const string Cooldown = "Cooldown";
+        public const string Event = "Event";
+        public const string GameplayCue = "GameplayCue";
+
+
         // Attributes
-        public const string Attribute_Primary_Attack = "Attribute.Primary.Attack";
+        public const string Attribute_Primary_Attack = "Attribute.Primary.Attack";          // or you can write as Attribute + '.Primary.Attack'
         public const string Attribute_Primary_Defense = "Attribute.Primary.Defense";
         public const string Attribute_Secondary_Health = "Attribute.Secondary.Health";
         public const string Attribute_Secondary_MaxHealth = "Attribute.Secondary.MaxHealth";
@@ -27,6 +45,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         public const string Cooldown_PoisonBlade = "Cooldown.Skill.PoisonBlade";
         public const string Cooldown_Purify = "Cooldown.Skill.Purify";
         public const string Cooldown_ChainLightning = "Cooldown.Skill.ChainLightning";
+        public const string Cooldown_SlamAttack = "Cooldown.Skill.SlamAttack";
 
         // Events
         public const string Event_Character_Death = "Event.Character.Death";
@@ -39,5 +58,6 @@ namespace CycloneGames.GameplayAbilities.Sample
         public const string GameplayCue_Poison_Loop = "GameplayCue.Poison.Loop";
         public const string GameplayCue_Purify_Effect = "GameplayCue.Purify.Effect";
         public const string GameplayCue_Lightning_Impact = "GameplayCue.Lightning.Impact";
+        public const string GameplayCue_Slam_Impact = "GameplayCue.Slam.Impact";
     }
 }
