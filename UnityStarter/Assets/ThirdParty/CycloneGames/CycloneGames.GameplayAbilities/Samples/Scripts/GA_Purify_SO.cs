@@ -34,7 +34,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
                     // Create a tag container with the tag of the effect we want to remove.
                     var tagsToRemove = new GameplayTagContainer();
-                    tagsToRemove.AddTag(GameplayTagManager.RequestTag(ProjectGameplayTags.Debuff_Poison));
+                    tagsToRemove.AddTag(GameplayTagManager.RequestTag(GASSampleTags.Debuff_Poison));
 
                     // This function needs to be implemented in your AbilitySystemComponent.
                     targetASC.RemoveActiveEffectsWithGrantedTags(tagsToRemove);

@@ -21,19 +21,19 @@ namespace CycloneGames.GameplayAbilities.Sample
             // Initialize the GameplayTagManager with our defined tags.
             var tagNames = new List<string>
             {
-                ProjectGameplayTags.Attribute_Primary_Attack, ProjectGameplayTags.Attribute_Primary_Defense,
-                ProjectGameplayTags.Attribute_Secondary_Health, ProjectGameplayTags.Attribute_Secondary_MaxHealth,
-                ProjectGameplayTags.Attribute_Secondary_Mana, ProjectGameplayTags.Attribute_Secondary_MaxMana,
-                ProjectGameplayTags.Attribute_Secondary_Speed, ProjectGameplayTags.Attribute_Meta_Damage,
-                ProjectGameplayTags.State_Dead, ProjectGameplayTags.State_Stunned,
-                ProjectGameplayTags.State_Burning, ProjectGameplayTags.State_Poisoned,
-                ProjectGameplayTags.Debuff_Burn, ProjectGameplayTags.Debuff_Poison,
-                ProjectGameplayTags.Cooldown_Fireball, ProjectGameplayTags.Cooldown_PoisonBlade,
-                ProjectGameplayTags.Cooldown_Purify, ProjectGameplayTags.Cooldown_ChainLightning,
-                ProjectGameplayTags.Event_Character_Death, ProjectGameplayTags.Event_Character_LeveledUp,
-                ProjectGameplayTags.GameplayCue_Fireball_Impact, ProjectGameplayTags.GameplayCue_Burn_Loop,
-                ProjectGameplayTags.GameplayCue_Poison_Impact, ProjectGameplayTags.GameplayCue_Poison_Loop,
-                ProjectGameplayTags.GameplayCue_Purify_Effect, ProjectGameplayTags.GameplayCue_Lightning_Impact
+                GASSampleTags.Attribute_Primary_Attack, GASSampleTags.Attribute_Primary_Defense,
+                GASSampleTags.Attribute_Secondary_Health, GASSampleTags.Attribute_Secondary_MaxHealth,
+                GASSampleTags.Attribute_Secondary_Mana, GASSampleTags.Attribute_Secondary_MaxMana,
+                GASSampleTags.Attribute_Secondary_Speed, GASSampleTags.Attribute_Meta_Damage,
+                GASSampleTags.State_Dead, GASSampleTags.State_Stunned,
+                GASSampleTags.State_Burning, GASSampleTags.State_Poisoned,
+                GASSampleTags.Debuff_Burn, GASSampleTags.Debuff_Poison,
+                GASSampleTags.Cooldown_Fireball, GASSampleTags.Cooldown_PoisonBlade,
+                GASSampleTags.Cooldown_Purify, GASSampleTags.Cooldown_ChainLightning,
+                GASSampleTags.Event_Character_Death, GASSampleTags.Event_Character_LeveledUp,
+                GASSampleTags.GameplayCue_Fireball_Impact, GASSampleTags.GameplayCue_Burn_Loop,
+                GASSampleTags.GameplayCue_Poison_Impact, GASSampleTags.GameplayCue_Poison_Loop,
+                GASSampleTags.GameplayCue_Purify_Effect, GASSampleTags.GameplayCue_Lightning_Impact
             };
             GameplayTagManager.RegisterDynamicTags(tagNames);
 

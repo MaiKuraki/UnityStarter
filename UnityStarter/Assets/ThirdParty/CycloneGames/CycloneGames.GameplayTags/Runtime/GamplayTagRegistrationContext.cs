@@ -80,21 +80,30 @@ namespace CycloneGames.GameplayTags.Runtime
 
         private void RegisterMissingParents()
         {
-            // Use a temporary list to avoid modifying the collection while iterating.
-            var tempDefinitions = new List<GameplayTagDefinition>(m_Definitions);
-
-            foreach (GameplayTagDefinition definition in tempDefinitions)
+            // A do-while loop is used here to ensure full recursion. The loop continues as long as new
+            // parent tags are being discovered and added in a pass. This guarantees that for a tag like
+            // 'A.B.C', the system will first add 'A.B', and in the next iteration, add 'A',
+            // thus correctly building the entire hierarchy chain.
+            bool newParentAdded;
+            do
             {
-                // We only need to check the direct parent. The recursion will handle grandparents.
-                if (GameplayTagUtility.TryGetParentName(definition.TagName, out string parentName))
+                newParentAdded = false;
+                // We create a temporary copy to safely iterate while modifying the original list.
+                var currentDefinitions = new List<GameplayTagDefinition>(m_Definitions);
+
+                foreach (GameplayTagDefinition definition in currentDefinitions)
                 {
-                    if (!m_TagsByName.ContainsKey(parentName))
+                    if (GameplayTagUtility.TryGetParentName(definition.TagName, out string parentName))
                     {
-                        // Recursively register the parent. This ensures the entire chain is created.
-                        RegisterTag(parentName, "Auto-generated parent tag.", GameplayTagFlags.None);
+                        if (!m_TagsByName.ContainsKey(parentName))
+                        {
+                            RegisterTag(parentName, "Auto-generated parent tag.", GameplayTagFlags.None);
+                            // Set the flag to true, indicating that the list was modified and we need to loop again.
+                            newParentAdded = true;
+                        }
                     }
                 }
-            }
+            } while (newParentAdded);
         }
 
         private void SortDefinitionsAlphabetically()

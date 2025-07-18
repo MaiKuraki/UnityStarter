@@ -11,7 +11,7 @@ namespace CycloneGames.GameplayTags.Runtime
         private static List<GameplayTagDefinition> s_TagsDefinitionsList = new List<GameplayTagDefinition>();
         private static GameplayTag[] s_Tags;
         private static bool s_IsInitialized;
-        
+
         public static ReadOnlySpan<GameplayTag> GetAllTags()
         {
             InitializeIfNeeded();
@@ -56,7 +56,7 @@ namespace CycloneGames.GameplayTags.Runtime
                 tag = GameplayTag.None;
                 return false;
             }
-            
+
             InitializeIfNeeded();
             if (s_TagDefinitionsByName.TryGetValue(name, out GameplayTagDefinition definition))
             {
@@ -67,19 +67,19 @@ namespace CycloneGames.GameplayTags.Runtime
             tag = GameplayTag.None;
             return false;
         }
-        
+
         public static void InitializeIfNeeded()
         {
             if (s_IsInitialized)
             {
                 return;
             }
-            
+
             // This whole block runs only once.
             s_IsInitialized = true; // Set early to prevent re-entrancy.
 
             GameplayTagRegistrationContext context = new GameplayTagRegistrationContext();
-            
+
             // Discover tags from attributes in all loaded assemblies.
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
@@ -98,6 +98,29 @@ namespace CycloneGames.GameplayTags.Runtime
 #endif
                         }
                     }
+
+                    // Scans the assembly for attributes pointing to static classes with tag definitions.
+                    foreach (RegisterGameplayTagsFromAttribute fromAttribute in assembly.GetCustomAttributes<RegisterGameplayTagsFromAttribute>())
+                    {
+                        Type targetType = fromAttribute.TargetType;
+                        if (targetType == null) continue;
+
+                        var fields = targetType.GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy);
+                        foreach (var field in fields)
+                        {
+                            // We are looking for public static literal strings (const).
+                            if (field.IsLiteral && !field.IsInitOnly && field.FieldType == typeof(string))
+                            {
+                                string tagName = (string)field.GetValue(null);
+                                if (!string.IsNullOrEmpty(tagName))
+                                {
+                                    // Register the tag found in the static class.
+                                    // The description will default to the tag name itself.
+                                    context.RegisterTag(tagName, description: tagName, flags: GameplayTagFlags.None);
+                                }
+                            }
+                        }
+                    }
                 }
                 catch (Exception e)
                 {
@@ -107,7 +130,7 @@ namespace CycloneGames.GameplayTags.Runtime
 #endif
                 }
             }
-            
+
             s_TagsDefinitionsList = context.GenerateDefinitions(true);
             s_TagDefinitionsByName.Clear();
             foreach (GameplayTagDefinition definition in s_TagsDefinitionsList)
@@ -132,11 +155,11 @@ namespace CycloneGames.GameplayTags.Runtime
                 s_Tags[i] = s_TagsDefinitionsList[i + 1].Tag;
             }
         }
-        
+
         public static void RegisterDynamicTags(IEnumerable<string> tags)
         {
             if (tags == null) return;
-            
+
             InitializeIfNeeded();
             var context = new GameplayTagRegistrationContext(s_TagsDefinitionsList);
 
@@ -145,7 +168,7 @@ namespace CycloneGames.GameplayTags.Runtime
                 if (string.IsNullOrEmpty(tag)) continue;
                 context.RegisterTag(tag, string.Empty, GameplayTagFlags.None);
             }
-            
+
             // Finalize registration
             s_TagsDefinitionsList = context.GenerateDefinitions(false); // Do not add another "None" tag.
             // Re-map all definitions by name
@@ -160,18 +183,18 @@ namespace CycloneGames.GameplayTags.Runtime
         public static void RegisterDynamicTag(string name, string description = null, GameplayTagFlags flags = GameplayTagFlags.None)
         {
             if (string.IsNullOrEmpty(name)) return;
-            
+
             InitializeIfNeeded();
-            
+
             // If tag already exists, do nothing.
             if (s_TagDefinitionsByName.ContainsKey(name))
             {
                 return;
             }
-            
+
             var context = new GameplayTagRegistrationContext(s_TagsDefinitionsList);
             context.RegisterTag(name, description, flags);
-            
+
             s_TagsDefinitionsList = context.GenerateDefinitions(false);
             s_TagDefinitionsByName.Clear();
             foreach (var definition in s_TagsDefinitionsList)
