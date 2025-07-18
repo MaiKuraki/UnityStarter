@@ -17,7 +17,7 @@ namespace CycloneGames.Logger // Ensure namespace matches if it contains LogMess
 
         private readonly StreamWriter _writer;
         private readonly Timer _flushTimer;
-        private readonly ConcurrentQueue<LogMessage> _logQueue = new(); // Changed from ConcurrentQueue<string>
+        private readonly ConcurrentQueue<LogMessage> _logQueue = new();
         private volatile bool _disposed;
 
         public FileLogger(string logFilePath)
@@ -46,8 +46,7 @@ namespace CycloneGames.Logger // Ensure namespace matches if it contains LogMess
             {
                 _disposed = true; // Mark as disposed to prevent operations.
                 tempTimer?.Dispose();
-                tempWriter?.Dispose(); // Disposes underlying stream too.
-                // Fallback critical error logging.
+                tempWriter?.Dispose();
                 Console.Error.WriteLine($"[CRITICAL] FileLogger: Failed to initialize for path '{logFilePath}'. {ex.Message}");
                 throw new InvalidOperationException($"Failed to initialize FileLogger for path '{logFilePath}'", ex);
             }

@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 
-namespace CycloneGames.Logger
+namespace CycloneGames.Logger.Util
 {
     public static class StringBuilderPool
     {
