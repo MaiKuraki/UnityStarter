@@ -1,0 +1,78 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: cb068d9736917d440ba3a3103f9a665b, type: 3}
+  m_Name: GE_BaseAttributes_Enemy
+  m_EditorClassIdentifier: 
+  EffectName: BaseAttribute_Enemy
+  DurationPolicy: 0
+  Duration: 0
+  Period: 0
+  SerializableModifiers:
+  - AttributeName: Attribute.Primary.Level
+    Operation: 3
+    Magnitude:
+      BaseValue: 1
+      ScalingFactorPerLevel: 0
+  - AttributeName: Attribute.Secondary.MaxHealth
+    Operation: 3
+    Magnitude:
+      BaseValue: 100
+      ScalingFactorPerLevel: 0
+  - AttributeName: Attribute.Secondary.Health
+    Operation: 3
+    Magnitude:
+      BaseValue: 100
+      ScalingFactorPerLevel: 0
+  - AttributeName: Attribute.Secondary.MaxMana
+    Operation: 3
+    Magnitude:
+      BaseValue: 50
+      ScalingFactorPerLevel: 0
+  - AttributeName: Attribute.Secondary.Mana
+    Operation: 3
+    Magnitude:
+      BaseValue: 50
+      ScalingFactorPerLevel: 0
+  - AttributeName: Attribute.Primary.Attack
+    Operation: 3
+    Magnitude:
+      BaseValue: 10
+      ScalingFactorPerLevel: 0
+  - AttributeName: Attribute.Primary.Defense
+    Operation: 3
+    Magnitude:
+      BaseValue: 5
+      ScalingFactorPerLevel: 0
+  - AttributeName: Attribute.Secondary.Speed
+    Operation: 3
+    Magnitude:
+      BaseValue: 5
+      ScalingFactorPerLevel: 0
+  GrantedAbilities: []
+  AssetTags:
+    m_SerializedExplicitTags: []
+  GrantedTags:
+    m_SerializedExplicitTags: []
+  ApplicationTagRequirements:
+    m_ForbiddenTags:
+      m_SerializedExplicitTags: []
+    m_RequiredTags:
+      m_SerializedExplicitTags: []
+  OngoingTagRequirements:
+    m_ForbiddenTags:
+      m_SerializedExplicitTags: []
+    m_RequiredTags:
+      m_SerializedExplicitTags: []
+  RemoveGameplayEffectsWithTags:
+    m_SerializedExplicitTags: []
+  GameplayCues:
+    m_SerializedExplicitTags: []
