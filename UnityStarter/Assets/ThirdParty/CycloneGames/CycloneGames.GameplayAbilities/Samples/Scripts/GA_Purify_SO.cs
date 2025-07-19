@@ -24,19 +24,20 @@ namespace CycloneGames.GameplayAbilities.Sample
         {
             if (CommitAbility(actorInfo, spec))
             {
-                var caster = actorInfo.AvatarActor as GameObject;
-                // Target self or friendly
-                var target = caster;
+                // This ability targets the caster themselves.
+                var targetASC = actorInfo.OwnerActor as AbilitySystemComponent;
+                if (actorInfo.OwnerActor is Character character) targetASC = character.AbilitySystemComponent;
+                if (actorInfo.OwnerActor is AbilitySystemComponentHolder holder) targetASC = holder.AbilitySystemComponent;
 
-                if (target != null && target.TryGetComponent<AbilitySystemComponent>(out var targetASC))
+                if (targetASC != null)
                 {
-                    CLogger.LogInfo($"{caster.name} casts Purify on {target.name}.");
+                    CLogger.LogInfo($"{actorInfo.AvatarActor.GetType().Name} casts Purify on themselves.");
 
                     // Create a tag container with the tag of the effect we want to remove.
                     var tagsToRemove = new GameplayTagContainer();
                     tagsToRemove.AddTag(GameplayTagManager.RequestTag(GASSampleTags.Debuff_Poison));
 
-                    // This function needs to be implemented in your AbilitySystemComponent.
+                    // This function removes all active effects that grant the specified tag.
                     targetASC.RemoveActiveEffectsWithGrantedTags(tagsToRemove);
                 }
             }
@@ -50,6 +51,22 @@ namespace CycloneGames.GameplayAbilities.Sample
     [CreateAssetMenu(fileName = "GA_Purify", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Purify")]
     public class GA_Purify_SO : GameplayAbilitySO
     {
-        public override GameplayAbility CreateAbility() => new GA_Purify();
+        public override GameplayAbility CreateAbility()
+        {
+            var ability = new GA_Purify();
+            ability.Initialize(
+                AbilityName,
+                InstancingPolicy,
+                NetExecutionPolicy,
+                CostEffect?.CreateGameplayEffect(),
+                CooldownEffect?.CreateGameplayEffect(),
+                AbilityTags,
+                ActivationBlockedTags,
+                ActivationRequiredTags,
+                CancelAbilitiesWithTag,
+                BlockAbilitiesWithTag
+            );
+            return ability;
+        }
     }
 }

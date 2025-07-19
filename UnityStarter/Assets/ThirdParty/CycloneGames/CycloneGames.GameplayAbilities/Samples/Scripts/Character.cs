@@ -23,16 +23,16 @@ namespace CycloneGames.GameplayAbilities.Sample
         void Awake()
         {
             ascHolder = GetComponent<AbilitySystemComponentHolder>();
+        }
 
+        void Start()
+        {
             // This is a common setup pattern.
             AbilitySystemComponent.InitAbilityActorInfo(this, gameObject);
 
             AttributeSet = new CharacterAttributeSet();
             AbilitySystemComponent.AddAttributeSet(AttributeSet);
-        }
 
-        void Start()
-        {
             // Apply initial attributes and abilities on Start to ensure all systems are ready.
             ApplyInitialEffects();
             GrantInitialAbilities();
@@ -97,7 +97,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             new ModifierInfo(AttributeSet.Defense, EAttributeModifierOperation.Add, gains.DefenseGain)
         };
 
-            var levelUpEffect = new GameplayEffect("GE_LevelUp", EDurationPolicy.Instant, 0, mods);
+            var levelUpEffect = new GameplayEffect("GE_LevelUp", EDurationPolicy.Instant, 0, 0, mods);
             var spec = GameplayEffectSpec.Create(levelUpEffect, AbilitySystemComponent);
             AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
 

@@ -65,10 +65,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// <summary>
     /// Represents a float value that can scale with a level.
     /// </summary>
+    [System.Serializable]
     public struct ScalableFloat
     {
-        public float BaseValue { get; }
-        public float ScalingFactorPerLevel { get; }
+        //  The base value of this float.
+        public float BaseValue;
+        //  A scaling factor applied per level. Formula: BaseValue + (ScalingFactorPerLevel * (Level - 1))
+        public float ScalingFactorPerLevel;
 
         public ScalableFloat(float baseValue, float scalingFactorPerLevel = 0f)
         {

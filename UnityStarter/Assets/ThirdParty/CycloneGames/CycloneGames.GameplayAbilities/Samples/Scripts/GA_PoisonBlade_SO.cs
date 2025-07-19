@@ -49,6 +49,24 @@ namespace CycloneGames.GameplayAbilities.Sample
     public class GA_PoisonBlade_SO : GameplayAbilitySO
     {
         public GameplayEffectSO PoisonEffect;
-        public override GameplayAbility CreateAbility() => new GA_PoisonBlade(PoisonEffect.CreateGameplayEffect());
+
+        public override GameplayAbility CreateAbility()
+        {
+            var effect = PoisonEffect ? PoisonEffect.CreateGameplayEffect() : null;
+            var ability = new GA_PoisonBlade(effect);
+            ability.Initialize(
+                AbilityName,
+                InstancingPolicy,
+                NetExecutionPolicy,
+                CostEffect?.CreateGameplayEffect(),
+                CooldownEffect?.CreateGameplayEffect(),
+                AbilityTags,
+                ActivationBlockedTags,
+                ActivationRequiredTags,
+                CancelAbilitiesWithTag,
+                BlockAbilitiesWithTag
+            );
+            return ability;
+        }
     }
 }

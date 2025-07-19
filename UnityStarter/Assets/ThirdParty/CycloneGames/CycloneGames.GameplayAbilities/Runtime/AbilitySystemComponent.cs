@@ -116,7 +116,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GameplayAbilitySpec GrantAbility(GameplayAbility ability, int level = 1)
         {
             if (ability == null) return null;
+
             var spec = new GameplayAbilitySpec(ability, level);
+            spec.Init(this);
+
             activatableAbilities.Add(spec);
             spec.GetPrimaryInstance().OnGiveAbility(new GameplayAbilityActorInfo(OwnerActor, AvatarActor), spec);
             return spec;
@@ -190,12 +193,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Handle instancing
             if (ability.InstancingPolicy == EGameplayAbilityInstancingPolicy.InstancedPerExecution)
             {
-                spec.CreateInstance(this);
+                spec.CreateInstance();
                 ability = spec.AbilityInstance;
             }
             else if (ability.InstancingPolicy == EGameplayAbilityInstancingPolicy.InstancedPerActor && spec.AbilityInstance == null)
             {
-                spec.CreateInstance(this);
+                spec.CreateInstance();
                 ability = spec.AbilityInstance;
             }
 
@@ -301,6 +304,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 pendingPredictedEffects.Add(newActiveEffect);
             }
 
+            CLogger.LogInfo($"{OwnerActor} Apply GameplayEffect '{spec.Def.Name}' to self.");
             OnEffectApplied(newActiveEffect);
             MarkAttributesDirtyFromEffect(newActiveEffect);
         }
@@ -358,7 +362,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return true;
         }
 
-        private void ExecuteInstantEffect(GameplayEffectSpec spec)
+        internal void ExecuteInstantEffect(GameplayEffectSpec spec)
         {
             // This logic is mostly server-authoritative or for local effects.
             // Prediction of instant damage is complex and often avoided.
@@ -385,6 +389,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     ApplyModifier(spec, attribute, mod, spec.GetCalculatedMagnitude(mod), false);
                 }
             }
+
+            CLogger.LogInfo($"{OwnerActor} Execute Instant GameplayEffect '{spec.Def.Name}' on self.");
         }
 
         // --- Tick and State Management ---
@@ -402,7 +408,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 expiredEffectsScratchPad.Clear();
                 for (int i = activeEffects.Count - 1; i >= 0; i--)
                 {
-                    if (activeEffects[i].Tick(deltaTime))
+                    if (activeEffects[i].Tick(deltaTime, this))
                     {
                         expiredEffectsScratchPad.Add(activeEffects[i]);
                     }
@@ -438,7 +444,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                 foreach (var effect in activeEffects)
                 {
-                    if (!effect.Spec.Def.OngoingTagRequirements.IsEmpty() && !effect.Spec.Def.OngoingTagRequirements.MeetsRequirements(CombinedTags))
+                    if (!effect.Spec.Def.OngoingTagRequirements.IsEmpty && !effect.Spec.Def.OngoingTagRequirements.MeetsRequirements(CombinedTags))
                     {
                         continue;
                     }

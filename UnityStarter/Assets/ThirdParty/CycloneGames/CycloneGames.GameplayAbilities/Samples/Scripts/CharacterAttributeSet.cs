@@ -7,19 +7,19 @@ namespace CycloneGames.GameplayAbilities.Sample
     public class CharacterAttributeSet : AttributeSet
     {
         // --- Primary Attributes ---
-        public GameplayAttribute Level { get; } = new GameplayAttribute("Level");
-        public GameplayAttribute AttackPower { get; } = new GameplayAttribute("AttackPower");
-        public GameplayAttribute Defense { get; } = new GameplayAttribute("Defense");
-        public GameplayAttribute Speed { get; } = new GameplayAttribute("Speed");
+        public GameplayAttribute Level { get; } = new GameplayAttribute(GASSampleTags.Attribute_Primary_Level);
+        public GameplayAttribute AttackPower { get; } = new GameplayAttribute(GASSampleTags.Attribute_Primary_Attack);
+        public GameplayAttribute Defense { get; } = new GameplayAttribute(GASSampleTags.Attribute_Primary_Defense);
+        public GameplayAttribute Speed { get; } = new GameplayAttribute(GASSampleTags.Attribute_Secondary_Speed);
 
         // --- Secondary Attributes ---
-        public GameplayAttribute Health { get; } = new GameplayAttribute("Health");
-        public GameplayAttribute MaxHealth { get; } = new GameplayAttribute("MaxHealth");
-        public GameplayAttribute Mana { get; } = new GameplayAttribute("Mana");
-        public GameplayAttribute MaxMana { get; } = new GameplayAttribute("MaxMana");
+        public GameplayAttribute Health { get; } = new GameplayAttribute(GASSampleTags.Attribute_Secondary_Health);
+        public GameplayAttribute MaxHealth { get; } = new GameplayAttribute(GASSampleTags.Attribute_Secondary_MaxHealth);
+        public GameplayAttribute Mana { get; } = new GameplayAttribute(GASSampleTags.Attribute_Secondary_Mana);
+        public GameplayAttribute MaxMana { get; } = new GameplayAttribute(GASSampleTags.Attribute_Secondary_MaxMana);
 
         // --- Meta Attributes (temporary values for calculations) ---
-        public GameplayAttribute Damage { get; } = new GameplayAttribute("Damage");
+        public GameplayAttribute Damage { get; } = new GameplayAttribute(GASSampleTags.Attribute_Meta_Damage);
 
         public CharacterAttributeSet()
         {

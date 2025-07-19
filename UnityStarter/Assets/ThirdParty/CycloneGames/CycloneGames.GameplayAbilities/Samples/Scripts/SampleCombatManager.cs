@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.Logger;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -16,32 +17,37 @@ namespace CycloneGames.GameplayAbilities.Sample
         public Text EnemyStatusText;
         public Text LogText;
 
+        private void Awake()
+        {
+            CLogger.Instance.AddLogger(new UnityLogger());
+        }
+
         private void Start()
         {
-            // Initialize the GameplayTagManager with our defined tags.
-            var tagNames = new List<string>
-            {
-                GASSampleTags.Attribute_Primary_Attack, GASSampleTags.Attribute_Primary_Defense,
-                GASSampleTags.Attribute_Secondary_Health, GASSampleTags.Attribute_Secondary_MaxHealth,
-                GASSampleTags.Attribute_Secondary_Mana, GASSampleTags.Attribute_Secondary_MaxMana,
-                GASSampleTags.Attribute_Secondary_Speed, GASSampleTags.Attribute_Meta_Damage,
-                GASSampleTags.State_Dead, GASSampleTags.State_Stunned,
-                GASSampleTags.State_Burning, GASSampleTags.State_Poisoned,
-                GASSampleTags.Debuff_Burn, GASSampleTags.Debuff_Poison,
-                GASSampleTags.Cooldown_Fireball, GASSampleTags.Cooldown_PoisonBlade,
-                GASSampleTags.Cooldown_Purify, GASSampleTags.Cooldown_ChainLightning,
-                GASSampleTags.Event_Character_Death, GASSampleTags.Event_Character_LeveledUp,
-                GASSampleTags.GameplayCue_Fireball_Impact, GASSampleTags.GameplayCue_Burn_Loop,
-                GASSampleTags.GameplayCue_Poison_Impact, GASSampleTags.GameplayCue_Poison_Loop,
-                GASSampleTags.GameplayCue_Purify_Effect, GASSampleTags.GameplayCue_Lightning_Impact
-            };
-            GameplayTagManager.RegisterDynamicTags(tagNames);
-
-            // Setup a simple logger to display messages on screen.
-            // CLogger.OnLog += (message, type) =>
+            // // Initialize the GameplayTagManager with our defined tags.
+            // var tagNames = new List<string>
             // {
-            //     if (LogText != null) LogText.text = message;
+            //     GASSampleTags.Attribute_Primary_Attack, GASSampleTags.Attribute_Primary_Defense,
+            //     GASSampleTags.Attribute_Secondary_Health, GASSampleTags.Attribute_Secondary_MaxHealth,
+            //     GASSampleTags.Attribute_Secondary_Mana, GASSampleTags.Attribute_Secondary_MaxMana,
+            //     GASSampleTags.Attribute_Secondary_Speed, GASSampleTags.Attribute_Meta_Damage,
+            //     GASSampleTags.State_Dead, GASSampleTags.State_Stunned,
+            //     GASSampleTags.State_Burning, GASSampleTags.State_Poisoned,
+            //     GASSampleTags.Debuff_Burn, GASSampleTags.Debuff_Poison,
+            //     GASSampleTags.Cooldown_Fireball, GASSampleTags.Cooldown_PoisonBlade,
+            //     GASSampleTags.Cooldown_Purify, GASSampleTags.Cooldown_ChainLightning,
+            //     GASSampleTags.Event_Character_Death, GASSampleTags.Event_Character_LeveledUp,
+            //     GASSampleTags.GameplayCue_Fireball_Impact, GASSampleTags.GameplayCue_Burn_Loop,
+            //     GASSampleTags.GameplayCue_Poison_Impact, GASSampleTags.GameplayCue_Poison_Loop,
+            //     GASSampleTags.GameplayCue_Purify_Effect, GASSampleTags.GameplayCue_Lightning_Impact
             // };
+            // GameplayTagManager.RegisterDynamicTags(tagNames);
+
+            // // Setup a simple logger to display messages on screen.
+            // // CLogger.OnLog += (message, type) =>
+            // // {
+            // //     if (LogText != null) LogText.text = message;
+            // // };
         }
 
         void Update()
@@ -52,7 +58,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         void HandleInput()
         {
-            if (Input.GetKeyDown(KeyCode.Alpha1)) TryActivateAbility(Player, 0); // Fireball
+            if (Input.GetKeyDown(KeyCode.Q)) TryActivateAbility(Player, 0); // Fireball
             if (Input.GetKeyDown(KeyCode.Alpha2)) TryActivateAbility(Player, 1); // Poison Blade
             if (Input.GetKeyDown(KeyCode.Alpha3)) TryActivateAbility(Player, 2); // Chain Lightning
             if (Input.GetKeyDown(KeyCode.Alpha4)) TryActivateAbility(Player, 3); // Purify

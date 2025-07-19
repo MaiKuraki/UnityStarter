@@ -17,6 +17,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public int StackCount { get; private set; }
         public bool IsExpired { get; private set; }
 
+        private float periodTimer;
         private ActiveGameplayEffect() { }
 
         public static ActiveGameplayEffect Create(GameplayEffectSpec spec)
@@ -26,6 +27,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             activeEffect.TimeRemaining = spec.Duration;
             activeEffect.StackCount = 1;
             activeEffect.IsExpired = false;
+
+            // Initialize the period timer. If the period is 0 or less, it's not a periodic effect.
+            activeEffect.periodTimer = spec.Def.Period > 0 ? spec.Def.Period : -1f;
+
             return activeEffect;
         }
 
@@ -36,6 +41,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             TimeRemaining = 0;
             StackCount = 0;
             IsExpired = false;
+            periodTimer = -1f;
             pool.Push(this);
         }
 
@@ -50,26 +56,46 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 TimeRemaining = Spec.Duration;
             }
+
+            if (periodTimer > 0)
+            {
+                periodTimer = Spec.Def.Period;
+            }
         }
-        
+
         /// <summary>
-        /// Ticks the effect's duration.
+        /// Ticks the effect's duration and period timer.
         /// </summary>
         /// <param name="deltaTime">The time since the last frame.</param>
+        /// <param name="asc">The owning AbilitySystemComponent to execute periodic effects on.</param>
         /// <returns>True if the effect expired this tick, false otherwise.</returns>
-        public bool Tick(float deltaTime)
+        public bool Tick(float deltaTime, AbilitySystemComponent asc)
         {
-            if (IsExpired || Spec.Def.DurationPolicy != EDurationPolicy.HasDuration)
+            // --- Duration Handling ---
+            if (!IsExpired && Spec.Def.DurationPolicy == EDurationPolicy.HasDuration)
             {
-                return IsExpired;
+                TimeRemaining -= deltaTime;
+                if (TimeRemaining <= 0)
+                {
+                    IsExpired = true;
+                }
             }
 
-            TimeRemaining -= deltaTime;
-            if (TimeRemaining <= 0)
+            // --- Periodic Effect Handling ---
+            if (!IsExpired && periodTimer > 0)
             {
-                IsExpired = true;
+                periodTimer -= deltaTime;
+                if (periodTimer <= 0)
+                {
+                    // Period has elapsed, execute the effect's instant logic.
+                    // Note: Periodic effect executions are not predicted in this model.
+                    asc.ExecuteInstantEffect(this.Spec);
+
+                    // Reset the timer for the next period.
+                    periodTimer = Spec.Def.Period;
+                }
             }
-            
+
             return IsExpired;
         }
     }

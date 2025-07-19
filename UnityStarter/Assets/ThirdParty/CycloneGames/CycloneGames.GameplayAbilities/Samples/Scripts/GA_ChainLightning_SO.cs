@@ -26,8 +26,9 @@ namespace CycloneGames.GameplayAbilities.Sample
 
                 // Use a HashSet to track who has been hit to prevent infinite chains.
                 var hitTargets = new HashSet<GameObject>();
+                hitTargets.Add(caster); // Caster can't be hit.
 
-                GameObject currentTarget = FindInitialTarget(caster);
+                GameObject currentTarget = FindInitialTarget(caster, hitTargets);
                 if (currentTarget == null)
                 {
                     CLogger.LogWarning("Chain Lightning fizzles, no initial target found.");
@@ -35,62 +36,73 @@ namespace CycloneGames.GameplayAbilities.Sample
                     return;
                 }
 
-                hitTargets.Add(currentTarget);
-
                 // Chain loop
                 for (int i = 0; i <= maxBounces; i++)
                 {
-                    if (currentTarget == null || !currentTarget.TryGetComponent<AbilitySystemComponent>(out var targetASC))
+                    if (currentTarget == null)
                     {
                         break; // Chain is broken
                     }
 
+                    hitTargets.Add(currentTarget);
+
+                    if (!currentTarget.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
+                    {
+                        // Find next target even if current one has no ASC.
+                        currentTarget = FindNextTarget(currentTarget, hitTargets);
+                        continue;
+                    }
+
+                    var targetASC = holder.AbilitySystemComponent;
+
                     // Calculate damage for this bounce
                     float damageMultiplier = Mathf.Pow(1 - damageFalloffPerBounce, i);
-
                     CLogger.LogInfo($"Chain Lightning hits {currentTarget.name} for {damageMultiplier:P0} damage.");
 
-                    var damageSpec = GameplayEffectSpec.Create(lightningDamageEffect, AbilitySystemComponent, spec.Level);
-                    // Here we override the magnitude. This requires a SetByCaller-like mechanism.
-                    // For simplicity in this example, we'll create a temporary GE with modified magnitude.
-                    // A better system would allow GameplayEffectSpec modification.
-                    var tempMod = new ModifierInfo(lightningDamageEffect.Modifiers[0].AttributeName,
-                        lightningDamageEffect.Modifiers[0].Operation,
-                        new ScalableFloat(lightningDamageEffect.Modifiers[0].Magnitude.BaseValue * damageMultiplier));
+                    // A better system would allow GameplayEffectSpec modification (e.g., SetByCaller).
+                    // For simplicity here, we create a temporary GE with the modified magnitude.
+                    var originalMod = lightningDamageEffect.Modifiers[0];
+                    var tempMod = new ModifierInfo(
+                        originalMod.AttributeName,
+                        originalMod.Operation,
+                        new ScalableFloat(originalMod.Magnitude.GetValueAtLevel(spec.Level) * damageMultiplier)
+                    );
 
-                    var tempEffect = new GameplayEffect("TempLightning", EDurationPolicy.Instant, 0, new List<ModifierInfo> { tempMod });
+                    var tempEffect = new GameplayEffect("TempLightning", EDurationPolicy.Instant, 0, 0, new List<ModifierInfo> { tempMod });
                     var tempSpec = GameplayEffectSpec.Create(tempEffect, AbilitySystemComponent, spec.Level);
 
                     targetASC.ApplyGameplayEffectSpecToSelf(tempSpec);
 
                     // Find the next target
                     currentTarget = FindNextTarget(currentTarget, hitTargets);
-                    if (currentTarget != null) hitTargets.Add(currentTarget);
                 }
             }
 
             EndAbility();
         }
 
-        private GameObject FindInitialTarget(GameObject caster)
+        private GameObject FindInitialTarget(GameObject caster, HashSet<GameObject> alreadyHit)
         {
             // Simple forward raycast
-            if (Physics.Raycast(caster.transform.position + Vector3.up, caster.transform.forward, out RaycastHit hit, 20f))
+            if (Physics.Raycast(caster.transform.position + Vector3.up, caster.transform.forward, out RaycastHit hit, 100f))
             {
-                if (hit.collider.CompareTag("Enemy")) return hit.collider.gameObject;
+                if (!alreadyHit.Contains(hit.collider.gameObject) && hit.collider.CompareTag("Enemy"))
+                {
+                    return hit.collider.gameObject;
+                }
             }
             return null;
         }
 
         private GameObject FindNextTarget(GameObject fromTarget, HashSet<GameObject> alreadyHit)
         {
-            var colliders = Physics.OverlapSphere(fromTarget.transform.position, 10f); // 10m chain range
+            var colliders = Physics.OverlapSphere(fromTarget.transform.position, 15f); // 15m chain range
             GameObject closest = null;
             float minSqrDist = float.MaxValue;
 
             foreach (var col in colliders)
             {
-                if (col.gameObject == fromTarget || alreadyHit.Contains(col.gameObject) || !col.CompareTag("Enemy"))
+                if (alreadyHit.Contains(col.gameObject) || !col.CompareTag("Enemy"))
                 {
                     continue;
                 }
@@ -118,6 +130,23 @@ namespace CycloneGames.GameplayAbilities.Sample
         [Range(0f, 1f)]
         public float DamageFalloffPerBounce = 0.25f;
 
-        public override GameplayAbility CreateAbility() => new GA_ChainLightning(LightningDamageEffect.CreateGameplayEffect(), MaxBounces, DamageFalloffPerBounce);
+        public override GameplayAbility CreateAbility()
+        {
+            var effect = LightningDamageEffect ? LightningDamageEffect.CreateGameplayEffect() : null;
+            var ability = new GA_ChainLightning(effect, MaxBounces, DamageFalloffPerBounce);
+            ability.Initialize(
+                AbilityName,
+                InstancingPolicy,
+                NetExecutionPolicy,
+                CostEffect?.CreateGameplayEffect(),
+                CooldownEffect?.CreateGameplayEffect(),
+                AbilityTags,
+                ActivationBlockedTags,
+                ActivationRequiredTags,
+                CancelAbilitiesWithTag,
+                BlockAbilitiesWithTag
+            );
+            return ability;
+        }
     }
 }
