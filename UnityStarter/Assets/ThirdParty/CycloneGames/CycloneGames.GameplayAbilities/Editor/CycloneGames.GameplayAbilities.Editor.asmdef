@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.GameplayAbilities.Editor",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.GameplayAbilities.Runtime",
+        "CycloneGames.Utility.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

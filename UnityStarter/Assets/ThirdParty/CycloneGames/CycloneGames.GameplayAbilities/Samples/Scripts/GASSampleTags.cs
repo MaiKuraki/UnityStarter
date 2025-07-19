@@ -5,23 +5,9 @@ namespace CycloneGames.GameplayAbilities.Sample
 {
     public static class GASSampleTags
     {
-        // ==================================================================================
-        // TAG DEFINITION ROOTS
-        // Define all top-level categories here. Child tags MUST be defined by
-        // concatenating from these constants to ensure compile-time safety.
-        // ==================================================================================
-
-        // root nodes for optimize, also if you dont want to use it, you can remove it
-        public const string Attribute = "Attribute";
-        public const string State = "State";
-        public const string Debuff = "Debuff";
-        public const string Cooldown = "Cooldown";
-        public const string Event = "Event";
-        public const string GameplayCue = "GameplayCue";
-
-
         // Attributes
-        public const string Attribute_Primary_Attack = "Attribute.Primary.Attack";          // or you can write as Attribute + '.Primary.Attack'
+        public const string Attribute_Primary_Level = "Attribute.Primary.Level";
+        public const string Attribute_Primary_Attack = "Attribute.Primary.Attack";          
         public const string Attribute_Primary_Defense = "Attribute.Primary.Defense";
         public const string Attribute_Secondary_Health = "Attribute.Secondary.Health";
         public const string Attribute_Secondary_MaxHealth = "Attribute.Secondary.MaxHealth";

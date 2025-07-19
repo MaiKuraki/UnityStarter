@@ -28,23 +28,26 @@ namespace CycloneGames.GameplayAbilities.Sample
             if (CommitAbility(actorInfo, spec))
             {
                 // --- Targeting ---
-                // In a real game, you would spawn a projectile or use a targeting system.
-                // Here, we simulate finding a target in front of the caster.
+                // TODO: should spawn a projectile or use a targeting system.
+                // simulate finding a target in front of the caster.
                 var caster = actorInfo.AvatarActor as GameObject;
                 var target = FindTarget(caster);
 
-                if (target != null && target.TryGetComponent<AbilitySystemComponent>(out var targetASC))
+                if (target != null && target.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
                 {
+                    var targetASC = holder.AbilitySystemComponent;
                     CLogger.LogInfo($"{caster.name} casts {Name} on {target.name}");
 
-                    // 1. Apply Instant Damage
+                    // Apply Instant Damage
                     var damageSpec = GameplayEffectSpec.Create(fireballDamageEffect, AbilitySystemComponent, spec.Level);
-                    // We can dynamically add tags or set values here if needed.
                     targetASC.ApplyGameplayEffectSpecToSelf(damageSpec);
 
-                    // 2. Apply Burn Debuff
-                    var burnSpec = GameplayEffectSpec.Create(burnEffect, AbilitySystemComponent, spec.Level);
-                    targetASC.ApplyGameplayEffectSpecToSelf(burnSpec);
+                    // Apply Burn Debuff
+                    if (burnEffect != null)
+                    {
+                        var burnSpec = GameplayEffectSpec.Create(burnEffect, AbilitySystemComponent, spec.Level);
+                        targetASC.ApplyGameplayEffectSpecToSelf(burnSpec);
+                    }
                 }
                 else
                 {
@@ -58,27 +61,28 @@ namespace CycloneGames.GameplayAbilities.Sample
         // A placeholder for a real targeting system
         private GameObject FindTarget(GameObject caster)
         {
-            // For simplicity, find the closest object with the "Enemy" tag in front of the caster.
-            GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
-            GameObject closest = null;
-            float minDistance = float.MaxValue;
+            //  TODO: get enemies from other way.
+            // GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
+            // GameObject closest = null;
+            // float minDistance = float.MaxValue;
 
-            foreach (var enemy in enemies)
-            {
-                if (enemy == caster) continue;
+            // foreach (var enemy in enemies)
+            // {
+            //     if (enemy == caster) continue;
 
-                Vector3 toEnemy = enemy.transform.position - caster.transform.position;
-                if (Vector3.Dot(caster.transform.forward, toEnemy.normalized) > 0.5f) // Is in front?
-                {
-                    float distance = toEnemy.sqrMagnitude;
-                    if (distance < minDistance)
-                    {
-                        minDistance = distance;
-                        closest = enemy;
-                    }
-                }
-            }
-            return closest;
+            //     Vector3 toEnemy = enemy.transform.position - caster.transform.position;
+            //     if (Vector3.Dot(caster.transform.forward, toEnemy.normalized) > 0.5f) // Is in front?
+            //     {
+            //         float distance = toEnemy.sqrMagnitude;
+            //         if (distance < minDistance)
+            //         {
+            //             minDistance = distance;
+            //             closest = enemy;
+            //         }
+            //     }
+            // }
+            GameObject enemy = GameObject.Find("Enemy");
+            return enemy;
         }
 
         public override GameplayAbility CreatePoolableInstance()
@@ -96,7 +100,24 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override GameplayAbility CreateAbility()
         {
-            return new GA_Fireball(FireballDamageEffect.CreateGameplayEffect(), BurnEffect.CreateGameplayEffect());
+            var effect_fireball = FireballDamageEffect ? FireballDamageEffect.CreateGameplayEffect() : null;
+            var effect_burn = BurnEffect ? BurnEffect.CreateGameplayEffect() : null;
+            var ability = new GA_Fireball(effect_fireball, effect_burn);
+
+            ability.Initialize(
+                AbilityName,
+                InstancingPolicy,
+                NetExecutionPolicy,
+                CostEffect?.CreateGameplayEffect(),
+                CooldownEffect?.CreateGameplayEffect(),
+                AbilityTags,
+                ActivationBlockedTags,
+                ActivationRequiredTags,
+                CancelAbilitiesWithTag,
+                BlockAbilitiesWithTag
+            );
+
+            return ability;
         }
     }
 }

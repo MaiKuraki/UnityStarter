@@ -49,5 +49,21 @@ namespace CycloneGames.GameplayTags.Runtime
 
          return GameplayTagContainerUtility.HasAll(staticContainer, dynamicContainer, m_RequiredTags);
       }
+
+      /// <summary>
+      /// Checks if the provided container meets these requirements.
+      /// </summary>
+      public bool MeetsRequirements(GameplayTagCountContainer container)
+      {
+         if (container.HasAny(ForbiddenTags))
+         {
+            return false;
+         }
+         if (!container.HasAll(RequiredTags))
+         {
+            return false;
+         }
+         return true;
+      }
    }
 }
