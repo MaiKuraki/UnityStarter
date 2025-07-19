@@ -38,6 +38,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 EffectName,
                 DurationPolicy,
                 Duration,
+                Period,
                 runtimeModifiers,
                 Execution,
                 Stacking,

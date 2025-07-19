@@ -15,15 +15,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Level = level;
         }
 
-        public GameplayAbility GetPrimaryInstance() => AbilityInstance ?? AbilityCDO;
-
-        internal void CreateInstance(AbilitySystemComponent owner)
+        /// <summary>
+        /// Initializes the Spec with its owning AbilitySystemComponent.
+        /// This MUST be called immediately after the spec is created.
+        /// </summary>
+        internal void Init(AbilitySystemComponent owner)
         {
             this.Owner = owner;
+        }
+
+        public GameplayAbility GetPrimaryInstance() => AbilityInstance ?? AbilityCDO;
+
+        internal void CreateInstance()
+        {
             if (Ability.InstancingPolicy != EGameplayAbilityInstancingPolicy.NonInstanced && AbilityInstance == null)
             {
                 AbilityInstance = Ability.CreatePoolableInstance();
-                AbilityInstance.OnGiveAbility(new GameplayAbilityActorInfo(owner.OwnerActor, owner.AvatarActor), this);
+                AbilityInstance.OnGiveAbility(new GameplayAbilityActorInfo(Owner.OwnerActor, Owner.AvatarActor), this);
             }
         }
 

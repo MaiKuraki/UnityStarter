@@ -14,6 +14,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public string Name { get; }
         public EDurationPolicy DurationPolicy { get; }
         public float Duration { get; }
+        public float Period { get; }
         public List<ModifierInfo> Modifiers { get; }
         public GameplayEffectExecutionCalculation Execution { get; }
         public GameplayEffectStacking Stacking { get; }
@@ -50,6 +51,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             string name,
             EDurationPolicy durationPolicy,
             float duration = 0,
+            float period = 0,
             List<ModifierInfo> modifiers = null,
             GameplayEffectExecutionCalculation execution = null,
             GameplayEffectStacking stacking = default,
@@ -64,6 +66,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Name = name;
             DurationPolicy = durationPolicy;
             Duration = duration;
+            Period = period;
             Modifiers = modifiers ?? new List<ModifierInfo>();
             Execution = execution;
             Stacking = stacking;

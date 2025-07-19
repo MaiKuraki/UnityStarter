@@ -1,0 +1,32 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8a5f46b6f5a852949836c33f16bec0a5, type: 3}
+  m_Name: GA_Fireball
+  m_EditorClassIdentifier: 
+  AbilityName: Fireball
+  InstancingPolicy: 0
+  NetExecutionPolicy: 0
+  CostEffect: {fileID: 0}
+  CooldownEffect: {fileID: 0}
+  AbilityTags:
+    m_SerializedExplicitTags: []
+  ActivationBlockedTags:
+    m_SerializedExplicitTags: []
+  ActivationRequiredTags:
+    m_SerializedExplicitTags: []
+  CancelAbilitiesWithTag:
+    m_SerializedExplicitTags: []
+  BlockAbilitiesWithTag:
+    m_SerializedExplicitTags: []
+  FireballDamageEffect: {fileID: 11400000, guid: fa23d7aa75982ad46872c934d7a4d8ed,
+    type: 2}
+  BurnEffect: {fileID: 11400000, guid: 50f699da58f16a64ea8d004fa61cf5e7, type: 2}

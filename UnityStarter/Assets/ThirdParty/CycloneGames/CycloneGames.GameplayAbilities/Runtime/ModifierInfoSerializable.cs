@@ -2,10 +2,13 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
+    public class AttributeNameSelectorAttribute : PropertyAttribute { }
+
     [System.Serializable]
     public class ModifierInfoSerializable
     {
         [Tooltip("The name of the attribute to modify. Must match the name in the AttributeSet exactly.")]
+        [AttributeNameSelector]
         public string AttributeName;
 
         [Tooltip("The operation to perform on the attribute.")]

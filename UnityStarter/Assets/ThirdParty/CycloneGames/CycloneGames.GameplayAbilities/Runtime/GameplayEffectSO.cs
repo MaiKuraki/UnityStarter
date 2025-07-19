@@ -13,8 +13,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
     {
         public string EffectName;
         public EDurationPolicy DurationPolicy;
-        [Tooltip("Only used if DurationPolicy is HasDuration.")]
+
+        [Tooltip("Duration of the effect in seconds. Only used if DurationPolicy is HasDuration. Use -1 for infinite.")]
         public float Duration;
+
+        [Tooltip("Period in seconds for effects that have periodic application (e.g., damage over time). Only used if DurationPolicy is HasDuration or Infinite.")]
+        public float Period;
         public List<ModifierInfoSerializable> SerializableModifiers;
         public GameplayEffectExecutionCalculation Execution;
         public GameplayEffectStacking Stacking;

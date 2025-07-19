@@ -54,13 +54,13 @@ namespace CycloneGames.GameplayAbilities.Sample
 
             foreach (var col in colliders)
             {
-                // Here we identify enemies by checking for an AbilitySystemComponent
-                // and ensuring it's not our own. This avoids using Unity Tags.
+                // Identify enemies by checking for an AbilitySystemComponent and ensuring it's not our own.
                 if (col.TryGetComponent<AbilitySystemComponentHolder>(out var holder) && holder.AbilitySystemComponent != this.AbilitySystemComponent)
                 {
                     hitTargets.Add(holder.AbilitySystemComponent);
                 }
             }
+            CLogger.LogInfo($"{Name} hit {hitTargets.Count} targets.");
 
             // Apply the damage effect to all valid targets found.
             foreach (var targetASC in hitTargets)
@@ -74,7 +74,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override GameplayAbility CreatePoolableInstance() => new GA_SlamAttack(slamDamageEffect, slamRadius);
     }
-    
+
     // We need a new AbilityTask for this
     public class AbilityTask_WaitForLanding : AbilityTask
     {
@@ -88,11 +88,24 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         protected override void OnActivate()
         {
-            // In a real game, you would subscribe to an event on your CharacterMovementComponent.
-            // For this sample, we'll simulate it with a simple delay.
+            // TODO: In a real game, you would subscribe to an event on your CharacterMovementComponent.
+            // For this sample, we'll simulate it with a simple delay to represent falling time.
             var delayTask = AbilityTask_WaitDelay.WaitDelay(this.Ability, 0.5f);
-            delayTask.OnFinishDelay += () => OnLanded?.Invoke();
+            delayTask.OnFinishDelay += () =>
+            {
+                if (!IsCancelled)
+                {
+                    OnLanded?.Invoke();
+                }
+                EndTask();
+            };
             delayTask.Activate();
+        }
+
+        protected override void OnDestroy()
+        {
+            base.OnDestroy();
+            OnLanded = null;
         }
     }
 
@@ -101,6 +114,24 @@ namespace CycloneGames.GameplayAbilities.Sample
     {
         public GameplayEffectSO DamageEffect;
         public float Radius = 5.0f;
-        public override GameplayAbility CreateAbility() => new GA_SlamAttack(DamageEffect.CreateGameplayEffect(), Radius);
+
+        public override GameplayAbility CreateAbility()
+        {
+            var effect = DamageEffect ? DamageEffect.CreateGameplayEffect() : null;
+            var ability = new GA_SlamAttack(effect, Radius);
+            ability.Initialize(
+                AbilityName,
+                InstancingPolicy,
+                NetExecutionPolicy,
+                CostEffect?.CreateGameplayEffect(),
+                CooldownEffect?.CreateGameplayEffect(),
+                AbilityTags,
+                ActivationBlockedTags,
+                ActivationRequiredTags,
+                CancelAbilitiesWithTag,
+                BlockAbilitiesWithTag
+            );
+            return ability;
+        }
     }
 }
