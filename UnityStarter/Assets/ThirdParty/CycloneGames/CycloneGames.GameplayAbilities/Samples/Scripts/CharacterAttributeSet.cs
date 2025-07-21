@@ -20,6 +20,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         // --- Meta Attributes (temporary values for calculations) ---
         public GameplayAttribute Damage { get; } = new GameplayAttribute(GASSampleTags.Attribute_Meta_Damage);
+        public GameplayAttribute Experience { get; } = new GameplayAttribute(GASSampleTags.Attribute_Meta_Experience);
 
         public CharacterAttributeSet()
         {
@@ -53,7 +54,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             base.PostGameplayEffectExecute(data);
 
             // We use a "meta attribute" for damage. This effect applies a temporary value to the 'Damage' attribute.
-            // We then intercept that change here to perform the final health modification.
+            // then intercept that change here to perform the final health modification.
             if (data.Modifier.AttributeName == Damage.Name)
             {
                 float incomingDamage = data.EvaluatedMagnitude;
@@ -83,6 +84,34 @@ namespace CycloneGames.GameplayAbilities.Sample
                     // It's a good practice to use tags for state changes.
                     data.Target.AddLooseGameplayTag(GameplayTagManager.RequestTag(GASSampleTags.State_Dead));
                     CLogger.LogWarning($"{data.Target.OwnerActor} has died!");
+
+                    var targetASC = data.Target;
+                    targetASC.AddLooseGameplayTag(GameplayTagManager.RequestTag(GASSampleTags.State_Dead));
+                    CLogger.LogWarning($"{targetASC.OwnerActor} has died!");
+
+                    // Find the killer from the effect's source
+                    var killerASC = data.EffectSpec.Source;
+                    if (killerASC != null && killerASC != targetASC)
+                    {
+                        // The 'target' character that died needs to hold a reference to its bounty GE.
+                        if (targetASC.OwnerActor is Character deadCharacter)
+                        {
+                            deadCharacter.GrantBountyTo(killerASC);
+                        }
+                    }
+                }
+            }
+
+            if (data.Modifier.AttributeName == Experience.Name)
+            {
+                // The GameplayEffect applies a temporary value to the 'Experience' meta attribute.
+                // We intercept it here and call the Character's method to add the experience.
+                int xpGained = (int)data.EvaluatedMagnitude;
+
+                // The target of this effect is the one GAINING the experience.
+                if (data.Target.OwnerActor is Character character)
+                {
+                    character.AddExperience(xpGained);
                 }
             }
         }

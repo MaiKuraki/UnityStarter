@@ -14,7 +14,7 @@ namespace CycloneGames.GameplayAbilities.Sample
     }
 
     [CreateAssetMenu(fileName = "LevelUpData", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Level Up Data")]
-    public class LevelingSystem : ScriptableObject
+    public class LevelUpDataSO : ScriptableObject
     {
         public List<LevelData> Levels;
     }

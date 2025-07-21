@@ -1,5 +1,3 @@
-using System.Collections.Generic;
-using CycloneGames.GameplayTags.Runtime;
 using CycloneGames.Logger;
 using UnityEngine;
 using UnityEngine.UI;
@@ -20,11 +18,19 @@ namespace CycloneGames.GameplayAbilities.Sample
         private void Awake()
         {
             CLogger.Instance.AddLogger(new UnityLogger());
+            if (LogText != null)
+            {
+                CLogger.Instance.AddLogger(new UILogger(LogText, "[Game Log] ", 1));
+            }
+            else
+            {
+                Debug.LogWarning("SampleCombatManager: LogText is not assigned in the Inspector. UI logs will not be displayed.");
+            }
         }
 
         private void Start()
         {
-            // // Initialize the GameplayTagManager with our defined tags.
+            // // Initialize the GameplayTagManager with defined tags.
             // var tagNames = new List<string>
             // {
             //     GASSampleTags.Attribute_Primary_Attack, GASSampleTags.Attribute_Primary_Defense,
@@ -42,12 +48,6 @@ namespace CycloneGames.GameplayAbilities.Sample
             //     GASSampleTags.GameplayCue_Purify_Effect, GASSampleTags.GameplayCue_Lightning_Impact
             // };
             // GameplayTagManager.RegisterDynamicTags(tagNames);
-
-            // // Setup a simple logger to display messages on screen.
-            // // CLogger.OnLog += (message, type) =>
-            // // {
-            // //     if (LogText != null) LogText.text = message;
-            // // };
         }
 
         void Update()
@@ -58,7 +58,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         void HandleInput()
         {
-            if (Input.GetKeyDown(KeyCode.Q)) TryActivateAbility(Player, 0); // Fireball
+            if (Input.GetKeyDown(KeyCode.Alpha1)) TryActivateAbility(Player, 0); // Fireball
             if (Input.GetKeyDown(KeyCode.Alpha2)) TryActivateAbility(Player, 1); // Poison Blade
             if (Input.GetKeyDown(KeyCode.Alpha3)) TryActivateAbility(Player, 2); // Chain Lightning
             if (Input.GetKeyDown(KeyCode.Alpha4)) TryActivateAbility(Player, 3); // Purify

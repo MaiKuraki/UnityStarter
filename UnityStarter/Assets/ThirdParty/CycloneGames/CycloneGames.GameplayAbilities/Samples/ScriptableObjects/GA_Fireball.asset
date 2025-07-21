@@ -15,8 +15,8 @@ MonoBehaviour:
   AbilityName: Fireball
   InstancingPolicy: 0
   NetExecutionPolicy: 0
-  CostEffect: {fileID: 0}
-  CooldownEffect: {fileID: 0}
+  CostEffect: {fileID: 11400000, guid: a24a4335b348a9d44a23a66e0f2fc61b, type: 2}
+  CooldownEffect: {fileID: 11400000, guid: 12796ed79a8aa6f40baef41cee7f9310, type: 2}
   AbilityTags:
     m_SerializedExplicitTags: []
   ActivationBlockedTags:
