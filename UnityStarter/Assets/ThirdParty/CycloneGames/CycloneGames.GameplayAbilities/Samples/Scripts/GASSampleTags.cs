@@ -14,6 +14,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         public const string Attribute_Secondary_Mana = "Attribute.Secondary.Mana";
         public const string Attribute_Secondary_MaxMana = "Attribute.Secondary.MaxMana";
         public const string Attribute_Secondary_Speed = "Attribute.Secondary.Speed";
+        public const string Attribute_Meta_Experience = "Attribute.Meta.Experience";
         public const string Attribute_Meta_Damage = "Attribute.Meta.Damage";
 
         // States
