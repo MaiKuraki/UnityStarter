@@ -850,6 +850,12 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
         type: 3}
+      propertyPath: BountyEffect
+      value: 
+      objectReference: {fileID: 11400000, guid: f686a36f7123f054498f7c1be6463b9d,
+        type: 2}
+    - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
+        type: 3}
       propertyPath: InitialAttributesEffect
       value: 
       objectReference: {fileID: 11400000, guid: 117b699f121c5444393668704477a950,
