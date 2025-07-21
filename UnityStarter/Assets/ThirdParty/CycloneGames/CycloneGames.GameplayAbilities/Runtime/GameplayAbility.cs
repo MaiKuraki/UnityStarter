@@ -37,7 +37,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GameplayTagContainer ActivationRequiredTags { get; protected set; }
         public GameplayTagContainer CancelAbilitiesWithTag { get; protected set; }
         public GameplayTagContainer BlockAbilitiesWithTag { get; protected set; }
-        
+
         public AbilitySystemComponent AbilitySystemComponent { get; private set; }
         public GameplayAbilitySpec Spec { get; private set; }
         public GameplayAbilityActorInfo ActorInfo { get; private set; }
@@ -71,6 +71,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.Spec = spec;
             this.AbilitySystemComponent = spec.Owner;
             this.isEnding = false;
+            this.activeTasks.Clear();
         }
 
         public virtual void OnRemoveAbility()
@@ -96,7 +97,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (isEnding) return;
             isEnding = true;
-            
+
             for (int i = activeTasks.Count - 1; i >= 0; i--)
             {
                 activeTasks[i].CancelTask();
@@ -178,12 +179,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public bool CommitAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec)
         {
             if (!CheckCost(spec.Owner) || !CheckCooldown(spec.Owner)) return false;
-            
+
             ApplyCooldown(spec.Owner, spec);
             ApplyCost(spec.Owner, spec);
             return true;
         }
-        
+
         protected void ApplyCost(AbilitySystemComponent asc, GameplayAbilitySpec spec)
         {
             if (CostEffectDefinition != null)
@@ -192,7 +193,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 asc.ApplyGameplayEffectSpecToSelf(costSpec);
             }
         }
-        
+
         protected void ApplyCooldown(AbilitySystemComponent asc, GameplayAbilitySpec spec)
         {
             if (CooldownEffectDefinition != null)
@@ -201,7 +202,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 asc.ApplyGameplayEffectSpecToSelf(cooldownSpec);
             }
         }
-        
+
         public abstract GameplayAbility CreatePoolableInstance();
 
         internal virtual void OnReturnedToPool()
