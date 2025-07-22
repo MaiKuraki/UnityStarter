@@ -55,6 +55,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly List<AttributeSet> attributeSets = new List<AttributeSet>(4);
         private readonly Dictionary<string, GameplayAttribute> attributes = new Dictionary<string, GameplayAttribute>(32);
         private readonly List<ActiveGameplayEffect> activeEffects = new List<ActiveGameplayEffect>(32);
+        public IReadOnlyList<ActiveGameplayEffect> ActiveEffects => activeEffects.AsReadOnly();
 
         private readonly List<GameplayAbilitySpec> activatableAbilities = new List<GameplayAbilitySpec>(16);
         public IReadOnlyList<GameplayAbilitySpec> GetActivatableAbilities() => activatableAbilities.AsReadOnly();

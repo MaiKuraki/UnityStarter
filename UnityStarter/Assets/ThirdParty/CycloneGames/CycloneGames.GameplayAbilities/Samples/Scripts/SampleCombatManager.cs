@@ -1,3 +1,5 @@
+using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.GameplayTags.Runtime;
 using CycloneGames.Logger;
 using UnityEngine;
 using UnityEngine.UI;
@@ -93,23 +95,65 @@ namespace CycloneGames.GameplayAbilities.Sample
         string GetCharacterStatus(Character character)
         {
             if (character == null) return "N/A";
-
             var asc = character.AbilitySystemComponent;
             var set = character.AttributeSet;
 
-            string status = $"<b>{character.name}</b>\n" +
-                            $"LV: {set.GetCurrentValue(set.Level):F0}\n" +
-                            $"HP: {set.GetCurrentValue(set.Health):F1} / {set.GetCurrentValue(set.MaxHealth):F1}\n" +
-                            $"MP: {set.GetCurrentValue(set.Mana):F1} / {set.GetCurrentValue(set.MaxMana):F1}\n" +
-                            $"ATK: {set.GetCurrentValue(set.AttackPower):F1} | DEF: {set.GetCurrentValue(set.Defense):F1}\n" +
-                            "<b>Tags:</b>\n";
+            // Use a StringBuilder for efficient string construction
+            var statusBuilder = new System.Text.StringBuilder();
 
-            foreach (var tag in asc.CombinedTags)
+            statusBuilder.AppendLine($"<b>{character.name}</b>");
+            statusBuilder.AppendLine($"LV: {set.GetCurrentValue(set.Level):F0}");
+            statusBuilder.AppendLine($"HP: {set.GetCurrentValue(set.Health):F1} / {set.GetCurrentValue(set.MaxHealth):F1}");
+            statusBuilder.AppendLine($"MP: {set.GetCurrentValue(set.Mana):F1} / {set.GetCurrentValue(set.MaxMana):F1}");
+            statusBuilder.AppendLine($"ATK: {set.GetCurrentValue(set.AttackPower):F1} | DEF: {set.GetCurrentValue(set.Defense):F1}");
+
+            // --- New Section for Active Effects ---
+            statusBuilder.AppendLine("<b>Active Effects:</b>");
+            bool hasEffects = false;
+            if (asc.ActiveEffects != null && asc.ActiveEffects.Count > 0)
             {
-                status += $"{tag.Name}\n";
+                foreach (var activeEffect in asc.ActiveEffects)
+                {
+                    // We identify DoTs by checking for the 'Debuff' parent tag.
+                    if (activeEffect.Spec.Def.GrantedTags.HasTag(GameplayTagManager.RequestTag("Debuff")))
+                    {
+                        hasEffects = true;
+                        // Display Effect Name, Remaining Duration, and Stack Count
+                        statusBuilder.Append($" - {activeEffect.Spec.Def.Name} ");
+                        if (activeEffect.Spec.Def.DurationPolicy == EDurationPolicy.HasDuration)
+                        {
+                            statusBuilder.Append($"({activeEffect.TimeRemaining:F1}s) ");
+                        }
+                        if (activeEffect.StackCount > 1)
+                        {
+                            statusBuilder.Append($"[Stacks: {activeEffect.StackCount}]");
+                        }
+                        statusBuilder.AppendLine();
+                    }
+                }
             }
 
-            return status;
+            if (!hasEffects)
+            {
+                statusBuilder.AppendLine(" - None");
+            }
+            // --- End New Section ---
+
+            // Display all granted tags for debugging purposes
+            statusBuilder.AppendLine("<b>Tags:</b>");
+            if (asc.CombinedTags.IsEmpty)
+            {
+                statusBuilder.AppendLine(" - None");
+            }
+            else
+            {
+                foreach (var tag in asc.CombinedTags)
+                {
+                    statusBuilder.AppendLine($" - {tag.Name}");
+                }
+            }
+
+            return statusBuilder.ToString();
         }
     }
 }
