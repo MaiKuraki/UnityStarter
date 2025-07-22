@@ -25,34 +25,33 @@ namespace CycloneGames.GameplayAbilities.Sample
         {
             CLogger.LogInfo($"Activating {Name}");
 
-            if (CommitAbility(actorInfo, spec))
+            CommitAbility(actorInfo, spec);
+
+            // --- Targeting ---
+            // TODO: should spawn a projectile or use a targeting system.
+            // simulate finding a target in front of the caster.
+            var caster = actorInfo.AvatarActor as GameObject;
+            var target = FindTarget(caster);
+
+            if (target != null && target.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
             {
-                // --- Targeting ---
-                // TODO: should spawn a projectile or use a targeting system.
-                // simulate finding a target in front of the caster.
-                var caster = actorInfo.AvatarActor as GameObject;
-                var target = FindTarget(caster);
+                var targetASC = holder.AbilitySystemComponent;
+                CLogger.LogInfo($"{caster.name} casts {Name} on {target.name}");
 
-                if (target != null && target.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
+                // Apply Instant Damage
+                var damageSpec = GameplayEffectSpec.Create(fireballDamageEffect, AbilitySystemComponent, spec.Level);
+                targetASC.ApplyGameplayEffectSpecToSelf(damageSpec);
+
+                // Apply Burn Debuff
+                if (burnEffect != null)
                 {
-                    var targetASC = holder.AbilitySystemComponent;
-                    CLogger.LogInfo($"{caster.name} casts {Name} on {target.name}");
-
-                    // Apply Instant Damage
-                    var damageSpec = GameplayEffectSpec.Create(fireballDamageEffect, AbilitySystemComponent, spec.Level);
-                    targetASC.ApplyGameplayEffectSpecToSelf(damageSpec);
-
-                    // Apply Burn Debuff
-                    if (burnEffect != null)
-                    {
-                        var burnSpec = GameplayEffectSpec.Create(burnEffect, AbilitySystemComponent, spec.Level);
-                        targetASC.ApplyGameplayEffectSpecToSelf(burnSpec);
-                    }
+                    var burnSpec = GameplayEffectSpec.Create(burnEffect, AbilitySystemComponent, spec.Level);
+                    targetASC.ApplyGameplayEffectSpecToSelf(burnSpec);
                 }
-                else
-                {
-                    CLogger.LogWarning($"{Name} could not find a valid target.");
-                }
+            }
+            else
+            {
+                CLogger.LogWarning($"{Name} could not find a valid target.");
             }
 
             EndAbility();
@@ -87,11 +86,24 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override GameplayAbility CreatePoolableInstance()
         {
-            return new GA_Fireball(fireballDamageEffect, burnEffect);
+            var ability = new GA_Fireball(this.fireballDamageEffect, this.burnEffect);
+
+            ability.Initialize(
+                this.Name,
+                this.InstancingPolicy,
+                this.NetExecutionPolicy,
+                this.CostEffectDefinition,
+                this.CooldownEffectDefinition,
+                this.AbilityTags,
+                this.ActivationBlockedTags,
+                this.ActivationRequiredTags,
+                this.CancelAbilitiesWithTag,
+                this.BlockAbilitiesWithTag
+            );
+            return ability;
         }
     }
 
-    // Corresponding ScriptableObject
     [CreateAssetMenu(fileName = "GA_Fireball", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Fireball")]
     public class GA_Fireball_SO : GameplayAbilitySO
     {

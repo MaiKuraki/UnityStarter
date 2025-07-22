@@ -20,62 +20,61 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            if (CommitAbility(actorInfo, spec))
+            CommitAbility(actorInfo, spec);
+            
+            var caster = actorInfo.AvatarActor as GameObject;
+
+            // Use a HashSet to track who has been hit to prevent infinite chains.
+            var hitTargets = new HashSet<GameObject>();
+            hitTargets.Add(caster); // Caster can't be hit.
+
+            GameObject currentTarget = FindInitialTarget(caster, hitTargets);
+            if (currentTarget == null)
             {
-                var caster = actorInfo.AvatarActor as GameObject;
+                CLogger.LogWarning("Chain Lightning fizzles, no initial target found.");
+                EndAbility();
+                return;
+            }
 
-                // Use a HashSet to track who has been hit to prevent infinite chains.
-                var hitTargets = new HashSet<GameObject>();
-                hitTargets.Add(caster); // Caster can't be hit.
-
-                GameObject currentTarget = FindInitialTarget(caster, hitTargets);
+            // Chain loop
+            for (int i = 0; i <= maxBounces; i++)
+            {
                 if (currentTarget == null)
                 {
-                    CLogger.LogWarning("Chain Lightning fizzles, no initial target found.");
-                    EndAbility();
-                    return;
+                    break; // Chain is broken
                 }
 
-                // Chain loop
-                for (int i = 0; i <= maxBounces; i++)
+                hitTargets.Add(currentTarget);
+
+                if (!currentTarget.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
                 {
-                    if (currentTarget == null)
-                    {
-                        break; // Chain is broken
-                    }
-
-                    hitTargets.Add(currentTarget);
-
-                    if (!currentTarget.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
-                    {
-                        // Find next target even if current one has no ASC.
-                        currentTarget = FindNextTarget(currentTarget, hitTargets);
-                        continue;
-                    }
-
-                    var targetASC = holder.AbilitySystemComponent;
-
-                    // Calculate damage for this bounce
-                    float damageMultiplier = Mathf.Pow(1 - damageFalloffPerBounce, i);
-                    CLogger.LogInfo($"Chain Lightning hits {currentTarget.name} for {damageMultiplier:P0} damage.");
-
-                    // A better system would allow GameplayEffectSpec modification (e.g., SetByCaller).
-                    // For simplicity here, we create a temporary GE with the modified magnitude.
-                    var originalMod = lightningDamageEffect.Modifiers[0];
-                    var tempMod = new ModifierInfo(
-                        originalMod.AttributeName,
-                        originalMod.Operation,
-                        new ScalableFloat(originalMod.Magnitude.GetValueAtLevel(spec.Level) * damageMultiplier)
-                    );
-
-                    var tempEffect = new GameplayEffect("TempLightning", EDurationPolicy.Instant, 0, 0, new List<ModifierInfo> { tempMod });
-                    var tempSpec = GameplayEffectSpec.Create(tempEffect, AbilitySystemComponent, spec.Level);
-
-                    targetASC.ApplyGameplayEffectSpecToSelf(tempSpec);
-
-                    // Find the next target
+                    // Find next target even if current one has no ASC.
                     currentTarget = FindNextTarget(currentTarget, hitTargets);
+                    continue;
                 }
+
+                var targetASC = holder.AbilitySystemComponent;
+
+                // Calculate damage for this bounce
+                float damageMultiplier = Mathf.Pow(1 - damageFalloffPerBounce, i);
+                CLogger.LogInfo($"Chain Lightning hits {currentTarget.name} for {damageMultiplier:P0} damage.");
+
+                // A better system would allow GameplayEffectSpec modification (e.g., SetByCaller).
+                // For simplicity here, we create a temporary GE with the modified magnitude.
+                var originalMod = lightningDamageEffect.Modifiers[0];
+                var tempMod = new ModifierInfo(
+                    originalMod.AttributeName,
+                    originalMod.Operation,
+                    new ScalableFloat(originalMod.Magnitude.GetValueAtLevel(spec.Level) * damageMultiplier)
+                );
+
+                var tempEffect = new GameplayEffect("TempLightning", EDurationPolicy.Instant, 0, 0, new List<ModifierInfo> { tempMod });
+                var tempSpec = GameplayEffectSpec.Create(tempEffect, AbilitySystemComponent, spec.Level);
+
+                targetASC.ApplyGameplayEffectSpecToSelf(tempSpec);
+
+                // Find the next target
+                currentTarget = FindNextTarget(currentTarget, hitTargets);
             }
 
             EndAbility();

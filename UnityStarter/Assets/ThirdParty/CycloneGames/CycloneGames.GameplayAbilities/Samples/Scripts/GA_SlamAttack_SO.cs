@@ -25,11 +25,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            if (!CommitAbility(actorInfo, spec))
-            {
-                EndAbility();
-                return;
-            }
+            CommitAbility(actorInfo, spec);
 
             // Create a task that waits for the character to land.
             var landingTask = AbilityTask_WaitForLanding.WaitForLanding(this);
@@ -72,7 +68,23 @@ namespace CycloneGames.GameplayAbilities.Sample
             EndAbility();
         }
 
-        public override GameplayAbility CreatePoolableInstance() => new GA_SlamAttack(slamDamageEffect, slamRadius);
+        public override GameplayAbility CreatePoolableInstance()
+        {
+            var ability = new GA_SlamAttack(this.slamDamageEffect, this.slamRadius);
+            ability.Initialize(
+                this.Name,
+                this.InstancingPolicy,
+                this.NetExecutionPolicy,
+                this.CostEffectDefinition,
+                this.CooldownEffectDefinition,
+                this.AbilityTags,
+                this.ActivationBlockedTags,
+                this.ActivationRequiredTags,
+                this.CancelAbilitiesWithTag,
+                this.BlockAbilitiesWithTag
+            );
+            return ability;
+        }
     }
 
     // We need a new AbilityTask for this

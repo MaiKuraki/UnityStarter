@@ -6,7 +6,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 {
     /// <summary>
     /// A concrete, creatable ScriptableObject definition for a GameplayEffect.
-    /// Use this to create new Gameplay Effect assets in the editor.
+    /// Use this to create new Gameplay Effect assets in the editor via 'Assets/Create/...'.
     /// </summary>
     [CreateAssetMenu(fileName = "GE_", menuName = "CycloneGames/GameplayAbilitySystem/Samples/GameplayEffect Definition")]
     public class ConcreteGameplayEffectSO : GameplayEffectSO
@@ -21,7 +21,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             {
                 foreach (var abilitySO in GrantedAbilities)
                 {
-                    if(abilitySO != null) grantedAbilities.Add(abilitySO.CreateAbility());
+                    if (abilitySO != null) grantedAbilities.Add(abilitySO.CreateAbility());
                 }
             }
 
