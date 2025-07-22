@@ -22,25 +22,25 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            if (CommitAbility(actorInfo, spec))
+            CommitAbility(actorInfo, spec);
+
+            // This ability targets the caster themselves.
+            var targetASC = actorInfo.OwnerActor as AbilitySystemComponent;
+            if (actorInfo.OwnerActor is Character character) targetASC = character.AbilitySystemComponent;
+            if (actorInfo.OwnerActor is AbilitySystemComponentHolder holder) targetASC = holder.AbilitySystemComponent;
+
+            if (targetASC != null)
             {
-                // This ability targets the caster themselves.
-                var targetASC = actorInfo.OwnerActor as AbilitySystemComponent;
-                if (actorInfo.OwnerActor is Character character) targetASC = character.AbilitySystemComponent;
-                if (actorInfo.OwnerActor is AbilitySystemComponentHolder holder) targetASC = holder.AbilitySystemComponent;
+                CLogger.LogInfo($"{actorInfo.AvatarActor.GetType().Name} casts Purify on themselves.");
 
-                if (targetASC != null)
-                {
-                    CLogger.LogInfo($"{actorInfo.AvatarActor.GetType().Name} casts Purify on themselves.");
+                // Create a tag container with the tag of the effect we want to remove.
+                var tagsToRemove = new GameplayTagContainer();
+                tagsToRemove.AddTag(GameplayTagManager.RequestTag(GASSampleTags.Debuff_Poison));
 
-                    // Create a tag container with the tag of the effect we want to remove.
-                    var tagsToRemove = new GameplayTagContainer();
-                    tagsToRemove.AddTag(GameplayTagManager.RequestTag(GASSampleTags.Debuff_Poison));
-
-                    // This function removes all active effects that grant the specified tag.
-                    targetASC.RemoveActiveEffectsWithGrantedTags(tagsToRemove);
-                }
+                // This function removes all active effects that grant the specified tag.
+                targetASC.RemoveActiveEffectsWithGrantedTags(tagsToRemove);
             }
+
             EndAbility();
         }
 
