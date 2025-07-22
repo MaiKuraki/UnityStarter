@@ -107,14 +107,12 @@ namespace CycloneGames.GameplayAbilities.Sample
             statusBuilder.AppendLine($"MP: {set.GetCurrentValue(set.Mana):F1} / {set.GetCurrentValue(set.MaxMana):F1}");
             statusBuilder.AppendLine($"ATK: {set.GetCurrentValue(set.AttackPower):F1} | DEF: {set.GetCurrentValue(set.Defense):F1}");
 
-            // --- New Section for Active Effects ---
             statusBuilder.AppendLine("<b>Active Effects:</b>");
             bool hasEffects = false;
             if (asc.ActiveEffects != null && asc.ActiveEffects.Count > 0)
             {
                 foreach (var activeEffect in asc.ActiveEffects)
                 {
-                    // We identify DoTs by checking for the 'Debuff' parent tag.
                     if (activeEffect.Spec.Def.GrantedTags.HasTag(GameplayTagManager.RequestTag("Debuff")))
                     {
                         hasEffects = true;

@@ -53,43 +53,35 @@ namespace CycloneGames.GameplayAbilities.Sample
         {
             base.PostGameplayEffectExecute(data);
 
-            // We use a "meta attribute" for damage. This effect applies a temporary value to the 'Damage' attribute.
-            // then intercept that change here to perform the final health modification.
-            if (data.Modifier.AttributeName == Damage.Name)
+            var attribute = GetAttribute(data.Modifier.AttributeName);
+            if (attribute == null) return;
+
+            if (attribute == Damage)
             {
+                // The magnitude from the GE is the raw, pre-mitigation damage value.
+                // By convention, this should always be a positive number.
                 float incomingDamage = data.EvaluatedMagnitude;
 
-                // Convert the temporary 'Damage' into a permanent health reduction.
-                // First, get the victim's current health and defense.
+                if (incomingDamage <= 0) return;
+
                 float currentHealth = GetCurrentValue(Health);
                 float currentDefense = GetCurrentValue(Defense);
 
-                // Simple mitigation formula: Damage * (1 - Defense / (Defense + 100))
-                // This provides diminishing returns for defense.
+                //  TODO: in this simple sample, set a simple damage mitigation formula.
                 float mitigatedDamage = incomingDamage * (1 - currentDefense / (currentDefense + 100));
-                mitigatedDamage = System.Math.Max(0, mitigatedDamage); // Damage shouldn't heal.
+                mitigatedDamage = System.Math.Max(0, mitigatedDamage);
 
                 float newHealth = currentHealth - mitigatedDamage;
-
-                // Apply the final health value.
-                // Note: This directly sets the base value, but for health changes, it's common
-                // to adjust the current value. We use SetBaseValue here for simplicity,
-                // assuming direct health damage. A more robust system might use another effect.
                 SetBaseValue(Health, newHealth);
 
-                // If health has dropped to 0, broadcast a death event.
+                // --- Death and Bounty ---
                 if (newHealth <= 0 && currentHealth > 0)
                 {
-                    // The 'data.Target' is the AbilitySystemComponent of the character being damaged.
-                    // It's a good practice to use tags for state changes.
-                    data.Target.AddLooseGameplayTag(GameplayTagManager.RequestTag(GASSampleTags.State_Dead));
-                    CLogger.LogWarning($"{data.Target.OwnerActor} has died!");
-
                     var targetASC = data.Target;
                     targetASC.AddLooseGameplayTag(GameplayTagManager.RequestTag(GASSampleTags.State_Dead));
                     CLogger.LogWarning($"{targetASC.OwnerActor} has died!");
 
-                    // Find the killer from the effect's source
+                    // Find the killer from the effect's source.
                     var killerASC = data.EffectSpec.Source;
                     if (killerASC != null && killerASC != targetASC)
                     {
@@ -100,20 +92,39 @@ namespace CycloneGames.GameplayAbilities.Sample
                         }
                     }
                 }
+                return; // Damage processing is complete.
             }
 
-            if (data.Modifier.AttributeName == Experience.Name)
+            if (attribute == Experience)
             {
-                // The GameplayEffect applies a temporary value to the 'Experience' meta attribute.
-                // We intercept it here and call the Character's method to add the experience.
                 int xpGained = (int)data.EvaluatedMagnitude;
-
-                // The target of this effect is the one GAINING the experience.
                 if (data.Target.OwnerActor is Character character)
                 {
                     character.AddExperience(xpGained);
                 }
+                return;
             }
+
+            // --- Direct Attribute Modification Handling ---
+            // This section handles permanent changes to regular attributes (like Health from a DoT).
+            float currentBase = GetBaseValue(attribute);
+            float newBase = currentBase;
+            switch (data.Modifier.Operation)
+            {
+                case EAttributeModifierOperation.Add:
+                    newBase += data.EvaluatedMagnitude;
+                    break;
+                case EAttributeModifierOperation.Multiply:
+                    newBase *= data.EvaluatedMagnitude;
+                    break;
+                case EAttributeModifierOperation.Division:
+                    if (data.EvaluatedMagnitude != 0) newBase /= data.EvaluatedMagnitude;
+                    break;
+                case EAttributeModifierOperation.Override:
+                    newBase = data.EvaluatedMagnitude;
+                    break;
+            }
+            SetBaseValue(attribute, newBase);
         }
     }
 }
