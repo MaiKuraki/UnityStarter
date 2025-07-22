@@ -252,6 +252,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (ability.Spec != null)
             {
                 ability.Spec.IsActive = false;
+                // This ensures that flags like 'isEnding' are ready for the next activation.
+                ability.InternalOnEndAbility();
+
                 if (ability.InstancingPolicy == EGameplayAbilityInstancingPolicy.InstancedPerExecution)
                 {
                     ability.Spec.ClearInstance();

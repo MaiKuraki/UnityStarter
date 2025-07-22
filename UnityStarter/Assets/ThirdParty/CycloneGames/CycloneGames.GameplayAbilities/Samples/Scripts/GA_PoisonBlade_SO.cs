@@ -15,19 +15,19 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            if (CommitAbility(actorInfo, spec))
-            {
-                var caster = actorInfo.AvatarActor as GameObject;
-                // Similar targeting logic as Fireball
-                var target = FindTarget(caster);
+            CommitAbility(actorInfo, spec);
 
-                if (target != null && target.TryGetComponent<AbilitySystemComponent>(out var targetASC))
-                {
-                    CLogger.LogInfo($"{caster.name} applies Poison to {target.name}");
-                    var poisonSpec = GameplayEffectSpec.Create(poisonEffect, AbilitySystemComponent, spec.Level);
-                    targetASC.ApplyGameplayEffectSpecToSelf(poisonSpec);
-                }
+            var caster = actorInfo.AvatarActor as GameObject;
+            // Similar targeting logic as Fireball
+            var target = FindTarget(caster);
+
+            if (target != null && target.TryGetComponent<AbilitySystemComponent>(out var targetASC))
+            {
+                CLogger.LogInfo($"{caster.name} applies Poison to {target.name}");
+                var poisonSpec = GameplayEffectSpec.Create(poisonEffect, AbilitySystemComponent, spec.Level);
+                targetASC.ApplyGameplayEffectSpecToSelf(poisonSpec);
             }
+
             EndAbility();
         }
 

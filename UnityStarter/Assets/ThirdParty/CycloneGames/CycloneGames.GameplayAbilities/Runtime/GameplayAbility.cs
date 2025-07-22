@@ -81,16 +81,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public virtual void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            if (CommitAbility(actorInfo, spec))
-            {
-                CLogger.LogInfo($"Ability '{Name}' activated successfully.");
-                EndAbility();
-            }
-            else
-            {
-                CLogger.LogWarning($"Ability '{Name}' failed to commit and was cancelled.");
-                CancelAbility();
-            }
+            CLogger.LogWarning($"Base ActivateAbility called for '{Name}'. Did you forget to override it in your specific ability class?");
+            CommitAbility(actorInfo, spec);
         }
 
         public void EndAbility()
@@ -106,6 +98,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             AbilitySystemComponent?.OnAbilityEnded(this);
             CLogger.LogInfo($"Ability '{Name}' ended.");
+        }
+
+        /// <summary>
+        /// Called by the AbilitySystemComponent when the ability has officially ended.
+        /// reset internal state for reused ability instances.
+        /// </summary>
+        internal void InternalOnEndAbility()
+        {
+            isEnding = false;
         }
 
         public virtual void CancelAbility()
@@ -176,13 +177,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return true;
         }
 
-        public bool CommitAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec)
+        public void CommitAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec)
         {
-            if (!CheckCost(spec.Owner) || !CheckCooldown(spec.Owner)) return false;
-
             ApplyCooldown(spec.Owner, spec);
             ApplyCost(spec.Owner, spec);
-            return true;
         }
 
         protected void ApplyCost(AbilitySystemComponent asc, GameplayAbilitySpec spec)
