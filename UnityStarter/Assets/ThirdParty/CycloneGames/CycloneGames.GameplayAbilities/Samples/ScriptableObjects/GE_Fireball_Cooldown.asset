@@ -21,7 +21,8 @@ MonoBehaviour:
   AssetTags:
     m_SerializedExplicitTags: []
   GrantedTags:
-    m_SerializedExplicitTags: []
+    m_SerializedExplicitTags:
+    - Cooldown.Skill.Fireball
   ApplicationTagRequirements:
     m_ForbiddenTags:
       m_SerializedExplicitTags: []
