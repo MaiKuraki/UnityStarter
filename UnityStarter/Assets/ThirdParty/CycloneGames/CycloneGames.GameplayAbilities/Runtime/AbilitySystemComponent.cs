@@ -310,7 +310,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             CLogger.LogInfo($"{OwnerActor} Apply GameplayEffect '{spec.Def.Name}' to self.");
             OnEffectApplied(newActiveEffect);
-            MarkAttributesDirtyFromEffect(newActiveEffect);
+
+            if (spec.Def.Period <= 0)
+            {
+                MarkAttributesDirtyFromEffect(newActiveEffect);
+            }
         }
 
         public void RemoveActiveEffectsWithGrantedTags(GameplayTagContainer tags)
@@ -390,7 +394,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 var attribute = GetAttribute(mod.AttributeName);
                 if (attribute != null)
                 {
-                    ApplyModifier(spec, attribute, mod, spec.GetCalculatedMagnitude(mod), false);
+                    //  Modify the base value, so isFromExecution is true
+                    ApplyModifier(spec, attribute, mod, spec.GetCalculatedMagnitude(mod), true);
                 }
             }
 
@@ -448,6 +453,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                 foreach (var effect in activeEffects)
                 {
+                    // An effect with a period should ONLY apply its modifications on its tick.
+                    // It should NOT contribute to the passive, continuous recalculation of the CurrentValue.
+                    // This 'continue' statement prevents the DoT's modifier from being applied as a temporary
+                    // debuff, which was the root cause of the health "jumping back" when the effect expired.
+                    if (effect.Spec.Def.Period > 0)
+                    {
+                        continue;
+                    }
+
                     if (!effect.Spec.Def.OngoingTagRequirements.IsEmpty && !effect.Spec.Def.OngoingTagRequirements.MeetsRequirements(CombinedTags))
                     {
                         continue;
@@ -638,9 +652,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
         private void ApplyModifier(GameplayEffectSpec spec, GameplayAttribute attribute, ModifierInfo mod, float magnitude, bool isFromExecution)
         {
-            // The 'attribute' parameter passed in is now found via string lookup before this call.
-            // The implementation can remain largely the same, but let's make it cleaner
-            // by ensuring we always look up the attribute inside.
             var targetAttribute = GetAttribute(mod.AttributeName);
             if (targetAttribute == null)
             {
@@ -651,47 +662,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var targetAttributeSet = targetAttribute.OwningSet;
             if (targetAttributeSet == null) return;
 
-            // Instant effects directly modify the BaseValue of an attribute.
-            if (spec.Def.DurationPolicy == EDurationPolicy.Instant || isFromExecution)
+            // If the effect is duration-based AND this is not an explicit execution (like a periodic tick),
+            // then it's a temporary modifier that affects the CurrentValue by dirtying the attribute.
+            if (spec.Def.DurationPolicy != EDurationPolicy.Instant && !isFromExecution)
             {
-                // For Executions, allow the AttributeSet to perform complex logic.
-                if (isFromExecution)
-                {
-                    var callbackData = new GameplayEffectModCallbackData(spec, mod, magnitude, this);
-                    targetAttributeSet.PostGameplayEffectExecute(callbackData);
-                }
-                else // For standard instant modifiers, apply them directly.
-                {
-                    float currentBase = targetAttributeSet.GetBaseValue(attribute);
-                    float newBase = currentBase;
-
-                    switch (mod.Operation)
-                    {
-                        case EAttributeModifierOperation.Add:
-                            newBase += magnitude;
-                            break;
-                        case EAttributeModifierOperation.Multiply:
-                            newBase *= magnitude;
-                            break;
-                        case EAttributeModifierOperation.Division:
-                            if (magnitude != 0) newBase /= magnitude;
-                            break;
-                        case EAttributeModifierOperation.Override:
-                            newBase = magnitude;
-                            break;
-                    }
-
-                    // Allow the attribute set to clamp or react to the base value change.
-                    targetAttributeSet.PreAttributeBaseChange(attribute, ref newBase);
-                    targetAttributeSet.SetBaseValue(attribute, newBase);
-                }
-            }
-            else // Duration/Infinite effects modify the CurrentValue via the dirty/recalculation mechanism.
-            {
-                // When a duration-based effect is applied, we simply mark the attribute as dirty.
-                // The Tick() method will then handle recalculating the final CurrentValue based on ALL active modifiers.
                 MarkAttributeDirty(attribute);
+                return;
             }
+
+            // Otherwise, this is a permanent modification.
+            // The AttributeSet is SOLELY responsible for handling it via PostGameplayEffectExecute.
+            // The ASC's job is just to deliver the data.
+            var callbackData = new GameplayEffectModCallbackData(spec, mod, magnitude, this);
+            targetAttributeSet.PostGameplayEffectExecute(callbackData);
         }
         private void MarkAttributesDirtyFromEffect(ActiveGameplayEffect activeEffect)
         {

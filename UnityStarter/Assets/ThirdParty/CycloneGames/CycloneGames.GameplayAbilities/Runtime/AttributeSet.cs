@@ -83,11 +83,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
+        public GameplayAttribute GetAttribute(string name)
+        {
+            foreach (var attr in discoveredAttributes)
+            {
+                if (attr.Name == name)
+                {
+                    return attr;
+                }
+            }
+            return null;
+        }
+
         public virtual void PreAttributeChange(GameplayAttribute attribute, ref float newValue) { }
         public virtual void PreAttributeBaseChange(GameplayAttribute attribute, ref float newBaseValue) { }
         public virtual void PostGameplayEffectExecute(GameplayEffectModCallbackData data) { }
     }
-    
+
     // Data struct passed to PostGameplayEffectExecute
     public struct GameplayEffectModCallbackData
     {

@@ -17,10 +17,10 @@ MonoBehaviour:
   Duration: 5
   Period: 1
   SerializableModifiers:
-  - AttributeName: Attribute.Secondary.Health
+  - AttributeName: Attribute.Meta.Damage
     Operation: 0
     Magnitude:
-      BaseValue: -5
+      BaseValue: 5
       ScalingFactorPerLevel: 0
   GrantedAbilities: []
   AssetTags:
