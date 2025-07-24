@@ -37,6 +37,10 @@ namespace CycloneGames.GameplayAbilities.Sample
         // Events
         public const string Event_Character_Death = "Event.Character.Death";
         public const string Event_Character_LeveledUp = "Event.Character.LeveledUp";
+        public const string Event_Experience_Gain = "Event.Experience.Gain";
+
+        // Datas
+        public const string Data_DamageMultiplier = "Data.DamageMultiplier";
 
         // GameplayCues
         public const string GameplayCue_Fireball_Impact = "GameplayCue.Fireball.Impact";

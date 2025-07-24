@@ -57,6 +57,11 @@ MonoBehaviour:
     Magnitude:
       BaseValue: 5
       ScalingFactorPerLevel: 0
+  - AttributeName: Data.DamageMultiplier
+    Operation: 3
+    Magnitude:
+      BaseValue: 1
+      ScalingFactorPerLevel: 0
   GrantedAbilities: []
   AssetTags:
     m_SerializedExplicitTags: []

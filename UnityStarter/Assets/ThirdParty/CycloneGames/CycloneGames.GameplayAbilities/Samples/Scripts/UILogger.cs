@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 using CycloneGames.Logger;
@@ -9,16 +10,15 @@ namespace CycloneGames.GameplayAbilities.Sample
     public class UILogger : CycloneGames.Logger.ILogger
     {
         private readonly Text logTextComponent;
-        private readonly string prefix;
         private readonly int maxLogLines;
         private readonly Queue<string> logQueue;
-        private readonly StringBuilder stringBuilder = new StringBuilder(); // Re-use StringBuilder
+        private readonly StringBuilder stringBuilder = new StringBuilder();
+        private readonly Action<string> updateLogAction;
 
-        public UILogger(Text textComponent, string prefix = "", int maxLines = 2) // Default to 2 lines
+        public UILogger(Action<string> UpdateLog, int maxLines = 7)
         {
-            this.logTextComponent = textComponent;
-            this.prefix = prefix;
-            this.maxLogLines = Mathf.Max(1, maxLines); // Ensure at least 1 line
+            this.updateLogAction = UpdateLog ?? throw new ArgumentNullException(nameof(UpdateLog), "UpdateLog action cannot be null.");
+            this.maxLogLines = Mathf.Max(1, maxLines);
             this.logQueue = new Queue<string>(this.maxLogLines);
             if (this.logTextComponent != null)
             {
@@ -38,30 +38,31 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         private void AddLog(in LogMessage logMessage)
         {
-            if (logTextComponent == null) return;
-
             // If the queue is full, remove the oldest log
             while (logQueue.Count >= maxLogLines)
             {
                 logQueue.Dequeue();
             }
 
-            logQueue.Enqueue($"{prefix}[{logMessage.Level}] {logMessage.OriginalMessage}");
+            logQueue.Enqueue($"[{logMessage.Timestamp}] {logMessage.OriginalMessage}");
 
             // Efficiently build the final string
             stringBuilder.Clear();
-            foreach (string line in logQueue)
+            var logLines = logQueue.ToArray();
+
+            for (int i = 0; i < logLines.Length; i++)
             {
-                stringBuilder.AppendLine(line);
+                if (i == logLines.Length - 1)
+                {
+                    stringBuilder.AppendLine($"<color=cyan>{logLines[i]}</color>");
+                }
+                else
+                {
+                    stringBuilder.AppendLine(logLines[i]);
+                }
             }
 
-            logTextComponent.text = stringBuilder.ToString();
-
-            // Force the layout to rebuild to ensure the UI updates
-            if (logTextComponent.transform is RectTransform rectTransform)
-            {
-                LayoutRebuilder.ForceRebuildLayoutImmediate(rectTransform);
-            }
+            updateLogAction(stringBuilder.ToString());
         }
     }
 }

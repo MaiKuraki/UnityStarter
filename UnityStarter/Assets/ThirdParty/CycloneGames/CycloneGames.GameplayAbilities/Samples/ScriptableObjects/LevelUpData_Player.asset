@@ -1,0 +1,65 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 91d6ad8f0bb3062458c741096c47d28b, type: 3}
+  m_Name: LevelUpData_Player
+  m_EditorClassIdentifier: 
+  Levels:
+  - XpToNextLevel: 100
+    HealthGain: 25
+    ManaGain: 15
+    AttackGain: 3
+    DefenseGain: 2
+  - XpToNextLevel: 180
+    HealthGain: 25
+    ManaGain: 15
+    AttackGain: 3
+    DefenseGain: 2
+  - XpToNextLevel: 270
+    HealthGain: 25
+    ManaGain: 15
+    AttackGain: 3
+    DefenseGain: 2
+  - XpToNextLevel: 380
+    HealthGain: 30
+    ManaGain: 20
+    AttackGain: 4
+    DefenseGain: 3
+  - XpToNextLevel: 500
+    HealthGain: 30
+    ManaGain: 20
+    AttackGain: 4
+    DefenseGain: 3
+  - XpToNextLevel: 650
+    HealthGain: 30
+    ManaGain: 20
+    AttackGain: 4
+    DefenseGain: 3
+  - XpToNextLevel: 820
+    HealthGain: 30
+    ManaGain: 20
+    AttackGain: 4
+    DefenseGain: 3
+  - XpToNextLevel: 1000
+    HealthGain: 35
+    ManaGain: 25
+    AttackGain: 5
+    DefenseGain: 4
+  - XpToNextLevel: 1250
+    HealthGain: 35
+    ManaGain: 25
+    AttackGain: 5
+    DefenseGain: 4
+  - XpToNextLevel: 1500
+    HealthGain: 50
+    ManaGain: 30
+    AttackGain: 7
+    DefenseGain: 5
