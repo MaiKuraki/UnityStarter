@@ -1,6 +1,7 @@
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Runtime;
 using CycloneGames.Logger;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -16,13 +17,15 @@ namespace CycloneGames.GameplayAbilities.Sample
         public Text PlayerStatusText;
         public Text EnemyStatusText;
         public Text LogText;
+        private GameObject logTextGORef;
 
         private void Awake()
         {
+            logTextGORef = LogText?.gameObject;
             CLogger.Instance.AddLogger(new UnityLogger());
             if (LogText != null)
             {
-                CLogger.Instance.AddLogger(new UILogger(LogText, "[Game Log] ", 1));
+                CLogger.Instance.AddLogger(new UILogger(UpdateLog, 7));
             }
             else
             {
@@ -92,6 +95,20 @@ namespace CycloneGames.GameplayAbilities.Sample
             }
         }
 
+        void UpdateLog(string message)
+        {
+            ForceRefreshLog(message).Forget();
+        }
+
+        async UniTask ForceRefreshLog(string messageStr)
+        {
+            await UniTask.SwitchToMainThread();
+            if (LogText != null)
+            {
+                LogText.text = messageStr;
+            }
+        }
+
         string GetCharacterStatus(Character character)
         {
             if (character == null) return "N/A";
@@ -117,7 +134,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                     {
                         hasEffects = true;
                         // Display Effect Name, Remaining Duration, and Stack Count
-                        statusBuilder.Append($" - {activeEffect.Spec.Def.Name} ");
+                        statusBuilder.Append($" - <color=red>{activeEffect.Spec.Def.Name}</color> ");
                         if (activeEffect.Spec.Def.DurationPolicy == EDurationPolicy.HasDuration)
                         {
                             statusBuilder.Append($"({activeEffect.TimeRemaining:F1}s) ");
@@ -147,7 +164,18 @@ namespace CycloneGames.GameplayAbilities.Sample
             {
                 foreach (var tag in asc.CombinedTags)
                 {
-                    statusBuilder.AppendLine($" - {tag.Name}");
+                    if (tag.Name.Contains("Debuff"))
+                    {
+                        statusBuilder.AppendLine($" - <color=yellow>{tag.Name}</color>");
+                    }
+                    if (tag.Name.Contains("Dead"))
+                    {
+                        statusBuilder.AppendLine($" - <color=red>{tag.Name}</color>");
+                    }
+                    else
+                    {
+                        statusBuilder.AppendLine($" - {tag.Name}");
+                    }
                 }
             }
 
