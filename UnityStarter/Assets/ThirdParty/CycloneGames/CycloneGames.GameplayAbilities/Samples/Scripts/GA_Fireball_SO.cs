@@ -1,4 +1,5 @@
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.GameplayTags.Runtime;
 using CycloneGames.Logger;
 using UnityEngine;
 
@@ -40,6 +41,15 @@ namespace CycloneGames.GameplayAbilities.Sample
 
                 // Apply Instant Damage
                 var damageSpec = GameplayEffectSpec.Create(fireballDamageEffect, AbilitySystemComponent, spec.Level);
+
+                //  Check Damage Multiplier (may player has some skills enhanced the damage)
+                if (actorInfo.OwnerActor is Character casterCharacter)
+                {
+                    float bonusDamageMultiplier = casterCharacter.AttributeSet.GetCurrentValue(casterCharacter.AttributeSet.BonusDamageMultiplier);
+                    damageSpec.SetSetByCallerMagnitude(GameplayTagManager.RequestTag(GASSampleTags.Data_DamageMultiplier), bonusDamageMultiplier);
+                    CLogger.LogInfo($"Snapshotting DamageMultiplier: {bonusDamageMultiplier}");
+                }
+
                 targetASC.ApplyGameplayEffectSpecToSelf(damageSpec);
 
                 // Apply Burn Debuff

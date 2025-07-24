@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -47,6 +49,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // A cache of calculated magnitudes for each modifier in the effect definition.
         // This is a critical performance optimization to avoid re-calculating magnitudes on every evaluation.
         private readonly Dictionary<ModifierInfo, float> calculatedMagnitudes = new Dictionary<ModifierInfo, float>();
+
+        private readonly Dictionary<GameplayTag, float> setByCallerMagnitudes = new Dictionary<GameplayTag, float>();
 
         // Private constructor to enforce creation via the pooling system.
         private GameplayEffectSpec() { }
@@ -109,8 +113,47 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Level = 0;
             Duration = 0;
             calculatedMagnitudes.Clear();
+            setByCallerMagnitudes.Clear();
 
             pool.Push(this);
+        }
+
+        /// <summary>
+        /// Sets a magnitude value associated with a GameplayTag. This is the "snapshotting" mechanism.
+        /// </summary>
+        /// <param name="dataTag">The GameplayTag to use as a key.</param>
+        /// <param name="magnitude">The float value to store.</param>
+        public void SetSetByCallerMagnitude(GameplayTag dataTag, float magnitude)
+        {
+            if (dataTag == GameplayTag.None)
+            {
+                // Optional: Add a warning here if you want to prevent using invalid tags.
+                return;
+            }
+            setByCallerMagnitudes[dataTag] = magnitude;
+        }
+
+        /// <summary>
+        /// Retrieves a magnitude value associated with a GameplayTag from the SetByCaller cache.
+        /// </summary>
+        /// <param name="dataTag">The GameplayTag key to look up.</param>
+        /// <param name="warnIfNotFound">If true, logs a warning if the key is not found.</param>
+        /// <param name="defaultValue">The value to return if the key is not found.</param>
+        /// <returns>The stored magnitude or the default value.</returns>
+        public float GetSetByCallerMagnitude(GameplayTag dataTag, bool warnIfNotFound = true, float defaultValue = 0f)
+        {
+            if (setByCallerMagnitudes.TryGetValue(dataTag, out float magnitude))
+            {
+                return magnitude;
+            }
+
+            if (warnIfNotFound)
+            {
+                // Consider using your CLogger here
+                CLogger.LogWarning($"GetSetByCallerMagnitude: Tag '{dataTag.Name}' not found in spec for effect '{Def?.Name}'. Returning default value.");
+            }
+
+            return defaultValue;
         }
 
         /// <summary>
