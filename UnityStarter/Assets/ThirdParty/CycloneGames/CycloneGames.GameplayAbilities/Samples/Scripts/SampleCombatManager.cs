@@ -156,6 +156,12 @@ namespace CycloneGames.GameplayAbilities.Sample
                         }
                         statusBuilder.AppendLine();
                     }
+                    else
+                    {
+                        hasEffects = true;
+                        statusBuilder.Append($" - {activeEffect.Spec.Def.Name} ");
+                        statusBuilder.AppendLine();
+                    }
                 }
             }
 
