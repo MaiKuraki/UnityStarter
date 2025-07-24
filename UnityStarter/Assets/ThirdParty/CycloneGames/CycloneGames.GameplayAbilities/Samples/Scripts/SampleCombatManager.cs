@@ -1,6 +1,7 @@
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Runtime;
 using CycloneGames.Logger;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -12,17 +13,23 @@ namespace CycloneGames.GameplayAbilities.Sample
         public Character Player;
         public Character Enemy;
 
+        [Header("Setup")]
+        [Tooltip("A GameplayEffect used for debugging to grant XP to the player.")]
+        public GameplayEffectSO DebugXpEffect;
+
         [Header("UI")]
         public Text PlayerStatusText;
         public Text EnemyStatusText;
         public Text LogText;
+        private GameObject logTextGORef;
 
         private void Awake()
         {
+            logTextGORef = LogText?.gameObject;
             CLogger.Instance.AddLogger(new UnityLogger());
             if (LogText != null)
             {
-                CLogger.Instance.AddLogger(new UILogger(LogText, "[Game Log] ", 1));
+                CLogger.Instance.AddLogger(new UILogger(UpdateLog, 7));
             }
             else
             {
@@ -67,7 +74,14 @@ namespace CycloneGames.GameplayAbilities.Sample
 
             if (Input.GetKeyDown(KeyCode.Space))
             {
-                Player.AddExperience(50); // Give player XP
+                // Grant XP by applying a GameplayEffect
+                if (Player != null && DebugXpEffect != null)
+                {
+                    var ge = DebugXpEffect.CreateGameplayEffect();
+                    var spec = GameplayEffectSpec.Create(ge, Player.AbilitySystemComponent);
+                    Player.AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
+                    CLogger.LogInfo("Granted debug XP to player.");
+                }
             }
         }
 
@@ -92,6 +106,20 @@ namespace CycloneGames.GameplayAbilities.Sample
             }
         }
 
+        void UpdateLog(string message)
+        {
+            ForceRefreshLog(message).Forget();
+        }
+
+        async UniTask ForceRefreshLog(string messageStr)
+        {
+            await UniTask.SwitchToMainThread();
+            if (LogText != null)
+            {
+                LogText.text = messageStr;
+            }
+        }
+
         string GetCharacterStatus(Character character)
         {
             if (character == null) return "N/A";
@@ -105,7 +133,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             statusBuilder.AppendLine($"LV: {set.GetCurrentValue(set.Level):F0}");
             statusBuilder.AppendLine($"HP: {set.GetCurrentValue(set.Health):F1} / {set.GetCurrentValue(set.MaxHealth):F1}");
             statusBuilder.AppendLine($"MP: {set.GetCurrentValue(set.Mana):F1} / {set.GetCurrentValue(set.MaxMana):F1}");
-            statusBuilder.AppendLine($"ATK: {set.GetCurrentValue(set.AttackPower):F1} | DEF: {set.GetCurrentValue(set.Defense):F1}");
+            statusBuilder.AppendLine($"ATK: {set.GetCurrentValue(set.AttackPower):F1}   |   DEF: {set.GetCurrentValue(set.Defense):F1}  |   EXP: {set.GetCurrentValue(set.Experience):F1}");
 
             statusBuilder.AppendLine("<b>Active Effects:</b>");
             bool hasEffects = false;
@@ -117,7 +145,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                     {
                         hasEffects = true;
                         // Display Effect Name, Remaining Duration, and Stack Count
-                        statusBuilder.Append($" - {activeEffect.Spec.Def.Name} ");
+                        statusBuilder.Append($" - <color=red>{activeEffect.Spec.Def.Name}</color> ");
                         if (activeEffect.Spec.Def.DurationPolicy == EDurationPolicy.HasDuration)
                         {
                             statusBuilder.Append($"({activeEffect.TimeRemaining:F1}s) ");
@@ -147,7 +175,18 @@ namespace CycloneGames.GameplayAbilities.Sample
             {
                 foreach (var tag in asc.CombinedTags)
                 {
-                    statusBuilder.AppendLine($" - {tag.Name}");
+                    if (tag.Name.Contains("Debuff"))
+                    {
+                        statusBuilder.AppendLine($" - <color=yellow>{tag.Name}</color>");
+                    }
+                    if (tag.Name.Contains("Dead"))
+                    {
+                        statusBuilder.AppendLine($" - <color=red>{tag.Name}</color>");
+                    }
+                    else
+                    {
+                        statusBuilder.AppendLine($" - {tag.Name}");
+                    }
                 }
             }
 

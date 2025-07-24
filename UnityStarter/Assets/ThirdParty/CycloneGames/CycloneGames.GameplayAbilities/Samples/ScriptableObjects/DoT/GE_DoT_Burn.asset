@@ -10,24 +10,25 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: cb068d9736917d440ba3a3103f9a665b, type: 3}
-  m_Name: GE_Bounty_Enemy
+  m_Name: GE_DoT_Burn
   m_EditorClassIdentifier: 
-  EffectName: Bounty_Enemy
-  DurationPolicy: 0
-  Duration: 0
-  Period: 0
+  EffectName: Burn_Dot
+  DurationPolicy: 1
+  Duration: 5
+  Period: 1
   SerializableModifiers:
-  - AttributeName: Attribute.Meta.Experience
+  - AttributeName: Attribute.Meta.Damage
     Operation: 0
     Magnitude:
-      BaseValue: 500
+      BaseValue: 5
       ScalingFactorPerLevel: 0
   GrantedAbilities: []
   AssetTags:
-    m_SerializedExplicitTags:
-    - Event.Experience.Gain
-  GrantedTags:
     m_SerializedExplicitTags: []
+  GrantedTags:
+    m_SerializedExplicitTags:
+    - Debuff.Burn
+    - State.Burning
   ApplicationTagRequirements:
     m_ForbiddenTags:
       m_SerializedExplicitTags: []
@@ -41,4 +42,5 @@ MonoBehaviour:
   RemoveGameplayEffectsWithTags:
     m_SerializedExplicitTags: []
   GameplayCues:
-    m_SerializedExplicitTags: []
+    m_SerializedExplicitTags:
+    - GameplayCue.Burn.Loop
