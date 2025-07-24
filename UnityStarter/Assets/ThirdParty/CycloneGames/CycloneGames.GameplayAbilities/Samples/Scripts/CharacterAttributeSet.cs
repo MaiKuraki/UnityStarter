@@ -8,6 +8,8 @@ namespace CycloneGames.GameplayAbilities.Sample
     {
         // --- Primary Attributes ---
         public GameplayAttribute Level { get; } = new GameplayAttribute(GASSampleTags.Attribute_Primary_Level);
+
+        public GameplayAttribute Experience { get; } = new GameplayAttribute(GASSampleTags.Attribute_Meta_Experience);
         public GameplayAttribute AttackPower { get; } = new GameplayAttribute(GASSampleTags.Attribute_Primary_Attack);
         public GameplayAttribute Defense { get; } = new GameplayAttribute(GASSampleTags.Attribute_Primary_Defense);
         public GameplayAttribute Speed { get; } = new GameplayAttribute(GASSampleTags.Attribute_Secondary_Speed);
@@ -19,8 +21,8 @@ namespace CycloneGames.GameplayAbilities.Sample
         public GameplayAttribute MaxMana { get; } = new GameplayAttribute(GASSampleTags.Attribute_Secondary_MaxMana);
 
         // --- Meta Attributes (temporary values for calculations) ---
+        public GameplayAttribute BonusDamageMultiplier { get; } = new GameplayAttribute(GASSampleTags.Data_DamageMultiplier);
         public GameplayAttribute Damage { get; } = new GameplayAttribute(GASSampleTags.Attribute_Meta_Damage);
-        public GameplayAttribute Experience { get; } = new GameplayAttribute(GASSampleTags.Attribute_Meta_Experience);
 
         public CharacterAttributeSet()
         {
@@ -46,6 +48,83 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
 
         /// <summary>
+        /// This hook handles the 'Damage' meta attribute, completely overriding the default logic.
+        /// </summary>
+        protected override bool PreProcessInstantEffect(GameplayEffectModCallbackData data)
+        {
+            //  Do not call base.PreProcessInstantEffect(data) here,
+
+            var attribute = GetAttribute(data.Modifier.AttributeName);
+            if (attribute == Damage)
+            {
+                // --- Damage Mitigation Logic ---
+                float incomingDamage = data.EvaluatedMagnitude;
+                if (incomingDamage <= 0) return true;
+
+                // Get the multiplier from the incoming Spec's SetByCaller data.
+                // If the tag doesn't exist in the Spec, default to 1.0f.
+                float damageMultiplier = data.EffectSpec.GetSetByCallerMagnitude(
+                    GameplayTagManager.RequestTag(GASSampleTags.Data_DamageMultiplier),
+                    warnIfNotFound: false,
+                    defaultValue: 1.0f);
+
+                if (damageMultiplier > 0)
+                {
+                    incomingDamage *= damageMultiplier;
+                }
+
+                float currentHealth = GetCurrentValue(Health);
+                float currentDefense = GetCurrentValue(Defense);
+
+                float mitigatedDamage = incomingDamage * (1 - currentDefense / (currentDefense + 100));
+                mitigatedDamage = System.Math.Max(0, mitigatedDamage);
+
+                float newHealth = currentHealth - mitigatedDamage;
+                SetBaseValue(Health, newHealth);
+                SetCurrentValue(Health, newHealth);
+
+                // --- Death and Bounty Logic ---
+                if (newHealth <= 0 && currentHealth > 0)
+                {
+                    var targetASC = data.Target;
+                    targetASC.AddLooseGameplayTag(GameplayTagManager.RequestTag(GASSampleTags.State_Dead));
+                    CLogger.LogWarning($"{targetASC.OwnerActor} has died!");
+
+                    var killerASC = data.EffectSpec.Source;
+                    if (killerASC != null && killerASC != targetASC)
+                    {
+                        if (targetASC.OwnerActor is Character deadCharacter)
+                        {
+                            deadCharacter.GrantBountyTo(killerASC);
+                        }
+                    }
+                }
+
+                return true; // Handled, no further processing needed.
+            }
+
+            return false; // For any other attribute, return false to allow the default logic to run.
+        }
+
+        /// <summary>
+        /// Called after a GameplayEffect has been executed on this AttributeSet.
+        /// This is the ideal place for complex calculations like damage mitigation.
+        /// </summary>
+        protected override void PostProcessInstantEffect(GameplayEffectModCallbackData data)
+        {
+            base.PostProcessInstantEffect(data);
+
+            var attribute = GetAttribute(data.Modifier.AttributeName);
+            if (attribute == Experience && data.EffectSpec.Def.AssetTags.HasTag(GameplayTagManager.RequestTag(GASSampleTags.Event_Experience_Gain)))
+            {
+                if (data.Target.OwnerActor is Character character)
+                {
+                    character.CheckForLevelUp();
+                }
+            }
+        }
+
+        /// <summary>
         /// Called after a GameplayEffect has been executed on this AttributeSet.
         /// This is the ideal place for complex calculations like damage mitigation.
         /// </summary>
@@ -56,75 +135,18 @@ namespace CycloneGames.GameplayAbilities.Sample
             var attribute = GetAttribute(data.Modifier.AttributeName);
             if (attribute == null) return;
 
-            if (attribute == Damage)
-            {
-                // The magnitude from the GE is the raw, pre-mitigation damage value.
-                // By convention, this should always be a positive number.
-                float incomingDamage = data.EvaluatedMagnitude;
-
-                if (incomingDamage <= 0) return;
-
-                float currentHealth = GetCurrentValue(Health);
-                float currentDefense = GetCurrentValue(Defense);
-
-                //  TODO: in this simple sample, set a simple damage mitigation formula.
-                float mitigatedDamage = incomingDamage * (1 - currentDefense / (currentDefense + 100));
-                mitigatedDamage = System.Math.Max(0, mitigatedDamage);
-
-                float newHealth = currentHealth - mitigatedDamage;
-                SetBaseValue(Health, newHealth);
-
-                // --- Death and Bounty ---
-                if (newHealth <= 0 && currentHealth > 0)
-                {
-                    var targetASC = data.Target;
-                    targetASC.AddLooseGameplayTag(GameplayTagManager.RequestTag(GASSampleTags.State_Dead));
-                    CLogger.LogWarning($"{targetASC.OwnerActor} has died!");
-
-                    // Find the killer from the effect's source.
-                    var killerASC = data.EffectSpec.Source;
-                    if (killerASC != null && killerASC != targetASC)
-                    {
-                        // The 'target' character that died needs to hold a reference to its bounty GE.
-                        if (targetASC.OwnerActor is Character deadCharacter)
-                        {
-                            deadCharacter.GrantBountyTo(killerASC);
-                        }
-                    }
-                }
-                return; // Damage processing is complete.
-            }
-
             if (attribute == Experience)
             {
-                int xpGained = (int)data.EvaluatedMagnitude;
-                if (data.Target.OwnerActor is Character character)
-                {
-                    character.AddExperience(xpGained);
-                }
-                return;
-            }
+                bool hasExpGainTag = data.EffectSpec.Def.AssetTags.HasTag(GameplayTagManager.RequestTag(GASSampleTags.Event_Experience_Gain));
 
-            // --- Direct Attribute Modification Handling ---
-            // This section handles permanent changes to regular attributes (like Health from a DoT).
-            float currentBase = GetBaseValue(attribute);
-            float newBase = currentBase;
-            switch (data.Modifier.Operation)
-            {
-                case EAttributeModifierOperation.Add:
-                    newBase += data.EvaluatedMagnitude;
-                    break;
-                case EAttributeModifierOperation.Multiply:
-                    newBase *= data.EvaluatedMagnitude;
-                    break;
-                case EAttributeModifierOperation.Division:
-                    if (data.EvaluatedMagnitude != 0) newBase /= data.EvaluatedMagnitude;
-                    break;
-                case EAttributeModifierOperation.Override:
-                    newBase = data.EvaluatedMagnitude;
-                    break;
+                if (hasExpGainTag)
+                {
+                    if (data.Target.OwnerActor is Character character)
+                    {
+                        character.CheckForLevelUp();
+                    }
+                }
             }
-            SetBaseValue(attribute, newBase);
         }
     }
 }

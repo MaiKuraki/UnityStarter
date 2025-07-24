@@ -10,22 +10,21 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: cb068d9736917d440ba3a3103f9a665b, type: 3}
-  m_Name: GE_Bounty_Enemy
+  m_Name: GE_Passive_IncreaseDamage_10Percent
   m_EditorClassIdentifier: 
-  EffectName: Bounty_Enemy
-  DurationPolicy: 0
+  EffectName: Passive_IncreaseDamage_10Percent
+  DurationPolicy: 2
   Duration: 0
   Period: 0
   SerializableModifiers:
-  - AttributeName: Attribute.Meta.Experience
+  - AttributeName: Data.DamageMultiplier
     Operation: 0
     Magnitude:
-      BaseValue: 500
+      BaseValue: 0.1
       ScalingFactorPerLevel: 0
   GrantedAbilities: []
   AssetTags:
-    m_SerializedExplicitTags:
-    - Event.Experience.Gain
+    m_SerializedExplicitTags: []
   GrantedTags:
     m_SerializedExplicitTags: []
   ApplicationTagRequirements:

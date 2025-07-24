@@ -780,6 +780,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   Player: {fileID: 2992749990518937320}
   Enemy: {fileID: 1578423669}
+  DebugXpEffect: {fileID: 11400000, guid: 3020cddc11491904183551de42a243ad, type: 2}
   PlayerStatusText: {fileID: 1376934481}
   EnemyStatusText: {fileID: 680871953}
   LogText: {fileID: 113189218}
@@ -1198,6 +1199,11 @@ PrefabInstance:
       value: 
       objectReference: {fileID: 11400000, guid: 117b699f121c5444393668704477a950,
         type: 2}
+    - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
+        type: 3}
+      propertyPath: InitialPassiveEffects.Array.size
+      value: 0
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
@@ -1496,6 +1502,12 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
         type: 3}
+      propertyPath: LevelUpData
+      value: 
+      objectReference: {fileID: 11400000, guid: 750381211e3a2d0419e3ce3f87464d57,
+        type: 2}
+    - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
+        type: 3}
       propertyPath: InitialAttributesEffect
       value: 
       objectReference: {fileID: 11400000, guid: 1dd2fff979d6fd049a5d564eb1604489,
@@ -1510,6 +1522,17 @@ PrefabInstance:
       propertyPath: 'InitialAbilities.Array.data[0]'
       value: 
       objectReference: {fileID: 11400000, guid: 80ac259937a01bf4984d66b9108ead62,
+        type: 2}
+    - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
+        type: 3}
+      propertyPath: InitialPassiveEffects.Array.size
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
+        type: 3}
+      propertyPath: 'InitialPassiveEffects.Array.data[0]'
+      value: 
+      objectReference: {fileID: 11400000, guid: 47e3160bb78f337409d4a6924455ecc2,
         type: 2}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
