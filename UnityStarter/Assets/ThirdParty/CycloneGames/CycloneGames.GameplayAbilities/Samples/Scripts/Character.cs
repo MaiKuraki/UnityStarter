@@ -21,6 +21,11 @@ namespace CycloneGames.GameplayAbilities.Sample
         public List<GameplayEffectSO> InitialPassiveEffects;
         public LevelUpDataSO LevelUpData;
 
+        [Header("Faction")]
+        // A character can now belong to multiple factions, e.g., "Faction.Player", "Faction.Team.Blue".
+        [Tooltip("Tags that define this character's faction, team, or allegiances.")]
+        public GameplayTagContainer FactionTags;
+
         [Header("Bounty")]
         [Tooltip("The GameplayEffect to grant to the killer when this character dies.")]
         public GameplayEffectSO BountyEffect;   // TODO: maybe create a new class for EnemyCharacter?
