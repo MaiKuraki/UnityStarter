@@ -1,5 +1,5 @@
 using System.Collections.Generic;
-using CycloneGames.GameplayAbilities.Runtime; // Notice this is using the Runtime namespace
+using CycloneGames.GameplayAbilities.Runtime;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Sample

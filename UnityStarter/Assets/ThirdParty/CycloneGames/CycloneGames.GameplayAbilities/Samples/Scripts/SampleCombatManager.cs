@@ -68,9 +68,17 @@ namespace CycloneGames.GameplayAbilities.Sample
         void HandleInput()
         {
             if (Input.GetKeyDown(KeyCode.Alpha1)) TryActivateAbility(Player, 0); // Fireball
-            if (Input.GetKeyDown(KeyCode.Alpha2)) TryActivateAbility(Player, 1); // Poison Blade
-            if (Input.GetKeyDown(KeyCode.Alpha3)) TryActivateAbility(Player, 2); // Chain Lightning
-            if (Input.GetKeyDown(KeyCode.Alpha4)) TryActivateAbility(Player, 3); // Purify
+            if (Input.GetKeyDown(KeyCode.Alpha2)) TryActivateAbility(Player, 1); // Purify
+
+            //  Enemy active PoisonBlade ability
+            if (Input.GetKeyDown(KeyCode.E))
+            {
+                if (Enemy != null)
+                {
+                    CLogger.LogInfo("DEBUG: Forcing Enemy to cast ability.");
+                    TryActivateAbility(Enemy, 0);
+                }
+            }
 
             if (Input.GetKeyDown(KeyCode.Space))
             {
@@ -185,7 +193,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                     {
                         statusBuilder.AppendLine($" - <color=yellow>{tag.Name}</color>");
                     }
-                    if (tag.Name.Contains("Dead"))
+                    else if (tag.Name.Contains("Dead"))
                     {
                         statusBuilder.AppendLine($" - <color=red>{tag.Name}</color>");
                     }

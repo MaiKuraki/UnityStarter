@@ -10,25 +10,23 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: cb068d9736917d440ba3a3103f9a665b, type: 3}
-  m_Name: GE_DoT_Burn
+  m_Name: GE_PoisonBlade_Cost
   m_EditorClassIdentifier: 
-  EffectName: Dot_Burn
-  DurationPolicy: 1
-  Duration: 5
-  Period: 1
+  EffectName: PoisonBlade_Cost
+  DurationPolicy: 0
+  Duration: 0
+  Period: 0
   SerializableModifiers:
-  - AttributeName: Attribute.Meta.Damage
+  - AttributeName: Attribute.Secondary.Mana
     Operation: 0
     Magnitude:
-      BaseValue: 5
+      BaseValue: -5
       ScalingFactorPerLevel: 0
   GrantedAbilities: []
   AssetTags:
     m_SerializedExplicitTags: []
   GrantedTags:
-    m_SerializedExplicitTags:
-    - Debuff.Burn
-    - State.Burning
+    m_SerializedExplicitTags: []
   ApplicationTagRequirements:
     m_ForbiddenTags:
       m_SerializedExplicitTags: []
@@ -42,5 +40,4 @@ MonoBehaviour:
   RemoveGameplayEffectsWithTags:
     m_SerializedExplicitTags: []
   GameplayCues:
-    m_SerializedExplicitTags:
-    - GameplayCue.Burn.Loop
+    m_SerializedExplicitTags: []
