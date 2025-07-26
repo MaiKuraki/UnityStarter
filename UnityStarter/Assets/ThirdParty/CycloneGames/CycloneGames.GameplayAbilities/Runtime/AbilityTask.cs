@@ -1,5 +1,3 @@
-using System;
-
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>

@@ -7,32 +7,37 @@ namespace CycloneGames.GameplayAbilities.Sample
 {
     public abstract class GameplayAbilityTargetActor_TraceBase : ITargetActor
     {
+        protected LayerMask TraceLayerMask;
         protected TargetingQuery Query;
-        protected Action<TargetData> onTargetDataReadyCallback;
-        protected Action onCancelledCallback;
-        protected Character CasterCharacter;
-
+        protected GameObject CasterGameObject;
         public event Action<TargetData> OnTargetDataReady;
         public event Action OnCanceled;
 
+        public GameplayAbilityTargetActor_TraceBase(LayerMask layerMask, TargetingQuery query)
+        {
+            this.TraceLayerMask = layerMask;
+            this.Query = query;
+        }
+
         public virtual void Configure(GameplayAbility ability, Action<TargetData> onTargetDataReady, Action onCancelled)
         {
-            this.onTargetDataReadyCallback = onTargetDataReady;
-            this.onCancelledCallback = onCancelled;
+            this.OnTargetDataReady = onTargetDataReady;
+            this.OnCanceled = onCancelled;
 
             if (ability.ActorInfo.AvatarActor is GameObject casterGO)
             {
-                this.CasterCharacter = casterGO.GetComponent<Character>();
+                this.CasterGameObject = casterGO;
             }
         }
-        
-        public void StartTargeting()
+
+        public virtual void StartTargeting()
         {
-            if (CasterCharacter == null)
+            if (CasterGameObject == null)
             {
-                onCancelledCallback?.Invoke();
+                BroadcastCancelled();
                 return;
             }
+
             PerformTrace();
         }
 
@@ -42,12 +47,12 @@ namespace CycloneGames.GameplayAbilities.Sample
         /// <summary>
         /// A robust, centralized method to check if a potential target is valid based on the query settings.
         /// </summary>
-        protected bool IsValidTarget(GameObject targetObject)
+        protected virtual bool IsValidTarget(GameObject targetObject)
         {
             if (targetObject == null) return false;
-            
+
             // Ignore the caster if specified.
-            if (Query.IgnoreCaster && targetObject == CasterCharacter.gameObject)
+            if (Query.IgnoreCaster && targetObject == CasterGameObject)
             {
                 return false;
             }
@@ -61,18 +66,33 @@ namespace CycloneGames.GameplayAbilities.Sample
 
             return hasRequired && !hasForbidden;
         }
-
-        // Default implementations for non-instant targeting.
-        public void ConfirmTargeting() { }
-        public void CancelTargeting() => onCancelledCallback?.Invoke();
-
+        public virtual void ConfirmTargeting() { }
+        public virtual void CancelTargeting()
+        {
+            BroadcastCancelled();
+        }
         public virtual void Destroy()
         {
-            onTargetDataReadyCallback = null;
-            onCancelledCallback = null;
             OnTargetDataReady = null;
             OnCanceled = null;
-            CasterCharacter = null;
+            CasterGameObject = null;
+        }
+
+        /// <summary>
+        /// A protected method for subclasses to safely invoke the OnTargetDataReady event.
+        /// This is the correct way to trigger an event from a derived class.
+        /// </summary>
+        protected void BroadcastReady(TargetData data)
+        {
+            OnTargetDataReady?.Invoke(data);
+        }
+
+        /// <summary>
+        /// A protected method for subclasses to safely invoke the OnCanceled event.
+        /// </summary>
+        protected void BroadcastCancelled()
+        {
+            OnCanceled?.Invoke();
         }
     }
 }
