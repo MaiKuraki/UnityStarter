@@ -10,9 +10,9 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: cb068d9736917d440ba3a3103f9a665b, type: 3}
-  m_Name: GE_DoT_Burn
+  m_Name: GE_DoT_Poison
   m_EditorClassIdentifier: 
-  EffectName: Dot_Burn
+  EffectName: DoT_Poison
   DurationPolicy: 1
   Duration: 5
   Period: 1
@@ -27,8 +27,8 @@ MonoBehaviour:
     m_SerializedExplicitTags: []
   GrantedTags:
     m_SerializedExplicitTags:
-    - Debuff.Burn
-    - State.Burning
+    - Debuff.Poison
+    - State.Poisoned
   ApplicationTagRequirements:
     m_ForbiddenTags:
       m_SerializedExplicitTags: []
@@ -43,4 +43,4 @@ MonoBehaviour:
     m_SerializedExplicitTags: []
   GameplayCues:
     m_SerializedExplicitTags:
-    - GameplayCue.Burn.Loop
+    - GameplayCue.Poison.Loop

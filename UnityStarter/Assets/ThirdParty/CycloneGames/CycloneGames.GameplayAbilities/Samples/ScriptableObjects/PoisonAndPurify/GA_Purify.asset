@@ -1,0 +1,35 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6d55bd623465ede4ba86eaa692cbd6ce, type: 3}
+  m_Name: GA_Purify
+  m_EditorClassIdentifier: 
+  AbilityName: Purify
+  InstancingPolicy: 0
+  NetExecutionPolicy: 0
+  CostEffect: {fileID: 11400000, guid: d6ec08bd85ef7c84da9a7e1fdebaf78b, type: 2}
+  CooldownEffect: {fileID: 11400000, guid: 29b3fdd1a4dcb3948b8f8495bdbb0bb7, type: 2}
+  AbilityTags:
+    m_SerializedExplicitTags: []
+  ActivationBlockedTags:
+    m_SerializedExplicitTags: []
+  ActivationRequiredTags:
+    m_SerializedExplicitTags: []
+  CancelAbilitiesWithTag:
+    m_SerializedExplicitTags: []
+  BlockAbilitiesWithTag:
+    m_SerializedExplicitTags: []
+  AreaOfEffectRadius: 5
+  TargetRequiredFactions:
+    m_SerializedExplicitTags:
+    - Faction.Player
+  TargetForbiddenFactions:
+    m_SerializedExplicitTags: []

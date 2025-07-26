@@ -1189,6 +1189,11 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
         type: 3}
+      propertyPath: TeamID
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
+        type: 3}
       propertyPath: BountyEffect
       value: 
       objectReference: {fileID: 11400000, guid: f686a36f7123f054498f7c1be6463b9d,
@@ -1201,8 +1206,29 @@ PrefabInstance:
         type: 2}
     - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
         type: 3}
+      propertyPath: InitialAbilities.Array.size
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
+        type: 3}
+      propertyPath: 'InitialAbilities.Array.data[0]'
+      value: 
+      objectReference: {fileID: 11400000, guid: e955b1832c5c8c449b8854396b1fb812,
+        type: 2}
+    - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
+        type: 3}
       propertyPath: InitialPassiveEffects.Array.size
       value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
+        type: 3}
+      propertyPath: FactionTags.m_SerializedExplicitTags.Array.size
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8058165710471204962, guid: 2937417110db2354c805b522a849be63,
+        type: 3}
+      propertyPath: 'FactionTags.m_SerializedExplicitTags.Array.data[0]'
+      value: Faction.NPC.Enemy
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -1515,13 +1541,25 @@ PrefabInstance:
     - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
         type: 3}
       propertyPath: InitialAbilities.Array.size
-      value: 1
+      value: 2
       objectReference: {fileID: 0}
     - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
         type: 3}
       propertyPath: 'InitialAbilities.Array.data[0]'
       value: 
       objectReference: {fileID: 11400000, guid: 80ac259937a01bf4984d66b9108ead62,
+        type: 2}
+    - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
+        type: 3}
+      propertyPath: 'InitialAbilities.Array.data[1]'
+      value: 
+      objectReference: {fileID: 11400000, guid: f1bc871933b8807479d85658051fa5bc,
+        type: 2}
+    - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
+        type: 3}
+      propertyPath: 'InitialAbilities.Array.data[2]'
+      value: 
+      objectReference: {fileID: 11400000, guid: f1bc871933b8807479d85658051fa5bc,
         type: 2}
     - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
         type: 3}
@@ -1534,6 +1572,16 @@ PrefabInstance:
       value: 
       objectReference: {fileID: 11400000, guid: 47e3160bb78f337409d4a6924455ecc2,
         type: 2}
+    - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
+        type: 3}
+      propertyPath: FactionTags.m_SerializedExplicitTags.Array.size
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 8058165710471204962, guid: 266f57a47310a384eac0782472136468,
+        type: 3}
+      propertyPath: 'FactionTags.m_SerializedExplicitTags.Array.data[0]'
+      value: Faction.Player
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
