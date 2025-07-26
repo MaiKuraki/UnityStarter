@@ -11,15 +11,15 @@ namespace CycloneGames.GameplayAbilities.Sample
     {
         private readonly float radius;
 
-        public GameplayAbilityTargetActor_SphereOverlap(TargetingQuery query, float radius)
+        public GameplayAbilityTargetActor_SphereOverlap(LayerMask layerMask, TargetingQuery query, float radius)
+            : base(layerMask, query)
         {
-            this.Query = query;
             this.radius = radius;
         }
 
         protected override void PerformTrace()
         {
-            var hitColliders = Physics.OverlapSphere(CasterCharacter.transform.position, radius, Query.HitLayerMask);
+            var hitColliders = Physics.OverlapSphere(CasterGameObject.transform.position, radius, TraceLayerMask);
             var foundTargets = new List<GameObject>();
 
             foreach (var col in hitColliders)
@@ -35,11 +35,11 @@ namespace CycloneGames.GameplayAbilities.Sample
             {
                 var multiTargetData = GameplayAbilityTargetData_MultiTarget.Get();
                 multiTargetData.Init(foundTargets);
-                onTargetDataReadyCallback?.Invoke(multiTargetData);
+                BroadcastReady(multiTargetData);
             }
             else
             {
-                onCancelledCallback?.Invoke();
+                BroadcastCancelled();
             }
         }
     }

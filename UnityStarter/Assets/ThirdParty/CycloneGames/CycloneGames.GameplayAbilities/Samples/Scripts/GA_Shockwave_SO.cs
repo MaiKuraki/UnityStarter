@@ -26,7 +26,6 @@ namespace CycloneGames.GameplayAbilities.Sample
             var query = new TargetingQuery
             {
                 OwningAbility = this,
-                HitLayerMask = -1,
                 IgnoreCaster = true, // A shockwave should not hit the caster.
                 RequiredTags = this.targetRequiredFactions,
                 ForbiddenTags = this.targetForbiddenFactions
@@ -34,7 +33,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
             // Create the task with our sphere overlap actor.
             var targetTask = AbilityTask_WaitTargetData.WaitTargetData(this,
-                new GameplayAbilityTargetActor_SphereOverlap(query, radius));
+                new GameplayAbilityTargetActor_SphereOverlap(-1, query, radius));
 
             targetTask.OnValidData += OnTargetDataReceived;
             targetTask.OnCancelled += () =>

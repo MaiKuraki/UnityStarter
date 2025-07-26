@@ -25,14 +25,13 @@ namespace CycloneGames.GameplayAbilities.Sample
             var query = new TargetingQuery
             {
                 OwningAbility = this,
-                HitLayerMask = -1,
                 IgnoreCaster = false,
                 RequiredTags = this.targetRequiredFactions,
                 ForbiddenTags = this.targetForbiddenFactions
             };
 
             var targetTask = AbilityTask_WaitTargetData.WaitTargetData(this,
-                new GameplayAbilityTargetActor_SphereOverlap(query, areaOfEffectRadius));
+                new GameplayAbilityTargetActor_SphereOverlap(-1, query, areaOfEffectRadius));
 
             targetTask.OnValidData += OnTargetDataReceived;
             targetTask.OnCancelled += () => OnTargetDataReceived(null);
@@ -85,16 +84,6 @@ namespace CycloneGames.GameplayAbilities.Sample
             }
 
             EndAbility();
-        }
-
-        private void PurifyCharacter(Character targetCharacter, int dispelLevel)
-        {
-            if (CanDispelPoison(targetCharacter.AbilitySystemComponent, dispelLevel))
-            {
-                var poisonTagContainer = new GameplayTagContainer { GameplayTagManager.RequestTag(GASSampleTags.Debuff_Poison) };
-                targetCharacter.AbilitySystemComponent.RemoveActiveEffectsWithGrantedTags(poisonTagContainer);
-                CLogger.LogInfo($"Purified {targetCharacter.name}.");
-            }
         }
 
         private bool CanDispelPoison(AbilitySystemComponent targetASC, int dispelLevel)
