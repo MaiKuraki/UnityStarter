@@ -2,26 +2,50 @@ using System;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
+    /// <summary>
+    /// Interface for AbilityTasks that need to be updated every frame.
+    /// </summary>
     public interface IAbilityTaskTick
     {
         void Tick(float DeltaTime);
     }
 
+    /// <summary>
+    /// The base class for all asynchronous, latent actions within a GameplayAbility.
+    /// Tasks are used for operations that occur over time, such as waiting for a delay,
+    /// an event, or player input.
+    /// </summary>
     public abstract class AbilityTask
     {
+        /// <summary>
+        /// A reference to the GameplayAbility that owns and created this task.
+        /// </summary>
         public GameplayAbility Ability { get; protected set; }
-        public bool IsActive { get; private set; }
-        public bool IsCancelled { get; private set; }
-        public event Action<AbilityTask> OnFinish;
 
+        /// <summary>
+        /// True if the task is currently running.
+        /// </summary>
+        public bool IsActive { get; private set; }
+
+        /// <summary>
+        /// True if the task was explicitly cancelled before it could complete naturally.
+        /// </summary>
+        public bool IsCancelled { get; private set; }
+
+        /// <summary>
+        /// Initializes the task with its owning ability and resets its state.
+        /// Called when a task is retrieved from the pool.
+        /// </summary>
         public virtual void InitTask(GameplayAbility ability)
         {
             this.Ability = ability;
-            // Reset state when reusing a task from the pool.
             IsActive = false;
             IsCancelled = false;
         }
 
+        /// <summary>
+        /// Starts the execution of the task's primary logic.
+        /// </summary>
         public void Activate()
         {
             if (IsActive) return;
@@ -29,33 +53,40 @@ namespace CycloneGames.GameplayAbilities.Runtime
             OnActivate();
         }
 
+        /// <summary>
+        /// The main entry point for the task's logic. This must be implemented by subclasses.
+        /// </summary>
         protected abstract void OnActivate();
 
         /// <summary>
-        /// This should be overridden by child classes to clean up their specific state,
-        /// especially delegates, before the task is returned to the pool.
+        /// Called just before the task is returned to the pool.
+        /// Subclasses must override this to clean up their delegates and other state to prevent memory leaks.
         /// </summary>
         protected virtual void OnDestroy()
         {
             // Clean up base class delegates.
-            OnFinish = null;
+            
         }
 
+        /// <summary>
+        /// Marks the task as complete, notifies the parent ability, and returns the task to the pool.
+        /// </summary>
         public void EndTask()
         {
             if (IsActive)
             {
                 IsActive = false;
                 Ability.OnTaskEnded(this);
-                
-                // Call the virtual OnDestroy for subclass cleanup.
+
                 OnDestroy();
 
-                // Return this task to the central pool for reuse.
                 PoolManager.ReturnTask(this);
             }
         }
 
+        /// <summary>
+        /// Explicitly cancels the task, preventing its completion delegates from firing.
+        /// </summary>
         public void CancelTask()
         {
             if (IsActive)

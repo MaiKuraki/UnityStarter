@@ -1,4 +1,3 @@
-//  NOTE: This line will rigister all const string tags definitions in 'CycloneGames.GameplayAbilities.Sample.ProjectGameplayTags'
 [assembly: CycloneGames.GameplayTags.Runtime.RegisterGameplayTagsFrom(typeof(CycloneGames.GameplayAbilities.Sample.GASSampleTags))]
 
 namespace CycloneGames.GameplayAbilities.Sample
@@ -7,7 +6,7 @@ namespace CycloneGames.GameplayAbilities.Sample
     {
         // Attributes
         public const string Attribute_Primary_Level = "Attribute.Primary.Level";
-        public const string Attribute_Primary_Attack = "Attribute.Primary.Attack";          
+        public const string Attribute_Primary_Attack = "Attribute.Primary.Attack";
         public const string Attribute_Primary_Defense = "Attribute.Primary.Defense";
         public const string Attribute_Secondary_Health = "Attribute.Secondary.Health";
         public const string Attribute_Secondary_MaxHealth = "Attribute.Secondary.MaxHealth";
@@ -45,10 +44,14 @@ namespace CycloneGames.GameplayAbilities.Sample
         // GameplayCues
         public const string GameplayCue_Fireball_Impact = "GameplayCue.Fireball.Impact";
         public const string GameplayCue_Burn_Loop = "GameplayCue.Burn.Loop";
-        public const string GameplayCue_Poison_Impact = "GameplayCue.Poison.Impact";
+        public const string GameplayCue_PoisonBlade_Impact = "GameplayCue.PoisonBlade.Impact";
         public const string GameplayCue_Poison_Loop = "GameplayCue.Poison.Loop";
         public const string GameplayCue_Purify_Effect = "GameplayCue.Purify.Effect";
         public const string GameplayCue_Lightning_Impact = "GameplayCue.Lightning.Impact";
         public const string GameplayCue_Slam_Impact = "GameplayCue.Slam.Impact";
+
+        // Factions
+        public const string Faction_Player = "Faction.Player";
+        public const string Faction_NPC_Enemy = "Faction.NPC.Enemy";
     }
 }

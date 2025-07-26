@@ -87,7 +87,6 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
-    // We need a new AbilityTask for this
     public class AbilityTask_WaitForLanding : AbilityTask
     {
         public System.Action OnLanded;
