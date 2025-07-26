@@ -8,68 +8,53 @@ namespace CycloneGames.GameplayAbilities.Sample
     /// A simple implementation of ITargetActor that performs a single line trace (raycast)
     /// from the caster's forward direction to find a target.
     /// </summary>
-    public class GameplayAbilityTargetActor_SingleLineTrace : ITargetActor
+    public class GameplayAbilityTargetActor_SingleLineTrace : GameplayAbilityTargetActor_TraceBase
     {
-        public event Action<TargetData> OnTargetDataReady;
-        public event Action OnCanceled;
-
         private GameplayAbility owningAbility;
-        private Action<TargetData> onTargetDataReadyCallback;
-        private Action onCancelledCallback;
 
         private float traceRange = 20f; // Max range for the trace
 
-        public void Configure(GameplayAbility ability, Action<TargetData> onTargetDataReady, Action onCancelled)
+        public GameplayAbilityTargetActor_SingleLineTrace(LayerMask layerMask, TargetingQuery query)
+            : base(layerMask, query)
         {
-            this.owningAbility = ability;
-            this.onTargetDataReadyCallback = onTargetDataReady;
-            this.onCancelledCallback = onCancelled;
+            
         }
 
-        public void StartTargeting()
+        public override void Configure(GameplayAbility ability, Action<TargetData> onTargetDataReady, Action onCancelled)
         {
-            // For an instant trace, we can perform it immediately.
+            base.Configure(ability, onTargetDataReady, onCancelled);
+
+            this.owningAbility = ability;
+        }
+
+        public override void StartTargeting()
+        {
             PerformTrace();
         }
 
-        private void PerformTrace()
+        protected override void PerformTrace()
         {
             if (owningAbility?.ActorInfo.AvatarActor is GameObject caster)
             {
                 // Perform a raycast from the caster's position, forward.
                 if (Physics.Raycast(caster.transform.position, caster.transform.forward, out RaycastHit hit, traceRange))
                 {
-                    // If we hit something, package it as TargetData.
                     var targetData = GameplayAbilityTargetData_SingleTargetHit.Get();
                     targetData.Init(hit);
-                    onTargetDataReadyCallback?.Invoke(targetData);
+                    BroadcastReady(targetData);
                     return;
                 }
             }
 
             // If trace fails or caster is invalid, we consider it a "cancel" or "no valid data".
-            onCancelledCallback?.Invoke();
+            BroadcastCancelled();
         }
 
-        public void ConfirmTargeting()
+        public override void Destroy()
         {
-            // Not needed for an instant trace actor like this one.
-        }
-
-        public void CancelTargeting()
-        {
-            onCancelledCallback?.Invoke();
-        }
-
-        public void Destroy()
-        {
-            // This class is not a MonoBehaviour, so it doesn't need to be destroyed in the traditional sense.
-            // We just clear delegates to prevent memory leaks.
+            base.Destroy();
+            
             owningAbility = null;
-            onTargetDataReadyCallback = null;
-            onCancelledCallback = null;
-            OnTargetDataReady = null;
-            OnCanceled = null;
         }
     }
 }
