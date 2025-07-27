@@ -80,6 +80,8 @@ namespace CycloneGames.GameplayAbilities.Sample
                 mitigatedDamage = System.Math.Max(0, mitigatedDamage);
 
                 float newHealth = currentHealth - mitigatedDamage;
+                newHealth = System.Math.Max(0, newHealth);
+                
                 SetBaseValue(Health, newHealth);
                 SetCurrentValue(Health, newHealth);
 
