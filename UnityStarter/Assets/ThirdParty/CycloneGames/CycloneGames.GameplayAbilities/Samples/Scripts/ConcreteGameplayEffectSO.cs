@@ -34,13 +34,20 @@ namespace CycloneGames.GameplayAbilities.Sample
                 }
             }
 
+            GameplayEffectExecutionCalculation runtimeExecution = null;
+
+            if (ExecutionDefinition != null)
+            {
+                runtimeExecution = ExecutionDefinition.CreateExecution();
+            }
+
             return new GameplayEffect(
                 EffectName,
                 DurationPolicy,
                 Duration,
                 Period,
                 runtimeModifiers,
-                Execution,
+                runtimeExecution,
                 Stacking,
                 grantedAbilities,
                 AssetTags,

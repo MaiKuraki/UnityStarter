@@ -26,7 +26,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public List<ModifierInfoSerializable> SerializableModifiers;
 
         [Tooltip("(Advanced) A custom calculation class for complex, non-predictable logic, such as a final damage formula. This only executes for 'Instant' effects or for each tick of a periodic effect.")]
-        public GameplayEffectExecutionCalculation Execution;
+        public GameplayEffectExecutionCalculationSO ExecutionDefinition;
 
         [Tooltip("Defines how this effect interacts with other instances of the same effect on a target, including stacking rules and limits.")]
         public GameplayEffectStacking Stacking;
