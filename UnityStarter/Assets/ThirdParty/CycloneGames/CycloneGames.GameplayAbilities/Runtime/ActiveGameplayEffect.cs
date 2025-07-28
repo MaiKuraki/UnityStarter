@@ -28,8 +28,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             activeEffect.StackCount = 1;
             activeEffect.IsExpired = false;
 
-            // Initialize the period timer. If the period is 0 or less, it's not a periodic effect.
-            activeEffect.periodTimer = spec.Def.Period > 0 ? spec.Def.Period : -1f;
+            // If the effect is periodic, set the timer to 0 to ensure the first tick executes on the very next AbilitySystemComponent update.
+            // This implements the common behavior where a periodic effect's first tick is applied immediately upon application.
+            activeEffect.periodTimer = spec.Def.Period > 0 ? 0f : -1f;
 
             return activeEffect;
         }
@@ -82,7 +83,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             // --- Periodic Effect Handling ---
-            if (!IsExpired && periodTimer > 0)
+            if (!IsExpired && periodTimer >= 0)
             {
                 periodTimer -= deltaTime;
                 if (periodTimer <= 0)

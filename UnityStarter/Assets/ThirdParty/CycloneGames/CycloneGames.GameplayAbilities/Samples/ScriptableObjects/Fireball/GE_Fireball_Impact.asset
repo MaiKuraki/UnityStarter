@@ -22,6 +22,11 @@ MonoBehaviour:
     Magnitude:
       BaseValue: 20
       ScalingFactorPerLevel: 0
+  ExecutionDefinition: {fileID: 0}
+  Stacking:
+    Type: 0
+    Limit: 0
+    DurationPolicy: 0
   GrantedAbilities: []
   AssetTags:
     m_SerializedExplicitTags: []
