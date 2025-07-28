@@ -48,11 +48,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// <summary>
     /// A complete definition of an effect's stacking behavior.
     /// </summary>
+    [System.Serializable]
     public struct GameplayEffectStacking
     {
-        public EGameplayEffectStackingType Type { get; }
-        public int Limit { get; }
-        public EGameplayEffectStackingDurationPolicy DurationPolicy { get; }
+        public EGameplayEffectStackingType Type;
+        public int Limit;
+        public EGameplayEffectStackingDurationPolicy DurationPolicy;
 
         public GameplayEffectStacking(EGameplayEffectStackingType type, int limit, EGameplayEffectStackingDurationPolicy durationPolicy)
         {
@@ -139,7 +140,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Magnitude = magnitude;
             CustomCalculation = null;
         }
-        
+
         public ModifierInfo(string attributeName, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation)
         {
             AttributeName = attributeName;
