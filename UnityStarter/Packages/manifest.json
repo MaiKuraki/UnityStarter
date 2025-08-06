@@ -30,6 +30,7 @@
     "com.unity.profiling.core": "1.0.2",
     "com.unity.render-pipelines.universal": "17.1.0",
     "com.unity.scriptablebuildpipeline": "2.4.1",
+    "com.unity.textmeshpro": "3.0.9",
     "com.unity.ugui": "2.0.0",
     "com.wooshii.hierarchydecorator": "https://github.com/WooshiiDev/HierarchyDecorator.git",
     "com.yasirkula.ingamedebugconsole": "https://github.com/yasirkula/UnityIngameDebugConsole.git",
