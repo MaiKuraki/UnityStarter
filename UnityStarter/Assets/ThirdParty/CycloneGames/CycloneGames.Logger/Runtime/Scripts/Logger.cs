@@ -16,7 +16,8 @@ namespace CycloneGames.Logger
         private static readonly Lazy<CLogger> _instance = new(() => new CLogger());
         public static CLogger Instance => _instance.Value;
 
-        private readonly List<ILogger> _loggers = new();
+        private List<ILogger> _loggers = new();
+        private readonly HashSet<Type> _loggerTypes = new();
         private readonly ReaderWriterLockSlim _loggersLock = new(LockRecursionPolicy.NoRecursion);
 
         private readonly BlockingCollection<LogMessage> _messageQueue = new(new ConcurrentQueue<LogMessage>());
@@ -59,20 +60,15 @@ namespace CycloneGames.Logger
         public void AddLoggerUnique(ILogger logger)
         {
             if (logger == null) throw new ArgumentNullException(nameof(logger));
+            Type loggerType = logger.GetType();
+
             _loggersLock.EnterWriteLock();
             try
             {
-                Type loggerType = logger.GetType();
-                bool exists = false;
-                for (int i = 0; i < _loggers.Count; i++)
-                {
-                    if (_loggers[i].GetType() == loggerType)
-                    {
-                        exists = true;
-                        break;
-                    }
-                }
-                if (!exists) { _loggers.Add(logger); }
+                if (_loggerTypes.Contains(loggerType)) return;
+                
+                _loggers.Add(logger);
+                _loggerTypes.Add(loggerType);
             }
             finally { _loggersLock.ExitWriteLock(); }
         }
@@ -83,24 +79,26 @@ namespace CycloneGames.Logger
             _loggersLock.EnterWriteLock();
             try
             {
-                _loggers.Remove(logger);
+                if (_loggers.Remove(logger))
+                {
+                    _loggerTypes.Remove(logger.GetType());
+                }
             }
             finally { _loggersLock.ExitWriteLock(); }
-            // Consider whether CLogger owns the logger and should dispose it.
-            // logger.Dispose(); // If CLogger is responsible for logger lifecycle.
         }
 
         /// <summary>
-        /// Removes all loggers and disposes them.
+        /// Removes all loggers and disposes them. This operation is optimized to avoid extra list allocations.
         /// </summary>
         public void ClearLoggers()
         {
-            _loggersLock.EnterWriteLock();
             List<ILogger> toDispose;
+            _loggersLock.EnterWriteLock();
             try
             {
-                toDispose = new List<ILogger>(_loggers); // Create a copy for safe iteration.
-                _loggers.Clear();
+                toDispose = _loggers;
+                _loggers = new List<ILogger>();
+                _loggerTypes.Clear();
             }
             finally { _loggersLock.ExitWriteLock(); }
 
@@ -139,25 +137,22 @@ namespace CycloneGames.Logger
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private bool ShouldLog(LogLevel logLevel, string category)
         {
-            if (logLevel < _currentLogLevel) return false; // Primary level filter.
+            if (logLevel < _currentLogLevel) return false;
 
-            // Quick path for LogAll or no category.
-            LogFilter currentFilter = _currentLogFilter; // Read volatile field once.
+            LogFilter currentFilter = _currentLogFilter;
             if (currentFilter == LogFilter.LogAll || string.IsNullOrEmpty(category)) return true;
 
             lock (_filterLock)
             {
-                switch (currentFilter) // Use the local copy of _currentLogFilter
+                switch (currentFilter)
                 {
                     case LogFilter.LogWhiteList: return _whiteList.Contains(category);
                     case LogFilter.LogNoBlackList: return !_blackList.Contains(category);
-                    // LogAll already handled, default is redundant but safe.
                     default: return true;
                 }
             }
         }
 
-        // Static logging methods
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void LogTrace(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
             => Instance.EnqueueMessage(LogLevel.Trace, message, category, filePath, lineNumber, memberName);
@@ -184,34 +179,22 @@ namespace CycloneGames.Logger
 
         private void EnqueueMessage(LogLevel level, string originalMessage, string category, string filePath, int lineNumber, string memberName)
         {
-            // Filter check happens before any significant work.
             if (!ShouldLog(level, category)) return;
+            if (_messageQueue.IsAddingCompleted) return;
 
-            var logEntry = new LogMessage(
-                DateTime.Now,
-                level,
-                originalMessage,
-                category,
-                filePath,
-                lineNumber,
-                memberName
-            );
-
-            if (!_messageQueue.IsAddingCompleted)
+            try
             {
-                try
-                {
-                    _messageQueue.Add(logEntry);
-                }
-                catch (InvalidOperationException) { /* Queue is completed, ignore. */ }
+                var logEntry = LogMessagePool.Get();
+                logEntry.Initialize(DateTime.Now, level, originalMessage, category, filePath, lineNumber, memberName);
+                _messageQueue.Add(logEntry);
             }
+            catch (InvalidOperationException) { /* Ignore if shutting down. */ }
         }
 
         private void ProcessQueue()
         {
             try
             {
-                // GetConsumingEnumerable will block until items are available or collection is marked as complete.
                 foreach (var logMessage in _messageQueue.GetConsumingEnumerable(_cts.Token))
                 {
                     _loggersLock.EnterReadLock();
@@ -242,11 +225,12 @@ namespace CycloneGames.Logger
                     {
                         _loggersLock.ExitReadLock();
                     }
+                    
+                    LogMessagePool.Return(logMessage);
                 }
             }
             catch (OperationCanceledException)
             {
-                // Expected when _cts.Cancel() is called during Dispose.
                 Console.WriteLine("[INFO] CLogger: Processing task cancelled.");
             }
             catch (Exception ex)
@@ -260,31 +244,31 @@ namespace CycloneGames.Logger
             if (_cts.IsCancellationRequested) return;
             Console.WriteLine("[INFO] CLogger: Dispose called. Shutting down...");
 
-            _messageQueue.CompleteAdding(); // Stop new messages from being enqueued.
-            _cts.Cancel(); // Signal cancellation to ProcessQueue.
+            _messageQueue.CompleteAdding();
+            _cts.Cancel();
 
             try
             {
-                // Wait for the processing task to finish, with a timeout.
-                if (!_processingTask.Wait(TimeSpan.FromSeconds(5)))
+                if (!_processingTask.Wait(TimeSpan.FromSeconds(2)))
                 {
                     Console.Error.WriteLine("[WARNING] CLogger: Processing task timeout on shutdown.");
                 }
             }
             catch (AggregateException ae)
             {
-                ae.Handle(ex => ex is OperationCanceledException); // Expect OperationCanceledException.
+                ae.Handle(ex => ex is OperationCanceledException);
             }
-            catch (Exception ex) // Other exceptions during task wait.
+            catch (Exception ex)
             {
                 Console.Error.WriteLine($"[ERROR] CLogger: Error during task shutdown. {ex.Message}");
             }
 
+            ClearLoggers();
+
             _cts.Dispose();
             _messageQueue.Dispose();
             _loggersLock.Dispose();
-
-            ClearLoggers(); // Dispose all registered loggers.
+            
             Console.WriteLine("[INFO] CLogger: Shutdown complete.");
         }
     }
