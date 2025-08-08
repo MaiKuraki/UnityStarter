@@ -16,7 +16,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private static readonly Dictionary<Type, List<PropertyInfo>> s_AttributePropertyCache = new Dictionary<Type, List<PropertyInfo>>();
 
         private readonly Dictionary<string, AttributeData> attributeData = new Dictionary<string, AttributeData>();
-        private readonly List<GameplayAttribute> discoveredAttributes = new List<GameplayAttribute>();
+        private readonly Dictionary<string, GameplayAttribute> discoveredAttributes = new Dictionary<string, GameplayAttribute>();
 
         public AbilitySystemComponent OwningAbilitySystemComponent { get; internal set; }
 
@@ -48,12 +48,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     attr.OwningSet = this;
                     attributeData[attr.Name] = new AttributeData();
-                    discoveredAttributes.Add(attr);
+                    discoveredAttributes[attr.Name] = attr;
                 }
             }
         }
 
-        public IReadOnlyList<GameplayAttribute> GetAttributes() => discoveredAttributes;
+        public IReadOnlyCollection<GameplayAttribute> GetAttributes() => discoveredAttributes.Values;
 
         public float GetBaseValue(GameplayAttribute attribute) => attributeData.TryGetValue(attribute.Name, out var data) ? data.BaseValue : 0f;
         public float GetCurrentValue(GameplayAttribute attribute) => attributeData.TryGetValue(attribute.Name, out var data) ? data.CurrentValue : 0f;
@@ -83,16 +83,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
+        /// <summary>
+        /// Retrieves an attribute by its name.
+        /// </summary>
+        /// <param name="name">The name of the attribute to retrieve.</param>
+        /// <returns>The GameplayAttribute instance if found; otherwise, null.</returns>
         public GameplayAttribute GetAttribute(string name)
         {
-            foreach (var attr in discoveredAttributes)
-            {
-                if (attr.Name == name)
-                {
-                    return attr;
-                }
-            }
-            return null;
+            discoveredAttributes.TryGetValue(name, out var attribute);
+            return attribute;
         }
 
         /// <summary>
@@ -115,6 +114,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public virtual void PreAttributeChange(GameplayAttribute attribute, ref float newValue) { }
         public virtual void PreAttributeBaseChange(GameplayAttribute attribute, ref float newBaseValue) { }
+
+        /// <summary>
+        /// Called after a GameplayEffect is executed on this AttributeSet. This is the main entry point for attribute modifications.
+        /// It follows a Pre-Process, Default-Process, Post-Process flow.
+        /// </summary>
+        /// <param name="data">The data associated with the gameplay effect modification.</param>
         public virtual void PostGameplayEffectExecute(GameplayEffectModCallbackData data)
         {
             // --- Pre-Process ---
