@@ -62,6 +62,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private readonly Dictionary<ActiveGameplayEffect, List<GameplayAbilitySpec>> effectGrantedAbilities = new Dictionary<ActiveGameplayEffect, List<GameplayAbilitySpec>>(16);
         private readonly HashSet<GameplayAttribute> dirtyAttributes = new HashSet<GameplayAttribute>(32);
+        
+        // Caches which active effects affect which attributes, to optimize RecalculateDirtyAttributes.
+        private readonly Dictionary<GameplayAttribute, List<ActiveGameplayEffect>> attributeToActiveEffectsMap = new Dictionary<GameplayAttribute, List<ActiveGameplayEffect>>();
 
         private static readonly List<ActiveGameplayEffect> expiredEffectsScratchPad = new List<ActiveGameplayEffect>(16);
         private static List<ModifierInfo> executionOutputScratchPad = new List<ModifierInfo>(16);
@@ -216,9 +219,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void ClientActivateAbilitySucceed(GameplayAbilitySpec spec, PredictionKey predictionKey)
         {
             if (!predictionKey.IsValid()) return;
-            // The server has confirmed our prediction. The predicted effects are now "real".
-            // We can clear them from the pending list.
-            pendingPredictedEffects.RemoveAll(effect => effect.Spec.Context.PredictionKey.Equals(predictionKey));
+            // The server has confirmed our prediction. 
+            // Remove matching items without allocating a predicate.
+            for (int i = pendingPredictedEffects.Count - 1; i >= 0; i--)
+            {
+                var predicted = pendingPredictedEffects[i];
+                if (predicted.Spec.Context.PredictionKey.Equals(predictionKey))
+                {
+                    pendingPredictedEffects.RemoveAt(i);
+                }
+            }
         }
 
         private void ClientActivateAbilityFailed(GameplayAbilitySpec spec, PredictionKey predictionKey)
@@ -228,20 +238,24 @@ namespace CycloneGames.GameplayAbilities.Runtime
             CLogger.LogWarning($"Client prediction failed for ability '{spec.Ability.Name}' with key {predictionKey.Key}. Rolling back.");
 
             // Find and remove all effects applied with this failed prediction key.
-            var toRemove = new List<ActiveGameplayEffect>();
-            foreach (var effect in pendingPredictedEffects)
+            using (CycloneGames.GameplayTags.Runtime.Pools.ListPool<ActiveGameplayEffect>.Get(out var toRemove))
             {
-                if (effect.Spec.Context.PredictionKey.Equals(predictionKey))
+                for (int i = 0; i < pendingPredictedEffects.Count; i++)
                 {
-                    toRemove.Add(effect);
+                    var effect = pendingPredictedEffects[i];
+                    if (effect.Spec.Context.PredictionKey.Equals(predictionKey))
+                    {
+                        toRemove.Add(effect);
+                    }
                 }
-            }
 
-            foreach (var effect in toRemove)
-            {
-                activeEffects.Remove(effect);
-                pendingPredictedEffects.Remove(effect);
-                OnEffectRemoved(effect, false); // Don't re-dirty attributes on rollback
+                for (int i = 0; i < toRemove.Count; i++)
+                {
+                    var effect = toRemove[i];
+                    activeEffects.Remove(effect);
+                    pendingPredictedEffects.Remove(effect);
+                    OnEffectRemoved(effect, false); // Don't re-dirty attributes on rollback
+                }
             }
 
             // Immediately end the ability on the client.
@@ -321,29 +335,21 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (tags == null || tags.IsEmpty) return;
 
-            // A list to hold effects that are confirmed to be removed.
-            using (Pools.ListPool<ActiveGameplayEffect>.Get(out var effectsToRemove))
+            using (Pools.ListPool<ActiveGameplayEffect>.Get(out var removedEffects))
             {
-                foreach (var activeEffect in activeEffects)
+                // The predicate captures the effects to be removed into a temporary list for post-processing.
+                activeEffects.RemoveAll(effect =>
                 {
-                    bool bHasGrantedTag = activeEffect.Spec.Def.GrantedTags.HasAny(tags);
-                    bool bHasAssetTag = activeEffect.Spec.Def.AssetTags.HasAny(tags);
-
-                    if (bHasGrantedTag || bHasAssetTag)
+                    bool shouldRemove = effect.Spec.Def.GrantedTags.HasAny(tags) || effect.Spec.Def.AssetTags.HasAny(tags);
+                    if (shouldRemove)
                     {
-                        effectsToRemove.Add(activeEffect);
+                        removedEffects.Add(effect);
                     }
-                }
+                    return shouldRemove;
+                });
 
-                if (effectsToRemove.Count == 0)
+                foreach (var effect in removedEffects)
                 {
-                    return;
-                }
-
-                foreach (var effect in effectsToRemove)
-                {
-                    // Remove from the main list of active effects.
-                    activeEffects.Remove(effect);
                     OnEffectRemoved(effect, true);
                 }
             }
@@ -451,51 +457,42 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 float overrideValue = 0;
                 bool hasOverride = false;
 
-                foreach (var effect in activeEffects)
+                if (attributeToActiveEffectsMap.TryGetValue(attr, out var affectingEffects))
                 {
-                    // An effect with a period should ONLY apply its modifications on its tick.
-                    // It should NOT contribute to the passive, continuous recalculation of the CurrentValue.
-                    // This 'continue' statement prevents the DoT's modifier from being applied as a temporary
-                    // debuff, which was the root cause of the health "jumping back" when the effect expired.
-                    if (effect.Spec.Def.Period > 0)
+                    foreach (var effect in affectingEffects)
                     {
-                        continue;
-                    }
-
-                    if (!effect.Spec.Def.OngoingTagRequirements.IsEmpty && !effect.Spec.Def.OngoingTagRequirements.MeetsRequirements(CombinedTags))
-                    {
-                        continue;
-                    }
-
-                    foreach (var mod in effect.Spec.Def.Modifiers)
-                    {
-                        if (mod.AttributeName == attr.Name)
+                        if (effect.Spec.Def.Period > 0 || (!effect.Spec.Def.OngoingTagRequirements.IsEmpty && !effect.Spec.Def.OngoingTagRequirements.MeetsRequirements(CombinedTags)))
                         {
-                            float magnitude = effect.Spec.GetCalculatedMagnitude(mod) * effect.StackCount;
-                            switch (mod.Operation)
+                            continue;
+                        }
+
+                        foreach (var mod in effect.Spec.Def.Modifiers)
+                        {
+                            if (mod.AttributeName == attr.Name)
                             {
-                                case EAttributeModifierOperation.Add: additive += magnitude; break;
-                                case EAttributeModifierOperation.Multiply: multiplicitive += (magnitude - 1.0f); break;
-                                case EAttributeModifierOperation.Division: if (magnitude != 0) division *= magnitude; break;
-                                case EAttributeModifierOperation.Override:
-                                    overrideValue = magnitude;
-                                    hasOverride = true;
-                                    break;
+                                float magnitude = effect.Spec.GetCalculatedMagnitude(mod) * effect.StackCount;
+                                switch (mod.Operation)
+                                {
+                                    case EAttributeModifierOperation.Add:
+                                        additive += magnitude;
+                                        break;
+                                    case EAttributeModifierOperation.Multiply:
+                                        multiplicitive *= magnitude;
+                                        break;
+                                    case EAttributeModifierOperation.Division:
+                                        if (magnitude != 0) division *= magnitude;
+                                        break;
+                                    case EAttributeModifierOperation.Override:
+                                        overrideValue = magnitude;
+                                        hasOverride = true;
+                                        break;
+                                }
                             }
                         }
                     }
                 }
 
-                float finalValue;
-                if (hasOverride)
-                {
-                    finalValue = overrideValue;
-                }
-                else
-                {
-                    finalValue = (baseValue + additive) * multiplicitive;
-                    if (division != 0) finalValue /= division;
-                }
+                float finalValue = hasOverride ? overrideValue : ((baseValue + additive) * multiplicitive / (division == 0 ? 1.0f : division));
 
                 attr.OwningSet.PreAttributeChange(attr, ref finalValue);
                 attr.OwningSet.SetCurrentValue(attr, finalValue);
@@ -508,6 +505,21 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             fromEffectsTags.AddTags(effect.Spec.Def.GrantedTags);
             UpdateCombinedTags();
+            
+            // Update the attribute-to-effect map
+            foreach (var modifier in effect.Spec.Def.Modifiers)
+            {
+                var attribute = GetAttribute(modifier.AttributeName);
+                if (attribute != null)
+                {
+                    if (!attributeToActiveEffectsMap.TryGetValue(attribute, out var effectList))
+                    {
+                        effectList = new List<ActiveGameplayEffect>();
+                        attributeToActiveEffectsMap[attribute] = effectList;
+                    }
+                    effectList.Add(effect);
+                }
+            }
 
             if (effect.Spec.Def.GrantedAbilities.Count > 0)
             {
@@ -543,6 +555,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             fromEffectsTags.RemoveTags(effect.Spec.Def.GrantedTags);
             UpdateCombinedTags();
+            
+            // Update the attribute-to-effect map
+            foreach (var modifier in effect.Spec.Def.Modifiers)
+            {
+                var attribute = GetAttribute(modifier.AttributeName);
+                if (attribute != null && attributeToActiveEffectsMap.TryGetValue(attribute, out var effectList))
+                {
+                    effectList.Remove(effect);
+                }
+            }
 
             if (effectGrantedAbilities.TryGetValue(effect, out var specsToRemove))
             {
@@ -623,8 +645,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     // Check if the stack limit has been reached.
                     if (existingEffect.StackCount >= spec.Def.Stacking.Limit)
                     {
-                        // If at the limit, we might still refresh the duration, but we don't add a new stack.
-                        // This behavior can be customized further if needed.
+                        // At stack limit. Respect duration refresh policy when re-applied.
+                        if (spec.Def.Stacking.DurationPolicy == EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication)
+                        {
+                            existingEffect.RefreshDurationAndPeriod();
+                        }
                         CLogger.LogInfo($"Stacking limit for {spec.Def.Name} reached.");
                     }
                     else

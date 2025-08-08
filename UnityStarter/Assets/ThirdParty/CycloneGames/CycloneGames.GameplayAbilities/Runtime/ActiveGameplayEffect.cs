@@ -65,6 +65,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
+        /// Refreshes this effect's remaining time and period timer without modifying the stack count.
+        /// Useful when a new application occurs while already at max stacks and the policy requires a refresh.
+        /// </summary>
+        public void RefreshDurationAndPeriod()
+        {
+            if (Spec.Def.DurationPolicy == EDurationPolicy.HasDuration)
+            {
+                TimeRemaining = Spec.Duration;
+            }
+
+            if (periodTimer >= 0)
+            {
+                periodTimer = Spec.Def.Period;
+            }
+        }
+
+        /// <summary>
         /// Ticks the effect's duration and period timer.
         /// </summary>
         /// <param name="deltaTime">The time since the last frame.</param>
