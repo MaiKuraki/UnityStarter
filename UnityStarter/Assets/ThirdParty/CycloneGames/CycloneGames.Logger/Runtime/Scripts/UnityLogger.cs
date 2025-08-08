@@ -1,3 +1,4 @@
+using System;
 using System.Text;
 using CycloneGames.Logger.Util;
 
@@ -9,7 +10,7 @@ namespace CycloneGames.Logger
     /// </summary>
     public sealed class UnityLogger : ILogger
     {
-        private void LogToUnity(in LogMessage logMessage)
+        private void LogToUnity(LogMessage logMessage)
         {
             StringBuilder sb = StringBuilderPool.Get();
             string unityMessage;
@@ -32,8 +33,18 @@ namespace CycloneGames.Logger
                 // However, Unity might require the full path for robust click-to-source.
                 if (!string.IsNullOrEmpty(logMessage.FilePath))
                 {
-                    // Unity typically expects " (at Assets/Path/To/File.cs:LINE)"
-                    sb.Append($"\n(at {logMessage.FilePath.Replace("\\", "/")}:{logMessage.LineNumber})");
+                    // To make the file path clickable in the Unity Console, it must be relative to the project root (e.g., "Assets/MyFolder/MyScript.cs").
+                    // The [CallerFilePath] attribute provides an absolute path. We need to convert it.
+                    // A common and robust way is to find the "Assets" folder in the path and take the substring from there.
+                    string filePath = logMessage.FilePath.Replace("\\", "/");
+                    int assetsIndex = filePath.IndexOf("/Assets/", StringComparison.OrdinalIgnoreCase);
+                    if (assetsIndex > -1)
+                    {
+                        filePath = filePath.Substring(assetsIndex + 1);
+                    }
+                    
+                    // The newline character is important for matching the format of Unity's native stack traces.
+                    sb.Append($"\n(at {filePath}:{logMessage.LineNumber})");
                 }
                 unityMessage = sb.ToString();
             }
@@ -62,12 +73,12 @@ namespace CycloneGames.Logger
             }
         }
 
-        public void LogTrace(in LogMessage logMessage) => LogToUnity(logMessage);
-        public void LogDebug(in LogMessage logMessage) => LogToUnity(logMessage);
-        public void LogInfo(in LogMessage logMessage) => LogToUnity(logMessage);
-        public void LogWarning(in LogMessage logMessage) => LogToUnity(logMessage);
-        public void LogError(in LogMessage logMessage) => LogToUnity(logMessage);
-        public void LogFatal(in LogMessage logMessage) => LogToUnity(logMessage);
+        public void LogTrace(LogMessage logMessage) => LogToUnity(logMessage);
+        public void LogDebug(LogMessage logMessage) => LogToUnity(logMessage);
+        public void LogInfo(LogMessage logMessage) => LogToUnity(logMessage);
+        public void LogWarning(LogMessage logMessage) => LogToUnity(logMessage);
+        public void LogError(LogMessage logMessage) => LogToUnity(logMessage);
+        public void LogFatal(LogMessage logMessage) => LogToUnity(logMessage);
 
         public void Dispose() { }
     }
