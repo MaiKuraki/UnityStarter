@@ -29,14 +29,14 @@ namespace CycloneGames.GameplayAbilities.Sample
         public void Dispose() { }
 
         // All log levels now call the central AddLog method
-        public void LogTrace(in LogMessage logMessage) => AddLog(logMessage);
-        public void LogDebug(in LogMessage logMessage) => AddLog(logMessage);
-        public void LogInfo(in LogMessage logMessage) => AddLog(logMessage);
-        public void LogWarning(in LogMessage logMessage) => AddLog(logMessage);
-        public void LogError(in LogMessage logMessage) => AddLog(logMessage);
-        public void LogFatal(in LogMessage logMessage) => AddLog(logMessage);
+        public void LogTrace(LogMessage logMessage) => AddLog(logMessage);
+        public void LogDebug(LogMessage logMessage) => AddLog(logMessage);
+        public void LogInfo(LogMessage logMessage) => AddLog(logMessage);
+        public void LogWarning(LogMessage logMessage) => AddLog(logMessage);
+        public void LogError(LogMessage logMessage) => AddLog(logMessage);
+        public void LogFatal(LogMessage logMessage) => AddLog(logMessage);
 
-        private void AddLog(in LogMessage logMessage)
+        private void AddLog(LogMessage logMessage)
         {
             // If the queue is full, remove the oldest log
             while (logQueue.Count >= maxLogLines)

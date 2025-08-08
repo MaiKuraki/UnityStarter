@@ -12,14 +12,14 @@ namespace CycloneGames.Logger
     {
         private static readonly object _consoleLock = new();
 
-        public void LogTrace(in LogMessage logMessage) => LogInternal("TRACE", logMessage, Console.Out);
-        public void LogDebug(in LogMessage logMessage) => LogInternal("DEBUG", logMessage, Console.Out);
-        public void LogInfo(in LogMessage logMessage) => LogInternal("INFO", logMessage, Console.Out);
-        public void LogWarning(in LogMessage logMessage) => LogInternal("WARNING", logMessage, Console.Out); // Warnings can go to Console.Out or Console.Error depending on preference.
-        public void LogError(in LogMessage logMessage) => LogInternal("ERROR", logMessage, Console.Error);
-        public void LogFatal(in LogMessage logMessage) => LogInternal("FATAL", logMessage, Console.Error);
+        public void LogTrace(LogMessage logMessage) => LogInternal("TRACE", logMessage, Console.Out);
+        public void LogDebug(LogMessage logMessage) => LogInternal("DEBUG", logMessage, Console.Out);
+        public void LogInfo(LogMessage logMessage) => LogInternal("INFO", logMessage, Console.Out);
+        public void LogWarning(LogMessage logMessage) => LogInternal("WARNING", logMessage, Console.Out);
+        public void LogError(LogMessage logMessage) => LogInternal("ERROR", logMessage, Console.Error);
+        public void LogFatal(LogMessage logMessage) => LogInternal("FATAL", logMessage, Console.Error);
 
-        private static void LogInternal(string levelString, in LogMessage logMessage, TextWriter writer)
+        private static void LogInternal(string levelString, LogMessage logMessage, TextWriter writer)
         {
             StringBuilder sb = StringBuilderPool.Get();
             try
