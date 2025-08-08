@@ -27,20 +27,26 @@ namespace CycloneGames.Logger
     }
 
     /// <summary>
-    /// Represents a single log entry. Designed to be a struct for performance.
-    /// Passed by 'in' parameter to minimize copying.
+    /// Represents a single log entry. This is a class to enable object pooling,
+    /// which is crucial for minimizing GC allocation in high-frequency logging scenarios.
     /// </summary>
-    public readonly struct LogMessage
+    public sealed class LogMessage
     {
-        public readonly DateTime Timestamp;
-        public readonly LogLevel Level;
-        public readonly string OriginalMessage; // Content of the log.
-        public readonly string Category;        // Optional category for filtering.
-        public readonly string FilePath;        // Source file of the log call.
-        public readonly int LineNumber;         // Source line number.
-        public readonly string MemberName;      // Source member name.
+        public DateTime Timestamp { get; private set; }
+        public LogLevel Level { get; private set; }
+        public string OriginalMessage { get; private set; }
+        public string Category { get; private set; }
+        public string FilePath { get; private set; }
+        public int LineNumber { get; private set; }
+        public string MemberName { get; private set; }
 
-        public LogMessage(DateTime timestamp, LogLevel level, string originalMessage, string category, string filePath, int lineNumber, string memberName)
+        // Internal parameterless constructor for object pool creation.
+        internal LogMessage() { }
+
+        /// <summary>
+        /// Initializes a LogMessage instance with data. Called when an object is retrieved from the pool.
+        /// </summary>
+        internal void Initialize(DateTime timestamp, LogLevel level, string originalMessage, string category, string filePath, int lineNumber, string memberName)
         {
             Timestamp = timestamp;
             Level = level;
@@ -49,6 +55,23 @@ namespace CycloneGames.Logger
             FilePath = filePath;
             LineNumber = lineNumber;
             MemberName = memberName;
+        }
+
+        /// <summary>
+        /// Resets the object's state. Called before returning it to the pool.
+        /// </summary>
+        internal void Reset()
+        {
+            // Reset reference types to null to release references and allow GC if necessary.
+            OriginalMessage = null;
+            Category = null;
+            FilePath = null;
+            MemberName = null;
+            
+            // Reset value types to default.
+            Timestamp = default;
+            Level = default;
+            LineNumber = 0;
         }
     }
 }

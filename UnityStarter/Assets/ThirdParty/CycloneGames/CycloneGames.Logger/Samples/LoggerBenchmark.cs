@@ -1,6 +1,6 @@
 using UnityEngine;
 using CycloneGames.Logger;
-using System.Diagnostics; // For Stopwatch 
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 
@@ -35,7 +35,7 @@ public class LoggerBenchmark : MonoBehaviour
                     "|------------------------|-----------|\n" +
                     $"| Unity Debug.Log        | {FormatFloat(unityLoggerTimespan)} |\n" +
                     $"| CLogger LogInfo        | {FormatFloat(customLoggerTimespan)} |\n" +
-                    "======================================";
+                    "======================================\n";
 
         File.AppendAllText(reportPath, finalReport, System.Text.Encoding.UTF8);
         UnityEngine.Debug.Log(finalReport);
