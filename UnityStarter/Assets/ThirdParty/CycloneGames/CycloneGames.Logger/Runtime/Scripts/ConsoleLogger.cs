@@ -6,7 +6,8 @@ using CycloneGames.Logger.Util;
 namespace CycloneGames.Logger
 {
     /// <summary>
-    /// Logs messages to the standard console output and error streams.
+    /// Logs messages to standard console output and error streams.
+    /// Uses a shared lock to avoid interleaved writes across threads.
     /// </summary>
     public sealed class ConsoleLogger : ILogger
     {
@@ -24,7 +25,7 @@ namespace CycloneGames.Logger
             StringBuilder sb = StringBuilderPool.Get();
             try
             {
-                sb.Append(levelString); // Using pre-supplied level string. Could also use LogLevelStrings.Get(logMessage.Level)
+                sb.Append(levelString);
                 sb.Append(": ");
                 if (!string.IsNullOrEmpty(logMessage.Category))
                 {
@@ -32,12 +33,20 @@ namespace CycloneGames.Logger
                     sb.Append(logMessage.Category);
                     sb.Append("] ");
                 }
-                sb.Append(logMessage.OriginalMessage);
-                // FilePath and LineNumber are typically not logged to console by default, but could be added.
-                // if (!string.IsNullOrEmpty(logMessage.FilePath))
-                // {
-                //    sb.Append($" (at {Path.GetFileName(logMessage.FilePath)}:{logMessage.LineNumber})");
-                // }
+                if (logMessage.OriginalMessage != null) sb.Append(logMessage.OriginalMessage);
+                if (!string.IsNullOrEmpty(logMessage.FilePath))
+                {
+                    sb.Append(" (at ");
+                    string src = logMessage.FilePath;
+                    for (int i = 0; i < src.Length; i++)
+                    {
+                        char c = src[i];
+                        sb.Append(c == '\\' ? '/' : c);
+                    }
+                    sb.Append(':');
+                    sb.Append(logMessage.LineNumber);
+                    sb.Append(')');
+                }
 
                 lock (_consoleLock)
                 {
