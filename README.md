@@ -21,9 +21,22 @@ Note: **GameplayFramework** and **Factory** have DI sample.</br>
 <img src="./Docs/ProjectDescription/Main/Des_01.png" alt="Branch Select" style="width: 50%; height: auto; max-width: 360px;" />
 
 ## Usage
-If you intend to use this template as a starter for your Unity project, it is recommended to use the `rename_project` Go script or executable located in the `Tools/` folder. Copy it to the `UnityStarter/` directory to rename the project components. Note that you will still need to rename the `UnityStarter` folder manually.
 
-If you only want to use specific modules from this project, you can simply delete the unwanted packages from the `Assets/ThirdParty/CycloneGames/` directory. For a real project, it is advisable to move all these packages outside the project's `Assets` folder and reference them as local packages through the Unity Package Manager.
+This repository can be used in two primary ways: as a complete template for a new project, or as a source of individual modules to be imported into an existing project.
+
+### As a Full Project Template
+If you intend to use this repository as a starter for a new Unity project, follow these steps to rename it:
+
+1.  **Locate the Renaming Tool**: Find the `rename_project` Go script or `.exe` executable inside the `Tools/` directory.
+2.  **Move the Renaming Tool**: Copy the `rename_project`'s script or executable into the `UnityStarter/` directory.
+3.  **Run the Tool**: Execute the script. It will automatically update project-specific components like namespaces and assembly definitions.
+4.  **Rename Manually**: Finally, manually rename the `UnityStarter/` root folder to your desired project name.
+
+### Using Specific Modules
+If you only need specific modules for your project, you have two options:
+
+- **Simple Method**: Navigate to `Assets/ThirdParty/CycloneGames/` and simply delete the package folders you do not need.
+- **Recommended Method (Production)**: For a production environment, it is best practice to move the required packages from `Assets/ThirdParty/CycloneGames/` to a location *outside* your project's `Assets` folder. Then, add them to your project via the Unity Package Manager using the **"Add package from disk..."** option. This approach keeps your project clean and highly modular.
 ## Project Structure
 The main source code for the modules is located in the `UnityStarter/Assets/ThirdParty/` directory. The project is developed using a Unity Package-based approach with separated Assembly Definitions (asmdef), which allows for easy removal of unwanted modules and ensures a clear separation of concerns.
 
