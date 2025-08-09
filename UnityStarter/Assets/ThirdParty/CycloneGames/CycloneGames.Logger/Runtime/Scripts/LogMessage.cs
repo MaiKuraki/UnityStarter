@@ -50,7 +50,8 @@ namespace CycloneGames.Logger
         {
             Timestamp = timestamp;
             Level = level;
-            OriginalMessage = originalMessage ?? string.Empty;
+            // Avoid extra allocations by keeping null when no message, downstream formatters must handle null as empty
+            OriginalMessage = originalMessage;
             Category = category;
             FilePath = filePath;
             LineNumber = lineNumber;

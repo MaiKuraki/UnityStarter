@@ -1,18 +1,37 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
+using CycloneGames.Logger.Util;
 
 namespace CycloneGames.Logger
 {
     /// <summary>
-    /// Central logging manager. Dispatches log messages to registered ILogger instances.
-    /// Provides static methods for easy logging.
+    /// Central logging manager.
+    ///
+    /// Responsibilities:
+    /// - Provides static convenience APIs (LogTrace..LogFatal) with string and builder overloads
+    /// - Filters by severity and category before allocating work
+    /// - Queues messages into a pluggable processing strategy (threaded or single-threaded)
+    /// - Dispatches to registered <see cref="ILogger"/> implementations
+    ///
+    /// Performance/GC:
+    /// - Builder overloads avoid intermediate string allocations when logging is disabled
+    /// - Messages are pooled via <see cref="LogMessagePool"/>
+    /// - Formatting helpers reuse <see cref="Util.StringBuilderPool"/>
+    ///
+    /// Thread-safety:
+    /// - Logger registration is protected by a <see cref="ReaderWriterLockSlim"/>
+    /// - Dispatch occurs inside a read-lock to minimize contention
+    ///
+    /// Platform notes:
+    /// - Single-threaded processing requires calling <see cref="Pump"/> regularly (e.g., once per frame)
+    /// - Threaded processing ignores Pump() and drains in a background worker
     /// </summary>
     public sealed class CLogger : IDisposable
     {
+        private static Func<CLogger, ILogProcessor> _processorFactory = owner => new ThreadedLogProcessor(owner);
         private static readonly Lazy<CLogger> _instance = new(() => new CLogger());
         public static CLogger Instance => _instance.Value;
 
@@ -20,9 +39,8 @@ namespace CycloneGames.Logger
         private readonly HashSet<Type> _loggerTypes = new();
         private readonly ReaderWriterLockSlim _loggersLock = new(LockRecursionPolicy.NoRecursion);
 
-        private readonly BlockingCollection<LogMessage> _messageQueue = new(new ConcurrentQueue<LogMessage>());
-        private readonly CancellationTokenSource _cts = new();
-        private readonly Task _processingTask;
+        // Processing strategy decoupled from platform specifics; no Unity macros here.
+        private readonly ILogProcessor _processor;
 
         private volatile LogLevel _currentLogLevel = LogLevel.Info; // Default log level.
         private volatile LogFilter _currentLogFilter = LogFilter.LogAll; // Default filter.
@@ -32,7 +50,42 @@ namespace CycloneGames.Logger
 
         private CLogger()
         {
-            _processingTask = Task.Factory.StartNew(ProcessQueue, _cts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+            try
+            {
+                _processor = (_processorFactory ?? (o => new ThreadedLogProcessor(o)))(this);
+            }
+            catch
+            {
+                // Fallback for platforms that do not support background threads
+                _processor = new SingleThreadLogProcessor(this);
+            }
+        }
+
+        /// <summary>
+        /// Configure the processor factory before the first access to Instance to fully decouple platform specifics.
+        /// Advanced: intended for infrastructure code. Most projects should prefer
+        /// <see cref="ConfigureSingleThreadedProcessing"/> or <see cref="ConfigureThreadedProcessing"/>.
+        /// </summary>
+        internal static void ConfigureProcessorFactory(Func<CLogger, ILogProcessor> factory)
+        {
+            if (factory != null) _processorFactory = factory;
+        }
+
+        /// <summary>
+        /// Force single-threaded processing (manual Pump). Call this before first use of Instance.
+        /// Suitable for platforms without background threads (e.g., Web/WASM).
+        /// </summary>
+        public static void ConfigureSingleThreadedProcessing()
+        {
+            _processorFactory = o => new SingleThreadLogProcessor(o);
+        }
+
+        /// <summary>
+        /// Force threaded processing. Call this before first use of Instance.
+        /// </summary>
+        public static void ConfigureThreadedProcessing()
+        {
+            _processorFactory = o => new ThreadedLogProcessor(o);
         }
 
         public void SetLogLevel(LogLevel level) => _currentLogLevel = level;
@@ -177,98 +230,115 @@ namespace CycloneGames.Logger
         public static void LogFatal(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
             => Instance.EnqueueMessage(LogLevel.Fatal, message, category, filePath, lineNumber, memberName);
 
+        // Builder-based overloads to avoid intermediate string allocations when logging is disabled or to minimize GC.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogTrace(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
+            => Instance.EnqueueMessage(LogLevel.Trace, messageBuilder, category, filePath, lineNumber, memberName);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogDebug(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
+            => Instance.EnqueueMessage(LogLevel.Debug, messageBuilder, category, filePath, lineNumber, memberName);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogInfo(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
+            => Instance.EnqueueMessage(LogLevel.Info, messageBuilder, category, filePath, lineNumber, memberName);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogWarning(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
+            => Instance.EnqueueMessage(LogLevel.Warning, messageBuilder, category, filePath, lineNumber, memberName);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogError(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
+            => Instance.EnqueueMessage(LogLevel.Error, messageBuilder, category, filePath, lineNumber, memberName);
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void LogFatal(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
+            => Instance.EnqueueMessage(LogLevel.Fatal, messageBuilder, category, filePath, lineNumber, memberName);
+
         private void EnqueueMessage(LogLevel level, string originalMessage, string category, string filePath, int lineNumber, string memberName)
         {
             if (!ShouldLog(level, category)) return;
-            if (_messageQueue.IsAddingCompleted) return;
 
             try
             {
                 var logEntry = LogMessagePool.Get();
                 logEntry.Initialize(DateTime.Now, level, originalMessage, category, filePath, lineNumber, memberName);
-                _messageQueue.Add(logEntry);
+                _processor.Enqueue(logEntry);
             }
             catch (InvalidOperationException) { /* Ignore if shutting down. */ }
         }
 
-        private void ProcessQueue()
+        // Zero/min-GC-friendly overloads that build messages only when logging is enabled.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void EnqueueMessage(LogLevel level, Action<StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
+            if (!ShouldLog(level, category)) return;
+
+            StringBuilder sb = StringBuilderPool.Get();
+            string builtMessage = string.Empty;
             try
             {
-                foreach (var logMessage in _messageQueue.GetConsumingEnumerable(_cts.Token))
+                messageBuilder?.Invoke(sb);
+                builtMessage = StringBuilderPool.GetStringAndReturn(sb);
+            }
+            catch
+            {
+                // Ensure the builder is returned on exceptions
+                StringBuilderPool.Return(sb);
+                throw;
+            }
+
+            EnqueueMessage(level, builtMessage, category, filePath, lineNumber, memberName);
+        }
+
+        internal void DispatchToLoggers(LogMessage logMessage)
+        {
+            _loggersLock.EnterReadLock();
+            try
+            {
+                for (int i = 0; i < _loggers.Count; i++)
                 {
-                    _loggersLock.EnterReadLock();
+                    var logger = _loggers[i];
                     try
                     {
-                        for (int i = 0; i < _loggers.Count; i++)
+                        switch (logMessage.Level)
                         {
-                            var logger = _loggers[i];
-                            try
-                            {
-                                switch (logMessage.Level)
-                                {
-                                    case LogLevel.Trace: logger.LogTrace(logMessage); break;
-                                    case LogLevel.Debug: logger.LogDebug(logMessage); break;
-                                    case LogLevel.Info: logger.LogInfo(logMessage); break;
-                                    case LogLevel.Warning: logger.LogWarning(logMessage); break;
-                                    case LogLevel.Error: logger.LogError(logMessage); break;
-                                    case LogLevel.Fatal: logger.LogFatal(logMessage); break;
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.Error.WriteLine($"[CRITICAL] CLogger: Logger {logger.GetType().Name} failed. {ex.Message}");
-                            }
+                            case LogLevel.Trace: logger.LogTrace(logMessage); break;
+                            case LogLevel.Debug: logger.LogDebug(logMessage); break;
+                            case LogLevel.Info: logger.LogInfo(logMessage); break;
+                            case LogLevel.Warning: logger.LogWarning(logMessage); break;
+                            case LogLevel.Error: logger.LogError(logMessage); break;
+                            case LogLevel.Fatal: logger.LogFatal(logMessage); break;
                         }
                     }
-                    finally
+                    catch (Exception ex)
                     {
-                        _loggersLock.ExitReadLock();
+                        Console.Error.WriteLine($"[CRITICAL] CLogger: Logger {logger.GetType().Name} failed. {ex.Message}");
                     }
-                    
-                    LogMessagePool.Return(logMessage);
                 }
             }
-            catch (OperationCanceledException)
+            finally
             {
-                Console.WriteLine("[INFO] CLogger: Processing task cancelled.");
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[CRITICAL] CLogger: ProcessQueue critical error. {ex}");
+                _loggersLock.ExitReadLock();
             }
         }
 
+        /// <summary>
+        /// Processes queued log messages.
+        /// - Single-threaded processing: call regularly (e.g., once per frame) to avoid stalls.
+        /// - Threaded processing: this is a no-op and can be left in place for portability.
+        /// </summary>
+        /// <param name="maxItems">Upper bound to the number of messages processed in this call.</param>
+        public void Pump(int maxItems = 256) => _processor.Pump(maxItems);
+
         public void Dispose()
         {
-            if (_cts.IsCancellationRequested) return;
             Console.WriteLine("[INFO] CLogger: Dispose called. Shutting down...");
 
-            _messageQueue.CompleteAdding();
-            _cts.Cancel();
-
-            try
-            {
-                if (!_processingTask.Wait(TimeSpan.FromSeconds(2)))
-                {
-                    Console.Error.WriteLine("[WARNING] CLogger: Processing task timeout on shutdown.");
-                }
-            }
-            catch (AggregateException ae)
-            {
-                ae.Handle(ex => ex is OperationCanceledException);
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[ERROR] CLogger: Error during task shutdown. {ex.Message}");
-            }
-
+            _processor.Dispose();
             ClearLoggers();
-
-            _cts.Dispose();
-            _messageQueue.Dispose();
             _loggersLock.Dispose();
-            
+
             Console.WriteLine("[INFO] CLogger: Shutdown complete.");
         }
     }
