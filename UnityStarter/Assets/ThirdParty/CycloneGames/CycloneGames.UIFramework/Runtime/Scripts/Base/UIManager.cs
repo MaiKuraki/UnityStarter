@@ -260,6 +260,9 @@ namespace CycloneGames.UIFramework // Added namespace
             uiLayer.AddWindow(uiWindowInstance);
             activeWindows[windowName] = uiWindowInstance;
 
+            // Asynchronously open the window and wait for its transition to complete.
+            await uiWindowInstance.Open();
+
             onUIWindowCreated?.Invoke(uiWindowInstance);
             tcs.TrySetResult(uiWindowInstance); // Resolve the task for this open operation
             uiOpenTCS.Remove(windowName);

@@ -114,22 +114,28 @@ namespace CycloneGames.UIFramework
             }
         }
 
-        protected virtual void Start()
+        /// <summary>
+        /// Asynchronously opens the window. This method should be called by the UIManager after instantiation.
+        /// It handles the transition through OpeningState and into OpenedState.
+        /// Override this method to implement custom opening animations.
+        /// </summary>
+        /// <returns>A UniTask that completes when the window's opening transition is finished.</returns>
+        internal virtual async Cysharp.Threading.Tasks.UniTask Open()
         {
-            // This lifecycle assumes windows are instantiated and immediately start opening.
-            // If windows can be instantiated but kept "dormant", this logic would need adjustment.
-            
-            // TODO: The original code had OnStartOpen and OnFinishedOpen called sequentially here.
-            // This implies no actual opening animation time.
-            // For a proper animated opening:
-            // 1. Call OnStartOpen() -> changes state to OpeningState.
-            // 2. OpeningState or an animation system calls OnFinishedOpen() upon animation completion.
-            
-            OnStartOpen(); // Start the opening process
+            // The opening process starts.
+            OnStartOpen();
 
-            // Simulating an immediate open for now, as per original logic.
-            // In a real system, OnFinishedOpen would be delayed by an animation/transition.
+            // --- Animation Hook ---
+            // The opening animation or transition should happen here.
+            // For this example, we simulate an instant transition.
+            // In a real implementation, you might await a DOTween sequence, a Unity animation, or a simple delay.
+            // e.g., await Cysharp.Threading.Tasks.UniTask.Delay(System.TimeSpan.FromSeconds(0.5f));
+            
+            // The opening process has finished.
             OnFinishedOpen();
+            
+            // The task is completed, signaling that the window is fully open.
+            await Cysharp.Threading.Tasks.UniTask.CompletedTask;
         }
 
         protected virtual void Update()
