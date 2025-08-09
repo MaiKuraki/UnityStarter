@@ -5,8 +5,9 @@ using CycloneGames.Logger.Util;
 namespace CycloneGames.Logger
 {
     /// <summary>
-    /// Logs messages to the Unity Editor Console.
-    /// Includes file path and line number for click-to-source functionality.
+    /// Logs messages to the Unity Console.
+    /// Includes file path and line number in a format recognized by Unity for click-to-source.
+    /// Designed to avoid extra allocations by formatting into a pooled StringBuilder.
     /// </summary>
     public sealed class UnityLogger : ILogger
     {
@@ -26,25 +27,28 @@ namespace CycloneGames.Logger
                     sb.Append(logMessage.Category);
                     sb.Append("] ");
                 }
-                sb.Append(logMessage.OriginalMessage);
+                if (logMessage.OriginalMessage != null) sb.Append(logMessage.OriginalMessage);
 
-                // Append file path and line number for Unity's jump-to-source.
-                // Using Path.GetFileName can make the console output cleaner if paths are long.
-                // However, Unity might require the full path for robust click-to-source.
+                // Append clickable file path and line number for Unity Console without extra string allocations.
                 if (!string.IsNullOrEmpty(logMessage.FilePath))
                 {
-                    // To make the file path clickable in the Unity Console, it must be relative to the project root (e.g., "Assets/MyFolder/MyScript.cs").
-                    // The [CallerFilePath] attribute provides an absolute path. We need to convert it.
-                    // A common and robust way is to find the "Assets" folder in the path and take the substring from there.
-                    string filePath = logMessage.FilePath.Replace("\\", "/");
-                    int assetsIndex = filePath.IndexOf("/Assets/", StringComparison.OrdinalIgnoreCase);
-                    if (assetsIndex > -1)
+                    sb.Append('\n');
+                    sb.Append("(at ");
+
+                    // Try to make path relative from Assets for better Unity Console click-through.
+                    // Use IndexOf (no allocation) and then append characters manually to avoid Substring allocations.
+                    string sourcePath = logMessage.FilePath;
+                    int assetsIndex = sourcePath.IndexOf("/Assets/", StringComparison.OrdinalIgnoreCase);
+                    int startIndex = assetsIndex >= 0 ? assetsIndex + 1 : 0;
+                    for (int i = startIndex; i < sourcePath.Length; i++)
                     {
-                        filePath = filePath.Substring(assetsIndex + 1);
+                        char c = sourcePath[i];
+                        sb.Append(c == '\\' ? '/' : c);
                     }
-                    
-                    // The newline character is important for matching the format of Unity's native stack traces.
-                    sb.Append($"\n(at {filePath}:{logMessage.LineNumber})");
+
+                    sb.Append(':');
+                    sb.Append(logMessage.LineNumber);
+                    sb.Append(')');
                 }
                 unityMessage = sb.ToString();
             }

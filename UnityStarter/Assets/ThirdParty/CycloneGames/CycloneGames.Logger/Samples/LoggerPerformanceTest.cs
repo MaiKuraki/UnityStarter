@@ -9,10 +9,19 @@ public class LoggerPerformanceTest : MonoBehaviour
 
     void Start()
     {
-        // Initialize logger system with different loggers
-        CLogger.Instance.AddLogger(new ConsoleLogger());
-        CLogger.Instance.AddLogger(new FileLogger(Application.dataPath + "/Logs/PerformanceTest.log"));
-        CLogger.Instance.AddLogger(new UnityLogger());
+        // Remove if centralized bootstrap is used.
+#if UNITY_WEBGL && !UNITY_EDITOR
+        CLogger.ConfigureSingleThreadedProcessing();
+#else
+        CLogger.ConfigureThreadedProcessing();
+#endif
+        // Per-script registration (remove if centralized bootstrap registers loggers).
+        // Avoid ConsoleLogger in the Unity Editor to prevent duplicate console entries.
+#if !UNITY_EDITOR
+        CLogger.Instance.AddLoggerUnique(new ConsoleLogger());
+#endif
+        CLogger.Instance.AddLoggerUnique(new FileLogger(Application.dataPath + "/Logs/PerformanceTest.log"));
+        CLogger.Instance.AddLoggerUnique(new UnityLogger());
 
         // Configure logging level and filter
         CLogger.Instance.SetLogLevel(LogLevel.Trace);
@@ -29,15 +38,17 @@ public class LoggerPerformanceTest : MonoBehaviour
 
     void Update()
     {
+        // Pump drains the queue in single-threaded mode; no-op when threaded.
+        CLogger.Instance.Pump(8192);
         if (logCount < MaxLogCount)
         {
             // Log messages at different severity levels
-            CLogger.LogTrace($"Trace log message {logCount}", "PerformanceTest");
-            CLogger.LogDebug($"Debug log message {logCount}", "PerformanceTest");
-            CLogger.LogInfo($"Info log message {logCount}", "PerformanceTest");
-            CLogger.LogWarning($"Warning log message {logCount}", "PerformanceTest");
-            CLogger.LogError($"Error log message {logCount}", "PerformanceTest");
-            CLogger.LogFatal($"Fatal log message {logCount}", "PerformanceTest");
+            CLogger.LogTrace(sb => { sb.Append("Trace log message "); sb.Append(logCount); }, "PerformanceTest");
+            CLogger.LogDebug(sb => { sb.Append("Debug log message "); sb.Append(logCount); }, "PerformanceTest");
+            CLogger.LogInfo(sb => { sb.Append("Info log message "); sb.Append(logCount); }, "PerformanceTest");
+            CLogger.LogWarning(sb => { sb.Append("Warning log message "); sb.Append(logCount); }, "PerformanceTest");
+            CLogger.LogError(sb => { sb.Append("Error log message "); sb.Append(logCount); }, "PerformanceTest");
+            CLogger.LogFatal(sb => { sb.Append("Fatal log message "); sb.Append(logCount); }, "PerformanceTest");
 
             logCount += 6; // Increment counter (6 logs per Update)
         }
