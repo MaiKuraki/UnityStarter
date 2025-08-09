@@ -31,7 +31,7 @@ namespace CycloneGames.GameplayFramework
 
         void OnEnable()
         {
-            CLogger.Instance.AddLoggerUnique(new UnityLogger());
+            // CLogger.Instance.AddLoggerUnique(new UnityLogger());
         }
     }
 }

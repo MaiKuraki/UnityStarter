@@ -26,7 +26,6 @@ namespace CycloneGames.GameplayAbilities.Sample
         private void Awake()
         {
             logTextGORef = LogText?.gameObject;
-            CLogger.Instance.AddLogger(new UnityLogger());
             if (LogText != null)
             {
                 CLogger.Instance.AddLogger(new UILogger(UpdateLog, 7));

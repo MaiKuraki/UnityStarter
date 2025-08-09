@@ -14,10 +14,21 @@ public class LoggerBenchmark : MonoBehaviour
 
     void Start()
     {
-        // Setup custom logger 
-        CLogger.Instance.AddLogger(new ConsoleLogger());
+        // Remove if centralized bootstrap is used.
+#if UNITY_WEBGL && !UNITY_EDITOR
+        CLogger.ConfigureSingleThreadedProcessing();
+#else
+        CLogger.ConfigureThreadedProcessing();
+#endif
+        // Per-script registration (remove if centralized bootstrap registers loggers).
+        // Avoid adding ConsoleLogger in the Unity Editor to prevent duplicate console entries
+        // (Unity may surface stdout and Debug.Log in the same Console view).
+#if !UNITY_EDITOR
+        CLogger.Instance.AddLoggerUnique(new ConsoleLogger());
+#endif
+        // Use AddLogger (not Unique) so a dedicated file sink is always added even if a global FileLogger exists.
         CLogger.Instance.AddLogger(new FileLogger(Application.dataPath + "/Logs/Benchmark.log"));
-        CLogger.Instance.AddLogger(new UnityLogger());
+        CLogger.Instance.AddLoggerUnique(new UnityLogger());
         CLogger.Instance.SetLogLevel(LogLevel.Trace);
 
         // Prepare report file 
@@ -44,6 +55,12 @@ public class LoggerBenchmark : MonoBehaviour
     void OnDestroy()
     {
         CLogger.Instance.Dispose();
+    }
+
+    void Update()
+    {
+        // Pump drains the queue in single-threaded mode; no-op when threaded.
+        CLogger.Instance.Pump(4096);
     }
 
     float TestUnityLogger()
