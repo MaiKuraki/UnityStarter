@@ -17,11 +17,12 @@
 > 由于 [**Zenject**](https://github.com/Mathijs-Bakker/Extenject) 作者宣布[停止对项目的更新](https://github.com/Mathijs-Bakker/Extenject/issues/73)，这里我更推荐尝试 [**VContainer**](https://github.com/hadashiA/VContainer)，如果你希望对项目更高度的自定义，则更推荐 [**StrangeIoC**](https://github.com/strangeioc/strangeioc)。如果你希望使用 [**Zenject**](https://github.com/Mathijs-Bakker/Extenject)，那么 [**MessagePipe**](https://github.com/Cysharp/MessagePipe) 也是一个可以搭配的消息框架。
 
 ## DI 框架选择指南 
-通过切换 Git 分支可查看各 DI 框架的实现范例<br/>
+通过切换 Git 分支可查看各 DI 框架的实现范例。<br/>
+注意：**GameplayFramework** 与 **Factory** 拥有针对 DI 编写的示例<br/>
 <img src="./Docs/ProjectDescription/Main/Des_01.png" alt="Branch Select" style="width: 50%; height: auto; max-width: 360px;" />
 
 ## 使用项目
-如果你打算直接使用此项目作为 Unity 的起始项目。那么推荐使用 Tools/ 文件夹下的 rename_project 的 go 语言脚本或者 exe 可执行文件，把它们复制到 UnityStarter 文件夹下(与 unity_project_full_clean.exe 同级目录) 对项目进行重命名，当然 UnityStarter 需要手动修改。如果不希望使用项目只使用项目中的某些模块，可以直接从 Assets/CycloneGames 目录拿走需要的 Package 包。
+如果你打算直接使用此项目作为 Unity 的起始项目。那么推荐使用 Tools/ 文件夹下的 rename_project 的 go 语言脚本或者 exe 可执行文件，把它们复制到 UnityStarter 文件夹下(与 unity_project_full_clean.exe 同级目录) 对项目进行重命名，当然 UnityStarter 需要手动修改。如果不希望使用项目只使用项目中的某些模块，可以直接从 Assets/CycloneGames 目录删除不需要的 Package 包。在一个真实的项目中，建议将这些包全都移至项目外以 package 形式将所需的包引用进 Unity 项目。
 
 ## 项目结构说明
 项目主要源码位于 `UnityStarter/Assets/ThirdParty/` 目录下。采用 **Unity Package** 形式开发，分离 asmdef 设计，可轻易的选择移除不需要的包。
