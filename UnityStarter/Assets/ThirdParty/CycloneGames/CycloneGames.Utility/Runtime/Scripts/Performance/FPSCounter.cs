@@ -42,9 +42,17 @@ namespace CycloneGames.Utility.Runtime
         [Tooltip("If true, this component will enforce a singleton pattern and persist across scene loads.")]
         [SerializeField] private bool _singleton = true;
 
+        [Header("Safe Area Settings")]
         [Tooltip("If true, the position of the FPS counter will be adjusted to fit within the screen's safe area.")]
         [SerializeField] private bool AdjustForSafeArea = true;
+        [Tooltip("If true, the UI will extend into the bottom safe area. On iOS, this means drawing behind the Home Indicator. Useful for immersive backgrounds, but interactive elements may be hard to use.")]
+        private bool extendIntoBottomSafeArea = true; // TODO: maybe public?
+        [Tooltip("If true, the bottom inset is increased to match the top inset if the top is larger. Balances a top notch in portrait mode.")]
+        public bool enforceVerticalSymmetry = true;
+        [Tooltip("If true, left/right insets are matched to the larger of the two. Balances a notch/indicator in landscape mode.")]
+        public bool enforceHorizontalSymmetry = true;
 
+        [Space(10)]
         [Tooltip("The interval (in seconds) at which the FPS display is updated.")]
         [SerializeField] private float UpdateInterval = 0.3f;
 
@@ -194,7 +202,7 @@ namespace CycloneGames.Utility.Runtime
             // Binary search for the correct color (list is sorted descending by FPSValue)
             // We want the color for the highest threshold that _currentFPS is below.
             int selectedColorIndex = -1;
-            for(int i = 0; i < FPSColors.Count; ++i)
+            for (int i = 0; i < FPSColors.Count; ++i)
             {
                 if (_currentFPS < FPSColors[i].FPSValue)
                 {
@@ -298,9 +306,9 @@ namespace CycloneGames.Utility.Runtime
         // Calculates the screen position for the FPS counter label
         private Vector2 GetLabelPosition(Vector2 labelSize)
         {
-            Rect safeArea = AdjustForSafeArea ? Screen.safeArea : new Rect(0, 0, Screen.width, Screen.height);
+            // Start with the calculated adaptive safe area.
+            Rect safeArea = GetAdaptiveSafeArea();
 
-            // Use properties of safeArea for calculations
             float xPos = 0, yPos = 0;
 
             switch (PositionPreset)
@@ -338,11 +346,51 @@ namespace CycloneGames.Utility.Runtime
                     yPos = safeArea.yMax - labelSize.y - PresetPositionMargin;
                     break;
                 case ScreenPosition.Custom:
-                    // For custom position, safe area is not automatically applied.
-                    // User is responsible for ensuring it's visible.
                     return CustomPosition;
             }
             return new Vector2(xPos, yPos);
+        }
+
+        /// <summary>
+        /// Calculates the final safe area Rect based on the adaptive settings.
+        /// </summary>
+        private Rect GetAdaptiveSafeArea()
+        {
+            Rect safeArea = Screen.safeArea;
+
+            float topInset = Screen.height - safeArea.yMax;
+            float bottomInset = safeArea.yMin;
+            float leftInset = safeArea.xMin;
+            float rightInset = Screen.width - safeArea.xMax;
+
+            #region Do not Change this pipe
+            // The 'extendIntoBottomSafeArea' option is intentionally applied first.
+            // It acts as a primary override, allowing the user to explicitly reclaim the
+            // bottom space, regardless of the system's default safe area.
+            if (extendIntoBottomSafeArea)
+            {
+                bottomInset = 0;
+            }
+
+            // The symmetry logic is then applied to the *result* of the previous step.
+            // This ensures that even if the bottom inset was cleared, it can be restored
+            // to match the top inset (e.g., for a notch). This sequence guarantees that
+            // the aesthetic need for symmetry correctly overrides the functional choice
+            // to extend into the bottom area when a top notch is present.
+            if (enforceVerticalSymmetry)
+            {
+                bottomInset = Mathf.Max(bottomInset, topInset);
+            }
+            #endregion
+            
+            if (enforceHorizontalSymmetry)
+            {
+                float maxHorizontal = Mathf.Max(leftInset, rightInset);
+                leftInset = maxHorizontal;
+                rightInset = maxHorizontal;
+            }
+
+            return new Rect(leftInset, bottomInset, Screen.width - leftInset - rightInset, Screen.height - bottomInset - topInset);
         }
     }
 }
