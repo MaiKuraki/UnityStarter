@@ -14,6 +14,10 @@ namespace CycloneGames.Editor.Build
         
         [SerializeField] private SceneAsset launchScene;
         
+        [Header("------ Build Pipeline Options ------")] 
+        [Tooltip("If enabled and Buildalon package is present, use Buildalon helpers (e.g. SyncSolution). Actual build still uses this project's pipeline and naming.")]
+        [SerializeField] private bool useBuildalon = false;
+        
         public SceneAsset LaunchScene => launchScene;
         
         public string GetLaunchScenePath()
@@ -27,6 +31,8 @@ namespace CycloneGames.Editor.Build
 
             return string.Empty;
         }
+
+        public bool UseBuildalon => useBuildalon;
 #endif
     }
 }
