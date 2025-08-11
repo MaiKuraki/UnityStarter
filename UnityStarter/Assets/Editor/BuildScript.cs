@@ -6,6 +6,7 @@ using UnityEditor.Build;
 using CycloneGames.Editor.VersionControl;
 using UnityEditor.SceneManagement;
 using UnityEditor.Build.Reporting;
+using System.Reflection;
 
 namespace CycloneGames.Editor.Build
 {
@@ -249,10 +250,27 @@ namespace CycloneGames.Editor.Build
 
             try
             {
+                var previousTarget = EditorUserBuildSettings.activeBuildTarget;
+
                 if (bCleanBuild)
                 {
                     DeletePlatformBuildFolder(TargetPlatform);
                 }
+
+                // If switching platforms, clear platform-specific caches to avoid stale artifacts
+                if (previousTarget != TargetPlatform)
+                {
+                    Debug.Log($"{DEBUG_FLAG} Platform switch detected: {previousTarget} -> {TargetPlatform}. Clearing caches...");
+                    TryClearPlatformSwitchCaches();
+                }
+
+                // Ensure Android export flag is only set for Android builds
+                if (TargetPlatform != BuildTarget.Android)
+                {
+                    EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
+                }
+
+                TryBuildalonSyncSolution();
 
                 InitializeVersionControl(DefaultVersionControlType);
                 string commitHash = VersionControlProvider?.GetCommitHash();
@@ -260,14 +278,26 @@ namespace CycloneGames.Editor.Build
 
                 Debug.Log($"{DEBUG_FLAG} Start Build, Platform: {EditorUserBuildSettings.activeBuildTarget}");
                 TryGetBuildData();
-                EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetName, TargetPlatform);
+                if (EditorUserBuildSettings.activeBuildTarget != TargetPlatform)
+                {
+                    Debug.Log($"{DEBUG_FLAG} Switching active build target to {TargetPlatform}...");
+                    EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetName, TargetPlatform);
+                }
+                else
+                {
+                    Debug.Log($"{DEBUG_FLAG} Active build target already {TargetPlatform}, skipping switch.");
+                }
+
+                // After target switch, refresh assets and optionally sync solution/build scripts
+                AssetDatabase.SaveAssets();
+                TryBuildalonSyncSolution();
+                TryCleanAddressablesPlayerContent();
 
                 string originalVersion = PlayerSettings.bundleVersion;
-                string commitHashSuffix = string.IsNullOrEmpty(commitHash)
-                                            ? ".Unknown"
-                                            : (commitHash.Length < 8 ? $".{commitHash}"
-                                            : $".{commitHash.Substring(0, 8)}");
-                string fullBuildVersion = $"{ApplicationVersion}{commitHashSuffix}";
+                string commitShort = string.IsNullOrEmpty(commitHash)
+                                            ? string.Empty
+                                            : (commitHash.Length < 8 ? commitHash : commitHash.Substring(0, 8));
+                string fullBuildVersion = string.IsNullOrEmpty(commitShort) ? $"{ApplicationVersion}.Unknown" : $"{ApplicationVersion}.{commitShort}";
 
                 PlayerSettings.SetScriptingBackend(BuildTargetName, BackendScriptImpl);
                 PlayerSettings.companyName = CompanyName;
@@ -371,6 +401,186 @@ namespace CycloneGames.Editor.Build
                     // Handle more specific exceptions as well
                     throw new Exception($"Error copying file: {sourceFilePath} to {destinationFilePath}. Exception: {ex.Message}");
                 }
+            }
+        }
+
+        // Clears common Unity caches that often cause cross-platform build failures (Bee, IL2CPP, Burst, PlayerData)
+        private static void TryClearPlatformSwitchCaches()
+        {
+            try
+            {
+                string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+                string libraryPath = Path.Combine(projectRoot, "Library");
+                string tempPath = Path.Combine(projectRoot, "Temp");
+
+                string[] cacheDirs = new[]
+                {
+                    Path.Combine(libraryPath, "Bee"),
+                    Path.Combine(libraryPath, "Il2cppBuildCache"),
+                    Path.Combine(libraryPath, "BurstCache"),
+                    Path.Combine(libraryPath, "PlayerDataCache"),
+                    Path.Combine(libraryPath, "BuildPlayerDataCache"),
+                    Path.Combine(tempPath, "gradleOut"),
+                    Path.Combine(tempPath, "PlayBackEngine")
+                };
+
+                foreach (var dir in cacheDirs)
+                {
+                    if (Directory.Exists(dir))
+                    {
+                        Debug.Log($"{DEBUG_FLAG} Deleting cache folder: {dir}");
+                        try { Directory.Delete(dir, true); }
+                        catch (Exception ex) { Debug.LogWarning($"{DEBUG_FLAG} Failed to delete {dir}: {ex.Message}"); }
+                    }
+                }
+
+                // Purge Unity build cache if available (reflection to avoid hard dependency)
+                TryPurgeUnityBuildCache();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} TryClearPlatformSwitchCaches encountered a non-fatal error: {ex.Message}");
+            }
+        }
+
+        private static void TryPurgeUnityBuildCache()
+        {
+            try
+            {
+                var editorAssemblies = System.AppDomain.CurrentDomain.GetAssemblies();
+                foreach (var asm in editorAssemblies)
+                {
+                    var buildCacheType = asm.GetType("UnityEditor.Build.BuildCache");
+                    if (buildCacheType == null) continue;
+                    MethodInfo purgeMethod = null;
+                    foreach (var m in buildCacheType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                    {
+                        if (m.Name != "PurgeCache") continue;
+                        var parameters = m.GetParameters();
+                        if (parameters.Length == 0 ||
+                            (parameters.Length == 1 && parameters[0].ParameterType == typeof(bool)))
+                        {
+                            purgeMethod = m;
+                            break;
+                        }
+                    }
+                    if (purgeMethod != null)
+                    {
+                        if (purgeMethod.GetParameters().Length == 1)
+                        {
+                            purgeMethod.Invoke(null, new object[] { true });
+                        }
+                        else
+                        {
+                            purgeMethod.Invoke(null, null);
+                        }
+                        Debug.Log($"{DEBUG_FLAG} UnityEditor.Build.BuildCache purged.");
+                        return;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Unable to purge Unity build cache via reflection: {ex.Message}");
+            }
+        }
+
+        // If Addressables package is present, clean player content to avoid stale catalog/bundles across platform switches
+        private static void TryCleanAddressablesPlayerContent()
+        {
+            try
+            {
+                var assemblies = System.AppDomain.CurrentDomain.GetAssemblies();
+                foreach (var asm in assemblies)
+                {
+                    var addrType = asm.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
+                    if (addrType == null) continue;
+
+                    // Try zero-parameter CleanPlayerContent first
+                    MethodInfo cleanMethod = null;
+                    foreach (var m in addrType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                    {
+                        if (m.Name != "CleanPlayerContent") continue;
+                        if (m.GetParameters().Length == 0)
+                        {
+                            cleanMethod = m;
+                            break;
+                        }
+                    }
+                    if (cleanMethod != null)
+                    {
+                        cleanMethod.Invoke(null, null);
+                        Debug.Log($"{DEBUG_FLAG} Addressables CleanPlayerContent executed.");
+                        return;
+                    }
+
+                    // Fallback: some versions require a settings instance; try to get default settings and invoke overload
+                    var getSettingsMethod = addrType.GetMethod("Default", BindingFlags.Public | BindingFlags.Static) ??
+                                            addrType.GetProperty("Default", BindingFlags.Public | BindingFlags.Static)?.GetGetMethod();
+                    var settingsInstance = getSettingsMethod != null ? getSettingsMethod.Invoke(null, null) : null;
+                    if (settingsInstance != null)
+                    {
+                        MethodInfo cleanWithSettings = null;
+                        foreach (var m in addrType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                        {
+                            if (m.Name != "CleanPlayerContent") continue;
+                            var ps = m.GetParameters();
+                            if (ps.Length == 1 && ps[0].ParameterType == addrType)
+                            {
+                                cleanWithSettings = m;
+                                break;
+                            }
+                        }
+                        if (cleanWithSettings != null)
+                        {
+                            cleanWithSettings.Invoke(null, new[] { settingsInstance });
+                            Debug.Log($"{DEBUG_FLAG} Addressables CleanPlayerContent(settings) executed.");
+                            return;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Addressables clean skipped: {ex.Message}");
+            }
+        }
+
+        // If Buildalon is installed, sync solution to ensure project files are updated (safe, no exit)
+        private static void TryBuildalonSyncSolution()
+        {
+            try
+            {
+                Debug.Log($"{DEBUG_FLAG} Probing Buildalon for SyncSolution...");
+                var assemblies = System.AppDomain.CurrentDomain.GetAssemblies();
+                bool toolsFound = false;
+                bool invoked = false;
+                foreach (var asm in assemblies)
+                {
+                    var toolsType = asm.GetType("Buildalon.Editor.BuildPipeline.UnityPlayerBuildTools");
+                    if (toolsType == null) continue;
+                    toolsFound = true;
+                    var syncMethod = toolsType.GetMethod("SyncSolution", BindingFlags.Public | BindingFlags.Static);
+                    if (syncMethod != null)
+                    {
+                        syncMethod.Invoke(null, null);
+                        Debug.Log($"{DEBUG_FLAG} Buildalon SyncSolution executed.");
+                        invoked = true;
+                    }
+                    return;
+                }
+                if (!toolsFound)
+                {
+                    Debug.Log($"{DEBUG_FLAG} Buildalon not detected. Skipping SyncSolution.");
+                }
+                else if (!invoked)
+                {
+                    Debug.Log($"{DEBUG_FLAG} Buildalon detected but SyncSolution method not found.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Buildalon SyncSolution skipped: {ex.Message}");
             }
         }
     }
