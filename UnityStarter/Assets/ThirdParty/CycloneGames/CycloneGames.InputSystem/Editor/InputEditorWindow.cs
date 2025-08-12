@@ -234,6 +234,7 @@ namespace CycloneGames.InputSystem.Editor
             {
                 JoinAction = new ActionBindingConfig
                 {
+                    Type = ActionValueType.Button,
                     ActionName = "JoinGame",
                     DeviceBindings = new System.Collections.Generic.List<string> { "<Keyboard>/enter", "<Gamepad>/start" }
                 },
@@ -252,11 +253,13 @@ namespace CycloneGames.InputSystem.Editor
                                 {
                                     new ActionBindingConfig
                                     {
+                                        Type = ActionValueType.Vector2,
                                         ActionName = "Move",
                                         DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/leftStick", "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)" }
                                     },
                                     new ActionBindingConfig
                                     {
+                                        Type = ActionValueType.Button,
                                         ActionName = "Confirm",
                                         DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" }
                                     }
@@ -275,16 +278,18 @@ namespace CycloneGames.InputSystem.Editor
                                 ActionMap = "PlayerActions",
                                 Bindings = new System.Collections.Generic.List<ActionBindingConfig>
                                 {
-                                    new ActionBindingConfig
-                                    {
-                                        ActionName = "Move",
-                                        DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/leftStick", "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)" }
-                                    },
-                                    new ActionBindingConfig
-                                    {
-                                        ActionName = "Confirm",
-                                        DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" }
-                                    }
+                                     new ActionBindingConfig
+                                     {
+                                         Type = ActionValueType.Vector2,
+                                         ActionName = "Move",
+                                         DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/leftStick", "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)" }
+                                     },
+                                     new ActionBindingConfig
+                                     {
+                                         Type = ActionValueType.Button,
+                                         ActionName = "Confirm",
+                                         DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" }
+                                     }
                                 }
                             }
                         }

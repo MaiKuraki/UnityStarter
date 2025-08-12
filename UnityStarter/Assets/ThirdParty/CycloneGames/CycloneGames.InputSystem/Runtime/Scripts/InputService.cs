@@ -20,12 +20,14 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly ReactiveProperty<string> _activeContextName = new(null);
         private readonly Stack<InputContext> _contextStack = new();
         private readonly Dictionary<string, InputContext> _registeredContexts = new();
-        private readonly Dictionary<string, Subject<Unit>> _buttonSubjects = new();
-        private readonly Dictionary<string, Subject<Vector2>> _vector2Subjects = new();
-        private readonly Dictionary<string, Subject<float>> _scalarSubjects = new();
+        // Keyed by (mapName, actionName)
+        private readonly Dictionary<(string map, string action), Subject<Unit>> _buttonSubjects = new();
+        private readonly Dictionary<(string map, string action), Subject<Vector2>> _vector2Subjects = new();
+        private readonly Dictionary<(string map, string action), Subject<float>> _scalarSubjects = new();
         private readonly HashSet<string> _requiredLayouts = new();
 
         private CompositeDisposable _subscriptions;
+        private readonly CompositeDisposable _actionWiringSubscriptions = new();
         private readonly CancellationTokenSource _cancellation;
         private readonly InputActionAsset _inputActionAsset;
         private bool _isInputBlocked;
@@ -44,12 +46,6 @@ namespace CycloneGames.InputSystem.Runtime
 
             // Listen for device changes to handle hot-swapping for this specific player.
             UnityEngine.InputSystem.InputSystem.onDeviceChange += OnDeviceChanged;
-
-            // Ensure we unsubscribe when this service is disposed to prevent memory leaks.
-            _subscriptions.Add(Disposable.Create(() =>
-            {
-                UnityEngine.InputSystem.InputSystem.onDeviceChange -= OnDeviceChanged;
-            }));
         }
 
         /// <summary>
@@ -126,18 +122,41 @@ namespace CycloneGames.InputSystem.Runtime
 
         public Observable<Vector2> GetVector2Observable(string actionName)
         {
-            return _vector2Subjects.TryGetValue(actionName, out var subject) ? subject : Observable.Empty<Vector2>();
+            // Search in current active context map first for convenience
+            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            if (mapName != null && _vector2Subjects.TryGetValue((mapName, actionName), out var subject)) return subject;
+            // Fallback: search any map
+            foreach (var kv in _vector2Subjects)
+                if (kv.Key.action == actionName) return kv.Value;
+            return Observable.Empty<Vector2>();
         }
 
         public Observable<Unit> GetButtonObservable(string actionName)
         {
-            return _buttonSubjects.TryGetValue(actionName, out var subject) ? subject : Observable.Empty<Unit>();
+            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            if (mapName != null && _buttonSubjects.TryGetValue((mapName, actionName), out var subject)) return subject;
+            foreach (var kv in _buttonSubjects)
+                if (kv.Key.action == actionName) return kv.Value;
+            return Observable.Empty<Unit>();
         }
 
         public Observable<float> GetScalarObservable(string actionName)
         {
-            return _scalarSubjects.TryGetValue(actionName, out var subject) ? subject : Observable.Empty<float>();
+            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            if (mapName != null && _scalarSubjects.TryGetValue((mapName, actionName), out var subject)) return subject;
+            foreach (var kv in _scalarSubjects)
+                if (kv.Key.action == actionName) return kv.Value;
+            return Observable.Empty<float>();
         }
+
+        public Observable<Vector2> GetVector2Observable(string actionMapName, string actionName)
+            => _vector2Subjects.TryGetValue((actionMapName, actionName), out var subject) ? subject : Observable.Empty<Vector2>();
+
+        public Observable<Unit> GetButtonObservable(string actionMapName, string actionName)
+            => _buttonSubjects.TryGetValue((actionMapName, actionName), out var subject) ? subject : Observable.Empty<Unit>();
+
+        public Observable<float> GetScalarObservable(string actionMapName, string actionName)
+            => _scalarSubjects.TryGetValue((actionMapName, actionName), out var subject) ? subject : Observable.Empty<float>();
 
         public void BlockInput()
         {
@@ -161,23 +180,28 @@ namespace CycloneGames.InputSystem.Runtime
             _cancellation.Cancel();
             _cancellation.Dispose();
             _subscriptions?.Dispose();
+            _actionWiringSubscriptions.Dispose();
             _inputActionAsset.Disable();
+            if (_inputActionAsset != null)
+            {
+                var assetToDestroy = _inputActionAsset;
+                // Use DestroyImmediate in Editor to avoid leaks; Destroy in play mode
+                if (Application.isPlaying) UnityEngine.Object.Destroy(assetToDestroy);
+                else UnityEngine.Object.DestroyImmediate(assetToDestroy);
+            }
 
             foreach (var s in _buttonSubjects.Values) s.Dispose();
             foreach (var s in _vector2Subjects.Values) s.Dispose();
 
             User.UnpairDevicesAndRemoveUser();
+            UnityEngine.InputSystem.InputSystem.onDeviceChange -= OnDeviceChanged;
         }
 
         private void ActivateTopContext()
         {
             _subscriptions?.Dispose();
             _subscriptions = new CompositeDisposable();
-            UnityEngine.InputSystem.InputSystem.onDeviceChange += OnDeviceChanged;
-            _subscriptions.Add(Disposable.Create(() =>
-            {
-                UnityEngine.InputSystem.InputSystem.onDeviceChange -= OnDeviceChanged;
-            }));
+            // Per-context device change hook removed to avoid duplicate subscriptions.
 
             if (_contextStack.Count == 0)
             {
@@ -206,7 +230,8 @@ namespace CycloneGames.InputSystem.Runtime
         {
             var asset = ScriptableObject.CreateInstance<InputActionAsset>();
             var token = _cancellation.Token;
-            var allActions = new Dictionary<string, InputAction>();
+            // Actions are unique per ActionMap now: (mapName, actionName) -> InputAction
+            var actionsByMapAndName = new Dictionary<(string mapName, string actionName), InputAction>();
 
             _requiredLayouts.Clear();
             foreach (var ctx in config.Contexts)
@@ -223,39 +248,59 @@ namespace CycloneGames.InputSystem.Runtime
 
             foreach (var ctxConfig in config.Contexts)
             {
-                var map = asset.AddActionMap(ctxConfig.ActionMap);
+                var map = asset.FindActionMap(ctxConfig.ActionMap) ?? asset.AddActionMap(ctxConfig.ActionMap);
                 foreach (var bindingConfig in ctxConfig.Bindings)
                 {
-                    if (allActions.ContainsKey(bindingConfig.ActionName)) continue;
+                    var key = (ctxConfig.ActionMap, bindingConfig.ActionName);
+                    if (actionsByMapAndName.ContainsKey(key))
+                    {
+                        // Same action name inside the same map should aggregate bindings, not skip entirely.
+                        foreach (var path in bindingConfig.DeviceBindings) actionsByMapAndName[key].AddBinding(path);
+                        continue;
+                    }
 
-                    bool isVector2 = bindingConfig.ActionName.ToLower().Contains("move") || bindingConfig.ActionName.ToLower().Contains("navigate");
-                    bool isScalar = bindingConfig.DeviceBindings.Any(b => b.Contains("Trigger"));
-                    var actionType = isVector2 ? InputActionType.Value : (isScalar ? InputActionType.Value : InputActionType.Button);
+                    // Backwards-compat: if Type not set (default Button), infer from bindings
+                    var inferredType = bindingConfig.Type;
+                    if (inferredType == ActionValueType.Button)
+                    {
+                        bool looksVector2 = bindingConfig.DeviceBindings.Any(b =>
+                            b.Contains("2DVector") || b.Contains("leftStick") || b.Contains("rightStick") || b.Contains("dpad") || b.EndsWith("/delta"));
+                        bool looksFloat = !looksVector2 && bindingConfig.DeviceBindings.Any(b => b.Contains("Trigger"));
+                        if (looksVector2) inferredType = ActionValueType.Vector2;
+                        else if (looksFloat) inferredType = ActionValueType.Float;
+                    }
+
+                    var actionType = inferredType switch
+                    {
+                        ActionValueType.Vector2 => InputActionType.Value,
+                        ActionValueType.Float => InputActionType.Value,
+                        _ => InputActionType.Button
+                    };
                     var action = map.AddAction(bindingConfig.ActionName, actionType);
 
                     foreach (var path in bindingConfig.DeviceBindings) action.AddBinding(path);
 
-                    allActions[bindingConfig.ActionName] = action;
+                    actionsByMapAndName[key] = action;
 
-                    if (isVector2)
+                    if (inferredType == ActionValueType.Vector2)
                     {
                         var subject = new Subject<Vector2>();
-                        action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<Vector2>()).Subscribe(subject.AsObserver());
-                        action.CanceledAsObservable(token).Select(_ => Vector2.zero).Subscribe(subject.AsObserver());
-                        _vector2Subjects[action.name] = subject;
+                        action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<Vector2>()).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                        action.CanceledAsObservable(token).Select(_ => Vector2.zero).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                        _vector2Subjects[(ctxConfig.ActionMap, action.name)] = subject;
                     }
-                    else if (isScalar)
+                    else if (inferredType == ActionValueType.Float)
                     {
                         var subject = new Subject<float>();
-                        action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<float>()).Subscribe(subject.AsObserver());
-                        action.CanceledAsObservable(token).Select(_ => 0f).Subscribe(subject.AsObserver());
-                        _scalarSubjects[action.name] = subject;
+                        action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<float>()).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                        action.CanceledAsObservable(token).Select(_ => 0f).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                        _scalarSubjects[(ctxConfig.ActionMap, action.name)] = subject;
                     }
                     else
                     {
                         var subject = new Subject<Unit>();
-                        action.PerformedAsObservable(token).Select(_ => Unit.Default).Subscribe(subject.AsObserver());
-                        _buttonSubjects[action.name] = subject;
+                        action.PerformedAsObservable(token).Select(_ => Unit.Default).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                        _buttonSubjects[(ctxConfig.ActionMap, action.name)] = subject;
                     }
                 }
             }

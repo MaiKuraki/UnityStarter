@@ -9,12 +9,14 @@ namespace CycloneGames.InputSystem.Editor
     [System.Serializable]
     public class ActionBindingSO
     {
+        public ActionValueType Type;
         public string ActionName;
         [StringAsConstSelector(typeof(InputBindingConstants), UseMenu = true)] // Custom drawer for this list!
         public List<string> DeviceBindings = new List<string>();
 
         public void FromData(ActionBindingConfig data)
         {
+            Type = data.Type;
             ActionName = data.ActionName;
             DeviceBindings = new List<string>(data.DeviceBindings);
         }
@@ -23,6 +25,7 @@ namespace CycloneGames.InputSystem.Editor
         {
             return new ActionBindingConfig
             {
+                Type = this.Type,
                 ActionName = this.ActionName,
                 DeviceBindings = new List<string>(this.DeviceBindings)
             };
@@ -31,12 +34,14 @@ namespace CycloneGames.InputSystem.Editor
     [System.Serializable]
     public class ActionBindingDrawerData
     {
+        public ActionValueType Type;
         public string ActionName;
         [StringAsConstSelector(typeof(InputBindingConstants), UseMenu = true)] // Uses the custom dropdown drawer
         public List<string> DeviceBindings = new List<string>();
 
         public void FromData(ActionBindingConfig data)
         {
+            Type = data.Type;
             ActionName = data.ActionName;
             DeviceBindings = new List<string>(data.DeviceBindings);
         }
@@ -45,6 +50,7 @@ namespace CycloneGames.InputSystem.Editor
         {
             return new ActionBindingConfig
             {
+                Type = this.Type,
                 ActionName = this.ActionName,
                 DeviceBindings = new List<string>(this.DeviceBindings)
             };
