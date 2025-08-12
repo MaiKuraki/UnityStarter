@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading;
 
 namespace CycloneGames.Factory.Runtime
@@ -20,6 +21,7 @@ namespace CycloneGames.Factory.Runtime
         private readonly List<TValue> _activeItems;
         private readonly Dictionary<TValue, int> _activeItemIndices;
         private readonly ReaderWriterLockSlim _rwLock = new ReaderWriterLockSlim();
+        private readonly ConcurrentQueue<TValue> _pendingDespawns = new ConcurrentQueue<TValue>();
         
         // --- Auto-Scaling Fields ---
         private readonly float _expansionFactor;
@@ -131,25 +133,17 @@ namespace CycloneGames.Factory.Runtime
         {
             if (item == null) return;
 
+            // If current thread holds a read lock (e.g., inside Tick), avoid deadlock and queue the request.
+            if (_rwLock.IsReadLockHeld)
+            {
+                _pendingDespawns.Enqueue(item);
+                return;
+            }
+
             _rwLock.EnterWriteLock();
             try
             {
-                if (!_activeItemIndices.TryGetValue(item, out int index))
-                {
-                    // Item is not currently active, possibly already despawned.
-                    return;
-                }
-
-                // Efficiently remove from active list using swap-and-pop.
-                // This avoids shifting list elements, making despawn an O(1) operation.
-                TValue lastItem = _activeItems[_activeItems.Count - 1];
-                _activeItems[index] = lastItem;
-                _activeItemIndices[lastItem] = index;
-                _activeItems.RemoveAt(_activeItems.Count - 1);
-                _activeItemIndices.Remove(item);
-
-                item.OnDespawned();
-                _inactivePool.Push(item);
+                DespawnWithoutLock(item);
             }
             finally
             {
@@ -183,12 +177,44 @@ namespace CycloneGames.Factory.Runtime
             _rwLock.EnterWriteLock();
             try
             {
+                // First process any despawns requested during Tick
+                DrainPendingDespawnsWithoutLock();
+                // Then handle auto-shrink
                 UpdateShrinkLogic();
             }
             finally
             {
                 if (_rwLock.IsWriteLockHeld) _rwLock.ExitWriteLock();
             }
+        }
+
+        private void DrainPendingDespawnsWithoutLock()
+        {
+            while (_pendingDespawns.TryDequeue(out var item))
+            {
+                DespawnWithoutLock(item);
+            }
+        }
+
+        private void DespawnWithoutLock(TValue item)
+        {
+            if (item == null) return;
+
+            if (!_activeItemIndices.TryGetValue(item, out int index))
+            {
+                // Item is not currently active or already despawned.
+                return;
+            }
+
+            // Efficiently remove from active list using swap-and-pop.
+            TValue lastItem = _activeItems[_activeItems.Count - 1];
+            _activeItems[index] = lastItem;
+            _activeItemIndices[lastItem] = index;
+            _activeItems.RemoveAt(_activeItems.Count - 1);
+            _activeItemIndices.Remove(item);
+
+            item.OnDespawned();
+            _inactivePool.Push(item);
         }
         
         private void UpdateShrinkLogic()
@@ -278,7 +304,11 @@ namespace CycloneGames.Factory.Runtime
         {
             for (int i = 0; i < count; i++)
             {
-                _inactivePool.Push(_factory.Create());
+                var created = _factory.Create();
+                if (created != null)
+                {
+                    _inactivePool.Push(created);
+                }
             }
         }
 
