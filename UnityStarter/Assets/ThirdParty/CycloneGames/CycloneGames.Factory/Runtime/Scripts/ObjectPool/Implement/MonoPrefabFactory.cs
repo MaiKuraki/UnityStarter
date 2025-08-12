@@ -17,7 +17,16 @@ namespace CycloneGames.Factory.Runtime
 
         public T Create()
         {
+            if (_spawner == null || _prefab == null)
+            {
+                return null;
+            }
+
             var instance = _spawner.Create(_prefab);
+            if (instance == null)
+            {
+                return null;
+            }
 
             if (_parent)
             {
