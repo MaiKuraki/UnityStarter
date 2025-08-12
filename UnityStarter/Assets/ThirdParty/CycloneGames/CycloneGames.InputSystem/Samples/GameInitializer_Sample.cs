@@ -119,8 +119,8 @@ namespace CycloneGames.InputSystem.Sample
             //     var jumpCommand = new ActionCommand(controller.OnJump);
 
             //     var gameplayContext = new InputContext("Gameplay", "PlayerActions")
-            //         .AddBinding(playerInput.GetVector2Observable("Move"), moveCommand)
-            //         .AddBinding(playerInput.GetButtonObservable("Jump"), jumpCommand);
+            //         .AddBinding(playerInput.GetVector2Observable("PlayerActions", "Move"), moveCommand)
+            //         .AddBinding(playerInput.GetButtonObservable("PlayerActions", "Jump"), jumpCommand);
 
             //     playerInput.RegisterContext(gameplayContext);
             //     playerInput.PushContext("Gameplay");

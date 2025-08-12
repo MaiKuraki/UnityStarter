@@ -4,6 +4,17 @@ using VYaml.Annotations;
 namespace CycloneGames.InputSystem.Runtime
 {
     /// <summary>
+    /// Explicit value type for an input action. This removes brittle heuristics and
+    /// enables zero-GC routing with precise action wiring.
+    /// </summary>
+    public enum ActionValueType
+    {
+        Button,
+        Vector2,
+        Float
+    }
+
+    /// <summary>
     /// Represents the root of the YAML input configuration file.
     /// </summary>
     [YamlObject]
@@ -53,6 +64,9 @@ namespace CycloneGames.InputSystem.Runtime
     [YamlObject]
     public partial class ActionBindingConfig
     {
+        [YamlMember("type")]
+        public ActionValueType Type { get; set; }
+
         [YamlMember("action")]
         public string ActionName { get; set; }
         
