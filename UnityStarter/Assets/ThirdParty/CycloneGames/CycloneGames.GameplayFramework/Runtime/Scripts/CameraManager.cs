@@ -62,6 +62,23 @@ namespace CycloneGames.GameplayFramework
             PCOwner = PlayerController;
             SetFOV(DefaultFOV);
             SetViewTarget(PlayerController);
+            // If no active virtual camera has been explicitly set, attempt to find one at runtime.
+            if (ActiveVirtualCamera == null)
+            {
+                var brain = Camera.main ? Camera.main.GetComponent<CinemachineBrain>() : null;
+                if (brain != null)
+                {
+                    // Try find any virtual camera in scene; prefer one that already follows the target
+                    var candidates = GameObject.FindObjectsByType<CinemachineCamera>(FindObjectsSortMode.None);
+                    if (candidates != null && candidates.Length > 0)
+                    {
+                        // Choose first for determinism; callers can override later via SetActiveVirtualCamera
+                        SetActiveVirtualCamera(candidates[0]);
+                        // Ensure follow/look target are set
+                        SetViewTarget(PlayerController);
+                    }
+                }
+            }
             IsInitialized = true;
         }
 

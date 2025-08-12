@@ -1,5 +1,4 @@
 using System;
-using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework
@@ -31,12 +30,7 @@ namespace CycloneGames.GameplayFramework
                 transform.position = NewPosition;
             }
         }
-        public float GetYaw()
-        {
-            Quaternion q = transform.rotation;
-            float yaw = Mathf.Rad2Deg * Mathf.Atan2(2 * q.y * q.w - 2 * q.x * q.z, 1 - 2 * q.y * q.y - 2 * q.z * q.z);
-            return yaw;
-        }
+        public float GetYaw() => transform.eulerAngles.y;
         public Quaternion GetActorRotation() => transform.rotation;
         void Orientation()
         {
@@ -54,15 +48,8 @@ namespace CycloneGames.GameplayFramework
 
             if (initialLifeSpanSec > 0.001f)
             {
-                int lifeTimeMS = (int)(initialLifeSpanSec * 1000);
-                DelayInvokeAction(lifeTimeMS, () => Destroy(gameObject)).Forget();
+                Destroy(gameObject, initialLifeSpanSec);
             }
-        }
-
-        async UniTask DelayInvokeAction(int DelayMilliSeconds, Action Action_DelayTask)
-        {
-            await UniTask.Delay(DelayMilliSeconds);
-            Action_DelayTask?.Invoke();
         }
 
         public virtual void FellOutOfWorld()
