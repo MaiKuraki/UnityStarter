@@ -1,0 +1,36 @@
+{
+  "name": "com.cyclone-games.inputsystem",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.InputSystem",
+  "description": "Reactive, zero-GC input wrapper with YAML config, editor tooling, context stacks, and robust multi-player device pairing.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "license": "MIT",
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "keywords": [
+    "CycloneGames",
+    "Input",
+    "Reactive",
+    "YAML"
+  ],
+  "samples": [
+    {
+      "displayName": "GameInitializer Sample",
+      "description": "Bootstraps and demonstrates multiple join modes.",
+      "path": "Samples"
+    }
+  ],
+  "dependencies": {
+    "com.unity.inputsystem": "1.7.0",
+    "com.cysharp.unitask": "2.5.0",
+    "com.cysharp.r3.unity": "1.0.0",
+    "com.annulusgames.reactive-input-system": "0.1.0",
+    "com.cyclone-games.utility": "1.0.0",
+    "com.cyclone-games.logger": "1.0.0",
+    "com.vyaml.core": "1.2.0"
+  }
+}
