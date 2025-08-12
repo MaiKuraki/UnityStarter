@@ -1,5 +1,6 @@
 using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
+using System.Threading;
 
 namespace CycloneGames.GameplayFramework
 {
@@ -36,19 +37,36 @@ namespace CycloneGames.GameplayFramework
             }
         }
 
+        private CancellationTokenSource initCts;
+
         protected override void Awake()
         {
             base.Awake();
 
-            InitializePlayerController().Forget();
+            initCts = new CancellationTokenSource();
+            InitializePlayerController(initCts.Token).Forget();
         }
 
-        private async UniTask InitializePlayerController()
+        private async UniTask InitializePlayerController(CancellationToken token)
         {
-            await UniTask.WaitUntil(() => base.IsInitialized);
+            await UniTask.WaitUntil(() => base.IsInitialized, cancellationToken: token);
+            if (token.IsCancellationRequested) return;
             InitPlayerState();
+            if (token.IsCancellationRequested) return;
             SpawnCameraManager();
+            if (token.IsCancellationRequested) return;
             SpawnSpectatorPawn();
+        }
+
+        protected override void OnDestroy()
+        {
+            base.OnDestroy();
+            if (initCts != null)
+            {
+                initCts.Cancel();
+                initCts.Dispose();
+                initCts = null;
+            }
         }
     }
 }

@@ -38,10 +38,8 @@ namespace CycloneGames.GameplayFramework
         //  TODO: SetPawnPrivate should not called from pawn.
         private void SetPlayerState(PlayerState NewPlayerState)
         {
-            PlayerState OldPlayerState = playerState;
             if (playerState && playerState.GetPawn() == this)
             {
-                Pawn oldPawn = playerState.GetPawn();
                 playerState.SetPawnPrivate(null);
             }
             
@@ -49,7 +47,6 @@ namespace CycloneGames.GameplayFramework
 
             if (playerState)
             {
-                Pawn oldPawn = playerState.GetPawn();
                 playerState.SetPawnPrivate(this);
             }
             //  OnPlayerStateChangedEvent
