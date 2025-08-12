@@ -19,8 +19,12 @@ namespace CycloneGames.GameplayFramework
         {
             //  Target Actor require a 'Collision' component and 'Rigidbody' component
             CLogger.LogInfo($"{DEBUG_FLAG} {other.gameObject.name} Enter Kill Z");
+            if (!other) return;
             Actor otherActor = other.GetComponent<Actor>();
-            otherActor.FellOutOfWorld();
+            if (otherActor != null)
+            {
+                otherActor.FellOutOfWorld();
+            }
         }
     }
 }
