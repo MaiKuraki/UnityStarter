@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.Networking.Adapter.Mirror",
+    "rootNamespace": "",
+    "references": [
+        "Mirror",
+        "CycloneGames.Networking.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
