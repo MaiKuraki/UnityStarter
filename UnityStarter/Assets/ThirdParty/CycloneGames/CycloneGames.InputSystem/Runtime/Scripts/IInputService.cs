@@ -28,6 +28,14 @@ namespace CycloneGames.InputSystem.Runtime
         Observable<Vector2> GetVector2Observable(string actionName);
 
         /// <summary>
+        /// Gets a reactive stream for a Vector2-based action within a specific action map.
+        /// </summary>
+        /// <param name="actionMapName">The action map that owns the action.</param>
+        /// <param name="actionName">The action name.</param>
+        /// <returns>An Observable stream of Vector2 values.</returns>
+        Observable<Vector2> GetVector2Observable(string actionMapName, string actionName);
+
+        /// <summary>
         /// Gets a reactive stream for a button-based action (e.g., jump, shoot).
         /// </summary>
         /// <param name="actionName">The name of the action defined in the configuration.</param>
@@ -35,11 +43,27 @@ namespace CycloneGames.InputSystem.Runtime
         Observable<Unit> GetButtonObservable(string actionName);
 
         /// <summary>
+        /// Gets a reactive stream for a button-based action within a specific action map.
+        /// </summary>
+        /// <param name="actionMapName">The action map that owns the action.</param>
+        /// <param name="actionName">The action name.</param>
+        /// <returns>An Observable stream of Unit values.</returns>
+        Observable<Unit> GetButtonObservable(string actionMapName, string actionName);
+
+        /// <summary>
         /// Gets a reactive stream for a scalar-based action (e.g., zoom, sensitivity).
         /// </summary>
         /// <param name="actionName"></param>
         /// <returns></returns>
         Observable<float> GetScalarObservable(string actionName);
+
+        /// <summary>
+        /// Gets a reactive stream for a scalar-based action within a specific action map.
+        /// </summary>
+        /// <param name="actionMapName">The action map that owns the action.</param>
+        /// <param name="actionName">The action name.</param>
+        /// <returns>An Observable stream of float values.</returns>
+        Observable<float> GetScalarObservable(string actionMapName, string actionName);
 
         /// <summary>
         /// Registers a pre-configured InputContext, making it available for activation.
