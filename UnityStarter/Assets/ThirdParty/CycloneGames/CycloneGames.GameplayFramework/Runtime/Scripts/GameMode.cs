@@ -66,7 +66,7 @@ namespace CycloneGames.GameplayFramework
             {
                 foreach (var st in playerStartArray)
                 {
-                    if (st.GetName() == IncommingName)
+                    if (string.Equals(st.GetName(), IncommingName, System.StringComparison.Ordinal))
                     {
                         Player.SetStartSpot(st);
                         return st;
@@ -148,7 +148,7 @@ namespace CycloneGames.GameplayFramework
                 return;
             }
 
-            Quaternion SpawnRotation = SpawnTransform.rotation;
+            Quaternion SpawnRotation = SpawnTransform != null ? SpawnTransform.rotation : Quaternion.identity;
             if (NewPlayer.GetPawn() != null)
             {
                 SpawnRotation = NewPlayer.GetPawn().transform.rotation;
@@ -226,15 +226,15 @@ namespace CycloneGames.GameplayFramework
 
         Pawn SpawnDefaultPawnAtTransform(Controller NewPlayer, Transform SpawnTransform)
         {
+            if (SpawnTransform == null)
+            {
+                CLogger.LogError($"{DEBUG_FLAG} Invalid target transform, please check your spawn pipeline");
+                return null;
+            }
             Pawn p = objectSpawner?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
             if (p == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn, please check your spawn pipeline");
-                return null;
-            }
-            if (SpawnTransform == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid target transform, please check your spawn pipeline");
                 return null;
             }
             p.transform.position = SpawnTransform.position;

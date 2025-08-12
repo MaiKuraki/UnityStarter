@@ -45,6 +45,11 @@ namespace CycloneGames.GameplayFramework
 
         public virtual void Possess(Pawn InPawn)
         {
+            if (InPawn == null)
+            {
+                CLogger.LogError("[Controller] Possess called with null Pawn");
+                return;
+            }
             OnPossess(InPawn);
         }
 
