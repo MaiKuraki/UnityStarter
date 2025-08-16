@@ -1,0 +1,27 @@
+{
+    "name": "CycloneGames.AssetManagement.Integrations.VContainer",
+    "rootNamespace": "CycloneGames.AssetManagement.Integrations.DI.VContainer",
+    "references": [
+        "CycloneGames.Logger",
+        "CycloneGames.AssetManagement",
+        "VContainer",
+        "YooAsset"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "VCONTAINER_PRESENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vcontainer",
+            "expression": "",
+            "define": "VCONTAINER_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}

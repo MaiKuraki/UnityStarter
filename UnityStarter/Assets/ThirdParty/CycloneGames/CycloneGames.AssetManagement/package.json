@@ -1,0 +1,26 @@
+{
+  "name": "com.cyclonegames.assetmanagement",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.AssetManagement",
+  "description": "Interface-first, DI-friendly unified asset management for Unity. Default provider wraps YooAsset with zero-GC hot paths, robust update/download flows, Navigathena scene integration (optional).",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.0.0",
+    "com.tuyoogame.yooasset": "2.3.14"
+  },
+  "keywords": [
+    "CycloneGames",
+    "AssetManagement",
+    "YooAsset",
+    "Navigathena",
+    "Addressables"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}
+
