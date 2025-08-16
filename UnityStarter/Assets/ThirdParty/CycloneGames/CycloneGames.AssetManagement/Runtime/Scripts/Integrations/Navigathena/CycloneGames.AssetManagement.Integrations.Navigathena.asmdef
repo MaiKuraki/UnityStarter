@@ -1,0 +1,39 @@
+{
+    "name": "CycloneGames.AssetManagement.Integrations.Navigathena",
+    "rootNamespace": "CycloneGames.AssetManagement.Integrations.Navigathena",
+    "references": [
+        "CycloneGames.AssetManagement",
+        "UniTask",
+        "MackySoft.Navigathena",
+        "MackySoft.Navigathena.SceneManagement"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "NAVIGATHENA_PRESENT",
+        "NAVIGATHENA_YOOASSET",
+        "UNITASK_PRESENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.mackysoft.navigathena",
+            "expression": "",
+            "define": "NAVIGATHENA_PRESENT"
+        },
+        {
+            "name": "com.tuyoogame.yooasset",
+            "expression": "",
+            "define": "NAVIGATHENA_YOOASSET"
+        },
+        {
+            "name": "com.cysharp.unitask",
+            "expression": "",
+            "define": "UNITASK_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}
