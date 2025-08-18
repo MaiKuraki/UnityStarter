@@ -1,6 +1,7 @@
-<div align="center"><a href="./README.md">English</a> | 简体中文</div>
-
 ## CycloneGames.Factory
+<div align="left"><a href="./README.md">English</a> | 简体中文</div>
+
+---
 
 面向 Unity 与纯 C# 的高性能、低 GC 工厂与对象池工具集。模块化、可插拔，易于与 DI 框架集成。
 
@@ -18,7 +19,7 @@
 ### 安装
 本仓库以内嵌包形式位于 `Assets/ThirdParty`。包名：`com.cyclone-games.factory`（Unity 2022.3+）。可直接使用或迁移到你自己的 UPM。
 
-### 快速开始（面向初学者）
+### 快速上手
 
 1）纯 C# 工厂
 ```csharp
@@ -88,9 +89,9 @@ builder.Register<IFactory<Bullet>>(c => new MonoPrefabFactory<Bullet>(
     c.Resolve<IUnityObjectSpawner>(), bulletPrefab, parent)).AsSelf();
 ```
 
-### 自动扩缩容要点
+### 自动扩缩容
 - 当池为空时按 `expansionFactor` 扩容（默认当前总量的 50%）。
-- 经过 `shrinkCooldownTicks` 后，按最近高水位 + 缓冲收缩。
+- 经过 `shrinkCooldownTicks` 后，按最近高出发容量 + 缓冲收缩。
 - `Tick()` 做三件事：读锁遍历 `Tick()`、写锁处理延迟回收、写锁进行收缩判断。
 
 ### 示例说明
@@ -98,6 +99,6 @@ builder.Register<IFactory<Bullet>>(c => new MonoPrefabFactory<Bullet>(
 - `PureCSharp/` 演示基于 `ObjectPool` 的纯数据粒子系统模拟。
 - `PureUnity/` 演示通过 `IUnityObjectSpawner` 生成 `MonoBehaviour` Prefab 的最小示例。
 
-### 小贴士
-- 若需要零分配日志，可搭配仓库内 `CycloneGames.Logger`（使用消息池）。
+### Tips
+- 可搭配仓库内 `CycloneGames.Logger` 达到高性能低 GC 日志。
 - 本仓库中的 Gameplay 模块已依赖 `CycloneGames.Factory.Runtime`，可参考其集成模式。
