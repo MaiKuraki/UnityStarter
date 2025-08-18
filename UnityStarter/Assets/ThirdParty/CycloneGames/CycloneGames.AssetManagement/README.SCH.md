@@ -9,7 +9,6 @@
 - Unity 2022.3+
 - 必需：`com.tuyoogame.yooasset`
 - 可选：`com.cysharp.unitask`、`jp.hadashikick.vcontainer`、`com.mackysoft.navigathena`、`com.cyclonegames.factory`、`com.cyclone-games.logger`、`com.harumak.addler`
-- 安装对应包后，asmdef 会自动注入宏（无需手工定义）
 
 ## 快速上手
 

@@ -3,18 +3,9 @@
 
 # CycloneGames.Logger
 
-[English](README.md) | [简体中文](README.SCH.md)
+English | [简体中文](README.SCH.md)
 
 High-performance, low/zero-GC logging for Unity and .NET, designed for stability and portability across platforms (Android, iOS, Windows, macOS, Linux, Web/WASM such as Unity WebGL).
-
-## Why not just Debug.Log?
-
-- Throughput & GC: Builder overloads and object pooling minimize allocations even at high volumes; avoids string formatting when filtered out.
-- Async decoupling: Threaded processing (where available) removes logging cost from gameplay threads. Single-threaded processing with Pump() for WebGL.
-- Flexible routing: Plug in multiple outputs (Unity Console, file, console/stdout, custom sinks).
-- Filtering: Severity level and category whitelist/blacklist applied before work is allocated.
-- Production safety: Robust dispatch, contained exceptions, graceful shutdown.
-- File maintenance: Optional size warning/automatic rotation with archive retention.
 
 ## Features
 
@@ -161,9 +152,3 @@ CLogger.Instance.SetLogFilter(LogFilter.LogWhiteList);
 
 - Duplicate lines in Unity Console: If both ConsoleLogger and UnityLogger are active in the Editor, the Editor may surface both stdout and Debug.Log. Skip ConsoleLogger in the Editor or keep only UnityLogger.
 - No file output: Ensure you added a FileLogger (it is not registered by default) and that the path is writeable.
-
-## Safety and robustness
-
-- Registration guarded by read/write lock
-- Dispatch exceptions contained and reported to console
-- Graceful shutdown on dispose

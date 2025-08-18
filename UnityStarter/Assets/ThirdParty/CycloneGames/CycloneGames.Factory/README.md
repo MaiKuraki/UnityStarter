@@ -1,6 +1,7 @@
-<div align="center">English | <a href="./README.SCH.md">简体中文</a></div>
-
 ## CycloneGames.Factory
+<div align="left">English | <a href="./README.SCH.md">简体中文</a></div>
+
+---
 
 High-performance, low-GC factory and object-pooling utilities for Unity and pure C#. Designed to be DI-friendly and easy to adopt incrementally.
 
@@ -18,7 +19,7 @@ High-performance, low-GC factory and object-pooling utilities for Unity and pure
 ### Install
 This repo embeds the package under `Assets/ThirdParty`. The package name is `com.cyclone-games.factory` (Unity 2022.3+). You can keep it embedded or reference it via UPM in your own projects.
 
-### Quick start (beginner-friendly)
+### Quick start
 
 1) Pure C# factory
 ```csharp
@@ -99,5 +100,5 @@ Under `Samples/`:
 - `PureUnity/` shows spawning `MonoBehaviour` prefabs via `IUnityObjectSpawner` and a minimal manager.
 
 ### Tips
-- For zero-GC logging, pair with `CycloneGames.Logger` (also in this repo) which uses pooled messages.
+- For zero-GC and high-performance logging, pair with `CycloneGames.Logger` (also in this repo) which uses pooled messages.
 - Gameplay modules in this repo already depend on `CycloneGames.Factory.Runtime`, demonstrating integration patterns.

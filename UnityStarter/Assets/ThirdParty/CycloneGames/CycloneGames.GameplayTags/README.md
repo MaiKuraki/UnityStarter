@@ -5,7 +5,5 @@
 [developement branch]
 
 ## What Modify
-`GameplayTagManager`->`RegisterDynamicTags` Pipeline
-
-## TODO
-Runtime tags register pipeline will not display correct for the `GameplayTagContainer`'s inspector in Editor.
+-   `GameplayTagManager`->`RegisterDynamicTags` Pipeline. (For dynamically add new tags during runtime)
+-   Implement Auto generate Default tags with static class defined. (For integrate Hot-Update coding)

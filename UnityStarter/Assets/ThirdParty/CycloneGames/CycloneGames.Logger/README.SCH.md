@@ -7,15 +7,6 @@
 
 高性能、低/零 GC 的 Unity/.NET 日志模块，兼顾稳定与跨平台（Android、iOS、Windows、macOS、Linux、Web/WASM）。
 
-## 为什么不直接用 Debug.Log？
-
-- 性能与 GC：Builder 重载与对象池尽量避免分配；过滤后再构建消息。
-- 异步解耦：线程化后台（可用平台）；WebGL 采用单线程 + Pump()。
-- 灵活注册：Unity Console、文件Log等。
-- 过滤控制：等级与分类（白/黑名单）在做工作前生效。
-- 生产可用：异常隔离、优雅关闭。
-- 文件维护：可选大小预警/自动轮转并保留归档。
-
 ## 功能特性
 
 - 可插拔处理策略：线程化后台或单线程 Pump
@@ -127,7 +118,7 @@ CLogger.Instance.AddToWhiteList("Gameplay");
 CLogger.Instance.SetLogFilter(LogFilter.LogWhiteList);
 ```
 
-## 最佳实践
+## 使用建议
 
 - 仅保留一个集中引导（资源或代码）避免重复注册
 - 热路径优先使用 Builder 重载
@@ -139,9 +130,3 @@ CLogger.Instance.SetLogFilter(LogFilter.LogWhiteList);
 
 - Console 重复：Editor 下同时启用 ConsoleLogger 与 UnityLogger 可能重复展示，建议 Editor 跳过 ConsoleLogger 或仅保留 UnityLogger。
 - 文件无输出：确认已添加 FileLogger（默认不注册）且路径可写。
-
-## 安全与稳定
-
-- 读写锁保护后端注册/分发
-- 后端异常被隔离并记录
-- Dispose 时尽量优雅关闭
