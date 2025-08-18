@@ -2,22 +2,20 @@
 
 This project is a lightweight Unity starter template designed to serve as a foundation for new projects, integrating commonly used packages and providing support for various DI/IoC frameworks.
 
-<p align="center">
-    <br> English | <a href="README.SCH.md">简体中文</a>
-</p>
+<p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
 ## Overview
 A lightweight Unity starter template designed to serve as a foundation for new projects. This repository integrates:
 
 - **Commonly used Unity Packages** (updated to recent versions).
-- **DI/IoC framework support** with pre-configured adapters for: (All framework listed are tested in production environments.)
+- **DI/IoC framework support** with pre-configured adapters for: (All **listed frameworks have been** tested in production environments.)
   - [VContainer](https://github.com/hadashiA/VContainer)
   - [StrangeIoC](https://github.com/strangeioc/strangeioc)
   - [Extenject(Zenject)](https://github.com/Mathijs-Bakker/Extenject) (no longer actively maintained.)
 > Since the author of [**Zenject**](https://github.com/Mathijs-Bakker/Extenject) announced the [discontinuation of project updates](https://github.com/Mathijs-Bakker/Extenject/issues/73), I recommend trying [**VContainer**](https://github.com/hadashiA/VContainer). If you prefer a higher degree of customization for your project, [**StrangeIoC**](https://github.com/strangeioc/strangeioc) is a better choice. If you decide to use [**Zenject**](https://github.com/Mathijs-Bakker/Extenject), [**MessagePipe**](https://github.com/Cysharp/MessagePipe) is a compatible messaging framework that works well with it.
 ## DI Framework Selection
 Switch between Git branches to explore implementation examples for each DI framework.</br>
-Note: **GameplayFramework** and **Factory** have DI sample.</br>
+Note: The **GameplayFramework** and **Factory** modules **include** DI samples.</br>
 <img src="./Docs/ProjectDescription/Main/Des_01.png" alt="Branch Select" style="width: 50%; height: auto; max-width: 360px;" />
 
 ## Usage
@@ -28,7 +26,7 @@ This repository can be used in two primary ways: as a complete template for a ne
 If you intend to use this repository as a starter for a new Unity project, follow these steps to rename it:
 
 1.  **Locate the Renaming Tool**: Find the `rename_project` Go script or `.exe` executable inside the `Tools/` directory.
-2.  **Move the Renaming Tool**: Copy the `rename_project`'s script or executable into the `UnityStarter/` directory.
+2.  **Move the Renaming Tool**: Copy the `rename_project` script or executable into the `UnityStarter/` directory.
 3.  **Run the Tool**: Execute the script. It will automatically update project-specific components like namespaces and assembly definitions.
 4.  **Rename Manually**: Finally, manually rename the `UnityStarter/` root folder to your desired project name.
 
@@ -65,3 +63,10 @@ The main source code for the modules is located in the `UnityStarter/Assets/Thir
     │   └── ...
     ├── Packages/                       # Package manifests and configurations
     └── ProjectSettings/                # Unity project settings
+```
+
+## Other Open Source Projects Based on This Project
+- [x] [Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse)
+A collection of all common rhythm game mechanics and gameplay types. This project is currently in active development.
+- [ ] [Unity Gameplay Ability System Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
+An example project of a UE-like GAS (Gameplay Ability System) for Unity. The project uses older technology and is planned to be refactored based on UnityStarter.
