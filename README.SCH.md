@@ -2,9 +2,7 @@
 
 本项目是一个轻量级的 Unity 启动模板，旨在作为新项目的基础框架，整合了常用的开源包并为多种 DI/IoC 框架提供了支持。
 
-<p align="center">
-    <br> <a href="README.md">English</a> | 简体中文
-</p>
+<p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
 ## 概述
 一个轻量级的 Unity 启动模板，旨在作为新项目的基础框架。本仓库整合了以下内容：
@@ -67,3 +65,9 @@
     │   └── ...
     ├── Packages/                       # 包清单与配置
     └── ProjectSettings/                # Unity 项目设置
+```
+
+## 基于此项目的其他开源项目
+
+- [x] [Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse) 一款集合所有常见音乐游戏玩法的开源项目，目前还在开发中。
+- [ ] [Unity Gameplay Ability System Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample) 为 Unity 设计的类虚幻引擎 GAS 系统的示例项目，目前使用旧版技术，计划基于此项目重构。
