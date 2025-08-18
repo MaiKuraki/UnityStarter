@@ -9,7 +9,6 @@ DI-first, interface-driven asset management abstraction for Unity. Default provi
 - Unity 2022.3+
 - Required: `com.tuyoogame.yooasset`
 - Optional: `com.cysharp.unitask`, `jp.hadashikick.vcontainer`, `com.mackysoft.navigathena`, `com.cyclonegames.factory`, `com.cyclone-games.logger`, `com.harumak.addler`
-- Macros are auto-defined via asmdef versionDefines when packages are present
 
 ## Quick Start
 
