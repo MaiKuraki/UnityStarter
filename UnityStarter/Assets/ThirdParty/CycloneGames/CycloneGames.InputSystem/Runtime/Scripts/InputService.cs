@@ -1,3 +1,4 @@
+using CycloneGames.Logger;
 using R3;
 using ReactiveInputSystem;
 using System;
@@ -60,7 +61,7 @@ namespace CycloneGames.InputSystem.Runtime
             // AND that it hasn't already been claimed by another player.
             if (IsDeviceRequiredAndAvailable(device))
             {
-                Debug.Log($"[InputService P{PlayerId}] New required device '{device.displayName}' connected. Pairing...");
+                CLogger.LogInfo($"[InputService P{PlayerId}] New required device '{device.displayName}' connected. Pairing...");
                 InputUser.PerformPairingWithDevice(device, User);
             }
         }
@@ -75,7 +76,15 @@ namespace CycloneGames.InputSystem.Runtime
 
             // Check if the device layout matches any of our required layouts.
             // Using IsFirstLayoutBasedOnSecond is robust, as it handles inheritance (e.g., an XInputController is also a Gamepad).
-            bool isRequired = _requiredLayouts.Any(layout => UnityEngine.InputSystem.InputSystem.IsFirstLayoutBasedOnSecond(device.layout, layout));
+            bool isRequired = false;
+            foreach (var layout in _requiredLayouts)
+            {
+                if (UnityEngine.InputSystem.InputSystem.IsFirstLayoutBasedOnSecond(device.layout, layout))
+                {
+                    isRequired = true;
+                    break;
+                }
+            }
 
             if (!isRequired) return false;
 
@@ -278,14 +287,28 @@ namespace CycloneGames.InputSystem.Runtime
                     };
                     var action = map.AddAction(bindingConfig.ActionName, actionType);
 
-                    foreach (var path in bindingConfig.DeviceBindings) action.AddBinding(path);
+                    foreach (var path in bindingConfig.DeviceBindings)
+                    {
+                        if (!TryAddInline2DVectorComposite(action, path))
+                        {
+                            action.AddBinding(path);
+                        }
+                    }
 
                     actionsByMapAndName[key] = action;
 
                     if (inferredType == ActionValueType.Vector2)
                     {
                         var subject = new Subject<Vector2>();
-                        action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<Vector2>()).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                        action.PerformedAsObservable(token)
+                            .Select(ctx =>
+                            {
+                                var v = ctx.ReadValue<Vector2>();
+                                if (v.sqrMagnitude > 1f) v = v.normalized; // normalize digital diagonals to avoid sqrt(2) speed-up
+                                return v;
+                            })
+                            .Subscribe(subject.AsObserver())
+                            .AddTo(_actionWiringSubscriptions);
                         action.CanceledAsObservable(token).Select(_ => Vector2.zero).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
                         _vector2Subjects[(ctxConfig.ActionMap, action.name)] = subject;
                     }
@@ -305,6 +328,44 @@ namespace CycloneGames.InputSystem.Runtime
                 }
             }
             return asset;
+        }
+
+        /// <summary>
+        /// If the provided path is an inline 2DVector composite specification, expands it into a proper composite binding.
+        /// Recognized part names are Unity's fixed composite parts: "up", "down", "left", "right". Returns true if handled.
+        /// Example supported syntax: "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)".
+        /// </summary>
+        private static bool TryAddInline2DVectorComposite(InputAction action, string path)
+        {
+            const string compositePrefix = "2DVector(";
+            if (string.IsNullOrEmpty(path) || !path.StartsWith(compositePrefix, StringComparison.OrdinalIgnoreCase) || !path.EndsWith(")"))
+            {
+                return false;
+            }
+
+            var inner = path.Substring(compositePrefix.Length, path.Length - compositePrefix.Length - 1);
+            var segments = inner.Split(',');
+            string mode = null, up = null, down = null, left = null, right = null;
+            for (int i = 0; i < segments.Length; i++)
+            {
+                var seg = segments[i].Trim();
+                int eq = seg.IndexOf('=');
+                if (eq <= 0 || eq >= seg.Length - 1) continue;
+                var key = seg.Substring(0, eq).Trim();
+                var val = seg.Substring(eq + 1).Trim();
+                if (string.Equals(key, "mode", StringComparison.OrdinalIgnoreCase)) mode = val;
+                else if (string.Equals(key, "up", StringComparison.OrdinalIgnoreCase)) up = val;
+                else if (string.Equals(key, "down", StringComparison.OrdinalIgnoreCase)) down = val;
+                else if (string.Equals(key, "left", StringComparison.OrdinalIgnoreCase)) left = val;
+                else if (string.Equals(key, "right", StringComparison.OrdinalIgnoreCase)) right = val;
+            }
+            var header = mode != null ? $"2DVector(mode={mode})" : "2DVector";
+            var composite = action.AddCompositeBinding(header);
+            if (!string.IsNullOrEmpty(up)) composite.With("up", up);
+            if (!string.IsNullOrEmpty(down)) composite.With("down", down);
+            if (!string.IsNullOrEmpty(left)) composite.With("left", left);
+            if (!string.IsNullOrEmpty(right)) composite.With("right", right);
+            return true;
         }
     }
 }
