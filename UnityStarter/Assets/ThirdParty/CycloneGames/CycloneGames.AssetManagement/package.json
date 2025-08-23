@@ -1,5 +1,5 @@
 {
-  "name": "com.cyclonegames.assetmanagement",
+  "name": "com.cyclone-games.assetmanagement",
   "version": "1.0.0",
   "displayName": "CycloneGames.AssetManagement",
   "description": "Interface-first, DI-friendly unified asset management for Unity. Default provider wraps YooAsset with zero-GC hot paths, robust update/download flows, Navigathena scene integration (optional).",
