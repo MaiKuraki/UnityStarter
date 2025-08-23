@@ -1,14 +1,16 @@
 {
-    "name": "CycloneGames.UIFramework",
+    "name": "CycloneGames.UIFramework.Samples",
     "rootNamespace": "",
     "references": [
-        "Unity.ResourceManager",
         "UniTask",
-        "CycloneGames.Logger",
+        "LitMotion",
+        "CycloneGames.UIFramework",
         "CycloneGames.Service",
         "CycloneGames.Factory.Runtime",
         "CycloneGames.AssetManagement",
-        "LitMotion"
+        "CycloneGames.Utility.Runtime",
+        "Unity.Addressables",
+        "Unity.ResourceManager"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

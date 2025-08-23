@@ -1,4 +1,6 @@
 using UnityEngine;
+using Cysharp.Threading.Tasks;
+using System.Threading;
 
 namespace CycloneGames.UIFramework
 {
@@ -11,6 +13,15 @@ namespace CycloneGames.UIFramework
         public string WindowName => windowNameInternal;
         
         private IUIWindowState currentState;
+        private CancellationTokenSource openCts;
+        private CancellationTokenSource closeCts;
+        private IUIWindowTransitionDriver _transitionDriver; // Optional external transition driver
+
+        // Shared state instances to avoid per-open allocations
+        private static readonly OpeningState OpeningStateShared = new OpeningState();
+        private static readonly OpenedState OpenedStateShared = new OpenedState();
+        private static readonly ClosingState ClosingStateShared = new ClosingState();
+        private static readonly ClosedState ClosedStateShared = new ClosedState();
         private UILayer parentLayerInternal;
         public UILayer ParentLayer => parentLayerInternal; // Public getter
 
@@ -58,6 +69,38 @@ namespace CycloneGames.UIFramework
             OnFinishedClose();
         }
 
+        /// <summary>
+        /// Closes the window asynchronously with cancellation.
+        /// </summary>
+        public async UniTask CloseAsync(CancellationToken externalToken)
+        {
+            if (_isDestroying) return;
+            // cancel any ongoing open
+            openCts?.Cancel();
+            openCts?.Dispose();
+            openCts = null;
+
+            closeCts?.Dispose();
+            closeCts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
+            var ct = closeCts.Token;
+
+            OnStartClose();
+            if (_transitionDriver != null)
+            {
+                await _transitionDriver.PlayCloseAsync(this, ct);
+            }
+            if (ct.IsCancellationRequested) return;
+            OnFinishedClose();
+        }
+
+        /// <summary>
+        /// Assigns an external transition driver (e.g., DOTween/Animator based) for open/close.
+        /// </summary>
+        public void SetTransitionDriver(IUIWindowTransitionDriver driver)
+        {
+            _transitionDriver = driver;
+        }
+
         private void ChangeState(IUIWindowState newState)
         {
             if (currentState == newState && newState != null) return; // Avoid re-entering the same state if logic allows
@@ -71,7 +114,7 @@ namespace CycloneGames.UIFramework
         protected virtual void OnStartOpen()
         {
             if (_isDestroying) return;
-            ChangeState(new OpeningState());
+            ChangeState(OpeningStateShared);
             // Typically, make the GameObject active if it's not.
             // Handled by OpeningState.OnEnter for this example.
         }
@@ -79,13 +122,13 @@ namespace CycloneGames.UIFramework
         protected virtual void OnFinishedOpen()
         {
             if (_isDestroying) return;
-            ChangeState(new OpenedState());
+            ChangeState(OpenedStateShared);
         }
 
         protected virtual void OnStartClose()
         {
             // No need to check _isDestroying here as Close() method does it.
-            ChangeState(new ClosingState());
+            ChangeState(ClosingStateShared);
         }
 
         protected virtual void OnFinishedClose()
@@ -95,7 +138,7 @@ namespace CycloneGames.UIFramework
 
             _isDestroying = true; // Mark that destruction process has started from logical close
 
-            ChangeState(new ClosedState());
+            ChangeState(ClosedStateShared);
             
             // The window is responsible for destroying its GameObject.
             // UILayer will be notified via this window's OnDestroy method.
@@ -122,6 +165,15 @@ namespace CycloneGames.UIFramework
         /// <returns>A UniTask that completes when the window's opening transition is finished.</returns>
         internal virtual async Cysharp.Threading.Tasks.UniTask Open()
         {
+            // cancel any closing in progress
+            closeCts?.Cancel();
+            closeCts?.Dispose();
+            closeCts = null;
+            // set new open CTS
+            openCts?.Dispose();
+            openCts = new CancellationTokenSource();
+            var ct = openCts.Token;
+
             // The opening process starts.
             OnStartOpen();
 
@@ -130,12 +182,41 @@ namespace CycloneGames.UIFramework
             // For this example, we simulate an instant transition.
             // In a real implementation, you might await a DOTween sequence, a Unity animation, or a simple delay.
             // e.g., await Cysharp.Threading.Tasks.UniTask.Delay(System.TimeSpan.FromSeconds(0.5f));
+            if (_transitionDriver != null)
+            {
+                await _transitionDriver.PlayOpenAsync(this, ct);
+            }
             
-            // The opening process has finished.
+            // Allow derived classes to await custom animations; here it's immediate
+            if (ct.IsCancellationRequested) return;
             OnFinishedOpen();
             
             // The task is completed, signaling that the window is fully open.
             await Cysharp.Threading.Tasks.UniTask.CompletedTask;
+        }
+
+        /// <summary>
+        /// Opens the window with an external cancellation token.
+        /// </summary>
+        public async UniTask OpenAsync(CancellationToken externalToken)
+        {
+            // cancel any closing in progress
+            closeCts?.Cancel();
+            closeCts?.Dispose();
+            closeCts = null;
+
+            openCts?.Dispose();
+            openCts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
+            var ct = openCts.Token;
+
+            OnStartOpen();
+            if (_transitionDriver != null)
+            {
+                await _transitionDriver.PlayOpenAsync(this, ct);
+            }
+            if (ct.IsCancellationRequested) return;
+            OnFinishedOpen();
+            await UniTask.CompletedTask;
         }
 
         protected virtual void Update()
@@ -149,6 +230,12 @@ namespace CycloneGames.UIFramework
         protected virtual void OnDestroy()
         {
             _isDestroying = true; // Ensure flag is set if destruction is initiated externally (e.g., scene unload)
+            openCts?.Cancel();
+            openCts?.Dispose();
+            openCts = null;
+            closeCts?.Cancel();
+            closeCts?.Dispose();
+            closeCts = null;
             
             // Debug.Log($"[UIWindow] OnDestroy called for {WindowName}", this);
 
