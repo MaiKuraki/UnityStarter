@@ -1,6 +1,8 @@
 using System;
 using CycloneGames.Factory.Runtime; // For IUnityObjectSpawner
 using CycloneGames.Service; // For IAssetPathBuilderFactory, IMainCameraService
+using CycloneGames.AssetManagement;
+using CycloneGames.AssetManagement.Integrations.Common;
 
 namespace CycloneGames.UIFramework
 {
@@ -40,6 +42,7 @@ namespace CycloneGames.UIFramework
         (float, float) GetRootCanvasSize();
 
         void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService);
+        void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService, IAssetPackage package);
     }
 
     public class UIService : IDisposable, IUIService
@@ -69,6 +72,11 @@ namespace CycloneGames.UIFramework
             Initialize(factory, spawner, cameraService);
         }
 
+        public UIService(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService, IAssetPackage package)
+        {
+            Initialize(factory, spawner, cameraService, package);
+        }
+
         public void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService)
         {
             if (isInitialized)
@@ -85,12 +93,30 @@ namespace CycloneGames.UIFramework
             this.objectSpawner = spawner;
             this.mainCameraService = cameraService;
 
-            InitializeUIManager();
+            InitializeUIManager(null);
+            isInitialized = true;
+        }
+
+        public void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService, IAssetPackage package)
+        {
+            if (isInitialized)
+            {
+                UnityEngine.Debug.LogWarning($"{DEBUG_FLAG} UIService already initialized. Operation aborted.");
+                return;
+            }
+            if (factory == null) throw new ArgumentNullException(nameof(factory));
+            if (spawner == null) throw new ArgumentNullException(nameof(spawner));
+
+            this.assetPathBuilderFactory = factory;
+            this.objectSpawner = spawner;
+            this.mainCameraService = cameraService;
+
+            InitializeUIManager(package);
             isInitialized = true;
         }
 
         // This method could also be an explicit Init if dependencies aren't constructor-injected.
-        private void InitializeUIManager()
+        private void InitializeUIManager(IAssetPackage package)
         {
             // Try to find an existing UIManager in the scene.
             uiManagerInstance = UnityEngine.GameObject.FindFirstObjectByType<UIManager>();
@@ -109,7 +135,8 @@ namespace CycloneGames.UIFramework
             }
 
             // Initialize the UIManager instance with the provided dependencies.
-            uiManagerInstance.Initialize(assetPathBuilderFactory, objectSpawner, mainCameraService);
+            var pkg = package ?? AssetManagementLocator.DefaultPackage;
+            uiManagerInstance.Initialize(assetPathBuilderFactory, objectSpawner, mainCameraService, pkg);
         }
 
         private bool CheckInitialization()
@@ -142,6 +169,21 @@ namespace CycloneGames.UIFramework
         {
             if (!CheckInitialization()) return;
             uiManagerInstance.CloseUI(windowName);
+        }
+
+        /// <summary>
+        /// Optionally open and await until the window reports Opened (strict sequencing use-cases).
+        /// </summary>
+        public async Cysharp.Threading.Tasks.UniTask<UIWindow> OpenUIAndWait(string windowName)
+        {
+            if (!CheckInitialization()) return null;
+            var tcs = new Cysharp.Threading.Tasks.UniTaskCompletionSource<UIWindow>();
+            uiManagerInstance.OpenUI(windowName, w =>
+            {
+                if (w == null) tcs.TrySetResult(null);
+                else tcs.TrySetResult(w);
+            });
+            return await tcs.Task;
         }
 
         public UIWindow GetUIWindow(string windowName)

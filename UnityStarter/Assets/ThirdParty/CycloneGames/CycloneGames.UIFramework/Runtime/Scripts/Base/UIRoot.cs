@@ -2,14 +2,14 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace CycloneGames.UIFramework // Added namespace
+namespace CycloneGames.UIFramework
 {
     public class UIRoot : MonoBehaviour
     {
         private const string DEBUG_FLAG = "[UIRoot]";
         [SerializeField] private Camera uiCamera;
         [SerializeField] private Canvas rootCanvas;
-        [SerializeField] private List<UILayer> layerList = new List<UILayer>(); // Initialize to avoid null issues
+        [SerializeField] private List<UILayer> layerList = new List<UILayer>();
 
         public Camera UICamera => uiCamera;
         public Canvas UIRootCanvas => rootCanvas;
