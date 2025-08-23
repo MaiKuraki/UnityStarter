@@ -1,6 +1,6 @@
 namespace CycloneGames.UIFramework
 {
-    // CAUTION: if you modify this interface name,
+    // NOTE: if you modify this interface name,
     // don't forget modify the link.xml file located in the CycloneGames.UIFramework/Scripts/Framework folder
     // (This comment is from original code, ensure link.xml is checked if this name changes)
     public interface IUIWindowState
