@@ -8,17 +8,20 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 func main() {
 	startTime := time.Now()
 	fmt.Println("Starting manifest.json cleanup process...")
-
-	// Print Debug info
 	fmt.Printf("Working directory: %s\n", getWorkingDir())
 
-	// List of packages to remove
+	dryRun := strings.EqualFold(os.Getenv("DRY_RUN"), "1")
+	if dryRun {
+		fmt.Println("[DRY RUN] No changes will be written. Set DRY_RUN=0 to apply.")
+	}
+
 	packagesToRemove := []string{
 		"com.unity.2d.tilemap",
 		"com.unity.ai.navigation",
@@ -46,60 +49,49 @@ func main() {
 		"com.unity.visualscripting",
 	}
 
-	// Read manifest.json
 	manifestPath := filepath.Join(".", "Packages", "manifest.json")
-	fmt.Printf("\n[1/4] Reading %s...\n", manifestPath)
-
-	if !fileExists(manifestPath) {
-		fmt.Printf("\nERROR: File not found: %s\n", manifestPath)
-		waitForExit()
-		return
-	}
-
-	data, err := os.ReadFile("./Packages/manifest.json")
+	fmt.Printf("\n[1/3] Reading %s...\n", manifestPath)
+	data, err := os.ReadFile(manifestPath)
 	if handleError(err, "Error reading file") {
 		return
 	}
 
-	// Parse JSON
-	fmt.Println("[2/4] Parsing JSON structure...")
+	fmt.Println("[2/3] Parsing JSON structure...")
 	var manifest map[string]interface{}
 	if err := json.Unmarshal(data, &manifest); handleError(err, "Invalid JSON format") {
 		return
 	}
 
-	// Process dependencies
-	fmt.Println("[3/4] Processing dependencies...")
+	fmt.Println("[3/3] Processing dependencies...")
 	removedCount := 0
 	if deps, ok := manifest["dependencies"].(map[string]interface{}); ok {
-		// Remove unused variable declaration
 		for _, pkg := range packagesToRemove {
 			if _, exists := deps[pkg]; exists {
-				delete(deps, pkg)
-				fmt.Printf("  Removed package: %s\n", pkg)
-				removedCount++
+				if dryRun {
+					fmt.Printf("  [DRY] Would remove: %s\n", pkg)
+				} else {
+					delete(deps, pkg)
+					fmt.Printf("  Removed package: %s\n", pkg)
+					removedCount++
+				}
 			}
 		}
 		manifest["dependencies"] = deps
-		fmt.Printf("\nRemoved %d/%d specified packages", removedCount, len(packagesToRemove))
-		fmt.Printf("\nRemaining dependencies: %d\n", len(deps))
+		if !dryRun {
+			updatedData, err := json.MarshalIndent(manifest, "", "  ")
+			if handleError(err, "Error marshaling JSON") {
+				return
+			}
+			if err := os.WriteFile(manifestPath, updatedData, 0644); handleError(err, "Error writing file") {
+				return
+			}
+		}
 	} else {
 		fmt.Println("Warning: No dependencies section found")
 	}
 
-	// Write modified JSON
-	fmt.Println("[4/4] Writing changes to file...")
-	updatedData, err := json.MarshalIndent(manifest, "", "  ")
-	if handleError(err, "Error marshaling JSON") {
-		return
-	}
-
-	if err := os.WriteFile("./Packages/manifest.json", updatedData, 0644); handleError(err, "Error writing file") {
-		return
-	}
-
-	// Display summary
-	fmt.Printf("\nOperation completed successfully in %v\n", time.Since(startTime).Round(time.Millisecond))
+	fmt.Printf("\nOperation completed%v in %v\n",
+		map[bool]string{true: " (dry-run)"}[dryRun], time.Since(startTime).Round(time.Millisecond))
 	fmt.Printf("Total packages removed: %d\n\n", removedCount)
 
 	waitForExit()
@@ -111,11 +103,6 @@ func getWorkingDir() string {
 		return fmt.Sprintf("[Error getting working directory: %v]", err)
 	}
 	return dir
-}
-
-func fileExists(path string) bool {
-	_, err := os.Stat(path)
-	return !os.IsNotExist(err)
 }
 
 func handleError(err error, message string) bool {
