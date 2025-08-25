@@ -2,6 +2,7 @@
     "name": "CycloneGames.Factory.Samples",
     "rootNamespace": "",
     "references": [
+        "UniTask",
         "CycloneGames.Factory.Runtime"
     ],
     "includePlatforms": [],

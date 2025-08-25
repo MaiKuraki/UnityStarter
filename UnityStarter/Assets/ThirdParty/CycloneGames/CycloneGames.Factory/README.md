@@ -5,22 +5,22 @@
 
 High-performance, low-GC factory and object-pooling utilities for Unity and pure C#. Designed to be DI-friendly and easy to adopt incrementally.
 
-### What is inside
-- **Factory interfaces**: `IFactory<TValue>`, `IFactory<TArg, TValue>` for object creation; `IUnityObjectSpawner` for Unity `Object` instantiation.
-- **Default spawner**: `DefaultUnityObjectSpawner` uses `Object.Instantiate` and is safe for non-DI usage or as a DI default.
-- **Prefab factory**: `MonoPrefabFactory<T>` creates disabled instances from a prefab via an injected `IUnityObjectSpawner` (optionally sets parent).
-- **Object pool**: `ObjectPool<TParam1, TValue>` is a thread-safe, auto-scaling pool. Requires `TValue : IPoolable<TParam1, IMemoryPool>, ITickable`.
+### Features
+- **Factory interfaces**: `IFactory<TValue>`, `IFactory<TArg, TValue>` for creation; `IUnityObjectSpawner` for Unity `Object` instantiation.
+- **Default spawner**: `DefaultUnityObjectSpawner` wraps `Object.Instantiate` (safe default for non-DI or as DI binding).
+- **Prefab factory**: `MonoPrefabFactory<T>` creates disabled instances from a prefab via an injected `IUnityObjectSpawner` (optional parent).
+- **Object pool**: `ObjectPool<TParam1, TValue>` is thread-safe and auto-scaling. Requires `TValue : IPoolable<TParam1, IMemoryPool>, ITickable`.
+- **Low-GC hot paths**: swap-and-pop O(1) despawn; deferred despawns during `Tick()` to reduce lock contention.
 
-### Goals
-- **Minimal GC**: Pooling-first design, no hidden allocations in hot paths.
-- **Performance & safety**: O(1) despawn via swap-and-pop, reader/writer locks, deferred despawns during Tick to avoid lock contention.
-- **Extensibility**: Small interfaces, easy to integrate with DI containers (VContainer, Zenject, etc.).
+### Compatibility
+- Unity 2022.3+
+- .NET 4.x (Unity) / modern .NET (for Pure C# samples)
 
 ### Install
-This repo embeds the package under `Assets/ThirdParty`. The package name is `com.cyclone-games.factory` (Unity 2022.3+). You can keep it embedded or reference it via UPM in your own projects.
+This repo embeds the package under `Assets/ThirdParty`. Package name: `com.cyclone-games.factory`.
+- Keep it embedded, or reference via UPM in your own projects.
 
 ### Quick start
-
 1) Pure C# factory
 ```csharp
 using CycloneGames.Factory.Runtime;
@@ -55,12 +55,12 @@ public class MySpawner
 using UnityEngine;
 using CycloneGames.Factory.Runtime;
 
-// Pooled item must implement both IPoolable<TParam1, IMemoryPool> and ITickable
+// Pooled item must implement IPoolable<TParam1, IMemoryPool> and ITickable
 public sealed class Bullet : MonoBehaviour, IPoolable<BulletData, IMemoryPool>, ITickable
 {
     private IMemoryPool owningPool;
-    public void OnSpawned(BulletData data, IMemoryPool pool) { owningPool = pool; /* init state */ }
-    public void OnDespawned() { owningPool = null; /* reset state */ }
+    public void OnSpawned(BulletData data, IMemoryPool pool) { owningPool = pool; /* init */ }
+    public void OnDespawned() { owningPool = null; /* reset */ }
     public void Tick() { /* per-frame update; call owningPool.Despawn(this) when done */ }
 }
 
@@ -74,31 +74,40 @@ var pool = new ObjectPool<BulletData, Bullet>(factory, initialCapacity: 16);
 // Use
 var bullet = pool.Spawn(new BulletData { Position = start, Velocity = dir });
 // In your game loop
-pool.Tick(); // Ticks active bullets and handles auto-shrink
+pool.Tick();
 ```
 
-### With a DI container
-- Bind `IUnityObjectSpawner` to `DefaultUnityObjectSpawner` (or your own implementation that integrates Addressables or ECS).
+### DI containers
+- Bind `IUnityObjectSpawner` → `DefaultUnityObjectSpawner` (or your own spawner integrating Addressables/ECS).
 - Bind your `IFactory<T>` or use `MonoPrefabFactory<T>` where appropriate.
-- Pools can be registered as singletons or scoped services depending on lifecycle needs.
+- Pools can be singletons or scoped depending on lifecycle.
 
-Example (pseudo):
 ```csharp
 builder.Register<IUnityObjectSpawner, DefaultUnityObjectSpawner>(Lifetime.Singleton);
 builder.Register<IFactory<Bullet>>(c => new MonoPrefabFactory<Bullet>(
     c.Resolve<IUnityObjectSpawner>(), bulletPrefab, parent)).AsSelf();
 ```
 
-### Auto-scaling object pool notes
+### Object pool notes
 - Expands when empty by `expansionFactor` (default 50% of current total).
 - Shrinks after `shrinkCooldownTicks`, keeping a buffer above the recent high-water mark.
-- `Tick()` performs: read-locked ticking of active items, write-locked shrink check, and processes deferred despawns safely.
+- `Tick()` reads active items, processes deferred despawns, and evaluates shrink.
 
 ### Samples
 Under `Samples/`:
-- `PureCSharp/` shows a data-only particle system using `ObjectPool`.
-- `PureUnity/` shows spawning `MonoBehaviour` prefabs via `IUnityObjectSpawner` and a minimal manager.
+- `PureCSharp/` data-only systems using `ObjectPool`.
+- `PureUnity/` minimal `IUnityObjectSpawner` prefab spawning.
+- `Benchmarks/PureCSharp/` pure C# factory/pooling benchmarks.
+- `Benchmarks/Unity/` Unity GameObject pooling vs Instantiate, memory profiling, stress tests.
 
-### Tips
-- For zero-GC and high-performance logging, pair with `CycloneGames.Logger` (also in this repo) which uses pooled messages.
-- Gameplay modules in this repo already depend on `CycloneGames.Factory.Runtime`, demonstrating integration patterns.
+### Benchmarks
+- Unity and Pure C# benchmark samples live under `Samples/Benchmarks/` and save reports to `BenchmarkReports/` (`.txt`, `.md`, `.SCH.md`).
+- Benchmark samples are AI-authored; other package code is authored by the maintainer.
+
+### Performance expectations (indicative)
+- **CPU**: pooling can be 2–10× faster than `new` for complex objects
+- **Memory**: 50–90% reduction in GC allocations
+- **Unity GameObjects**: 5–20× faster than `Instantiate()`/`Destroy()` in typical scenarios
+
+### License
+See repository license.
