@@ -16,5 +16,26 @@
     "email": "",
     "url": ""
   },
-  "samples": []
+  "samples": [
+    {
+      "displayName": "Pure C# Benchmarks",
+      "description": "Performance benchmarks for pure C# factory and object pooling scenarios",
+      "path": "Samples/Benchmarks/PureCSharp"
+    },
+    {
+      "displayName": "Unity GameObject Benchmarks",
+      "description": "Performance benchmarks for Unity-specific GameObject pooling and factory patterns",
+      "path": "Samples/Benchmarks/Unity"
+    },
+    {
+      "displayName": "Basic Pure C# Example",
+      "description": "Simple data-only particle system using ObjectPool",
+      "path": "Samples/PureCSharp"
+    },
+    {
+      "displayName": "Basic Unity Example",
+      "description": "MonoBehaviour prefab spawning via IUnityObjectSpawner",
+      "path": "Samples/PureUnity"
+    }
+  ]
 }
