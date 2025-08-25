@@ -1,9 +1,7 @@
 {
     "name": "CycloneGames.Factory.Runtime",
     "rootNamespace": "",
-    "references": [
-        "CycloneGames.Logger"
-    ],
+    "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
