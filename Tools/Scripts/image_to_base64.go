@@ -1,22 +1,5 @@
-// To run this Go file, you need to install the clipboard package, run the following command:
-// go get github.com/atotto/clipboard
-/*
-	# 1. Create a project directory
-	mkdir image_to_base64
-	cd image_to_base64
-
-	# 2. Initialize Go module
-	go mod init image_to_base64
-
-	# 3. Install clipboard package
-	go get github.com/atotto/clipboard
-
-	# 4. Create main.go file and add your code
-	# Use a text editor to open and paste the code, then save the file.
-
-	# 5. Run the program
-	go run main.go
-**/
+// To build directly without modules or external libs.
+// This tool copies Base64 to clipboard using OS commands (Windows: clip; macOS: pbcopy; Linux: xclip/wl-copy if available).
 
 package main
 
@@ -24,64 +7,123 @@ import (
 	"bufio"
 	"encoding/base64"
 	"fmt"
-	"io"
 	"log"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
-
-	"github.com/atotto/clipboard"
 )
 
+func normalizePath(p string) string {
+	p = strings.TrimSpace(p)
+	p = strings.Trim(p, "\"\u00a0")
+	if strings.HasPrefix(p, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			p = filepath.Join(home, strings.TrimPrefix(p, "~"))
+		}
+	}
+	return p
+}
+
+func copyToClipboard(s string) error {
+	switch runtime.GOOS {
+	case "windows":
+		cmd := exec.Command("cmd", "/c", "clip")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return err
+		}
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		if _, err := stdin.Write([]byte(s)); err != nil {
+			return err
+		}
+		stdin.Close()
+		return cmd.Wait()
+	case "darwin":
+		cmd := exec.Command("pbcopy")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return err
+		}
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		if _, err := stdin.Write([]byte(s)); err != nil {
+			return err
+		}
+		stdin.Close()
+		return cmd.Wait()
+	default: // linux/bsd
+		// Try wl-copy then xclip
+		if _, err := exec.LookPath("wl-copy"); err == nil {
+			cmd := exec.Command("wl-copy")
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				return err
+			}
+			if err := cmd.Start(); err != nil {
+				return err
+			}
+			if _, err := stdin.Write([]byte(s)); err != nil {
+				return err
+			}
+			stdin.Close()
+			return cmd.Wait()
+		}
+		if _, err := exec.LookPath("xclip"); err == nil {
+			cmd := exec.Command("xclip", "-selection", "clipboard")
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				return err
+			}
+			if err := cmd.Start(); err != nil {
+				return err
+			}
+			if _, err := stdin.Write([]byte(s)); err != nil {
+				return err
+			}
+			stdin.Close()
+			return cmd.Wait()
+		}
+		return fmt.Errorf("no clipboard tool found (tried wl-copy/xclip)")
+	}
+}
+
 func main() {
-	// Create a command line input prompt
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Println("Please enter the path of the image file (you can drag the image here and press enter):")
 
-	// Read the user's input path
 	imagePath, err := reader.ReadString('\n')
 	if err != nil {
 		log.Fatalf("Failed to read input: %v", err)
 	}
+	imagePath = normalizePath(imagePath)
 
-	// Remove the newline character and any extra spaces from the path
-	imagePath = strings.TrimSpace(imagePath)
-
-	// Open the image file
-	file, err := os.Open(imagePath)
-	if err != nil {
-		log.Fatalf("Unable to open file: %v", err)
-	}
-	defer file.Close()
-
-	// Read the content of the image file
-	imageData, err := io.ReadAll(file)
+	data, err := os.ReadFile(imagePath)
 	if err != nil {
 		log.Fatalf("Unable to read file: %v", err)
 	}
 
-	// Convert the image content to Base64
-	base64String := base64.StdEncoding.EncodeToString(imageData)
+	base64String := base64.StdEncoding.EncodeToString(data)
 
-	// Print the result
 	fmt.Println("\nBase64 encoded string:")
 	fmt.Println(base64String)
 
-	// Copy the Base64 string to the clipboard
-	err = clipboard.WriteAll(base64String)
-	if err != nil {
-		log.Fatalf("Unable to copy Base64 string to clipboard: %v", err)
+	if err := copyToClipboard(base64String); err != nil {
+		fmt.Printf("\nWarning: failed to copy to clipboard: %v\n", err)
+	} else {
+		fmt.Println("\nBase64 string has been automatically copied to the clipboard!")
 	}
-	fmt.Println("\nBase64 string has been automatically copied to the clipboard!")
 
-	// Optional: Save the Base64 string to a text file
-	outputFile := "output_base64.txt"
-	err = os.WriteFile(outputFile, []byte(base64String), 0644)
-	if err != nil {
+	outName := filepath.Base(imagePath) + ".base64.txt"
+	if err := os.WriteFile(outName, []byte(base64String), 0644); err != nil {
 		log.Fatalf("Unable to save Base64 string to file: %v", err)
 	}
-	fmt.Printf("\nBase64 string has been saved to file: %s\n", outputFile)
+	fmt.Printf("\nBase64 string has been saved to file: %s\n", outName)
 
-	// Wait for the user to press enter before exiting
 	fmt.Println("\nPress the enter key to close the program...")
-	reader.ReadString('\n') // Wait for user to press enter
+	reader.ReadString('\n')
 }
