@@ -72,5 +72,15 @@ namespace CycloneGames.InputSystem.Runtime
         
         [YamlMember("deviceBindings")]
         public List<string> DeviceBindings { get; set; }
+
+        // Optional: when set (> 0) and Type == Button, emits a separate long-press event
+        // after holding the button for at least the specified number of milliseconds.
+        [YamlMember("longPressMs")]
+        public int LongPressMs { get; set; }
+
+        // Optional: for Float actions (e.g., Trigger) define the actuation threshold (0-1)
+        // above which the value is considered "pressed" for long-press timing. Default 0.5.
+        [YamlMember("longPressValueThreshold")]
+        public float LongPressValueThreshold { get; set; }
     }
 }
