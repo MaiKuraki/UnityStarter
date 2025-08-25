@@ -15,6 +15,7 @@ namespace CycloneGames.InputSystem.Editor
         private InputConfigurationSO _configSO;
         private SerializedObject _serializedConfig;
         private Vector2 _scrollPosition;
+        private GUIStyle _overflowLabelStyle;
 
         private string _defaultConfigPath;
         private string _userConfigPath;
@@ -40,6 +41,15 @@ namespace CycloneGames.InputSystem.Editor
 
         private void OnGUI()
         {
+            if (_overflowLabelStyle == null)
+            {
+                _overflowLabelStyle = new GUIStyle(EditorStyles.label)
+                {
+                    clipping = TextClipping.Overflow,
+                    wordWrap = false,
+                    alignment = TextAnchor.MiddleLeft
+                };
+            }
             DrawToolbar();
             DrawStatusBar();
 
@@ -49,9 +59,87 @@ namespace CycloneGames.InputSystem.Editor
             {
                 _serializedConfig.Update();
 
-                // This will now draw the entire hierarchy as expandable lists, as intended.
+                // Draw join action
                 EditorGUILayout.PropertyField(_serializedConfig.FindProperty("_joinAction"), true);
-                EditorGUILayout.PropertyField(_serializedConfig.FindProperty("_playerSlots"), true);
+
+                // Draw player slots with conditional UI for long-press fields
+                var slotsProp = _serializedConfig.FindProperty("_playerSlots");
+                EditorGUILayout.PropertyField(slotsProp, new GUIContent("Player Slots"), false);
+                if (slotsProp.isExpanded)
+                {
+                    EditorGUI.indentLevel++;
+                    for (int i = 0; i < slotsProp.arraySize; i++)
+                    {
+                        var slotProp = slotsProp.GetArrayElementAtIndex(i);
+                        EditorGUILayout.PropertyField(slotProp, new GUIContent($"Player Slot {i}"), false);
+                        if (slotProp.isExpanded)
+                        {
+                            EditorGUI.indentLevel++;
+                            var contextsProp = slotProp.FindPropertyRelative("Contexts");
+                            EditorGUILayout.PropertyField(contextsProp, new GUIContent("Contexts"), false);
+                            if (contextsProp.isExpanded)
+                            {
+                                EditorGUI.indentLevel++;
+                                for (int c = 0; c < contextsProp.arraySize; c++)
+                                {
+                                    var ctxProp = contextsProp.GetArrayElementAtIndex(c);
+                                    EditorGUILayout.PropertyField(ctxProp.FindPropertyRelative("Name"));
+                                    EditorGUILayout.PropertyField(ctxProp.FindPropertyRelative("ActionMap"));
+
+                                    var bindingsProp = ctxProp.FindPropertyRelative("Bindings");
+                                    EditorGUILayout.PropertyField(bindingsProp, new GUIContent("Bindings"), false);
+                                    if (bindingsProp.isExpanded)
+                                    {
+                                        EditorGUI.indentLevel++;
+                                        for (int b = 0; b < bindingsProp.arraySize; b++)
+                                        {
+                                            var bindProp = bindingsProp.GetArrayElementAtIndex(b);
+                                            var typeProp = bindProp.FindPropertyRelative("Type");
+                                            EditorGUILayout.PropertyField(typeProp);
+                                            EditorGUILayout.PropertyField(bindProp.FindPropertyRelative("ActionName"));
+                                            EditorGUILayout.PropertyField(bindProp.FindPropertyRelative("DeviceBindings"), true);
+
+                                            var type = (CycloneGames.InputSystem.Runtime.ActionValueType)typeProp.enumValueIndex;
+                                            if (type == CycloneGames.InputSystem.Runtime.ActionValueType.Button)
+                                            {
+                                                var msProp = bindProp.FindPropertyRelative("LongPressMs");
+                                                EditorGUILayout.BeginHorizontal();
+                                                EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
+                                                EditorGUILayout.PropertyField(msProp, GUIContent.none, true);
+                                                EditorGUILayout.EndHorizontal();
+                                            }
+                                            else if (type == CycloneGames.InputSystem.Runtime.ActionValueType.Float)
+                                            {
+                                                var msProp = bindProp.FindPropertyRelative("LongPressMs");
+                                                var thProp = bindProp.FindPropertyRelative("LongPressValueThreshold");
+                                                EditorGUILayout.BeginHorizontal();
+                                                EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
+                                                EditorGUILayout.PropertyField(msProp, GUIContent.none, true);
+                                                EditorGUILayout.EndHorizontal();
+                                                EditorGUILayout.BeginHorizontal();
+                                                EditorGUILayout.LabelField("Long Press Threshold (0-1)", _overflowLabelStyle, GUILayout.Width(220));
+                                                EditorGUILayout.PropertyField(thProp, GUIContent.none, true);
+                                                EditorGUILayout.EndHorizontal();
+                                            }
+                                            else
+                                            {
+                                                using (new EditorGUI.DisabledScope(true))
+                                                {
+                                                    var tmp = bindProp.FindPropertyRelative("LongPressMs");
+                                                    EditorGUILayout.IntField(new GUIContent("LongPressMs"), 0);
+                                                }
+                                            }
+                                        }
+                                        EditorGUI.indentLevel--;
+                                    }
+                                }
+                                EditorGUI.indentLevel--;
+                            }
+                            EditorGUI.indentLevel--;
+                        }
+                    }
+                    EditorGUI.indentLevel--;
+                }
 
                 _serializedConfig.ApplyModifiedProperties();
             }
@@ -236,7 +324,8 @@ namespace CycloneGames.InputSystem.Editor
                 {
                     Type = ActionValueType.Button,
                     ActionName = "JoinGame",
-                    DeviceBindings = new System.Collections.Generic.List<string> { "<Keyboard>/enter", "<Gamepad>/start" }
+                    DeviceBindings = new System.Collections.Generic.List<string> { "<Keyboard>/enter", "<Gamepad>/start" },
+                    LongPressMs = 0
                 },
                 PlayerSlots = new System.Collections.Generic.List<PlayerSlotConfig>
                 {
@@ -261,7 +350,8 @@ namespace CycloneGames.InputSystem.Editor
                                     {
                                         Type = ActionValueType.Button,
                                         ActionName = "Confirm",
-                                        DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" }
+                                        DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" },
+                                        LongPressMs = 500
                                     }
                                 }
                             }
@@ -288,7 +378,8 @@ namespace CycloneGames.InputSystem.Editor
                                      {
                                          Type = ActionValueType.Button,
                                          ActionName = "Confirm",
-                                         DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" }
+                                         DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/buttonSouth", "<Keyboard>/space" },
+                                         LongPressMs = 500
                                      }
                                 }
                             }

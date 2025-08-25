@@ -8,6 +8,7 @@ using System.Threading;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Users;
+using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.InputSystem.Runtime
 {
@@ -23,6 +24,8 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly Dictionary<string, InputContext> _registeredContexts = new();
         // Keyed by (mapName, actionName)
         private readonly Dictionary<(string map, string action), Subject<Unit>> _buttonSubjects = new();
+        private readonly Dictionary<(string map, string action), Subject<Unit>> _longPressSubjects = new();
+        private readonly Dictionary<(string map, string action), BehaviorSubject<bool>> _pressStateSubjects = new();
         private readonly Dictionary<(string map, string action), Subject<Vector2>> _vector2Subjects = new();
         private readonly Dictionary<(string map, string action), Subject<float>> _scalarSubjects = new();
         private readonly HashSet<string> _requiredLayouts = new();
@@ -149,6 +152,15 @@ namespace CycloneGames.InputSystem.Runtime
             return Observable.Empty<Unit>();
         }
 
+        public Observable<Unit> GetLongPressObservable(string actionName)
+        {
+            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            if (mapName != null && _longPressSubjects.TryGetValue((mapName, actionName), out var subject)) return subject;
+            foreach (var kv in _longPressSubjects)
+                if (kv.Key.action == actionName) return kv.Value;
+            return Observable.Empty<Unit>();
+        }
+
         public Observable<float> GetScalarObservable(string actionName)
         {
             var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
@@ -158,14 +170,29 @@ namespace CycloneGames.InputSystem.Runtime
             return Observable.Empty<float>();
         }
 
+        public Observable<bool> GetPressStateObservable(string actionName)
+        {
+            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            if (mapName != null && _pressStateSubjects.TryGetValue((mapName, actionName), out var subject)) return subject;
+            foreach (var kv in _pressStateSubjects)
+                if (kv.Key.action == actionName) return kv.Value;
+            return Observable.Empty<bool>();
+        }
+
         public Observable<Vector2> GetVector2Observable(string actionMapName, string actionName)
             => _vector2Subjects.TryGetValue((actionMapName, actionName), out var subject) ? subject : Observable.Empty<Vector2>();
 
         public Observable<Unit> GetButtonObservable(string actionMapName, string actionName)
             => _buttonSubjects.TryGetValue((actionMapName, actionName), out var subject) ? subject : Observable.Empty<Unit>();
 
+        public Observable<Unit> GetLongPressObservable(string actionMapName, string actionName)
+            => _longPressSubjects.TryGetValue((actionMapName, actionName), out var subject) ? subject : Observable.Empty<Unit>();
+
         public Observable<float> GetScalarObservable(string actionMapName, string actionName)
             => _scalarSubjects.TryGetValue((actionMapName, actionName), out var subject) ? subject : Observable.Empty<float>();
+
+        public Observable<bool> GetPressStateObservable(string actionMapName, string actionName)
+            => _pressStateSubjects.TryGetValue((actionMapName, actionName), out var subject) ? subject : Observable.Empty<bool>();
 
         public void BlockInput()
         {
@@ -200,7 +227,9 @@ namespace CycloneGames.InputSystem.Runtime
             }
 
             foreach (var s in _buttonSubjects.Values) s.Dispose();
+            foreach (var s in _longPressSubjects.Values) s.Dispose();
             foreach (var s in _vector2Subjects.Values) s.Dispose();
+            foreach (var s in _pressStateSubjects.Values) s.Dispose();
 
             User.UnpairDevicesAndRemoveUser();
             UnityEngine.InputSystem.InputSystem.onDeviceChange -= OnDeviceChanged;
@@ -261,13 +290,6 @@ namespace CycloneGames.InputSystem.Runtime
                 foreach (var bindingConfig in ctxConfig.Bindings)
                 {
                     var key = (ctxConfig.ActionMap, bindingConfig.ActionName);
-                    if (actionsByMapAndName.ContainsKey(key))
-                    {
-                        // Same action name inside the same map should aggregate bindings, not skip entirely.
-                        foreach (var path in bindingConfig.DeviceBindings) actionsByMapAndName[key].AddBinding(path);
-                        continue;
-                    }
-
                     // Backwards-compat: if Type not set (default Button), infer from bindings
                     var inferredType = bindingConfig.Type;
                     if (inferredType == ActionValueType.Button)
@@ -277,6 +299,54 @@ namespace CycloneGames.InputSystem.Runtime
                         bool looksFloat = !looksVector2 && bindingConfig.DeviceBindings.Any(b => b.Contains("Trigger"));
                         if (looksVector2) inferredType = ActionValueType.Vector2;
                         else if (looksFloat) inferredType = ActionValueType.Float;
+                    }
+
+                    if (actionsByMapAndName.ContainsKey(key))
+                    {
+                        // Same action name inside the same map should aggregate bindings.
+                        var existingAction = actionsByMapAndName[key];
+                        foreach (var path in bindingConfig.DeviceBindings) existingAction.AddBinding(path);
+
+                        // If this duplicate binding specifies long-press, ensure long-press subject is wired.
+                        if (inferredType == ActionValueType.Button && bindingConfig.LongPressMs > 0 && !_longPressSubjects.ContainsKey(key))
+                        {
+                            var longPressSubject = new Subject<Unit>();
+                            float thresholdSec = bindingConfig.LongPressMs / 1000f;
+                            float lastStartTimeDup = 0f;
+                            existingAction.StartedAsObservable(token).Subscribe(_ => lastStartTimeDup = Time.realtimeSinceStartup).AddTo(_actionWiringSubscriptions);
+                            existingAction.PerformedAsObservable(token).Subscribe(_ =>
+                            {
+                                var t = Time.realtimeSinceStartup;
+                                if (lastStartTimeDup > 0f && t - lastStartTimeDup >= thresholdSec)
+                                {
+                                    longPressSubject.OnNext(Unit.Default);
+                                }
+                            }).AddTo(_actionWiringSubscriptions);
+                            existingAction.StartedAsObservable(token).Subscribe(_ =>
+                            {
+                                var startSnapshot = Time.realtimeSinceStartup;
+                                var ct = _cancellation.Token;
+                                UniTask.Void(async () =>
+                                {
+                                    try
+                                    {
+                                        float elapsed = 0f;
+                                        while (existingAction.IsPressed() && elapsed < thresholdSec)
+                                        {
+                                            await UniTask.Yield(PlayerLoopTiming.Update, ct);
+                                            elapsed = Time.realtimeSinceStartup - startSnapshot;
+                                        }
+                                        if (existingAction.IsPressed() && elapsed >= thresholdSec)
+                                        {
+                                            longPressSubject.OnNext(Unit.Default);
+                                        }
+                                    }
+                                    catch (OperationCanceledException) { }
+                                });
+                            }).AddTo(_actionWiringSubscriptions);
+                            _longPressSubjects[key] = longPressSubject;
+                        }
+                        continue;
                     }
 
                     var actionType = inferredType switch
@@ -318,12 +388,118 @@ namespace CycloneGames.InputSystem.Runtime
                         action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<float>()).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
                         action.CanceledAsObservable(token).Select(_ => 0f).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
                         _scalarSubjects[(ctxConfig.ActionMap, action.name)] = subject;
+
+                        // Optional long-press for Float using threshold if configured
+                        int longPressMs = bindingConfig.LongPressMs;
+                        if (longPressMs > 0)
+                        {
+                            float thresholdSec = longPressMs / 1000f;
+                            float valueThreshold = bindingConfig.LongPressValueThreshold > 0f ? Mathf.Clamp01(bindingConfig.LongPressValueThreshold) : 0.5f;
+
+                            var longPressSubject = new Subject<Unit>();
+                            float activateTime = -1f;
+
+                            // Track when value crosses threshold upward (press start)
+                            action.PerformedAsObservable(token).Subscribe(ctx =>
+                            {
+                                float v = ctx.ReadValue<float>();
+                                if (activateTime < 0f && v >= valueThreshold)
+                                {
+                                    activateTime = Time.realtimeSinceStartup;
+                                    var ct = _cancellation.Token;
+                                    UniTask.Void(async () =>
+                                    {
+                                        try
+                                        {
+                                            float elapsed = 0f;
+                                            while (action.ReadValue<float>() >= valueThreshold && elapsed < thresholdSec)
+                                            {
+                                                await UniTask.Yield(PlayerLoopTiming.Update, ct);
+                                                elapsed = Time.realtimeSinceStartup - activateTime;
+                                            }
+                                            if (action.ReadValue<float>() >= valueThreshold && elapsed >= thresholdSec)
+                                            {
+                                                longPressSubject.OnNext(Unit.Default);
+                                            }
+                                        }
+                                        catch (OperationCanceledException) { }
+                                    });
+                                }
+                                else if (activateTime >= 0f && v < valueThreshold)
+                                {
+                                    activateTime = -1f; // released
+                                }
+                            }).AddTo(_actionWiringSubscriptions);
+
+                            // Reset on cancel
+                            action.CanceledAsObservable(token).Subscribe(_ => activateTime = -1f).AddTo(_actionWiringSubscriptions);
+                            _longPressSubjects[(ctxConfig.ActionMap, action.name)] = longPressSubject;
+                        }
                     }
                     else
                     {
                         var subject = new Subject<Unit>();
                         action.PerformedAsObservable(token).Select(_ => Unit.Default).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
                         _buttonSubjects[(ctxConfig.ActionMap, action.name)] = subject;
+
+                        // Press state subject: true on started, false on canceled
+                        var pressState = new BehaviorSubject<bool>(false);
+                        action.StartedAsObservable(token).Select(_ => true).Subscribe(pressState.AsObserver()).AddTo(_actionWiringSubscriptions);
+                        action.CanceledAsObservable(token).Select(_ => false).Subscribe(pressState.AsObserver()).AddTo(_actionWiringSubscriptions);
+                        _pressStateSubjects[(ctxConfig.ActionMap, action.name)] = pressState;
+
+                        // Optional long-press wiring
+                        int longPressMs = bindingConfig.LongPressMs;
+                        if (longPressMs > 0)
+                        {
+                            var longPressSubject = new Subject<Unit>();
+                            var started = action.StartedAsObservable(token).Select(_ => Time.realtimeSinceStartup);
+                            var canceled = action.CanceledAsObservable(token).Select(_ => Time.realtimeSinceStartup);
+
+                            // When performed, check if time since started >= threshold; if so, emit long-press
+                            var performed = action.PerformedAsObservable(token).Select(_ => Time.realtimeSinceStartup);
+
+                            float thresholdSec = longPressMs / 1000f;
+
+                            // Track last start time
+                            float lastStartTime = 0f;
+                            started.Subscribe(t => lastStartTime = t).AddTo(_actionWiringSubscriptions);
+
+                            // On performed, emit long press if duration >= threshold
+                            performed.Subscribe(t =>
+                            {
+                                if (lastStartTime > 0f && t - lastStartTime >= thresholdSec)
+                                {
+                                    longPressSubject.OnNext(Unit.Default);
+                                }
+                            }).AddTo(_actionWiringSubscriptions);
+
+                            // Also support hold without release: timer that fires if still pressed after threshold
+                            action.StartedAsObservable(token).Subscribe(_ =>
+                            {
+                                var startSnapshot = Time.realtimeSinceStartup;
+                                var ct = _cancellation.Token;
+                                UniTask.Void(async () =>
+                                {
+                                    try
+                                    {
+                                        float elapsed = 0f;
+                                        while (action.IsPressed() && elapsed < thresholdSec)
+                                        {
+                                            await UniTask.Yield(PlayerLoopTiming.Update, ct);
+                                            elapsed = Time.realtimeSinceStartup - startSnapshot;
+                                        }
+                                        if (action.IsPressed() && elapsed >= thresholdSec)
+                                        {
+                                            longPressSubject.OnNext(Unit.Default);
+                                        }
+                                    }
+                                    catch (OperationCanceledException) { }
+                                });
+                            }).AddTo(_actionWiringSubscriptions);
+
+                            _longPressSubjects[(ctxConfig.ActionMap, action.name)] = longPressSubject;
+                        }
                     }
                 }
             }
