@@ -98,7 +98,9 @@ builder.Register<IFactory<Bullet>>(c => new MonoPrefabFactory<Bullet>(
 位于 `Samples/`：
 - `PureCSharp/` 演示基于 `ObjectPool` 的纯数据粒子系统模拟。
 - `PureUnity/` 演示通过 `IUnityObjectSpawner` 生成 `MonoBehaviour` Prefab 的最小示例。
+- `Benchmarks/PureCSharp/` 提供纯 C# 工厂模式和对象池的综合性能基准测试。
+- `Benchmarks/Unity/` 提供 Unity 特定的 GameObject 池化、Prefab 实例化和内存分析基准测试。
 
-### Tips
-- 可搭配仓库内 `CycloneGames.Logger` 达到高性能低 GC 日志。
-- 本仓库中的 Gameplay 模块已依赖 `CycloneGames.Factory.Runtime`，可参考其集成模式。
+### 性能与基准
+- Unity 与纯 C# 的基准样例位于 `Samples/Benchmarks/`，会将报告保存到 `BenchmarkReports/`（`.txt`、`.md`、`.SCH.md`）。
+- 提示：Benchmark 示例由 AI 编写，其他代码由作者本人编写。
