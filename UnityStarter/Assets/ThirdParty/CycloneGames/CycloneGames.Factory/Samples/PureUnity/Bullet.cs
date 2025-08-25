@@ -27,6 +27,9 @@ namespace CycloneGames.Factory.Samples.PureUnity
 
         public void OnDespawned()
         {
+            // This prevents the bullet from trying to despawn itself again
+            // if it's recycled by some other means before the 3-second timer is up.
+            CancelInvoke(nameof(Recycle));
             gameObject.SetActive(false);
         }
 
@@ -38,13 +41,19 @@ namespace CycloneGames.Factory.Samples.PureUnity
 
         private void Recycle()
         {
-            _pool.Despawn(this);
+            // Ensure pool still exists to avoid errors during shutdown
+            if (_pool != null)
+            {
+                _pool.Despawn(this);
+            }
         }
 
         public void Dispose()
         {
-            // Called when the pool is destroyed
-            Destroy(gameObject);
+            if (this != null)
+            {
+                Destroy(gameObject);
+            }
         }
     }
 }

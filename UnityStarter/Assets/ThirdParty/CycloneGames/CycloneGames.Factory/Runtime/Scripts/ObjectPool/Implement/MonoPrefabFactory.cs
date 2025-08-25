@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace CycloneGames.Factory.Runtime
@@ -17,20 +18,28 @@ namespace CycloneGames.Factory.Runtime
 
         public T Create()
         {
-            if (_spawner == null || _prefab == null)
+            if (_spawner == null)
             {
-                return null;
+                throw new InvalidOperationException("IUnityObjectSpawner is null. The factory has not been properly initialized.");
+            }
+            if (_prefab == null)
+            {
+                throw new InvalidOperationException("Prefab is null. The factory cannot create an instance from a null prefab.");
             }
 
             var instance = _spawner.Create(_prefab);
             if (instance == null)
             {
+                // This can happen if the spawner implementation fails or if Object.Instantiate returns null
+                // (e.g., during application shutdown). Returning null here is acceptable, but the primary
+                // checks above are more critical for configuration errors.
                 return null;
             }
 
             if (_parent)
             {
-                instance.transform.SetParent(_parent);
+                // avoid an extra transform update.
+                instance.transform.SetParent(_parent, false);
             }
 
             instance.gameObject.SetActive(false);
