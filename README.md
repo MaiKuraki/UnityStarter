@@ -74,7 +74,6 @@ The main source code for the modules is located in the `UnityStarter/Assets/Thir
     │   │   └── ...
     │   ├── ThirdParty/
     │   │   ├── CycloneGames/           # Core development suite
-    │   │   │   ├── Core/               # Core framework components
     │   │   │   ├── Cheat/              # Debug command pipeline system
     │   │   │   ├── Factory/            # High-performance object pooling
     │   │   │   ├── GameplayAbilities/  # Data-driven ability system (UnrealEngine GAS-inspired)

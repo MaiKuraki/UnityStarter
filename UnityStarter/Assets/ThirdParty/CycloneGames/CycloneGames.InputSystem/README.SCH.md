@@ -70,7 +70,7 @@ playerSlots:
               - "<Keyboard>/space"
 ```
 
-## 最小示例（新手友好）
+## 简单示例
 
 1) 新建一个 MonoBehaviour：`SimplePlayer`
 
