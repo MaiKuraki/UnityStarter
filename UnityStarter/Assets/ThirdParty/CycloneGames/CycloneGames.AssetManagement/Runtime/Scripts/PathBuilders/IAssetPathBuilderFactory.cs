@@ -1,4 +1,4 @@
-namespace CycloneGames.Service
+namespace CycloneGames.AssetManagement
 {
     public interface IAssetPathBuilderFactory
     {

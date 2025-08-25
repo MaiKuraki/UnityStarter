@@ -1,5 +1,5 @@
 #if UNITY_EDITOR
-using CycloneGames.Service;
+using CycloneGames.AssetManagement;
 
 namespace CycloneGames.UIFramework.Editor // Or a runtime namespace if used in builds
 {
