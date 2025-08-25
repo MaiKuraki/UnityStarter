@@ -1,4 +1,4 @@
-using CycloneGames.Service;
+using CycloneGames.AssetManagement;
 
 namespace CycloneGames.UIFramework.Samples
 {
