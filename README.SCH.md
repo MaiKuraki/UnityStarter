@@ -37,6 +37,31 @@
 - **简单方式**：直接在 `Assets/ThirdParty/CycloneGames/` 目录中删除你不需要的模块包。
 - **推荐方式（用于实际项目）**：在正式项目中，最好将所需的包从 `Assets/ThirdParty/CycloneGames/` 移至项目 `Assets` 文件夹之外的任意位置，然后通过 Unity Package Manager 的 **"Add package from disk..."** 功能将其作为本地包（Package）引入。这种方法有助于保持项目结构的清晰和高度模块化。
 
+## 核心框架模块
+
+### 🎮 游戏玩法系统
+- **[GameplayFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework)** - 虚幻引擎风格的游戏框架，包含 Actor、Pawn、Controller、GameMode 概念。支持 DI 的可扩展游戏项目架构。
+- **[GameplayAbilities](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities)** - 强大的数据驱动技能系统，灵感来自虚幻引擎的 GAS。支持复杂技能、属性、状态效果，基于 ScriptableObject 设计。
+- **[GameplayTags](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags)** - 基于标签的识别系统，用于技能、效果和游戏状态，灵感来自虚幻引擎的 GameplayTags。支持运行时动态标签注册和自动生成。
+
+### 🏗️ 核心基础设施  
+- **[Factory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory)** - 高性能、低 GC 的工厂和对象池工具。线程安全的自动扩缩容池，O(1) 操作复杂度。
+- **[Logger](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger)** - 零/低 GC 日志系统，支持可插拔处理策略。支持线程化工作模式、文件轮转和跨平台兼容（包括 WebGL）。
+- **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement)** - DI 优先的资源管理抽象层，集成 YooAsset。支持下载、缓存、版本管理，兼容 Addressables/Navigathena。
+
+### 🎯 输入与界面
+- **[InputSystem](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem)** - 响应式输入封装，支持上下文栈、多人游戏、设备锁定和基于 YAML 的配置。使用 R3 Observable 构建。
+- **[UIFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework)** - 层级式 UI 管理系统，支持基于层的组织、转场动画和资源集成。
+
+### 🛠️ 工具与服务
+- **[Utility](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Utility)** - 通用工具集，包含 FPS 计数器、安全区域适配、文件操作、性能工具和 Unity 启动画面控制。
+- **[Services](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Services)** - 游戏服务抽象层，用于摄像机管理、图形设置和设备配置，支持基于 YAML 的设置。
+- **[Cheat](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat)** - 类型安全的调试命令管道，集成 VitalRouter。支持异步操作和线程安全执行。
+
+### 🌐 网络与扩展
+- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - 网络抽象层，提供 Mirror 适配器。为传输、序列化和技能系统集成提供接口。
+- **[FontAssets](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.FontAssets)** - 多语言字体集合和字符集，支持拉丁文、中文（简体/繁体）、日文和韩文本地化。
+
 ## 项目结构说明
 项目主要源码位于 `UnityStarter/Assets/ThirdParty/` 目录下。采用 **Unity Package** 形式开发，分离 asmdef 设计，可轻易的选择移除不需要的包。
 
@@ -51,21 +76,44 @@
     │   │   └── ...
     │   ├── ThirdParty/
     │   │   ├── CycloneGames/           # 核心开发套件
-    │   │   │   ├── Cheat/              # 简单的 Cheat 系统
-    │   │   │   ├── Factory/            # 工厂与对象池
-    │   │   │   ├── GameplayAbilities/  # 类虚幻引擎的 Gameplay Ability 系统
-    │   │   │   ├── GameplayFramework/  # 类虚幻引擎的 Gameplay Framework
-    │   │   │   ├── GameplayTags/       # 类虚幻引擎的 Gameplay Tags
-    │   │   │   ├── InputSystem/        # 灵活高级的输入绑定系统
-    │   │   │   ├── Logger/             # 高性能多线程的日志工具
-    │   │   │   ├── Service/            # 通用游戏服务
-    │   │   │   ├── UIFramework/        # 简单的层级 UI 框架
-    │   │   │   └── Utility/            # 通用工具 (FPS 计数器等)
+    │   │   │   ├── Core/               # 核心框架组件
+    │   │   │   ├── Cheat/              # 调试命令管道系统
+    │   │   │   ├── Factory/            # 高性能对象池
+    │   │   │   ├── GameplayAbilities/  # 数据驱动技能系统（类似 UnrealEngine GAS）
+    │   │   │   ├── GameplayFramework/  # UE 风格游戏架构（类似 UnrealEngine GameplayFramework）
+    │   │   │   ├── GameplayTags/       # 基于标签的识别系统（类似 UnrealEngine GameplayTags）
+    │   │   │   ├── InputSystem/        # 响应式输入管理，支持上下文栈
+    │   │   │   ├── Logger/             # 零 GC 多线程日志
+    │   │   │   ├── AssetManagement/    # 资源加载和版本管理
+    │   │   │   ├── Services/           # 通用游戏服务抽象
+    │   │   │   ├── UIFramework/        # 层级式 UI 管理
+    │   │   │   ├── Networking/         # 网络抽象层
+    │   │   │   ├── FontAssets/         # 多语言字体集合
+    │   │   │   └── Utility/            # 性能工具和实用程序
     │   │   └── ...
     │   └── ...
     ├── Packages/                       # 包清单与配置
     └── ProjectSettings/                # Unity 项目设置
 ```
+
+## 技术特性与依赖关系
+
+### 核心技术栈
+- **Unity 2022.3+** - 所有模块的必需 Unity 版本
+- **UniTask** - Unity 异步/等待操作支持
+- **R3** - Unity 响应式扩展（InputSystem 中使用）
+- **VYaml** - 配置文件的 YAML 序列化
+- **VitalRouter** - 消息路由系统（Cheat 系统中使用）
+- **YooAsset** - 资源管理和热更新支持
+- **Mirror** - 网络框架适配器
+
+### 架构特点
+- **依赖注入就绪**: 所有模块支持 VContainer、StrangeIoC 和 Zenject
+- **程序集定义隔离**: 每个模块都有自己的 asmdef，确保清晰分离
+- **ScriptableObject 配置**: 技能、效果和设置的数据驱动设计
+- **线程安全设计**: Logger 和 Factory 模块专为多线程操作设计
+- **零/低 GC**: 性能优化，最小垃圾回收
+- **跨平台**: 支持桌面、移动和 WebGL 部署
 
 ## 基于此项目的其他开源项目
 
