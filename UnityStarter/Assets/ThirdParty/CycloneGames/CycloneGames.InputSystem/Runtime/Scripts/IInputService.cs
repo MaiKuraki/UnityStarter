@@ -43,12 +43,46 @@ namespace CycloneGames.InputSystem.Runtime
         Observable<Unit> GetButtonObservable(string actionName);
 
         /// <summary>
+        /// Gets a reactive stream that fires when the button is held for at least the configured long-press duration.
+        /// If the action has no long-press configured, returns an empty stream.
+        /// </summary>
+        /// <param name="actionName">The name of the action defined in the configuration.</param>
+        /// <returns>An Observable stream of Unit values signaling a long-press.</returns>
+        Observable<Unit> GetLongPressObservable(string actionName);
+
+        /// <summary>
+        /// Gets a reactive stream for the pressed state of a button action.
+        /// Emits true on press start, false on release.
+        /// </summary>
+        /// <param name="actionName">The name of the action defined in the configuration.</param>
+        /// <returns>An Observable stream of bool values indicating pressed state.</returns>
+        Observable<bool> GetPressStateObservable(string actionName);
+
+        /// <summary>
         /// Gets a reactive stream for a button-based action within a specific action map.
         /// </summary>
         /// <param name="actionMapName">The action map that owns the action.</param>
         /// <param name="actionName">The action name.</param>
         /// <returns>An Observable stream of Unit values.</returns>
         Observable<Unit> GetButtonObservable(string actionMapName, string actionName);
+
+        /// <summary>
+        /// Gets a reactive stream for a long-press event within a specific action map.
+        /// Returns empty if the action has no long-press configured.
+        /// </summary>
+        /// <param name="actionMapName">The action map that owns the action.</param>
+        /// <param name="actionName">The action name.</param>
+        /// <returns>An Observable stream of Unit values signaling a long-press.</returns>
+        Observable<Unit> GetLongPressObservable(string actionMapName, string actionName);
+
+        /// <summary>
+        /// Gets a reactive stream for the pressed state within a specific action map.
+        /// Emits true on press start, false on release.
+        /// </summary>
+        /// <param name="actionMapName">The action map that owns the action.</param>
+        /// <param name="actionName">The action name.</param>
+        /// <returns>An Observable stream of bool values indicating pressed state.</returns>
+        Observable<bool> GetPressStateObservable(string actionMapName, string actionName);
 
         /// <summary>
         /// Gets a reactive stream for a scalar-based action (e.g., zoom, sensitivity).
