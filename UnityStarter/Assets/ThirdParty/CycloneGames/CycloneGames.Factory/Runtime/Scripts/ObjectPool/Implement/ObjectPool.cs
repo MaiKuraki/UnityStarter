@@ -396,5 +396,25 @@ namespace CycloneGames.Factory.Runtime
             Clear();
             _rwLock.Dispose();
         }
+
+        public void DespawnAllActive()
+        {
+            _rwLock.EnterWriteLock();
+            try
+            {
+                // Despawn from the back to avoid shifting costs
+                for (int i = _activeItems.Count - 1; i >= 0; i--)
+                {
+                    var item = _activeItems[_activeItems.Count - 1];
+                    DespawnWithoutLock(item);
+                }
+                DrainPendingDespawnsWithoutLock();
+                ResetShrinkTracker();
+            }
+            finally
+            {
+                if (_rwLock.IsWriteLockHeld) _rwLock.ExitWriteLock();
+            }
+        }
     }
 }
