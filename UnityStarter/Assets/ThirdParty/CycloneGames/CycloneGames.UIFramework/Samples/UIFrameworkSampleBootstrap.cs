@@ -1,6 +1,7 @@
 using UnityEngine;
 using CycloneGames.Factory.Runtime;
 using CycloneGames.Service;
+using CycloneGames.AssetManagement;
 using CycloneGames.AssetManagement.Integrations.Common;
 
 namespace CycloneGames.UIFramework.Samples
