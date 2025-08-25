@@ -13,21 +13,33 @@ namespace CycloneGames.InputSystem.Editor
         public string ActionName;
         [StringAsConstSelector(typeof(InputBindingConstants), UseMenu = true)] // Custom drawer for this list!
         public List<string> DeviceBindings = new List<string>();
+        [Tooltip("Long-press duration in milliseconds (Button or Float)")]
+        [Min(0)]
+        public int LongPressMs = 0;
+        [Range(0f, 1f)]
+        [Tooltip("For Float actions (e.g., Trigger): actuation threshold for long-press timing")] 
+        public float LongPressValueThreshold = 0.5f;
 
         public void FromData(ActionBindingConfig data)
         {
             Type = data.Type;
             ActionName = data.ActionName;
             DeviceBindings = new List<string>(data.DeviceBindings);
+            LongPressMs = data.LongPressMs;
+            LongPressValueThreshold = data.LongPressValueThreshold;
         }
 
         public ActionBindingConfig ToData()
         {
+            var sanitizedLongPress = ((this.Type == ActionValueType.Button || this.Type == ActionValueType.Float) && this.LongPressMs > 0) ? this.LongPressMs : 0;
+            var sanitizedThreshold = (this.Type == ActionValueType.Float && sanitizedLongPress > 0) ? Mathf.Clamp01(this.LongPressValueThreshold) : 0.5f;
             return new ActionBindingConfig
             {
                 Type = this.Type,
                 ActionName = this.ActionName,
-                DeviceBindings = new List<string>(this.DeviceBindings)
+                DeviceBindings = new List<string>(this.DeviceBindings),
+                LongPressMs = sanitizedLongPress,
+                LongPressValueThreshold = sanitizedThreshold
             };
         }
     }
@@ -38,21 +50,33 @@ namespace CycloneGames.InputSystem.Editor
         public string ActionName;
         [StringAsConstSelector(typeof(InputBindingConstants), UseMenu = true)] // Uses the custom dropdown drawer
         public List<string> DeviceBindings = new List<string>();
+        [Tooltip("Long-press duration in milliseconds (Button or Float)")]
+        [Min(0)]
+        public int LongPressMs = 0;
+        [Range(0f, 1f)]
+        [Tooltip("For Float actions (e.g., Trigger): actuation threshold for long-press timing")] 
+        public float LongPressValueThreshold = 0.5f;
 
         public void FromData(ActionBindingConfig data)
         {
             Type = data.Type;
             ActionName = data.ActionName;
             DeviceBindings = new List<string>(data.DeviceBindings);
+            LongPressMs = data.LongPressMs;
+            LongPressValueThreshold = data.LongPressValueThreshold;
         }
 
         public ActionBindingConfig ToData()
         {
+            var sanitizedLongPress = ((this.Type == ActionValueType.Button || this.Type == ActionValueType.Float) && this.LongPressMs > 0) ? this.LongPressMs : 0;
+            var sanitizedThreshold = (this.Type == ActionValueType.Float && sanitizedLongPress > 0) ? Mathf.Clamp01(this.LongPressValueThreshold) : 0.5f;
             return new ActionBindingConfig
             {
                 Type = this.Type,
                 ActionName = this.ActionName,
-                DeviceBindings = new List<string>(this.DeviceBindings)
+                DeviceBindings = new List<string>(this.DeviceBindings),
+                LongPressMs = sanitizedLongPress,
+                LongPressValueThreshold = sanitizedThreshold
             };
         }
     }
