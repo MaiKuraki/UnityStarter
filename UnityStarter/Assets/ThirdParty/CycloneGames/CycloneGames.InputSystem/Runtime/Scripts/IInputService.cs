@@ -16,6 +16,12 @@ namespace CycloneGames.InputSystem.Runtime
         ReadOnlyReactiveProperty<string> ActiveContextName { get; }
 
         /// <summary>
+        /// The last active input device kind for this player (reactive).
+        /// Updates whenever any bound action is performed.
+        /// </summary>
+        ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind { get; }
+
+        /// <summary>
         /// An event that fires when the active context changes.
         /// </summary>
         event Action<string> OnContextChanged;

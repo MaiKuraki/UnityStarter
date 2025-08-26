@@ -97,9 +97,13 @@ namespace CycloneGames.InputSystem.Editor
                                             var typeProp = bindProp.FindPropertyRelative("Type");
                                             EditorGUILayout.PropertyField(typeProp);
                                             EditorGUILayout.PropertyField(bindProp.FindPropertyRelative("ActionName"));
-                                            EditorGUILayout.PropertyField(bindProp.FindPropertyRelative("DeviceBindings"), true);
-
                                             var type = (CycloneGames.InputSystem.Runtime.ActionValueType)typeProp.enumValueIndex;
+                                            // Device bindings with hint for Vector2 sources
+                                            if (type == CycloneGames.InputSystem.Runtime.ActionValueType.Vector2)
+                                            {
+                                                EditorGUILayout.HelpBox("Tip: Vector2 sources include Mouse Delta, Sticks, DPad, or 2DVector composites.", MessageType.None);
+                                            }
+                                            EditorGUILayout.PropertyField(bindProp.FindPropertyRelative("DeviceBindings"), true);
                                             if (type == CycloneGames.InputSystem.Runtime.ActionValueType.Button)
                                             {
                                                 var msProp = bindProp.FindPropertyRelative("LongPressMs");
@@ -344,7 +348,11 @@ namespace CycloneGames.InputSystem.Editor
                                     {
                                         Type = ActionValueType.Vector2,
                                         ActionName = "Move",
-                                        DeviceBindings = new System.Collections.Generic.List<string> { "<Gamepad>/leftStick", "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)" }
+                                        DeviceBindings = new System.Collections.Generic.List<string> {
+                                            InputBindingConstants.Vector2Sources.Gamepad_LeftStick,
+                                            InputBindingConstants.Vector2Sources.Composite_WASD,
+                                            InputBindingConstants.Vector2Sources.Mouse_Delta
+                                        }
                                     },
                                     new ActionBindingConfig
                                     {
