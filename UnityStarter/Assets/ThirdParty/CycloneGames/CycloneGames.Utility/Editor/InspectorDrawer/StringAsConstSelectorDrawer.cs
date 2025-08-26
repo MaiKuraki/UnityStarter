@@ -124,7 +124,8 @@ namespace CycloneGames.Utility.Editor
             string buttonText = "None";
             if (!string.IsNullOrEmpty(property.stringValue) && cachedData.ValueToDisplayMap.TryGetValue(property.stringValue, out string currentDisplayName))
             {
-                buttonText = currentDisplayName.Replace(attrib.Separator, '/');
+                string pretty = MakePrettyDisplayName(currentDisplayName, property.stringValue);
+                buttonText = pretty.Replace(attrib.Separator, '/');
             }
 
             // Draw the dropdown button
@@ -135,7 +136,8 @@ namespace CycloneGames.Utility.Editor
                 {
                     string displayName = cachedData.DisplayOptions[i];
                     string value = cachedData.ValueOptions[i];
-                    string menuPath = displayName.Replace(attrib.Separator, '/');
+                    string pretty = MakePrettyDisplayName(displayName, value);
+                    string menuPath = pretty.Replace(attrib.Separator, '/');
 
                     menu.AddItem(new GUIContent(menuPath), property.stringValue == value, () =>
                     {
@@ -162,7 +164,8 @@ namespace CycloneGames.Utility.Editor
             {
                 string displayName = cachedData.DisplayOptions[i];
                 string value = cachedData.ValueOptions[i];
-                string menuPath = displayName.Replace(attrib.Separator, '/');
+                string pretty = MakePrettyDisplayName(displayName, value);
+                string menuPath = pretty.Replace(attrib.Separator, '/');
 
                 menu.AddItem(new GUIContent(menuPath), property.stringValue == value, () =>
                 {
@@ -194,6 +197,19 @@ namespace CycloneGames.Utility.Editor
             var newData = new CachedConstantData(stringFields);
             s_constantsCache[constantsType] = newData;
             return newData;
+        }
+
+        /// <summary>
+        /// Adds context hints to display names without altering the underlying value.
+        /// For example, show "Mouse/Delta(Vector2)" for "<Mouse>/delta".
+        /// </summary>
+        private static string MakePrettyDisplayName(string displayName, string value)
+        {
+            if (string.Equals(value, "<Mouse>/delta", StringComparison.OrdinalIgnoreCase))
+            {
+                return displayName + "(Vector2)";
+            }
+            return displayName;
         }
     }
 }
