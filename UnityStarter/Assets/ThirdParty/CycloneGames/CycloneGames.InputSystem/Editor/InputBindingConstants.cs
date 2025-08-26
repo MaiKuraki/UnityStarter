@@ -73,6 +73,7 @@ namespace CycloneGames.InputSystem.Editor
 
         public const string Mouse_LeftButton = "<Mouse>/leftButton";
         public const string Mouse_RightButton = "<Mouse>/rightButton";
+        // Note: Delta is a 2D vector (x,y)
         public const string Mouse_Delta = "<Mouse>/delta";
 
         #endregion
@@ -115,14 +116,34 @@ namespace CycloneGames.InputSystem.Editor
 
         /// <summary>
         /// A 2DVector composite for standard WASD movement.
+        /// Menu path: Composites/2DVector/WASD
         /// </summary>
-        public const string Composite_2DVector_WASD = "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)";
+        public const string Composites_2DVector_WASD = "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)";
 
         /// <summary>
         /// A 2DVector composite for arrow key movement.
+        /// Menu path: Composites/2DVector/Arrows
         /// </summary>
-        public const string Composite_2DVector_Arrows = "2DVector(mode=2,up=<Keyboard>/upArrow,down=<Keyboard>/downArrow,left=<Keyboard>/leftArrow,right=<Keyboard>/rightArrow)";
+        public const string Composites_2DVector_Arrows = "2DVector(mode=2,up=<Keyboard>/upArrow,down=<Keyboard>/downArrow,left=<Keyboard>/leftArrow,right=<Keyboard>/rightArrow)";
 
         #endregion
+
+        // Organized by action value type for easier picking in the editor menu
+        public static class Vector2Sources
+        {
+            // Mouse
+            public const string Mouse_Delta = InputBindingConstants.Mouse_Delta; // 2D vector (x,y) for mouse movement
+
+            // Gamepad sticks
+            public const string Gamepad_LeftStick = "<Gamepad>/leftStick";
+            public const string Gamepad_RightStick = "<Gamepad>/rightStick";
+            public const string Gamepad_DPad = "<Gamepad>/dpad";
+
+            // Keyboard composites
+            public const string Composite_WASD = Composites_2DVector_WASD;
+            public const string Composite_Arrows = Composites_2DVector_Arrows;
+        }
+
+        // (No top-level aliases to avoid duplicate menu entries)
     }
 }

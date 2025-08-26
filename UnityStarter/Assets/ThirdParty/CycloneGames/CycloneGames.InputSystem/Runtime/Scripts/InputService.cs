@@ -9,6 +9,7 @@ using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Users;
 using Cysharp.Threading.Tasks;
+using UnityEngine.InputSystem.LowLevel;
 
 namespace CycloneGames.InputSystem.Runtime
 {
@@ -18,8 +19,10 @@ namespace CycloneGames.InputSystem.Runtime
         public event Action<string> OnContextChanged;
         public int PlayerId { get; }
         public InputUser User { get; }
+        public ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind { get; private set; }
 
         private readonly ReactiveProperty<string> _activeContextName = new(null);
+        private readonly ReactiveProperty<InputDeviceKind> _activeDeviceKind = new(InputDeviceKind.Unknown);
         private readonly Stack<InputContext> _contextStack = new();
         private readonly Dictionary<string, InputContext> _registeredContexts = new();
         // Keyed by (mapName, actionName)
@@ -44,6 +47,7 @@ namespace CycloneGames.InputSystem.Runtime
             _cancellation = new CancellationTokenSource();
             _subscriptions = new CompositeDisposable();
             ActiveContextName = _activeContextName;
+            ActiveDeviceKind = _activeDeviceKind;
             _inputActionAsset = BuildAssetFromConfig(config);
 
             User.AssociateActionsWithUser(_inputActionAsset);
@@ -379,6 +383,7 @@ namespace CycloneGames.InputSystem.Runtime
                             })
                             .Subscribe(subject.AsObserver())
                             .AddTo(_actionWiringSubscriptions);
+                        action.PerformedAsObservable(token).Subscribe(ctx => UpdateActiveDeviceKind(ctx.control?.device)).AddTo(_actionWiringSubscriptions);
                         action.CanceledAsObservable(token).Select(_ => Vector2.zero).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
                         _vector2Subjects[(ctxConfig.ActionMap, action.name)] = subject;
                     }
@@ -386,6 +391,7 @@ namespace CycloneGames.InputSystem.Runtime
                     {
                         var subject = new Subject<float>();
                         action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<float>()).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                        action.PerformedAsObservable(token).Subscribe(ctx => UpdateActiveDeviceKind(ctx.control?.device)).AddTo(_actionWiringSubscriptions);
                         action.CanceledAsObservable(token).Select(_ => 0f).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
                         _scalarSubjects[(ctxConfig.ActionMap, action.name)] = subject;
 
@@ -440,6 +446,7 @@ namespace CycloneGames.InputSystem.Runtime
                     {
                         var subject = new Subject<Unit>();
                         action.PerformedAsObservable(token).Select(_ => Unit.Default).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                        action.PerformedAsObservable(token).Subscribe(ctx => UpdateActiveDeviceKind(ctx.control?.device)).AddTo(_actionWiringSubscriptions);
                         _buttonSubjects[(ctxConfig.ActionMap, action.name)] = subject;
 
                         // Press state subject: true on started, false on canceled
@@ -504,6 +511,22 @@ namespace CycloneGames.InputSystem.Runtime
                 }
             }
             return asset;
+        }
+
+        private void UpdateActiveDeviceKind(InputDevice device)
+        {
+            if (device == null) return;
+            if (device is Keyboard || device is Mouse)
+            {
+                _activeDeviceKind.Value = InputDeviceKind.KeyboardMouse;
+                return;
+            }
+            if (device is Gamepad)
+            {
+                _activeDeviceKind.Value = InputDeviceKind.Gamepad;
+                return;
+            }
+            _activeDeviceKind.Value = InputDeviceKind.Other;
         }
 
         /// <summary>
