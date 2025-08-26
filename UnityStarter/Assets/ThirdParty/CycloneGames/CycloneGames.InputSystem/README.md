@@ -16,6 +16,7 @@ English | [简体中文](./README.SCH.md)
   - Button: press and optional long-press streams
   - Float (e.g., Trigger): optional long-press with value threshold
 - Hot-swap required devices per player, safe pairing
+  - Active device detection: expose last active device kind (KeyboardMouse/Gamepad/Other)
 
 ## Install
 
@@ -65,6 +66,7 @@ playerSlots:
             deviceBindings:
               - "<Gamepad>/leftStick"
               - "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)"
+              - "<Mouse>/delta"
           - type: Button
             action: Confirm
             longPressMs: 500 # optional, emits long-press after 500ms
@@ -232,6 +234,8 @@ press.Subscribe(p =>
 
 - Button shows “Long Press (ms)”; Float shows both “Long Press (ms)” and “Long Press Threshold (0-1)”.
 - Non-Button/Float actions ignore `longPressMs` during save.
+- Vector2 sources: use Mouse Delta, Sticks, DPad, or 2DVector composites. Constants available under `InputBindingConstants.Vector2Sources`.
+- Mouse Delta is displayed as “Mouse/Delta(Vector2)” in the picker, but binds to `<Mouse>/delta`.
 
 2) Increment while pressed:
 
@@ -295,10 +299,17 @@ bindings:
       - "<Keyboard>/space"
 ```
 
+Device kind usage:
+
+```csharp
+_input.ActiveDeviceKind.Subscribe(kind => UpdateHUDIcons(kind));
+```
+
 ## API
 
 - IInputService
   - `ReadOnlyReactiveProperty<string>` ActiveContextName; `event OnContextChanged`
+  - `ReadOnlyReactiveProperty<InputDeviceKind>` ActiveDeviceKind (KeyboardMouse/Gamepad/Other)
   - GetVector2Observable(map, action) | GetVector2Observable(action)
   - GetButtonObservable(map, action) | GetButtonObservable(action)
   - GetLongPressObservable(map, action) | GetLongPressObservable(action)

@@ -3,6 +3,13 @@ using VYaml.Annotations;
 
 namespace CycloneGames.InputSystem.Runtime
 {
+    public enum InputDeviceKind
+    {
+        Unknown,
+        KeyboardMouse,
+        Gamepad,
+        Other
+    }
     /// <summary>
     /// Explicit value type for an input action. This removes brittle heuristics and
     /// enables zero-GC routing with precise action wiring.

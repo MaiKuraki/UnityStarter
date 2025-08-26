@@ -16,6 +16,7 @@
   - 按钮：短按事件与可选的长按事件
   - 浮点（如手柄 Trigger）：可选长按（带阈值）
 - 热插拔：自动配对所需设备
+  - 设备检测：获取最近一次活跃输入设备类型（键鼠/手柄/其他）
 
 ## 安装依赖
 
@@ -65,6 +66,7 @@ playerSlots:
             deviceBindings:
               - "<Gamepad>/leftStick"
               - "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)"
+              - "<Mouse>/delta"
           - type: Button
             action: Confirm
             longPressMs: 500 # 可选，长按 500ms 触发
@@ -232,6 +234,8 @@ press.Subscribe(p =>
 
 - Button 显示 “Long Press (ms)”；Float 显示 “Long Press (ms)” 与 “Long Press Threshold (0-1)”。
 - 非 Button/Float 类型在保存时会忽略 `longPressMs`。
+- Vector2 来源：可用 Mouse Delta、摇杆、DPad 或 2DVector 复合。常量位于 `InputBindingConstants.Vector2Sources`。
+- 鼠标 Delta 在选择器中显示为 “Mouse/Delta(Vector2)”，实际绑定路径为 `<Mouse>/delta`。
 
 2) 在按住期间逐帧累加：
 
@@ -295,10 +299,17 @@ bindings:
       - "<Keyboard>/space"
 ```
 
+设备类型用法：
+
+```csharp
+_input.ActiveDeviceKind.Subscribe(kind => UpdateHUDIcons(kind));
+```
+
 ## API 概览
 
 - IInputService
   - `ReadOnlyReactiveProperty<string>` ActiveContextName；`event OnContextChanged`
+  - `ReadOnlyReactiveProperty<InputDeviceKind>` ActiveDeviceKind（键鼠/手柄/其他）
   - GetVector2Observable(map, action) | GetVector2Observable(action)
   - GetButtonObservable(map, action) | GetButtonObservable(action)
   - GetLongPressObservable(map, action) | GetLongPressObservable(action)
