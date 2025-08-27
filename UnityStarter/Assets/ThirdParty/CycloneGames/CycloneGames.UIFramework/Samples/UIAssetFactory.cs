@@ -9,14 +9,14 @@ namespace CycloneGames.UIFramework.Samples
             switch (type)
             {
                 case "UI":
-                    return new CIGAGameJam25UIAssetPathBuilder();
+                    return new UIAssetPathBuilder();
                 default:
                     return null;
             }
         }
     }
     
-    public class CIGAGameJam25UIAssetPathBuilder : IAssetPathBuilder
+    public class UIAssetPathBuilder : IAssetPathBuilder
     {
         public string GetAssetPath(string key)
         {
