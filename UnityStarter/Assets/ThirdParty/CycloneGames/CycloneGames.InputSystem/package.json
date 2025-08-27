@@ -27,10 +27,10 @@
   "dependencies": {
     "com.unity.inputsystem": "1.7.0",
     "com.cysharp.unitask": "2.5.0",
-    "com.cysharp.r3.unity": "1.0.0",
+    "com.cysharp.r3": "1.0.0",
     "com.annulusgames.reactive-input-system": "0.1.0",
     "com.cyclone-games.utility": "1.0.0",
     "com.cyclone-games.logger": "1.0.0",
-    "com.vyaml.core": "1.2.0"
+    "jp.hadashikick.vyaml": "1.2.0"
   }
 }
