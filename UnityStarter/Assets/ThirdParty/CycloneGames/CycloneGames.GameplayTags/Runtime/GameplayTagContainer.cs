@@ -572,9 +572,7 @@ namespace CycloneGames.GameplayTags.Runtime
       {
          m_Indices = GameplayTagContainerIndices.Create();
          if (serializedTags == null || serializedTags.Count == 0)
-         {
             return;
-         }
 
          m_SerializedExplicitTags = new List<string>(serializedTags);
 
@@ -650,6 +648,15 @@ namespace CycloneGames.GameplayTags.Runtime
             GameplayTag tag = GameplayTagManager.RequestTag(m_SerializedExplicitTags[i]);
             if (tag == GameplayTag.None)
             {
+               // TODO: if you remove some Old tags in code but not remove property from Prefab or in GameObject or ScriptableObject, there will be some invalid Tags,
+               //       but we dont have a good idea to resolve or autoremove in these stuff. The log behind can log the invalid Tags but can not find where the Tags required.
+
+               // Log an error when a serialized tag is no longer registered.
+               // This will be visible in the console and can be configured to break builds.
+
+               // string invalidTagName = m_SerializedExplicitTags[i];
+               // UnityEngine.Debug.LogError($"[GameplayTagContainer]: Tag '<b><color=red>{invalidTagName}</color></b>' was found in serialized data but is no longer registered in GameplayTagManager. It has been removed from the container. Please update your assets or re-register the tag.");
+
                m_SerializedExplicitTags.RemoveAt(i);
                continue;
             }
