@@ -6,7 +6,7 @@
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
-    "com.cysharp.unitask" : "2.5.0",
+    "com.cysharp.unitask": "2.5.0",
     "com.unity.addressables": "2.4.0",
     "com.cyclone-games.gameplay-tags": "1.0.0",
     "com.cyclone-games.logger": "1.0.0",
@@ -21,5 +21,11 @@
     "email": "",
     "url": ""
   },
-  "samples": []
+  "samples": [
+    {
+      "displayName": "Gameplay Ability Samples",
+      "description": "Gameplay Ability Samples",
+      "path": "Samples"
+    }
+  ]
 }
