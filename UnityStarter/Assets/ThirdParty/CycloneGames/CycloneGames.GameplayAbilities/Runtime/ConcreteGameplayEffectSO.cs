@@ -1,14 +1,13 @@
 using System.Collections.Generic;
-using CycloneGames.GameplayAbilities.Runtime;
 using UnityEngine;
 
-namespace CycloneGames.GameplayAbilities.Sample
+namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
     /// A concrete, creatable ScriptableObject definition for a GameplayEffect.
     /// Use this to create new Gameplay Effect assets in the editor via 'Assets/Create/...'.
     /// </summary>
-    [CreateAssetMenu(fileName = "GE_", menuName = "CycloneGames/GameplayAbilitySystem/Samples/GameplayEffect Definition")]
+    [CreateAssetMenu(fileName = "GE_", menuName = "CycloneGames/GameplayAbilitySystem/GameplayEffect Definition")]
     public class ConcreteGameplayEffectSO : GameplayEffectSO
     {
         /// <summary>
