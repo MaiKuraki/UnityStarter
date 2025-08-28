@@ -4,6 +4,7 @@ using System.IO;
 using VYaml.Serialization;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using CycloneGames.Utility.Runtime;
 using CycloneGames.InputSystem.Runtime;
 
@@ -22,6 +23,11 @@ namespace CycloneGames.InputSystem.Editor
         private string _statusMessage;
         private MessageType _statusMessageType = MessageType.Info;
 
+        // --- Code Generation Settings ---
+        private string _codegenPath;
+        private string _codegenNamespace;
+        private DefaultAsset _codegenFolder;
+
         // --- Constants ---
         private const string DefaultConfigFileName = "input_config.yaml";
         private const string UserConfigFileName = "user_input_settings.yaml";
@@ -36,6 +42,15 @@ namespace CycloneGames.InputSystem.Editor
         {
             _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(DefaultConfigFileName, UnityPathSource.StreamingAssets);
             _userConfigPath = FilePathUtility.GetUnityWebRequestUri(UserConfigFileName, UnityPathSource.PersistentData);
+            
+            // Load codegen settings
+            _codegenPath = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenPath", "Assets");
+            _codegenNamespace = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenNamespace", "YourGame.Input.Generated");
+            if (!string.IsNullOrEmpty(_codegenPath))
+            {
+                _codegenFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_codegenPath);
+            }
+            
             LoadUserConfig();
         }
 
@@ -52,6 +67,8 @@ namespace CycloneGames.InputSystem.Editor
             }
             DrawToolbar();
             DrawStatusBar();
+            
+            DrawCodegenSettings();
 
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
 
@@ -59,90 +76,89 @@ namespace CycloneGames.InputSystem.Editor
             {
                 _serializedConfig.Update();
 
-                // Draw join action
-                EditorGUILayout.PropertyField(_serializedConfig.FindProperty("_joinAction"), true);
+                // Draw player slots with dynamic add/remove support
+                var slotsProp = _serializedConfig.FindProperty("_playerSlots");
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("Player Slots", EditorStyles.boldLabel);
+                if (GUILayout.Button("+ Add Player", GUILayout.Width(100)))
+                {
+                    AddNewPlayer(slotsProp);
+                }
+                EditorGUILayout.EndHorizontal();
 
                 // Draw player slots with conditional UI for long-press fields
-                var slotsProp = _serializedConfig.FindProperty("_playerSlots");
-                EditorGUILayout.PropertyField(slotsProp, new GUIContent("Player Slots"), false);
-                if (slotsProp.isExpanded)
+                if (slotsProp.arraySize > 0)
                 {
-                    EditorGUI.indentLevel++;
                     for (int i = 0; i < slotsProp.arraySize; i++)
                     {
                         var slotProp = slotsProp.GetArrayElementAtIndex(i);
-                        EditorGUILayout.PropertyField(slotProp, new GUIContent($"Player Slot {i}"), false);
-                        if (slotProp.isExpanded)
+                        
+                        // Player header with remove button
+                        EditorGUILayout.BeginHorizontal();
+                        EditorGUILayout.LabelField($"Player {i}", EditorStyles.boldLabel);
+                        if (GUILayout.Button("Remove", GUILayout.Width(60)))
                         {
-                            EditorGUI.indentLevel++;
-                            var contextsProp = slotProp.FindPropertyRelative("Contexts");
-                            EditorGUILayout.PropertyField(contextsProp, new GUIContent("Contexts"), false);
-                            if (contextsProp.isExpanded)
-                            {
-                                EditorGUI.indentLevel++;
-                                for (int c = 0; c < contextsProp.arraySize; c++)
-                                {
-                                    var ctxProp = contextsProp.GetArrayElementAtIndex(c);
-                                    EditorGUILayout.PropertyField(ctxProp.FindPropertyRelative("Name"));
-                                    EditorGUILayout.PropertyField(ctxProp.FindPropertyRelative("ActionMap"));
-
-                                    var bindingsProp = ctxProp.FindPropertyRelative("Bindings");
-                                    EditorGUILayout.PropertyField(bindingsProp, new GUIContent("Bindings"), false);
-                                    if (bindingsProp.isExpanded)
-                                    {
-                                        EditorGUI.indentLevel++;
-                                        for (int b = 0; b < bindingsProp.arraySize; b++)
-                                        {
-                                            var bindProp = bindingsProp.GetArrayElementAtIndex(b);
-                                            var typeProp = bindProp.FindPropertyRelative("Type");
-                                            EditorGUILayout.PropertyField(typeProp);
-                                            EditorGUILayout.PropertyField(bindProp.FindPropertyRelative("ActionName"));
-                                            var type = (CycloneGames.InputSystem.Runtime.ActionValueType)typeProp.enumValueIndex;
-                                            // Device bindings with hint for Vector2 sources
-                                            if (type == CycloneGames.InputSystem.Runtime.ActionValueType.Vector2)
-                                            {
-                                                EditorGUILayout.HelpBox("Tip: Vector2 sources include Mouse Delta, Sticks, DPad, or 2DVector composites.", MessageType.None);
-                                            }
-                                            EditorGUILayout.PropertyField(bindProp.FindPropertyRelative("DeviceBindings"), true);
-                                            if (type == CycloneGames.InputSystem.Runtime.ActionValueType.Button)
-                                            {
-                                                var msProp = bindProp.FindPropertyRelative("LongPressMs");
-                                                EditorGUILayout.BeginHorizontal();
-                                                EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
-                                                EditorGUILayout.PropertyField(msProp, GUIContent.none, true);
-                                                EditorGUILayout.EndHorizontal();
-                                            }
-                                            else if (type == CycloneGames.InputSystem.Runtime.ActionValueType.Float)
-                                            {
-                                                var msProp = bindProp.FindPropertyRelative("LongPressMs");
-                                                var thProp = bindProp.FindPropertyRelative("LongPressValueThreshold");
-                                                EditorGUILayout.BeginHorizontal();
-                                                EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
-                                                EditorGUILayout.PropertyField(msProp, GUIContent.none, true);
-                                                EditorGUILayout.EndHorizontal();
-                                                EditorGUILayout.BeginHorizontal();
-                                                EditorGUILayout.LabelField("Long Press Threshold (0-1)", _overflowLabelStyle, GUILayout.Width(220));
-                                                EditorGUILayout.PropertyField(thProp, GUIContent.none, true);
-                                                EditorGUILayout.EndHorizontal();
-                                            }
-                                            else
-                                            {
-                                                using (new EditorGUI.DisabledScope(true))
-                                                {
-                                                    var tmp = bindProp.FindPropertyRelative("LongPressMs");
-                                                    EditorGUILayout.IntField(new GUIContent("LongPressMs"), 0);
-                                                }
-                                            }
-                                        }
-                                        EditorGUI.indentLevel--;
-                                    }
-                                }
-                                EditorGUI.indentLevel--;
-                            }
-                            EditorGUI.indentLevel--;
+                            slotsProp.DeleteArrayElementAtIndex(i);
+                            break;
+                        }
+                        EditorGUILayout.EndHorizontal();
+                        
+                        EditorGUI.indentLevel++;
+                        
+                        // Player ID
+                        EditorGUILayout.PropertyField(slotProp.FindPropertyRelative("PlayerId"));
+                        
+                        // Join Action for this player (always visible)
+                        EditorGUILayout.LabelField("Join Action", EditorStyles.boldLabel);
+                        EditorGUI.indentLevel++;
+                        var joinTypeProp = slotProp.FindPropertyRelative("JoinAction.Type");
+                        var joinActionProp = slotProp.FindPropertyRelative("JoinAction.ActionName");
+                        var joinBindingsProp = slotProp.FindPropertyRelative("JoinAction.DeviceBindings");
+                        var joinLongPressProp = slotProp.FindPropertyRelative("JoinAction.LongPressMs");
+                        
+                        EditorGUILayout.PropertyField(joinTypeProp);
+                        EditorGUILayout.PropertyField(joinActionProp);
+                        EditorGUILayout.PropertyField(joinBindingsProp, true);
+                        
+                        var joinType = (CycloneGames.InputSystem.Runtime.ActionValueType)joinTypeProp.enumValueIndex;
+                        if (joinType == CycloneGames.InputSystem.Runtime.ActionValueType.Button)
+                        {
+                            EditorGUILayout.BeginHorizontal();
+                            EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
+                            EditorGUILayout.PropertyField(joinLongPressProp, GUIContent.none, true);
+                            EditorGUILayout.EndHorizontal();
+                        }
+                        else if (joinType == CycloneGames.InputSystem.Runtime.ActionValueType.Float)
+                        {
+                            var joinThresholdProp = slotProp.FindPropertyRelative("JoinAction.LongPressValueThreshold");
+                            EditorGUILayout.BeginHorizontal();
+                            EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
+                            EditorGUILayout.PropertyField(joinLongPressProp, GUIContent.none, true);
+                            EditorGUILayout.EndHorizontal();
+                            EditorGUILayout.BeginHorizontal();
+                            EditorGUILayout.LabelField("Long Press Threshold (0-1)", _overflowLabelStyle, GUILayout.Width(220));
+                            EditorGUILayout.PropertyField(joinThresholdProp, GUIContent.none, true);
+                            EditorGUILayout.EndHorizontal();
+                        }
+                        EditorGUI.indentLevel--;
+                        
+                        // Contexts (collapsible)
+                        var contextsProp = slotProp.FindPropertyRelative("Contexts");
+                        EditorGUILayout.PropertyField(contextsProp, new GUIContent("Contexts"), true);
+                        EditorGUI.indentLevel--;
+                        
+                        // Add separator between players
+                        if (i < slotsProp.arraySize - 1)
+                        {
+                            EditorGUILayout.Space();
+                            EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
+                            EditorGUILayout.Space();
                         }
                     }
-                    EditorGUI.indentLevel--;
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox("No players configured. Click 'Add Player' to create the first player.", MessageType.Info);
                 }
 
                 _serializedConfig.ApplyModifiedProperties();
@@ -165,6 +181,10 @@ namespace CycloneGames.InputSystem.Editor
             GUILayout.Space(20);
             GUI.enabled = _configSO != null;
             if (GUILayout.Button("Save to User Config", EditorStyles.toolbarButton)) SaveChangesToUserConfig();
+            if (GUILayout.Button("Save and Generate Constants", EditorStyles.toolbarButton))
+            {
+                SaveChangesToUserConfig(true); // Pass true to trigger generation
+            }
             GUI.enabled = true;
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("Reset User to Default", EditorStyles.toolbarButton))
@@ -183,6 +203,35 @@ namespace CycloneGames.InputSystem.Editor
             {
                 EditorGUILayout.HelpBox(_statusMessage, _statusMessageType);
             }
+        }
+
+        private void DrawCodegenSettings()
+        {
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Code Generation Settings", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            EditorGUI.BeginChangeCheck();
+            var newFolder = (DefaultAsset)EditorGUILayout.ObjectField("Output Directory", _codegenFolder, typeof(DefaultAsset), false);
+            var newNamespace = EditorGUILayout.TextField("Namespace", _codegenNamespace);
+
+            if (EditorGUI.EndChangeCheck())
+            {
+                if (newFolder != _codegenFolder)
+                {
+                    _codegenFolder = newFolder;
+                    _codegenPath = AssetDatabase.GetAssetPath(_codegenFolder);
+                    EditorPrefs.SetString("CycloneGames.InputSystem.CodegenPath", _codegenPath);
+                }
+                if (newNamespace != _codegenNamespace)
+                {
+                    _codegenNamespace = newNamespace;
+                    EditorPrefs.SetString("CycloneGames.InputSystem.CodegenNamespace", _codegenNamespace);
+                }
+            }
+            
+            EditorGUI.indentLevel--;
+            EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
         }
 
         private void LoadUserConfig()
@@ -233,7 +282,7 @@ namespace CycloneGames.InputSystem.Editor
             }
         }
 
-        private void SaveChangesToUserConfig()
+        private void SaveChangesToUserConfig(bool generateConstants = false)
         {
             if (_configSO == null)
             {
@@ -256,7 +305,15 @@ namespace CycloneGames.InputSystem.Editor
 
                 File.WriteAllText(localPath, yamlContent);
                 SetStatus($"Successfully saved user configuration to: {localPath}", MessageType.Info);
-                EditorUtility.DisplayDialog("Save Successful", "User input configuration has been saved.", "OK");
+
+                if (generateConstants)
+                {
+                    GenerateConstantsFile(configModel);
+                }
+                else
+                {
+                    EditorUtility.DisplayDialog("Save Successful", "User input configuration has been saved.", "OK");
+                }
             }
             catch (System.Exception e)
             {
@@ -316,6 +373,176 @@ namespace CycloneGames.InputSystem.Editor
                 SetStatus($"Error generating default config: {e.Message}", MessageType.Error);
             }
         }
+        
+        private void GenerateConstantsFile(InputConfiguration config)
+        {
+            var actionMaps = new HashSet<string>();
+            var actions = new HashSet<string>();
+
+            if (config.PlayerSlots != null)
+            {
+                foreach (var slot in config.PlayerSlots)
+                {
+                    if (slot.JoinAction != null && !string.IsNullOrEmpty(slot.JoinAction.ActionName))
+                    {
+                        actions.Add(slot.JoinAction.ActionName);
+                    }
+
+                    if (slot.Contexts != null)
+                    {
+                        foreach (var context in slot.Contexts)
+                        {
+                            if (!string.IsNullOrEmpty(context.ActionMap))
+                            {
+                                actionMaps.Add(context.ActionMap);
+                            }
+
+                            if (context.Bindings != null)
+                            {
+                                foreach (var binding in context.Bindings)
+                                {
+                                    if (!string.IsNullOrEmpty(binding.ActionName))
+                                    {
+                                        actions.Add(binding.ActionName);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (config.JoinAction != null && !string.IsNullOrEmpty(config.JoinAction.ActionName))
+            {
+                actions.Add(config.JoinAction.ActionName);
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine("// -- AUTO-GENERATED FILE --");
+            sb.AppendLine("// This file is generated by the CycloneGames.InputSystem Editor window.");
+            sb.AppendLine("// Do not modify this file manually.");
+            sb.AppendLine();
+            sb.AppendLine($"namespace {_codegenNamespace}");
+            sb.AppendLine("{");
+            sb.AppendLine("    public static class InputActions");
+            sb.AppendLine("    {");
+
+            // --- ActionMaps Class ---
+            sb.AppendLine("        public static class ActionMaps");
+            sb.AppendLine("        {");
+            foreach (var map in actionMaps.OrderBy(a => a))
+            {
+                sb.AppendLine($"            public static readonly int {SanitizeIdentifier(map)} = \"{map}\".GetHashCode();");
+            }
+            sb.AppendLine("        }");
+            sb.AppendLine();
+
+            // --- Actions Class (now with context) ---
+            sb.AppendLine("        public static class Actions");
+            sb.AppendLine("        {");
+            if (config.PlayerSlots != null)
+            {
+                var allBindings = config.PlayerSlots
+                    .Where(slot => slot.Contexts != null)
+                    .SelectMany(slot => slot.Contexts)
+                    .Where(ctx => ctx.Bindings != null && !string.IsNullOrEmpty(ctx.Name))
+                    .SelectMany(ctx => ctx.Bindings.Select(b => new { Context = ctx.Name, Action = b.ActionName, Map = ctx.ActionMap }))
+                    .Distinct();
+
+                foreach (var binding in allBindings.OrderBy(b => b.Context).ThenBy(b => b.Action))
+                {
+                    if (string.IsNullOrEmpty(binding.Action)) continue;
+                    
+                    // The constant name is Context_Action for intuitive use in code.
+                    string constantName = $"{binding.Context}_{binding.Action}";
+                    // The ID is based on Map/Action, as the runtime InputActionAsset is structured by maps.
+                    string uniqueId = $"{binding.Map}/{binding.Action}";
+                    sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = \"{uniqueId}\".GetHashCode();");
+                }
+            }
+            // Also handle player-specific join actions
+            if (config.PlayerSlots != null)
+            {
+                foreach (var slot in config.PlayerSlots.Where(s => s.JoinAction != null && !string.IsNullOrEmpty(s.JoinAction.ActionName)))
+                {
+                    // We'll invent a context name for these for clarity
+                    const string joinContext = "PlayerJoin";
+                    // And a map name
+                    const string joinMap = "GlobalActions";
+                    string constantName = $"{joinContext}_P{slot.PlayerId}_{slot.JoinAction.ActionName}";
+                    string uniqueId = $"{joinMap}/{slot.JoinAction.ActionName}";
+                     sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = \"{uniqueId}\".GetHashCode();");
+                }
+            }
+            sb.AppendLine("        }");
+
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+
+            try
+            {
+                if (_codegenFolder == null || string.IsNullOrEmpty(_codegenPath))
+                {
+                    SetStatus("Output directory for code generation is not set.", MessageType.Error);
+                    return;
+                }
+
+                if (!Directory.Exists(_codegenPath))
+                {
+                    Directory.CreateDirectory(_codegenPath);
+                }
+
+                string filePath = Path.Combine(_codegenPath, "InputActions.cs");
+                File.WriteAllText(filePath, sb.ToString());
+                
+                SetStatus("Successfully saved and generated constants file.", MessageType.Info);
+                EditorUtility.DisplayDialog("Save & Generate Successful", "User input configuration has been saved and InputActions.cs has been generated.", "OK");
+                
+                AssetDatabase.Refresh();
+            }
+            catch (System.Exception e)
+            {
+                SetStatus($"Failed to generate constants file: {e.Message}", MessageType.Error);
+            }
+        }
+
+        private string SanitizeIdentifier(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return "_";
+
+            var sb = new StringBuilder();
+            char firstChar = name[0];
+            
+            // Handle first character
+            if (char.IsLetter(firstChar) || firstChar == '_')
+            {
+                sb.Append(firstChar);
+            }
+            else if (char.IsDigit(firstChar))
+            {
+                sb.Append('_').Append(firstChar);
+            }
+            else
+            {
+                sb.Append('_');
+            }
+
+            // Handle remaining characters
+            for (int i = 1; i < name.Length; i++)
+            {
+                char c = name[i];
+                if (char.IsLetterOrDigit(c) || c == '_')
+                {
+                    sb.Append(c);
+                }
+                else
+                {
+                    sb.Append('_');
+                }
+            }
+
+            return sb.ToString();
+        }
 
         /// <summary>
         /// Creates a hardcoded template for a new default configuration.
@@ -324,18 +551,18 @@ namespace CycloneGames.InputSystem.Editor
         {
             return new InputConfiguration
             {
-                JoinAction = new ActionBindingConfig
-                {
-                    Type = ActionValueType.Button,
-                    ActionName = "JoinGame",
-                    DeviceBindings = new System.Collections.Generic.List<string> { "<Keyboard>/enter", "<Gamepad>/start" },
-                    LongPressMs = 0
-                },
                 PlayerSlots = new System.Collections.Generic.List<PlayerSlotConfig>
                 {
                     new PlayerSlotConfig
                     {
                         PlayerId = 0,
+                        JoinAction = new ActionBindingConfig
+                        {
+                            Type = ActionValueType.Button,
+                            ActionName = "JoinGame",
+                            DeviceBindings = new System.Collections.Generic.List<string> { "<Keyboard>/enter", "<Gamepad>/start" },
+                            LongPressMs = 0
+                        },
                         Contexts = new System.Collections.Generic.List<ContextDefinitionConfig>
                         {
                             new ContextDefinitionConfig
@@ -368,6 +595,13 @@ namespace CycloneGames.InputSystem.Editor
                     new PlayerSlotConfig
                     {
                         PlayerId = 1,
+                        JoinAction = new ActionBindingConfig
+                        {
+                            Type = ActionValueType.Button,
+                            ActionName = "JoinGame",
+                            DeviceBindings = new System.Collections.Generic.List<string> { "<Keyboard>/enter", "<Gamepad>/start" },
+                            LongPressMs = 0
+                        },
                         Contexts = new System.Collections.Generic.List<ContextDefinitionConfig>
                         {
                              new ContextDefinitionConfig
@@ -407,6 +641,80 @@ namespace CycloneGames.InputSystem.Editor
         {
             _statusMessage = message;
             _statusMessageType = type;
+        }
+
+        private void AddNewPlayer(SerializedProperty slotsProp)
+        {
+            int newIndex = slotsProp.arraySize;
+            slotsProp.arraySize++;
+            var newSlot = slotsProp.GetArrayElementAtIndex(newIndex);
+            
+            // Set default values for new player
+            newSlot.FindPropertyRelative("PlayerId").intValue = newIndex;
+            
+            // Add default join action
+            var joinAction = newSlot.FindPropertyRelative("JoinAction");
+            joinAction.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Button;
+            joinAction.FindPropertyRelative("ActionName").stringValue = "JoinGame";
+            var joinBindings = joinAction.FindPropertyRelative("DeviceBindings");
+            joinBindings.arraySize = 2;
+            joinBindings.GetArrayElementAtIndex(0).stringValue = "<Keyboard>/enter";
+            joinBindings.GetArrayElementAtIndex(1).stringValue = "<Gamepad>/start";
+            joinAction.FindPropertyRelative("LongPressMs").intValue = 0;
+            
+            // Add default context
+            var contexts = newSlot.FindPropertyRelative("Contexts");
+            contexts.arraySize = 1;
+            var context = contexts.GetArrayElementAtIndex(0);
+            context.FindPropertyRelative("Name").stringValue = "Gameplay";
+            context.FindPropertyRelative("ActionMap").stringValue = "PlayerActions";
+            
+            // Add default bindings
+            var bindings = context.FindPropertyRelative("Bindings");
+            bindings.arraySize = 2;
+            
+            // Move binding
+            var moveBinding = bindings.GetArrayElementAtIndex(0);
+            moveBinding.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Vector2;
+            moveBinding.FindPropertyRelative("ActionName").stringValue = "Move";
+            var moveDeviceBindings = moveBinding.FindPropertyRelative("DeviceBindings");
+            moveDeviceBindings.arraySize = 3;
+            moveDeviceBindings.GetArrayElementAtIndex(0).stringValue = "<Gamepad>/leftStick";
+            moveDeviceBindings.GetArrayElementAtIndex(1).stringValue = "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)";
+            moveDeviceBindings.GetArrayElementAtIndex(2).stringValue = "<Mouse>/delta";
+            moveBinding.FindPropertyRelative("LongPressMs").intValue = 0;
+            moveBinding.FindPropertyRelative("LongPressValueThreshold").floatValue = 0f;
+            
+            // Confirm binding
+            var confirmBinding = bindings.GetArrayElementAtIndex(1);
+            confirmBinding.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Button;
+            confirmBinding.FindPropertyRelative("ActionName").stringValue = "Confirm";
+            var confirmDeviceBindings = confirmBinding.FindPropertyRelative("DeviceBindings");
+            confirmDeviceBindings.arraySize = 2;
+            confirmDeviceBindings.GetArrayElementAtIndex(0).stringValue = "<Gamepad>/buttonSouth";
+            confirmDeviceBindings.GetArrayElementAtIndex(1).stringValue = "<Keyboard>/space";
+            confirmBinding.FindPropertyRelative("LongPressMs").intValue = 500;
+            confirmBinding.FindPropertyRelative("LongPressValueThreshold").floatValue = 0f;
+            
+            _serializedConfig.ApplyModifiedProperties();
+        }
+
+        private void AddNewBinding(SerializedProperty bindingsProp)
+        {
+            int newIndex = bindingsProp.arraySize;
+            bindingsProp.arraySize++;
+            var newBinding = bindingsProp.GetArrayElementAtIndex(newIndex);
+            
+            // Set default values for new binding
+            newBinding.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Button;
+            newBinding.FindPropertyRelative("ActionName").stringValue = "NewAction";
+            var deviceBindings = newBinding.FindPropertyRelative("DeviceBindings");
+            deviceBindings.arraySize = 1;
+            deviceBindings.GetArrayElementAtIndex(0).stringValue = "<Keyboard>/space";
+            newBinding.FindPropertyRelative("LongPressMs").intValue = 0;
+            newBinding.FindPropertyRelative("LongPressValueThreshold").floatValue = 0.5f;
+            
+            _serializedConfig.ApplyModifiedProperties();
         }
     }
 }
