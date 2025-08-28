@@ -8,15 +8,18 @@
 
 ## 功能特点
 
-- 上下文栈：Push/Pop 切换，按上下文启用对应 Action Map
-- 多人加入模式：单人锁定、共享设备、监听绑定（可开启设备锁定）
-- YAML 配置，显式声明动作类型（Button / Vector2 / Float）
-- 编辑器窗口：生成/加载/保存配置；绑定路径下拉常量选择
-- 响应式 API（R3）：为每个动作提供 Observable 流
-  - 按钮：短按事件与可选的长按事件
-  - 浮点（如手柄 Trigger）：可选长按（带阈值）
-- 热插拔：自动配对所需设备
-  - 设备检测：获取最近一次活跃输入设备类型（键鼠/手柄/其他）
+- **上下文栈**：通过 Push/Pop 管理输入状态（如：游戏、UI、过场动画）。
+- **丰富的多人模式**：
+    - **单人模式**：自动加入并将所有必需设备锁定给单个玩家。
+    - **大厅（设备锁定）Lobby (Device Locking)**：第一个设备加入成为玩家0。后续接入的设备会自动配对给该玩家，非常适合单人玩家在键鼠和手柄间无缝切换的场景。
+    - **大厅（设备共享）Lobby (Shared Devices)**：每个新设备加入都会创建一个新玩家（玩家0, 1, 2...），是本地多人合作的理想选择。
+- **零GC API**：可选的高性能 API，通过代码生成常量来彻底消除运行时的字符串操作和垃圾回收。
+- **可配置的代码生成**：
+    - 根据您的 YAML 配置自动生成静态的 `InputActions` 类。
+    - 可自定义生成文件的输出目录和命名空间，以适应您的项目结构，保持 `Packages` 目录的整洁。
+- **响应式 API (R3)**：为按钮的短按、长按、模拟量输入等提供 `Observable` 事件流。
+- **智能热插拔**：在大厅阶段结束后，能自动将新连接的设备配对给正确的玩家。
+- **活动设备检测**：`ActiveDeviceKind` 属性可以实时追踪玩家最后一次使用的设备是键鼠还是手柄。
 
 ## 安装依赖
 
@@ -26,8 +29,11 @@
 
 ## 快速上手
 
-1) 生成默认配置：Tools → CycloneGames → Input System Editor → Generate Default Config
-2) 启动时初始化：
+1) 生成默认配置：`Tools → CycloneGames → Input System Editor → Generate Default Config`。
+2) **（推荐）** 配置代码生成：
+    - 在编辑器窗口中，为即将生成的 `InputActions.cs` 文件设置**输出目录**（例如 `Assets/Scripts/Generated`）和**命名空间**。
+    - 点击 **Save and Generate Constants**。
+3) 启动时初始化：
 
 ```csharp
 var defaultUri = FilePathUtility.GetUnityWebRequestUri("input_config.yaml", UnityPathSource.StreamingAssets);
@@ -35,16 +41,21 @@ var userUri = FilePathUtility.GetUnityWebRequestUri("user_input_settings.yaml", 
 await InputSystemLoader.InitializeAsync(defaultUri, userUri);
 ```
 
-1) 加入并设置上下文：
+1) 使用生成的常量来加入游戏并设置上下文，以获得最佳性能和类型安全：
 
 ```csharp
+// 确保引入了您自定义的命名空间
+using YourGame.Input.Generated;
+
 var svc = InputManager.Instance.JoinSinglePlayer(0);
 var ctx = new InputContext("Gameplay", "PlayerActions")
-  .AddBinding(svc.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(dir => {/*...*/}))
-  .AddBinding(svc.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(() => {/*...*/}));
+  .AddBinding(svc.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(dir => {/*...*/}))
+  .AddBinding(svc.GetButtonObservable(InputActions.Actions.Gameplay_Confirm), new ActionCommand(() => {/*...*/}));
 svc.RegisterContext(ctx);
 svc.PushContext("Gameplay");
 ```
+
+> **注意**：如果您不想使用代码生成功能，原始的基于字符串的 API (`GetVector2Observable("PlayerActions", "Move")`) 仍然完全可用。
 
 ## YAML 配置示例
 
@@ -232,10 +243,9 @@ press.Subscribe(p =>
 
 ### 编辑器提示
 
-- Button 显示 “Long Press (ms)”；Float 显示 “Long Press (ms)” 与 “Long Press Threshold (0-1)”。
-- 非 Button/Float 类型在保存时会忽略 `longPressMs`。
-- Vector2 来源：可用 Mouse Delta、摇杆、DPad 或 2DVector 复合。常量位于 `InputBindingConstants.Vector2Sources`。
-- 鼠标 Delta 在选择器中显示为 “Mouse/Delta(Vector2)”，实际绑定路径为 `<Mouse>/delta`。
+- **代码生成**：编辑器窗口提供了设置选项，可自定义生成的 `InputActions.cs` 文件的输出目录和命名空间。这些设置会保存在项目的 `EditorPrefs` 中。
+- **长按**：“Long Press (ms)” 字段仅对 `Button` 和 `Float` 类型的动作有效。对于 `Float` 类型，您还可以设置 “Long Press Threshold (0-1)” 来定义模拟量的“按下”阈值。
+- **Vector2 来源**：`InputBindingConstants.Vector2Sources` 类为常用的 Vector2 绑定（如 `Gamepad_LeftStick` 和 `Composite_WASD`）提供了方便的常量。
 
 2) 在按住期间逐帧累加：
 
@@ -307,12 +317,20 @@ _input.ActiveDeviceKind.Subscribe(kind => UpdateHUDIcons(kind));
 
 ## API 概览
 
-- IInputService
-  - `ReadOnlyReactiveProperty<string>` ActiveContextName；`event OnContextChanged`
-  - `ReadOnlyReactiveProperty<InputDeviceKind>` ActiveDeviceKind（键鼠/手柄/其他）
-  - GetVector2Observable(map, action) | GetVector2Observable(action)
-  - GetButtonObservable(map, action) | GetButtonObservable(action)
-  - GetLongPressObservable(map, action) | GetLongPressObservable(action)
-  - GetPressStateObservable(map, action) | GetPressStateObservable(action)
-  - GetScalarObservable(map, action) | GetScalarObservable(action)
-  - RegisterContext, PushContext, PopContext, BlockInput, UnblockInput
+- `IInputService`
+  - `ReadOnlyReactiveProperty<string> ActiveContextName`
+  - `ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind`
+  - `event Action<string> OnContextChanged`
+  - **零GC API (推荐)**
+    - `GetVector2Observable(int actionId)`
+    - `GetButtonObservable(int actionId)`
+    - `GetLongPressObservable(int actionId)`
+    - `GetPressStateObservable(int actionId)`
+    - `GetScalarObservable(int actionId)`
+  - **基于字符串的 API (兼容/可选)**
+    - `Get...Observable(string actionName)`
+    - `Get...Observable(string actionMapName, string actionName)`
+  - `RegisterContext(InputContext context)`
+  - `PushContext(string contextName)`
+  - `PopContext()`
+  - `BlockInput()`, `UnblockInput()`

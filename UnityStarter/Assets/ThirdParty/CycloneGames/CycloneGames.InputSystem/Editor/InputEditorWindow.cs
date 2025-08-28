@@ -4,6 +4,7 @@ using System.IO;
 using VYaml.Serialization;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using CycloneGames.Utility.Runtime;
 using CycloneGames.InputSystem.Runtime;
 
@@ -22,6 +23,11 @@ namespace CycloneGames.InputSystem.Editor
         private string _statusMessage;
         private MessageType _statusMessageType = MessageType.Info;
 
+        // --- Code Generation Settings ---
+        private string _codegenPath;
+        private string _codegenNamespace;
+        private DefaultAsset _codegenFolder;
+
         // --- Constants ---
         private const string DefaultConfigFileName = "input_config.yaml";
         private const string UserConfigFileName = "user_input_settings.yaml";
@@ -36,6 +42,15 @@ namespace CycloneGames.InputSystem.Editor
         {
             _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(DefaultConfigFileName, UnityPathSource.StreamingAssets);
             _userConfigPath = FilePathUtility.GetUnityWebRequestUri(UserConfigFileName, UnityPathSource.PersistentData);
+            
+            // Load codegen settings
+            _codegenPath = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenPath", "Assets");
+            _codegenNamespace = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenNamespace", "YourGame.Input.Generated");
+            if (!string.IsNullOrEmpty(_codegenPath))
+            {
+                _codegenFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_codegenPath);
+            }
+            
             LoadUserConfig();
         }
 
@@ -52,6 +67,8 @@ namespace CycloneGames.InputSystem.Editor
             }
             DrawToolbar();
             DrawStatusBar();
+            
+            DrawCodegenSettings();
 
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
 
@@ -164,6 +181,10 @@ namespace CycloneGames.InputSystem.Editor
             GUILayout.Space(20);
             GUI.enabled = _configSO != null;
             if (GUILayout.Button("Save to User Config", EditorStyles.toolbarButton)) SaveChangesToUserConfig();
+            if (GUILayout.Button("Save and Generate Constants", EditorStyles.toolbarButton))
+            {
+                SaveChangesToUserConfig(true); // Pass true to trigger generation
+            }
             GUI.enabled = true;
             GUILayout.FlexibleSpace();
             if (GUILayout.Button("Reset User to Default", EditorStyles.toolbarButton))
@@ -182,6 +203,35 @@ namespace CycloneGames.InputSystem.Editor
             {
                 EditorGUILayout.HelpBox(_statusMessage, _statusMessageType);
             }
+        }
+
+        private void DrawCodegenSettings()
+        {
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Code Generation Settings", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            EditorGUI.BeginChangeCheck();
+            var newFolder = (DefaultAsset)EditorGUILayout.ObjectField("Output Directory", _codegenFolder, typeof(DefaultAsset), false);
+            var newNamespace = EditorGUILayout.TextField("Namespace", _codegenNamespace);
+
+            if (EditorGUI.EndChangeCheck())
+            {
+                if (newFolder != _codegenFolder)
+                {
+                    _codegenFolder = newFolder;
+                    _codegenPath = AssetDatabase.GetAssetPath(_codegenFolder);
+                    EditorPrefs.SetString("CycloneGames.InputSystem.CodegenPath", _codegenPath);
+                }
+                if (newNamespace != _codegenNamespace)
+                {
+                    _codegenNamespace = newNamespace;
+                    EditorPrefs.SetString("CycloneGames.InputSystem.CodegenNamespace", _codegenNamespace);
+                }
+            }
+            
+            EditorGUI.indentLevel--;
+            EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
         }
 
         private void LoadUserConfig()
@@ -232,7 +282,7 @@ namespace CycloneGames.InputSystem.Editor
             }
         }
 
-        private void SaveChangesToUserConfig()
+        private void SaveChangesToUserConfig(bool generateConstants = false)
         {
             if (_configSO == null)
             {
@@ -255,7 +305,15 @@ namespace CycloneGames.InputSystem.Editor
 
                 File.WriteAllText(localPath, yamlContent);
                 SetStatus($"Successfully saved user configuration to: {localPath}", MessageType.Info);
-                EditorUtility.DisplayDialog("Save Successful", "User input configuration has been saved.", "OK");
+
+                if (generateConstants)
+                {
+                    GenerateConstantsFile(configModel);
+                }
+                else
+                {
+                    EditorUtility.DisplayDialog("Save Successful", "User input configuration has been saved.", "OK");
+                }
             }
             catch (System.Exception e)
             {
@@ -314,6 +372,176 @@ namespace CycloneGames.InputSystem.Editor
             {
                 SetStatus($"Error generating default config: {e.Message}", MessageType.Error);
             }
+        }
+        
+        private void GenerateConstantsFile(InputConfiguration config)
+        {
+            var actionMaps = new HashSet<string>();
+            var actions = new HashSet<string>();
+
+            if (config.PlayerSlots != null)
+            {
+                foreach (var slot in config.PlayerSlots)
+                {
+                    if (slot.JoinAction != null && !string.IsNullOrEmpty(slot.JoinAction.ActionName))
+                    {
+                        actions.Add(slot.JoinAction.ActionName);
+                    }
+
+                    if (slot.Contexts != null)
+                    {
+                        foreach (var context in slot.Contexts)
+                        {
+                            if (!string.IsNullOrEmpty(context.ActionMap))
+                            {
+                                actionMaps.Add(context.ActionMap);
+                            }
+
+                            if (context.Bindings != null)
+                            {
+                                foreach (var binding in context.Bindings)
+                                {
+                                    if (!string.IsNullOrEmpty(binding.ActionName))
+                                    {
+                                        actions.Add(binding.ActionName);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (config.JoinAction != null && !string.IsNullOrEmpty(config.JoinAction.ActionName))
+            {
+                actions.Add(config.JoinAction.ActionName);
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine("// -- AUTO-GENERATED FILE --");
+            sb.AppendLine("// This file is generated by the CycloneGames.InputSystem Editor window.");
+            sb.AppendLine("// Do not modify this file manually.");
+            sb.AppendLine();
+            sb.AppendLine($"namespace {_codegenNamespace}");
+            sb.AppendLine("{");
+            sb.AppendLine("    public static class InputActions");
+            sb.AppendLine("    {");
+
+            // --- ActionMaps Class ---
+            sb.AppendLine("        public static class ActionMaps");
+            sb.AppendLine("        {");
+            foreach (var map in actionMaps.OrderBy(a => a))
+            {
+                sb.AppendLine($"            public static readonly int {SanitizeIdentifier(map)} = \"{map}\".GetHashCode();");
+            }
+            sb.AppendLine("        }");
+            sb.AppendLine();
+
+            // --- Actions Class (now with context) ---
+            sb.AppendLine("        public static class Actions");
+            sb.AppendLine("        {");
+            if (config.PlayerSlots != null)
+            {
+                var allBindings = config.PlayerSlots
+                    .Where(slot => slot.Contexts != null)
+                    .SelectMany(slot => slot.Contexts)
+                    .Where(ctx => ctx.Bindings != null && !string.IsNullOrEmpty(ctx.Name))
+                    .SelectMany(ctx => ctx.Bindings.Select(b => new { Context = ctx.Name, Action = b.ActionName, Map = ctx.ActionMap }))
+                    .Distinct();
+
+                foreach (var binding in allBindings.OrderBy(b => b.Context).ThenBy(b => b.Action))
+                {
+                    if (string.IsNullOrEmpty(binding.Action)) continue;
+                    
+                    // The constant name is Context_Action for intuitive use in code.
+                    string constantName = $"{binding.Context}_{binding.Action}";
+                    // The ID is based on Map/Action, as the runtime InputActionAsset is structured by maps.
+                    string uniqueId = $"{binding.Map}/{binding.Action}";
+                    sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = \"{uniqueId}\".GetHashCode();");
+                }
+            }
+            // Also handle player-specific join actions
+            if (config.PlayerSlots != null)
+            {
+                foreach (var slot in config.PlayerSlots.Where(s => s.JoinAction != null && !string.IsNullOrEmpty(s.JoinAction.ActionName)))
+                {
+                    // We'll invent a context name for these for clarity
+                    const string joinContext = "PlayerJoin";
+                    // And a map name
+                    const string joinMap = "GlobalActions";
+                    string constantName = $"{joinContext}_P{slot.PlayerId}_{slot.JoinAction.ActionName}";
+                    string uniqueId = $"{joinMap}/{slot.JoinAction.ActionName}";
+                     sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = \"{uniqueId}\".GetHashCode();");
+                }
+            }
+            sb.AppendLine("        }");
+
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+
+            try
+            {
+                if (_codegenFolder == null || string.IsNullOrEmpty(_codegenPath))
+                {
+                    SetStatus("Output directory for code generation is not set.", MessageType.Error);
+                    return;
+                }
+
+                if (!Directory.Exists(_codegenPath))
+                {
+                    Directory.CreateDirectory(_codegenPath);
+                }
+
+                string filePath = Path.Combine(_codegenPath, "InputActions.cs");
+                File.WriteAllText(filePath, sb.ToString());
+                
+                SetStatus("Successfully saved and generated constants file.", MessageType.Info);
+                EditorUtility.DisplayDialog("Save & Generate Successful", "User input configuration has been saved and InputActions.cs has been generated.", "OK");
+                
+                AssetDatabase.Refresh();
+            }
+            catch (System.Exception e)
+            {
+                SetStatus($"Failed to generate constants file: {e.Message}", MessageType.Error);
+            }
+        }
+
+        private string SanitizeIdentifier(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return "_";
+
+            var sb = new StringBuilder();
+            char firstChar = name[0];
+            
+            // Handle first character
+            if (char.IsLetter(firstChar) || firstChar == '_')
+            {
+                sb.Append(firstChar);
+            }
+            else if (char.IsDigit(firstChar))
+            {
+                sb.Append('_').Append(firstChar);
+            }
+            else
+            {
+                sb.Append('_');
+            }
+
+            // Handle remaining characters
+            for (int i = 1; i < name.Length; i++)
+            {
+                char c = name[i];
+                if (char.IsLetterOrDigit(c) || c == '_')
+                {
+                    sb.Append(c);
+                }
+                else
+                {
+                    sb.Append('_');
+                }
+            }
+
+            return sb.ToString();
         }
 
         /// <summary>

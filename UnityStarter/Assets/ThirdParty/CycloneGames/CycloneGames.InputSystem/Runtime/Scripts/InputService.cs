@@ -32,6 +32,10 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly Dictionary<(string map, string action), Subject<Vector2>> _vector2Subjects = new();
         private readonly Dictionary<(string map, string action), Subject<float>> _scalarSubjects = new();
         private readonly HashSet<string> _requiredLayouts = new();
+        
+        // --- Zero GC Lookups ---
+        private readonly Dictionary<int, InputAction> _actionLookup = new();
+        private readonly Dictionary<int, string> _actionIdToName = new(); // For debugging
 
         private CompositeDisposable _subscriptions;
         private readonly CompositeDisposable _actionWiringSubscriptions = new();
@@ -39,7 +43,7 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly InputActionAsset _inputActionAsset;
         private bool _isInputBlocked;
 
-        public InputService(int playerId, InputUser user, PlayerSlotConfig config)
+        public InputService(int playerId, InputUser user, PlayerSlotConfig config, InputDevice initialDevice = null)
         {
             PlayerId = playerId;
             User = user;
@@ -54,6 +58,12 @@ namespace CycloneGames.InputSystem.Runtime
 
             // Listen for device changes to handle hot-swapping for this specific player.
             UnityEngine.InputSystem.InputSystem.onDeviceChange += OnDeviceChanged;
+            
+            // Set initial device kind if provided
+            if (initialDevice != null)
+            {
+                UpdateActiveDeviceKind(initialDevice);
+            }
         }
 
         /// <summary>
@@ -61,6 +71,10 @@ namespace CycloneGames.InputSystem.Runtime
         /// </summary>
         private void OnDeviceChanged(InputDevice device, InputDeviceChange change)
         {
+            // While in the lobby (listening for players), do not auto-pair new devices to existing players.
+            // Let new devices be used to join new players.
+            if (InputManager.IsListeningForPlayers) return;
+            
             // We only care about devices being added, as removal is handled automatically by the InputUser.
             if (change != InputDeviceChange.Added) return;
 
@@ -198,6 +212,24 @@ namespace CycloneGames.InputSystem.Runtime
         public Observable<bool> GetPressStateObservable(string actionMapName, string actionName)
             => _pressStateSubjects.TryGetValue((actionMapName, actionName), out var subject) ? subject : Observable.Empty<bool>();
 
+        #region ZeroGC API
+        public Observable<Vector2> GetVector2Observable(int actionId) => FindAction(actionId) is { } action ? GetVector2Observable(action.actionMap.name, action.name) : Observable.Empty<Vector2>();
+        public Observable<Unit> GetButtonObservable(int actionId) => FindAction(actionId) is { } action ? GetButtonObservable(action.actionMap.name, action.name) : Observable.Empty<Unit>();
+        public Observable<Unit> GetLongPressObservable(int actionId) => FindAction(actionId) is { } action ? GetLongPressObservable(action.actionMap.name, action.name) : Observable.Empty<Unit>();
+        public Observable<bool> GetPressStateObservable(int actionId) => FindAction(actionId) is { } action ? GetPressStateObservable(action.actionMap.name, action.name) : Observable.Empty<bool>();
+        public Observable<float> GetScalarObservable(int actionId) => FindAction(actionId) is { } action ? GetScalarObservable(action.actionMap.name, action.name) : Observable.Empty<float>();
+
+        private InputAction FindAction(int actionId)
+        {
+            if (_actionLookup.TryGetValue(actionId, out var action))
+            {
+                return action;
+            }
+            CLogger.LogWarning($"[InputService] Action with globally unique ID '{actionId}' not found. Make sure to regenerate constants after changing the config.");
+            return null;
+        }
+        #endregion
+
         public void BlockInput()
         {
             if (_isInputBlocked) return;
@@ -287,6 +319,29 @@ namespace CycloneGames.InputSystem.Runtime
                             if (endIndex > startIndex) _requiredLayouts.Add(devBinding.Substring(startIndex + 1, endIndex - startIndex - 1));
                         }
                     }
+            
+            // --- Handle Player-Specific Join Action ---
+            if (config.JoinAction != null && !string.IsNullOrEmpty(config.JoinAction.ActionName))
+            {
+                const string joinMapName = "GlobalActions";
+                var joinMap = asset.FindActionMap(joinMapName) ?? asset.AddActionMap(joinMapName);
+                var joinAction = joinMap.AddAction(config.JoinAction.ActionName, InputActionType.Button);
+                foreach (var path in config.JoinAction.DeviceBindings)
+                {
+                    joinAction.AddBinding(path);
+                }
+                
+                string combinedId = $"{joinMapName}/{joinAction.name}";
+                var actionId = combinedId.GetHashCode();
+                _actionLookup[actionId] = joinAction;
+                _actionIdToName[actionId] = combinedId;
+                
+                // Wire up the observable for the join action
+                var subject = new Subject<Unit>();
+                joinAction.PerformedAsObservable(token).Select(_ => Unit.Default).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                _buttonSubjects[(joinMapName, joinAction.name)] = subject;
+            }
+            // -----------------------------------------
 
             foreach (var ctxConfig in config.Contexts)
             {
@@ -370,6 +425,15 @@ namespace CycloneGames.InputSystem.Runtime
                     }
 
                     actionsByMapAndName[key] = action;
+                    
+                    // --- Populate ZeroGC Lookups ---
+                    string combinedId = $"{ctxConfig.ActionMap}/{action.name}";
+                    var actionId = combinedId.GetHashCode();
+                    
+                    // No collision check needed as combinedId is unique by design
+                    _actionLookup[actionId] = action;
+                    _actionIdToName[actionId] = combinedId; // Store combined name for debugging
+                    // --------------------------------
 
                     if (inferredType == ActionValueType.Vector2)
                     {

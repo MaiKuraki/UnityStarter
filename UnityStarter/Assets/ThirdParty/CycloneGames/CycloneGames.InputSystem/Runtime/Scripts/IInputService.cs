@@ -40,6 +40,8 @@ namespace CycloneGames.InputSystem.Runtime
         /// <param name="actionName">The action name.</param>
         /// <returns>An Observable stream of Vector2 values.</returns>
         Observable<Vector2> GetVector2Observable(string actionMapName, string actionName);
+        
+        Observable<Vector2> GetVector2Observable(int actionId);
 
         /// <summary>
         /// Gets a reactive stream for a button-based action (e.g., jump, shoot).
@@ -71,6 +73,8 @@ namespace CycloneGames.InputSystem.Runtime
         /// <param name="actionName">The action name.</param>
         /// <returns>An Observable stream of Unit values.</returns>
         Observable<Unit> GetButtonObservable(string actionMapName, string actionName);
+        
+        Observable<Unit> GetButtonObservable(int actionId);
 
         /// <summary>
         /// Gets a reactive stream for a long-press event within a specific action map.
@@ -80,6 +84,8 @@ namespace CycloneGames.InputSystem.Runtime
         /// <param name="actionName">The action name.</param>
         /// <returns>An Observable stream of Unit values signaling a long-press.</returns>
         Observable<Unit> GetLongPressObservable(string actionMapName, string actionName);
+        
+        Observable<Unit> GetLongPressObservable(int actionId);
 
         /// <summary>
         /// Gets a reactive stream for the pressed state within a specific action map.
@@ -89,6 +95,8 @@ namespace CycloneGames.InputSystem.Runtime
         /// <param name="actionName">The action name.</param>
         /// <returns>An Observable stream of bool values indicating pressed state.</returns>
         Observable<bool> GetPressStateObservable(string actionMapName, string actionName);
+        
+        Observable<bool> GetPressStateObservable(int actionId);
 
         /// <summary>
         /// Gets a reactive stream for a scalar-based action (e.g., zoom, sensitivity).
@@ -104,6 +112,8 @@ namespace CycloneGames.InputSystem.Runtime
         /// <param name="actionName">The action name.</param>
         /// <returns>An Observable stream of float values.</returns>
         Observable<float> GetScalarObservable(string actionMapName, string actionName);
+        
+        Observable<float> GetScalarObservable(int actionId);
 
         /// <summary>
         /// Registers a pre-configured InputContext, making it available for activation.

@@ -1,6 +1,8 @@
 using CycloneGames.InputSystem.Runtime;
+using CycloneGames.InputSystem.Runtime.Generated;
 using CycloneGames.Utility.Runtime;
 using Cysharp.Threading.Tasks;
+using R3;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -103,28 +105,53 @@ namespace CycloneGames.InputSystem.Sample
         {
             int playerId = (playerInput as InputService).PlayerId;
 
-            // Your game-specific code goes here.
-            
-            //if (_playerPrefab == null || _spawnPoints.Length <= playerId) return;
+            if (_playerPrefab == null)
+            {
+                Debug.LogError("Player Prefab is not set in the GameInitializer_Sample.");
+                return;
+            }
+            if (_spawnPoints.Length <= playerId)
+            {
+                Debug.LogError($"Not enough spawn points for Player {playerId}.");
+                return;
+            }
 
-            // Transform spawnPoint = _spawnPoints[playerId];
-            // GameObject playerInstance = Instantiate(_playerPrefab, spawnPoint.position, spawnPoint.rotation);
-            // PlayerController controller = playerInstance.GetComponent<PlayerController>();
+            Transform spawnPoint = _spawnPoints[playerId];
+            GameObject playerInstance = Instantiate(_playerPrefab, spawnPoint.position, spawnPoint.rotation);
+            var controller = playerInstance.GetComponent<SimplePlayerController>();
 
-            // if (controller)
-            // {
-            //     controller.Initialize(playerId, _playerColors[playerId]);
+            if (controller)
+            {
+                Color playerColor = _playerColors.Length > playerId ? _playerColors[playerId] : Color.white;
+                controller.Initialize(playerId, playerColor);
 
-            //     var moveCommand = new MoveCommand(controller.OnMove);
-            //     var jumpCommand = new ActionCommand(controller.OnJump);
+                // --- Context and Command setup using the new Zero-GC API ---
+                
+                // Create commands that link input events to controller methods
+                var moveCommand = new MoveCommand(controller.OnMove);
+                var confirmCommand = new ActionCommand(controller.OnConfirm);
+                var confirmLongPressCommand = new ActionCommand(controller.OnConfirmLongPress);
 
-            //     var gameplayContext = new InputContext("Gameplay", "PlayerActions")
-            //         .AddBinding(playerInput.GetVector2Observable("PlayerActions", "Move"), moveCommand)
-            //         .AddBinding(playerInput.GetButtonObservable("PlayerActions", "Jump"), jumpCommand);
+                // Create an input context for gameplay
+                var gameplayContext = new InputContext("Gameplay", "PlayerActions")
+                    // Bind the 'Move' action using the generated constant ID. The name is Context_Action.
+                    .AddBinding(playerInput.GetVector2Observable(InputActions.Actions.Gameplay_Move), moveCommand)
+                    // Bind the 'Confirm' action's short press event
+                    .AddBinding(playerInput.GetButtonObservable(InputActions.Actions.Gameplay_Confirm), confirmCommand)
+                    // Bind the 'Confirm' action's long press event
+                    .AddBinding(playerInput.GetLongPressObservable(InputActions.Actions.Gameplay_Confirm), confirmLongPressCommand);
 
-            //     playerInput.RegisterContext(gameplayContext);
-            //     playerInput.PushContext("Gameplay");
-            // }
+                // Register the context with the service and push it to the top of the stack to activate it.
+                playerInput.RegisterContext(gameplayContext);
+                playerInput.PushContext("Gameplay");
+                
+                // --- Example of subscribing to device changes ---
+                playerInput.ActiveDeviceKind.Subscribe(kind =>
+                {
+                    Debug.Log($"Player {playerId} active device changed to: {kind}");
+                    // Here you could update UI prompts, e.g., show "Press [A]" vs "Press [Space]"
+                }).AddTo(controller.destroyCancellationToken); // Manage subscription lifetime on the MonoBehaviour component, not the GameObject.
+            }
         }
     }
 }
