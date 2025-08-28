@@ -1,32 +1,38 @@
-using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
-using CycloneGames.GameplayTags.Runtime; // Add this line
+using UnityEngine.SceneManagement;
+using System.Collections.Generic;
+using CycloneGames.GameplayTags.Runtime;
+using UnityEditor.SceneManagement;
+
+//  NOTE: This tool doesn't works well.
 
 namespace CycloneGames.GameplayTags.Editor
 {
     public class GameplayTagValidationReporter : EditorWindow
     {
+        // Internal struct to hold information about an invalid tag reference.
         private struct InvalidTagEntry
         {
             public string AssetPath;
             public string TagName;
-            public Object AssetObject; // Reference to the actual asset for selection
-            public SerializedProperty TagContainerProperty; // Reference to the SerializedProperty for the container
+            public Object ContextObject; // The specific component or asset containing the tag.
+            public string PropertyPath; // The path to the GameplayTagContainer within the object.
 
-            public InvalidTagEntry(string assetPath, string tagName, Object assetObject, SerializedProperty tagContainerProperty)
+            public InvalidTagEntry(string assetPath, string tagName, Object contextObject, string propertyPath)
             {
                 AssetPath = assetPath;
                 TagName = tagName;
-                AssetObject = assetObject;
-                TagContainerProperty = tagContainerProperty.Copy(); // Copy the property to avoid issues with iterator
+                ContextObject = contextObject;
+                PropertyPath = propertyPath;
             }
         }
 
         private List<InvalidTagEntry> m_InvalidTags = new List<InvalidTagEntry>();
         private Vector2 m_ScrollPosition;
 
-        [MenuItem("Tools/CycloneGames/GameplayTags/Tag Validation Window")]
+        //  NOTE: This tool doesn't works well. keep comment until we find a good way validate the tags required in GameObject(Prefab)/Scene/ScriptableObject.
+        // [MenuItem("Tools/CycloneGames/GameplayTags/Tag Validation Window")]
         public static void ShowWindow()
         {
             GetWindow<GameplayTagValidationReporter>("GameplayTag Validation");
@@ -35,9 +41,10 @@ namespace CycloneGames.GameplayTags.Editor
         private void OnGUI()
         {
             EditorGUILayout.LabelField("GameplayTag Validation Tool", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox("This tool scans all project assets (Prefabs, ScriptableObjects) AND all objects in currently open scenes for invalid GameplayTag references.", MessageType.Info);
             EditorGUILayout.Space();
 
-            if (GUILayout.Button("Scan for Invalid Tags"))
+            if (GUILayout.Button("Scan Project and Open Scenes for Invalid Tags"))
             {
                 ScanForInvalidTags();
             }
@@ -46,22 +53,34 @@ namespace CycloneGames.GameplayTags.Editor
 
             if (m_InvalidTags.Count == 0)
             {
-                EditorGUILayout.HelpBox("No invalid GameplayTags found in project.", MessageType.Info);
+                EditorGUILayout.HelpBox("Scan complete. No invalid GameplayTags found.", MessageType.Info);
             }
             else
             {
-                EditorGUILayout.HelpBox($"{m_InvalidTags.Count} invalid GameplayTags found. Please review and fix.", MessageType.Warning);
+                EditorGUILayout.HelpBox($"{m_InvalidTags.Count} invalid GameplayTag reference(s) found. Please review and fix.", MessageType.Warning);
 
                 m_ScrollPosition = EditorGUILayout.BeginScrollView(m_ScrollPosition);
-                for (int i = 0; i < m_InvalidTags.Count; i++)
+                for (int i = m_InvalidTags.Count - 1; i >= 0; i--) // Iterate backwards for safe removal
                 {
                     var entry = m_InvalidTags[i];
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.ObjectField(entry.AssetObject, typeof(Object), false);
-                    EditorGUILayout.SelectableLabel(entry.TagName, GUILayout.ExpandWidth(true));
-                    if (GUILayout.Button("Fix", GUILayout.Width(50)))
+                    EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
+
+                    // Display the context object (the component or SO) which is clickable
+                    EditorGUILayout.ObjectField(entry.ContextObject, typeof(Object), true, GUILayout.Width(150));
+
+                    EditorGUILayout.BeginVertical();
+                    EditorGUILayout.LabelField($"Invalid Tag: ", EditorStyles.boldLabel);
+                    EditorGUILayout.SelectableLabel(entry.TagName, GUILayout.Height(EditorGUIUtility.singleLineHeight));
+                    EditorGUILayout.LabelField($"Location: ", EditorStyles.boldLabel);
+                    EditorGUILayout.SelectableLabel(entry.AssetPath, GUILayout.Height(EditorGUIUtility.singleLineHeight));
+                    EditorGUILayout.EndVertical();
+
+                    if (GUILayout.Button("Fix", GUILayout.Width(50), GUILayout.Height(EditorGUIUtility.singleLineHeight * 2 + 5)))
                     {
                         FixSingleInvalidTag(entry, i);
+                        // Since we modified the list, we should exit the loop for this frame
+                        // to avoid issues with the collection being modified during iteration.
+                        GUIUtility.ExitGUI();
                     }
                     EditorGUILayout.EndHorizontal();
                 }
@@ -75,34 +94,40 @@ namespace CycloneGames.GameplayTags.Editor
             }
         }
 
+        /// <summary>
+        /// Scans both project assets and all open scenes for invalid tags.
+        /// </summary>
         private void ScanForInvalidTags()
         {
             m_InvalidTags.Clear();
-            EditorUtility.DisplayProgressBar("Scanning Assets", "Initializing scan...", 0f);
+            GameplayTagManager.InitializeIfNeeded(); // Ensure the tag dictionary is up-to-date
 
-            string[] assetGuids = AssetDatabase.FindAssets("t:ScriptableObject t:GameObject"); // Scan for ScriptableObjects and GameObjects (prefabs)
+            // --- Part 1: Scan Project Assets (Prefabs and ScriptableObjects) ---
+            string[] assetGuids = AssetDatabase.FindAssets("t:ScriptableObject t:GameObject");
             for (int i = 0; i < assetGuids.Length; i++)
             {
                 string assetPath = AssetDatabase.GUIDToAssetPath(assetGuids[i]);
-                EditorUtility.DisplayProgressBar("Scanning Assets", $"Scanning: {assetPath}", (float)i / assetGuids.Length);
+                EditorUtility.DisplayProgressBar("Scanning Project Assets", $"Scanning: {assetPath}", (float)i / assetGuids.Length);
 
                 Object assetObject = AssetDatabase.LoadAssetAtPath<Object>(assetPath);
                 if (assetObject == null) continue;
 
-                // For GameObjects (prefabs), we need to check its components
-                if (assetObject is GameObject gameObject)
+                CheckObjectForInvalidTags(assetObject, assetPath);
+            }
+
+            // --- Part 2: Scan All Open Scenes ---
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                Scene scene = SceneManager.GetSceneAt(i);
+                if (!scene.isLoaded) continue;
+
+                EditorUtility.DisplayProgressBar("Scanning Open Scenes", $"Scanning Scene: {scene.name}", (float)i / SceneManager.sceneCount);
+
+                GameObject[] rootGameObjects = scene.GetRootGameObjects();
+                foreach (GameObject rootGo in rootGameObjects)
                 {
-                    MonoBehaviour[] components = gameObject.GetComponentsInChildren<MonoBehaviour>(true);
-                    foreach (MonoBehaviour component in components)
-                    {
-                        if (component == null) continue;
-                        CheckObjectForInvalidTags(component, assetPath);
-                    }
-                }
-                // For ScriptableObjects
-                else if (assetObject is ScriptableObject scriptableObject)
-                {
-                    CheckObjectForInvalidTags(scriptableObject, assetPath);
+                    // For scene objects, the "asset path" is the scene's path.
+                    CheckObjectForInvalidTags(rootGo, scene.path);
                 }
             }
 
@@ -112,28 +137,41 @@ namespace CycloneGames.GameplayTags.Editor
 
         private void CheckObjectForInvalidTags(Object obj, string assetPath)
         {
-            if (obj == null) return;
+            if (obj is GameObject go)
+            {
+                MonoBehaviour[] components = go.GetComponentsInChildren<MonoBehaviour>(true);
+                foreach (MonoBehaviour component in components)
+                {
+                    if (component == null) continue;
+                    ProcessSerializedObject(new SerializedObject(component), assetPath);
+                }
+            }
+            else if (obj is ScriptableObject scriptableObject)
+            {
+                ProcessSerializedObject(new SerializedObject(scriptableObject), assetPath);
+            }
+        }
 
-            SerializedObject serializedObject = new SerializedObject(obj);
+        private void ProcessSerializedObject(SerializedObject serializedObject, string assetPath)
+        {
             SerializedProperty property = serializedObject.GetIterator();
-
             if (property.NextVisible(true))
             {
                 do
                 {
                     if (property.propertyType == SerializedPropertyType.Generic && property.type == "GameplayTagContainer")
                     {
-                        SerializedProperty serializedExplicitTagsProperty = property.FindPropertyRelative("m_SerializedExplicitTags");
-                        if (serializedExplicitTagsProperty != null && serializedExplicitTagsProperty.isArray)
+                        SerializedProperty tagsArrayProperty = property.FindPropertyRelative("m_SerializedExplicitTags");
+                        if (tagsArrayProperty != null && tagsArrayProperty.isArray)
                         {
-                            for (int i = 0; i < serializedExplicitTagsProperty.arraySize; i++)
+                            for (int i = 0; i < tagsArrayProperty.arraySize; i++)
                             {
-                                SerializedProperty tagStringProperty = serializedExplicitTagsProperty.GetArrayElementAtIndex(i);
+                                SerializedProperty tagStringProperty = tagsArrayProperty.GetArrayElementAtIndex(i);
                                 string tagName = tagStringProperty.stringValue;
 
                                 if (!string.IsNullOrEmpty(tagName) && !GameplayTagManager.TryRequestTag(tagName, out _))
                                 {
-                                    m_InvalidTags.Add(new InvalidTagEntry(assetPath, tagName, obj, serializedExplicitTagsProperty));
+                                    m_InvalidTags.Add(new InvalidTagEntry(assetPath, tagName, serializedObject.targetObject, property.propertyPath));
                                 }
                             }
                         }
@@ -144,155 +182,76 @@ namespace CycloneGames.GameplayTags.Editor
 
         private void FixSingleInvalidTag(InvalidTagEntry entryToFix, int indexInList)
         {
-            if (!EditorUtility.DisplayDialog("Confirm Fix", $"Are you sure you want to remove the invalid tag '{entryToFix.TagName}' from asset '{entryToFix.AssetPath}'? This action cannot be undone.", "Yes", "No"))
+            if (!EditorUtility.DisplayDialog("Confirm Fix", $"Are you sure you want to remove the invalid tag '{entryToFix.TagName}' from object '{entryToFix.ContextObject.name}'? This action cannot be undone.", "Yes", "No"))
             {
                 return;
             }
 
-            EditorUtility.DisplayProgressBar("Fixing Invalid Tag", $"Processing: {entryToFix.AssetPath}", 0f);
+            SerializedObject serializedObject = new SerializedObject(entryToFix.ContextObject);
+            // Find the specific GameplayTagContainer property using its stored path
+            SerializedProperty containerProperty = serializedObject.FindProperty(entryToFix.PropertyPath);
 
-            SerializedObject serializedObject = new SerializedObject(entryToFix.AssetObject);
-            SerializedProperty serializedExplicitTagsProperty = entryToFix.TagContainerProperty; // Use the copied property
-
-            // Re-find the property in the current SerializedObject context
-            // This is crucial because the copied property might be from an old SerializedObject
-            SerializedProperty currentProperty = serializedObject.GetIterator();
-            bool foundContainer = false;
-            if (currentProperty.NextVisible(true))
-            {
-                do
-                {
-                    if (currentProperty.propertyType == SerializedPropertyType.Generic && currentProperty.type == "GameplayTagContainer")
-                    {
-                        // Check if this is the correct GameplayTagContainer by comparing its path
-                        if (currentProperty.propertyPath == serializedExplicitTagsProperty.propertyPath)
-                        {
-                            serializedExplicitTagsProperty = currentProperty.FindPropertyRelative("m_SerializedExplicitTags");
-                            foundContainer = true;
-                            break;
-                        }
-                    }
-                } while (currentProperty.NextVisible(false));
-            }
-
-            if (!foundContainer || serializedExplicitTagsProperty == null || !serializedExplicitTagsProperty.isArray)
+            if (containerProperty == null)
             {
                 EditorUtility.DisplayDialog("Fix Failed", $"Could not find the GameplayTagContainer property for asset '{entryToFix.AssetPath}'. It might have been fixed manually or the asset changed.", "OK");
-                EditorUtility.ClearProgressBar();
                 return;
             }
 
-            bool tagRemoved = false;
-            for (int i = serializedExplicitTagsProperty.arraySize - 1; i >= 0; i--)
-            {
-                SerializedProperty tagStringProperty = serializedExplicitTagsProperty.GetArrayElementAtIndex(i);
-                string tagName = tagStringProperty.stringValue;
+            SerializedProperty tagsArrayProperty = containerProperty.FindPropertyRelative("m_SerializedExplicitTags");
 
-                if (tagName == entryToFix.TagName)
+            if (tagsArrayProperty == null || !tagsArrayProperty.isArray) return;
+
+            bool tagRemoved = false;
+            for (int i = tagsArrayProperty.arraySize - 1; i >= 0; i--)
+            {
+                if (tagsArrayProperty.GetArrayElementAtIndex(i).stringValue == entryToFix.TagName)
                 {
-                    serializedExplicitTagsProperty.DeleteArrayElementAtIndex(i);
+                    tagsArrayProperty.DeleteArrayElementAtIndex(i);
                     tagRemoved = true;
-                    break;
                 }
             }
 
             if (tagRemoved)
             {
                 serializedObject.ApplyModifiedProperties();
-                EditorUtility.SetDirty(entryToFix.AssetObject);
-                AssetDatabase.SaveAssets();
-                AssetDatabase.Refresh();
-                m_InvalidTags.RemoveAt(indexInList); // Remove from the list in the window
+
+                // If it's a scene object, mark the scene as dirty so the user can save.
+                if (!EditorUtility.IsPersistent(entryToFix.ContextObject))
+                {
+                    EditorSceneManager.MarkSceneDirty(((Component)entryToFix.ContextObject).gameObject.scene);
+                }
+
+                m_InvalidTags.RemoveAt(indexInList);
                 Repaint();
-                EditorUtility.DisplayDialog("Fix Complete", $"Successfully removed tag '{entryToFix.TagName}' from '{entryToFix.AssetPath}'.", "OK");
+                Debug.Log($"Successfully removed tag '{entryToFix.TagName}' from '{entryToFix.ContextObject.name}'. Please save your scene if the object was in the hierarchy.");
             }
             else
             {
-                EditorUtility.DisplayDialog("Fix Failed", $"Could not find or remove tag '{entryToFix.TagName}' from '{entryToFix.AssetPath}'. It might have been fixed manually or the asset changed.", "OK");
+                EditorUtility.DisplayDialog("Fix Failed", $"Could not find or remove tag '{entryToFix.TagName}' from '{entryToFix.ContextObject.name}'. It might have been fixed manually.", "OK");
             }
-
-            EditorUtility.ClearProgressBar();
         }
 
         private void FixAllInvalidTags()
         {
             if (m_InvalidTags.Count == 0) return;
 
-            if (!EditorUtility.DisplayDialog("Confirm Fix", $"Are you sure you want to remove all {m_InvalidTags.Count} invalid GameplayTags from the detected assets? This action cannot be undone.", "Yes", "No"))
+            if (!EditorUtility.DisplayDialog("Confirm Fix All", $"Are you sure you want to remove all {m_InvalidTags.Count} invalid GameplayTag references? This action cannot be undone.", "Yes", "No"))
             {
                 return;
             }
 
-            EditorUtility.DisplayProgressBar("Fixing Invalid Tags", "Initializing fix...", 0f);
-
-            // Group invalid tags by asset path to avoid loading/saving the same asset multiple times
-            Dictionary<Object, List<string>> tagsToFixByAsset = new Dictionary<Object, List<string>>();
-            foreach (var entry in m_InvalidTags)
-            {
-                if (!tagsToFixByAsset.ContainsKey(entry.AssetObject))
-                {
-                    tagsToFixByAsset[entry.AssetObject] = new List<string>();
-                }
-                tagsToFixByAsset[entry.AssetObject].Add(entry.TagName);
-            }
-
-            int totalTagsToFix = m_InvalidTags.Count;
             int fixedCount = 0;
-            int assetProcessedCount = 0;
-
-            foreach (var kvp in tagsToFixByAsset)
+            // Iterate backwards because FixSingleInvalidTag will remove items from the list
+            for (int i = m_InvalidTags.Count - 1; i >= 0; i--)
             {
-                Object assetObject = kvp.Key;
-                List<string> tagsToRemove = kvp.Value;
-                string assetPath = AssetDatabase.GetAssetPath(assetObject);
-
-                EditorUtility.DisplayProgressBar("Fixing Invalid Tags", $"Processing: {assetPath}", (float)assetProcessedCount / tagsToFixByAsset.Count);
-
-                SerializedObject serializedObject = new SerializedObject(assetObject);
-                SerializedProperty property = serializedObject.GetIterator();
-
-                bool assetModified = false;
-                if (property.NextVisible(true))
-                {
-                    do
-                    {
-                        if (property.propertyType == SerializedPropertyType.Generic && property.type == "GameplayTagContainer")
-                        {
-                            SerializedProperty serializedExplicitTagsProperty = property.FindPropertyRelative("m_SerializedExplicitTags");
-                            if (serializedExplicitTagsProperty != null && serializedExplicitTagsProperty.isArray)
-                            {
-                                for (int i = serializedExplicitTagsProperty.arraySize - 1; i >= 0; i--)
-                                {
-                                    SerializedProperty tagStringProperty = serializedExplicitTagsProperty.GetArrayElementAtIndex(i);
-                                    string tagName = tagStringProperty.stringValue;
-
-                                    if (tagsToRemove.Contains(tagName))
-                                    {
-                                        serializedExplicitTagsProperty.DeleteArrayElementAtIndex(i);
-                                        fixedCount++;
-                                        assetModified = true;
-                                    }
-                                }
-                            }
-                        }
-                    } while (property.NextVisible(false));
-                }
-
-                if (assetModified)
-                {
-                    serializedObject.ApplyModifiedProperties();
-                    EditorUtility.SetDirty(assetObject);
-                }
-                assetProcessedCount++;
+                FixSingleInvalidTag(m_InvalidTags[i], i);
+                fixedCount++;
             }
 
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
-
-            EditorUtility.ClearProgressBar();
-            m_InvalidTags.Clear();
-            Repaint();
-            EditorUtility.DisplayDialog("Fix Complete", $"Successfully removed {fixedCount} invalid GameplayTags from {tagsToFixByAsset.Count} assets.", "OK");
+            if (fixedCount > 0)
+            {
+                EditorUtility.DisplayDialog("Fix All Complete", $"Successfully processed {fixedCount} invalid tag references. Please review and save any modified scenes or assets.", "OK");
+            }
         }
     }
 }
