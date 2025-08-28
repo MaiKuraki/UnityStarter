@@ -8,15 +8,18 @@ English | [简体中文](./README.SCH.md)
 
 ## Features
 
-- Context stack with push/pop and per-context action maps
-- Multi-player join modes: single-player lock, shared devices, lobby join with optional device locking
-- YAML config with explicit action types (Button, Vector2, Float)
-- Editor window: generate/load/save configs; constant picker for bindings
-- Reactive API (R3) with Observables per action
-  - Button: press and optional long-press streams
-  - Float (e.g., Trigger): optional long-press with value threshold
-- Hot-swap required devices per player, safe pairing
-  - Active device detection: expose last active device kind (KeyboardMouse/Gamepad/Other)
+- **Context Stack**: Push/pop contexts to manage input states (e.g., Gameplay, UI, Cutscene).
+- **Rich Multi-Player Modes**:
+    - **Single-Player**: Auto-joins and locks all required devices to one player.
+    - **Lobby (Device Locking)**: The first device joins as Player 0. Subsequent devices are automatically paired to this single player, ideal for allowing one player to switch between keyboard and gamepad seamlessly.
+    - **Lobby (Shared Devices)**: Each new device joins as a new player (Player 0, 1, 2...), perfect for local co-op.
+- **Zero-GC API**: Optional, high-performance API using generated constants to eliminate runtime string operations and garbage collection.
+- **Configurable Code Generation**:
+    - Automatically generate a static `InputActions` class from your YAML config.
+    - Customize the output directory and namespace to fit your project structure, keeping your `Packages` folder clean.
+- **Reactive API (R3)**: Provides `Observable` streams for button presses, long presses, analog values, and more.
+- **Intelligent Hot-Swapping**: Automatically pairs newly connected devices to the correct player *after* the lobby phase.
+- **Active Device Detection**: `ActiveDeviceKind` property tracks whether the last input came from Keyboard/Mouse or a Gamepad.
 
 ## Install
 
@@ -26,8 +29,11 @@ English | [简体中文](./README.SCH.md)
 
 ## Quick Start
 
-1) Create default config: Tools → CycloneGames → Input System Editor → Generate Default Config
-2) Initialize at boot:
+1) Create default config: `Tools → CycloneGames → Input System Editor → Generate Default Config`.
+2) **(Recommended)** Configure Code Generation:
+    - In the editor window, set the **Output Directory** (e.g., `Assets/Scripts/Generated`) and **Namespace** for the generated `InputActions.cs` file.
+    - Click **Save and Generate Constants**.
+3) Initialize at boot:
 
 ```csharp
 var defaultUri = FilePathUtility.GetUnityWebRequestUri("input_config.yaml", UnityPathSource.StreamingAssets);
@@ -35,16 +41,21 @@ var userUri = FilePathUtility.GetUnityWebRequestUri("user_input_settings.yaml", 
 await InputSystemLoader.InitializeAsync(defaultUri, userUri);
 ```
 
-1) Join and set context:
+1) Join and set context using the generated constants for performance and type safety:
 
 ```csharp
+// Make sure to import the generated namespace
+using YourGame.Input.Generated;
+
 var svc = InputManager.Instance.JoinSinglePlayer(0);
 var ctx = new InputContext("Gameplay", "PlayerActions")
-  .AddBinding(svc.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(dir => {/*...*/}))
-  .AddBinding(svc.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(() => {/*...*/}));
+  .AddBinding(svc.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(dir => {/*...*/}))
+  .AddBinding(svc.GetButtonObservable(InputActions.Actions.Gameplay_Confirm), new ActionCommand(() => {/*...*/}));
 svc.RegisterContext(ctx);
 svc.PushContext("Gameplay");
 ```
+
+> **Note**: The original string-based API (`GetVector2Observable("PlayerActions", "Move")`) is still available for projects that do not wish to use code generation.
 
 ## YAML Schema
 
@@ -232,10 +243,9 @@ press.Subscribe(p =>
 
 ### Editor Tips
 
-- Button shows “Long Press (ms)”; Float shows both “Long Press (ms)” and “Long Press Threshold (0-1)”.
-- Non-Button/Float actions ignore `longPressMs` during save.
-- Vector2 sources: use Mouse Delta, Sticks, DPad, or 2DVector composites. Constants available under `InputBindingConstants.Vector2Sources`.
-- Mouse Delta is displayed as “Mouse/Delta(Vector2)” in the picker, but binds to `<Mouse>/delta`.
+- **Code Generation**: The editor window provides settings to customize the output directory and namespace for the generated `InputActions.cs` file. These settings are saved per-project in `EditorPrefs`.
+- **Long Press**: The "Long Press (ms)" field is only respected for `Button` and `Float` action types. For `Float` types, you can also set a "Long Press Threshold (0-1)" to define what analog value counts as "pressed".
+- **Vector2 Sources**: The `InputBindingConstants.Vector2Sources` class provides convenient constants for common Vector2 bindings like `Gamepad_LeftStick` and `Composite_WASD`.
 
 2) Increment while pressed:
 
@@ -307,12 +317,20 @@ _input.ActiveDeviceKind.Subscribe(kind => UpdateHUDIcons(kind));
 
 ## API
 
-- IInputService
-  - `ReadOnlyReactiveProperty<string>` ActiveContextName; `event OnContextChanged`
-  - `ReadOnlyReactiveProperty<InputDeviceKind>` ActiveDeviceKind (KeyboardMouse/Gamepad/Other)
-  - GetVector2Observable(map, action) | GetVector2Observable(action)
-  - GetButtonObservable(map, action) | GetButtonObservable(action)
-  - GetLongPressObservable(map, action) | GetLongPressObservable(action)
-  - GetPressStateObservable(map, action) | GetPressStateObservable(action)
-  - GetScalarObservable(map, action) | GetScalarObservable(action)
-  - RegisterContext, PushContext, PopContext, BlockInput, UnblockInput
+- `IInputService`
+  - `ReadOnlyReactiveProperty<string> ActiveContextName`
+  - `ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind`
+  - `event Action<string> OnContextChanged`
+  - **Zero-GC API (Recommended)**
+    - `GetVector2Observable(int actionId)`
+    - `GetButtonObservable(int actionId)`
+    - `GetLongPressObservable(int actionId)`
+    - `GetPressStateObservable(int actionId)`
+    - `GetScalarObservable(int actionId)`
+  - **String-Based API (Legacy/Optional)**
+    - `Get...Observable(string actionName)`
+    - `Get...Observable(string actionMapName, string actionName)`
+  - `RegisterContext(InputContext context)`
+  - `PushContext(string contextName)`
+  - `PopContext()`
+  - `BlockInput()`, `UnblockInput()`

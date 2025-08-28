@@ -20,6 +20,7 @@ namespace CycloneGames.InputSystem.Runtime
         public static InputManager Instance { get; } = new InputManager();
         private InputManager() { }
 
+        public static bool IsListeningForPlayers { get; private set; }
         public event Action<IInputService> OnPlayerJoined;
 
         private readonly Dictionary<int, IInputService> _playerServices = new();
@@ -67,12 +68,23 @@ namespace CycloneGames.InputSystem.Runtime
             _isDeviceLockingOnJoinEnabled = lockDeviceOnJoin;
             if (_joinAction != null) _joinAction.Dispose();
 
-            var joinActionConfig = _configuration.JoinAction;
-            _joinAction = new InputAction(name: joinActionConfig.ActionName, type: InputActionType.Button);
-            foreach (var binding in joinActionConfig.DeviceBindings) _joinAction.AddBinding(binding);
+            // Create a combined join action from all player join actions
+            _joinAction = new InputAction(name: "CombinedJoin", type: InputActionType.Button);
+            
+            foreach (var playerConfig in _configuration.PlayerSlots)
+            {
+                if (playerConfig.JoinAction != null)
+                {
+                    foreach (var binding in playerConfig.JoinAction.DeviceBindings)
+                    {
+                        _joinAction.AddBinding(binding);
+                    }
+                }
+            }
 
             _joinAction.performed += OnJoinAction;
             _joinAction.Enable();
+            IsListeningForPlayers = true;
             Debug.Log($"[InputManager] Listening for players... Device Locking: {_isDeviceLockingOnJoinEnabled}");
         }
 
@@ -84,6 +96,7 @@ namespace CycloneGames.InputSystem.Runtime
                 _joinAction.Dispose();
                 _joinAction = null;
             }
+            IsListeningForPlayers = false;
         }
 
         /// <summary>
@@ -136,7 +149,7 @@ namespace CycloneGames.InputSystem.Runtime
                 InputUser.PerformPairingWithDevice(devicesToPair[i], user);
             }
 
-            return CreatePlayerService(playerIdToJoin, user, playerConfig);
+            return CreatePlayerService(playerIdToJoin, user, playerConfig, devicesToPair.FirstOrDefault());
         }
 
         public async UniTask<IInputService> JoinSinglePlayerAsync(int playerIdToJoin = 0, int timeoutInSeconds = 5)
@@ -194,15 +207,33 @@ namespace CycloneGames.InputSystem.Runtime
             var user = InputUser.PerformPairingWithDevice(devicesToPair[0]);
             for (int i = 1; i < devicesToPair.Count; i++) InputUser.PerformPairingWithDevice(devicesToPair[i], user);
 
-            return CreatePlayerService(playerIdToJoin, user, playerConfig);
+            return CreatePlayerService(playerIdToJoin, user, playerConfig, devicesToPair.FirstOrDefault());
         }
 
         public IInputService JoinPlayerOnSharedDevice(int playerIdToJoin)
         {
             var playerConfig = GetPlayerConfig(playerIdToJoin);
             if (playerConfig == null) return null;
-            var user = InputUser.CreateUserWithoutPairedDevices();
-            return CreatePlayerService(playerIdToJoin, user, playerConfig);
+
+            // In a shared keyboard setup, we assume the keyboard is the device to be shared.
+            var keyboard = Keyboard.current;
+            if (keyboard == null)
+            {
+                Debug.LogError("[InputManager] Cannot JoinPlayerOnSharedDevice as no keyboard is connected.");
+                return null;
+            }
+
+            // We create a new user for the player, but pair them with the *same* keyboard device.
+            // The Input System supports multiple users on a single device.
+            var user = InputUser.PerformPairingWithDevice(keyboard);
+            
+            // Also pair the mouse, as they are a unit.
+            if (Mouse.current != null)
+            {
+                InputUser.PerformPairingWithDevice(Mouse.current, user);
+            }
+
+            return CreatePlayerService(playerIdToJoin, user, playerConfig, keyboard);
         }
 
         public IInputService JoinPlayerAndLockDevice(int playerIdToJoin, InputDevice deviceToLock)
@@ -233,36 +264,100 @@ namespace CycloneGames.InputSystem.Runtime
             }
 
             var user = InputUser.PerformPairingWithDevice(deviceToLock);
-            return CreatePlayerService(playerIdToJoin, user, playerConfig);
+            return CreatePlayerService(playerIdToJoin, user, playerConfig, deviceToLock);
         }
 
         private void OnJoinAction(InputAction.CallbackContext context)
         {
             var joiningDevice = context.control.device;
-            if (_isDeviceLockingOnJoinEnabled && InputUser.all.Any(user => user.pairedDevices.Contains(joiningDevice))) return;
 
-            int nextPlayerId = _playerServices.Count;
-            var playerConfig = GetPlayerConfig(nextPlayerId);
-            if (playerConfig == null) return;
+            // Universal check: A device already paired to any user cannot be used to join again.
+            if (InputUser.all.Any(user => user.pairedDevices.Contains(joiningDevice)))
+            {
+                Debug.LogWarning($"[InputManager] Device '{joiningDevice.displayName}' is already paired and cannot join again.");
+                return;
+            }
 
-            InputUser user;
             if (_isDeviceLockingOnJoinEnabled)
             {
-                user = InputUser.PerformPairingWithDevice(joiningDevice);
-                if (joiningDevice is Keyboard && Mouse.current != null && !InputUser.all.Any(u => u.pairedDevices.Contains(Mouse.current)))
+                // --- SINGLE-PLAYER, MULTI-DEVICE LOGIC ---
+                // In this mode, we only ever have one player: Player 0.
+                // If Player 0 already exists, any new device joins them.
+                // If not, the first device creates Player 0.
+
+                if (_playerServices.TryGetValue(0, out var existingService))
                 {
-                    InputUser.PerformPairingWithDevice(Mouse.current, user);
+                    // Player 0 exists, pair the new device to them.
+                    if (existingService is InputService service)
+                    {
+                        InputUser.PerformPairingWithDevice(joiningDevice, service.User);
+                        Debug.Log($"[InputManager] Paired new device '{joiningDevice.displayName}' to existing Player 0.");
+                    }
                 }
-                else if (joiningDevice is Mouse && Keyboard.current != null && !InputUser.all.Any(u => u.pairedDevices.Contains(Keyboard.current)))
+                else
                 {
-                    InputUser.PerformPairingWithDevice(Keyboard.current, user);
+                    // Player 0 does not exist, create them.
+                    var playerConfig = GetPlayerConfig(0);
+                    if (playerConfig == null) return;
+
+                    var user = InputUser.PerformPairingWithDevice(joiningDevice);
+                    if (joiningDevice is Keyboard && Mouse.current != null) InputUser.PerformPairingWithDevice(Mouse.current, user);
+                    else if (joiningDevice is Mouse && Keyboard.current != null) InputUser.PerformPairingWithDevice(Keyboard.current, user);
+                    
+                    CreatePlayerService(0, user, playerConfig, joiningDevice);
                 }
             }
             else
             {
-                user = InputUser.CreateUserWithoutPairedDevices();
+                // --- MULTI-PLAYER, MULTI-DEVICE LOGIC ---
+                // In this mode, each new device creates a new player in the next available slot.
+
+                int playerIdToJoin = -1;
+                for (int i = 0; i < _configuration.PlayerSlots.Count; i++)
+                {
+                    if (!_playerServices.ContainsKey(i))
+                    {
+                        var slotConfig = _configuration.PlayerSlots[i];
+                        if (slotConfig.JoinAction != null &&
+                            slotConfig.JoinAction.DeviceBindings.Any(binding =>
+                                binding.Contains(joiningDevice.layout) ||
+                                (joiningDevice is Keyboard && binding.Contains("Keyboard")) ||
+                                (joiningDevice is Mouse && binding.Contains("Mouse"))))
+                        {
+                            playerIdToJoin = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (playerIdToJoin == -1)
+                {
+                    // Fallback if no specific slot matches: find the next empty numerical slot.
+                    for (int i = 0; i < _configuration.PlayerSlots.Count; i++)
+                    {
+                        if (!_playerServices.ContainsKey(i))
+                        {
+                            playerIdToJoin = i;
+                            break;
+                        }
+                    }
+                }
+                
+                if (playerIdToJoin == -1)
+                {
+                    Debug.LogWarning("[InputManager] No available player slots to join.");
+                    return;
+                }
+
+                var playerConfig = GetPlayerConfig(playerIdToJoin);
+                if (playerConfig == null) return;
+
+                var user = InputUser.PerformPairingWithDevice(joiningDevice);
+                if (joiningDevice is Keyboard && Mouse.current != null) InputUser.PerformPairingWithDevice(Mouse.current, user);
+                else if (joiningDevice is Mouse && Keyboard.current != null) InputUser.PerformPairingWithDevice(Keyboard.current, user);
+
+                CreatePlayerService(playerIdToJoin, user, playerConfig, joiningDevice);
             }
-            CreatePlayerService(nextPlayerId, user, playerConfig);
         }
 
         private PlayerSlotConfig GetPlayerConfig(int playerId, bool checkIfAlreadyJoined = true)
@@ -274,9 +369,9 @@ namespace CycloneGames.InputSystem.Runtime
             return playerConfig;
         }
 
-        private IInputService CreatePlayerService(int playerId, InputUser user, PlayerSlotConfig config)
+        private IInputService CreatePlayerService(int playerId, InputUser user, PlayerSlotConfig config, InputDevice initialDevice = null)
         {
-            var inputService = new InputService(playerId, user, config);
+            var inputService = new InputService(playerId, user, config, initialDevice);
             _playerServices[playerId] = inputService;
             string devices = user.pairedDevices.Count > 0 ? string.Join(", ", user.pairedDevices.Select(d => d.displayName)) : "All (Shared)";
             Debug.Log($"[InputManager] Player {playerId} created with devices: [{devices}].");

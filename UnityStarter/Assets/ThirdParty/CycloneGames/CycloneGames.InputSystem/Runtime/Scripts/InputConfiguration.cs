@@ -45,6 +45,9 @@ namespace CycloneGames.InputSystem.Runtime
         [YamlMember("playerId")]
         public int PlayerId { get; set; }
 
+        [YamlMember("joinAction")]
+        public ActionBindingConfig JoinAction { get; set; }
+
         [YamlMember("contexts")]
         public List<ContextDefinitionConfig> Contexts { get; set; }
     }
