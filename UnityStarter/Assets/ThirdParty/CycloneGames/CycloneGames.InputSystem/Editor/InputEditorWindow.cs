@@ -59,90 +59,89 @@ namespace CycloneGames.InputSystem.Editor
             {
                 _serializedConfig.Update();
 
-                // Draw join action
-                EditorGUILayout.PropertyField(_serializedConfig.FindProperty("_joinAction"), true);
+                // Draw player slots with dynamic add/remove support
+                var slotsProp = _serializedConfig.FindProperty("_playerSlots");
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("Player Slots", EditorStyles.boldLabel);
+                if (GUILayout.Button("+ Add Player", GUILayout.Width(100)))
+                {
+                    AddNewPlayer(slotsProp);
+                }
+                EditorGUILayout.EndHorizontal();
 
                 // Draw player slots with conditional UI for long-press fields
-                var slotsProp = _serializedConfig.FindProperty("_playerSlots");
-                EditorGUILayout.PropertyField(slotsProp, new GUIContent("Player Slots"), false);
-                if (slotsProp.isExpanded)
+                if (slotsProp.arraySize > 0)
                 {
-                    EditorGUI.indentLevel++;
                     for (int i = 0; i < slotsProp.arraySize; i++)
                     {
                         var slotProp = slotsProp.GetArrayElementAtIndex(i);
-                        EditorGUILayout.PropertyField(slotProp, new GUIContent($"Player Slot {i}"), false);
-                        if (slotProp.isExpanded)
+                        
+                        // Player header with remove button
+                        EditorGUILayout.BeginHorizontal();
+                        EditorGUILayout.LabelField($"Player {i}", EditorStyles.boldLabel);
+                        if (GUILayout.Button("Remove", GUILayout.Width(60)))
                         {
-                            EditorGUI.indentLevel++;
-                            var contextsProp = slotProp.FindPropertyRelative("Contexts");
-                            EditorGUILayout.PropertyField(contextsProp, new GUIContent("Contexts"), false);
-                            if (contextsProp.isExpanded)
-                            {
-                                EditorGUI.indentLevel++;
-                                for (int c = 0; c < contextsProp.arraySize; c++)
-                                {
-                                    var ctxProp = contextsProp.GetArrayElementAtIndex(c);
-                                    EditorGUILayout.PropertyField(ctxProp.FindPropertyRelative("Name"));
-                                    EditorGUILayout.PropertyField(ctxProp.FindPropertyRelative("ActionMap"));
-
-                                    var bindingsProp = ctxProp.FindPropertyRelative("Bindings");
-                                    EditorGUILayout.PropertyField(bindingsProp, new GUIContent("Bindings"), false);
-                                    if (bindingsProp.isExpanded)
-                                    {
-                                        EditorGUI.indentLevel++;
-                                        for (int b = 0; b < bindingsProp.arraySize; b++)
-                                        {
-                                            var bindProp = bindingsProp.GetArrayElementAtIndex(b);
-                                            var typeProp = bindProp.FindPropertyRelative("Type");
-                                            EditorGUILayout.PropertyField(typeProp);
-                                            EditorGUILayout.PropertyField(bindProp.FindPropertyRelative("ActionName"));
-                                            var type = (CycloneGames.InputSystem.Runtime.ActionValueType)typeProp.enumValueIndex;
-                                            // Device bindings with hint for Vector2 sources
-                                            if (type == CycloneGames.InputSystem.Runtime.ActionValueType.Vector2)
-                                            {
-                                                EditorGUILayout.HelpBox("Tip: Vector2 sources include Mouse Delta, Sticks, DPad, or 2DVector composites.", MessageType.None);
-                                            }
-                                            EditorGUILayout.PropertyField(bindProp.FindPropertyRelative("DeviceBindings"), true);
-                                            if (type == CycloneGames.InputSystem.Runtime.ActionValueType.Button)
-                                            {
-                                                var msProp = bindProp.FindPropertyRelative("LongPressMs");
-                                                EditorGUILayout.BeginHorizontal();
-                                                EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
-                                                EditorGUILayout.PropertyField(msProp, GUIContent.none, true);
-                                                EditorGUILayout.EndHorizontal();
-                                            }
-                                            else if (type == CycloneGames.InputSystem.Runtime.ActionValueType.Float)
-                                            {
-                                                var msProp = bindProp.FindPropertyRelative("LongPressMs");
-                                                var thProp = bindProp.FindPropertyRelative("LongPressValueThreshold");
-                                                EditorGUILayout.BeginHorizontal();
-                                                EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
-                                                EditorGUILayout.PropertyField(msProp, GUIContent.none, true);
-                                                EditorGUILayout.EndHorizontal();
-                                                EditorGUILayout.BeginHorizontal();
-                                                EditorGUILayout.LabelField("Long Press Threshold (0-1)", _overflowLabelStyle, GUILayout.Width(220));
-                                                EditorGUILayout.PropertyField(thProp, GUIContent.none, true);
-                                                EditorGUILayout.EndHorizontal();
-                                            }
-                                            else
-                                            {
-                                                using (new EditorGUI.DisabledScope(true))
-                                                {
-                                                    var tmp = bindProp.FindPropertyRelative("LongPressMs");
-                                                    EditorGUILayout.IntField(new GUIContent("LongPressMs"), 0);
-                                                }
-                                            }
-                                        }
-                                        EditorGUI.indentLevel--;
-                                    }
-                                }
-                                EditorGUI.indentLevel--;
-                            }
-                            EditorGUI.indentLevel--;
+                            slotsProp.DeleteArrayElementAtIndex(i);
+                            break;
+                        }
+                        EditorGUILayout.EndHorizontal();
+                        
+                        EditorGUI.indentLevel++;
+                        
+                        // Player ID
+                        EditorGUILayout.PropertyField(slotProp.FindPropertyRelative("PlayerId"));
+                        
+                        // Join Action for this player (always visible)
+                        EditorGUILayout.LabelField("Join Action", EditorStyles.boldLabel);
+                        EditorGUI.indentLevel++;
+                        var joinTypeProp = slotProp.FindPropertyRelative("JoinAction.Type");
+                        var joinActionProp = slotProp.FindPropertyRelative("JoinAction.ActionName");
+                        var joinBindingsProp = slotProp.FindPropertyRelative("JoinAction.DeviceBindings");
+                        var joinLongPressProp = slotProp.FindPropertyRelative("JoinAction.LongPressMs");
+                        
+                        EditorGUILayout.PropertyField(joinTypeProp);
+                        EditorGUILayout.PropertyField(joinActionProp);
+                        EditorGUILayout.PropertyField(joinBindingsProp, true);
+                        
+                        var joinType = (CycloneGames.InputSystem.Runtime.ActionValueType)joinTypeProp.enumValueIndex;
+                        if (joinType == CycloneGames.InputSystem.Runtime.ActionValueType.Button)
+                        {
+                            EditorGUILayout.BeginHorizontal();
+                            EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
+                            EditorGUILayout.PropertyField(joinLongPressProp, GUIContent.none, true);
+                            EditorGUILayout.EndHorizontal();
+                        }
+                        else if (joinType == CycloneGames.InputSystem.Runtime.ActionValueType.Float)
+                        {
+                            var joinThresholdProp = slotProp.FindPropertyRelative("JoinAction.LongPressValueThreshold");
+                            EditorGUILayout.BeginHorizontal();
+                            EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
+                            EditorGUILayout.PropertyField(joinLongPressProp, GUIContent.none, true);
+                            EditorGUILayout.EndHorizontal();
+                            EditorGUILayout.BeginHorizontal();
+                            EditorGUILayout.LabelField("Long Press Threshold (0-1)", _overflowLabelStyle, GUILayout.Width(220));
+                            EditorGUILayout.PropertyField(joinThresholdProp, GUIContent.none, true);
+                            EditorGUILayout.EndHorizontal();
+                        }
+                        EditorGUI.indentLevel--;
+                        
+                        // Contexts (collapsible)
+                        var contextsProp = slotProp.FindPropertyRelative("Contexts");
+                        EditorGUILayout.PropertyField(contextsProp, new GUIContent("Contexts"), true);
+                        EditorGUI.indentLevel--;
+                        
+                        // Add separator between players
+                        if (i < slotsProp.arraySize - 1)
+                        {
+                            EditorGUILayout.Space();
+                            EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
+                            EditorGUILayout.Space();
                         }
                     }
-                    EditorGUI.indentLevel--;
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox("No players configured. Click 'Add Player' to create the first player.", MessageType.Info);
                 }
 
                 _serializedConfig.ApplyModifiedProperties();
@@ -324,18 +323,18 @@ namespace CycloneGames.InputSystem.Editor
         {
             return new InputConfiguration
             {
-                JoinAction = new ActionBindingConfig
-                {
-                    Type = ActionValueType.Button,
-                    ActionName = "JoinGame",
-                    DeviceBindings = new System.Collections.Generic.List<string> { "<Keyboard>/enter", "<Gamepad>/start" },
-                    LongPressMs = 0
-                },
                 PlayerSlots = new System.Collections.Generic.List<PlayerSlotConfig>
                 {
                     new PlayerSlotConfig
                     {
                         PlayerId = 0,
+                        JoinAction = new ActionBindingConfig
+                        {
+                            Type = ActionValueType.Button,
+                            ActionName = "JoinGame",
+                            DeviceBindings = new System.Collections.Generic.List<string> { "<Keyboard>/enter", "<Gamepad>/start" },
+                            LongPressMs = 0
+                        },
                         Contexts = new System.Collections.Generic.List<ContextDefinitionConfig>
                         {
                             new ContextDefinitionConfig
@@ -368,6 +367,13 @@ namespace CycloneGames.InputSystem.Editor
                     new PlayerSlotConfig
                     {
                         PlayerId = 1,
+                        JoinAction = new ActionBindingConfig
+                        {
+                            Type = ActionValueType.Button,
+                            ActionName = "JoinGame",
+                            DeviceBindings = new System.Collections.Generic.List<string> { "<Keyboard>/enter", "<Gamepad>/start" },
+                            LongPressMs = 0
+                        },
                         Contexts = new System.Collections.Generic.List<ContextDefinitionConfig>
                         {
                              new ContextDefinitionConfig
@@ -407,6 +413,80 @@ namespace CycloneGames.InputSystem.Editor
         {
             _statusMessage = message;
             _statusMessageType = type;
+        }
+
+        private void AddNewPlayer(SerializedProperty slotsProp)
+        {
+            int newIndex = slotsProp.arraySize;
+            slotsProp.arraySize++;
+            var newSlot = slotsProp.GetArrayElementAtIndex(newIndex);
+            
+            // Set default values for new player
+            newSlot.FindPropertyRelative("PlayerId").intValue = newIndex;
+            
+            // Add default join action
+            var joinAction = newSlot.FindPropertyRelative("JoinAction");
+            joinAction.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Button;
+            joinAction.FindPropertyRelative("ActionName").stringValue = "JoinGame";
+            var joinBindings = joinAction.FindPropertyRelative("DeviceBindings");
+            joinBindings.arraySize = 2;
+            joinBindings.GetArrayElementAtIndex(0).stringValue = "<Keyboard>/enter";
+            joinBindings.GetArrayElementAtIndex(1).stringValue = "<Gamepad>/start";
+            joinAction.FindPropertyRelative("LongPressMs").intValue = 0;
+            
+            // Add default context
+            var contexts = newSlot.FindPropertyRelative("Contexts");
+            contexts.arraySize = 1;
+            var context = contexts.GetArrayElementAtIndex(0);
+            context.FindPropertyRelative("Name").stringValue = "Gameplay";
+            context.FindPropertyRelative("ActionMap").stringValue = "PlayerActions";
+            
+            // Add default bindings
+            var bindings = context.FindPropertyRelative("Bindings");
+            bindings.arraySize = 2;
+            
+            // Move binding
+            var moveBinding = bindings.GetArrayElementAtIndex(0);
+            moveBinding.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Vector2;
+            moveBinding.FindPropertyRelative("ActionName").stringValue = "Move";
+            var moveDeviceBindings = moveBinding.FindPropertyRelative("DeviceBindings");
+            moveDeviceBindings.arraySize = 3;
+            moveDeviceBindings.GetArrayElementAtIndex(0).stringValue = "<Gamepad>/leftStick";
+            moveDeviceBindings.GetArrayElementAtIndex(1).stringValue = "2DVector(mode=2,up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)";
+            moveDeviceBindings.GetArrayElementAtIndex(2).stringValue = "<Mouse>/delta";
+            moveBinding.FindPropertyRelative("LongPressMs").intValue = 0;
+            moveBinding.FindPropertyRelative("LongPressValueThreshold").floatValue = 0f;
+            
+            // Confirm binding
+            var confirmBinding = bindings.GetArrayElementAtIndex(1);
+            confirmBinding.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Button;
+            confirmBinding.FindPropertyRelative("ActionName").stringValue = "Confirm";
+            var confirmDeviceBindings = confirmBinding.FindPropertyRelative("DeviceBindings");
+            confirmDeviceBindings.arraySize = 2;
+            confirmDeviceBindings.GetArrayElementAtIndex(0).stringValue = "<Gamepad>/buttonSouth";
+            confirmDeviceBindings.GetArrayElementAtIndex(1).stringValue = "<Keyboard>/space";
+            confirmBinding.FindPropertyRelative("LongPressMs").intValue = 500;
+            confirmBinding.FindPropertyRelative("LongPressValueThreshold").floatValue = 0f;
+            
+            _serializedConfig.ApplyModifiedProperties();
+        }
+
+        private void AddNewBinding(SerializedProperty bindingsProp)
+        {
+            int newIndex = bindingsProp.arraySize;
+            bindingsProp.arraySize++;
+            var newBinding = bindingsProp.GetArrayElementAtIndex(newIndex);
+            
+            // Set default values for new binding
+            newBinding.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Button;
+            newBinding.FindPropertyRelative("ActionName").stringValue = "NewAction";
+            var deviceBindings = newBinding.FindPropertyRelative("DeviceBindings");
+            deviceBindings.arraySize = 1;
+            deviceBindings.GetArrayElementAtIndex(0).stringValue = "<Keyboard>/space";
+            newBinding.FindPropertyRelative("LongPressMs").intValue = 0;
+            newBinding.FindPropertyRelative("LongPressValueThreshold").floatValue = 0.5f;
+            
+            _serializedConfig.ApplyModifiedProperties();
         }
     }
 }

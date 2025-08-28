@@ -67,9 +67,19 @@ namespace CycloneGames.InputSystem.Runtime
             _isDeviceLockingOnJoinEnabled = lockDeviceOnJoin;
             if (_joinAction != null) _joinAction.Dispose();
 
-            var joinActionConfig = _configuration.JoinAction;
-            _joinAction = new InputAction(name: joinActionConfig.ActionName, type: InputActionType.Button);
-            foreach (var binding in joinActionConfig.DeviceBindings) _joinAction.AddBinding(binding);
+            // Create a combined join action from all player join actions
+            _joinAction = new InputAction(name: "CombinedJoin", type: InputActionType.Button);
+            
+            foreach (var playerConfig in _configuration.PlayerSlots)
+            {
+                if (playerConfig.JoinAction != null)
+                {
+                    foreach (var binding in playerConfig.JoinAction.DeviceBindings)
+                    {
+                        _joinAction.AddBinding(binding);
+                    }
+                }
+            }
 
             _joinAction.performed += OnJoinAction;
             _joinAction.Enable();
@@ -241,8 +251,29 @@ namespace CycloneGames.InputSystem.Runtime
             var joiningDevice = context.control.device;
             if (_isDeviceLockingOnJoinEnabled && InputUser.all.Any(user => user.pairedDevices.Contains(joiningDevice))) return;
 
-            int nextPlayerId = _playerServices.Count;
-            var playerConfig = GetPlayerConfig(nextPlayerId);
+            // Find which player's join action was triggered
+            int playerIdToJoin = -1;
+            for (int i = 0; i < _configuration.PlayerSlots.Count; i++)
+            {
+                var slotConfig = _configuration.PlayerSlots[i];
+                if (slotConfig.JoinAction != null && 
+                    slotConfig.JoinAction.DeviceBindings.Any(binding => 
+                        binding.Contains(joiningDevice.layout) || 
+                        (joiningDevice is Keyboard && binding.Contains("Keyboard")) ||
+                        (joiningDevice is Mouse && binding.Contains("Mouse"))))
+                {
+                    playerIdToJoin = i;
+                    break;
+                }
+            }
+
+            if (playerIdToJoin == -1)
+            {
+                // Fallback: use next available player ID
+                playerIdToJoin = _playerServices.Count;
+            }
+
+            var playerConfig = GetPlayerConfig(playerIdToJoin);
             if (playerConfig == null) return;
 
             InputUser user;
@@ -262,7 +293,7 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 user = InputUser.CreateUserWithoutPairedDevices();
             }
-            CreatePlayerService(nextPlayerId, user, playerConfig);
+            CreatePlayerService(playerIdToJoin, user, playerConfig);
         }
 
         private PlayerSlotConfig GetPlayerConfig(int playerId, bool checkIfAlreadyJoined = true)
