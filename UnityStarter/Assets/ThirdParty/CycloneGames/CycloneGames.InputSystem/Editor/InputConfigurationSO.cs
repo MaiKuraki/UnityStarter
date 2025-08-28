@@ -171,11 +171,16 @@ namespace CycloneGames.InputSystem.Editor
     public class PlayerSlotDrawerData
     {
         public int PlayerId;
+        public ActionBindingDrawerData JoinAction = new ActionBindingDrawerData();
         public List<ContextDefinitionDrawerData> Contexts = new List<ContextDefinitionDrawerData>();
 
         public void FromData(PlayerSlotConfig data)
         {
             PlayerId = data.PlayerId;
+            if (data.JoinAction != null)
+            {
+                JoinAction.FromData(data.JoinAction);
+            }
             Contexts = data.Contexts.Select(c =>
             {
                 var drawerData = new ContextDefinitionDrawerData();
@@ -189,6 +194,7 @@ namespace CycloneGames.InputSystem.Editor
             return new PlayerSlotConfig
             {
                 PlayerId = this.PlayerId,
+                JoinAction = this.JoinAction.ToData(),
                 Contexts = this.Contexts.Select(c => c.ToData()).ToList()
             };
         }
@@ -206,7 +212,6 @@ namespace CycloneGames.InputSystem.Editor
         public void FromData(InputConfiguration data)
         {
             // Now correctly creates simple class instances, NOT ScriptableObjects.
-            _joinAction.FromData(data.JoinAction);
             _playerSlots = data.PlayerSlots.Select(p =>
             {
                 var drawerData = new PlayerSlotDrawerData();
@@ -219,7 +224,6 @@ namespace CycloneGames.InputSystem.Editor
         {
             return new InputConfiguration
             {
-                JoinAction = _joinAction.ToData(),
                 PlayerSlots = _playerSlots.Select(p => p.ToData()).ToList()
             };
         }
