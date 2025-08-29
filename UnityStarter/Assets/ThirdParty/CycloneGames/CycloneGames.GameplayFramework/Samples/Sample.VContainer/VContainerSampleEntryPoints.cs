@@ -1,15 +1,17 @@
-using CycloneGames.Factory.Runtime;
+using System.Threading;
+using Cysharp.Threading.Tasks;
 using VContainer;
 using VContainer.Unity;
 
 namespace CycloneGames.GameplayFramework.Sample.VContainer
 {
-    public class VContainerSampleEntryPoints : IStartable
+    public class VContainerSampleEntryPoints : IAsyncStartable
     {
         [Inject] private IGameMode gameMode;
-        public void Start()
+        
+        public async UniTask StartAsync(CancellationToken cancellation)
         {
-            gameMode.LaunchGameMode();
+            await gameMode.LaunchGameModeAsync(cancellation);
         }
     }
 }

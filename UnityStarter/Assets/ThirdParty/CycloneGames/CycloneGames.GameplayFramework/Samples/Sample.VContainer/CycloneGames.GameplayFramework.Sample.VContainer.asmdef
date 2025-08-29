@@ -5,7 +5,8 @@
         "VContainer",
         "CycloneGames.Logger",
         "CycloneGames.Factory.Runtime",
-        "CycloneGames.GameplayFramework"
+        "CycloneGames.GameplayFramework",
+        "UniTask"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
