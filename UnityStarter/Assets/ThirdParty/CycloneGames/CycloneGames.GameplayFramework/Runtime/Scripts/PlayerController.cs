@@ -6,6 +6,8 @@ namespace CycloneGames.GameplayFramework
 {
     public class PlayerController : Controller
     {
+        public UniTask InitializationTask { get; private set; }
+        
         private SpectatorPawn spectatorPawn;
         public SpectatorPawn GetSpectatorPawn() => spectatorPawn;
         private CameraManager cameraManager;
@@ -23,18 +25,21 @@ namespace CycloneGames.GameplayFramework
 
         void SpawnCameraManager()
         {
-            cameraManager = objectSpawner?.Create(worldSettings?.CameraManagerClass) as CameraManager;
+            if (worldSettings?.CameraManagerClass == null)
+            {
+                //  This is an expected case, CameraManager is optional.
+                return;
+            }
+            
+            cameraManager = objectSpawner?.Create(worldSettings.CameraManagerClass) as CameraManager;
             if (cameraManager == null)
             {
-                CLogger.LogError("Spawn CameraManager Failed, please check your spawn pipeline");
+                CLogger.LogError("Spawn CameraManager Failed, a CameraManagerClass was provided in WorldSettings but it could not be spawned. Check your spawn pipeline.");
                 return;
             }
 
-            if (cameraManager)
-            {
-                cameraManager.SetOwner(this);
-                cameraManager.InitializeFor(this);
-            }
+            cameraManager.SetOwner(this);
+            cameraManager.InitializeFor(this);
         }
 
         private CancellationTokenSource initCts;
@@ -44,7 +49,7 @@ namespace CycloneGames.GameplayFramework
             base.Awake();
 
             initCts = new CancellationTokenSource();
-            InitializePlayerController(initCts.Token).Forget();
+            InitializationTask = InitializePlayerController(initCts.Token);
         }
 
         private async UniTask InitializePlayerController(CancellationToken token)

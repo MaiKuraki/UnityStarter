@@ -4,7 +4,8 @@
     "references": [
         "CycloneGames.Logger",
         "CycloneGames.GameplayFramework",
-        "CycloneGames.Factory.Runtime"
+        "CycloneGames.Factory.Runtime",
+        "UniTask"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
