@@ -4,7 +4,8 @@ using System.Collections.Generic;
 namespace CycloneGames.Utility.Runtime
 {
 	/// <summary>
-	/// Color helpers
+    /// A utility class providing a rich set of predefined colors and color-related helper methods.
+    /// CSS3 specification color names are used for consistency.
 	/// </summary>
 	public static class Colors
 	{
@@ -309,20 +310,13 @@ namespace CycloneGames.Utility.Runtime
 				InitializeDictionary();
 			}
 
-			if (index < ColorDictionary.Count)
-			{
-				return ColorDictionary[index];
-			}
-			else
-			{
-				return Color.white;
-			}
+			return ColorDictionary.TryGetValue(index, out Color color) ? color : Color.white;
 		}
 
 		public static Color RandomColor()
 		{
-			int random = Random.Range(0, 140);
-			return GetColorAt(random);
+			int random = Random.Range(0, ColorDictionary.Count);
+            return GetColorAt(random);
 		}
 
 		/// <summary>
@@ -334,15 +328,13 @@ namespace CycloneGames.Utility.Runtime
 		/// <returns></returns>
 		public static Color RandomColor(this Color color, Color min, Color max)
 		{
-			Color c = new Color()
-			{
-				r = UnityEngine.Random.Range(min.r, max.r),
-				g = UnityEngine.Random.Range(min.g, max.g),
-				b = UnityEngine.Random.Range(min.b, max.b),
-				a = UnityEngine.Random.Range(min.a, max.a)
-			};
-
-			return c;
+			return new Color
+            {
+                r = Random.Range(min.r, max.r),
+                g = Random.Range(min.g, max.g),
+                b = Random.Range(min.b, max.b),
+                a = Random.Range(min.a, max.a)
+            };
 		}
 
 		/// <summary>
