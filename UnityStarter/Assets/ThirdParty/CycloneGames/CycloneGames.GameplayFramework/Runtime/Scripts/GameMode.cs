@@ -239,9 +239,24 @@ namespace CycloneGames.GameplayFramework
                 CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn, please check your spawn pipeline");
                 return null;
             }
+
+            //  To teleport a CharacterController, we should disable it first, move the transform, and then re-enable it.
+            //  This forces the controller to re-synchronize its internal state with the new transform data.
+            var characterController = p.GetComponent<CharacterController>();
+            if (characterController)
+            {
+                characterController.enabled = false;
+            }
+
             p.transform.position = SpawnTransform.position;
             p.transform.localScale = Vector3.one;
             p.transform.rotation = SpawnTransform.rotation;
+
+            if (characterController)
+            {
+                characterController.enabled = true;
+            }
+            
             return p;
         }
 
@@ -290,10 +305,10 @@ namespace CycloneGames.GameplayFramework
             {
                 return;
             }
-            
+
             await PC.InitializationTask.AttachExternalCancellation(cancellationToken);
             if (cancellationToken.IsCancellationRequested) return;
-            
+
             //  Now PlayerController is fully initialized, we can restart player(spawn pawn and possess it)
             RestartPlayer(PC);
         }
