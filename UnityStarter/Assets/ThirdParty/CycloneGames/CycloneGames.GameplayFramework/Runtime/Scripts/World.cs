@@ -2,7 +2,7 @@ namespace CycloneGames.GameplayFramework
 {
     public interface IWorld
     {
-        public void SetGameMode(GameMode inGameModeRef);
+        public void SetGameMode(IGameMode inGameModeRef);
         public GameMode GetGameMode();
         public PlayerController GetPlayerController();      //  TODO: maybe a player index
         public Pawn GetPlayerPawn();                        //  TODO: maybe a player index
@@ -20,9 +20,9 @@ namespace CycloneGames.GameplayFramework
             
         }
 
-        public void SetGameMode(GameMode inGameModeRef)
+        public void SetGameMode(IGameMode inGameModeRef)
         {
-            savedGameMode = inGameModeRef;
+            savedGameMode = (GameMode)inGameModeRef;
         }
 
         public GameMode GetGameMode()
