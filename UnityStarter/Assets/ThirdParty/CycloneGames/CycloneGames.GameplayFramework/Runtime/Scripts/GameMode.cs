@@ -1,12 +1,14 @@
+using System.Threading;
 using CycloneGames.Logger;
 using CycloneGames.Factory.Runtime;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework
 {
     public interface IGameMode
     {
-        void LaunchGameMode();
+        UniTask LaunchGameModeAsync(CancellationToken cancellationToken = default);
     }
     public class GameMode : Actor, IGameMode
     {
@@ -279,11 +281,20 @@ namespace CycloneGames.GameplayFramework
             return InController.GetDefaultPawnPrefab();
         }
 
-        public virtual void LaunchGameMode()
+        public virtual async UniTask LaunchGameModeAsync(CancellationToken cancellationToken = default)
         {
             CLogger.LogInfo($"{DEBUG_FLAG} Launch GameMode");
 
             PlayerController PC = SpawnPlayerController();
+            if (!PC)
+            {
+                return;
+            }
+            
+            await PC.InitializationTask.AttachExternalCancellation(cancellationToken);
+            if (cancellationToken.IsCancellationRequested) return;
+            
+            //  Now PlayerController is fully initialized, we can restart player(spawn pawn and possess it)
             RestartPlayer(PC);
         }
     }
