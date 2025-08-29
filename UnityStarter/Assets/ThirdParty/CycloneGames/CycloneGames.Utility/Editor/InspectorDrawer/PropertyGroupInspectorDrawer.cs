@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
 using UnityEditor;
 using UnityEngine;
@@ -13,32 +12,36 @@ namespace CycloneGames.Utility.Editor
 	[CanEditMultipleObjects]
 	public class PropertyGroupInspectorDrawer : UnityEditor.Editor
 	{
-		Dictionary<string, CacheFoldProp> cacheFolds = new Dictionary<string, CacheFoldProp>();
-		List<SerializedProperty> props = new List<SerializedProperty>();
-		List<MethodInfo> methods = new List<MethodInfo>();
-		bool initialized;
+		private readonly Dictionary<string, CacheFoldProp> _cacheFolds = new Dictionary<string, CacheFoldProp>();
+		private readonly List<object> _drawOrder = new List<object>(); // A list to hold groups and properties in correct order.
+		private SerializedProperty _scriptProperty;
+		private List<MethodInfo> _methods = new List<MethodInfo>();
+		private bool _initialized;
 
-		void OnEnable()
+		private void OnEnable()
 		{
-			initialized = false;
+			_initialized = false;
 		}
 
-		void OnDisable()
+		private void OnDisable()
 		{
-			if (target != null)
+			if (target == null) return;
+
+			foreach (var c in _cacheFolds)
 			{
-				foreach (var c in cacheFolds)
+				// Use string.Concat to avoid boxing allocations from string interpolation/format.
+				if (c.Value.Props.Count > 0)
 				{
-					EditorPrefs.SetBool(string.Format($"{c.Value.atr.GroupName}{c.Value.props[0].name}{target.name}"), c.Value.expanded);
-					c.Value.Dispose();
+					string key = string.Concat(c.Value.Atr.GroupName, c.Value.Props[0].name, target.name);
+					EditorPrefs.SetBool(key, c.Value.Expanded);
 				}
+				c.Value.Dispose();
 			}
 		}
 
-
 		public override bool RequiresConstantRepaint()
 		{
-			return EditorFramework.needToRepaint;
+			return EditorFramework.NeedToRepaint;
 		}
 
 		public override void OnInspectorGUI()
@@ -47,211 +50,211 @@ namespace CycloneGames.Utility.Editor
 
 			Setup();
 
-			if (props.Count == 0)
+			if (_drawOrder.Count == 0 && _cacheFolds.Count == 0)
 			{
 				DrawDefaultInspector();
 				return;
 			}
 
-			Header();
-			Body();
-
-			serializedObject.ApplyModifiedProperties();
-
-			void Header()
+			// Header (Script field)
+			if (_scriptProperty != null)
 			{
-				using (new EditorGUI.DisabledScope("m_Script" == props[0].propertyPath))
+				using (new EditorGUI.DisabledScope(true))
 				{
 					EditorGUILayout.Space();
-					EditorGUILayout.PropertyField(props[0], true);
+					EditorGUILayout.PropertyField(_scriptProperty, true);
 					EditorGUILayout.Space();
 				}
 			}
 
-			void Body()
+			// Body - Draw items in the order they were declared.
+			foreach (var item in _drawOrder)
 			{
-				foreach (var pair in cacheFolds)
+				if (item is CacheFoldProp group)
 				{
-					Foldout(pair.Value);
+					Foldout(group);
 					EditorGUILayout.Space();
 					EditorGUI.indentLevel = 0;
 				}
-				EditorGUILayout.Space();
-				for (var i = 1; i < props.Count; i++)
+				else if (item is SerializedProperty prop)
 				{
-					EditorGUILayout.PropertyField(props[i], true);
-				}
-				EditorGUILayout.Space();
-				if (methods == null) return;
-				foreach (MethodInfo memberInfo in methods)
-				{
-					this.UseButton(memberInfo);
+					EditorGUILayout.PropertyField(prop, true);
 				}
 			}
 
-			void Foldout(CacheFoldProp cache)
+			EditorGUILayout.Space();
+
+			if (_methods == null) return;
+
+			foreach (MethodInfo memberInfo in _methods)
 			{
-				this.UseGroupLayout(() =>
-				{
-					cache.expanded = EditorGUILayout.Foldout(cache.expanded, cache.atr.GroupName, true, StyleFramework.foldout);
-					if (cache.expanded)
-					{
-						EditorGUI.indentLevel = 1;
-						for (int i = 0; i < cache.props.Count; i++)
-						{
-							Child(i);
-						}
-					}
-				}, StyleFramework.box, cache.groupColor);
-
-				void Child(int i)
-				{
-					EditorGUILayout.PropertyField(cache.props[i], new GUIContent(cache.props[i].name.FirstLetterToUpperCase()), true);
-				}
+				this.UseButton(memberInfo);
 			}
 
-			void Setup()
-			{
-				EditorFramework.currentEvent = Event.current;
-				if (!initialized)
-				{
-					List<FieldInfo> objectFields;
-					PropertyGroupAttribute prevFold = default;
-
-					var length = EditorTypes.Get(target, out objectFields);
-
-					for (var i = 0; i < length; i++)
-					{
-						#region FOLDERS
-
-						var fold = Attribute.GetCustomAttribute(objectFields[i], typeof(PropertyGroupAttribute)) as PropertyGroupAttribute;
-						CacheFoldProp c;
-						if (fold == null)
-						{
-							if (prevFold != null && prevFold.GroupAllFieldsUntilNextGroupAttribute)
-							{
-								if (!cacheFolds.TryGetValue(prevFold.GroupName, out c))
-								{
-									cacheFolds.Add(prevFold.GroupName, new CacheFoldProp { atr = prevFold, types = new HashSet<string> { objectFields[i].Name }, groupColor = Colors.GetColorAt(prevFold.GroupColorIndex) });
-								}
-								else
-								{
-									c.groupColor = Colors.GetColorAt(prevFold.GroupColorIndex);
-									c.types.Add(objectFields[i].Name);
-								}
-							}
-
-							continue;
-						}
-
-						prevFold = fold;
-
-						if (!cacheFolds.TryGetValue(fold.GroupName, out c))
-						{
-							var expanded = EditorPrefs.GetBool(string.Format($"{fold.GroupName}{objectFields[i].Name}{target.name}"), false);
-							cacheFolds.Add(fold.GroupName, new CacheFoldProp { atr = fold, types = new HashSet<string> { objectFields[i].Name }, expanded = expanded, groupColor = Colors.GetColorAt(prevFold.GroupColorIndex) });
-						}
-						else
-						{
-							c.groupColor = Colors.GetColorAt(prevFold.GroupColorIndex);
-							c.types.Add(objectFields[i].Name);
-						}
-
-						#endregion
-					}
-
-					var property = serializedObject.GetIterator();
-					var next = property.NextVisible(true);
-					if (next)
-					{
-						do
-						{
-							HandleFoldProp(property);
-						} while (property.NextVisible(false));
-					}
-
-					initialized = true;
-				}
-			}
-
+			serializedObject.ApplyModifiedProperties();
 		}
 
-		public void HandleFoldProp(SerializedProperty prop)
+		private void Foldout(CacheFoldProp cache)
 		{
-			bool shouldBeFolded = false;
+			EditorLayoutHelper.BeginGroupLayout(StyleFramework.Box, cache.GroupColor);
 
-			foreach (var pair in cacheFolds)
+			cache.Expanded = EditorGUILayout.Foldout(cache.Expanded, cache.Atr.GroupName, true, StyleFramework.Foldout);
+			if (cache.Expanded)
 			{
-				if (pair.Value.types.Contains(prop.name))
+				EditorGUI.indentLevel = 1;
+				for (int i = 0; i < cache.Props.Count; i++)
 				{
-					var pr = prop.Copy();
-					shouldBeFolded = true;
-					pair.Value.props.Add(pr);
-
-					break;
+					// Use cached GUIContent to avoid allocations.
+					EditorGUILayout.PropertyField(cache.Props[i], cache.HeaderLabels[i], true);
 				}
 			}
 
-			if (shouldBeFolded == false)
-			{
-				var pr = prop.Copy();
-				props.Add(pr);
-			}
+			EditorLayoutHelper.EndGroupLayout();
 		}
 
-		class CacheFoldProp
+		private void Setup()
 		{
-			public HashSet<string> types = new HashSet<string>();
-			public List<SerializedProperty> props = new List<SerializedProperty>();
-			public PropertyGroupAttribute atr;
-			public bool expanded;
-			public Color groupColor;
+			EditorFramework.CurrentEvent = Event.current;
+			if (_initialized) return;
+
+			// Clear previous data
+			_cacheFolds.Clear();
+			_drawOrder.Clear();
+			_methods.Clear();
+			_scriptProperty = null;
+
+			// 1. First, parse all fields with reflection to understand the group structure.
+			PropertyGroupAttribute prevFold = default;
+			var objectFields = EditorTypes.Get(target);
+			for (var i = 0; i < objectFields.Count; i++)
+			{
+				var field = objectFields[i];
+				if (Attribute.IsDefined(field, typeof(EndPropertyGroupAttribute)))
+				{
+					prevFold = null;
+				}
+
+				var fold = Attribute.GetCustomAttribute(field, typeof(PropertyGroupAttribute)) as PropertyGroupAttribute;
+				if (fold != null)
+				{
+					prevFold = fold;
+					if (!_cacheFolds.ContainsKey(fold.GroupName))
+					{
+						string key = string.Concat(fold.GroupName, field.Name, target.name);
+						var expanded = EditorPrefs.GetBool(key, !fold.ClosedByDefault);
+						_cacheFolds.Add(fold.GroupName, new CacheFoldProp { Atr = fold, Expanded = expanded, GroupColor = Colors.GetColorAt(fold.GroupColorIndex) });
+					}
+					_cacheFolds[fold.GroupName].Types.Add(field.Name);
+				}
+				else
+				{
+					if (prevFold != null && prevFold.GroupAllFieldsUntilNextGroupAttribute)
+					{
+						_cacheFolds[prevFold.GroupName].Types.Add(field.Name);
+					}
+				}
+			}
+
+			// 2. Now, iterate through serialized properties to build the final draw order list.
+			var property = serializedObject.GetIterator();
+			var addedGroups = new HashSet<string>();
+			if (property.NextVisible(true))
+			{
+				do
+				{
+					// Handle script property separately
+					if (property.propertyPath == "m_Script")
+					{
+						_scriptProperty = property.Copy();
+						continue;
+					}
+
+					CacheFoldProp belongingGroup = null;
+					foreach (var pair in _cacheFolds)
+					{
+						if (pair.Value.Types.Contains(property.name))
+						{
+							belongingGroup = pair.Value;
+							break;
+						}
+					}
+
+					if (belongingGroup != null)
+					{
+						belongingGroup.Props.Add(property.Copy());
+						if (!addedGroups.Contains(belongingGroup.Atr.GroupName))
+						{
+							_drawOrder.Add(belongingGroup);
+							addedGroups.Add(belongingGroup.Atr.GroupName);
+						}
+					}
+					else
+					{
+						_drawOrder.Add(property.Copy());
+					}
+				} while (property.NextVisible(false));
+			}
+
+			// 3. Populate cached GUIContent for all groups.
+			foreach (var pair in _cacheFolds)
+			{
+				pair.Value.CacheGUIContent();
+			}
+
+			_initialized = true;
+		}
+
+		private class CacheFoldProp
+		{
+			public readonly HashSet<string> Types = new HashSet<string>();
+			public readonly List<SerializedProperty> Props = new List<SerializedProperty>();
+			public readonly List<GUIContent> HeaderLabels = new List<GUIContent>();
+			public PropertyGroupAttribute Atr;
+			public bool Expanded;
+			public Color GroupColor;
 
 			public void Dispose()
 			{
-				props.Clear();
-				types.Clear();
-				atr = null;
+				Props.Clear();
+				Types.Clear();
+				HeaderLabels.Clear();
+				Atr = null;
+			}
+
+			public void CacheGUIContent()
+			{
+				HeaderLabels.Clear();
+				for (int i = 0; i < Props.Count; i++)
+				{
+					HeaderLabels.Add(new GUIContent(Props[i].name.FirstLetterToUpperCase()));
+				}
 			}
 		}
 	}
 
 	public static class EditorLayoutHelper
 	{
-		public static void UseGroupLayout(this UnityEditor.Editor e, Action action, GUIStyle style, Color groupColor)
+		// Refactored to Begin/End pattern to avoid delegate allocation.
+		public static void BeginGroupLayout(GUIStyle style, Color groupColor)
 		{
-			// Begin a horizontal layout to place the color bar and the vertical content side by side
 			EditorGUILayout.BeginHorizontal();
-			// Draw the color bar
-			float colorBarWidth = 4;
 
-			//	This offset is designed for align the foldout group's background box
-			float xOffset = 4;
-			float yOffset = 4;
+			const float colorBarWidth = 4;
+			const float xOffset = 4;
+			const float yOffset = 4;
 
 			Rect colorBarRect = GUILayoutUtility.GetRect(colorBarWidth, 0, GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(false));
 			colorBarRect.y += yOffset;
 			colorBarRect.x += xOffset;
 
-			EditorGUI.DrawRect(new Rect(colorBarRect.x,
-										 colorBarRect.y,
-										 colorBarRect.width,
-										 colorBarRect.height),
-							   groupColor);
 			EditorGUI.DrawRect(colorBarRect, groupColor);
-			// Begin the vertical layout for the actual content
 			EditorGUILayout.BeginVertical(style);
-			action();
-			EditorGUILayout.EndVertical();
-			// End the horizontal layout
-			EditorGUILayout.EndHorizontal();
 		}
 
-		public static void UseVerticalLayout(this UnityEditor.Editor e, Action action, GUIStyle style)
+		public static void EndGroupLayout()
 		{
-			EditorGUILayout.BeginVertical(style);
-			action();
 			EditorGUILayout.EndVertical();
+			EditorGUILayout.EndHorizontal();
 		}
 
 		public static void UseButton(this UnityEditor.Editor e, MethodInfo m)
@@ -263,43 +266,41 @@ namespace CycloneGames.Utility.Editor
 		}
 	}
 
-	static class StyleFramework
+	internal static class StyleFramework
 	{
-		public static GUIStyle box;
-		public static GUIStyle foldout;
-		const int iconLeftPadding = 16;
+		public static readonly GUIStyle Box;
+		public static readonly GUIStyle Foldout;
+		private const int IconLeftPadding = 16;
 
 		static StyleFramework()
 		{
-			bool pro = EditorGUIUtility.isProSkin;
-
 			var uiTex_in = Resources.Load<Texture2D>("IN foldout focus-6510");
 			var uiTex_in_on = Resources.Load<Texture2D>("IN foldout focus on-5718");
 
-			var c_on = pro ? Color.white : new Color(51 / 255f, 102 / 255f, 204 / 255f, 1);
+			var c_on = EditorGUIUtility.isProSkin ? Color.white : new Color(51 / 255f, 102 / 255f, 204 / 255f, 1);
 
-			foldout = new GUIStyle(EditorStyles.foldout);
+			Foldout = new GUIStyle(EditorStyles.foldout)
+			{
+				padding = new RectOffset(IconLeftPadding, 0, -2, 0)
+			};
 
-			foldout.padding = new RectOffset(iconLeftPadding, 0, -2, 0);    //	Title offset
+			Foldout.active.textColor = c_on;
+			Foldout.active.background = uiTex_in;
+			Foldout.onActive.textColor = c_on;
+			Foldout.onActive.background = uiTex_in_on;
+			Foldout.focused.textColor = c_on;
+			Foldout.focused.background = uiTex_in;
+			Foldout.onFocused.textColor = c_on;
+			Foldout.onFocused.background = uiTex_in_on;
+			Foldout.hover.textColor = c_on;
+			Foldout.hover.background = uiTex_in;
+			Foldout.onHover.textColor = c_on;
+			Foldout.onHover.background = uiTex_in_on;
 
-			foldout.active.textColor = c_on;
-			foldout.active.background = uiTex_in;
-			foldout.onActive.textColor = c_on;
-			foldout.onActive.background = uiTex_in_on;
-
-			foldout.focused.textColor = c_on;
-			foldout.focused.background = uiTex_in;
-			foldout.onFocused.textColor = c_on;
-			foldout.onFocused.background = uiTex_in_on;
-
-			foldout.hover.textColor = c_on;
-			foldout.hover.background = uiTex_in;
-
-			foldout.onHover.textColor = c_on;
-			foldout.onHover.background = uiTex_in_on;
-
-			box = new GUIStyle(GUI.skin.box);
-			box.padding = new RectOffset(iconLeftPadding, 0, 6, 4); //	Title align
+			Box = new GUIStyle(GUI.skin.box)
+			{
+				padding = new RectOffset(IconLeftPadding, 0, 6, 4)
+			};
 		}
 
 		public static string FirstLetterToUpperCase(this string s)
@@ -311,95 +312,75 @@ namespace CycloneGames.Utility.Editor
 			a[0] = char.ToUpper(a[0]);
 			return new string(a);
 		}
-
-		public static IList<Type> GetTypeTree(this Type t)
-		{
-			var types = new List<Type>();
-			while (t.BaseType != null)
-			{
-				types.Add(t);
-				t = t.BaseType;
-			}
-
-			return types;
-		}
 	}
 
-	static class EditorTypes
+	internal static class EditorTypes
 	{
-		public static Dictionary<int, List<FieldInfo>> fields = new Dictionary<int, List<FieldInfo>>(FastComparable.Default);
+		private static readonly Dictionary<Type, List<FieldInfo>> FieldsCache = new Dictionary<Type, List<FieldInfo>>();
 
-		public static int Get(Object target, out List<FieldInfo> objectFields)
+		public static List<FieldInfo> Get(Object target)
 		{
-			var t = target.GetType();
-			var hash = t.GetHashCode();
-
-			if (!fields.TryGetValue(hash, out objectFields))
+			Type t = target.GetType();
+			if (FieldsCache.TryGetValue(t, out var objectFields))
 			{
-				var typeTree = t.GetTypeTree();
-				objectFields = target.GetType()
-						.GetFields(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.NonPublic)
-						.OrderByDescending(x => typeTree.IndexOf(x.DeclaringType))
-						.ToList();
-				fields.Add(hash, objectFields);
+				return objectFields;
 			}
 
-			return objectFields.Count;
-		}
-	}
+			objectFields = new List<FieldInfo>();
+			const BindingFlags flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
 
-	class FastComparable : IEqualityComparer<int>
-	{
-		public static FastComparable Default = new FastComparable();
+			var typeHierarchy = new List<Type>();
+			for (var type = t; type != null; type = type.BaseType)
+			{
+				typeHierarchy.Add(type);
+			}
+			typeHierarchy.Reverse();
 
-		public bool Equals(int x, int y)
-		{
-			return x == y;
-		}
+			foreach (var type in typeHierarchy)
+			{
+				objectFields.AddRange(type.GetFields(flags));
+			}
 
-		public int GetHashCode(int obj)
-		{
-			return obj.GetHashCode();
+			FieldsCache.Add(t, objectFields);
+			return objectFields;
 		}
 	}
 
 	[InitializeOnLoad]
-	public static class EditorFramework
+	internal static class EditorFramework
 	{
-		internal static bool needToRepaint;
-
-		internal static Event currentEvent;
-		internal static float t;
+		internal static bool NeedToRepaint;
+		internal static Event CurrentEvent;
+		private static float _t;
 
 		static EditorFramework()
 		{
 			EditorApplication.update += Updating;
 		}
 
-
-		static void Updating()
+		private static void Updating()
 		{
 			CheckMouse();
 
-			if (needToRepaint)
+			if (NeedToRepaint)
 			{
-				t += Time.deltaTime;
+				_t += Time.deltaTime;
 
-				if (t >= 0.3f)
+				if (_t >= 0.3f)
 				{
-					t -= 0.3f;
-					needToRepaint = false;
+					_t = 0f;
+					NeedToRepaint = false;
 				}
 			}
 		}
 
-		static void CheckMouse()
+		private static void CheckMouse()
 		{
-			var ev = currentEvent;
-			if (ev == null) return;
-
-			if (ev.type == EventType.MouseMove)
-				needToRepaint = true;
+			var ev = CurrentEvent;
+			if (ev?.type == EventType.MouseMove)
+			{
+				NeedToRepaint = true;
+			}
 		}
 	}
 }
