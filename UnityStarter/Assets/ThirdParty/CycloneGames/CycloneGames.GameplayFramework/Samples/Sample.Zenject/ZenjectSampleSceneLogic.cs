@@ -1,3 +1,5 @@
+using System.Threading;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 using Zenject;
 
@@ -9,7 +11,12 @@ namespace CycloneGames.GameplayFramework.Sample.Zenject
 
         void Start()
         {
-            gameMode.LaunchGameMode();            
+            LaunchGameModeAsync(this.GetCancellationTokenOnDestroy()).Forget();
+        }
+
+        async UniTask LaunchGameModeAsync(CancellationToken cancel)
+        {
+            await gameMode.LaunchGameModeAsync(cancel);
         }
     }
 }

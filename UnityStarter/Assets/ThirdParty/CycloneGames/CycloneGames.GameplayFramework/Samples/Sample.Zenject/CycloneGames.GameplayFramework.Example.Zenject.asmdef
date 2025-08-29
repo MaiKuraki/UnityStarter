@@ -2,6 +2,7 @@
     "name": "CycloneGames.GameplayFramework.Sample.Zenject",
     "rootNamespace": "",
     "references": [
+        "UniTask",
         "Zenject",
         "CycloneGames.GameplayFramework",
         "CycloneGames.Factory.Runtime",
