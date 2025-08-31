@@ -137,6 +137,18 @@ namespace CycloneGames.GameplayAbilities.Sample
             var attribute = GetAttribute(data.Modifier.AttributeName);
             if (attribute == null) return;
 
+            // After any modification, clamp Health and Mana to their max values.
+            // This is the correct place to clamp the BaseValue, preventing it from growing indefinitely
+            // from effects like regeneration, while PreAttributeChange clamps the CurrentValue.
+            if (attribute == Health)
+            {
+                SetBaseValue(Health, System.Math.Clamp(GetBaseValue(Health), 0, GetCurrentValue(MaxHealth)));
+            }
+            else if (attribute == Mana)
+            {
+                SetBaseValue(Mana, System.Math.Clamp(GetBaseValue(Mana), 0, GetCurrentValue(MaxMana)));
+            }
+            
             if (attribute == Experience)
             {
                 bool hasExpGainTag = data.EffectSpec.Def.AssetTags.HasTag(GameplayTagManager.RequestTag(GASSampleTags.Event_Experience_Gain));
