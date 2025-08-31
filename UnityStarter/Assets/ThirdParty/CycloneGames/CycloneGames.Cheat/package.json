@@ -19,5 +19,11 @@
     "email": "",
     "url": ""
   },
-  "samples": []
+  "samples": [
+    {
+      "displayName": "Cheat Sample",
+      "description": "Cheat Sample",
+      "path": "Samples"
+    }
+  ]
 }
