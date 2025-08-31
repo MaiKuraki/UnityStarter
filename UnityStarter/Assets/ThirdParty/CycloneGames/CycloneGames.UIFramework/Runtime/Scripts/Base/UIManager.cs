@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
-using CycloneGames.Logger; 
-using CycloneGames.Service; // For IMainCameraService
+using CycloneGames.Logger;
+using CycloneGames.Service;         // For IMainCameraService
 using CycloneGames.AssetManagement; // For IAssetPathBuilderFactory
 using CycloneGames.Factory.Runtime; // For IUnityObjectSpawner
 using CycloneGames.AssetManagement.Integrations.Common;
@@ -14,7 +14,7 @@ namespace CycloneGames.UIFramework
         private const string DEBUG_FLAG = "[UIManager]";
         private IAssetPathBuilder assetPathBuilder;
         private IUnityObjectSpawner objectSpawner; // Should be IObjectSpawner<UnityEngine.Object> or similar
-        private IMainCameraService mainCameraService; // Renamed for clarity
+        private IMainCameraService mainCameraService;
         private IAssetPackage assetPackage; // Generic asset package for loading configs/prefabs
         private IUIWindowTransitionDriver transitionDriver; // Optional transition driver applied to spawned windows
         private UIRoot uiRoot;
@@ -158,7 +158,7 @@ namespace CycloneGames.UIFramework
             CloseUIAsync(windowName).Forget(); // Fire and forget UniTask
         }
 
-        internal async UniTask<UIWindow> OpenUIAsync(string windowName, System.Action<UIWindow> onUIWindowCreated = null)
+        internal async UniTask<UIWindow> OpenUIAsync(string windowName, System.Action<UIWindow> onUIWindowCreated = null, System.Threading.CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrEmpty(windowName))
             {
@@ -181,7 +181,7 @@ namespace CycloneGames.UIFramework
             if (uiOpenTCS.TryGetValue(windowName, out var existingTcs))
             {
                 CLogger.LogInfo($"{DEBUG_FLAG} Window '{windowName}' open operation already in progress. Awaiting existing task.");
-                UIWindow window = await existingTcs.Task; // Wait for the existing operation
+                UIWindow window = await existingTcs.Task.AttachExternalCancellation(cancellationToken); // Wait for the existing operation
                 onUIWindowCreated?.Invoke(window);
                 return window;
             }
@@ -203,6 +203,7 @@ namespace CycloneGames.UIFramework
             UIWindowConfiguration windowConfig = null;
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (assetPackage == null)
                 {
                     throw new System.InvalidOperationException("IAssetPackage is not available.");
@@ -211,7 +212,7 @@ namespace CycloneGames.UIFramework
                 var windowConfigHandle = assetPackage.LoadAssetAsync<UIWindowConfiguration>(configPath);
                 while (!windowConfigHandle.IsDone)
                 {
-                    await UniTask.Yield();
+                    await UniTask.Yield(cancellationToken);
                 }
 
                 if (!string.IsNullOrEmpty(windowConfigHandle.Error) || windowConfigHandle.Asset == null)
@@ -236,6 +237,14 @@ namespace CycloneGames.UIFramework
                     onUIWindowCreated?.Invoke(null);
                     return null;
                 }
+            }
+            catch (System.OperationCanceledException)
+            {
+                CLogger.LogInfo($"{DEBUG_FLAG} Open UI operation for '{windowName}' was canceled.");
+                uiOpenTCS.Remove(windowName);
+                tcs.TrySetCanceled();
+                onUIWindowCreated?.Invoke(null);
+                return null;
             }
             catch (System.Exception ex)
             {
@@ -297,11 +306,13 @@ namespace CycloneGames.UIFramework
                     IAssetHandle<GameObject> prefabHandle;
                     if (!prefabHandleCache.TryGetValue(windowConfig.PrefabLocation, out prefabHandle) || prefabHandle == null)
                     {
-                        prefabHandle = assetPackage.LoadAssetAsync<GameObject>(windowConfig.PrefabLocation);
-                        while (!prefabHandle.IsDone)
+                        var prefabLoadHandle = assetPackage.LoadAssetAsync<GameObject>(windowConfig.PrefabLocation);
+                        while (!prefabLoadHandle.IsDone)
                         {
-                            await UniTask.Yield();
+                            await UniTask.Yield(cancellationToken);
                         }
+                        prefabHandle = prefabLoadHandle;
+
                         if (!string.IsNullOrEmpty(prefabHandle.Error) || prefabHandle.Asset == null)
                         {
                             prefabHandle?.Dispose();
@@ -317,14 +328,14 @@ namespace CycloneGames.UIFramework
                     }
                     var go = prefabHandle.Asset;
                     // Spawn instance via spawner to allow pooling or custom instantiation
-                    await ThrottleInstantiate();
+                    await ThrottleInstantiate(cancellationToken);
                     var spawnedGo = objectSpawner.Create(go);
                     uiWindowInstance = spawnedGo != null ? spawnedGo.GetComponent<UIWindow>() : null;
                     // Keep handle cached for subsequent opens (avoid immediate dispose)
                 }
                 else // PrefabReference
                 {
-                    await ThrottleInstantiate();
+                    await ThrottleInstantiate(cancellationToken);
                     uiWindowInstance = objectSpawner.Create(windowConfig.WindowPrefab) as UIWindow;
                 }
 
@@ -338,6 +349,14 @@ namespace CycloneGames.UIFramework
                 {
                     uiWindowInstance.SetTransitionDriver(transitionDriver);
                 }
+            }
+            catch (System.OperationCanceledException)
+            {
+                CLogger.LogInfo($"{DEBUG_FLAG} Open UI operation for '{windowName}' was canceled during instantiation.");
+                uiOpenTCS.Remove(windowName);
+                tcs.TrySetCanceled();
+                onUIWindowCreated?.Invoke(null);
+                return null;
             }
             catch (System.Exception ex)
             {
@@ -353,7 +372,9 @@ namespace CycloneGames.UIFramework
             activeWindows[windowName] = uiWindowInstance;
 
             // Yield once before opening to spread work across frames if needed
-            await UniTask.Yield();
+            await UniTask.Yield(cancellationToken);
+            // The Open method itself might not be cancellable without modification,
+            // but the preceding heavy operations (loading, instantiation) are now cancellable.
             await uiWindowInstance.Open();
 
             onUIWindowCreated?.Invoke(uiWindowInstance);
@@ -362,12 +383,12 @@ namespace CycloneGames.UIFramework
             return uiWindowInstance;
         }
 
-        public UniTask<UIWindow> OpenUIAndWait(string windowName)
+        internal UniTask<UIWindow> OpenUIAndWait(string windowName, System.Threading.CancellationToken cancellationToken = default)
         {
-            return OpenUIAsync(windowName, null);
+            return OpenUIAsync(windowName, null, cancellationToken);
         }
 
-        private async UniTask CloseUIAsync(string windowName)
+        internal async UniTask CloseUIAsync(string windowName, System.Threading.CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrEmpty(windowName))
             {
@@ -375,48 +396,58 @@ namespace CycloneGames.UIFramework
                 return;
             }
 
-            // If an open operation is still in progress for this window, wait for it to complete.
-            if (uiOpenTCS.TryGetValue(windowName, out var openTcs))
+            try
             {
-                CLogger.LogInfo($"{DEBUG_FLAG} Close requested for '{windowName}' which is still opening. Awaiting open completion.");
-                await openTcs.Task; // Wait for opening to finish
-                // Do not remove from uiOpenTCS here, the OpenUIAsync will resolve it.
-                // Or, if Close is called *after* Open resolves but before Open removes its TCS,
-                // it might be okay. Let's assume OpenUIAsync's TCS is for the *completion* of opening.
-            }
+                cancellationToken.ThrowIfCancellationRequested();
 
-            if (!activeWindows.TryGetValue(windowName, out UIWindow windowToClose))
+                // If an open operation is still in progress for this window, wait for it to complete.
+                if (uiOpenTCS.TryGetValue(windowName, out var openTcs))
+                {
+                    CLogger.LogInfo($"{DEBUG_FLAG} Close requested for '{windowName}' which is still opening. Awaiting open completion.");
+                    await openTcs.Task.AttachExternalCancellation(cancellationToken); // Wait for opening to finish
+                }
+
+                if (!activeWindows.TryGetValue(windowName, out UIWindow windowToClose))
+                {
+                    CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' not found in active windows. Cannot close.");
+                    return;
+                }
+
+                CLogger.LogInfo($"{DEBUG_FLAG} Attempting to close UI: {windowName}");
+                UILayer layer = windowToClose.ParentLayer; // Get layer directly from window
+
+                if (layer != null)
+                {
+                    layer.RemoveWindow(windowName); // This is a synchronous call that likely triggers an async close.
+                }
+                else
+                {
+                    // Window is active but has no parent layer (should be rare if managed correctly)
+                    CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' has no parent layer but is active. Attempting direct close.");
+                    windowToClose.Close(); // This is a synchronous call.
+                }
+
+                // Remove from active tracking. The window's OnDestroy will handle UILayer's internal list.
+                activeWindows.Remove(windowName);
+                uiOpenTCS.Remove(windowName); // Clean up any residual open task completer for this window name
+
+                // Release the configuration asset loaded for this window
+                if (loadedConfigHandles.TryGetValue(windowName, out var configHandle))
+                {
+                    configHandle?.Dispose();
+                    loadedConfigHandles.Remove(windowName);
+                    CLogger.LogInfo($"{DEBUG_FLAG} Released UIWindowConfiguration for {windowName}.");
+                }
+                // Handles are disposed explicitly; prefab instances follow normal GameObject lifecycle.
+            }
+            catch (System.OperationCanceledException)
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' not found in active windows. Cannot close.");
-                return;
+                CLogger.LogInfo($"{DEBUG_FLAG} Close UI operation for '{windowName}' was canceled.");
             }
-
-            CLogger.LogInfo($"{DEBUG_FLAG} Attempting to close UI: {windowName}");
-            UILayer layer = windowToClose.ParentLayer; // Get layer directly from window
-
-            if (layer != null)
+            catch (System.Exception ex)
             {
-                layer.RemoveWindow(windowName); // This tells the window to initiate its Close() sequence
+                CLogger.LogError($"{DEBUG_FLAG} Exception during CloseUIAsync for '{windowName}': {ex.Message}\n{ex.StackTrace}");
             }
-            else
-            {
-                // Window is active but has no parent layer (should be rare if managed correctly)
-                CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' has no parent layer but is active. Attempting direct close.");
-                windowToClose.Close(); // Tell it to close itself
-            }
-
-            // Remove from active tracking. The window's OnDestroy will handle UILayer's internal list.
-            activeWindows.Remove(windowName);
-            uiOpenTCS.Remove(windowName); // Clean up any residual open task completer for this window name
-
-            // Release the configuration asset loaded for this window
-            if (loadedConfigHandles.TryGetValue(windowName, out var configHandle))
-            {
-                configHandle?.Dispose();
-                loadedConfigHandles.Remove(windowName);
-                CLogger.LogInfo($"{DEBUG_FLAG} Released UIWindowConfiguration for {windowName}.");
-            }
-            // Handles are disposed explicitly; prefab instances follow normal GameObject lifecycle.
         }
 
         /// <summary>
@@ -537,13 +568,11 @@ namespace CycloneGames.UIFramework
             }
         }
 
-        private async UniTask ThrottleInstantiate()
+        private async UniTask ThrottleInstantiate(System.Threading.CancellationToken cancellationToken = default)
         {
             while (instantiatesThisFrame >= maxInstantiatesPerFrame)
             {
-                await UniTask.Yield();
-                // Budget resets in onBeforeRender; to be safe, also reset if new frame detected by Time.frameCount changes
-                instantiatesThisFrame = 0;
+                await UniTask.Yield(cancellationToken);
             }
             instantiatesThisFrame++;
         }
