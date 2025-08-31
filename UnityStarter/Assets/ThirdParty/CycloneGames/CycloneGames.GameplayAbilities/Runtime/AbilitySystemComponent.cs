@@ -405,7 +405,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
-            CLogger.LogInfo($"{OwnerActor} Execute Instant GameplayEffect '{spec.Def.Name}' on self.");
+            // CLogger.LogInfo($"{OwnerActor} Execute Instant GameplayEffect '{spec.Def.Name}' on self.");
         }
 
         // --- Tick and State Management ---
