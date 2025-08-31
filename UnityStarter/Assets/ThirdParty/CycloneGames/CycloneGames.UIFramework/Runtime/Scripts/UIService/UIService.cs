@@ -1,6 +1,7 @@
 using System;
+using Cysharp.Threading.Tasks;
 using CycloneGames.Factory.Runtime; // For IUnityObjectSpawner
-using CycloneGames.Service; // For IMainCameraService
+using CycloneGames.Service;         // For IMainCameraService
 using CycloneGames.AssetManagement; // For IAssetPathBuilderFactory
 using CycloneGames.AssetManagement.Integrations.Common;
 
@@ -14,12 +15,14 @@ namespace CycloneGames.UIFramework
         /// <param name="windowName">The name of the UI window to open.</param>
         /// <param name="onWindowCreated">Optional callback invoked when the window is created.</param>
         void OpenUI(string windowName, System.Action<UIWindow> onWindowCreated = null);
+        UniTask<UIWindow> OpenUIAsync(string windowName, System.Threading.CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Closes a UI by its registered name.
         /// </summary>
         /// <param name="windowName">The name of the UI window to close.</param>
         void CloseUI(string windowName);
+        UniTask CloseUIAsync(string windowName, System.Threading.CancellationToken cancellationToken = default);
 
         /// <summary>
         /// Checks if a UI window is currently considered valid (e.g., open and active).
@@ -77,7 +80,7 @@ namespace CycloneGames.UIFramework
             Initialize(factory, spawner, cameraService, package);
         }
 
-        public void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService)
+        public virtual void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService)
         {
             if (isInitialized)
             {
@@ -97,7 +100,7 @@ namespace CycloneGames.UIFramework
             isInitialized = true;
         }
 
-        public void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService, IAssetPackage package)
+        public virtual void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService, IAssetPackage package)
         {
             if (isInitialized)
             {
@@ -165,25 +168,33 @@ namespace CycloneGames.UIFramework
             uiManagerInstance.OpenUI(windowName, onWindowCreated);
         }
 
+        public UniTask<UIWindow> OpenUIAsync(string windowName, System.Threading.CancellationToken cancellationToken = default)
+        {
+            if (!CheckInitialization()) return UniTask.FromResult<UIWindow>(null);
+            return uiManagerInstance.OpenUIAndWait(windowName, cancellationToken);
+        }
+
         public void CloseUI(string windowName)
         {
             if (!CheckInitialization()) return;
             uiManagerInstance.CloseUI(windowName);
         }
 
+        public async UniTask CloseUIAsync(string windowName, System.Threading.CancellationToken cancellationToken = default)
+        {
+            if (!CheckInitialization()) return;
+            await uiManagerInstance.CloseUIAsync(windowName, cancellationToken);
+        }
+
         /// <summary>
         /// Optionally open and await until the window reports Opened (strict sequencing use-cases).
         /// </summary>
-        public async Cysharp.Threading.Tasks.UniTask<UIWindow> OpenUIAndWait(string windowName)
+        public UniTask<UIWindow> OpenUIAndWait(string windowName, System.Threading.CancellationToken cancellationToken = default)
         {
-            if (!CheckInitialization()) return null;
-            var tcs = new Cysharp.Threading.Tasks.UniTaskCompletionSource<UIWindow>();
-            uiManagerInstance.OpenUI(windowName, w =>
-            {
-                if (w == null) tcs.TrySetResult(null);
-                else tcs.TrySetResult(w);
-            });
-            return await tcs.Task;
+            if (!CheckInitialization()) return UniTask.FromResult<UIWindow>(null);
+            // This method is now just a wrapper for OpenUIAsync.
+            // The original implementation with UniTaskCompletionSource is redundant if OpenUIAsync is already awaitable.
+            return uiManagerInstance.OpenUIAndWait(windowName, cancellationToken);
         }
 
         public UIWindow GetUIWindow(string windowName)
