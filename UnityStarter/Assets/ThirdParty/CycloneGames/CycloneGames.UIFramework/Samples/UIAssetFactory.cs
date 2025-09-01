@@ -1,6 +1,6 @@
-using CycloneGames.AssetManagement;
+using CycloneGames.AssetManagement.Runtime;
 
-namespace CycloneGames.UIFramework.Samples
+namespace CycloneGames.UIFramework.Runtime.Samples
 {
     public class UIAssetFactory : IAssetPathBuilderFactory
     {

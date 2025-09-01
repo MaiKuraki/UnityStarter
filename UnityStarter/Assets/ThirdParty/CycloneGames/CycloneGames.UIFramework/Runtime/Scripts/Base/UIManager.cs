@@ -2,12 +2,12 @@ using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using CycloneGames.Logger;
-using CycloneGames.Service;         // For IMainCameraService
-using CycloneGames.AssetManagement; // For IAssetPathBuilderFactory
-using CycloneGames.Factory.Runtime; // For IUnityObjectSpawner
-using CycloneGames.AssetManagement.Integrations.Common;
+using CycloneGames.Service.Runtime;         // For IMainCameraService
+using CycloneGames.Factory.Runtime;         // For IUnityObjectSpawner
+using CycloneGames.AssetManagement.Runtime; // For IAssetPathBuilderFactory
+using CycloneGames.AssetManagement.Runtime.Integrations.Common;
 
-namespace CycloneGames.UIFramework
+namespace CycloneGames.UIFramework.Runtime
 {
     public class UIManager : MonoBehaviour
     {

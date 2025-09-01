@@ -1,4 +1,4 @@
-namespace CycloneGames.GameplayFramework
+namespace CycloneGames.GameplayFramework.Runtime
 {
     public class SpectatorPawn : Pawn
     {

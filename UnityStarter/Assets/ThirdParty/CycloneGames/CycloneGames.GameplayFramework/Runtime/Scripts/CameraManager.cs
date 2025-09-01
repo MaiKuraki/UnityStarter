@@ -2,7 +2,7 @@ using CycloneGames.Logger;
 using Unity.Cinemachine;
 using UnityEngine;
 
-namespace CycloneGames.GameplayFramework
+namespace CycloneGames.GameplayFramework.Runtime
 {
     public class CameraManager : Actor
     {

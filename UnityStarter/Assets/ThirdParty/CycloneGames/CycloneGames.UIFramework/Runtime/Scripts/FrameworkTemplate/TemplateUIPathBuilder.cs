@@ -1,7 +1,7 @@
 #if UNITY_EDITOR
-using CycloneGames.AssetManagement;
+using CycloneGames.AssetManagement.Runtime;
 
-namespace CycloneGames.UIFramework.Editor // Or a runtime namespace
+namespace CycloneGames.UIFramework.Runtime.Editor // Or a runtime namespace
 {
     /// <summary>
     /// This is an example UI path builder. Define path construction logic specific to your project's

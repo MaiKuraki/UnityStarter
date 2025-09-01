@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using YooAsset;
 
-namespace CycloneGames.AssetManagement
+namespace CycloneGames.AssetManagement.Runtime
 {
 	internal sealed class YooAssetHandle<TAsset> : IAssetHandle<TAsset> where TAsset : UnityEngine.Object
 	{

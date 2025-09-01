@@ -4,7 +4,7 @@ using CycloneGames.Factory.Runtime;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
-namespace CycloneGames.GameplayFramework
+namespace CycloneGames.GameplayFramework.Runtime
 {
     public interface IGameMode
     {

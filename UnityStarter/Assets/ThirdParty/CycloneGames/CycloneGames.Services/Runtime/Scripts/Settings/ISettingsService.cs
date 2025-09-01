@@ -1,4 +1,4 @@
-namespace CycloneGames.Service
+namespace CycloneGames.Service.Runtime
 {
     /// <summary>
     /// Defines a generic contract for a service that manages a specific type of settings.

@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CycloneGames.AssetManagement.Cache
+namespace CycloneGames.AssetManagement.Runtime.Cache
 {
 	/// <summary>
 	/// Simple count-based LRU cache for asset handles. Keeps handles alive until evicted or cleared.

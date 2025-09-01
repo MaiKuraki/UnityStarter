@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace CycloneGames.GameplayFramework
+namespace CycloneGames.GameplayFramework.Runtime
 {
     /// <summary>
     /// This class is designed to provide functionality similar to the "LevelBlueprint" in Unreal Engine.

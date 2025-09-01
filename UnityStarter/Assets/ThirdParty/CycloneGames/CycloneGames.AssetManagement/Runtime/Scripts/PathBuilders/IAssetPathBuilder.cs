@@ -1,4 +1,4 @@
-namespace CycloneGames.AssetManagement
+namespace CycloneGames.AssetManagement.Runtime
 {
     /// <summary> 
     /// Defines an interface for building asset paths. 

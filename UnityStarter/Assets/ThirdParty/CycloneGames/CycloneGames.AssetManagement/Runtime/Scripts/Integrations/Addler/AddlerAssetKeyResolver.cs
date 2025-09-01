@@ -2,7 +2,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CycloneGames.AssetManagement.Integrations.Addler
+namespace CycloneGames.AssetManagement.Runtime.Integrations
 {
 	/// <summary>
 	/// Optional Addler-based key resolver. Register mappings from Addler entries (e.g., GUID, label, group) to asset locations.

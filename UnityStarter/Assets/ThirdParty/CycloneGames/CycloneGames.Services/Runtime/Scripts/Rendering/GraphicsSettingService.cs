@@ -5,7 +5,7 @@ using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
-namespace CycloneGames.Service
+namespace CycloneGames.Service.Runtime
 {
     public enum ScreenOrientation
     {

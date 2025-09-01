@@ -1,4 +1,4 @@
-namespace CycloneGames.AssetManagement.Integrations.Common
+namespace CycloneGames.AssetManagement.Runtime.Integrations.Common
 {
 	/// <summary>
 	/// Minimal service locator for cases where DI is not available.

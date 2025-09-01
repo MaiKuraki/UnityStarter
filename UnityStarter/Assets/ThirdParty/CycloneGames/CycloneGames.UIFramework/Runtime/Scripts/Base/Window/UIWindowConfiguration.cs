@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace CycloneGames.UIFramework
+namespace CycloneGames.UIFramework.Runtime
 {
     [CreateAssetMenu(fileName = "UIWindow_", menuName = "CycloneGames/UIFramework/UIWindow Configuration")]
     [System.Serializable]

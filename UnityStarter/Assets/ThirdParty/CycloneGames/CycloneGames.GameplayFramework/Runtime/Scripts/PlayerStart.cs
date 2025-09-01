@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace CycloneGames.GameplayFramework
+namespace CycloneGames.GameplayFramework.Runtime
 {
     public class PlayerStart : Actor
     {

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace CycloneGames.AssetManagement.Integrations.UI
+namespace CycloneGames.AssetManagement.Runtime.Integrations.UI
 {
 	[CreateAssetMenu(menuName = "CycloneGames/AssetManagement/UIPrefabRegistry", fileName = "UIPrefabRegistry")]
 	public sealed class UIPrefabRegistry : ScriptableObject

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.Logger;
 
-namespace CycloneGames.AssetManagement
+namespace CycloneGames.AssetManagement.Runtime
 {
 	/// <summary>
 	/// Enabled via AssetModuleOptions.EnableHandleTracking. Editor defaults to true.
