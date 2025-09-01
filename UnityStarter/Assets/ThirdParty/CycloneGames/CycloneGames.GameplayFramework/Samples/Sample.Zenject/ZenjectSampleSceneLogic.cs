@@ -2,6 +2,7 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using Zenject;
+using CycloneGames.GameplayFramework.Runtime;
 
 namespace CycloneGames.GameplayFramework.Sample.Zenject
 {

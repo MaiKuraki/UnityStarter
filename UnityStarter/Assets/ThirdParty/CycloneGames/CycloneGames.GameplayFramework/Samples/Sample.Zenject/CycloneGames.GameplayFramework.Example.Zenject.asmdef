@@ -4,9 +4,9 @@
     "references": [
         "UniTask",
         "Zenject",
-        "CycloneGames.GameplayFramework",
+        "CycloneGames.Logger",
         "CycloneGames.Factory.Runtime",
-        "CycloneGames.Logger"
+        "CycloneGames.GameplayFramework.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
