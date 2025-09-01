@@ -4,6 +4,8 @@
 
 <p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
+
 ## 概述
 一个轻量级的 Unity 启动模板，旨在作为新项目的基础框架。本仓库整合了以下内容：
 
