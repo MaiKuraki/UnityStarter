@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using YooAsset;
 using CycloneGames.Logger;
 
-namespace CycloneGames.AssetManagement
+namespace CycloneGames.AssetManagement.Runtime
 {
 	public sealed class YooAssetModule : IAssetModule
 	{

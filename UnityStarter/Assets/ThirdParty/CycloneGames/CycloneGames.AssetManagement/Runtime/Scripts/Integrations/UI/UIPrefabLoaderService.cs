@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace CycloneGames.AssetManagement.Integrations.UI
+namespace CycloneGames.AssetManagement.Runtime.Integrations.UI
 {
 	/// <summary>
 	/// Simple UI prefab loader that consults a registry (key -> location) and uses an asset package to load/instantiate.

@@ -1,4 +1,4 @@
-namespace CycloneGames.UIFramework.Samples
+namespace CycloneGames.UIFramework.Runtime.Samples
 {
     public class UIWindow_SampleUI : UIWindow
     {

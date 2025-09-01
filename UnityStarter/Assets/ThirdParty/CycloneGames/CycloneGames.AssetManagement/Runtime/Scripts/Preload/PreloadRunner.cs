@@ -1,8 +1,9 @@
 using System.Threading;
 using System.Threading.Tasks;
+using CycloneGames.AssetManagement.Runtime.Cache;
 using UnityEngine;
 
-namespace CycloneGames.AssetManagement.Preload
+namespace CycloneGames.AssetManagement.Runtime.Preload
 {
 	public sealed class PreloadRunner : MonoBehaviour
 	{

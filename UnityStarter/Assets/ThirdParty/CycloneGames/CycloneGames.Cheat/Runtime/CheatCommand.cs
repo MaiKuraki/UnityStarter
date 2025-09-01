@@ -1,7 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 
-namespace CycloneGames.Cheat
+namespace CycloneGames.Cheat.Runtime
 {
     public interface ICheatCommand : VitalRouter.ICommand
     {

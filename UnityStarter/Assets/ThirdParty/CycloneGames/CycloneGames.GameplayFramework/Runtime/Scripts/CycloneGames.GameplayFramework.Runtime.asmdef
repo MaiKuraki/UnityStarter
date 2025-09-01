@@ -1,5 +1,5 @@
 {
-    "name": "CycloneGames.GameplayFramework",
+    "name": "CycloneGames.GameplayFramework.Runtime",
     "rootNamespace": "",
     "references": [
         "UniTask",

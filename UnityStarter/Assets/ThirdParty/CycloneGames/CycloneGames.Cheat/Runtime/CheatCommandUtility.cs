@@ -10,7 +10,7 @@ using UnityEngine;
 using System.Collections.Generic;
 #endif
 
-namespace CycloneGames.Cheat
+namespace CycloneGames.Cheat.Runtime
 {
     public static class CheatCommandUtility
     {

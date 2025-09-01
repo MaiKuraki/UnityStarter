@@ -1,10 +1,10 @@
 using UnityEngine;
 using CycloneGames.Factory.Runtime;
-using CycloneGames.Service;
-using CycloneGames.AssetManagement;
-using CycloneGames.AssetManagement.Integrations.Common;
+using CycloneGames.Service.Runtime;
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.AssetManagement.Runtime.Integrations.Common;
 
-namespace CycloneGames.UIFramework.Samples
+namespace CycloneGames.UIFramework.Runtime.Samples
 {
     /// <summary>
     /// Minimal bootstrap demonstrating UIFramework usage with AssetManagement abstraction.

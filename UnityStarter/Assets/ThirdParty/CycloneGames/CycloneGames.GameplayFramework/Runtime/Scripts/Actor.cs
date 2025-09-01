@@ -1,7 +1,7 @@
 using System;
 using UnityEngine;
 
-namespace CycloneGames.GameplayFramework
+namespace CycloneGames.GameplayFramework.Runtime
 {
     public class Actor : MonoBehaviour
     {

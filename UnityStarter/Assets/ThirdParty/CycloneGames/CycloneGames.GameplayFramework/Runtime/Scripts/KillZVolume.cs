@@ -1,7 +1,7 @@
 using CycloneGames.Logger;
 using UnityEngine;
 
-namespace CycloneGames.GameplayFramework
+namespace CycloneGames.GameplayFramework.Runtime
 {
     //  TODO: Implement 2D version
     public class KillZVolume : Actor

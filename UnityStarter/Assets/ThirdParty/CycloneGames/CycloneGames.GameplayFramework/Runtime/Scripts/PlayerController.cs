@@ -2,7 +2,7 @@ using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
 using System.Threading;
 
-namespace CycloneGames.GameplayFramework
+namespace CycloneGames.GameplayFramework.Runtime
 {
     public class PlayerController : Controller
     {

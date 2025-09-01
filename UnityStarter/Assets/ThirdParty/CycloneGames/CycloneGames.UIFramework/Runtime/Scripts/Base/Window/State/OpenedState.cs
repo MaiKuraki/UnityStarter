@@ -1,4 +1,4 @@
-namespace CycloneGames.UIFramework
+namespace CycloneGames.UIFramework.Runtime
 {
     public class OpenedState : UIWindowState
     {

@@ -4,7 +4,7 @@ using Cysharp.Threading.Tasks;
 using UnityEngine;
 using LitMotion;
 
-namespace CycloneGames.UIFramework
+namespace CycloneGames.UIFramework.Runtime
 {
     /// <summary>
     /// LitMotion-based transition driver. Requires com.annulusgames.lit-motion.

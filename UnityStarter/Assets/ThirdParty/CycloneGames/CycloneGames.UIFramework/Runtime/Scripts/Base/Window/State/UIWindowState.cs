@@ -1,4 +1,4 @@
-namespace CycloneGames.UIFramework
+namespace CycloneGames.UIFramework.Runtime
 {
     // NOTE: if you modify this interface name,
     // don't forget modify the link.xml file located in the CycloneGames.UIFramework/Scripts/Framework folder

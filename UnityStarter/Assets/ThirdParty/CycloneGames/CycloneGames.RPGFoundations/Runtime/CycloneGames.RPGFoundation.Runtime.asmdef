@@ -1,11 +1,7 @@
 {
-    "name": "CycloneGames.Cheat.Sample",
+    "name": "CycloneGames.RPGFoundation.Runtime",
     "rootNamespace": "",
-    "references": [
-        "VitalRouter",
-        "UniTask",
-        "CycloneGames.Cheat.Runtime"
-    ],
+    "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

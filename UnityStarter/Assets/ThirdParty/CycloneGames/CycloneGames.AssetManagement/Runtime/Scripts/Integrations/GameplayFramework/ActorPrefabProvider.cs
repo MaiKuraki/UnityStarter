@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace CycloneGames.AssetManagement.Integrations.GameplayFramework
+namespace CycloneGames.AssetManagement.Runtime.Integrations.GameplayFramework
 {
 	/// <summary>
 	/// Maps actor type (or id) to prefab location and spawns actors using IAssetPackage.

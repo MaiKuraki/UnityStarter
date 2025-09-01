@@ -6,7 +6,7 @@ using VYaml.Parser;
 using VYaml.Emitter;
 using VYaml.Serialization;
 
-namespace CycloneGames.Service
+namespace CycloneGames.Service.Runtime
 {
     /// <summary>
     /// A service that manages device-specific settings like graphics, audio, localization and etc.

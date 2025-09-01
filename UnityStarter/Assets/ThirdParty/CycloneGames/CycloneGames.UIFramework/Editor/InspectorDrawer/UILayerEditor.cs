@@ -1,11 +1,11 @@
 #if UNITY_EDITOR
 using UnityEditor;
 using UnityEngine;
-using CycloneGames.UIFramework;
+using CycloneGames.UIFramework.Runtime;
 
-namespace CycloneGames.UIFramework.Editor
+namespace CycloneGames.UIFramework.Runtime.Editor
 {
-    [CustomEditor(typeof(CycloneGames.UIFramework.UILayer))]
+    [CustomEditor(typeof(UILayer))]
     public class UILayerEditor : UnityEditor.Editor
     {
         private const string InValidPageName = "InvalidPageName";

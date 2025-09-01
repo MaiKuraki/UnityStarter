@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace CycloneGames.AssetManagement.Integrations.Abilities
+namespace CycloneGames.AssetManagement.Runtime.Integrations
 {
 	/// <summary>
 	/// Provides ability icons by id using an asset package. Caches handles for reuse.
