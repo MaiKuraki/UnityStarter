@@ -3,6 +3,7 @@ using strange.extensions.context.impl;
 using UnityEngine;
 using strange.extensions.signal.impl;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.GameplayFramework.Runtime;
 
 namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
 {
