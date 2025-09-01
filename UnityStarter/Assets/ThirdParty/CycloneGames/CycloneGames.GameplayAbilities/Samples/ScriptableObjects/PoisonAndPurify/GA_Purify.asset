@@ -18,7 +18,8 @@ MonoBehaviour:
   CostEffect: {fileID: 11400000, guid: d6ec08bd85ef7c84da9a7e1fdebaf78b, type: 2}
   CooldownEffect: {fileID: 11400000, guid: 29b3fdd1a4dcb3948b8f8495bdbb0bb7, type: 2}
   AbilityTags:
-    m_SerializedExplicitTags: []
+    m_SerializedExplicitTags:
+    - Ability.Purify
   ActivationBlockedTags:
     m_SerializedExplicitTags: []
   ActivationRequiredTags:
@@ -29,7 +30,6 @@ MonoBehaviour:
     m_SerializedExplicitTags: []
   AreaOfEffectRadius: 5
   TargetRequiredFactions:
-    m_SerializedExplicitTags:
-    - Faction.Player
+    m_SerializedExplicitTags: []
   TargetForbiddenFactions:
     m_SerializedExplicitTags: []

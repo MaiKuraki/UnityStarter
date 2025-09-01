@@ -33,6 +33,10 @@ namespace CycloneGames.GameplayAbilities.Sample
         public const string Cooldown_ChainLightning = "Cooldown.Skill.ChainLightning";
         public const string Cooldown_SlamAttack = "Cooldown.Skill.SlamAttack";
 
+        public const string Ability_Fireball = "Ability.Fireball";
+        public const string Ability_PoisonBlade = "Ability.PoisonBlade";
+        public const string Ability_Purify = "Ability.Purify";
+
         // Events
         public const string Event_Character_Death = "Event.Character.Death";
         public const string Event_Character_LeveledUp = "Event.Character.LeveledUp";
