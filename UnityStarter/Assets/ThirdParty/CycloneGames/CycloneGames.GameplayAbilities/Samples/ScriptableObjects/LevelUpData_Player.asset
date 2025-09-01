@@ -58,8 +58,8 @@ MonoBehaviour:
     ManaGain: 25
     AttackGain: 5
     DefenseGain: 4
-  - XpToNextLevel: 1500
-    HealthGain: 50
-    ManaGain: 30
-    AttackGain: 7
-    DefenseGain: 5
+  - XpToNextLevel: 0
+    HealthGain: 0
+    ManaGain: 0
+    AttackGain: 0
+    DefenseGain: 0

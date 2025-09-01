@@ -137,10 +137,40 @@ namespace CycloneGames.GameplayAbilities.Sample
             var statusBuilder = new System.Text.StringBuilder();
 
             statusBuilder.AppendLine($"<b>{character.name}</b>");
-            statusBuilder.AppendLine($"LV: {set.GetCurrentValue(set.Level):F0}");
+            int currentLevel = (int)set.GetCurrentValue(set.Level);
+            statusBuilder.AppendLine($"LV: {currentLevel:F0}");
             statusBuilder.AppendLine($"HP: {set.GetCurrentValue(set.Health):F1} / {set.GetCurrentValue(set.MaxHealth):F1}");
             statusBuilder.AppendLine($"MP: {set.GetCurrentValue(set.Mana):F1} / {set.GetCurrentValue(set.MaxMana):F1}");
-            statusBuilder.AppendLine($"ATK: {set.GetCurrentValue(set.AttackPower):F1}   |   DEF: {set.GetCurrentValue(set.Defense):F1}  |   EXP: {set.GetCurrentValue(set.Experience):F1}");
+
+            // Build the EXP string with special handling for max level.
+            string expString;
+            var levelUpData = character.LevelUpData;
+            if (levelUpData != null && levelUpData.Levels.Count > 0)
+            {
+                // The max level is the number of entries in the level data. e.g., 10 entries = max level 10.
+                int maxLevel = levelUpData.Levels.Count;
+                
+                // The target XP for the current level.
+                // We clamp the index to prevent errors if the level is somehow out of bounds.
+                int targetExpIndex = Mathf.Clamp(currentLevel - 1, 0, levelUpData.Levels.Count - 1);
+                int targetExp = levelUpData.Levels[targetExpIndex].XpToNextLevel;
+
+                // If the character is at or above the max level, display a "full" bar, hiding the real overflow value.
+                if (currentLevel >= maxLevel)
+                {
+                    expString = $"EXP: {targetExp} / {targetExp} (MAX)";
+                }
+                else
+                {
+                    expString = $"EXP: {set.GetCurrentValue(set.Experience):F1} / {targetExp}";
+                }
+            }
+            else
+            {
+                // Fallback if no level up data is assigned.
+                expString = $"EXP: {set.GetCurrentValue(set.Experience):F1}";
+            }
+            statusBuilder.AppendLine($"ATK: {set.GetCurrentValue(set.AttackPower):F1}   |   DEF: {set.GetCurrentValue(set.Defense):F1}  |   {expString}");
 
             statusBuilder.AppendLine("<b>Active Effects:</b>");
             bool hasEffects = false;
