@@ -3,6 +3,7 @@ using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine.SceneManagement;
+using CycloneGames.AssetManagement.Runtime;
 using NaviSM = MackySoft.Navigathena.SceneManagement;
 
 namespace CycloneGames.AssetManagement.Integrations.Navigathena

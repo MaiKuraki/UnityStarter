@@ -3,6 +3,7 @@ using VContainer;
 using VContainer.Unity;
 using YooAsset;
 using CycloneGames.Logger;
+using CycloneGames.AssetManagement.Runtime;
 
 namespace CycloneGames.AssetManagement.Integrations.DI.VContainer
 {
