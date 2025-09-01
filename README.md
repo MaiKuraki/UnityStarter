@@ -115,5 +115,5 @@ The main source code for the modules is located in the `UnityStarter/Assets/Thir
 ## Other Open Source Projects Based on This Project
 - [x] [Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse)
 A collection of all common rhythm game mechanics and gameplay types. This project is currently in active development.
-- [ ] [Unity Gameplay Ability System Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
-An example project of a UE-like GAS (Gameplay Ability System) for Unity. The project uses older technology and is planned to be refactored based on UnityStarter.
+- [x] [Unity Gameplay Ability System Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
+An example project of a UE-like GAS (Gameplay Ability System) for Unity.

@@ -117,4 +117,4 @@
 ## 基于此项目的其他开源项目
 
 - [x] [Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse) 一款集合所有常见音乐游戏玩法的开源项目，目前还在开发中。
-- [ ] [Unity Gameplay Ability System Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample) 为 Unity 设计的类虚幻引擎 GAS 系统的示例项目，目前使用旧版技术，计划基于此项目重构。
+- [x] [Unity Gameplay Ability System Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample) 为 Unity 设计的类虚幻引擎 GAS 系统的示例项目。
