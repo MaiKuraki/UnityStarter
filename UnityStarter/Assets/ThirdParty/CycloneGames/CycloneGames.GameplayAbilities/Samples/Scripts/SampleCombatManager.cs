@@ -66,8 +66,8 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         void HandleInput()
         {
-            if (Input.GetKeyDown(KeyCode.Alpha1)) TryActivateAbility(Player, 0); // Fireball
-            if (Input.GetKeyDown(KeyCode.Alpha2)) TryActivateAbility(Player, 1); // Purify
+            if (Input.GetKeyDown(KeyCode.Alpha1)) TryActivateAbilityByTag(Player, GameplayTagManager.RequestTag(GASSampleTags.Ability_Fireball)); // Fireball
+            if (Input.GetKeyDown(KeyCode.Alpha2)) TryActivateAbilityByTag(Player, GameplayTagManager.RequestTag(GASSampleTags.Ability_Purify)); // Purify
 
             //  Enemy active PoisonBlade ability
             if (Input.GetKeyDown(KeyCode.E))
@@ -75,7 +75,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 if (Enemy != null)
                 {
                     CLogger.LogInfo("DEBUG: Forcing Enemy to cast ability.");
-                    TryActivateAbility(Enemy, 0);
+                    TryActivateAbilityByTag(Enemy, GameplayTagManager.RequestTag(GASSampleTags.Ability_PoisonBlade));
                 }
             }
 
@@ -92,13 +92,25 @@ namespace CycloneGames.GameplayAbilities.Sample
             }
         }
 
-        void TryActivateAbility(Character character, int abilityIndex)
+        void TryActivateAbilityByTag(Character character, GameplayTag abilityTag)
         {
-            var abilities = character.AbilitySystemComponent.GetActivatableAbilities();
-            if (abilityIndex < abilities.Count)
+            if (character == null || character.AbilitySystemComponent == null)
             {
-                character.AbilitySystemComponent.TryActivateAbility(abilities[abilityIndex]);
+                return;
             }
+
+            var abilities = character.AbilitySystemComponent.GetActivatableAbilities();
+            foreach (var abilitySpec in abilities)
+            {
+                // Note: This assumes that 'GameplayAbilitySpec' has a reference to the 'GameplayAbility'
+                // and that 'GameplayAbility' has a 'AbilityTags' container. This is a standard GAS pattern.
+                if (abilitySpec.Ability != null && abilitySpec.Ability.AbilityTags.HasTag(abilityTag))
+                {
+                    character.AbilitySystemComponent.TryActivateAbility(abilitySpec);
+                    return; // Found and tried to activate, so we're done.
+                }
+            }
+            CLogger.LogWarning($"TryActivateAbilityByTag: No ability found with tag {abilityTag.Name} on character {character.name}");
         }
 
         void UpdateUI()
