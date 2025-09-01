@@ -102,8 +102,11 @@ namespace CycloneGames.GameplayAbilities.Sample
             float defenseGain = 0;
 
             int tempLevelTracker = initialLevel;
+            
+            // Define the max level based on the level data entries.
+            int maxLevel = LevelUpData.Levels.Count;
 
-            while (tempLevelTracker < LevelUpData.Levels.Count && currentXP >= LevelUpData.Levels[tempLevelTracker - 1].XpToNextLevel)
+            while (tempLevelTracker < maxLevel && currentXP >= LevelUpData.Levels[tempLevelTracker - 1].XpToNextLevel)
             {
                 LevelData levelData = LevelUpData.Levels[tempLevelTracker - 1];
 
