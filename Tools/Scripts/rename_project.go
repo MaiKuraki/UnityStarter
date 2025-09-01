@@ -6,12 +6,107 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
 )
 
+// findProjectRoot scans for a Unity project root directory in the current or immediate subdirectories.
+func findProjectRoot() (string, error) {
+	// Check current directory
+	if _, err := os.Stat("./Assets"); err == nil {
+		if _, err := os.Stat("./ProjectSettings"); err == nil {
+			return ".", nil
+		}
+	}
+
+	// Check immediate subdirectories
+	files, err := ioutil.ReadDir(".")
+	if err != nil {
+		return "", err
+	}
+	for _, f := range files {
+		if f.IsDir() {
+			if _, err := os.Stat(filepath.Join(f.Name(), "Assets")); err == nil {
+				if _, err := os.Stat(filepath.Join(f.Name(), "ProjectSettings")); err == nil {
+					return f.Name(), nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("Unity project root not found in current directory or immediate subdirectories")
+}
+
+// getCurrentProjectInfo reads the current project settings to find the project name, company name, and app name.
+func getCurrentProjectInfo(projectRoot string) (string, string, string, error) {
+	// Read ProjectSettings.asset to get company and product name
+	projectSettingsPath := filepath.Join(projectRoot, "ProjectSettings", "ProjectSettings.asset")
+	projectSettingsBytes, err := ioutil.ReadFile(projectSettingsPath)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to read %s: %v", projectSettingsPath, err)
+	}
+	projectSettingsContent := string(projectSettingsBytes)
+
+	companyNameRegex := regexp.MustCompile(`companyName: (.*)`)
+	productNameRegex := regexp.MustCompile(`productName: (.*)`)
+
+	companyNameMatches := companyNameRegex.FindStringSubmatch(projectSettingsContent)
+	if len(companyNameMatches) < 2 {
+		return "", "", "", fmt.Errorf("could not find companyName in %s", projectSettingsPath)
+	}
+	companyName := strings.TrimSpace(companyNameMatches[1])
+
+	productNameMatches := productNameRegex.FindStringSubmatch(projectSettingsContent)
+	if len(productNameMatches) < 2 {
+		return "", "", "", fmt.Errorf("could not find productName in %s", projectSettingsPath)
+	}
+	appName := strings.TrimSpace(productNameMatches[1])
+
+	// Read EditorBuildSettings.asset to get project name from scene path
+	editorBuildSettingsPath := filepath.Join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset")
+	editorBuildSettingsBytes, err := ioutil.ReadFile(editorBuildSettingsPath)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to read %s: %v", editorBuildSettingsPath, err)
+	}
+	editorBuildSettingsContent := string(editorBuildSettingsBytes)
+
+	// In Unity, scene paths in EditorBuildSettings use forward slashes regardless of OS.
+	projectNameRegex := regexp.MustCompile(`path: Assets/(.*?)/Scenes/`)
+	projectNameMatches := projectNameRegex.FindStringSubmatch(editorBuildSettingsContent)
+	if len(projectNameMatches) < 2 {
+		// Fallback: check directories in Assets
+		assetsPath := filepath.Join(projectRoot, "Assets")
+		files, err := ioutil.ReadDir(assetsPath)
+		if err != nil {
+			return "", "", "", fmt.Errorf("could not find project name in %s and failed to scan %s: %v", editorBuildSettingsPath, assetsPath, err)
+		}
+		for _, f := range files {
+			if f.IsDir() {
+				// A simple heuristic: if a directory has a "Scenes" subdirectory, it's likely the project folder.
+				scenesPath := filepath.Join(assetsPath, f.Name(), "Scenes")
+				if _, err := os.Stat(scenesPath); err == nil {
+					projectName := f.Name()
+					return projectName, companyName, appName, nil
+				}
+			}
+		}
+		return "", "", "", fmt.Errorf("could not find project name in %s or by scanning %s", editorBuildSettingsPath, assetsPath)
+	}
+	projectName := strings.TrimSpace(projectNameMatches[1])
+
+	return projectName, companyName, appName, nil
+}
+
 func main() {
+	projectRoot, err := findProjectRoot()
+	if err != nil {
+		fmt.Println("Error:", err)
+		waitForKeyPress()
+		return
+	}
+	fmt.Printf("Found Unity project root at: %s\n", projectRoot)
+
 	var newProjectName, newCompanyName, newAppName string
 	reader := bufio.NewReader(os.Stdin)
 
@@ -94,13 +189,16 @@ func main() {
 		}
 	}
 
-	// Old project identifiers
-	oldName := "UnityStarter"
-	oldCompanyName := "CycloneGames"
-	oldAppName := "UnityStarter"
+	// Dynamically get old project identifiers
+	oldName, oldCompanyName, oldAppName, err := getCurrentProjectInfo(projectRoot)
+	if err != nil {
+		fmt.Println("Error getting current project info:", err)
+		waitForKeyPress()
+		return
+	}
 
 	// 1. Rename the folder and its meta file
-	err := renameFolderAndMeta("./Assets/"+oldName, "./Assets/"+newProjectName)
+	err = renameFolderAndMeta(filepath.Join(projectRoot, "Assets", oldName), filepath.Join(projectRoot, "Assets", newProjectName))
 	if err != nil {
 		fmt.Println("Error renaming folder:", err)
 		waitForKeyPress()
@@ -108,7 +206,8 @@ func main() {
 	}
 
 	// 2. Update BuildScript.cs with the new names
-	err = updateBuildScript("./Assets/Editor/BuildScript.cs", oldName, newProjectName, oldCompanyName, newCompanyName, oldAppName, newAppName)
+	buildScriptPath := filepath.Join(projectRoot, "Assets", "Editor", "BuildScript.cs")
+	err = updateBuildScript(buildScriptPath, oldName, newProjectName, oldCompanyName, newCompanyName, oldAppName, newAppName)
 	if err != nil {
 		fmt.Println("Error updating BuildScript.cs:", err)
 		waitForKeyPress()
@@ -116,7 +215,8 @@ func main() {
 	}
 
 	// 3. Update ProjectSettings.asset with the new names
-	err = updateProjectSettings("./ProjectSettings/ProjectSettings.asset", oldCompanyName, newCompanyName, oldAppName, newAppName)
+	projectSettingsPath := filepath.Join(projectRoot, "ProjectSettings", "ProjectSettings.asset")
+	err = updateProjectSettings(projectSettingsPath, oldCompanyName, newCompanyName, oldAppName, newAppName)
 	if err != nil {
 		fmt.Println("Error updating ProjectSettings.asset:", err)
 		waitForKeyPress()
@@ -124,7 +224,8 @@ func main() {
 	}
 
 	// 4. Update EditorBuildSettings.asset with the new project name
-	err = updateEditorBuildSettings("./ProjectSettings/EditorBuildSettings.asset", oldName, newProjectName)
+	editorBuildSettingsPath := filepath.Join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset")
+	err = updateEditorBuildSettings(editorBuildSettingsPath, oldName, newProjectName)
 	if err != nil {
 		fmt.Println("Error updating EditorBuildSettings.asset:", err)
 		waitForKeyPress()
@@ -184,6 +285,7 @@ func updateBuildScript(filePath, oldFolderName, newFolderName, oldCompanyName, n
 
 	lines := strings.Split(string(input), "\n")
 	for i, line := range lines {
+		// More careful replacement could be done here if needed, but for now, this matches original behavior.
 		lines[i] = strings.Replace(line, oldFolderName, newFolderName, -1)
 		lines[i] = strings.Replace(line, oldCompanyName, newCompanyName, -1)
 		lines[i] = strings.Replace(line, oldAppName, newAppName, -1)
@@ -236,7 +338,10 @@ func updateEditorBuildSettings(filePath, oldProjectName, newProjectName string) 
 	}
 
 	content := string(input)
-	content = strings.Replace(content, "Assets/"+oldProjectName+"/Scenes/", "Assets/"+newProjectName+"/Scenes/", -1)
+	// Unity paths use forward slashes
+	oldPath := "Assets/" + oldProjectName + "/Scenes/"
+	newPath := "Assets/" + newProjectName + "/Scenes/"
+	content = strings.Replace(content, oldPath, newPath, -1)
 
 	err = ioutil.WriteFile(filePath, []byte(content), 0644)
 	if err != nil {
