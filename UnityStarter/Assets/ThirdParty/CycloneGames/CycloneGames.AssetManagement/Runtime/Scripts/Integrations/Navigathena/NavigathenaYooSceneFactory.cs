@@ -1,6 +1,7 @@
 #if NAVIGATHENA_PRESENT && NAVIGATHENA_YOOASSET
 using MackySoft.Navigathena.SceneManagement;
 using UnityEngine.SceneManagement;
+using CycloneGames.AssetManagement.Runtime;
 
 namespace CycloneGames.AssetManagement.Integrations.Navigathena
 {

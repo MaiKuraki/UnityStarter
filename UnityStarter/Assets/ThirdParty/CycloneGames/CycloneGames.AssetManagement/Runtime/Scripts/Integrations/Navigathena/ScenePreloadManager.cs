@@ -3,7 +3,8 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
-using CycloneGames.AssetManagement.Preload;
+using CycloneGames.AssetManagement.Runtime.Preload;
+using CycloneGames.AssetManagement.Runtime;
 
 namespace CycloneGames.AssetManagement.Integrations.Navigathena
 {
