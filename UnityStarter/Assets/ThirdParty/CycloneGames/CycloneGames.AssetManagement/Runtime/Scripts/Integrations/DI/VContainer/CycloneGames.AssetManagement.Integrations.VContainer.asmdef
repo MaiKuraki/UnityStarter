@@ -3,9 +3,9 @@
     "rootNamespace": "CycloneGames.AssetManagement.Integrations.DI.VContainer",
     "references": [
         "CycloneGames.Logger",
-        "CycloneGames.AssetManagement",
         "VContainer",
-        "YooAsset"
+        "YooAsset",
+        "CycloneGames.AssetManagement.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
