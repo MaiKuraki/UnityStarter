@@ -102,12 +102,10 @@ namespace CycloneGames.GameplayAbilities.Sample
             var abilities = character.AbilitySystemComponent.GetActivatableAbilities();
             foreach (var abilitySpec in abilities)
             {
-                // Note: This assumes that 'GameplayAbilitySpec' has a reference to the 'GameplayAbility'
-                // and that 'GameplayAbility' has a 'AbilityTags' container. This is a standard GAS pattern.
                 if (abilitySpec.Ability != null && abilitySpec.Ability.AbilityTags.HasTag(abilityTag))
                 {
                     character.AbilitySystemComponent.TryActivateAbility(abilitySpec);
-                    return; // Found and tried to activate, so we're done.
+                    return;
                 }
             }
             CLogger.LogWarning($"TryActivateAbilityByTag: No ability found with tag {abilityTag.Name} on character {character.name}");
@@ -161,7 +159,6 @@ namespace CycloneGames.GameplayAbilities.Sample
             {
                 // The max level is the number of entries in the level data. e.g., 10 entries = max level 10.
                 int maxLevel = levelUpData.Levels.Count;
-                
                 // The target XP for the current level.
                 // We clamp the index to prevent errors if the level is somehow out of bounds.
                 int targetExpIndex = Mathf.Clamp(currentLevel - 1, 0, levelUpData.Levels.Count - 1);
