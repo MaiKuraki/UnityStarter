@@ -1,7 +1,7 @@
 using CycloneGames.Logger;
 using UnityEngine;
 
-namespace CycloneGames.Service
+namespace CycloneGames.Service.Runtime
 {
     public interface IMainCameraService
     {

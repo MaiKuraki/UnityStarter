@@ -1,5 +1,5 @@
 {
-    "name": "CycloneGames.Cheat",
+    "name": "CycloneGames.Cheat.Runtime",
     "rootNamespace": "",
     "references": [
         "UniTask",

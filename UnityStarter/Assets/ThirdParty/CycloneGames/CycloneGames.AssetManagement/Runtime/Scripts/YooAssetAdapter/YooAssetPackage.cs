@@ -5,7 +5,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using YooAsset;
 
-namespace CycloneGames.AssetManagement
+namespace CycloneGames.AssetManagement.Runtime
 {
 	internal sealed class YooAssetPackage : IAssetPackage
 	{

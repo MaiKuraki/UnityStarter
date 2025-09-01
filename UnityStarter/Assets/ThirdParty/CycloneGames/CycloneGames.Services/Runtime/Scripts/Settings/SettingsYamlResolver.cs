@@ -1,6 +1,6 @@
 using VYaml.Serialization;
 
-namespace CycloneGames.Service
+namespace CycloneGames.Service.Runtime
 {
     public class SettingsYamlResolver : IYamlFormatterResolver
     {

@@ -2,10 +2,10 @@
     "name": "CycloneGames.GameplayFramework.Sample.PureUnity",
     "rootNamespace": "",
     "references": [
+        "UniTask",
         "CycloneGames.Logger",
-        "CycloneGames.GameplayFramework",
         "CycloneGames.Factory.Runtime",
-        "UniTask"
+        "CycloneGames.GameplayFramework.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

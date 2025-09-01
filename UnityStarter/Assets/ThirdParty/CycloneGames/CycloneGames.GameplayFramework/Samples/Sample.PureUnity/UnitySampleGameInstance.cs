@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.GameplayFramework.Sample.PureUnity
+namespace CycloneGames.GameplayFramework.Runtime.Sample.PureUnity
 {
     /// <summary>
     /// Example GameInstance Singleton

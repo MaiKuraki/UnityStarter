@@ -1,5 +1,5 @@
 {
-    "name": "CycloneGames.Service",
+    "name": "CycloneGames.Service.Runtime",
     "rootNamespace": "",
     "references": [
         "UniTask",

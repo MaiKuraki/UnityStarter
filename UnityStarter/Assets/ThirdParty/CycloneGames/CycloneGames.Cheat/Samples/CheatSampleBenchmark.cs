@@ -3,6 +3,7 @@ using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Profiling;
 using System.Text;
+using CycloneGames.Cheat.Runtime;
 
 namespace CycloneGames.Cheat.Sample
 {

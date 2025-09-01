@@ -1,4 +1,4 @@
-namespace CycloneGames.Service
+namespace CycloneGames.Service.Runtime
 {
     /// <summary>
     /// Defines a contract for a type that can provide a default instance of another type T.

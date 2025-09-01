@@ -2,7 +2,7 @@ using Cysharp.Threading.Tasks;
 using UnityEngine;
 using CycloneGames.Factory.Runtime;
 
-namespace CycloneGames.GameplayFramework.Sample.PureUnity
+namespace CycloneGames.GameplayFramework.Runtime.Sample.PureUnity
 {
     public class UnitySampleBoot : MonoBehaviour
     {

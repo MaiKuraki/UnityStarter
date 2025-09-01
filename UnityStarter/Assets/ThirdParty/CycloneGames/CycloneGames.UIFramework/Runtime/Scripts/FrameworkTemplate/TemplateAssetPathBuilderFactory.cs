@@ -1,7 +1,7 @@
 #if UNITY_EDITOR
-using CycloneGames.AssetManagement;
+using CycloneGames.AssetManagement.Runtime;
 
-namespace CycloneGames.UIFramework.Editor // Or a runtime namespace if used in builds
+namespace CycloneGames.UIFramework.Runtime.Editor // Or a runtime namespace if used in builds
 {
     /// <summary>
     /// This is an example implementation. You must define your own AssetPathBuilderFactory for your project,

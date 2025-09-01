@@ -2,7 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace CycloneGames.AssetManagement.Retry
+namespace CycloneGames.AssetManagement.Runtime.Retry
 {
 	public static class LoadWithRetryExtensions
 	{

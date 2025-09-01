@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
-namespace CycloneGames.UIFramework
+namespace CycloneGames.UIFramework.Runtime
 {
     [RequireComponent(typeof(Canvas))]
     [RequireComponent(typeof(GraphicRaycaster))]
