@@ -1,13 +1,13 @@
 {
-    "name": "CycloneGames.UIFramework",
+    "name": "CycloneGames.UIFramework.Runtime",
     "rootNamespace": "",
     "references": [
         "Unity.ResourceManager",
         "UniTask",
         "CycloneGames.Logger",
-        "CycloneGames.Service",
+        "CycloneGames.Service.Runtime",
         "CycloneGames.Factory.Runtime",
-        "CycloneGames.AssetManagement",
+        "CycloneGames.AssetManagement.Runtime",
         "LitMotion"
     ],
     "includePlatforms": [],

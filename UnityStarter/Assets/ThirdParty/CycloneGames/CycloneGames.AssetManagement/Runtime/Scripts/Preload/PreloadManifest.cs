@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-namespace CycloneGames.AssetManagement.Preload
+namespace CycloneGames.AssetManagement.Runtime.Preload
 {
 	[CreateAssetMenu(menuName = "CycloneGames/AssetManagement/PreloadManifest", fileName = "PreloadManifest")]
 	public sealed class PreloadManifest : ScriptableObject

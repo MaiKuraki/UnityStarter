@@ -2,7 +2,7 @@ using CycloneGames.Logger;
 using UnityEngine;
 using UnityEngine.Rendering.Universal;
 
-namespace CycloneGames.Service
+namespace CycloneGames.Service.Runtime
 {
     public class MainCamera : MonoBehaviour
     {

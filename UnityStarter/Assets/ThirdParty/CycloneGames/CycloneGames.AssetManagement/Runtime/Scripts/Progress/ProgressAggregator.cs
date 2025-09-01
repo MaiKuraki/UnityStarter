@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CycloneGames.AssetManagement.Progressing
+namespace CycloneGames.AssetManagement.Runtime.Progressing
 {
 	/// <summary>
 	/// Aggregates weighted progress from multiple IOperation providers.

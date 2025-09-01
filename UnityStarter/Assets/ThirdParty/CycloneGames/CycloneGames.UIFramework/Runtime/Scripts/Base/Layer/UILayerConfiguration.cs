@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace CycloneGames.UIFramework
+namespace CycloneGames.UIFramework.Runtime
 {
     [CreateAssetMenu(fileName = "UILayer_", menuName = "CycloneGames/UIFramework/UILayer Configuration")] // Added file name convention
     [System.Serializable]

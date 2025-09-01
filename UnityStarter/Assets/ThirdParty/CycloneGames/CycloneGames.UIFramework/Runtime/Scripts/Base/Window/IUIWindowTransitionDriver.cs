@@ -1,7 +1,7 @@
 using System.Threading;
 using Cysharp.Threading.Tasks;
 
-namespace CycloneGames.UIFramework
+namespace CycloneGames.UIFramework.Runtime
 {
     /// <summary>
     /// Abstraction for driving window open/close transitions (e.g., DOTween, Animator).

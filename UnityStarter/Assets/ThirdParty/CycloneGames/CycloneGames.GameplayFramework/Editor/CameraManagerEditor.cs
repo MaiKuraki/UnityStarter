@@ -1,9 +1,9 @@
 using UnityEditor;
 using UnityEngine;
 using Unity.Cinemachine;
-using CycloneGames.GameplayFramework;
+using CycloneGames.GameplayFramework.Runtime;
 
-namespace CycloneGames.GameplayFramework.Editor
+namespace CycloneGames.GameplayFramework.Runtime.Editor
 {
     /// <summary>
     /// Custom editor for the CameraManager class and its children.

@@ -2,8 +2,8 @@
     "name": "CycloneGames.GameplayFramework.Editor",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.GameplayFramework",
-        "Unity.Cinemachine"
+        "Unity.Cinemachine",
+        "CycloneGames.GameplayFramework.Runtime"
     ],
     "includePlatforms": [
         "Editor"
