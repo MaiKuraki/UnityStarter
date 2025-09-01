@@ -1,5 +1,6 @@
 using VContainer;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.GameplayFramework.Runtime;
 
 namespace CycloneGames.GameplayFramework.Sample.VContainer
 {

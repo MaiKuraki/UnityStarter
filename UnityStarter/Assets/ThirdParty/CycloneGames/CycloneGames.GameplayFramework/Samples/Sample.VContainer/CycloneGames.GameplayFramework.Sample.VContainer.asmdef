@@ -3,10 +3,10 @@
     "rootNamespace": "",
     "references": [
         "VContainer",
+        "UniTask",
         "CycloneGames.Logger",
         "CycloneGames.Factory.Runtime",
-        "CycloneGames.GameplayFramework",
-        "UniTask"
+        "CycloneGames.GameplayFramework.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

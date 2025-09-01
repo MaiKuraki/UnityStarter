@@ -2,6 +2,7 @@ using VContainer;
 using VContainer.Unity;
 using UnityEngine;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.GameplayFramework.Runtime;
 
 namespace CycloneGames.GameplayFramework.Sample.VContainer
 {

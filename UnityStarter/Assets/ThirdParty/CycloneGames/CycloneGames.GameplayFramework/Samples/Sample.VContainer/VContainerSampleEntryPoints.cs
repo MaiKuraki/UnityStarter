@@ -2,6 +2,7 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 using VContainer;
 using VContainer.Unity;
+using CycloneGames.GameplayFramework.Runtime;
 
 namespace CycloneGames.GameplayFramework.Sample.VContainer
 {
