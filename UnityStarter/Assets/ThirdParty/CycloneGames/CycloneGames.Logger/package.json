@@ -16,5 +16,11 @@
     "email": "",
     "url": ""
   },
-  "samples": []
+  "samples": [
+    {
+      "displayName": "Logger Sample",
+      "description": "Logger Sample",
+      "path": "Samples"
+    }
+  ]
 }
