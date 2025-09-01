@@ -123,35 +123,39 @@ namespace CycloneGames.Utility.Editor
 			_methods.Clear();
 			_scriptProperty = null;
 
-			// 1. First, parse all fields with reflection to understand the group structure.
+			// 1. First, parse all members (fields and properties) with reflection to understand the group structure.
 			PropertyGroupAttribute prevFold = default;
-			var objectFields = EditorTypes.Get(target);
-			for (var i = 0; i < objectFields.Count; i++)
+			var objectMembers = EditorTypes.GetMembers(target); // Use the new method to get both fields and properties
+			for (var i = 0; i < objectMembers.Count; i++)
 			{
-				var field = objectFields[i];
-				if (Attribute.IsDefined(field, typeof(EndPropertyGroupAttribute)))
+				var member = objectMembers[i];
+				if (Attribute.IsDefined(member, typeof(EndPropertyGroupAttribute)))
 				{
 					prevFold = null;
+					continue; // End group found, continue to next member
 				}
 
-				var fold = Attribute.GetCustomAttribute(field, typeof(PropertyGroupAttribute)) as PropertyGroupAttribute;
+				var fold = Attribute.GetCustomAttribute(member, typeof(PropertyGroupAttribute)) as PropertyGroupAttribute;
 				if (fold != null)
 				{
 					prevFold = fold;
 					if (!_cacheFolds.ContainsKey(fold.GroupName))
 					{
-						string key = string.Concat(fold.GroupName, field.Name, target.name);
+						string key = string.Concat(fold.GroupName, member.Name, target.name);
 						var expanded = EditorPrefs.GetBool(key, !fold.ClosedByDefault);
 						_cacheFolds.Add(fold.GroupName, new CacheFoldProp { Atr = fold, Expanded = expanded, GroupColor = Colors.GetColorAt(fold.GroupColorIndex) });
 					}
-					_cacheFolds[fold.GroupName].Types.Add(field.Name);
 				}
-				else
+				
+				// Add member to the group if it has the attribute or if the "group all" flag is on.
+				// This works for both fields and properties.
+				if (fold != null)
 				{
-					if (prevFold != null && prevFold.GroupAllFieldsUntilNextGroupAttribute)
-					{
-						_cacheFolds[prevFold.GroupName].Types.Add(field.Name);
-					}
+					_cacheFolds[fold.GroupName].Types.Add(member.Name);
+				}
+				else if (prevFold != null && prevFold.GroupAllFieldsUntilNextGroupAttribute)
+				{
+					_cacheFolds[prevFold.GroupName].Types.Add(member.Name);
 				}
 			}
 
@@ -316,17 +320,17 @@ namespace CycloneGames.Utility.Editor
 
 	internal static class EditorTypes
 	{
-		private static readonly Dictionary<Type, List<FieldInfo>> FieldsCache = new Dictionary<Type, List<FieldInfo>>();
+		private static readonly Dictionary<Type, List<MemberInfo>> MembersCache = new Dictionary<Type, List<MemberInfo>>();
 
-		public static List<FieldInfo> Get(Object target)
+		public static List<MemberInfo> GetMembers(Object target)
 		{
 			Type t = target.GetType();
-			if (FieldsCache.TryGetValue(t, out var objectFields))
+			if (MembersCache.TryGetValue(t, out var objectMembers))
 			{
-				return objectFields;
+				return objectMembers;
 			}
 
-			objectFields = new List<FieldInfo>();
+			objectMembers = new List<MemberInfo>();
 			const BindingFlags flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
 
 			var typeHierarchy = new List<Type>();
@@ -338,11 +342,13 @@ namespace CycloneGames.Utility.Editor
 
 			foreach (var type in typeHierarchy)
 			{
-				objectFields.AddRange(type.GetFields(flags));
+				// Add both fields and properties
+				objectMembers.AddRange(type.GetFields(flags));
+				objectMembers.AddRange(type.GetProperties(flags));
 			}
 
-			FieldsCache.Add(t, objectFields);
-			return objectFields;
+			MembersCache.Add(t, objectMembers);
+			return objectMembers;
 		}
 	}
 
