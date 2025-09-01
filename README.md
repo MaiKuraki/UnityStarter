@@ -4,6 +4,8 @@ This project is a lightweight Unity starter template designed to serve as a foun
 
 <p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
+
 ## Overview
 A lightweight Unity starter template designed to serve as a foundation for new projects. This repository integrates:
 
