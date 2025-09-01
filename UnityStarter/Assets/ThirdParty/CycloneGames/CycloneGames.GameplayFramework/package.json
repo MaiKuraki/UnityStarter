@@ -21,5 +21,11 @@
     "email": "",
     "url": ""
   },
-  "samples": []
+  "samples": [
+    {
+      "displayName": "Gameplay Framework Sample",
+      "description": "Gameplay Framework Sample",
+      "path": "Samples"
+    }
+  ]
 }
