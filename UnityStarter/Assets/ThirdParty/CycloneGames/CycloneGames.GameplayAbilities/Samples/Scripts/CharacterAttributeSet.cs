@@ -148,16 +148,25 @@ namespace CycloneGames.GameplayAbilities.Sample
             {
                 SetBaseValue(Mana, System.Math.Clamp(GetBaseValue(Mana), 0, GetCurrentValue(MaxMana)));
             }
-            
+
             if (attribute == Experience)
             {
-                bool hasExpGainTag = data.EffectSpec.Def.AssetTags.HasTag(GameplayTagManager.RequestTag(GASSampleTags.Event_Experience_Gain));
-
-                if (hasExpGainTag)
+                if (data.Target.OwnerActor is Character character)
                 {
-                    if (data.Target.OwnerActor is Character character)
+                    bool hasExpGainTag = data.EffectSpec.Def.AssetTags.HasTag(GameplayTagManager.RequestTag(GASSampleTags.Event_Experience_Gain));
+                    if (hasExpGainTag)
                     {
                         character.CheckForLevelUp();
+                    }
+                    if (character.LevelUpData != null)
+                    {
+                        int maxLevel = character.LevelUpData.Levels.Count;
+                        int currentLevel = (int)GetBaseValue(Level);
+
+                        if (currentLevel >= maxLevel)
+                        {
+                            SetBaseValue(Experience, 0);
+                        }
                     }
                 }
             }
