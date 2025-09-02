@@ -31,7 +31,7 @@ namespace CycloneGames.Audio.Editor
         /// <summary>
         /// The rectangle defining the space where the event's properties are drawn
         /// </summary>
-        private Rect eventPropertyRect = new Rect(200, 20, 240, 150);
+        private Rect eventPropertyRect = new Rect(200, 20, 360, 150);
         /// <summary>
         /// The rectangle defining the space where the parameters are drawn
         /// </summary>
@@ -202,15 +202,7 @@ namespace CycloneGames.Audio.Editor
             switch (this.editorType)
             {
                 case EditorTypes.Events:
-                    if (this.selectedEvent != null)
-                    {
-                        GetInput();
-
-                        DrawEventNodes(this.selectedEvent);
-
-                        DrawEventProperties(this.selectedEvent);
-                    }
-                    DrawEventList();
+                    DrawEventsEditor();
                     break;
                 case EditorTypes.Parameters:
                     DrawParameterList();
@@ -231,17 +223,26 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private void DrawEventList()
         {
-            this.eventListRect.height = this.position.height;
-            GUILayout.BeginArea(this.eventListRect);
-            this.eventListScrollPosition = EditorGUILayout.BeginScrollView(this.eventListScrollPosition);
             this.audioBank = EditorGUILayout.ObjectField(this.audioBank, typeof(AudioBank), false) as AudioBank;
 
             if (this.audioBank == null)
             {
-                EditorGUILayout.EndScrollView();
-                GUILayout.EndArea();
                 return;
             }
+
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Add Event"))
+            {
+                AddEvent();
+            }
+
+            if (this.selectedEvent != null && GUILayout.Button("Delete Event"))
+            {
+                ConfirmDeleteEvent();
+            }
+            EditorGUILayout.EndHorizontal();
+
+            this.eventListScrollPosition = EditorGUILayout.BeginScrollView(this.eventListScrollPosition, false, false, GUILayout.ExpandHeight(true));
 
             if (this.audioBank.EditorEvents != null)
             {
@@ -272,7 +273,6 @@ namespace CycloneGames.Audio.Editor
             }
 
             EditorGUILayout.EndScrollView();
-            GUILayout.EndArea();
         }
 
         /// <summary>
@@ -451,24 +451,21 @@ namespace CycloneGames.Audio.Editor
         /// <param name="audioEvent">The event to display the properties for</param>
         private void DrawEventProperties(AudioEvent audioEvent)
         {
-            GUILayout.BeginArea(this.eventPropertyRect);
             this.eventPropertiesScrollPosition = EditorGUILayout.BeginScrollView(this.eventPropertiesScrollPosition);
+            EditorGUILayout.LabelField("Event Properties", EditorStyles.boldLabel);
             audioEvent.name = EditorGUILayout.TextField("Event Name", audioEvent.name);
             audioEvent.InstanceLimit = EditorGUILayout.IntField("Instance limit", audioEvent.InstanceLimit);
             audioEvent.FadeIn = EditorGUILayout.FloatField("Fade In", audioEvent.FadeIn);
             audioEvent.FadeOut = EditorGUILayout.FloatField("Fade Out", audioEvent.FadeOut);
             audioEvent.Group = EditorGUILayout.IntField("Group", audioEvent.Group);
-
-            audioEvent.DrawParameters();
             EditorGUILayout.EndScrollView();
-            GUILayout.EndArea();
         }
 
         /// <summary>
         /// Display the nodes for an AuidoEvent on the graph
         /// </summary>
         /// <param name="audioEvent">The audio event to display the nodes for</param>
-        private void DrawEventNodes(AudioEvent audioEvent)
+        private void DrawEventNodes(AudioEvent audioEvent, Rect graphRect)
         {
             if (audioEvent == null)
             {
@@ -480,6 +477,10 @@ namespace CycloneGames.Audio.Editor
                 return;
             }
 
+            // Clip everything to the graph rect
+            GUI.BeginGroup(graphRect);
+
+            // Apply panning by offsetting a second group
             GUI.BeginGroup(new Rect(this.panX, this.panY, CANVAS_SIZE, CANVAS_SIZE));
             BeginWindows();
             for (int i = 0; i < audioEvent.EditorNodes.Count; i++)
@@ -489,9 +490,93 @@ namespace CycloneGames.Audio.Editor
             }
             EndWindows();
             GUI.EndGroup();
+
+            // End clipping group
+            GUI.EndGroup();
         }
 
         #endregion
+
+        private void DrawEventParametersPanel()
+        {
+            EditorGUILayout.LabelField("Event Parameters", EditorStyles.boldLabel);
+
+            if (this.selectedEvent == null)
+            {
+                EditorGUILayout.HelpBox("No Event selected.", MessageType.Info);
+                return;
+            }
+
+            if (this.audioBank == null)
+            {
+                EditorGUILayout.HelpBox("No AudioBank selected.", MessageType.Info);
+                return;
+            }
+
+            if (GUILayout.Button("Add Parameter"))
+            {
+                this.selectedEvent.AddParameter();
+            }
+
+            this.parameterListScrollPosition = EditorGUILayout.BeginScrollView(this.parameterListScrollPosition);
+
+            this.selectedEvent.DrawParameters();
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawEventsEditor()
+        {
+            EditorGUILayout.BeginHorizontal();
+
+            // Left Panel for Event List
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(200), GUILayout.ExpandHeight(true));
+            DrawEventList();
+            EditorGUILayout.EndVertical();
+
+            // Right Panel for Properties and Graph
+            EditorGUILayout.BeginVertical();
+
+            // Top section for properties, split into two
+            EditorGUILayout.BeginHorizontal(GUILayout.Height(160));
+
+            // Event Properties (left side of top)
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(360));
+            if (this.selectedEvent != null)
+            {
+                DrawEventProperties(this.selectedEvent);
+            }
+            else
+            {
+                GUILayout.Label("No event selected.", EditorStyles.centeredGreyMiniLabel);
+            }
+            EditorGUILayout.EndVertical();
+
+            // Event Parameters (right side of top)
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.ExpandWidth(true));
+            DrawEventParametersPanel();
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.EndHorizontal();
+
+            // Graph section - gets the remaining space
+            if (this.selectedEvent != null)
+            {
+                Rect graphRect = GUILayoutUtility.GetRect(100, 10000, 100, 10000);
+                GetInput(graphRect);
+                DrawEventNodes(this.selectedEvent, graphRect);
+            }
+            else
+            {
+                // Fill the space and show a label
+                GUILayout.FlexibleSpace();
+                GUILayout.Label("Select an event from the list to edit.", EditorStyles.centeredGreyMiniLabel);
+                GUILayout.FlexibleSpace();
+            }
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.EndHorizontal();
+        }
 
         /// <summary>
         /// Create a new event and select it in the graph
@@ -560,7 +645,7 @@ namespace CycloneGames.Audio.Editor
         /// <summary>
         /// Process mouse clicks and call appropriate editor functions
         /// </summary>
-        private void GetInput()
+        private void GetInput(Rect graphRect)
         {
             if (this.selectedEvent == null)
             {
@@ -568,25 +653,43 @@ namespace CycloneGames.Audio.Editor
             }
 
             Event e = Event.current;
+
+            // We need to handle mouse movement for panning and connection drawing even outside the rect
+            if (e.type == EventType.MouseDrag || e.type == EventType.MouseMove || e.type == EventType.MouseUp)
+            {
+                HandleMouseMovement(e, graphRect);
+            }
+
+            // But for clicks and other interactions, they must be inside the graph rect
+            if (!graphRect.Contains(e.mousePosition))
+            {
+                // If mouse is released outside, cancel connection drawing
+                if (e.type == EventType.MouseUp)
+                {
+                    this.selectedOutput = null;
+                    this.panGraph = false;
+                }
+                return;
+            }
+
+            Vector2 mousePosInView = e.mousePosition - graphRect.position;
+
             switch (e.type)
             {
                 case EventType.MouseDown:
-                    this.selectedNode = GetNodeAtPosition(e.mousePosition);
+                    this.selectedNode = GetNodeAtPosition(mousePosInView);
                     Selection.activeObject = this.selectedNode;
                     if (e.button == 0)
                     {
-                        HandleLeftClick(e);
+                        HandleLeftClick(e, mousePosInView);
                     }
                     else if (e.button == 1)
                     {
-                        HandleRightClick(e);
+                        HandleRightClick(e, mousePosInView);
                     }
                     break;
                 case EventType.MouseUp:
-                    HandleMouseUp(e);
-                    break;
-                default:
-                    HandleMouseMovement(e);
+                    HandleMouseUp(e, mousePosInView);
                     break;
             }
         }
@@ -666,20 +769,20 @@ namespace CycloneGames.Audio.Editor
         /// Perform necessary actions for the left mouse button being pushed this frame
         /// </summary>
         /// <param name="e">The input event handled in Unity</param>
-        private void HandleLeftClick(Event e)
+        private void HandleLeftClick(Event e, Vector2 mousePosInView)
         {
             this.leftButtonDown = true;
             this.rightButtonClicked = false;
-            this.selectedOutput = GetOutputAtPosition(e.mousePosition);
+            this.selectedOutput = GetOutputAtPosition(mousePosInView);
 
-            this.selectedNode = GetNodeAtPosition(e.mousePosition);
+            this.selectedNode = GetNodeAtPosition(mousePosInView);
         }
 
         /// <summary>
         /// Perform necessary actions for the right mouse button being pushed this frame
         /// </summary>
         /// <param name="e">The input event handled by Unity</param>
-        private void HandleRightClick(Event e)
+        private void HandleRightClick(Event e, Vector2 mousePosInView)
         {
             this.rightButtonClicked = true;
             if (this.selectedOutput == null)
@@ -693,37 +796,37 @@ namespace CycloneGames.Audio.Editor
         /// Perform necessary actions for the a mouse button being released this frame
         /// </summary>
         /// <param name="e">The input event handled by Unity</param>
-        private void HandleMouseUp(Event e)
+        private void HandleMouseUp(Event e, Vector2 mousePosInView)
         {
             this.leftButtonDown = false;
             if (this.rightButtonClicked && !this.hasPanned)
             {
-                this.selectedNode = GetNodeAtPosition(e.mousePosition);
-                this.selectedOutput = GetOutputAtPosition(e.mousePosition);
-                AudioNodeInput tempInput = GetInputAtPosition(e.mousePosition);
+                this.selectedNode = GetNodeAtPosition(mousePosInView);
+                this.selectedOutput = GetOutputAtPosition(mousePosInView);
+                AudioNodeInput tempInput = GetInputAtPosition(mousePosInView);
 
                 if (tempInput != null)
                 {
-                    InputContextMenu(e.mousePosition);
+                    InputContextMenu(mousePosInView);
                 }
                 else if (this.selectedOutput != null)
                 {
-                    OutputContextMenu(e.mousePosition);
+                    OutputContextMenu(mousePosInView);
                 }
                 else if (this.selectedNode == null)
                 {
-                    CanvasContextMenu(e.mousePosition);
+                    CanvasContextMenu(mousePosInView);
                 }
                 else
                 {
-                    ModifyNodeContextMenu(e.mousePosition);
+                    ModifyNodeContextMenu(mousePosInView);
                 }
             }
             else
             {
                 if (this.selectedOutput != null)
                 {
-                    AudioNodeInput hoverInput = GetInputAtPosition(e.mousePosition);
+                    AudioNodeInput hoverInput = GetInputAtPosition(mousePosInView);
                     if (hoverInput != null)
                     {
                         hoverInput.AddConnection(this.selectedOutput);
@@ -742,17 +845,13 @@ namespace CycloneGames.Audio.Editor
         /// Perform necessary actions for the mouse moving while a button is held down
         /// </summary>
         /// <param name="e">The input event handled by Unity</param>
-        private void HandleMouseMovement(Event e)
+        private void HandleMouseMovement(Event e, Rect graphRect)
         {
             if (leftButtonDown && selectedNode != null && e.shift)
             {
-                Vector3 tempMove = new Vector2(lastMousePos.x, lastMousePos.y) - e.mousePosition;
-                AudioNodeOutput[] outputs = selectedNode.Input.ConnectedNodes;
-                for (int i = 0; i < outputs.Length; i++)
-                {
-                    outputs[i].ParentNode.MoveBy(tempMove);
-                }
-
+                Vector2 tempMove = e.mousePosition - new Vector2(lastMousePos.x, lastMousePos.y);
+                // Invert movement for node dragging
+                selectedNode.MoveBy(-tempMove);
             }
 
             if (this.selectedOutput == null)
@@ -769,7 +868,10 @@ namespace CycloneGames.Audio.Editor
             }
             else
             {
-                AudioNode.DrawCurve(ConvertToLocalPosition(this.selectedOutput.Center), e.mousePosition);
+                // The curve end position is in window space, start position needs to be converted from graph space to window space
+                Vector2 startPosInView = ConvertToLocalPosition(this.selectedOutput.Center);
+                Vector2 startPosInWindow = startPosInView + graphRect.position;
+                AudioNode.DrawCurve(startPosInWindow, e.mousePosition);
             }
 
             this.lastMousePos = e.mousePosition;
@@ -1009,14 +1111,14 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         /// <param name="position">The position on the graph to check against the nodes</param>
         /// <returns>The first node found that occupies the specified position or null</returns>
-        private AudioNode GetNodeAtPosition(Vector2 position)
+        private AudioNode GetNodeAtPosition(Vector2 viewPosition)
         {
             if (this.selectedEvent == null)
             {
                 return null;
             }
 
-            position = ConvertToGlobalPosition(position);
+            Vector2 position = ConvertToGlobalPosition(viewPosition);
 
             for (int i = 0; i < this.selectedEvent.EditorNodes.Count; i++)
             {
@@ -1035,14 +1137,14 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         /// <param name="position">The position on the graph to test against all input connectors</param>
         /// <returns>The first input connector found that occupies the specified position or null</returns>
-        private AudioNodeInput GetInputAtPosition(Vector2 position)
+        private AudioNodeInput GetInputAtPosition(Vector2 viewPosition)
         {
             if (this.selectedEvent == null)
             {
                 return null;
             }
 
-            position = ConvertToGlobalPosition(position);
+            Vector2 position = ConvertToGlobalPosition(viewPosition);
 
             for (int i = 0; i < this.selectedEvent.EditorNodes.Count; i++)
             {
@@ -1061,9 +1163,9 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         /// <param name="position">The position on the graph to test against all output connectors</param>
         /// <returns>The first output connector found that occupies the specified position or null</returns>
-        private AudioNodeOutput GetOutputAtPosition(Vector2 position)
+        private AudioNodeOutput GetOutputAtPosition(Vector2 viewPosition)
         {
-            position = ConvertToGlobalPosition(position);
+            Vector2 position = ConvertToGlobalPosition(viewPosition);
             if (this.selectedEvent == null)
             {
                 Debug.LogWarning("Tried to get output with no selected event");
@@ -1073,7 +1175,7 @@ namespace CycloneGames.Audio.Editor
             for (int i = 0; i < this.selectedEvent.EditorNodes.Count; i++)
             {
                 AudioNode tempNode = this.selectedEvent.EditorNodes[i];
-                
+
                 if (tempNode.Output != null && tempNode.Output.Window.Contains(position))
                 {
                     return tempNode.Output;
@@ -1100,11 +1202,11 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         /// <param name="inputPosition">The local GUI position after panning is applied</param>
         /// <returns>The graph position before panning is applied</returns>
-        public Vector2 ConvertToGlobalPosition(Vector2 inputPosition)
+        public Vector2 ConvertToGlobalPosition(Vector2 viewPosition)
         {
-            inputPosition.x -= this.panX;
-            inputPosition.y -= this.panY;
-            return inputPosition;
+            viewPosition.x -= this.panX;
+            viewPosition.y -= this.panY;
+            return viewPosition;
         }
 
         #endregion

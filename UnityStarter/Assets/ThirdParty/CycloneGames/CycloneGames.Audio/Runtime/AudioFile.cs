@@ -109,7 +109,7 @@ namespace CycloneGames.Audio.Runtime
                             activeEvent.StopImmediate();
                             return;
                         }
-                        
+
                         clip.name = System.IO.Path.GetFileNameWithoutExtension(this.filePath);
                         CalculateStartTime(clip);
                         activeEvent.AddEventSource(clip, null, null, startTime);
@@ -139,7 +139,7 @@ namespace CycloneGames.Audio.Runtime
                 this.startTime = 0;
                 return;
             }
-            
+
             float startTimeRatio = 0;
             if (this.minStartTime != this.maxStartTime)
             {
@@ -169,7 +169,7 @@ namespace CycloneGames.Audio.Runtime
         /// The width in pixels for the node's window in the graph
         /// </summary>
         private const float NodeWidth = 300;
-        private const float NodeHeight = 110;
+        private const float NodeHeight = 130;
 
         /// <summary>
         /// EDITOR: Initialize the node's properties when it is first created
