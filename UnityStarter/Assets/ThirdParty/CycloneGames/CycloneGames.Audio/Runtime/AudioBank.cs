@@ -94,7 +94,10 @@ namespace CycloneGames.Audio.Runtime
         {
             eventToDelete.DeleteNodes();
             this.audioEvents.Remove(eventToDelete);
+            AssetDatabase.RemoveObjectFromAsset(eventToDelete);
             ScriptableObject.DestroyImmediate(eventToDelete, true);
+            EditorUtility.SetDirty(this);
+            AssetDatabase.SaveAssets();
         }
 
         /// <summary>
