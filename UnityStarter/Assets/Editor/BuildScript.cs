@@ -248,6 +248,8 @@ namespace CycloneGames.Editor.Build
             //  new template scene for build
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
+            bool versionInfoAssetExisted = File.Exists(Path.Combine(Directory.GetCurrentDirectory(), VersionInfoAssetPath));
+
             try
             {
                 var previousTarget = EditorUserBuildSettings.activeBuildTarget;
@@ -274,7 +276,8 @@ namespace CycloneGames.Editor.Build
 
                 InitializeVersionControl(DefaultVersionControlType);
                 string commitHash = VersionControlProvider?.GetCommitHash();
-                VersionControlProvider?.UpdateVersionInfoAsset(VersionInfoAssetPath, commitHash);
+                string commitCount = VersionControlProvider?.GetCommitCount();
+                VersionControlProvider?.UpdateVersionInfoAsset(VersionInfoAssetPath, commitHash, commitCount);
 
                 Debug.Log($"{DEBUG_FLAG} Start Build, Platform: {EditorUserBuildSettings.activeBuildTarget}");
                 TryGetBuildData();
@@ -294,10 +297,8 @@ namespace CycloneGames.Editor.Build
                 TryCleanAddressablesPlayerContent();
 
                 string originalVersion = PlayerSettings.bundleVersion;
-                string commitShort = string.IsNullOrEmpty(commitHash)
-                                            ? string.Empty
-                                            : (commitHash.Length < 8 ? commitHash : commitHash.Substring(0, 8));
-                string fullBuildVersion = string.IsNullOrEmpty(commitShort) ? $"{ApplicationVersion}.Unknown" : $"{ApplicationVersion}.{commitShort}";
+                string buildNumber = string.IsNullOrEmpty(commitCount) ? "0" : commitCount;
+                string fullBuildVersion = $"{ApplicationVersion}.{buildNumber}";
 
                 PlayerSettings.SetScriptingBackend(BuildTargetName, BackendScriptImpl);
                 PlayerSettings.companyName = CompanyName;
@@ -335,10 +336,23 @@ namespace CycloneGames.Editor.Build
                 if (summary.result == BuildResult.Failed) Debug.Log($"{DEBUG_FLAG} Build <color=red>FAILURE</color>");
 
                 PlayerSettings.bundleVersion = originalVersion;
-                VersionControlProvider?.ClearVersionInfoAsset(VersionInfoAssetPath);
             }
             finally
             {
+                if (versionInfoAssetExisted)
+                {
+                    // If the file existed before, clear its contents to restore its state.
+                    VersionControlProvider?.ClearVersionInfoAsset(VersionInfoAssetPath);
+                }
+                else
+                {
+                    // If the file was created during the build, delete it.
+                    if (File.Exists(Path.Combine(Directory.GetCurrentDirectory(), VersionInfoAssetPath)))
+                    {
+                        AssetDatabase.DeleteAsset(VersionInfoAssetPath);
+                    }
+                }
+
                 Debug.Log($"{DEBUG_FLAG} Restoring original scene setup.");
                 //  In batch mode (CI/CD), the initial setup might be empty and invalid for restoration.
                 if (sceneSetup != null && sceneSetup.Length > 0)
