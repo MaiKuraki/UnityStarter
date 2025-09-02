@@ -265,6 +265,7 @@ namespace CycloneGames.Audio.Editor
 
                     if (GUILayout.Button(tempEvent.name))
                     {
+                        GUI.FocusControl(null);
                         SelectEvent(tempEvent);
                     }
 
@@ -306,7 +307,11 @@ namespace CycloneGames.Audio.Editor
                         continue;
                     }
 
-                    tempParameter.DrawParameterEditor();
+                    if (tempParameter.DrawParameterEditor())
+                    {
+                        EditorUtility.SetDirty(this.audioBank);
+                        AssetDatabase.SaveAssets();
+                    }
                     if (GUILayout.Button("Delete Parameter"))
                     {
                         this.audioBank.DeleteParameter(tempParameter);
@@ -346,7 +351,11 @@ namespace CycloneGames.Audio.Editor
                         continue;
                     }
 
-                    tempSwitch.DrawSwitchEditor();
+                    if (tempSwitch.DrawSwitchEditor())
+                    {
+                        EditorUtility.SetDirty(this.audioBank);
+                        AssetDatabase.SaveAssets();
+                    }
                     if (GUILayout.Button("Delete Switch"))
                     {
                         this.audioBank.DeleteSwitch(tempSwitch);
@@ -453,11 +462,27 @@ namespace CycloneGames.Audio.Editor
         {
             this.eventPropertiesScrollPosition = EditorGUILayout.BeginScrollView(this.eventPropertiesScrollPosition);
             EditorGUILayout.LabelField("Event Properties", EditorStyles.boldLabel);
-            audioEvent.name = EditorGUILayout.TextField("Event Name", audioEvent.name);
-            audioEvent.InstanceLimit = EditorGUILayout.IntField("Instance limit", audioEvent.InstanceLimit);
-            audioEvent.FadeIn = EditorGUILayout.FloatField("Fade In", audioEvent.FadeIn);
-            audioEvent.FadeOut = EditorGUILayout.FloatField("Fade Out", audioEvent.FadeOut);
-            audioEvent.Group = EditorGUILayout.IntField("Group", audioEvent.Group);
+
+            EditorGUI.BeginChangeCheck();
+
+            string newName = EditorGUILayout.TextField("Event Name", audioEvent.name);
+            int newInstanceLimit = EditorGUILayout.IntField("Instance limit", audioEvent.InstanceLimit);
+            float newFadeIn = EditorGUILayout.FloatField("Fade In", audioEvent.FadeIn);
+            float newFadeOut = EditorGUILayout.FloatField("Fade Out", audioEvent.FadeOut);
+            int newGroup = EditorGUILayout.IntField("Group", audioEvent.Group);
+
+            if (EditorGUI.EndChangeCheck())
+            {
+                audioEvent.name = newName;
+                audioEvent.InstanceLimit = newInstanceLimit;
+                audioEvent.FadeIn = newFadeIn;
+                audioEvent.FadeOut = newFadeOut;
+                audioEvent.Group = newGroup;
+                EditorUtility.SetDirty(audioEvent);
+                EditorUtility.SetDirty(this.audioBank);
+                AssetDatabase.SaveAssets();
+            }
+
             EditorGUILayout.EndScrollView();
         }
 
@@ -480,6 +505,8 @@ namespace CycloneGames.Audio.Editor
             // Clip everything to the graph rect
             GUI.BeginGroup(graphRect);
 
+            DrawGridBackground(graphRect);
+
             // Apply panning by offsetting a second group
             GUI.BeginGroup(new Rect(this.panX, this.panY, CANVAS_SIZE, CANVAS_SIZE));
             BeginWindows();
@@ -493,6 +520,56 @@ namespace CycloneGames.Audio.Editor
 
             // End clipping group
             GUI.EndGroup();
+        }
+
+        private void DrawGridBackground(Rect graphRect)
+        {
+            float smallStep = 20f;
+            float largeStep = 100f;
+
+            int widthDivs = Mathf.CeilToInt(graphRect.width / smallStep);
+            int heightDivs = Mathf.CeilToInt(graphRect.height / smallStep);
+
+            Handles.BeginGUI();
+            
+            // Draw minor grid lines
+            Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.2f);
+            float xOffset = this.panX % smallStep;
+            float yOffset = this.panY % smallStep;
+
+            for (int i = 0; i <= widthDivs; i++)
+            {
+                float x = smallStep * i + xOffset;
+                Handles.DrawLine(new Vector3(x, 0, 0), new Vector3(x, graphRect.height, 0));
+            }
+
+            for (int i = 0; i <= heightDivs; i++)
+            {
+                float y = smallStep * i + yOffset;
+                Handles.DrawLine(new Vector3(0, y, 0), new Vector3(graphRect.width, y, 0));
+            }
+
+            // Draw major grid lines
+            Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.4f);
+            float xOffsetLarge = this.panX % largeStep;
+            float yOffsetLarge = this.panY % largeStep;
+
+            int widthDivsLarge = Mathf.CeilToInt(graphRect.width / largeStep);
+            int heightDivsLarge = Mathf.CeilToInt(graphRect.height / largeStep);
+
+            for (int i = 0; i <= widthDivsLarge; i++)
+            {
+                float x = largeStep * i + xOffsetLarge;
+                Handles.DrawLine(new Vector3(x, 0, 0), new Vector3(x, graphRect.height, 0));
+            }
+
+            for (int i = 0; i <= heightDivsLarge; i++)
+            {
+                float y = largeStep * i + yOffsetLarge;
+                Handles.DrawLine(new Vector3(0, y, 0), new Vector3(graphRect.width, y, 0));
+            }
+
+            Handles.EndGUI();
         }
 
         #endregion
@@ -583,7 +660,7 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private void AddEvent()
         {
-            AudioEvent newEvent = this.audioBank.AddEvent(new Vector2(CANVAS_SIZE / 2, CANVAS_SIZE / 2));
+            AudioEvent newEvent = this.audioBank.AddEvent(new Vector2((CANVAS_SIZE - 200) / 2, (CANVAS_SIZE - 180) / 2));
             SelectEvent(newEvent);
         }
 
@@ -606,8 +683,8 @@ namespace CycloneGames.Audio.Editor
         {
             this.selectedEvent = selection;
             Rect output = this.selectedEvent.Output.NodeRect;
-            this.panX = -output.x + (this.position.width - output.width - 20);
-            this.panY = -output.y + (this.position.height / 2);
+            this.panX = -output.x + (this.position.width - output.width - 20) - 360;
+            this.panY = -output.y + (this.position.height / 2) - 200;
         }
 
         /// <summary>

@@ -1,6 +1,7 @@
 ﻿using UnityEngine;
 using UnityEditor;
 using CycloneGames.Audio.Runtime;
+using UnityEditor.Callbacks;
 
 namespace CycloneGames.Audio.Editor
 {
@@ -32,6 +33,18 @@ namespace CycloneGames.Audio.Editor
             {
                 AudioGraph.OpenAudioGraph(this.myTarget);
             }
+        }
+
+        [OnOpenAsset]
+        public static bool OnOpen(int instanceID, int line)
+        {
+            var asset = EditorUtility.InstanceIDToObject(instanceID) as AudioBank;
+            if (asset != null)
+            {
+                AudioGraph.OpenAudioGraph(asset);
+                return true;
+            }
+            return false;
         }
     }
 }

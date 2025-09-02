@@ -32,10 +32,18 @@ namespace CycloneGames.Audio.Runtime
 
 #if UNITY_EDITOR
 
-        public void DrawSwitchEditor()
+        public bool DrawSwitchEditor()
         {
-            this.name = EditorGUILayout.TextField("Name", this.name);
-            this.defaultValue = EditorGUILayout.IntField("Default Value", this.defaultValue);
+            EditorGUI.BeginChangeCheck();
+            string newName = EditorGUILayout.TextField("Name", this.name);
+            int newDefaultValue = EditorGUILayout.IntField("Default Value", this.defaultValue);
+            if (EditorGUI.EndChangeCheck())
+            {
+                this.name = newName;
+                this.defaultValue = newDefaultValue;
+                return true;
+            }
+            return false;
         }
 
 #endif
