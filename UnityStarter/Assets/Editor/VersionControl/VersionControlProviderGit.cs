@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using UnityEditor;
+using UnityEngine;
 
 namespace CycloneGames.Editor.VersionControl
 {
@@ -24,16 +25,44 @@ namespace CycloneGames.Editor.VersionControl
             }
         }
 
-        public void UpdateVersionInfoAsset(string assetPath, string commitHash)
+        public string GetCommitCount()
+        {
+            ProcessStartInfo startInfo = new ProcessStartInfo
+            {
+                FileName = "git",
+                Arguments = "rev-list --count HEAD",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            using (Process process = Process.Start(startInfo))
+            {
+                string output = process.StandardOutput.ReadToEnd();
+                process.WaitForExit();
+                return output.Trim();
+            }
+        }
+
+        public void UpdateVersionInfoAsset(string assetPath, string commitHash, string commitCount)
         {
             var versionInfoData = AssetDatabase.LoadAssetAtPath<VersionInfoData>(assetPath);
             if (versionInfoData == null)
             {
-                UnityEngine.Debug.LogError($"Could not find VersionInfoData asset at path: {assetPath}");
-                return;
+                UnityEngine.Debug.Log($"VersionInfoData asset not found at {assetPath}, creating a new one.");
+                versionInfoData = ScriptableObject.CreateInstance<VersionInfoData>();
+
+                string directory = System.IO.Path.GetDirectoryName(assetPath);
+                if (!System.IO.Directory.Exists(directory))
+                {
+                    System.IO.Directory.CreateDirectory(directory);
+                }
+
+                AssetDatabase.CreateAsset(versionInfoData, assetPath);
             }
 
             versionInfoData.commitHash = commitHash ?? "Unknown";
+            versionInfoData.commitCount = commitCount ?? "0";
             versionInfoData.buildDate = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
             // Mark the object as "dirty" so Unity knows it has changed
@@ -51,6 +80,7 @@ namespace CycloneGames.Editor.VersionControl
             if (versionInfoData != null)
             {
                 versionInfoData.commitHash = string.Empty;
+                versionInfoData.commitCount = string.Empty;
                 versionInfoData.buildDate = string.Empty;
                 EditorUtility.SetDirty(versionInfoData);
                 AssetDatabase.SaveAssets();

@@ -7,6 +7,9 @@ public class VersionInfoData : ScriptableObject
     [Tooltip("The Git commit hash at the time of the build.")]
     public string commitHash;
 
+    [Tooltip("The total number of commits at the time of the build.")]
+    public string commitCount;
+    
     [Tooltip("The date and time the build was created.")]
     public string buildDate;
 }
