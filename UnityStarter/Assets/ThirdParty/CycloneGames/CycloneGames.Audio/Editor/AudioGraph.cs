@@ -307,7 +307,11 @@ namespace CycloneGames.Audio.Editor
                         continue;
                     }
 
-                    tempParameter.DrawParameterEditor();
+                    if (tempParameter.DrawParameterEditor())
+                    {
+                        EditorUtility.SetDirty(this.audioBank);
+                        AssetDatabase.SaveAssets();
+                    }
                     if (GUILayout.Button("Delete Parameter"))
                     {
                         this.audioBank.DeleteParameter(tempParameter);
@@ -347,7 +351,11 @@ namespace CycloneGames.Audio.Editor
                         continue;
                     }
 
-                    tempSwitch.DrawSwitchEditor();
+                    if (tempSwitch.DrawSwitchEditor())
+                    {
+                        EditorUtility.SetDirty(this.audioBank);
+                        AssetDatabase.SaveAssets();
+                    }
                     if (GUILayout.Button("Delete Switch"))
                     {
                         this.audioBank.DeleteSwitch(tempSwitch);
@@ -454,11 +462,27 @@ namespace CycloneGames.Audio.Editor
         {
             this.eventPropertiesScrollPosition = EditorGUILayout.BeginScrollView(this.eventPropertiesScrollPosition);
             EditorGUILayout.LabelField("Event Properties", EditorStyles.boldLabel);
-            audioEvent.name = EditorGUILayout.TextField("Event Name", audioEvent.name);
-            audioEvent.InstanceLimit = EditorGUILayout.IntField("Instance limit", audioEvent.InstanceLimit);
-            audioEvent.FadeIn = EditorGUILayout.FloatField("Fade In", audioEvent.FadeIn);
-            audioEvent.FadeOut = EditorGUILayout.FloatField("Fade Out", audioEvent.FadeOut);
-            audioEvent.Group = EditorGUILayout.IntField("Group", audioEvent.Group);
+
+            EditorGUI.BeginChangeCheck();
+
+            string newName = EditorGUILayout.TextField("Event Name", audioEvent.name);
+            int newInstanceLimit = EditorGUILayout.IntField("Instance limit", audioEvent.InstanceLimit);
+            float newFadeIn = EditorGUILayout.FloatField("Fade In", audioEvent.FadeIn);
+            float newFadeOut = EditorGUILayout.FloatField("Fade Out", audioEvent.FadeOut);
+            int newGroup = EditorGUILayout.IntField("Group", audioEvent.Group);
+
+            if (EditorGUI.EndChangeCheck())
+            {
+                audioEvent.name = newName;
+                audioEvent.InstanceLimit = newInstanceLimit;
+                audioEvent.FadeIn = newFadeIn;
+                audioEvent.FadeOut = newFadeOut;
+                audioEvent.Group = newGroup;
+                EditorUtility.SetDirty(audioEvent);
+                EditorUtility.SetDirty(this.audioBank);
+                AssetDatabase.SaveAssets();
+            }
+
             EditorGUILayout.EndScrollView();
         }
 
