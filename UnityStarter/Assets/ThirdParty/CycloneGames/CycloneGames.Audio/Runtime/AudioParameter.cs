@@ -72,11 +72,22 @@ namespace CycloneGames.Audio.Runtime
         /// <summary>
         /// EDITOR: Draw the properties for the parameter in the graph
         /// </summary>
-        public void DrawParameterEditor()
+        public bool DrawParameterEditor()
         {
-            this.name = EditorGUILayout.TextField("Name", this.name);
-            this.defaultValue = EditorGUILayout.FloatField("Default Value", this.defaultValue);
-            this.useGaze = EditorGUILayout.Toggle("Use Gaze", this.useGaze);
+            EditorGUI.BeginChangeCheck();
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            string newName = EditorGUILayout.TextField("Name", this.name);
+            float newDefaultValue = EditorGUILayout.FloatField("Default Value", this.defaultValue);
+            bool newUseGaze = EditorGUILayout.Toggle("Use Gaze", this.useGaze);
+            EditorGUILayout.EndVertical();
+            if (EditorGUI.EndChangeCheck())
+            {
+                this.name = newName;
+                this.defaultValue = newDefaultValue;
+                this.useGaze = newUseGaze;
+                return true;
+            }
+            return false;
         }
 
 #endif

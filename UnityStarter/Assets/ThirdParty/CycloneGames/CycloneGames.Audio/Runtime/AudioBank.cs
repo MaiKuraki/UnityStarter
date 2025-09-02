@@ -94,7 +94,10 @@ namespace CycloneGames.Audio.Runtime
         {
             eventToDelete.DeleteNodes();
             this.audioEvents.Remove(eventToDelete);
+            AssetDatabase.RemoveObjectFromAsset(eventToDelete);
             ScriptableObject.DestroyImmediate(eventToDelete, true);
+            EditorUtility.SetDirty(this);
+            AssetDatabase.SaveAssets();
         }
 
         /// <summary>
@@ -120,7 +123,10 @@ namespace CycloneGames.Audio.Runtime
         public void DeleteParameter(AudioParameter parameterToDelete)
         {
             this.parameters.Remove(parameterToDelete);
+            AssetDatabase.RemoveObjectFromAsset(parameterToDelete);
             ScriptableObject.DestroyImmediate(parameterToDelete, true);
+            EditorUtility.SetDirty(this);
+            AssetDatabase.SaveAssets();
         }
 
         public AudioSwitch AddSwitch()
@@ -138,7 +144,10 @@ namespace CycloneGames.Audio.Runtime
         public void DeleteSwitch(AudioSwitch switchToDelete)
         {
             this.switches.Remove(switchToDelete);
+            AssetDatabase.RemoveObjectFromAsset(switchToDelete);
             ScriptableObject.DestroyImmediate(switchToDelete, true);
+            EditorUtility.SetDirty(this);
+            AssetDatabase.SaveAssets();
         }
 
         public void SortEvents()

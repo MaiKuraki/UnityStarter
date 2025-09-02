@@ -19,13 +19,13 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         [SerializeField]
         private int instanceLimit = 0;
-        
+
         /// <summary>
         /// The amount of time in seconds for the event to fade in from a volume of 0
         /// </summary>
         [SerializeField]
         private float fadeIn = 0;
-        
+
         /// <summary>
         /// The amount of time in seconds for the event to fade out to a volume of 0
         /// If the event is not explicitly stopped, the fade out will start before the end of the audio file
@@ -44,13 +44,13 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         [SerializeField]
         private List<AudioNode> nodes = new List<AudioNode>();
-        
+
         /// <summary>
         /// The final node in an AudioEvent that sets AudioSource properties
         /// </summary>
         [SerializeField]
         private AudioOutput output;
-        
+
         /// <summary>
         /// The parameters that affect the ActiveEvent when it is playing
         /// </summary>
@@ -161,9 +161,13 @@ namespace CycloneGames.Audio.Runtime
         {
             for (int i = 0; i < this.nodes.Count; i++)
             {
+                if (this.nodes[i] == null) continue;
                 this.nodes[i].DeleteConnections();
+                AssetDatabase.RemoveObjectFromAsset(this.nodes[i]);
                 ScriptableObject.DestroyImmediate(this.nodes[i], true);
             }
+            this.nodes.Clear();
+            EditorUtility.SetDirty(this);
         }
 
         /// <summary>
@@ -197,6 +201,7 @@ namespace CycloneGames.Audio.Runtime
 
             nodeToDelete.DeleteConnections();
             this.nodes.Remove(nodeToDelete);
+            AssetDatabase.RemoveObjectFromAsset(nodeToDelete);
             ScriptableObject.DestroyImmediate(nodeToDelete, true);
             EditorUtility.SetDirty(this);
         }
@@ -228,11 +233,6 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public void DrawParameters()
         {
-            if (GUILayout.Button("Add Parameter"))
-            {
-                AddParameter();
-            }
-
             if (this.parameters == null)
             {
                 this.parameters = new List<AudioEventParameter>();
@@ -240,6 +240,7 @@ namespace CycloneGames.Audio.Runtime
 
             for (int i = 0; i < this.parameters.Count; i++)
             {
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 AudioEventParameter tempParam = this.parameters[i];
                 tempParam.parameter = EditorGUILayout.ObjectField(tempParam.parameter, typeof(AudioParameter), false) as AudioParameter;
                 tempParam.responseCurve = EditorGUILayout.CurveField("Curve", tempParam.responseCurve);
@@ -248,7 +249,7 @@ namespace CycloneGames.Audio.Runtime
                 {
                     DeleteParameter(tempParam);
                 }
-                EditorGUILayout.Separator();
+                EditorGUILayout.EndVertical();
             }
         }
 
