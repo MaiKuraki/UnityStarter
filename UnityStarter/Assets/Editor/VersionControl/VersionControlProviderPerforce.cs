@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using UnityEditor;
+using UnityEngine;
 
 namespace CycloneGames.Editor.VersionControl
 {
@@ -10,7 +11,7 @@ namespace CycloneGames.Editor.VersionControl
             ProcessStartInfo startInfo = new ProcessStartInfo
             {
                 FileName = "p4",    // Ensure 'p4' is in your PATH
-                Arguments = "rev",
+                Arguments = "changes -m 1 #have", // Get the latest changelist number
                 RedirectStandardOutput = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
@@ -20,21 +21,50 @@ namespace CycloneGames.Editor.VersionControl
             {
                 string output = process.StandardOutput.ReadToEnd();
                 process.WaitForExit();
-                //  TODO: This implementation have not been checked
-                return output.Trim();
+                //  TODO: This implementation has not been checked
+                //  Example output: Change 12345 on 2023/01/01 by user@workspace 'description'
+                //  We need to parse the changelist number from this string.
+                if (!string.IsNullOrEmpty(output))
+                {
+                    string[] parts = output.Split(' ');
+                    if (parts.Length > 1)
+                    {
+                        return parts[1]; // Should be the changelist number
+                    }
+                }
+                return "0";
             }
         }
 
-        public void UpdateVersionInfoAsset(string assetPath, string commitHash)
+        public string GetCommitCount()
+        {
+            // Perforce doesn't have a direct equivalent of a global commit count.
+            // The changelist number from GetCommitHash is often used as the build number.
+            // Returning the changelist number again, or a placeholder.
+            // For simplicity, we can return the changelist number from GetCommitHash or "0".
+            // Let's return "0" as a safe default, assuming GetCommitHash provides the primary identifier.
+            return "0"; // Placeholder
+        }
+
+        public void UpdateVersionInfoAsset(string assetPath, string commitHash, string commitCount)
         {
             var versionInfoData = AssetDatabase.LoadAssetAtPath<VersionInfoData>(assetPath);
             if (versionInfoData == null)
             {
-                UnityEngine.Debug.LogError($"Could not find VersionInfoData asset at path: {assetPath}");
-                return;
+                UnityEngine.Debug.Log($"VersionInfoData asset not found at {assetPath}, creating a new one.");
+                versionInfoData = ScriptableObject.CreateInstance<VersionInfoData>();
+
+                string directory = System.IO.Path.GetDirectoryName(assetPath);
+                if (!System.IO.Directory.Exists(directory))
+                {
+                    System.IO.Directory.CreateDirectory(directory);
+                }
+
+                AssetDatabase.CreateAsset(versionInfoData, assetPath);
             }
 
-            versionInfoData.commitHash = commitHash ?? "Unknown";
+            versionInfoData.commitHash = commitHash ?? "Unknown"; // This will be the changelist number
+            versionInfoData.commitCount = commitCount ?? "0";
             versionInfoData.buildDate = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
             // Mark the object as "dirty" so Unity knows it has changed
@@ -52,6 +82,7 @@ namespace CycloneGames.Editor.VersionControl
             if (versionInfoData != null)
             {
                 versionInfoData.commitHash = string.Empty;
+                versionInfoData.commitCount = string.Empty;
                 versionInfoData.buildDate = string.Empty;
                 EditorUtility.SetDirty(versionInfoData);
                 AssetDatabase.SaveAssets();
