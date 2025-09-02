@@ -265,6 +265,7 @@ namespace CycloneGames.Audio.Editor
 
                     if (GUILayout.Button(tempEvent.name))
                     {
+                        GUI.FocusControl(null);
                         SelectEvent(tempEvent);
                     }
 
