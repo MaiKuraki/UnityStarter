@@ -161,9 +161,13 @@ namespace CycloneGames.Audio.Runtime
         {
             for (int i = 0; i < this.nodes.Count; i++)
             {
+                if (this.nodes[i] == null) continue;
                 this.nodes[i].DeleteConnections();
+                AssetDatabase.RemoveObjectFromAsset(this.nodes[i]);
                 ScriptableObject.DestroyImmediate(this.nodes[i], true);
             }
+            this.nodes.Clear();
+            EditorUtility.SetDirty(this);
         }
 
         /// <summary>
@@ -197,6 +201,7 @@ namespace CycloneGames.Audio.Runtime
 
             nodeToDelete.DeleteConnections();
             this.nodes.Remove(nodeToDelete);
+            AssetDatabase.RemoveObjectFromAsset(nodeToDelete);
             ScriptableObject.DestroyImmediate(nodeToDelete, true);
             EditorUtility.SetDirty(this);
         }

@@ -134,10 +134,12 @@ namespace CycloneGames.Audio.Runtime
         {
             if (this.input != null)
             {
+                AssetDatabase.RemoveObjectFromAsset(this.input);
                 ScriptableObject.DestroyImmediate(this.input, true);
             }
             if (this.output != null)
             {
+                AssetDatabase.RemoveObjectFromAsset(this.output);
                 ScriptableObject.DestroyImmediate(this.output, true);
             }
         }
