@@ -74,9 +74,11 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public void DrawParameterEditor()
         {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             this.name = EditorGUILayout.TextField("Name", this.name);
             this.defaultValue = EditorGUILayout.FloatField("Default Value", this.defaultValue);
             this.useGaze = EditorGUILayout.Toggle("Use Gaze", this.useGaze);
+            EditorGUILayout.EndVertical();
         }
 
 #endif

@@ -19,7 +19,7 @@ namespace CycloneGames.Audio.Runtime
     /// </summary>
     [System.Serializable]
     public class ActiveEvent
-        {
+    {
         /// <summary>
         /// The name of the audio event to be played
         /// </summary>
@@ -403,13 +403,13 @@ namespace CycloneGames.Audio.Runtime
             }
             else
             {
-            SetallSourceVolumes(this.targetVolume);
-            this.eventVolume = this.targetVolume;
-        }
+                SetallSourceVolumes(this.targetVolume);
+                this.eventVolume = this.targetVolume;
+            }
 
-        if (this.sources.Count == 0) return; // Don't apply other properties if async loading is not complete
+            if (this.sources.Count == 0) return; // Don't apply other properties if async loading is not complete
 
-        SetAllSourcePitches(this.eventPitch);
+            SetAllSourcePitches(this.eventPitch);
 
             this.useGaze = HasGazeProperty();
             if (this.useGaze)
@@ -418,14 +418,14 @@ namespace CycloneGames.Audio.Runtime
                 UpdateGaze();
             }
 
-        ApplyParameters();
+            ApplyParameters();
 
-        if (this.initialDelay == 0 && !this.isAsync)
-        {
-            this.hasPlayed = true;
-            PlayAllSources();
+            if (this.initialDelay == 0 && !this.isAsync)
+            {
+                this.hasPlayed = true;
+                PlayAllSources();
+            }
         }
-    }
 
         private void SetallSourceVolumes(float newVolume)
         {
@@ -790,7 +790,7 @@ namespace CycloneGames.Audio.Runtime
 
 #endif
 
-#endregion
+        #endregion
     }
     public class EventSource
     {
