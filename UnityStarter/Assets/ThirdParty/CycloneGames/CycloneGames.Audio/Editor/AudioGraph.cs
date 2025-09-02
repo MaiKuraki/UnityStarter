@@ -583,7 +583,7 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private void AddEvent()
         {
-            AudioEvent newEvent = this.audioBank.AddEvent(new Vector2(CANVAS_SIZE / 2, CANVAS_SIZE / 2));
+            AudioEvent newEvent = this.audioBank.AddEvent(new Vector2((CANVAS_SIZE - 200) / 2, (CANVAS_SIZE - 180) / 2));
             SelectEvent(newEvent);
         }
 
@@ -606,8 +606,8 @@ namespace CycloneGames.Audio.Editor
         {
             this.selectedEvent = selection;
             Rect output = this.selectedEvent.Output.NodeRect;
-            this.panX = -output.x + (this.position.width - output.width - 20);
-            this.panY = -output.y + (this.position.height / 2);
+            this.panX = -output.x + (this.position.width - output.width - 20) - 360;
+            this.panY = -output.y + (this.position.height / 2) - 200;
         }
 
         /// <summary>
