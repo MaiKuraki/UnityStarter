@@ -1,0 +1,22 @@
+{
+  "name": "com.cyclone-games.audio",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Audio",
+  "description": "An enhanced audio management system for Unity, based on Microsoft's Audio-Manager-for-Unity, with optimizations for performance, async loading, and GC.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Audio",
+    "Sound"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}
