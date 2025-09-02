@@ -480,6 +480,8 @@ namespace CycloneGames.Audio.Editor
             // Clip everything to the graph rect
             GUI.BeginGroup(graphRect);
 
+            DrawGridBackground(graphRect);
+
             // Apply panning by offsetting a second group
             GUI.BeginGroup(new Rect(this.panX, this.panY, CANVAS_SIZE, CANVAS_SIZE));
             BeginWindows();
@@ -493,6 +495,56 @@ namespace CycloneGames.Audio.Editor
 
             // End clipping group
             GUI.EndGroup();
+        }
+
+        private void DrawGridBackground(Rect graphRect)
+        {
+            float smallStep = 20f;
+            float largeStep = 100f;
+
+            int widthDivs = Mathf.CeilToInt(graphRect.width / smallStep);
+            int heightDivs = Mathf.CeilToInt(graphRect.height / smallStep);
+
+            Handles.BeginGUI();
+            
+            // Draw minor grid lines
+            Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.2f);
+            float xOffset = this.panX % smallStep;
+            float yOffset = this.panY % smallStep;
+
+            for (int i = 0; i <= widthDivs; i++)
+            {
+                float x = smallStep * i + xOffset;
+                Handles.DrawLine(new Vector3(x, 0, 0), new Vector3(x, graphRect.height, 0));
+            }
+
+            for (int i = 0; i <= heightDivs; i++)
+            {
+                float y = smallStep * i + yOffset;
+                Handles.DrawLine(new Vector3(0, y, 0), new Vector3(graphRect.width, y, 0));
+            }
+
+            // Draw major grid lines
+            Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.4f);
+            float xOffsetLarge = this.panX % largeStep;
+            float yOffsetLarge = this.panY % largeStep;
+
+            int widthDivsLarge = Mathf.CeilToInt(graphRect.width / largeStep);
+            int heightDivsLarge = Mathf.CeilToInt(graphRect.height / largeStep);
+
+            for (int i = 0; i <= widthDivsLarge; i++)
+            {
+                float x = largeStep * i + xOffsetLarge;
+                Handles.DrawLine(new Vector3(x, 0, 0), new Vector3(x, graphRect.height, 0));
+            }
+
+            for (int i = 0; i <= heightDivsLarge; i++)
+            {
+                float y = largeStep * i + yOffsetLarge;
+                Handles.DrawLine(new Vector3(0, y, 0), new Vector3(graphRect.width, y, 0));
+            }
+
+            Handles.EndGUI();
         }
 
         #endregion
