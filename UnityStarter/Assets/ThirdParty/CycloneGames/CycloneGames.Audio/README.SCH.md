@@ -32,36 +32,90 @@
 
 ## 快速上手
 
+### 0) 创建 AudioEvent 资源
+
+在播放音频之前，您需要在 Unity 中创建 AudioEvent 资源：
+
+1. 在项目窗口中右键点击
+2. 选择 **Create > Audio > Audio Event**
+3. 使用 AudioFile 节点和其他音频组件配置您的 AudioEvent
+4. 将资源保存在您的项目中
+
 ### 1) 播放音效 (SFX)
 
 ```csharp
-using CycloneGames.Audio;
+using CycloneGames.Audio.Runtime;
 using Cysharp.Threading.Tasks;
+using UnityEngine;
 
-// 播放一次性音效
-AudioSystem.PlayOneShot("SFX_Player_Jump");
-
-// 播放一个音效并获取句柄以便后续控制
-var audioHandle = AudioSystem.Play("SFX_Machine_Gun_Loop");
-
-// 停止循环音效
-if (audioHandle.IsValid())
+public class AudioExample : MonoBehaviour
 {
-    audioHandle.Stop();
+    [SerializeField] private AudioEvent jumpEvent; // 在检查器中分配
+    [SerializeField] private AudioEvent machineGunEvent; // 在检查器中分配
+    
+    void Start()
+    {
+        // 播放一次性音效
+        AudioManager.PlayEvent(jumpEvent, gameObject);
+        
+        // 播放一个音效并获取句柄以便后续控制
+        var audioHandle = AudioManager.PlayEvent(machineGunEvent, gameObject);
+        
+        // 5秒后停止循环音效
+        StartCoroutine(StopAfterDelay(audioHandle, 5f));
+    }
+    
+    private System.Collections.IEnumerator StopAfterDelay(ActiveEvent audioHandle, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        if (audioHandle != null)
+        {
+            audioHandle.Stop();
+        }
+    }
 }
 ```
 
 ### 2) 播放音乐
 
 ```csharp
-using CycloneGames.Audio;
+using CycloneGames.Audio.Runtime;
+using UnityEngine;
 
-// 播放背景音乐，将自动循环
-AudioSystem.PlayMusic("Music_Level_1");
-
-// 在 2 秒内淡出音乐
-AudioSystem.StopMusic(2.0f);
+public class MusicController : MonoBehaviour
+{
+    [SerializeField] private AudioEvent backgroundMusic; // 在检查器中分配
+    
+    void Start()
+    {
+        // 播放背景音乐
+        var musicHandle = AudioManager.PlayEvent(backgroundMusic, gameObject);
+    }
+    
+    public void StopMusic()
+    {
+        // 停止所有背景音乐实例
+        AudioManager.StopAll(backgroundMusic);
+    }
+}
 ```
+
+## API 参考
+
+### AudioManager 静态方法
+
+- `PlayEvent(AudioEvent eventToPlay, GameObject emitterObject)` - 在 GameObject 上播放 AudioEvent
+- `PlayEvent(AudioEvent eventToPlay, Vector3 position)` - 在特定位置播放 AudioEvent
+- `StopAll(AudioEvent eventsToStop)` - 停止特定 AudioEvent 的所有实例
+- `StopAll(int groupNum)` - 停止特定组中的所有事件
+- `ValidateManager()` - 确保 AudioManager 实例存在
+
+### ActiveEvent 方法
+
+- `Stop()` - 带淡出效果停止事件
+- `StopImmediate()` - 立即停止事件
+- `SetMute(bool toggle)` - 静音/取消静音事件
+- `SetSolo(bool toggle)` - 独奏/取消独奏事件
 
 ## CycloneGames 独有拓展
 
