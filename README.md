@@ -1,6 +1,6 @@
 # Unity Project Starter Template
 
-This project is a lightweight Unity starter template designed to serve as a foundation for new projects, integrating commonly used packages and providing support for various DI/IoC frameworks.
+This is a lightweight, modular Unity project template designed to provide a solid foundation for your new projects. It integrates core modules inspired by the **Unreal Engine**, including a **Gameplay Framework**, **Gameplay Tags**, and a **Gameplay Ability System**. Additionally, it features a high-performance, low-GC resource, object pool, and audio management system. The project also includes practical Debug tools and supports various **DI/IoC frameworks**. All modules are developed as decoupled **Unity Packages** and are optimized for platforms such as **Android, iOS, and WebGL**.
 
 <p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
