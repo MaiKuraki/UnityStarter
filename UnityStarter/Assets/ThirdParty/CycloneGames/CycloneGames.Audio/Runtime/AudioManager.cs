@@ -464,7 +464,7 @@ namespace CycloneGames.Audio.Runtime
                     activeClipRefCount[clip] = 1;
                 }
 
-                if (activeClipRefCount[clip] == 0)
+                if (activeClipRefCount.TryGetValue(clip, out int currentCount) && currentCount == 0)
                 {
                     activeClipRefCount.Remove(clip);
                 }
