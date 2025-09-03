@@ -20,6 +20,9 @@ namespace CycloneGames.Audio.Runtime
     [System.Serializable]
     public class ActiveEvent
     {
+        // Cached reference to the main camera to avoid repeated calls to Camera.main, which can impact performance.
+        private static Camera mainCamera;
+        
         /// <summary>
         /// The name of the audio event to be played
         /// </summary>
@@ -239,6 +242,12 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public void StopImmediate()
         {
+            // Prevent the event from being stopped multiple times, which can cause issues like returning sources to the pool multiple times.
+            if (this.status == EventStatus.Stopped)
+            {
+                return;
+            }
+
             if (this.cancellationTokenSource != null)
             {
                 this.cancellationTokenSource.Cancel();
@@ -414,7 +423,11 @@ namespace CycloneGames.Audio.Runtime
             this.useGaze = HasGazeProperty();
             if (this.useGaze)
             {
-                this.gazeReference = Camera.main.transform;
+                if (mainCamera == null)
+                {
+                    mainCamera = Camera.main;
+                }
+                this.gazeReference = mainCamera.transform;
                 UpdateGaze();
             }
 
@@ -655,15 +668,31 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         private void UpdateGaze()
         {
+            if (this.sources.Count == 0) return;
+            
             AudioSource mainSource = this.sources[0].source;
-            float gazeAngle = 0;
+            if (mainSource == null) return;
+
             if (this.gazeReference == null)
             {
-                this.gazeReference = Camera.main.transform;
+                if (mainCamera == null)
+                {
+                    mainCamera = Camera.main;
+                }
+                if (mainCamera != null)
+                {
+                    this.gazeReference = mainCamera.transform;
+                }
+                else
+                {
+                    // No main camera found, disable gaze updates for this event.
+                    this.useGaze = false;
+                    return;
+                }
             }
 
             Vector3 posDelta = this.gazeReference.position - mainSource.transform.position;
-            gazeAngle = Mathf.Abs(180 - Vector3.Angle(this.gazeReference.forward, posDelta));
+            float gazeAngle = Mathf.Abs(180 - Vector3.Angle(this.gazeReference.forward, posDelta));
 
             for (int i = 0; i < this.activeParameters.Length; i++)
             {
