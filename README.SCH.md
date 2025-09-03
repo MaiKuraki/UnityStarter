@@ -45,11 +45,13 @@
 - **[GameplayFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework)** - 虚幻引擎风格的游戏框架，包含 Actor、Pawn、Controller、GameMode 概念。支持 DI 的可扩展游戏项目架构。
 - **[GameplayAbilities](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities)** - 强大的数据驱动技能系统，灵感来自虚幻引擎的 GAS。支持复杂技能、属性、状态效果，基于 ScriptableObject 设计。
 - **[GameplayTags](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags)** - 基于标签的识别系统，用于技能、效果和游戏状态，灵感来自虚幻引擎的 GameplayTags。支持运行时动态标签注册和自动生成。
+- **[RPGFoundation](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)** - 包含 RPG 类游戏的基础拓展。
 
 ### 🏗️ 核心基础设施  
 - **[Factory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory)** - 高性能、低 GC 的工厂和对象池工具。线程安全的自动扩缩容池，O(1) 操作复杂度。
 - **[Logger](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger)** - 零/低 GC 日志系统，支持可插拔处理策略。支持线程化工作模式、文件轮转和跨平台兼容（包括 WebGL）。
 - **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement)** - DI 优先的资源管理抽象层，集成 YooAsset。支持下载、缓存、版本管理，兼容 Addressables/Navigathena。
+- **[Audio](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio)** - 一个高性能、低 GC、类似 Wwise 操作体验的，使用了 Unity 原生 Audio 功能的高级功能拓展。
 
 ### 🎯 输入与界面
 - **[InputSystem](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem)** - 响应式输入封装，支持上下文栈、多人游戏、设备锁定和基于 YAML 的配置。使用 R3 Observable 构建。
@@ -59,10 +61,10 @@
 - **[Utility](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Utility)** - 通用工具集，包含 FPS 计数器、安全区域适配、文件操作、性能工具和 Unity 启动画面控制。
 - **[Services](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Services)** - 游戏服务抽象层，用于摄像机管理、图形设置和设备配置，支持基于 YAML 的设置。
 - **[Cheat](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat)** - 类型安全的调试命令管道，集成 VitalRouter。支持异步操作和线程安全执行。
-
-### 🌐 网络与扩展
-- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - 网络抽象层，提供 Mirror 适配器。为传输、序列化和技能系统集成提供接口。
 - **[FontAssets](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.FontAssets)** - 多语言字体集合和字符集，支持拉丁文、中文（简体/繁体）、日文和韩文本地化。
+
+### 🌐 网络
+- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - 网络抽象层，提供 Mirror 适配器。为传输、序列化和技能系统集成提供接口。
 
 ## 项目结构说明
 项目主要源码位于 `UnityStarter/Assets/ThirdParty/` 目录下。采用 **Unity Package** 形式开发，分离 asmdef 设计，可轻易的选择移除不需要的包。
@@ -90,6 +92,8 @@
     │   │   │   ├── UIFramework/        # 层级式 UI 管理
     │   │   │   ├── Networking/         # 网络抽象层
     │   │   │   ├── FontAssets/         # 多语言字体集合
+    │   │   │   ├── Audio/              # 增强型音频管理系统
+    │   │   │   ├── RPGFoundation/      # RPG 基础组件 (例如, Movement)
     │   │   │   └── Utility/            # 性能工具和实用程序
     │   │   └── ...
     │   └── ...
