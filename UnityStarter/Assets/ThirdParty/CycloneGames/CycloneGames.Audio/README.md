@@ -2,7 +2,9 @@
 
 <div align="left">English | <a href="./README.SCH.md">简体中文</a></div>
 
-An enhanced audio management system for Unity. The core logic is sourced from Microsoft's `Audio-Manager-for-Unity`, extended by CycloneGames with a strong focus on performance and memory efficiency. If you do not plan to use mature middleware such as **Wwise**, **CriWare**, or **FMOD**, this plugin is highly recommended. Its logic for managing and editing audio is similar to **Wwise**, including common Wwise-like features such as **Bank, RTPC, Parameter, and Multi-Bus**, making it more suitable for developers and designers familiar with **Wwise**.
+An enhanced audio management system for Unity. The core logic is sourced from Microsoft's `Audio-Manager-for-Unity`, extended by CycloneGames with a strong focus on performance and memory efficiency.
+
+If you do not plan to use mature middleware such as **Wwise**, **CriWare**, or **FMOD**, this plugin is highly recommended. Its logic for managing and editing audio is similar to **Wwise**, including common Wwise-like features such as **Bank, RTPC, Parameter, and Multi-Bus**, making it more suitable for developers and designers familiar with **Wwise**.
 
 **Upstream Source**: https://github.com/microsoft/Audio-Manager-for-Unity
 
@@ -10,6 +12,7 @@ This version introduces critical optimizations for production environments, incl
 
 ## Features
 
+- **AudioGraph Redrawing**: A more intuitive and visually appealing AudioGraph editing interface, featuring Unreal Engine-like shortcuts (e.g., Alt + mouse click on connections).
 - **Centralized Audio Control**: Manage sound effects and music from a unified API.
 - **Performance Monitoring**: In-built hooks and utilities to monitor audio system performance in real-time.
 - **Asynchronous Loading**: Integrates `UniTask` for non-blocking, asynchronous loading of audio assets, ensuring smooth gameplay without hitches.
@@ -35,9 +38,8 @@ Install via UPM or place the package under `Packages`/`Assets`. See `package.jso
 Before you can play audio, you need to create AudioEvent assets in Unity:
 
 1. Right-click in your Project window
-2. Select **Create > Audio > Audio Event**
-3. Configure your AudioEvent with AudioFile nodes and other audio components
-4. Save the asset in your project
+2. Select **Create > CycloneGames > Audio > Audio Bank**
+3. Configure the internal logic of your AudioEvent using AudioFile nodes and other audio components
 
 ### 1) Playing a Sound Effect (SFX)
 
@@ -119,13 +121,17 @@ public class MusicController : MonoBehaviour
 
 This implementation significantly builds upon the original Microsoft audio manager. The key enhancements are:
 
+### AudioGraph Redrawing with Unreal Engine-like Shortcuts
+
+The AudioGraph has been redrawn to enhance the rendering of node connection curves. It now includes shortcuts similar to those in Unreal Engine, such as using `Alt + Left Mouse Button` to delete a single curve or all curves connected to the selected node.
+
 ### Asynchronous Operations
 
 All resource-intensive operations, such as loading `AudioClip`s, are performed asynchronously using `UniTask`. This prevents the main thread from blocking, which is essential for eliminating frame rate drops when new sounds are introduced during gameplay.
 
 ### GC Optimizations
 
-I have meticulously profiled and optimized the audio system to reduce memory allocations in performance-critical paths. These changes result in a much lower and more predictable memory footprint, reducing the frequency and impact of garbage collection.
+I have meticulously profiled and optimized the audio system to reduce memory allocations in performance-critical paths, and modified the default memory pool size to better suit different runtime platforms. These changes result in a much lower and more predictable memory footprint, reducing the frequency and impact of garbage collection.
 
 ### Performance Monitoring
 
