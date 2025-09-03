@@ -791,7 +791,6 @@ namespace CycloneGames.Audio.Editor
             Event e = Event.current;
 
             // We need to handle mouse movement for panning and connection drawing even outside the rect
-            // We need to handle mouse movement for panning and connection drawing even outside the rect
             if (e.type == EventType.MouseDrag || e.type == EventType.MouseMove || e.type == EventType.MouseUp)
             {
                 HandleMouseMovement(e, graphRect);
@@ -814,6 +813,15 @@ namespace CycloneGames.Audio.Editor
             switch (e.type)
             {
                 case EventType.MouseDown:
+                    if (e.alt && e.button == 0)
+                    {
+                        if (BreakConnectionAtPoint(mousePosInView))
+                        {
+                            e.Use();
+                            return;
+                        }
+                    }
+                    
                     this.selectedNode = GetNodeAtPosition(mousePosInView);
                     Selection.activeObject = this.selectedNode;
                     if (e.button == 0)
@@ -1027,10 +1035,64 @@ namespace CycloneGames.Audio.Editor
             this.lastMousePos = e.mousePosition;
         }
 
+        private bool BreakConnectionAtPoint(Vector2 viewPosition)
+        {
+            if (selectedEvent == null)
+            {
+                return false;
+            }
+
+            Vector2 globalClickPos = ConvertToGlobalPosition(viewPosition);
+            const float clickThreshold = 10.0f; // The distance in pixels to check for a click near a line.
+
+            // Iterate through all nodes to find their input connections
+            for (int i = 0; i < selectedEvent.EditorNodes.Count; i++)
+            {
+                AudioNode node = selectedEvent.EditorNodes[i];
+                if (node.Input != null && node.Input.ConnectedNodes.Length > 0)
+                {
+                    AudioNodeInput input = node.Input;
+                    // Must iterate over a copy, as we may modify the collection
+                    AudioNodeOutput[] outputs = new AudioNodeOutput[input.ConnectedNodes.Length];
+                    input.ConnectedNodes.CopyTo(outputs, 0);
+
+                    foreach (AudioNodeOutput output in outputs)
+                    {
+                        if (output == null) continue;
+
+                        Vector2 start = output.Center;
+                        Vector2 end = input.Center;
+
+                        // Check distance to the curve by sampling points on it.
+                        Vector3 startPos = new Vector3(start.x, start.y);
+                        Vector3 endPos = new Vector3(end.x, end.y);
+                        Vector3 startTan = startPos + Vector3.right * 50;
+                        Vector3 endTan = endPos + Vector3.left * 50;
+
+                        // Sample 20 points along the curve
+                        for (int j = 0; j <= 20; j++)
+                        {
+                            Vector3 pointOnCurve = GetPointOnCubicBezier(startPos, startTan, endTan, endPos, (float)j / 20.0f);
+                            if (Vector2.Distance(new Vector2(pointOnCurve.x, pointOnCurve.y), globalClickPos) < clickThreshold)
+                            {
+                                // Found a connection to break
+                                input.RemoveConnection(output);
+                                EditorUtility.SetDirty(input);
+                                Repaint();
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>
         /// Drag and drop functionality for adding clips
         /// </summary>
-        /// <param name="e">The input event handled by Unity</param>
+        /// <param name="e">The input event handled in Unity</param>
         private void HandleDrag(Event e)
         {
             int clipSelection = EditorUtility.DisplayDialogComplex("Add Clips to Audio Bank", "How should these clips be added?", "In current event", "In separate events", "Cancel");
@@ -1066,6 +1128,16 @@ namespace CycloneGames.Audio.Editor
         }
 
         #endregion
+
+        private Vector3 GetPointOnCubicBezier(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t)
+        {
+            t = Mathf.Clamp01(t);
+            float oneMinusT = 1f - t;
+            return (oneMinusT * oneMinusT * oneMinusT * p0) +
+                   (3f * oneMinusT * oneMinusT * t * p1) +
+                   (3f * oneMinusT * t * t * p2) +
+                   (t * t * t * p3);
+        }
 
         /// <summary>
         /// Create a context menu for a node's input connector
