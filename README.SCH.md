@@ -1,6 +1,6 @@
 # Unity 项目启动模板
 
-本项目是一个轻量级的 Unity 启动模板，旨在作为新项目的基础框架，整合了常用的开源包并为多种 DI/IoC 框架提供了支持。
+这是一个轻量级、模块化的 Unity 项目模板，旨在为您的新项目提供一个坚实的基础。它集成了借鉴**虚幻引擎**理念的 **Gameplay Framework**、**Gameplay Tags** 和 **Gameplay Ability System**，以及**高性能、低 GC** 的资源、对象池和音频管理系统。此外，项目还包含实用的 Debug 工具，并支持多种 **DI/IoC 框架**。所有模块均以解耦清晰的 Unity Package 形式开发，且已针对 **Android, iOS, WebGL** 等多平台进行了优化。
 
 <p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
