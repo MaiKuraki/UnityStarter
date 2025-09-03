@@ -4,6 +4,9 @@
 
 <p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
+> [!NOTE]
+> 如果你觉得这个项目对你有帮助，请点一个 Star ⭐，谢谢！
+
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
 
 ## 概述
