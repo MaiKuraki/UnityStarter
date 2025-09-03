@@ -219,6 +219,47 @@ namespace CycloneGames.Audio.Editor
         #region Drawing
 
         /// <summary>
+        /// Draw the drag preview line when connecting nodes (called from OnGUI)
+        /// </summary>
+        private void DrawDragPreviewLine()
+        {
+            // This method is no longer used; the drag preview line is now drawn in DrawEventNodes.
+        }
+
+        /// <summary>
+        /// Draw the drag preview line when connecting nodes (called from DrawEventNodes)
+        /// </summary>
+        private void DrawDragPreviewLineInGraph(Rect graphRect)
+        {
+            if (this.selectedOutput != null && this.leftButtonDown)
+            {
+                Event e = Event.current;
+                if (e.type == EventType.Repaint || e.type == EventType.MouseMove || e.type == EventType.MouseDrag)
+                {
+                    // Based on user feedback, the correct start position on screen is the node's global position plus the pan amount.
+                    Vector2 startPos = ConvertToLocalPosition(this.selectedOutput.Center);
+
+                    // The end position is simply the current mouse position in window coordinates.
+                    Vector2 endPos = e.mousePosition;
+                    
+                    // We draw in window coordinates.
+                    Handles.BeginGUI();
+                    Vector3 startPosition = new Vector3(startPos.x, startPos.y);
+                    Vector3 endPosition = new Vector3(endPos.x, endPos.y);
+                    Vector3 startTangent = startPosition + (Vector3.right * 50);
+                    Vector3 endTangent = endPosition + (Vector3.left * 50);
+
+                    // Use a visible color for the preview line and restore it afterward.
+                    Color originalColor = Handles.color;
+                    Handles.color = new Color(0f, 1f, 0f, 1f); // Bright green
+                    Handles.DrawBezier(startPosition, endPosition, startTangent, endTangent, Handles.color, null, 6);
+                    Handles.color = originalColor;
+                    Handles.EndGUI();
+                }
+            }
+        }
+
+        /// <summary>
         /// Display the list of buttons to select an event
         /// </summary>
         private void DrawEventList()
@@ -518,6 +559,8 @@ namespace CycloneGames.Audio.Editor
             EndWindows();
             GUI.EndGroup();
 
+            DrawDragPreviewLineInGraph(graphRect);
+
             // End clipping group
             GUI.EndGroup();
         }
@@ -533,10 +576,11 @@ namespace CycloneGames.Audio.Editor
             Handles.BeginGUI();
             
             // Draw minor grid lines
-            Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.2f);
+            Color minorGridColor = new Color(0.5f, 0.5f, 0.5f, 0.2f);
             float xOffset = this.panX % smallStep;
             float yOffset = this.panY % smallStep;
 
+            Handles.color = minorGridColor;
             for (int i = 0; i <= widthDivs; i++)
             {
                 float x = smallStep * i + xOffset;
@@ -550,13 +594,14 @@ namespace CycloneGames.Audio.Editor
             }
 
             // Draw major grid lines
-            Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.4f);
+            Color majorGridColor = new Color(0.5f, 0.5f, 0.5f, 0.4f);
             float xOffsetLarge = this.panX % largeStep;
             float yOffsetLarge = this.panY % largeStep;
 
             int widthDivsLarge = Mathf.CeilToInt(graphRect.width / largeStep);
             int heightDivsLarge = Mathf.CeilToInt(graphRect.height / largeStep);
 
+            Handles.color = majorGridColor;
             for (int i = 0; i <= widthDivsLarge; i++)
             {
                 float x = largeStep * i + xOffsetLarge;
@@ -731,6 +776,7 @@ namespace CycloneGames.Audio.Editor
 
             Event e = Event.current;
 
+            // We need to handle mouse movement for panning and connection drawing even outside the rect
             // We need to handle mouse movement for panning and connection drawing even outside the rect
             if (e.type == EventType.MouseDrag || e.type == EventType.MouseMove || e.type == EventType.MouseUp)
             {
@@ -945,10 +991,8 @@ namespace CycloneGames.Audio.Editor
             }
             else
             {
-                // The curve end position is in window space, start position needs to be converted from graph space to window space
-                Vector2 startPosInView = ConvertToLocalPosition(this.selectedOutput.Center);
-                Vector2 startPosInWindow = startPosInView + graphRect.position;
-                AudioNode.DrawCurve(startPosInWindow, e.mousePosition);
+                // Force a repaint to ensure the preview line is visible during drag.
+                Repaint();
             }
 
             this.lastMousePos = e.mousePosition;
