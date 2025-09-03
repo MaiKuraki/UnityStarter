@@ -255,7 +255,7 @@ namespace CycloneGames.Audio.Editor
                         startPos = e.mousePosition;
                         endPos = ConvertToLocalPosition(this.selectedInput.Center);
                     }
-                    
+
                     // We draw in window coordinates.
                     Handles.BeginGUI();
                     Vector3 startPosition = new Vector3(startPos.x, startPos.y);
@@ -588,7 +588,7 @@ namespace CycloneGames.Audio.Editor
             int heightDivs = Mathf.CeilToInt(graphRect.height / smallStep);
 
             Handles.BeginGUI();
-            
+
             // Draw minor grid lines
             Color minorGridColor = new Color(0.5f, 0.5f, 0.5f, 0.2f);
             float xOffset = this.panX % smallStep;
@@ -813,15 +813,58 @@ namespace CycloneGames.Audio.Editor
             switch (e.type)
             {
                 case EventType.MouseDown:
+                    // Check for Alt + Left Click for disconnection
                     if (e.alt && e.button == 0)
                     {
-                        if (BreakConnectionAtPoint(mousePosInView))
+                        AudioNodeInput clickedInput = GetInputAtPosition(mousePosInView);
+                        AudioNodeOutput clickedOutput = GetOutputAtPosition(mousePosInView);
+
+                        if (clickedInput != null)
                         {
-                            e.Use();
-                            return;
+                            // Disconnect all connections from this input
+                            clickedInput.RemoveAllConnections();
+                            EditorUtility.SetDirty(clickedInput); // Mark as dirty to save changes
+                            e.Use(); // Consume the event
+                            Repaint(); // Repaint to show the change
+                            return; // Stop further processing for this event
+                        }
+                        else if (clickedOutput != null)
+                        {
+                            // Disconnect all connections from this output
+                            bool connectionWasBroken = false; // Renamed to avoid confusion and indicate intent
+                            if (selectedEvent != null)
+                            {
+                                foreach (var node in selectedEvent.EditorNodes)
+                                {
+                                    if (node.Input != null)
+                                    {
+                                        // Call RemoveConnection directly. It's likely a void method.
+                                        // We assume that if it's called, it's intended to remove a connection.
+                                        node.Input.RemoveConnection(clickedOutput);
+                                        EditorUtility.SetDirty(node.Input);
+                                        connectionWasBroken = true; // Mark as true if this block is executed.
+                                    }
+                                }
+                            }
+                            if (connectionWasBroken)
+                            {
+                                e.Use();
+                                Repaint();
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            // If not clicking on an input/output point, try to break connection on the curve
+                            if (BreakConnectionAtPoint(mousePosInView))
+                            {
+                                e.Use();
+                                return;
+                            }
                         }
                     }
-                    
+
+                    // Normal node selection and handling
                     this.selectedNode = GetNodeAtPosition(mousePosInView);
                     Selection.activeObject = this.selectedNode;
                     if (e.button == 0)
