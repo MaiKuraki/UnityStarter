@@ -54,7 +54,7 @@
 - **[Audio](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio)** - 一个高性能、低 GC、类似 Wwise 操作体验的，使用了 Unity 原生 Audio 功能的高级功能拓展。
 
 ### 🎯 输入与界面
-- **[InputSystem](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem)** - 响应式输入封装，支持上下文栈、多人游戏、设备锁定和基于 YAML 的配置。使用 R3 Observable 构建。
+- **[InputSystem](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem)** - 响应式输入封装，支持上下文栈、本地多人、键盘双人、自动检测新设备接入、基于 YAML 的游戏运行时修改键位配置。使用 R3 Observable 构建。
 - **[UIFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework)** - 层级式 UI 管理系统，支持基于层的组织、转场动画和资源集成。
 
 ### 🛠️ 工具与服务
