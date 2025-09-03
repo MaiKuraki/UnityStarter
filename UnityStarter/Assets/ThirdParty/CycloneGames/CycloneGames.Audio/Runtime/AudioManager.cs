@@ -46,9 +46,13 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static string[] Languages;
         /// <summary>
-        /// The default number of AudioSources to create in the pool.
+        /// The number of AudioSources to create in the pool. Set this in the Inspector.
+        /// If set to 0, a platform-specific default will be used (Desktop: 80, Mobile: 32, WebGL: 24).
         /// </summary>
-        private const int DefaultSourcesCount = 80;
+        [SerializeField]
+        private int customPoolSize = 0;
+
+        private static bool isInitialized = false;
         /// <summary>
         /// The total list of AudioSources for the manager to use
         /// </summary>
@@ -272,6 +276,28 @@ namespace CycloneGames.Audio.Runtime
 
         #region Private Functions
 
+        private void Awake()
+        {
+            if (Instance != null)
+            {
+                // If an instance already exists and it's not this one, destroy this one.
+                if (Instance != this)
+                {
+                    Destroy(gameObject);
+                }
+                return;
+            }
+
+            // This is the first instance.
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+
+            if (!isInitialized)
+            {
+                Initialize();
+            }
+        }
+
         private void Update()
         {
             // The Update loop is now significantly leaner, only responsible for updating active events.
@@ -287,7 +313,7 @@ namespace CycloneGames.Audio.Runtime
         }
 
         /// <summary>
-        /// Instantiate a new GameObject and add the AudioManager component
+        /// Instantiate a new GameObject and add the AudioManager component as a fallback.
         /// </summary>
         private static void CreateInstance()
         {
@@ -295,15 +321,22 @@ namespace CycloneGames.Audio.Runtime
             {
                 return;
             }
+            
+            // This will create the object, and its Awake() method will handle all initialization.
+            new GameObject("AudioManager").AddComponent<AudioManager>();
+        }
 
+        /// <summary>
+        /// Initializes the AudioManager instance.
+        /// </summary>
+        private void Initialize()
+        {
             CurrentLanguage = 0;
             ActiveEvents = new List<ActiveEvent>();
-            GameObject instanceObject = new GameObject("AudioManager");
-            Instance = instanceObject.AddComponent<AudioManager>();
-            DontDestroyOnLoad(instanceObject);
             CreateSources();
             ValidateAudioListener();
             Application.quitting += HandleQuitting;
+            isInitialized = true;
         }
         
         /// <summary>
@@ -311,7 +344,7 @@ namespace CycloneGames.Audio.Runtime
         /// It prioritizes adding it to the main camera for correct 3D audio positioning.
         /// As a fallback, it adds it to the AudioManager's GameObject.
         /// </summary>
-        private static void ValidateAudioListener()
+        private void ValidateAudioListener()
         {
             // This check is performed only once at initialization to avoid performance overhead.
             if (FindObjectsOfType<AudioListener>().Length > 0)
@@ -328,7 +361,7 @@ namespace CycloneGames.Audio.Runtime
             else
             {
                 Debug.LogWarning("No AudioListener or main camera found in the scene. Creating AudioListener on AudioManager. 3D audio positioning may be incorrect.");
-                Instance.gameObject.AddComponent<AudioListener>();
+                this.gameObject.AddComponent<AudioListener>();
             }
         }
         
@@ -343,13 +376,29 @@ namespace CycloneGames.Audio.Runtime
         /// <summary>
         /// Create the pool of AudioSources
         /// </summary>
-        private static void CreateSources()
+        private void CreateSources()
         {
-            for (int i = 0; i < DefaultSourcesCount; i++)
+            int poolCount;
+            if (this.customPoolSize > 0)
+            {
+                poolCount = this.customPoolSize;
+            }
+            else
+            {
+                #if UNITY_WEBGL
+                    poolCount = 32;
+                #elif UNITY_ANDROID || UNITY_IOS
+                    poolCount = 48;
+                #else
+                    poolCount = 128; // Desktop default
+                #endif
+            }
+
+            for (int i = 0; i < poolCount; i++)
             {
                 GameObject sourceGO = new GameObject("AudioSource" + i);
                 sourceGO.transform.localScale = new Vector3(0.1f, 0.1f, 0.1f);
-                sourceGO.transform.SetParent(Instance.transform);
+                sourceGO.transform.SetParent(this.transform);
                 AudioSource tempSource = sourceGO.AddComponent<AudioSource>();
                 tempSource.playOnAwake = false;
                 sourcePool.Add(tempSource);
@@ -518,9 +567,17 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Instance == null)
             {
-                CreateInstance();
-            }
+                if (!AllowCreateInstance) { return false; }
 
+                // Try to find an instance that the user might have placed in the scene.
+                Instance = FindObjectOfType<AudioManager>();
+
+                // If no instance exists in the scene, create one.
+                if (Instance == null)
+                {
+                    CreateInstance();
+                }
+            }
             return Instance != null;
         }
 
