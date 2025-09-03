@@ -4,6 +4,9 @@ This is a lightweight, modular Unity project template designed to provide a soli
 
 <p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
+> [!NOTE]
+> If you find this project helpful, please consider giving it a star ⭐. Thank you!
+
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
 
 ## Overview
