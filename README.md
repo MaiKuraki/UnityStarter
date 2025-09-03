@@ -52,7 +52,7 @@ If you only need specific modules for your project, you have two options:
 - **[Audio](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio)** - A high-performance, low-GC, advanced feature extension using Unity's native audio functions, with a Wwise-like operating experience.
 
 ### 🎯 Input & UI
-- **[InputSystem](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem)** - Reactive input wrapper with context stacks, multi-player support, device locking, and YAML-based configuration. Built with R3 Observables.
+- **[InputSystem](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem)** - Reactive Input Wrapper with Context Stacks, supporting local co-op (keyboard and gamepad), and automatic detection of new devices. Keybinds can be configured at runtime via YAML files. Built using R3 Observables.
 - **[UIFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework)** - Hierarchical UI management system with layer-based organization, transitions, and asset integration support.
 
 ### 🛠️ Utilities & Services
