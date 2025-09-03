@@ -50,7 +50,7 @@
 ### 🏗️ 核心基础设施  
 - **[Factory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory)** - 高性能、低 GC 的工厂和对象池工具。线程安全的自动扩缩容池，O(1) 操作复杂度。
 - **[Logger](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger)** - 零/低 GC 日志系统，支持可插拔处理策略。支持线程化工作模式、文件轮转和跨平台兼容（包括 WebGL）。
-- **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement)** - DI 优先的资源管理抽象层，集成 YooAsset。支持下载、缓存、版本管理，兼容 Addressables/Navigathena。
+- **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement)** - DI 优先的资源管理抽象层，集成 [YooAsset](https://github.com/tuyoogame/YooAsset)。支持下载、缓存、版本管理，兼容 Addressables/[Navigathena](https://github.com/mackysoft/Navigathena)。
 - **[Audio](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio)** - 一个高性能、低 GC、类似 Wwise 操作体验的，使用了 Unity 原生 Audio 功能的高级功能拓展。
 
 ### 🎯 输入与界面
@@ -60,11 +60,11 @@
 ### 🛠️ 工具与服务
 - **[Utility](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Utility)** - 通用工具集，包含 FPS 计数器、安全区域适配、文件操作、性能工具和 Unity 启动画面控制。
 - **[Services](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Services)** - 游戏服务抽象层，用于摄像机管理、图形设置和设备配置，支持基于 YAML 的设置。
-- **[Cheat](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat)** - 类型安全的调试命令管道，集成 VitalRouter。支持异步操作和线程安全执行。
+- **[Cheat](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat)** - 类型安全的调试命令管道，集成 [VitalRouter](https://github.com/hadashiA/VitalRouter)。支持异步操作和线程安全执行。
 - **[FontAssets](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.FontAssets)** - 多语言字体集合和字符集，支持拉丁文、中文（简体/繁体）、日文和韩文本地化。
 
 ### 🌐 网络
-- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - 网络抽象层，提供 Mirror 适配器。为传输、序列化和技能系统集成提供接口。
+- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - 网络抽象层，提供 [Mirror](https://github.com/MirrorNetworking/Mirror) 适配器。为传输、序列化和技能系统集成提供接口。
 
 ## 项目结构说明
 项目主要源码位于 `UnityStarter/Assets/ThirdParty/` 目录下。采用 **Unity Package** 形式开发，分离 asmdef 设计，可轻易的选择移除不需要的包。
@@ -107,6 +107,7 @@
 - **Unity 2022.3+** - 所有模块的必需 Unity 版本
 - **UniTask** - Unity 异步/等待操作支持
 - **R3** - Unity 响应式扩展（InputSystem 中使用）
+- **LitMotion** - 一个高性能的补间动画库
 - **VYaml** - 配置文件的 YAML 序列化
 - **VitalRouter** - 消息路由系统（Cheat 系统中使用）
 - **YooAsset** - 资源管理和热更新支持
