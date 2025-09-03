@@ -48,7 +48,7 @@ If you only need specific modules for your project, you have two options:
 ### 🏗️ Core Infrastructure  
 - **[Factory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory)** - High-performance, low-GC factory and object pooling utilities. Thread-safe auto-scaling pools with O(1) operations.
 - **[Logger](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger)** - Zero/low-GC logging system with pluggable processing strategies. Supports threaded workers, file rotation, and cross-platform compatibility (including WebGL).
-- **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement)** - DI-first asset management abstraction with YooAsset integration. Supports downloading, caching, version management with Addressables/Navigathena compatibility.
+- **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement)** - DI-first asset management abstraction with [YooAsset](https://github.com/tuyoogame/YooAsset) integration. Supports downloading, caching, version management with Addressables/[Navigathena](https://github.com/mackysoft/Navigathena) compatibility.
 - **[Audio](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio)** - A high-performance, low-GC, advanced feature extension using Unity's native audio functions, with a Wwise-like operating experience.
 
 ### 🎯 Input & UI
@@ -58,11 +58,11 @@ If you only need specific modules for your project, you have two options:
 ### 🛠️ Utilities & Services
 - **[Utility](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Utility)** - Common utilities including FPS counter, safe area fitting, file operations, performance tools, and Unity splash screen control.
 - **[Services](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Services)** - Game service abstractions for camera management, graphics settings, and device configuration with YAML-based settings.
-- **[Cheat](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat)** - Type-safe command pipeline for debugging with VitalRouter integration. Supports async operations and thread-safe execution.
+- **[Cheat](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat)** - Type-safe command pipeline for debugging with [VitalRouter](https://github.com/hadashiA/VitalRouter) integration. Supports async operations and thread-safe execution.
 - **[FontAssets](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.FontAssets)** - Multilingual font collections and character sets for Latin, Chinese (Simplified/Traditional), Japanese, and Korean localization.
 
 ### 🌐 Networking
-- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - Networking abstraction layer with Mirror adapter. Provides interfaces for transport, serialization, and ability system integration.
+- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - Networking abstraction layer with [Mirror](https://github.com/MirrorNetworking/Mirror) adapter. Provides interfaces for transport, serialization, and ability system integration.
 
 ## Project Structure
 The main source code for the modules is located in the `UnityStarter/Assets/ThirdParty/` directory. The project is developed using a Unity Package-based approach with separated Assembly Definitions (asmdef), which allows for easy removal of unwanted modules and ensures a clear separation of concerns.
