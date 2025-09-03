@@ -25,6 +25,10 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private AudioNodeOutput selectedOutput;
         /// <summary>
+        /// The node input being connected to an output
+        /// </summary>
+        private AudioNodeInput selectedInput;
+        /// <summary>
         /// The rectangle defining the space where the list of events are drawn
         /// </summary>
         private Rect eventListRect = new Rect(0, 20, 200, 400);
@@ -231,16 +235,26 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private void DrawDragPreviewLineInGraph(Rect graphRect)
         {
-            if (this.selectedOutput != null && this.leftButtonDown)
+            if (this.leftButtonDown && (this.selectedOutput != null || this.selectedInput != null))
             {
                 Event e = Event.current;
                 if (e.type == EventType.Repaint || e.type == EventType.MouseMove || e.type == EventType.MouseDrag)
                 {
-                    // Based on user feedback, the correct start position on screen is the node's global position plus the pan amount.
-                    Vector2 startPos = ConvertToLocalPosition(this.selectedOutput.Center);
+                    Vector2 startPos;
+                    Vector2 endPos;
 
-                    // The end position is simply the current mouse position in window coordinates.
-                    Vector2 endPos = e.mousePosition;
+                    if (this.selectedOutput != null)
+                    {
+                        // Dragging from an output to an input
+                        startPos = ConvertToLocalPosition(this.selectedOutput.Center);
+                        endPos = e.mousePosition;
+                    }
+                    else // this.selectedInput != null
+                    {
+                        // Dragging from an input to an output
+                        startPos = e.mousePosition;
+                        endPos = ConvertToLocalPosition(this.selectedInput.Center);
+                    }
                     
                     // We draw in window coordinates.
                     Handles.BeginGUI();
@@ -897,6 +911,12 @@ namespace CycloneGames.Audio.Editor
             this.leftButtonDown = true;
             this.rightButtonClicked = false;
             this.selectedOutput = GetOutputAtPosition(mousePosInView);
+            this.selectedInput = null;
+
+            if (this.selectedOutput == null)
+            {
+                this.selectedInput = GetInputAtPosition(mousePosInView);
+            }
 
             this.selectedNode = GetNodeAtPosition(mousePosInView);
         }
@@ -955,11 +975,20 @@ namespace CycloneGames.Audio.Editor
                         hoverInput.AddConnection(this.selectedOutput);
                     }
                 }
+                else if (this.selectedInput != null)
+                {
+                    AudioNodeOutput hoverOutput = GetOutputAtPosition(mousePosInView);
+                    if (hoverOutput != null)
+                    {
+                        this.selectedInput.AddConnection(hoverOutput);
+                    }
+                }
             }
 
             this.panGraph = false;
             this.hasPanned = false;
             this.selectedOutput = null;
+            this.selectedInput = null;
             this.rightButtonClicked = false;
             this.leftButtonDown = false;
         }
