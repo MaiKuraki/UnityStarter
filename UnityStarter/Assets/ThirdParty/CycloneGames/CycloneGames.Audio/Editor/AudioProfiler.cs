@@ -249,11 +249,19 @@ namespace CycloneGames.Audio.Editor
         /// <param name="end">Final position of the line</param>
         public static void DrawCurve(Vector2 start, Vector2 end)
         {
+            Handles.BeginGUI();
+            
             Vector3 startPosition = new Vector3(start.x, start.y);
             Vector3 endPosition = new Vector3(end.x, end.y);
             Vector3 startTangent = startPosition + (Vector3.right * 50);
             Vector3 endTangent = endPosition + (Vector3.left * 50);
-            Handles.DrawBezier(startPosition, endPosition, startTangent, endTangent, Color.white, null, 2);
+            
+            Color originalColor = Handles.color;
+            Handles.color = new Color(0f, 1f, 0f, 1f); // Green
+            Handles.DrawBezier(startPosition, endPosition, startTangent, endTangent, Handles.color, null, 6);
+            Handles.color = originalColor;
+            
+            Handles.EndGUI();
         }
     }
 }

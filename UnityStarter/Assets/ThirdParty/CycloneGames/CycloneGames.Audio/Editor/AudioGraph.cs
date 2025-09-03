@@ -25,6 +25,10 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private AudioNodeOutput selectedOutput;
         /// <summary>
+        /// The node input being connected to an output
+        /// </summary>
+        private AudioNodeInput selectedInput;
+        /// <summary>
         /// The rectangle defining the space where the list of events are drawn
         /// </summary>
         private Rect eventListRect = new Rect(0, 20, 200, 400);
@@ -217,6 +221,57 @@ namespace CycloneGames.Audio.Editor
         }
 
         #region Drawing
+
+        /// <summary>
+        /// Draw the drag preview line when connecting nodes (called from OnGUI)
+        /// </summary>
+        private void DrawDragPreviewLine()
+        {
+            // This method is no longer used; the drag preview line is now drawn in DrawEventNodes.
+        }
+
+        /// <summary>
+        /// Draw the drag preview line when connecting nodes (called from DrawEventNodes)
+        /// </summary>
+        private void DrawDragPreviewLineInGraph(Rect graphRect)
+        {
+            if (this.leftButtonDown && (this.selectedOutput != null || this.selectedInput != null))
+            {
+                Event e = Event.current;
+                if (e.type == EventType.Repaint || e.type == EventType.MouseMove || e.type == EventType.MouseDrag)
+                {
+                    Vector2 startPos;
+                    Vector2 endPos;
+
+                    if (this.selectedOutput != null)
+                    {
+                        // Dragging from an output to an input
+                        startPos = ConvertToLocalPosition(this.selectedOutput.Center);
+                        endPos = e.mousePosition;
+                    }
+                    else // this.selectedInput != null
+                    {
+                        // Dragging from an input to an output
+                        startPos = e.mousePosition;
+                        endPos = ConvertToLocalPosition(this.selectedInput.Center);
+                    }
+
+                    // We draw in window coordinates.
+                    Handles.BeginGUI();
+                    Vector3 startPosition = new Vector3(startPos.x, startPos.y);
+                    Vector3 endPosition = new Vector3(endPos.x, endPos.y);
+                    Vector3 startTangent = startPosition + (Vector3.right * 50);
+                    Vector3 endTangent = endPosition + (Vector3.left * 50);
+
+                    // Use a visible color for the preview line and restore it afterward.
+                    Color originalColor = Handles.color;
+                    Handles.color = new Color(0f, 1f, 0f, 1f); // Bright green
+                    Handles.DrawBezier(startPosition, endPosition, startTangent, endTangent, Handles.color, null, 6);
+                    Handles.color = originalColor;
+                    Handles.EndGUI();
+                }
+            }
+        }
 
         /// <summary>
         /// Display the list of buttons to select an event
@@ -518,6 +573,8 @@ namespace CycloneGames.Audio.Editor
             EndWindows();
             GUI.EndGroup();
 
+            DrawDragPreviewLineInGraph(graphRect);
+
             // End clipping group
             GUI.EndGroup();
         }
@@ -531,12 +588,13 @@ namespace CycloneGames.Audio.Editor
             int heightDivs = Mathf.CeilToInt(graphRect.height / smallStep);
 
             Handles.BeginGUI();
-            
+
             // Draw minor grid lines
-            Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.2f);
+            Color minorGridColor = new Color(0.5f, 0.5f, 0.5f, 0.2f);
             float xOffset = this.panX % smallStep;
             float yOffset = this.panY % smallStep;
 
+            Handles.color = minorGridColor;
             for (int i = 0; i <= widthDivs; i++)
             {
                 float x = smallStep * i + xOffset;
@@ -550,13 +608,14 @@ namespace CycloneGames.Audio.Editor
             }
 
             // Draw major grid lines
-            Handles.color = new Color(0.5f, 0.5f, 0.5f, 0.4f);
+            Color majorGridColor = new Color(0.5f, 0.5f, 0.5f, 0.4f);
             float xOffsetLarge = this.panX % largeStep;
             float yOffsetLarge = this.panY % largeStep;
 
             int widthDivsLarge = Mathf.CeilToInt(graphRect.width / largeStep);
             int heightDivsLarge = Mathf.CeilToInt(graphRect.height / largeStep);
 
+            Handles.color = majorGridColor;
             for (int i = 0; i <= widthDivsLarge; i++)
             {
                 float x = largeStep * i + xOffsetLarge;
@@ -754,6 +813,58 @@ namespace CycloneGames.Audio.Editor
             switch (e.type)
             {
                 case EventType.MouseDown:
+                    // Check for Alt + Left Click for disconnection
+                    if (e.alt && e.button == 0)
+                    {
+                        AudioNodeInput clickedInput = GetInputAtPosition(mousePosInView);
+                        AudioNodeOutput clickedOutput = GetOutputAtPosition(mousePosInView);
+
+                        if (clickedInput != null)
+                        {
+                            // Disconnect all connections from this input
+                            clickedInput.RemoveAllConnections();
+                            EditorUtility.SetDirty(clickedInput); // Mark as dirty to save changes
+                            e.Use(); // Consume the event
+                            Repaint(); // Repaint to show the change
+                            return; // Stop further processing for this event
+                        }
+                        else if (clickedOutput != null)
+                        {
+                            // Disconnect all connections from this output
+                            bool connectionWasBroken = false; // Renamed to avoid confusion and indicate intent
+                            if (selectedEvent != null)
+                            {
+                                foreach (var node in selectedEvent.EditorNodes)
+                                {
+                                    if (node.Input != null)
+                                    {
+                                        // Call RemoveConnection directly. It's likely a void method.
+                                        // We assume that if it's called, it's intended to remove a connection.
+                                        node.Input.RemoveConnection(clickedOutput);
+                                        EditorUtility.SetDirty(node.Input);
+                                        connectionWasBroken = true; // Mark as true if this block is executed.
+                                    }
+                                }
+                            }
+                            if (connectionWasBroken)
+                            {
+                                e.Use();
+                                Repaint();
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            // If not clicking on an input/output point, try to break connection on the curve
+                            if (BreakConnectionAtPoint(mousePosInView))
+                            {
+                                e.Use();
+                                return;
+                            }
+                        }
+                    }
+
+                    // Normal node selection and handling
                     this.selectedNode = GetNodeAtPosition(mousePosInView);
                     Selection.activeObject = this.selectedNode;
                     if (e.button == 0)
@@ -851,6 +962,12 @@ namespace CycloneGames.Audio.Editor
             this.leftButtonDown = true;
             this.rightButtonClicked = false;
             this.selectedOutput = GetOutputAtPosition(mousePosInView);
+            this.selectedInput = null;
+
+            if (this.selectedOutput == null)
+            {
+                this.selectedInput = GetInputAtPosition(mousePosInView);
+            }
 
             this.selectedNode = GetNodeAtPosition(mousePosInView);
         }
@@ -909,11 +1026,20 @@ namespace CycloneGames.Audio.Editor
                         hoverInput.AddConnection(this.selectedOutput);
                     }
                 }
+                else if (this.selectedInput != null)
+                {
+                    AudioNodeOutput hoverOutput = GetOutputAtPosition(mousePosInView);
+                    if (hoverOutput != null)
+                    {
+                        this.selectedInput.AddConnection(hoverOutput);
+                    }
+                }
             }
 
             this.panGraph = false;
             this.hasPanned = false;
             this.selectedOutput = null;
+            this.selectedInput = null;
             this.rightButtonClicked = false;
             this.leftButtonDown = false;
         }
@@ -945,19 +1071,71 @@ namespace CycloneGames.Audio.Editor
             }
             else
             {
-                // The curve end position is in window space, start position needs to be converted from graph space to window space
-                Vector2 startPosInView = ConvertToLocalPosition(this.selectedOutput.Center);
-                Vector2 startPosInWindow = startPosInView + graphRect.position;
-                AudioNode.DrawCurve(startPosInWindow, e.mousePosition);
+                // Force a repaint to ensure the preview line is visible during drag.
+                Repaint();
             }
 
             this.lastMousePos = e.mousePosition;
         }
 
+        private bool BreakConnectionAtPoint(Vector2 viewPosition)
+        {
+            if (selectedEvent == null)
+            {
+                return false;
+            }
+
+            Vector2 globalClickPos = ConvertToGlobalPosition(viewPosition);
+            const float clickThreshold = 10.0f; // The distance in pixels to check for a click near a line.
+
+            // Iterate through all nodes to find their input connections
+            for (int i = 0; i < selectedEvent.EditorNodes.Count; i++)
+            {
+                AudioNode node = selectedEvent.EditorNodes[i];
+                if (node.Input != null && node.Input.ConnectedNodes.Length > 0)
+                {
+                    AudioNodeInput input = node.Input;
+                    // Must iterate over a copy, as we may modify the collection
+                    AudioNodeOutput[] outputs = new AudioNodeOutput[input.ConnectedNodes.Length];
+                    input.ConnectedNodes.CopyTo(outputs, 0);
+
+                    foreach (AudioNodeOutput output in outputs)
+                    {
+                        if (output == null) continue;
+
+                        Vector2 start = output.Center;
+                        Vector2 end = input.Center;
+
+                        // Check distance to the curve by sampling points on it.
+                        Vector3 startPos = new Vector3(start.x, start.y);
+                        Vector3 endPos = new Vector3(end.x, end.y);
+                        Vector3 startTan = startPos + Vector3.right * 50;
+                        Vector3 endTan = endPos + Vector3.left * 50;
+
+                        // Sample 20 points along the curve
+                        for (int j = 0; j <= 20; j++)
+                        {
+                            Vector3 pointOnCurve = GetPointOnCubicBezier(startPos, startTan, endTan, endPos, (float)j / 20.0f);
+                            if (Vector2.Distance(new Vector2(pointOnCurve.x, pointOnCurve.y), globalClickPos) < clickThreshold)
+                            {
+                                // Found a connection to break
+                                input.RemoveConnection(output);
+                                EditorUtility.SetDirty(input);
+                                Repaint();
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
         /// <summary>
         /// Drag and drop functionality for adding clips
         /// </summary>
-        /// <param name="e">The input event handled by Unity</param>
+        /// <param name="e">The input event handled in Unity</param>
         private void HandleDrag(Event e)
         {
             int clipSelection = EditorUtility.DisplayDialogComplex("Add Clips to Audio Bank", "How should these clips be added?", "In current event", "In separate events", "Cancel");
@@ -993,6 +1171,16 @@ namespace CycloneGames.Audio.Editor
         }
 
         #endregion
+
+        private Vector3 GetPointOnCubicBezier(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t)
+        {
+            t = Mathf.Clamp01(t);
+            float oneMinusT = 1f - t;
+            return (oneMinusT * oneMinusT * oneMinusT * p0) +
+                   (3f * oneMinusT * oneMinusT * t * p1) +
+                   (3f * oneMinusT * t * t * p2) +
+                   (t * t * t * p3);
+        }
 
         /// <summary>
         /// Create a context menu for a node's input connector
