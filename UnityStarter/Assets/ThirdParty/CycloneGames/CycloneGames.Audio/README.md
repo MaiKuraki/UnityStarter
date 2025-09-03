@@ -30,36 +30,90 @@ Install via UPM or place the package under `Packages`/`Assets`. See `package.jso
 
 ## Quick Start
 
+### 0) Creating AudioEvent Assets
+
+Before you can play audio, you need to create AudioEvent assets in Unity:
+
+1. Right-click in your Project window
+2. Select **Create > Audio > Audio Event**
+3. Configure your AudioEvent with AudioFile nodes and other audio components
+4. Save the asset in your project
+
 ### 1) Playing a Sound Effect (SFX)
 
 ```csharp
-using CycloneGames.Audio;
+using CycloneGames.Audio.Runtime;
 using Cysharp.Threading.Tasks;
+using UnityEngine;
 
-// Play a one-shot sound effect
-AudioSystem.PlayOneShot("SFX_Player_Jump");
-
-// Play a sound and get a handle to control it later
-var audioHandle = AudioSystem.Play("SFX_Machine_Gun_Loop");
-
-// Stop the looping sound
-if (audioHandle.IsValid())
+public class AudioExample : MonoBehaviour
 {
-    audioHandle.Stop();
+    [SerializeField] private AudioEvent jumpEvent; // Assign in Inspector
+    [SerializeField] private AudioEvent machineGunEvent; // Assign in Inspector
+    
+    void Start()
+    {
+        // Play a one-shot sound effect
+        AudioManager.PlayEvent(jumpEvent, gameObject);
+        
+        // Play a sound and get a handle to control it later
+        var audioHandle = AudioManager.PlayEvent(machineGunEvent, gameObject);
+        
+        // Stop the looping sound after 5 seconds
+        StartCoroutine(StopAfterDelay(audioHandle, 5f));
+    }
+    
+    private System.Collections.IEnumerator StopAfterDelay(ActiveEvent audioHandle, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        if (audioHandle != null)
+        {
+            audioHandle.Stop();
+        }
+    }
 }
 ```
 
 ### 2) Playing Music
 
 ```csharp
-using CycloneGames.Audio;
+using CycloneGames.Audio.Runtime;
+using UnityEngine;
 
-// Play background music, which will automatically loop
-AudioSystem.PlayMusic("Music_Level_1");
-
-// Fade out the music over 2 seconds
-AudioSystem.StopMusic(2.0f);
+public class MusicController : MonoBehaviour
+{
+    [SerializeField] private AudioEvent backgroundMusic; // Assign in Inspector
+    
+    void Start()
+    {
+        // Play background music
+        var musicHandle = AudioManager.PlayEvent(backgroundMusic, gameObject);
+    }
+    
+    public void StopMusic()
+    {
+        // Stop all instances of the background music
+        AudioManager.StopAll(backgroundMusic);
+    }
+}
 ```
+
+## API Reference
+
+### AudioManager Static Methods
+
+- `PlayEvent(AudioEvent eventToPlay, GameObject emitterObject)` - Play an AudioEvent on a GameObject
+- `PlayEvent(AudioEvent eventToPlay, Vector3 position)` - Play an AudioEvent at a specific position
+- `StopAll(AudioEvent eventsToStop)` - Stop all instances of a specific AudioEvent
+- `StopAll(int groupNum)` - Stop all events in a specific group
+- `ValidateManager()` - Ensure the AudioManager instance exists
+
+### ActiveEvent Methods
+
+- `Stop()` - Stop the event with fade out
+- `StopImmediate()` - Stop the event immediately
+- `SetMute(bool toggle)` - Mute/unmute the event
+- `SetSolo(bool toggle)` - Solo/unsolo the event
 
 ## CycloneGames Extensions
 
