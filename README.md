@@ -43,11 +43,13 @@ If you only need specific modules for your project, you have two options:
 - **[GameplayFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework)** - UnrealEngine-style gameplay framework with Actor, Pawn, Controller, GameMode concepts. DI-friendly architecture for scalable game projects.
 - **[GameplayAbilities](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities)** - Powerful data-driven ability system inspired by Unreal Engine's GAS. Supports complex skills, attributes, status effects with ScriptableObject-based design.
 - **[GameplayTags](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags)** - Tag-based identification system for abilities, effects, and game states, inspired by Unreal Engine's GameplayTags. Supports dynamic runtime tag registration and auto-generation.
+- **[RPGFoundation](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)** - Contains basic extensions for RPG-type games.
 
 ### 🏗️ Core Infrastructure  
 - **[Factory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory)** - High-performance, low-GC factory and object pooling utilities. Thread-safe auto-scaling pools with O(1) operations.
 - **[Logger](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger)** - Zero/low-GC logging system with pluggable processing strategies. Supports threaded workers, file rotation, and cross-platform compatibility (including WebGL).
 - **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement)** - DI-first asset management abstraction with YooAsset integration. Supports downloading, caching, version management with Addressables/Navigathena compatibility.
+- **[Audio](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio)** - A high-performance, low-GC, advanced feature extension using Unity's native audio functions, with a Wwise-like operating experience.
 
 ### 🎯 Input & UI
 - **[InputSystem](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem)** - Reactive input wrapper with context stacks, multi-player support, device locking, and YAML-based configuration. Built with R3 Observables.
@@ -57,10 +59,10 @@ If you only need specific modules for your project, you have two options:
 - **[Utility](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Utility)** - Common utilities including FPS counter, safe area fitting, file operations, performance tools, and Unity splash screen control.
 - **[Services](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Services)** - Game service abstractions for camera management, graphics settings, and device configuration with YAML-based settings.
 - **[Cheat](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat)** - Type-safe command pipeline for debugging with VitalRouter integration. Supports async operations and thread-safe execution.
-
-### 🌐 Networking & Extensions
-- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - Networking abstraction layer with Mirror adapter. Provides interfaces for transport, serialization, and ability system integration.
 - **[FontAssets](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.FontAssets)** - Multilingual font collections and character sets for Latin, Chinese (Simplified/Traditional), Japanese, and Korean localization.
+
+### 🌐 Networking
+- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - Networking abstraction layer with Mirror adapter. Provides interfaces for transport, serialization, and ability system integration.
 
 ## Project Structure
 The main source code for the modules is located in the `UnityStarter/Assets/ThirdParty/` directory. The project is developed using a Unity Package-based approach with separated Assembly Definitions (asmdef), which allows for easy removal of unwanted modules and ensures a clear separation of concerns.
@@ -88,6 +90,8 @@ The main source code for the modules is located in the `UnityStarter/Assets/Thir
     │   │   │   ├── UIFramework/        # Hierarchical UI management
     │   │   │   ├── Networking/         # Network abstraction layer
     │   │   │   ├── FontAssets/         # Multilingual font collections
+    │   │   │   ├── Audio/              # Enhanced audio management system
+    │   │   │   ├── RPGFoundation/      # RPG Foundation components (e.g., Movement)
     │   │   │   └── Utility/            # Performance tools and utilities
     │   │   └── ...
     │   └── ...
