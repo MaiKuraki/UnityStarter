@@ -5,7 +5,8 @@ using UnityEngine;
 using System.Globalization;
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
+using System;
+using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.Audio.Runtime
 {
@@ -27,10 +28,11 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static List<ActiveEvent> ActiveEvents { get; private set; }
         /// <summary>
-        /// The AudioSource components that are not currently playing
+        /// The AudioSource components that are not currently playing.
+        /// Using a Queue for efficient acquisition and release (O(1) operations).
         /// </summary>
-        private static readonly List<AudioSource> availableSources = new List<AudioSource>();
-        public static IReadOnlyList<AudioSource> AvailableSources => availableSources;
+        private static readonly Queue<AudioSource> availableSources = new Queue<AudioSource>();
+        public static IReadOnlyCollection<AudioSource> AvailableSources => availableSources;
         /// <summary>
         /// List of the previously started events
         /// </summary>
@@ -44,9 +46,9 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static string[] Languages;
         /// <summary>
-        /// The default number of AudioSources to create in the pool
+        /// The default number of AudioSources to create in the pool.
         /// </summary>
-        private static int DefaultSourcesCount = 80;
+        private const int DefaultSourcesCount = 80;
         /// <summary>
         /// The total list of AudioSources for the manager to use
         /// </summary>
@@ -56,6 +58,10 @@ namespace CycloneGames.Audio.Runtime
         // Memory tracking fields
         private static readonly Dictionary<AudioClip, int> activeClipRefCount = new Dictionary<AudioClip, int>();
         private static readonly Dictionary<AudioClip, long> clipMemoryCache = new Dictionary<AudioClip, long>();
+        
+        // A reusable HashSet to avoid GC allocations in TrackMemory when collecting unique clips.
+        private static readonly HashSet<AudioClip> reusableClipSet = new HashSet<AudioClip>();
+        
         public static long TotalMemoryUsage { get; private set; } = 0;
         public static IReadOnlyDictionary<AudioClip, int> ActiveClipRefCount => activeClipRefCount;
         public static IReadOnlyDictionary<AudioClip, long> ClipMemoryCache => clipMemoryCache;
@@ -65,22 +71,6 @@ namespace CycloneGames.Audio.Runtime
         private const int MaxPreviousEvents = 300;
         public static List<ActiveEvent> PreviousEvents => previousEvents;
 
-        float lastTime = 0f;
-
-        private readonly struct ActiveEventRemovalTimestamp
-        {
-            public readonly float RemovalTime;
-            public readonly ActiveEvent ActiveEvent;
-
-            public ActiveEventRemovalTimestamp(float removalTime, ActiveEvent activeEvent)
-            {
-                RemovalTime = removalTime;
-                ActiveEvent = activeEvent;
-            }
-        }
-
-        // We could get fancy and sort, but this list is usually pretty small, and the sort call can be expensive
-        private readonly List<ActiveEventRemovalTimestamp> delayedEventsToRemove = new();
 
 
         #region Interface
@@ -206,13 +196,17 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
+            // Return all associated AudioSources to the available pool.
             List<EventSource> sources = stoppedEvent.sources;
             for (int i = 0; i < sources.Count; i++)
             {
                 AudioSource tempSource = sources[i].source;
-                if (!availableSources.Contains(tempSource))
+                // A null check is important here, as the source might have been destroyed.
+                if (tempSource != null)
                 {
-                    availableSources.Add(tempSource);
+                    // We assume a source is only ever returned once per event stop, so we don't need a .Contains check,
+                    // which would be inefficient (O(n)) for a queue.
+                    availableSources.Enqueue(tempSource);
                 }
             }
 
@@ -250,20 +244,28 @@ namespace CycloneGames.Audio.Runtime
             ClearSourceText();
         }
 
-        public static void DelayRemoveActiveEvent(ActiveEvent eventToRemove, float delay = 1)
+        public static async void DelayRemoveActiveEvent(ActiveEvent eventToRemove, float delay = 1)
         {
             if (!ValidateManager())
             {
                 return;
             }
 
-            Instance.delayedEventsToRemove.Add(new ActiveEventRemovalTimestamp(Time.time + delay, eventToRemove));
-        }
-
-        public static IEnumerator RemoveActiveEventCoroutine(ActiveEvent eventToRemove, float delay)
-        {
-            yield return new WaitForSeconds(delay);
-            AudioManager.RemoveActiveEvent(eventToRemove);
+            try
+            {
+                // Use UniTask.Delay for a GC-friendly, cancellable delay.
+                await UniTask.Delay(TimeSpan.FromSeconds(delay), ignoreTimeScale: false, cancellationToken: eventToRemove.GetCancellationToken());
+                
+                // If the task was not cancelled, proceed with removal.
+                if (eventToRemove.status != EventStatus.Error)
+                {
+                    RemoveActiveEvent(eventToRemove);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // This is expected if the event is stopped abruptly. No action needed.
+            }
         }
 
         #endregion
@@ -272,32 +274,9 @@ namespace CycloneGames.Audio.Runtime
 
         private void Update()
         {
-            // First check and remove delayed events
-            if (lastTime > Time.time)
-            {
-                // Time.time has rolled over, lets kludge it and remove all (This should be rare)
-                Debug.LogWarning("Time Rollover, clearing all delayed events");
-                foreach (var eventToRemove in delayedEventsToRemove)
-                {
-                    RemoveActiveEvent(eventToRemove.ActiveEvent);
-                }
-
-                delayedEventsToRemove.Clear();
-            }
-            else
-            {
-                for (int i = delayedEventsToRemove.Count - 1; i >= 0; i--)
-                {
-                    if (delayedEventsToRemove[i].RemovalTime < Time.time)
-                    {
-                        RemoveActiveEvent(delayedEventsToRemove[i].ActiveEvent);
-                        delayedEventsToRemove.RemoveAt(i);
-                    }
-                }
-            }
-            lastTime = Time.time;
-
-            for (int i = 0; i < ActiveEvents.Count; i++)
+            // The Update loop is now significantly leaner, only responsible for updating active events.
+            // Delayed removals are handled by UniTask.
+            for (int i = ActiveEvents.Count - 1; i >= 0; i--)
             {
                 ActiveEvent tempEvent = ActiveEvents[i];
                 if (tempEvent != null && tempEvent.sources.Count != 0)
@@ -323,7 +302,34 @@ namespace CycloneGames.Audio.Runtime
             Instance = instanceObject.AddComponent<AudioManager>();
             DontDestroyOnLoad(instanceObject);
             CreateSources();
+            ValidateAudioListener();
             Application.quitting += HandleQuitting;
+        }
+        
+        /// <summary>
+        /// Ensures that there is an AudioListener in the scene.
+        /// It prioritizes adding it to the main camera for correct 3D audio positioning.
+        /// As a fallback, it adds it to the AudioManager's GameObject.
+        /// </summary>
+        private static void ValidateAudioListener()
+        {
+            // This check is performed only once at initialization to avoid performance overhead.
+            if (FindObjectsOfType<AudioListener>().Length > 0)
+            {
+                return;
+            }
+
+            Camera mainCamera = Camera.main;
+            if (mainCamera != null)
+            {
+                Debug.Log("No AudioListener found. Creating one on the main camera.");
+                mainCamera.gameObject.AddComponent<AudioListener>();
+            }
+            else
+            {
+                Debug.LogWarning("No AudioListener or main camera found in the scene. Creating AudioListener on AudioManager. 3D audio positioning may be incorrect.");
+                Instance.gameObject.AddComponent<AudioListener>();
+            }
         }
         
         /// <summary>
@@ -347,7 +353,7 @@ namespace CycloneGames.Audio.Runtime
                 AudioSource tempSource = sourceGO.AddComponent<AudioSource>();
                 tempSource.playOnAwake = false;
                 sourcePool.Add(tempSource);
-                availableSources.Add(tempSource);
+                availableSources.Enqueue(tempSource);
 #if UNITY_EDITOR
                 TextMesh newText = sourceGO.AddComponent<TextMesh>();
                 newText.characterSize = 0.2f;
@@ -357,12 +363,15 @@ namespace CycloneGames.Audio.Runtime
 
         private static void ClearSourceText()
         {
-            for (int i = 0; i < availableSources.Count; i++)
+            foreach (var source in availableSources)
             {
-                TextMesh tempText = availableSources[i].GetComponent<TextMesh>();
-                if (tempText != null)
+                if (source != null)
                 {
-                    tempText.text = string.Empty;
+                    TextMesh tempText = source.GetComponent<TextMesh>();
+                    if (tempText != null)
+                    {
+                        tempText.text = string.Empty;
+                    }
                 }
             }
         }
@@ -407,35 +416,40 @@ namespace CycloneGames.Audio.Runtime
         /// <summary>
         /// Look for an existing AudioSource component that is not currently playing
         /// </summary>
-        /// <param name="emitterObject">The GameObject the AudioSource needs to be attached to</param>
         /// <returns>An AudioSource reference if one exists, otherwise null</returns>
         public static AudioSource GetUnusedSource()
         {
-            ClearNullAudioSources();
+            // Using Dequeue is an O(1) operation, which is highly efficient.
+            // We loop to ensure we don't return a source that was destroyed.
+            while (availableSources.Count > 0)
+            {
+                AudioSource tempSource = availableSources.Dequeue();
+                if (tempSource != null)
+                {
+                    return tempSource;
+                }
+                // If source was destroyed, it's implicitly removed from the pool. Continue to the next.
+            }
 
-            if (availableSources.Count > 0)
-            {
-                AudioSource tempSource = availableSources[0];
-                availableSources.Remove(tempSource);
-                return tempSource;
-            }
-            else
-            {
-                return null;
-            }
+            // Pool is empty or only contained destroyed sources.
+            Debug.LogWarning("Audio source pool is empty. Consider increasing DefaultSourcesCount.");
+            return null;
         }
 
         /// <summary>
-        /// Remove any references to AudioSource components that no longer exist
+        /// Remove any references to AudioSource components that no longer exist.
+        /// NOTE: This operation can be expensive and should be used sparingly, not on hot paths.
+        /// It's now implicitly handled by the GetUnusedSource method's null check.
         /// </summary>
         private static void ClearNullAudioSources()
         {
-            for (int i = availableSources.Count - 1; i >= 0; i--)
+            int count = availableSources.Count;
+            for (int i = 0; i < count; i++)
             {
-                AudioSource tempSource = availableSources[i];
-                if (tempSource == null)
+                AudioSource tempSource = availableSources.Dequeue();
+                if (tempSource != null)
                 {
-                    availableSources.RemoveAt(i);
+                    availableSources.Enqueue(tempSource);
                 }
             }
         }
@@ -448,34 +462,44 @@ namespace CycloneGames.Audio.Runtime
 
         private static void TrackMemory(ActiveEvent activeEvent, bool isAdding)
         {
-            var clips = activeEvent.sources.Select(s => s.source.clip).Distinct();
-            foreach (var clip in clips)
+            // Use a reusable HashSet to get unique clips without GC allocation from LINQ.
+            reusableClipSet.Clear();
+            foreach (var eventSource in activeEvent.sources)
             {
-                if (clip == null) continue;
+                if (eventSource.source.clip != null)
+                {
+                    reusableClipSet.Add(eventSource.source.clip);
+                }
+            }
 
+            foreach (var clip in reusableClipSet)
+            {
                 int direction = isAdding ? 1 : -1;
 
-                if (activeClipRefCount.TryGetValue(clip, out int count))
-                {
-                    activeClipRefCount[clip] = count + direction;
-                }
-                else if (isAdding)
-                {
-                    activeClipRefCount[clip] = 1;
-                }
+                // Update reference count.
+                activeClipRefCount.TryGetValue(clip, out int count);
+                count += direction;
 
-                if (activeClipRefCount.TryGetValue(clip, out int currentCount) && currentCount == 0)
+                if (count > 0)
+                {
+                    activeClipRefCount[clip] = count;
+                }
+                else
                 {
                     activeClipRefCount.Remove(clip);
                 }
 
-                if (isAdding && !clipMemoryCache.ContainsKey(clip))
+                // Update total memory usage.
+                if (isAdding)
                 {
-                    long memory = CalculateAudioClipMemoryUsage(clip);
-                    clipMemoryCache[clip] = memory;
-                    TotalMemoryUsage += memory;
+                    if (!clipMemoryCache.ContainsKey(clip))
+                    {
+                        long memory = CalculateAudioClipMemoryUsage(clip);
+                        clipMemoryCache[clip] = memory;
+                        TotalMemoryUsage += memory;
+                    }
                 }
-                else if (!isAdding && !activeClipRefCount.ContainsKey(clip))
+                else if (count == 0) // Only decrease memory when the last reference is removed.
                 {
                     if (clipMemoryCache.TryGetValue(clip, out long memory))
                     {

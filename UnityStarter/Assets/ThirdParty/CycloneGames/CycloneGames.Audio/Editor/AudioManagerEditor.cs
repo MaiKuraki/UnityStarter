@@ -1,6 +1,6 @@
 using UnityEditor;
 using UnityEngine;
-using System.Linq;
+using System.Collections.Generic;
 using CycloneGames.Audio.Runtime;
 
 namespace CycloneGames.Audio.Editor
@@ -11,6 +11,9 @@ namespace CycloneGames.Audio.Editor
         private bool showPoolStatus = true;
         private bool showActiveEvents = true;
         private bool showMemoryUsage = true;
+        
+        // A reusable list to avoid GC allocation from LINQ's OrderBy.
+        private readonly List<KeyValuePair<AudioClip, long>> sortedClipList = new List<KeyValuePair<AudioClip, long>>();
 
         public override void OnInspectorGUI()
         {
@@ -60,10 +63,16 @@ namespace CycloneGames.Audio.Editor
             {
                 EditorGUI.indentLevel++;
                 EditorGUILayout.LabelField("Total Audio Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage));
-                
-                var sortedClips = AudioManager.ClipMemoryCache.OrderByDescending(kvp => kvp.Value);
 
-                foreach (var kvp in sortedClips)
+                // Populate the reusable list and sort it to avoid LINQ overhead.
+                sortedClipList.Clear();
+                foreach (var kvp in AudioManager.ClipMemoryCache)
+                {
+                    sortedClipList.Add(kvp);
+                }
+                sortedClipList.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+                foreach (var kvp in sortedClipList)
                 {
                     if (kvp.Key == null) continue;
                     
