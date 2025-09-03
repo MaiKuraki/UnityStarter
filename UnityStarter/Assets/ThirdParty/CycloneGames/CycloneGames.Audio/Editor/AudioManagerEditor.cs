@@ -62,7 +62,10 @@ namespace CycloneGames.Audio.Editor
             if (showMemoryUsage)
             {
                 EditorGUI.indentLevel++;
-                EditorGUILayout.LabelField("Total Audio Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage));
+                
+                EditorGUILayout.HelpBox("This tracks the memory of raw AudioClip sample data managed by the AudioManager. It does not include the full overhead of the Unity audio engine (FMOD).", MessageType.Info);
+                
+                EditorGUILayout.LabelField("Tracked AudioClip Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage));
 
                 // Populate the reusable list and sort it to avoid LINQ overhead.
                 sortedClipList.Clear();
