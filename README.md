@@ -105,6 +105,7 @@ The main source code for the modules is located in the `UnityStarter/Assets/Thir
 - **Unity 2022.3+** - Required Unity version for all modules
 - **UniTask** - Async/await support for Unity operations
 - **R3** - Reactive Extensions for Unity (used in InputSystem)
+- **LitMotion** - A high-performance tweening library
 - **VYaml** - YAML serialization for configuration files
 - **VitalRouter** - Message routing system (used in Cheat system)
 - **YooAsset** - Asset management and hot-update support

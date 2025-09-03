@@ -107,6 +107,7 @@
 - **Unity 2022.3+** - 所有模块的必需 Unity 版本
 - **UniTask** - Unity 异步/等待操作支持
 - **R3** - Unity 响应式扩展（InputSystem 中使用）
+- **LitMotion** - 一个高性能的补间动画库
 - **VYaml** - 配置文件的 YAML 序列化
 - **VitalRouter** - 消息路由系统（Cheat 系统中使用）
 - **YooAsset** - 资源管理和热更新支持
