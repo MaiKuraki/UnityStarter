@@ -2,40 +2,56 @@
 
 English | [简体中文](./README.SCH.md)
 
-DI-first, interface-driven asset management abstraction for Unity. Default provider is YooAsset, also compatible with Navigathena scene management.
+A DI-first, interface-driven, unified asset management abstraction layer for Unity. It decouples your game logic from the underlying asset system (like YooAsset, Addressables, or Resources), allowing you to write cleaner, more portable code. A default provider for YooAsset is included.
 
 ## Requirements
 
 - Unity 2022.3+
-- Required: `com.tuyoogame.yooasset`
+- Optional: `com.tuyoogame.yooasset`
 - Optional: `com.cysharp.unitask`, `jp.hadashikick.vcontainer`, `com.mackysoft.navigathena`, `com.cyclonegames.factory`, `com.cyclone-games.logger`, `com.harumak.addler`
 
 ## Quick Start
 
+To get started, you need an implementation of the `IAssetModule` interface that works with your chosen asset system. The following example demonstrates how to use a custom module that loads assets from Unity's `Resources` folder. This showcases how your game code interacts with the unified API, completely decoupled from the underlying `Resources.Load` calls.
+
 ```csharp
 using CycloneGames.AssetManagement;
-using YooAsset;
+using UnityEngine;
+using System.Threading.Tasks;
 
-// 1) Initialize module
-IAssetModule module = new YooAssetModule();
-module.Initialize(new AssetModuleOptions(operationSystemMaxTimeSliceMs: 16));
-
-// 2) Create and initialize a package
-var pkg = module.CreatePackage("Default");
-var hostParams = new HostPlayModeParameters
+// Assume you have written a 'ResourcesModule' that implements IAssetModule for the Resources system.
+// A minimal implementation might look like this:
+async Task LoadMyPlayer()
 {
-    BuildinFileSystemParameters = FileSystemParameters.CreateDefaultBuildinFileSystemParameters(),
-    CacheFileSystemParameters = FileSystemParameters.CreateDefaultCacheFileSystemParameters(remoteServices: null)
-};
-await pkg.InitializeAsync(new AssetPackageInitOptions(AssetPlayMode.Host, hostParams, bundleLoadingMaxConcurrencyOverride: 8));
+    IAssetModule module = new ResourcesModule();
+    module.Initialize(new AssetModuleOptions());
 
-// 3) Load and instantiate
-using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/My.prefab"))
-{
-    handle.WaitForAsyncComplete();
-    var go = pkg.InstantiateSync(handle);
+    var pkg = module.CreatePackage("MyResources");
+
+    // The API call is the same, regardless of the backend!
+    using (var handle = pkg.LoadAssetAsync<GameObject>("Prefabs/MyPlayer"))
+    {
+        // In a real project, you would await this asynchronously.
+        while (!handle.IsDone)
+        {
+            await Task.Yield(); // Or yield return null in a coroutine
+        }
+
+        if (handle.Asset)
+        {
+            var go = Object.Instantiate(handle.Asset);
+        }
+    }
 }
 ```
+
+## Features
+
+- **Interface-First Design**: Decouples your game logic from the underlying asset system. Write your code against a stable interface and swap the backend anytime without major refactoring.
+- **DI-Friendly**: Designed from the ground up for dependency injection, making it easy to manage asset loading services in a clean and testable way.
+- **Unified API**: Provides a single, consistent API for all asset operations. Whether you're using `YooAsset`, `Addressables`, or a custom `Resources.Load` wrapper, the calling code remains the same.
+- **Extensible**: Easily create your own providers by implementing the `IAssetModule` and `IAssetPackage` interfaces to support any asset management system.
+- **Robust Tooling**: Includes built-in support for common needs like batch downloading, retries, caching, and progress aggregation.
 
 ## Concepts (2-minute overview)
 
@@ -270,6 +286,36 @@ public class GameLifetimeScope : LifetimeScope
 Notes:
 
 - You can inherit `AssetManagementVContainerInstaller` and override parameter creation per scene.
+
+## Provider Example: Using the YooAsset Adapter
+
+If you have `com.tuyoogame.yooasset` in your project, you can use the provided adapter for a powerful, production-ready asset solution. The setup is similar to the original Quick Start.
+
+```csharp
+using CycloneGames.AssetManagement;
+using YooAsset;
+
+// 1) Initialize the specific YooAssetModule
+IAssetModule module = new YooAssetModule();
+module.Initialize(new AssetModuleOptions(operationSystemMaxTimeSliceMs: 16));
+
+// 2) Create and initialize a package
+var pkg = module.CreatePackage("Default");
+var hostParams = new HostPlayModeParameters
+{
+    BuildinFileSystemParameters = FileSystemParameters.CreateDefaultBuildinFileSystemParameters(),
+    CacheFileSystemParameters = FileSystemParameters.CreateDefaultCacheFileSystemParameters(remoteServices: null)
+};
+await pkg.InitializeAsync(new AssetPackageInitOptions(AssetPlayMode.Host, hostParams, bundleLoadingMaxConcurrencyOverride: 8));
+
+// 3) Load and instantiate using the unified API
+using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/My.prefab"))
+{
+    handle.WaitForAsyncComplete();
+    var go = pkg.InstantiateSync(handle); // Note: InstantiateSync is a YooAsset-specific extension
+}
+```
+For details on updating, downloading, and scene management with the YooAsset provider, please refer to the corresponding sections in this document.
 
 ## Other Tips
 
