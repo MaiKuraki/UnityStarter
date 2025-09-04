@@ -12,6 +12,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 589d8b9d416148c4285b30906480e7e8, type: 3}
   m_Name: GC_Fireball_Impact
   m_EditorClassIdentifier: 
-  ImpactVFXPrefab: 
+  ImpactVFXPrefab: YOUR_FIREBALL_ASSET_PATH
   VFXLifetime: 2
-  ImpactSound: 
+  ImpactSound: YOUR_FIREBALL_ASSET_PATH
