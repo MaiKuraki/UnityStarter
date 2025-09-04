@@ -1,3 +1,4 @@
+#if YOOASSET_PRESENT
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -260,3 +261,4 @@ namespace CycloneGames.AssetManagement.Runtime
 		}
 	}
 }
+#endif // YOOASSET_PRESENT

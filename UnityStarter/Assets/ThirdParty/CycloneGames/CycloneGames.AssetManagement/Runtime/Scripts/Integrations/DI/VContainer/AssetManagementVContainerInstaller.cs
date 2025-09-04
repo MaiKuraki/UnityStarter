@@ -1,4 +1,4 @@
-#if VCONTAINER_PRESENT
+#if VCONTAINER_PRESENT && YOOASSET_PRESENT
 using VContainer;
 using VContainer.Unity;
 using YooAsset;
