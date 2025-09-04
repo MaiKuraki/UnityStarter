@@ -1,7 +1,6 @@
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.AddressableAssets;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -11,10 +10,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class GameObjectPoolManager : IGameObjectPoolManager
     {
-        private class PooledObjectComponent : MonoBehaviour { public AssetReferenceGameObject AssetRef; }
+        private class PooledObjectComponent : MonoBehaviour { public string AssetRef; }
 
         private readonly IResourceLocator resourceLocator;
-        private readonly Dictionary<AssetReferenceGameObject, Stack<GameObject>> poolRegistry = new Dictionary<AssetReferenceGameObject, Stack<GameObject>>();
+        private readonly Dictionary<string, Stack<GameObject>> poolRegistry = new Dictionary<string, Stack<GameObject>>();
         private readonly Transform poolRoot;
 
         public GameObjectPoolManager(IResourceLocator locator)
@@ -24,14 +23,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Object.DontDestroyOnLoad(poolRoot.gameObject);
         }
 
-        public async UniTask<GameObject> GetAsync(AssetReferenceGameObject assetRef, Vector3 position, Quaternion rotation, Transform parent = null)
+        public async UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null)
         {
-            if (!assetRef.RuntimeKeyIsValid()) return null;
+            if (assetRef is not string assetKey || string.IsNullOrEmpty(assetKey)) return null;
 
-            if (!poolRegistry.TryGetValue(assetRef, out var pool))
+            if (!poolRegistry.TryGetValue(assetKey, out var pool))
             {
                 pool = new Stack<GameObject>();
-                poolRegistry[assetRef] = pool;
+                poolRegistry[assetKey] = pool;
             }
 
             GameObject instance;
@@ -43,10 +42,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             else
             {
-                var prefab = await resourceLocator.LoadAssetAsync<GameObject>(assetRef);
+                var prefab = await resourceLocator.LoadAssetAsync<GameObject>(assetKey);
                 if (prefab == null) return null;
                 instance = Object.Instantiate(prefab, position, rotation, parent);
-                instance.AddComponent<PooledObjectComponent>().AssetRef = assetRef;
+                instance.AddComponent<PooledObjectComponent>().AssetRef = assetKey;
             }
 
             instance.SetActive(true);
@@ -69,22 +68,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
             pool.Push(instance);
         }
 
-        public async UniTask PrewarmPoolAsync(AssetReferenceGameObject assetRef, int count)
+        public async UniTask PrewarmPoolAsync(object assetRef, int count)
         {
-            if (!assetRef.RuntimeKeyIsValid()) return;
-            var prefab = await resourceLocator.LoadAssetAsync<GameObject>(assetRef);
+            if (assetRef is not string assetKey || string.IsNullOrEmpty(assetKey)) return;
+            var prefab = await resourceLocator.LoadAssetAsync<GameObject>(assetKey);
             if (prefab == null) return;
 
-            if (!poolRegistry.TryGetValue(assetRef, out var pool))
+            if (!poolRegistry.TryGetValue(assetKey, out var pool))
             {
                 pool = new Stack<GameObject>();
-                poolRegistry[assetRef] = pool;
+                poolRegistry[assetKey] = pool;
             }
 
             while (pool.Count < count)
             {
                 var instance = Object.Instantiate(prefab, poolRoot);
-                instance.AddComponent<PooledObjectComponent>().AssetRef = assetRef;
+                instance.AddComponent<PooledObjectComponent>().AssetRef = assetKey;
                 instance.SetActive(false);
                 pool.Push(instance);
             }
