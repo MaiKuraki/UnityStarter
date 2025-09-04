@@ -12,8 +12,7 @@ namespace CycloneGames.UIFramework.Runtime.Samples
     /// </summary>
     public sealed class UIFrameworkSampleBootstrap : MonoBehaviour
     {
-        [SerializeField] private string firstWindowName = "SampleWindow";
-        [SerializeField] private bool autoSetupAddressablesPackage = true; // Try set DefaultPackage if missing
+        [SerializeField] private string firstWindowName = "UIWindow_SampleUI"; //  If you use Addressable, this is the path in Addressable, and you must implement IAssetPackage
 
         private UIService uiService;
         private MainCameraService _mainCameraService;
@@ -45,10 +44,7 @@ namespace CycloneGames.UIFramework.Runtime.Samples
 
             if (AssetManagementLocator.DefaultPackage == null)
             {
-                if (autoSetupAddressablesPackage)
-                {
-                    await EnsureDefaultPackageAsync();
-                }
+                await EnsureDefaultPackageAsync();
                 if (AssetManagementLocator.DefaultPackage == null)
                 {
                     Debug.LogError("[UIFrameworkSample] DefaultPackage is null. Assign a package via AssetManagementLocator before boot.");
@@ -71,18 +67,16 @@ namespace CycloneGames.UIFramework.Runtime.Samples
         {
             try
             {
-                // Minimal Addressables-based package from Samples. Replace with your adapter as needed.
-                var pkg = new AddressablesPackage();
+                // Use the new Resources-based package.
+                var pkg = new ResourcesPackage();
                 await pkg.InitializeAsync(default);
                 AssetManagementLocator.DefaultPackage = pkg;
-                Debug.Log("[UIFrameworkSample] DefaultPackage set to AddressablesPackage (Samples).");
+                Debug.Log("[UIFrameworkSample] DefaultPackage set to ResourcesPackage.");
             }
             catch (System.Exception ex)
             {
-                Debug.LogWarning($"[UIFrameworkSample] Failed to auto-setup Addressables package: {ex.Message}");
+                Debug.LogWarning($"[UIFrameworkSample] Failed to auto-setup Resources package: {ex.Message}");
             }
         }
     }
 }
-
-
