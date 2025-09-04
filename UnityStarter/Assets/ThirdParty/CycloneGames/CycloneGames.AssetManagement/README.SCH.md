@@ -2,37 +2,56 @@
 
 [English](./README.md) | 简体中文
 
-以接口为先、DI 友好的 Unity 资源管理插件。默认实现基于 YooAsset，兼容 Navigathena 场景管理插件。
+一个以 DI 为先、接口驱动的统一 Unity 资源管理抽象层。它将您的游戏逻辑与底层资源系统（如 YooAsset、Addressables 或 Resources）解耦，让您可以编写更清晰、更易于移植的代码。包内包含一个 YooAsset 的默认实现。
 
 ## 依赖与环境
 
 - Unity 2022.3+
-- 必需：`com.tuyoogame.yooasset`
+- 可选：`com.tuyoogame.yooasset`
 - 可选：`com.cysharp.unitask`、`jp.hadashikick.vcontainer`、`com.mackysoft.navigathena`、`com.cyclonegames.factory`、`com.cyclone-games.logger`、`com.harumak.addler`
 
 ## 快速上手
 
+要使用本插件，您首先需要一个针对目标资源系统、实现了 `IAssetModule` 接口的提供器（Provider）。下面的示例将演示如何使用一个自定义模块从 Unity 的 `Resources` 文件夹加载资源。它清晰地展示了您的游戏代码如何与统一的 API 交互，并与底层的 `Resources.Load` 调用完全解耦。
+
 ```csharp
 using CycloneGames.AssetManagement;
-using YooAsset;
+using UnityEngine;
+using System.Threading.Tasks;
 
-IAssetModule module = new YooAssetModule();
-module.Initialize(new AssetModuleOptions(operationSystemMaxTimeSliceMs: 16));
-
-var pkg = module.CreatePackage("Default");
-var hostParams = new HostPlayModeParameters
+// 假设您已编写了一个用于 Resources 系统的 'ResourcesModule'。
+// 一个最小化的实现可能如下所示：
+async Task LoadMyPlayer()
 {
-    BuildinFileSystemParameters = FileSystemParameters.CreateDefaultBuildinFileSystemParameters(),
-    CacheFileSystemParameters = FileSystemParameters.CreateDefaultCacheFileSystemParameters(remoteServices: null)
-};
-await pkg.InitializeAsync(new AssetPackageInitOptions(AssetPlayMode.Host, hostParams, bundleLoadingMaxConcurrencyOverride: 8));
+    IAssetModule module = new ResourcesModule();
+    module.Initialize(new AssetModuleOptions());
 
-using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/My.prefab"))
-{
-    handle.WaitForAsyncComplete();
-    var go = pkg.InstantiateSync(handle);
+    var pkg = module.CreatePackage("MyResources");
+
+    // 无论后端是什么，API 调用都是一样的！
+    using (var handle = pkg.LoadAssetAsync<GameObject>("Prefabs/MyPlayer"))
+    {
+        // 在真实项目中，您应该异步等待此操作。
+        while (!handle.IsDone)
+        {
+            await Task.Yield(); // 或者在协程中 yield return null
+        }
+
+        if (handle.Asset)
+        {
+            var go = Object.Instantiate(handle.Asset);
+        }
+    }
 }
 ```
+
+## 核心特性
+
+- **接口优先设计**：将您的游戏逻辑与底层资源系统解耦。面向稳定的接口编程，随时可以切换后端实现，无需大规模重构。
+- **DI 友好**：为依赖注入而生，让您能以清晰、可测试的方式管理资源加载服务。
+- **统一 API**：为所有资源操作提供单一、一致的 API。无论您使用 `YooAsset`、`Addressables` 还是自定义的 `Resources.Load` 封装，调用代码都保持不变。
+- **高可扩展性**：通过实现 `IAssetModule` 和 `IAssetPackage` 接口，轻松创建自己的 Provider 来支持任何资源管理系统。
+- **强大的工具集**：内置了对批量下载、重试、缓存和进度聚合等通用需求的支持。
 
 ## 更新与下载
 
@@ -221,6 +240,36 @@ preload.OnAfterLoadScene("Assets/Scenes/Main.unity");
 ### 说明
 
 - 关于 PreloadManifest 条目的进度计算与行为，请参见 `PreloadManifest` 源码中的中英注释与 Tooltip。
+
+## 提供器示例：使用 YooAsset 适配器
+
+如果您的项目中已包含 `com.tuyoogame.yooasset`，则可以直接使用内置的适配器，它提供了一套功能强大、生产环境可用的资源解决方案。其设置与旧版的快速上手类似。
+
+```csharp
+using CycloneGames.AssetManagement;
+using YooAsset;
+
+// 1) 初始化具体的 YooAssetModule
+IAssetModule module = new YooAssetModule();
+module.Initialize(new AssetModuleOptions(operationSystemMaxTimeSliceMs: 16));
+
+// 2) 创建并初始化资源包
+var pkg = module.CreatePackage("Default");
+var hostParams = new HostPlayModeParameters
+{
+    BuildinFileSystemParameters = FileSystemParameters.CreateDefaultBuildinFileSystemParameters(),
+    CacheFileSystemParameters = FileSystemParameters.CreateDefaultCacheFileSystemParameters(remoteServices: null)
+};
+await pkg.InitializeAsync(new AssetPackageInitOptions(AssetPlayMode.Host, hostParams, bundleLoadingMaxConcurrencyOverride: 8));
+
+// 3) 使用统一 API 加载并实例化
+using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/My.prefab"))
+{
+    handle.WaitForAsyncComplete();
+    var go = pkg.InstantiateSync(handle); // 注意: InstantiateSync 是 YooAsset 适配器特有的扩展方法
+}
+```
+关于使用 YooAsset 提供器进行更新、下载和场景管理的详细信息，请参阅本文档中的相应章节。
 
 ## 其他用法
 
