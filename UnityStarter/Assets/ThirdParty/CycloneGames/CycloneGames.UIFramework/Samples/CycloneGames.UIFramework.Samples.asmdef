@@ -8,9 +8,7 @@
         "CycloneGames.Factory.Runtime",
         "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.Service.Runtime",
-        "CycloneGames.UIFramework.Runtime",
-        "Unity.Addressables",
-        "Unity.ResourceManager"
+        "CycloneGames.UIFramework.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
