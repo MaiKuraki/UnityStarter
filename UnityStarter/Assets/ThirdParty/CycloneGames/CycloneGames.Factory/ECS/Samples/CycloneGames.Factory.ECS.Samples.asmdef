@@ -1,0 +1,33 @@
+{
+    "name": "CycloneGames.Factory.ECS.Samples",
+    "rootNamespace": "",
+    "references": [
+        "Unity.Burst",
+        "Unity.Entities",
+        "Unity.Entities.Hybrid",
+        "Unity.Mathematics",
+        "Unity.Collections",
+        "Unity.Transforms",
+        "CycloneGames.Factory.ECS.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.burst",
+            "expression": "",
+            "define": "PRESENT_BURST"
+        },
+        {
+            "name": "com.unity.entities",
+            "expression": "",
+            "define": "PRESENT_ECS"
+        }
+    ],
+    "noEngineReferences": false
+}

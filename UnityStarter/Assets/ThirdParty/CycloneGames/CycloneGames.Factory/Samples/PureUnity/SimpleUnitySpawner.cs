@@ -1,4 +1,3 @@
-using UnityEngine;
 using CycloneGames.Factory.Runtime;
 
 // A basic spawner for non-DI environments.
