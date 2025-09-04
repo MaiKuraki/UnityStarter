@@ -1,7 +1,6 @@
 using CycloneGames.GameplayAbilities.Runtime;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
-using UnityEngine.AddressableAssets;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
@@ -9,18 +8,18 @@ namespace CycloneGames.GameplayAbilities.Sample
     public class GC_Fireball_Impact : GameplayCueSO
     {
         [Header("Impact VFX")]
-        public AssetReferenceGameObject ImpactVFXPrefab;
+        public string ImpactVFXPrefab;
         public float VFXLifetime = 2.0f;
 
         [Header("Impact SFX")]
-        public AssetReferenceT<AudioClip> ImpactSound;
+        public string ImpactSound;
 
         public override async UniTask OnExecutedAsync(GameplayCueParameters parameters, IGameObjectPoolManager poolManager)
         {
             if (parameters.TargetObject == null) return;
 
             // Play visual effect from pool
-            if (ImpactVFXPrefab != null && ImpactVFXPrefab.RuntimeKeyIsValid())
+            if (!string.IsNullOrEmpty(ImpactVFXPrefab))
             {
                 var vfxInstance = await poolManager.GetAsync(ImpactVFXPrefab, parameters.TargetObject.transform.position, Quaternion.identity);
                 if (vfxInstance != null && VFXLifetime > 0)
@@ -31,12 +30,13 @@ namespace CycloneGames.GameplayAbilities.Sample
             }
 
             // Play sound effect
-            if (ImpactSound != null && ImpactSound.RuntimeKeyIsValid())
+            if (!string.IsNullOrEmpty(ImpactSound))
             {
-                AudioClip audioClip = null; // await Addressables.LoadAssetAsync<AudioClip>(ImpactSound);
+                var audioClip = await GameplayCueManager.Instance.ResourceLocator.LoadAssetAsync<AudioClip>(ImpactSound);
                 if (audioClip)
                 {
                     AudioSource.PlayClipAtPoint(audioClip, parameters.TargetObject.transform.position);
+                    GameplayCueManager.Instance.ResourceLocator.ReleaseAsset(ImpactSound);
                 }
             }
         }
