@@ -3,11 +3,10 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
-        "Unity.ResourceManager",
-        "Unity.Addressables",
-        "CycloneGames.GameplayTags.Runtime",
         "CycloneGames.Logger",
-        "CycloneGames.Factory.Runtime"
+        "CycloneGames.Factory.Runtime",
+        "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.GameplayTags.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

@@ -1,7 +1,6 @@
 using CycloneGames.GameplayTags.Runtime;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
-using UnityEngine.AddressableAssets;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -21,7 +20,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public interface IGameObjectPoolManager
     {
-        UniTask<GameObject> GetAsync(AssetReferenceGameObject assetRef, Vector3 position, Quaternion rotation, Transform parent = null);
+        UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null);
         void Release(GameObject instance);
         void Shutdown();
     }
