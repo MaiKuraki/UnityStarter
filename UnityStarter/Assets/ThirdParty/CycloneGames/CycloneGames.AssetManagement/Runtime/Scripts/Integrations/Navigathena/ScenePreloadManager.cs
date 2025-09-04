@@ -1,4 +1,4 @@
-#if NAVIGATHENA_PRESENT && NAVIGATHENA_YOOASSET
+#if NAVIGATHENA_PRESENT && YOOASSET_PRESENT
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;

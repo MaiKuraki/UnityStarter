@@ -15,10 +15,15 @@
     "autoReferenced": true,
     "defineConstraints": [
         "NAVIGATHENA_PRESENT",
-        "NAVIGATHENA_YOOASSET",
+        "YOOASSET_PRESENT",
         "UNITASK_PRESENT"
     ],
     "versionDefines": [
+        {
+            "name": "com.cysharp.unitask",
+            "expression": "",
+            "define": "UNITASK_PRESENT"
+        },
         {
             "name": "com.mackysoft.navigathena",
             "expression": "",
@@ -27,12 +32,7 @@
         {
             "name": "com.tuyoogame.yooasset",
             "expression": "",
-            "define": "NAVIGATHENA_YOOASSET"
-        },
-        {
-            "name": "com.cysharp.unitask",
-            "expression": "",
-            "define": "UNITASK_PRESENT"
+            "define": "YOOASSET_PRESENT"
         }
     ],
     "noEngineReferences": false
