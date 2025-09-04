@@ -1,4 +1,4 @@
-#if NAVIGATHENA_PRESENT && NAVIGATHENA_YOOASSET
+#if NAVIGATHENA_PRESENT && YOOASSET_PRESENT
 using MackySoft.Navigathena.SceneManagement;
 using UnityEngine.SceneManagement;
 using CycloneGames.AssetManagement.Runtime;

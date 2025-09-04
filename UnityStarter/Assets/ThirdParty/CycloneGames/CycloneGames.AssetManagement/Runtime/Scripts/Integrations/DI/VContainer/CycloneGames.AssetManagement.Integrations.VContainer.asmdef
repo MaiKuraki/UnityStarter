@@ -14,13 +14,19 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [
-        "VCONTAINER_PRESENT"
+        "VCONTAINER_PRESENT",
+        "YOOASSET_PRESENT"
     ],
     "versionDefines": [
         {
             "name": "jp.hadashikick.vcontainer",
             "expression": "",
             "define": "VCONTAINER_PRESENT"
+        },
+        {
+            "name": "com.tuyoogame.yooasset",
+            "expression": "",
+            "define": "YOOASSET_PRESENT"
         }
     ],
     "noEngineReferences": false

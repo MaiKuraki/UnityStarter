@@ -1,3 +1,4 @@
+#if CYCLONEGAMES_FACTORY_PRESENT && YOOASSET_PRESENT
 using System;
 using CycloneGames.Factory.Runtime;
 using UnityEngine;
@@ -48,3 +49,4 @@ namespace CycloneGames.AssetManagement.Integrations.Factory
 		}
 	}
 }
+#endif
