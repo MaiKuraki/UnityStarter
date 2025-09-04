@@ -1,3 +1,4 @@
+#if ADDRESSABLES_PRESENT    //  Note: remove this macro if you use the Addressable.
 using System;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -74,3 +75,4 @@ namespace CycloneGames.UIFramework.Runtime.Samples
         public Task<CycloneGames.AssetManagement.Runtime.IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, System.Threading.CancellationToken cancellationToken = default) => Task.FromResult<CycloneGames.AssetManagement.Runtime.IDownloader>(null);
     }
 }
+#endif
