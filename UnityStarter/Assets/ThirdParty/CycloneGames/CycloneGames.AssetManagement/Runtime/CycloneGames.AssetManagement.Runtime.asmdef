@@ -2,7 +2,6 @@
     "name": "CycloneGames.AssetManagement.Runtime",
     "rootNamespace": "",
     "references": [
-        "YooAsset",
         "UniTask",
         "CycloneGames.Logger"
     ],
@@ -15,24 +14,29 @@
     "defineConstraints": [],
     "versionDefines": [
         {
-            "name": "com.mackysoft.navigathena",
-            "expression": "",
-            "define": "NAVIGATHENA_PRESENT"
-        },
-        {
             "name": "jp.hadashikick.vcontainer",
             "expression": "",
             "define": "VCONTAINER_PRESENT"
         },
         {
+            "name": "com.mackysoft.navigathena",
+            "expression": "",
+            "define": "NAVIGATHENA_PRESENT"
+        },
+        {
             "name": "com.tuyoogame.yooasset",
             "expression": "",
-            "define": "NAVIGATHENA_YOOASSET"
+            "define": "YOOASSET_PRESENT"
         },
         {
             "name": "com.harumak.addler",
             "expression": "",
             "define": "ADDLER_PRESENT"
+        },
+        {
+            "name": "com.unity.addressables",
+            "expression": "",
+            "define": "ADDRESSABLES_PRESENT"
         }
     ],
     "noEngineReferences": false
