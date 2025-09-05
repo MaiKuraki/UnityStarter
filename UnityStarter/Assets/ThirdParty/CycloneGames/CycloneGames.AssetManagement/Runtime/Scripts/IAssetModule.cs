@@ -18,7 +18,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		/// Initializes the module. Idempotent. Safe to call multiple times.
 		/// </summary>
 		/// <param name="options">Global options (time slice, concurrency, logger etc.).</param>
-		void Initialize(AssetModuleOptions options = default);
+		void Initialize(AssetManagementOptions options = default);
 
 		/// <summary>
 		/// Destroys the module and releases all resources.
@@ -131,6 +131,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		bool IsDone { get; }
 		float Progress { get; }
 		string Error { get; }
+		System.Threading.Tasks.Task Task { get; }
 		void WaitForAsyncComplete();
 	}
 
@@ -153,19 +154,20 @@ namespace CycloneGames.AssetManagement.Runtime
 	public interface ISceneHandle : IOperation
 	{
 		string ScenePath { get; }
+		Scene Scene { get; }
 	}
 
 	/// <summary>
 	/// Global configuration for the module.
 	/// </summary>
-	public readonly struct AssetModuleOptions
+	public readonly struct AssetManagementOptions
 	{
 		public readonly long OperationSystemMaxTimeSliceMs;
 		public readonly int BundleLoadingMaxConcurrency;
 		public readonly ILogger Logger;
 		public readonly bool EnableHandleTracking;
 
-		public AssetModuleOptions(long operationSystemMaxTimeSliceMs = 16, int bundleLoadingMaxConcurrency = int.MaxValue, ILogger logger = null, bool enableHandleTracking = true)
+		public AssetManagementOptions(long operationSystemMaxTimeSliceMs = 16, int bundleLoadingMaxConcurrency = int.MaxValue, ILogger logger = null, bool enableHandleTracking = true)
 		{
 			OperationSystemMaxTimeSliceMs = operationSystemMaxTimeSliceMs < 10 ? 10 : operationSystemMaxTimeSliceMs;
 			BundleLoadingMaxConcurrency = bundleLoadingMaxConcurrency;

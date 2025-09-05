@@ -1,76 +1,85 @@
-using System;
 using System.Collections.Generic;
-using CycloneGames.Logger;
+using System.Text;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-	/// <summary>
-	/// Enabled via AssetModuleOptions.EnableHandleTracking. Editor defaults to true.
-	/// </summary>
-	internal static class HandleTracker
-	{
-		private sealed class Record
-		{
-			public readonly string Descriptor;
-			public readonly string PackageName;
-			public readonly string CreationStack;
-			public Record(string descriptor, string packageName, string creationStack)
-			{
-				Descriptor = descriptor;
-				PackageName = packageName;
-				CreationStack = creationStack;
-			}
-		}
+    /// <summary>
+    /// A utility for tracking active asset handles for diagnostic purposes.
+    /// </summary>
+    public static class HandleTracker
+    {
+        public struct HandleInfo
+        {
+            public int Id;
+            public string PackageName;
+            public string Description;
+            public System.DateTime RegistrationTime;
+        }
 
-		private static readonly Dictionary<int, Record> _records = new Dictionary<int, Record>(256);
-		private static readonly object _lock = new object();
+        public static bool Enabled { get; set; }
 
-		public static bool Enabled { get; set; }
+        private static readonly Dictionary<int, HandleInfo> activeHandles = new Dictionary<int, HandleInfo>();
+        private static readonly object lockObject = new object();
 
-		public static void Register(int id, string packageName, string descriptor)
-		{
-			if (!Enabled) return;
-			string stack = null;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-			stack = Environment.StackTrace;
-#endif
-			lock (_lock)
-			{
-				_records[id] = new Record(descriptor ?? string.Empty, packageName ?? string.Empty, stack);
-			}
-		}
+        public static void Register(int id, string packageName, string description)
+        {
+            if (!Enabled) return;
 
-		public static void Unregister(int id)
-		{
-			if (!Enabled) return;
-			lock (_lock)
-			{
-				_records.Remove(id);
-			}
-		}
+            lock (lockObject)
+            {
+                var info = new HandleInfo
+                {
+                    Id = id,
+                    PackageName = packageName,
+                    Description = description,
+                    RegistrationTime = System.DateTime.UtcNow
+                };
+                activeHandles[id] = info;
+            }
+        }
 
-		public static void ReportLeaks(string packageName)
-		{
-			if (!Enabled) return;
-			List<KeyValuePair<int, Record>> leaked = null;
-			lock (_lock)
-			{
-				foreach (var kv in _records)
-				{
-					if (string.Equals(kv.Value.PackageName, packageName, StringComparison.Ordinal))
-					{
-						(leaked ??= new List<KeyValuePair<int, Record>>()).Add(kv);
-					}
-				}
-			}
-			if (leaked == null || leaked.Count == 0) return;
+        public static void Unregister(int id)
+        {
+            if (!Enabled) return;
 
-			CLogger.LogWarning($"[AssetManagement] Detected {leaked.Count} undisposed handles in package '{packageName}'.");
-			for (int i = 0; i < leaked.Count; i++)
-			{
-				var rec = leaked[i].Value;
-				CLogger.LogWarning($"[AssetManagement] Leak {i + 1}/{leaked.Count}: '{rec.Descriptor}'\nStack:{rec.CreationStack}");
-			}
-		}
-	}
+            lock (lockObject)
+            {
+                activeHandles.Remove(id);
+            }
+        }
+
+        public static List<HandleInfo> GetActiveHandles()
+        {
+            var handles = new List<HandleInfo>();
+            if (!Enabled) return handles;
+
+            lock (lockObject)
+            {
+                foreach (var kvp in activeHandles)
+                {
+                    handles.Add(kvp.Value);
+                }
+            }
+            return handles;
+        }
+
+        public static string GetActiveHandlesReport()
+        {
+            if (!Enabled) return "Handle tracking is disabled.";
+
+            var handles = GetActiveHandles();
+            if (handles.Count == 0)
+            {
+                return "No active handles.";
+            }
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"--- Active Asset Handles Report ({handles.Count}) ---");
+            foreach (var handle in handles)
+            {
+                sb.AppendLine($"[ID: {handle.Id}] [Package: {handle.PackageName}] [Time: {handle.RegistrationTime:HH:mm:ss}] - {handle.Description}");
+            }
+            return sb.ToString();
+        }
+    }
 }

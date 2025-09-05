@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.AssetManagement.Runtime.Integrations.VContainer",
+    "rootNamespace": "",
+    "references": [
+        "VContainer",
+        "CycloneGames.AssetManagement.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vcontainer",
+            "expression": "",
+            "define": "VCONTAINER_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}

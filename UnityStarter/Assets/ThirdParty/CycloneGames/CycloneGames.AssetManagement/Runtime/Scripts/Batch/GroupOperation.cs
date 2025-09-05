@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace CycloneGames.AssetManagement.Runtime.Cache
+namespace CycloneGames.AssetManagement.Runtime.Batch
 {
 	public sealed class GroupOperation : IGroupOperation
 	{
@@ -18,10 +18,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 		private float _totalWeight;
 		private bool _canceled;
 		private string _error;
+		private readonly TaskCompletionSource<object> _tcs = new TaskCompletionSource<object>();
 
 		public bool IsDone { get; private set; }
 		public float Progress { get; private set; }
 		public string Error => _error;
+		public Task Task => _tcs.Task;
 		public IReadOnlyList<IOperation> Items
 		{
 			get
@@ -58,6 +60,18 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 				Progress = Math.Min(1f, _totalWeight <= 0f ? 1f : accWeight / _totalWeight);
 			}
 			IsDone = true;
+			if (!string.IsNullOrEmpty(_error))
+			{
+				_tcs.TrySetException(new Exception(_error));
+			}
+			else if (_canceled)
+			{
+				_tcs.TrySetCanceled();
+			}
+			else
+			{
+				_tcs.TrySetResult(null);
+			}
 		}
 
 		public void Cancel() { _canceled = true; }
