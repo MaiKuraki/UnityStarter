@@ -115,7 +115,7 @@ ISceneIdentifier id = new AssetManagementSceneIdentifier(pkg, "Assets/Scenes/Mai
 await GlobalSceneNavigator.Instance.Push(id);
 ```
 
-## 用户确认的更新流程（推荐）
+## 用户确认的更新流程
 
 模块支持“检查 → 用户确认 → 执行更新”的交互流程。
 
@@ -155,27 +155,13 @@ module.Initialize(new AssetManagementOptions(
   operationSystemMaxTimeSliceMs: 16,
   bundleLoadingMaxConcurrency: 8,
   logger: null,
-  enableHandleTracking: true // 编辑器/开发版建议开启，正式可关闭
+  enableHandleTracking: true // 编辑器监控
 ));
-```
-
-## Factory 集成
-
-- Prefab 工厂示例：
-
-```csharp
-using CycloneGames.AssetManagement.Integrations.Factory;
-
-var factory = new YooAssetPrefabFactory<MyMono>(pkg, "Assets/Prefabs/My.prefab");
-var instance = factory.Create();
-factory.Dispose();
 ```
 
 ## 脚本定义符号
 
-本包使用程序集定义文件（`.asmdef`）来根据项目中存在的其他包自动定义符号。这使得可选的集成功能在缺少依赖项时不会引发编译错误。
-
-以下是内部定义和使用的宏：
+本包使用程序集定义文件（`.asmdef`）来根据项目中存在的其他包自动定义宏。
 
 - `YOOASSET_PRESENT`: 当安装了 `com.tuyoogame.yooasset` 时定义。启用 YooAsset 提供器。
 - `ADDRESSABLES_PRESENT`: 当安装了 `com.unity.addressables` 时定义。启用 Addressables 提供器。
@@ -249,6 +235,9 @@ using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/M
     }
 }
 ```
+
+> [!NOTE]
+> 某些功能（例如软件包版本控制和预下载）是 YooAsset 特有的，在 Addressables 适配器中没有直接对应的功能。
 
 ## 其他用法
 
