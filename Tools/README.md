@@ -8,12 +8,12 @@ This repository contains a collection of utility scripts designed to streamline 
 
 | Script                       | Description                                                                                                |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `audio_volume_normalizer.go` | Batch normalizes audio files to a standard loudness level (-16 LUFS) using FFmpeg.                         |
-| `generate_file_tree.go`      | Generates a Markdown file representing the directory structure, with support for blacklists and whitelists.  |
-| `image_to_base64.go`         | Converts an image file to a Base64 string, copies it to the clipboard, and saves it to a text file.        |
-| `remove_unity_packages.go`   | Cleans up a Unity project's `Packages/manifest.json` by removing a predefined list of non-essential packages. |
-| `rename_project.go`          | Renames a Unity project, updating the project folder, company name, and application name in relevant files. |
-| `unity_project_full_clean.go`| Performs a deep clean of a Unity project, removing temporary files, caches, and build artifacts.           |
+| [`audio_volume_normalizer.go`](./Scripts/audio_volume_normalizer/) | Batch normalizes audio files to a standard loudness level (-16 LUFS) using FFmpeg.                         |
+| [`generate_file_tree.go`](./Scripts/generate_file_tree/)      | Generates a Markdown file representing the directory structure, with support for blacklists and whitelists.  |
+| [`image_to_base64.go`](./Scripts/image_to_base64/)         | Converts an image file to a Base64 string, copies it to the clipboard, and saves it to a text file.        |
+| [`remove_unity_packages.go`](./Scripts/remove_unity_packages/)   | Cleans up a Unity project's `Packages/manifest.json` by removing a predefined list of non-essential packages. |
+| [`rename_project.go`](./Scripts/rename_project/)          | Renames a Unity project, updating the project folder, company name, and application name in relevant files. |
+| [`unity_project_full_clean.go`](./Scripts/unity_project_full_clean/)| Performs a deep clean of a Unity project, removing temporary files, caches, and build artifacts.           |
 
 ---
 
