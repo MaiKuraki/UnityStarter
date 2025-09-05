@@ -8,16 +8,16 @@
 
 | 脚本文件                   | 功能描述                                                                                             |
 | -------------------------- | ---------------------------------------------------------------------------------------------------- |
-| [`audio_volume_normalizer.go`](./Scripts/audio_volume_normalizer/) | 使用 FFmpeg 将音频文件批量标准化到标准响度水平 (-16 LUFS)。                                           |
-| [`generate_file_tree.go`](./Scripts/generate_file_tree/)      | 生成表示目录结构的 Markdown 文件，支持黑名单和白名单过滤。                                           |
-| [`image_to_base64.go`](./Scripts/image_to_base64/)         | 将图像文件转换为 Base64 字符串，复制到剪贴板，并保存到文本文件中。                                   |
-| [`remove_unity_packages.go`](./Scripts/remove_unity_packages/)   | 通过移除预定义的非必要包来清理 Unity 项目的 `Packages/manifest.json` 文件。                          |
-| [`rename_project.go`](./Scripts/rename_project/)          | 重命名 Unity 项目，自动更新相关文件中的项目文件夹、公司名称和应用名称。                              |
-| [`unity_project_full_clean.go`](./Scripts/unity_project_full_clean/)| 对 Unity 项目进行深度清理，删除临时文件、缓存和构建产物。                                            |
+| [`audio_volume_normalizer.go`](./Scripts/audio_volume_normalizer.go) | 使用 FFmpeg 将音频文件批量标准化到标准响度水平 (-16 LUFS)。                                           |
+| [`generate_file_tree.go`](./Scripts/generate_file_tree.go)      | 生成表示目录结构的 Markdown 文件，支持黑名单和白名单过滤。                                           |
+| [`image_to_base64.go`](./Scripts/image_to_base64.go)         | 将图像文件转换为 Base64 字符串，复制到剪贴板，并保存到文本文件中。                                   |
+| [`remove_unity_packages.go`](./Scripts/remove_unity_packages.go)   | 通过移除预定义的非必要包来清理 Unity 项目的 `Packages/manifest.json` 文件。                          |
+| [`rename_project.go`](./Scripts/rename_project.go)          | 重命名 Unity 项目，自动更新相关文件中的项目文件夹、公司名称和应用名称。                              |
+| [`unity_project_full_clean.go`](./Scripts/unity_project_full_clean.go)| 对 Unity 项目进行深度清理，删除临时文件、缓存和构建产物。                                            |
 
 ---
 
-### 1. 音频响度标准化工具 (Audio Volume Normalizer)
+### 1. 音频响度标准化工具 (Audio Volume Normalizer) `audio_volume_normalizer.go`
 
 该工具用于批量标准化音频文件，以确保响度一致。它使用双通道 FFmpeg 处理流程，目标是达到 **-16.0 LUFS** 的响度和 **-1.5 dBTP** 的真实峰值。
 
@@ -37,7 +37,7 @@
 
 ---
 
-### 2. 目录树生成器 (Generate File Tree)
+### 2. 目录树生成器 (Generate File Tree) `generate_file_tree.go`
 
 此脚本会生成一个名为 `directory_structure.md` 的文件，用于可视化当前位置的目录结构。
 
@@ -53,7 +53,7 @@
 
 ---
 
-### 3. 图像转 Base64 (Image to Base64)
+### 3. 图像转 Base64 (Image to Base64) `image_to_base64.go`
 
 一个将图像转换为 Base64 编码字符串的简单工具。
 
@@ -70,7 +70,7 @@
 
 ---
 
-### 4. 移除 Unity 包 (Remove Unity Packages)
+### 4. 移除 Unity 包 (Remove Unity Packages) `remove_unity_packages.go`
 
 此脚本通过从 `Packages/manifest.json` 文件中移除一系列可能非必需的包来精简 Unity 项目，非常适合用于创建最小化的项目模板。
 
@@ -86,9 +86,9 @@
 
 ---
 
-### 5. 项目重命名 (Rename Project)
+### 5. 项目重命名 (Rename Project) `rename_project.go`
 
-一个功能强大的脚本，用于重命名 Unity 项目。它能自动完成更新项目文件夹名称、公司名称和应用名称等一系列繁琐操作。
+一个功能强大的脚本，用于重命名本代码库中的 Unity 项目。它能自动完成更新 `UnityStarter` 项目 Build 脚本关联的项目文件夹名称、公司名称, 和应用名称等一系列繁琐操作。
 
 **功能特性:**
 - 自动检测 Unity 项目根目录。
@@ -102,7 +102,7 @@
 
 ---
 
-### 6. Unity 项目完全清理 (Unity Project Full Clean)
+### 6. Unity 项目完全清理 (Unity Project Full Clean) `unity_project_full_clean.go`
 
 该工具对 Unity 项目目录执行彻底清理，移除可安全删除的临时文件、缓存和其他生成内容。这对于版本控制、项目归档或解决疑难问题非常有用。
 

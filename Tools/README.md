@@ -8,16 +8,16 @@ This repository contains a collection of utility scripts designed to streamline 
 
 | Script                       | Description                                                                                                |
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| [`audio_volume_normalizer.go`](./Scripts/audio_volume_normalizer/) | Batch normalizes audio files to a standard loudness level (-16 LUFS) using FFmpeg.                         |
-| [`generate_file_tree.go`](./Scripts/generate_file_tree/)      | Generates a Markdown file representing the directory structure, with support for blacklists and whitelists.  |
-| [`image_to_base64.go`](./Scripts/image_to_base64/)         | Converts an image file to a Base64 string, copies it to the clipboard, and saves it to a text file.        |
-| [`remove_unity_packages.go`](./Scripts/remove_unity_packages/)   | Cleans up a Unity project's `Packages/manifest.json` by removing a predefined list of non-essential packages. |
-| [`rename_project.go`](./Scripts/rename_project/)          | Renames a Unity project, updating the project folder, company name, and application name in relevant files. |
-| [`unity_project_full_clean.go`](./Scripts/unity_project_full_clean/)| Performs a deep clean of a Unity project, removing temporary files, caches, and build artifacts.           |
+| [`audio_volume_normalizer.go`](./Scripts/audio_volume_normalizer.go) | Batch normalizes audio files to a standard loudness level (-16 LUFS) using FFmpeg.                         |
+| [`generate_file_tree.go`](./Scripts/generate_file_tree.go)      | Generates a Markdown file representing the directory structure, with support for blacklists and whitelists.  |
+| [`image_to_base64.go`](./Scripts/image_to_base64.go)         | Converts an image file to a Base64 string, copies it to the clipboard, and saves it to a text file.        |
+| [`remove_unity_packages.go`](./Scripts/remove_unity_packages.go)   | Cleans up a Unity project's `Packages/manifest.json` by removing a predefined list of non-essential packages. |
+| [`rename_project.go`](./Scripts/rename_project.go)          | Renames a Unity project, updating the project folder, company name, and application name in relevant files. |
+| [`unity_project_full_clean.go`](./Scripts/unity_project_full_clean.go)| Performs a deep clean of a Unity project, removing temporary files, caches, and build artifacts.           |
 
 ---
 
-### 1. Audio Volume Normalizer
+### 1. Audio Volume Normalizer `audio_volume_normalizer.go`
 
 A tool for batch-normalizing audio files to ensure consistent loudness. It uses a two-pass FFmpeg process to achieve a target of **-16.0 LUFS** and **-1.5 dBTP** (True Peak).
 
@@ -37,7 +37,7 @@ A tool for batch-normalizing audio files to ensure consistent loudness. It uses 
 
 ---
 
-### 2. Generate File Tree
+### 2. Generate File Tree `generate_file_tree.go`
 
 This script generates a `directory_structure.md` file that visualizes the directory tree of the current location.
 
@@ -53,7 +53,7 @@ This script generates a `directory_structure.md` file that visualizes the direct
 
 ---
 
-### 3. Image to Base64
+### 3. Image to Base64 `image_to_base64.go`
 
 A simple utility to convert an image into a Base64 encoded string.
 
@@ -70,7 +70,7 @@ A simple utility to convert an image into a Base64 encoded string.
 
 ---
 
-### 4. Remove Unity Packages
+### 4. Remove Unity Packages `remove_unity_packages.go`
 
 This script helps slim down a Unity project by removing a list of potentially unnecessary packages from the `Packages/manifest.json` file. This is useful for creating a minimal project template.
 
@@ -86,9 +86,9 @@ This script helps slim down a Unity project by removing a list of potentially un
 
 ---
 
-### 5. Rename Project
+### 5. Rename Project `rename_project.go`
 
-A powerful script to rename a Unity project. It automates the process of updating the project folder name, company name, and application name across multiple configuration files.
+A powerful script to rename the UnityStarter project. It automates the process of updating the project folder name, company name, and application name across multiple configuration files for the Build script.
 
 **Features:**
 - Automatically detects the Unity project root.
@@ -102,7 +102,7 @@ A powerful script to rename a Unity project. It automates the process of updatin
 
 ---
 
-### 6. Unity Project Full Clean
+### 6. Unity Project Full Clean `unity_project_full_clean.go`
 
 This tool performs a thorough cleaning of a Unity project directory, removing temporary files, caches, and other generated content that can be safely deleted. This is useful for version control, archiving, or troubleshooting.
 

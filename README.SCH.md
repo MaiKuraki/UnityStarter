@@ -129,7 +129,7 @@
 - **Unity 2022.3+**
 - **异步编程**: [UniTask](https://github.com/Cysharp/UniTask)
 - **响应式编程**: [R3](https://github.com/Cysharp/R3) (前身为 UniRx)
-- **动画/缓动**: [LitMotion](https://github.com/Cysharp/LitMotion)
+- **动画/缓动**: [LitMotion](https://github.com/annulusgames/LitMotion)
 - **序列化**: [VYaml](https://github.com/hadashiA/VYaml) 用于 YAML 配置
 - **消息总线**: [VitalRouter](https://github.com/hadashiA/VitalRouter)
 - **资源管理**: [YooAsset](https://github.com/tuyoogame/YooAsset)
