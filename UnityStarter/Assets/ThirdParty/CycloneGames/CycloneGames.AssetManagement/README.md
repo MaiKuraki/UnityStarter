@@ -9,7 +9,7 @@ A DI-first, interface-driven, unified asset management abstraction layer for Uni
 - Unity 2022.3+
 - Optional: `com.tuyoogame.yooasset`
 - Optional: `com.unity.addressables`
-- Optional: `com.cysharp.unitask`, `jp.hadashikick.vcontainer`, `com.mackysoft.navigathena`, `com.cyclonegames.factory`, `com.cyclone-games.logger`, `com.harumak.addler`
+- Optional: `com.cysharp.unitask`, `jp.hadashikick.vcontainer`, `com.mackysoft.navigathena`, `com.cyclonegames.factory`, `com.cyclone-games.logger`
 
 ## Quick Start
 
@@ -127,11 +127,6 @@ IAssetPackage pkg = assetModule.GetPackage("DefaultPackage");
 ISceneIdentifier id = new AssetManagementSceneIdentifier(pkg, "Assets/Scenes/Main.unity", LoadSceneMode.Additive, true);
 await GlobalSceneNavigator.Instance.Push(id);
 ```
-
-## Addressables + YooAsset Coexistence (Short Notes)
-
-- Coexistence is supported. Keep Addressables keys equal to YooAsset locations to switch identifiers at runtime.
-- Choose Addressables or YooAsset identifiers by config; no extra setup is required here.
 
 ## User-confirmed Update Flow (recommended UX)
 
@@ -279,7 +274,7 @@ Notes:
 
 - You can inherit `AssetManagementVContainerInstaller` and override parameter creation per scene.
 
-## Provider Example: Using the YooAsset Adapter
+## YooAsset Adapter
 
 If you have `com.tuyoogame.yooasset` in your project, you can use the provided adapter for a powerful, production-ready asset solution. The setup is similar to the original Quick Start.
 
@@ -309,7 +304,7 @@ using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/M
 ```
 For details on updating, downloading, and scene management with the YooAsset provider, please refer to the corresponding sections in this document.
 
-## Provider Example: Using the Addressables Adapter
+## Addressables Adapter
 
 If you have `com.unity.addressables` in your project, you can use the provided adapter for it. The setup is straightforward.
 
@@ -367,38 +362,3 @@ agg.Add(groupOp1, 2f);
 agg.Add(groupOp2, 1f);
 var p = agg.GetProgress(); // 0..1
 ```
-
-## Addler Integration (Recommended for Lifetime Management)
-
-While the `AssetManagement` package provides the necessary tools for memory management (via `IDisposable` handles), manually managing the lifetime of every handle in a large project can be error-prone. `Addler` is a higher-level framework that automates handle lifetime management and pooling.
-
-Our package provides a seamless integration with Addler.
-
-### How to Register
-
-During your application's bootstrap phase, after initializing the `AssetManagement` module, you can create an instance of our `AssetManagementAssetLoader` and register it with Addler's `AssetProvider`.
-
-```csharp
-using Addler.Runtime.Core;
-using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.AssetManagement.Runtime.Integrations.Addler;
-
-// 1. Initialize your IAssetModule as usual
-IAssetModule assetModule = new YooAssetModule(); // or AddressableAssetModule
-assetModule.Initialize(new AssetManagementOptions());
-IAssetPackage defaultPackage = assetModule.CreatePackage("DefaultPackage");
-// ... initialize the package
-
-// 2. Create our custom asset loader, backed by our IAssetPackage
-var assetLoader = new AssetManagementAssetLoader(defaultPackage);
-
-// 3. Set this loader as the default for Addler
-AssetProvider.Setup(assetLoader);
-
-// 4. Now, you can use Addler to load assets, and it will use our system underneath
-var playerHandle = await AssetProvider.LoadAssetAsync<GameObject>("player_prefab_key");
-// ... use the asset
-// Addler will automatically manage the release of the underlying handle when it's no longer needed.
-```
-
-By using this setup, you gain the benefits of Addler's automated memory management while still using our flexible, provider-agnostic asset loading backend.

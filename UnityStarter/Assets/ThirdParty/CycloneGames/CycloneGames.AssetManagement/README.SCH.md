@@ -7,9 +7,9 @@
 ## 依赖与环境
 
 - Unity 2022.3+
-- 可选：`com.tuyoogame.yooasset`
-- 可选：`com.unity.addressables`
-- 可选：`com.cysharp.unitask`、`jp.hadashikick.vcontainer`、`com.mackysoft.navigathena`、`com.cyclonegames.factory`、`com.cyclone-games.logger`、`com.harumak.addler`
+- 可选: `com.tuyoogame.yooasset`
+- 可选: `com.unity.addressables`
+- 可选: `com.cysharp.unitask`, `jp.hadashikick.vcontainer`, `com.mackysoft.navigathena`, `com.cyclonegames.factory`, `com.cyclone-games.logger`
 
 ## 快速上手
 
@@ -20,7 +20,7 @@ using CycloneGames.AssetManagement;
 using UnityEngine;
 using System.Threading.Tasks;
 
-// 假设您已编写了一个用于 Resources 系统的 'ResourcesModule'。
+// 假设您已编写了一个用于 Resources 系统的 'ResourcesModule'(可能是 Resources.Load / Addressable / YooAsset)。
 // 一个最小化的实现可能如下所示：
 async Task LoadMyPlayer()
 {
@@ -29,10 +29,9 @@ async Task LoadMyPlayer()
 
     var pkg = module.CreatePackage("MyResources");
 
-    // 无论后端是什么，API 调用都是一样的！
     using (var handle = pkg.LoadAssetAsync<GameObject>("Prefabs/MyPlayer"))
     {
-        // 在真实项目中，您应该异步等待此操作。
+        // 在实际项目中，推荐使用 UniTask 异步等待
         while (!handle.IsDone)
         {
             await Task.Yield(); // 或者在协程中 yield return null
@@ -99,10 +98,6 @@ scene.WaitForAsyncComplete();
 await pkg.UnloadSceneAsync(scene);
 ```
 
-说明：
-
-- 现已支持 `activateOnLoad`，该参数会映射到 YooAsset 的 `suspendLoad`（当 `activateOnLoad == false` 时挂起激活），需要时可在加载完成后通过 YooAsset API 手动激活。
-
 ## 集成 Navigathena（可选）
 
 要将 Navigathena 与本资源管理系统支持的场景一起使用，请使用与提供者无关的 `AssetManagementSceneIdentifier`。无论您底层使用的是 YooAsset 还是 Addressables，它都可以正常工作。
@@ -119,13 +114,6 @@ IAssetPackage pkg = assetModule.GetPackage("DefaultPackage");
 ISceneIdentifier id = new AssetManagementSceneIdentifier(pkg, "Assets/Scenes/Main.unity", LoadSceneMode.Additive, true);
 await GlobalSceneNavigator.Instance.Push(id);
 ```
-
-## Addressables 与 YooAsset 共存（简要）
-
-- 支持共存。建议保持 Addressables Key 与 YooAsset Location 一致，便于运行时按配置切换标识符。
-- 实现细节由业务自行决定，本模块无需额外设置。
-
-<!-- This section is now covered by the generic AssetManagementSceneIdentifier example -->
 
 ## 用户确认的更新流程（推荐）
 
@@ -151,9 +139,6 @@ if (switched) { currentVersion = latest; /* 持久化保存 */ }
 // 可选：清理旧缓存
 // await pkg.ClearCacheFilesAsync(clearMode: "All");
 ```
-
-- 若只更新部分内容，可用标签或路径下载器替代全量预下载。
-- 处理取消：捕获 `OperationCanceledException`，保留旧清单不切换。
 
 ## 额外选项
 
@@ -190,89 +175,30 @@ factory.Dispose();
 
 本包使用程序集定义文件（`.asmdef`）来根据项目中存在的其他包自动定义符号。这使得可选的集成功能在缺少依赖项时不会引发编译错误。
 
-以下是内部定义和使用的符号：
+以下是内部定义和使用的宏：
 
 - `YOOASSET_PRESENT`: 当安装了 `com.tuyoogame.yooasset` 时定义。启用 YooAsset 提供器。
 - `ADDRESSABLES_PRESENT`: 当安装了 `com.unity.addressables` 时定义。启用 Addressables 提供器。
 - `VCONTAINER_PRESENT`: 当安装了 `jp.hadashikick.vcontainer` 时定义。启用 VContainer 集成。
 - `NAVIGATHENA_PRESENT`: 当安装了 `com.mackysoft.navigathena` 时定义。启用 Navigathena 集成。
 
-通常您不需要直接与这些符号交互。
-
-## Addler 集成 (推荐用于生命周期管理)
-
-尽管 `AssetManagement` 包提供了内存管理所需的必要工具（通过 `IDisposable` 句柄），但在大型项目中手动管理每个句柄的生命周期很容易出错。`Addler` 是一个更高级别的框架，可以自动化句柄的生命周期管理和对象池化。
-
-我们的包提供了与 Addler 的无缝集成。
-
-### 如何注册
-
-在您的应用程序启动阶段，初始化 `AssetManagement` 模块后，您可以创建我们的 `AssetManagementAssetLoader` 实例，并将其注册到 Addler 的 `AssetProvider` 中。
-
-```csharp
-using Addler.Runtime.Core;
-using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.AssetManagement.Runtime.Integrations.Addler;
-
-// 1. 像往常一样初始化您的 IAssetModule
-IAssetModule assetModule = new YooAssetModule(); // 或 AddressableAssetModule
-assetModule.Initialize(new AssetManagementOptions());
-IAssetPackage defaultPackage = assetModule.CreatePackage("DefaultPackage");
-// ... 初始化资源包
-
-// 2. 创建我们的自定义资源加载器，由 IAssetPackage 支持
-var assetLoader = new AssetManagementAssetLoader(defaultPackage);
-
-// 3. 将此加载器设置为 Addler 的默认加载器
-AssetProvider.Setup(assetLoader);
-
-// 4. 现在，您可以使用 Addler 来加载资源，它将在底层使用我们的系统
-var playerHandle = await AssetProvider.LoadAssetAsync<GameObject>("player_prefab_key");
-// ... 使用资源
-// 当资源不再需要时，Addler 将自动管理底层句柄的释放。
-```
-
-通过这种设置，您可以获得 Addler 自动化内存管理的好处，同时仍然使用我们灵活的、与提供者无关的资源加载后端。
+通常您不需要直接与这些宏交互。
 
 ## 场景预热（可选）
 
+预热每个场景的内容，以减少场景切换期间的峰值。
+
 ### 设置
 
-1) 创建一个或多个 `PreloadManifest` 资源（记录 location + weight）
-2) 创建 `ScenePreloadRegistry`，将 `sceneKey`（可用场景 location/name）映射到一组 manifests
-3) 启动时设置 `NavigathenaYooSceneFactory.DefaultPackage = pkg`
-4) 在 `NavigathenaNetworkManager`（来自 NavigathenaMirror）上指定 `scenePreloadRegistry`
-5) 确保已安装 Navigathena 与 YooAsset；宏由 asmdef 自动注入
+1) 创建一个或多个 `PreloadManifest` 资产（位置+权重）
+2) 创建一个 `ScenePreloadRegistry` 资产，将 `sceneKey` 映射到清单列表
+3) 在启动时设置 `DefaultPackage`
+4) 在 `NavigathenaNetworkManager` 中，分配 `scenePreloadRegistry`
+5) 确保已安装 Navigathena 和 YooAsset
 
-### Mirror + Navigathena 流程
+## 使用 YooAsset 适配器
 
-- 服务器：
-  - 通知客户端前，调用 `_preloadManager.OnBeforeLoadSceneAsync(sceneKey)`
-  - 发送场景消息给客户端
-  - 通过 Navigathena 加载场景，然后调用 `_preloadManager.OnAfterLoadScene(sceneKey)`
-- 客户端：
-  - 收到场景消息后，依次执行 `OnBeforeLoadSceneAsync(sceneKey)` → Navigathena Replace → `OnAfterLoadScene(sceneKey)`
-
-### 手动使用（非网络）
-
-```csharp
-using CycloneGames.AssetManagement.Integrations.Navigathena;
-using CycloneGames.AssetManagement.Preload;
-
-var registry = /* 加载 ScenePreloadRegistry */;
-var preload = new ScenePreloadManager(pkg, registry);
-await preload.OnBeforeLoadSceneAsync("Assets/Scenes/Main.unity");
-// ... 通过 Navigathena 切换场景
-preload.OnAfterLoadScene("Assets/Scenes/Main.unity");
-```
-
-### 说明
-
-- 关于 PreloadManifest 条目的进度计算与行为，请参见 `PreloadManifest` 源码中的中英注释与 Tooltip。
-
-## 提供器示例：使用 YooAsset 适配器
-
-如果您的项目中已包含 `com.tuyoogame.yooasset`，则可以直接使用内置的适配器，它提供了一套功能强大、生产环境可用的资源解决方案。其设置与旧版的快速上手类似。
+如果您的项目中已包含 `com.tuyoogame.yooasset`，则可以直接使用内置的适配器。
 
 ```csharp
 using CycloneGames.AssetManagement;
@@ -295,14 +221,13 @@ await pkg.InitializeAsync(new AssetPackageInitOptions(AssetPlayMode.Host, hostPa
 using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/My.prefab"))
 {
     handle.WaitForAsyncComplete();
-    var go = pkg.InstantiateSync(handle); // 注意: InstantiateSync 是 YooAsset 适配器特有的扩展方法
+    var go = pkg.InstantiateSync(handle);
 }
 ```
-关于使用 YooAsset 提供器进行更新、下载和场景管理的详细信息，请参阅本文档中的相应章节。
 
-## 提供器示例：使用 Addressables 适配器
+## 使用 Addressables 适配器
 
-如果您的项目中已包含 `com.unity.addressables`，则可以直接使用为其提供的适配器。设置过程非常简单。
+如果您的项目中已包含 `com.unity.addressables`，则可以直接使用为其提供的适配器。
 
 ```csharp
 using CycloneGames.AssetManagement;
@@ -311,32 +236,26 @@ using CycloneGames.AssetManagement;
 IAssetModule module = new AddressableAssetModule();
 module.Initialize(new AssetManagementOptions());
 
-// 2) 创建一个资源包（包名是逻辑上的，不影响 Addressables 的分组）
+// 2) 创建一个资源包
 var pkg = module.CreatePackage("Default");
 
 // 3) 使用统一 API 加载资源
 using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/MyCharacter.prefab"))
 {
-    // 在真实项目中，您应该异步等待此操作。
-    while (!handle.IsDone)
-    {
-        await System.Threading.Tasks.Task.Yield(); // 或者在协程中 yield return null
-    }
-    
+    await handle.Task;
     if (handle.Asset)
     {
         var go = UnityEngine.Object.Instantiate(handle.Asset);
     }
 }
 ```
-请注意，某些功能（如包版本控制和预下载）是 YooAsset 特有的，在 Addressables 适配器中没有直接的对应实现。
 
 ## 其他用法
 
 ### 缓存
 
 ```csharp
-var cache = new CycloneGames.AssetManagement.Cache.AssetCacheService(pkg, maxEntries: 128);
+var cache = new CycloneGames.AssetManagement.Runtime.Cache.AssetCacheService(pkg, maxEntries: 128);
 var icon = cache.Get<Sprite>("Assets/Art/UI/Icons/Abilities/Fireball.png");
 cache.TryRelease("Assets/Art/UI/Icons/Abilities/Fireball.png");
 ```
@@ -344,7 +263,7 @@ cache.TryRelease("Assets/Art/UI/Icons/Abilities/Fireball.png");
 ### 重试
 
 ```csharp
-using CycloneGames.AssetManagement.Retry;
+using CycloneGames.AssetManagement.Runtime.Retry;
 var policy = new RetryPolicy(3, 0.5, 2.0);
 var handle = await pkg.LoadAssetWithRetryAsync<Sprite>("Assets/Art/.../Icon.png", policy, ct);
 ```
@@ -352,9 +271,8 @@ var handle = await pkg.LoadAssetWithRetryAsync<Sprite>("Assets/Art/.../Icon.png"
 ### 进度
 
 ```csharp
-using CycloneGames.AssetManagement.Progressing;
+using CycloneGames.AssetManagement.Runtime.Progressing;
 var agg = new ProgressAggregator();
 agg.Add(groupOp1, 2f);
 agg.Add(groupOp2, 1f);
 var p = agg.GetProgress(); // 0..1
-```
