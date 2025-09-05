@@ -1,5 +1,7 @@
 # Unity Starter Tools
 
+<p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
+
 This repository contains a collection of utility scripts designed to streamline common tasks in Unity development and general project management. Each script is a standalone Go program.
 
 ## Scripts Overview
