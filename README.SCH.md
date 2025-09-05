@@ -154,7 +154,7 @@
 
 -   **运行时版本信息**：每次构建前，脚本会捕获当前的 Git 提交哈希、提交总数和构建日期，并将这些信息保存到 `VersionInfoData` ScriptableObject（位于 `Assets/UnityStarter/Scripts/Build/VersionInfoData.cs`）。这使您可以在应用程序内轻松显示详细的构建信息，便于调试和技术支持。
 
--   **CI/CD 就绪**：所有构建方法都可以通过命令行触发，从而轻松与 Jenkins、GitHub Actions 或 Unity Cloud Build 等 CI/CD 系统集成。
+-   **CI/CD 就绪**：所有构建方法都可以通过命令行触发，从而轻松与 Jenkins、TeamCity 等 CI/CD 系统集成。
 
 ## 基于此项目的其他开源项目
 
