@@ -151,7 +151,7 @@ This template is designed for automated builds and seamless integration with CI/
 
 -   **Runtime Version Information**: Before each build, the script captures the current Git commit hash, commit count, and build date, and saves this information into a `VersionInfoData` ScriptableObject (`Assets/UnityStarter/Scripts/Build/VersionInfoData.cs`). This allows you to easily display detailed build information within your application for debugging and support purposes.
 
--   **CI/CD Ready**: The build methods can be triggered from the command line, making it straightforward to integrate with CI/CD systems like Jenkins, GitHub Actions, or Unity Cloud Build.
+-   **CI/CD Ready**: The build methods can be triggered from the command line, making it straightforward to integrate with CI/CD systems like Jenkins, TeamCity.
 
 ---
 
