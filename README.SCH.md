@@ -69,6 +69,9 @@
 ### 🌐 网络
 - **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - 网络抽象层，提供 [Mirror](https://github.com/MirrorNetworking/Mirror) 适配器。为传输、序列化和技能系统集成提供接口。
 
+### 🧰 工具
+- **[Tools](Tools)** - 一系列实用工具脚本，旨在简化 Unity 开发和常规项目管理中的常见任务。
+
 ## 项目结构说明
 项目主要源码位于 `UnityStarter/Assets/ThirdParty/` 目录下。采用 **Unity Package** 形式开发，分离 asmdef 设计，可轻易的选择移除不需要的包。
 
@@ -123,6 +126,18 @@
 - **线程安全设计**: Logger 和 Factory 模块专为多线程操作设计
 - **零/低 GC**: 性能优化，最小垃圾回收
 - **跨平台**: 支持桌面、移动和 WebGL 部署
+
+## 🚀 构建与 CI/CD
+
+此模板专为自动化构建和与 CI/CD 流水线无缝集成而设计。
+
+-   **自动化构建脚本**：项目在 `Assets/Editor/BuildScript.cs` 中包含一个强大的构建脚本。它在 Unity 编辑器中提供菜单项，支持一键为多个平台（Windows、Mac、Android、WebGL）进行构建。
+
+-   **自动版本控制**：构建版本号会根据 Git 的提交次数自动生成。版本号格式为 `vX.Y.CommitCount`（例如 `v0.1.123`），确保每个构建版本都有唯一且可追溯的标识。
+
+-   **运行时版本信息**：每次构建前，脚本会捕获当前的 Git 提交哈希、提交总数和构建日期，并将这些信息保存到 `VersionInfoData` ScriptableObject（位于 `Assets/UnityStarter/Scripts/Build/VersionInfoData.cs`）。这使您可以在应用程序内轻松显示详细的构建信息，便于调试和技术支持。
+
+-   **CI/CD 就绪**：所有构建方法都可以通过命令行触发，从而轻松与 Jenkins、GitHub Actions 或 Unity Cloud Build 等 CI/CD 系统集成。
 
 ## 基于此项目的其他开源项目
 

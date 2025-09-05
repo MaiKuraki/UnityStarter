@@ -67,6 +67,9 @@ If you only need specific modules for your project, you have two options:
 ### 🌐 Networking
 - **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - Networking abstraction layer with [Mirror](https://github.com/MirrorNetworking/Mirror) adapter. Provides interfaces for transport, serialization, and ability system integration.
 
+### 🧰 Tools
+- **[Tools](Tools)** - A collection of utility scripts designed to streamline common tasks in Unity development and general project management.
+
 ## Project Structure
 The main source code for the modules is located in the `UnityStarter/Assets/ThirdParty/` directory. The project is developed using a Unity Package-based approach with separated Assembly Definitions (asmdef), which allows for easy removal of unwanted modules and ensures a clear separation of concerns.
 
@@ -121,6 +124,18 @@ The main source code for the modules is located in the `UnityStarter/Assets/Thir
 - **Thread-Safe Design**: Logger and Factory modules designed for multi-threaded operations
 - **Zero/Low-GC**: Performance-optimized with minimal garbage collection
 - **Cross-Platform**: Supports desktop, mobile, and WebGL deployment
+
+## 🚀 Build & CI/CD
+
+This template is designed for automated builds and seamless integration with CI/CD pipelines.
+
+-   **Automated Build Scripts**: The project includes a powerful build script located at `Assets/Editor/BuildScript.cs`. It provides menu items in the Unity Editor for one-click builds for multiple platforms (Windows, Mac, Android, WebGL).
+
+-   **Automatic Versioning**: Builds are automatically versioned using the Git commit count. The version number is formatted as `vX.Y.CommitCount` (e.g., `v0.1.123`), ensuring every build has a unique and traceable version.
+
+-   **Runtime Version Information**: Before each build, the script captures the current Git commit hash, commit count, and build date, and saves this information into a `VersionInfoData` ScriptableObject (`Assets/UnityStarter/Scripts/Build/VersionInfoData.cs`). This allows you to easily display detailed build information within your application for debugging and support purposes.
+
+-   **CI/CD Ready**: The build methods can be triggered from the command line, making it straightforward to integrate with CI/CD systems like Jenkins, GitHub Actions, or Unity Cloud Build.
 
 ## Other Open Source Projects Based on This Project
 - [x] [Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse)
