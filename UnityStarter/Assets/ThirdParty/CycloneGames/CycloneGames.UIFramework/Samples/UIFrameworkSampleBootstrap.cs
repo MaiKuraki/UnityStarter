@@ -2,7 +2,6 @@ using UnityEngine;
 using CycloneGames.Factory.Runtime;
 using CycloneGames.Service.Runtime;
 using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.AssetManagement.Runtime.Integrations.Common;
 
 namespace CycloneGames.UIFramework.Runtime.Samples
 {

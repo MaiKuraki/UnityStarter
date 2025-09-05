@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.AssetManagement.Runtime.Integrations.Navigathena",
+    "rootNamespace": "",
+    "references": [
+        "UniTask",
+        "MackySoft.Navigathena",
+        "MackySoft.Navigathena.SceneManagement",
+        "CycloneGames.AssetManagement.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.mackysoft.navigathena",
+            "expression": "",
+            "define": "NAVIGATHENA_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}

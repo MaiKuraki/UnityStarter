@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace CycloneGames.AssetManagement.Runtime.Cache
+namespace CycloneGames.AssetManagement.Runtime.Batch
 {
 	public interface IGroupOperation : IOperation
 	{

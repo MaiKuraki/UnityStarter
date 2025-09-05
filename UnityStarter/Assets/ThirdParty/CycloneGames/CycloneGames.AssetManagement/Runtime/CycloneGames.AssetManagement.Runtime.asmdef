@@ -4,7 +4,11 @@
     "references": [
         "UniTask",
         "CycloneGames.Logger",
-        "YooAsset"
+        "Unity.Addressables",
+        "Unity.ResourceManager",
+        "YooAsset",
+        "VContainer",
+        "MackySoft.Navigathena"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -15,29 +19,14 @@
     "defineConstraints": [],
     "versionDefines": [
         {
-            "name": "jp.hadashikick.vcontainer",
+            "name": "com.unity.addressables",
             "expression": "",
-            "define": "VCONTAINER_PRESENT"
-        },
-        {
-            "name": "com.mackysoft.navigathena",
-            "expression": "",
-            "define": "NAVIGATHENA_PRESENT"
+            "define": "ADDRESSABLES_PRESENT"
         },
         {
             "name": "com.tuyoogame.yooasset",
             "expression": "",
             "define": "YOOASSET_PRESENT"
-        },
-        {
-            "name": "com.harumak.addler",
-            "expression": "",
-            "define": "ADDLER_PRESENT"
-        },
-        {
-            "name": "com.unity.addressables",
-            "expression": "",
-            "define": "ADDRESSABLES_PRESENT"
         }
     ],
     "noEngineReferences": false

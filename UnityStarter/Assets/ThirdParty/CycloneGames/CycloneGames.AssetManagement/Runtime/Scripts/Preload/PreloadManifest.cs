@@ -8,16 +8,15 @@ namespace CycloneGames.AssetManagement.Runtime.Preload
 	public sealed class PreloadManifest : ScriptableObject
 	{
 		/// <summary>
-		/// One preload entry. "Location" is the YooAsset location to warm before scene switch.
-		/// "Weight" only affects aggregated progress (UI display), not load order or concurrency.
+		/// Defines a single asset to be preloaded.
 		/// </summary>
 		[Serializable]
 		public sealed class Entry
 		{
 			/// <summary>
-			/// YooAsset location (or addressable-compatible key) to warm before scene switch.
+			/// The location (address/key) of the asset to preload.
 			/// </summary>
-			[UnityEngine.Tooltip("YooAsset location (or addressable-compatible key) to warm before scene switch.")]
+			[UnityEngine.Tooltip("The location (address/key) of the asset to preload.")]
 			public string Location;
 			/// <summary>
 			/// Progress weight for UI aggregation. Larger weight contributes more to overall progress.
