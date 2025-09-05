@@ -126,7 +126,7 @@ For existing projects, you can import individual modules:
 - **Unity 2022.3+**
 - **Asynchronous Programming**: [UniTask](https://github.com/Cysharp/UniTask)
 - **Reactive Programming**: [R3](https://github.com/Cysharp/R3) (formerly UniRx)
-- **Animation/Tweening**: [LitMotion](https://github.com/Cysharp/LitMotion)
+- **Animation/Tweening**: [LitMotion](https://github.com/annulusgames/LitMotion)
 - **Serialization**: [VYaml](https://github.com/hadashiA/VYaml) for YAML configuration
 - **Message Bus**: [VitalRouter](https://github.com/hadashiA/VitalRouter)
 - **Asset Management**: [YooAsset](https://github.com/tuyoogame/YooAsset)
