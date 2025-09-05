@@ -134,10 +134,10 @@ For existing projects, you can import individual modules:
 
 ### Architecture Highlights
 - **Dependency Injection Ready**: All modules are designed to work seamlessly with DI containers.
-- **Assembly Definition Isolation**: Enforces clean code separation and improves compile times.
+- **Assembly Definition Isolation**: All modules are separated by specific asmdef Enforces clean code separation.
 - **ScriptableObject Configuration**: Leverages data-driven design for abilities, effects, and settings.
 - **Thread-Safe by Design**: Core systems like `Logger` and `Factory` are built for multi-threaded environments.
-- **Zero/Low-GC Focus**: Optimized for performance by minimizing garbage collection in critical loops.
+- **Zero/Low-GC**: Optimized for performance by minimizing garbage collection in critical loops.
 
 ---
 
