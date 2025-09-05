@@ -1,6 +1,6 @@
 using System.Threading;
 using System.Threading.Tasks;
-using CycloneGames.AssetManagement.Runtime.Cache;
+using CycloneGames.AssetManagement.Runtime.Batch;
 using UnityEngine;
 
 namespace CycloneGames.AssetManagement.Runtime.Preload

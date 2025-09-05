@@ -8,6 +8,7 @@
 
 - Unity 2022.3+
 - 可选：`com.tuyoogame.yooasset`
+- 可选：`com.unity.addressables`
 - 可选：`com.cysharp.unitask`、`jp.hadashikick.vcontainer`、`com.mackysoft.navigathena`、`com.cyclonegames.factory`、`com.cyclone-games.logger`、`com.harumak.addler`
 
 ## 快速上手
@@ -24,7 +25,7 @@ using System.Threading.Tasks;
 async Task LoadMyPlayer()
 {
     IAssetModule module = new ResourcesModule();
-    module.Initialize(new AssetModuleOptions());
+    module.Initialize(new AssetManagementOptions());
 
     var pkg = module.CreatePackage("MyResources");
 
@@ -104,15 +105,19 @@ await pkg.UnloadSceneAsync(scene);
 
 ## 集成 Navigathena（可选）
 
-使用提供的 `YooAssetSceneIdentifier` 将 Navigathena 的场景加载切至 YooAsset：
+要将 Navigathena 与本资源管理系统支持的场景一起使用，请使用与提供者无关的 `AssetManagementSceneIdentifier`。无论您底层使用的是 YooAsset 还是 Addressables，它都可以正常工作。
 
 ```csharp
-using CycloneGames.AssetManagement.Integrations.Navigathena;
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.AssetManagement.Runtime.Integrations.Navigathena;
 using MackySoft.Navigathena.SceneManagement;
 
-IAssetPackage pkg = module.GetPackage("Default");
-ISceneIdentifier id = new YooAssetSceneIdentifier(pkg, "Assets/Scenes/Main.unity", LoadSceneMode.Additive, true, 100);
-await GlobalSceneNavigator.Instance.Change(new LoadSceneRequest(id));
+// 从您的 IAssetModule 获取 IAssetPackage
+IAssetPackage pkg = assetModule.GetPackage("DefaultPackage");
+
+// 创建标识符。它将使用指定的包来加载场景。
+ISceneIdentifier id = new AssetManagementSceneIdentifier(pkg, "Assets/Scenes/Main.unity", LoadSceneMode.Additive, true);
+await GlobalSceneNavigator.Instance.Push(id);
 ```
 
 ## Addressables 与 YooAsset 共存（简要）
@@ -120,23 +125,7 @@ await GlobalSceneNavigator.Instance.Change(new LoadSceneRequest(id));
 - 支持共存。建议保持 Addressables Key 与 YooAsset Location 一致，便于运行时按配置切换标识符。
 - 实现细节由业务自行决定，本模块无需额外设置。
 
-### 双栈切换（Addressables <-> YooAsset）
-
-建议保持 Addressables 的 Key 与 YooAsset 的 Location 一致。运行时按配置选择：
-
-```csharp
-ISceneIdentifier id;
-if (useAddressables)
-{
-    // Addressables（需要 ENABLE_NAVIGATHENA_ADDRESSABLES）
-    id = new MackySoft.Navigathena.SceneManagement.AddressableAssets.AddressableSceneIdentifier("Assets/Scenes/Main.unity");
-}
-else
-{
-    id = new CycloneGames.AssetManagement.Integrations.Navigathena.YooAssetSceneIdentifier(pkg, "Assets/Scenes/Main.unity");
-}
-await GlobalSceneNavigator.Instance.Change(new LoadSceneRequest(id));
-```
+<!-- This section is now covered by the generic AssetManagementSceneIdentifier example -->
 
 ## 用户确认的更新流程（推荐）
 
@@ -177,7 +166,7 @@ var handle = pkg.LoadSceneSync("Assets/Scenes/Main.unity", LoadSceneMode.Single)
 - 句柄跟踪（诊断）
 
 ```csharp
-module.Initialize(new AssetModuleOptions(
+module.Initialize(new AssetManagementOptions(
   operationSystemMaxTimeSliceMs: 16,
   bundleLoadingMaxConcurrency: 8,
   logger: null,
@@ -197,13 +186,53 @@ var instance = factory.Create();
 factory.Dispose();
 ```
 
-## 宏说明（Macro Notes）
+## 脚本定义符号
 
-- `NAVIGATHENA_PRESENT`：安装 `com.mackysoft.navigathena` 时自动定义
-- `NAVIGATHENA_YOOASSET`：安装 `com.tuyoogame.yooasset` 时自动定义（启用 Navigathena + YooAsset 集成）
-- `ENABLE_NAVIGATHENA_ADDRESSABLES`：Navigathena 官方 Addressables 集成
-- `VCONTAINER_PRESENT`：安装 `jp.hadashikick.vcontainer` 时自动定义
-- `ADDLER_PRESENT`：安装 `com.harumak.addler` 时自动定义（启用可选 Addler 适配）
+本包使用程序集定义文件（`.asmdef`）来根据项目中存在的其他包自动定义符号。这使得可选的集成功能在缺少依赖项时不会引发编译错误。
+
+以下是内部定义和使用的符号：
+
+- `YOOASSET_PRESENT`: 当安装了 `com.tuyoogame.yooasset` 时定义。启用 YooAsset 提供器。
+- `ADDRESSABLES_PRESENT`: 当安装了 `com.unity.addressables` 时定义。启用 Addressables 提供器。
+- `VCONTAINER_PRESENT`: 当安装了 `jp.hadashikick.vcontainer` 时定义。启用 VContainer 集成。
+- `NAVIGATHENA_PRESENT`: 当安装了 `com.mackysoft.navigathena` 时定义。启用 Navigathena 集成。
+
+通常您不需要直接与这些符号交互。
+
+## Addler 集成 (推荐用于生命周期管理)
+
+尽管 `AssetManagement` 包提供了内存管理所需的必要工具（通过 `IDisposable` 句柄），但在大型项目中手动管理每个句柄的生命周期很容易出错。`Addler` 是一个更高级别的框架，可以自动化句柄的生命周期管理和对象池化。
+
+我们的包提供了与 Addler 的无缝集成。
+
+### 如何注册
+
+在您的应用程序启动阶段，初始化 `AssetManagement` 模块后，您可以创建我们的 `AssetManagementAssetLoader` 实例，并将其注册到 Addler 的 `AssetProvider` 中。
+
+```csharp
+using Addler.Runtime.Core;
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.AssetManagement.Runtime.Integrations.Addler;
+
+// 1. 像往常一样初始化您的 IAssetModule
+IAssetModule assetModule = new YooAssetModule(); // 或 AddressableAssetModule
+assetModule.Initialize(new AssetManagementOptions());
+IAssetPackage defaultPackage = assetModule.CreatePackage("DefaultPackage");
+// ... 初始化资源包
+
+// 2. 创建我们的自定义资源加载器，由 IAssetPackage 支持
+var assetLoader = new AssetManagementAssetLoader(defaultPackage);
+
+// 3. 将此加载器设置为 Addler 的默认加载器
+AssetProvider.Setup(assetLoader);
+
+// 4. 现在，您可以使用 Addler 来加载资源，它将在底层使用我们的系统
+var playerHandle = await AssetProvider.LoadAssetAsync<GameObject>("player_prefab_key");
+// ... 使用资源
+// 当资源不再需要时，Addler 将自动管理底层句柄的释放。
+```
+
+通过这种设置，您可以获得 Addler 自动化内存管理的好处，同时仍然使用我们灵活的、与提供者无关的资源加载后端。
 
 ## 场景预热（可选）
 
@@ -251,7 +280,7 @@ using YooAsset;
 
 // 1) 初始化具体的 YooAssetModule
 IAssetModule module = new YooAssetModule();
-module.Initialize(new AssetModuleOptions(operationSystemMaxTimeSliceMs: 16));
+module.Initialize(new AssetManagementOptions(operationSystemMaxTimeSliceMs: 16));
 
 // 2) 创建并初始化资源包
 var pkg = module.CreatePackage("Default");
@@ -270,6 +299,37 @@ using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/M
 }
 ```
 关于使用 YooAsset 提供器进行更新、下载和场景管理的详细信息，请参阅本文档中的相应章节。
+
+## 提供器示例：使用 Addressables 适配器
+
+如果您的项目中已包含 `com.unity.addressables`，则可以直接使用为其提供的适配器。设置过程非常简单。
+
+```csharp
+using CycloneGames.AssetManagement;
+
+// 1) 初始化 AddressableAssetModule
+IAssetModule module = new AddressableAssetModule();
+module.Initialize(new AssetManagementOptions());
+
+// 2) 创建一个资源包（包名是逻辑上的，不影响 Addressables 的分组）
+var pkg = module.CreatePackage("Default");
+
+// 3) 使用统一 API 加载资源
+using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/MyCharacter.prefab"))
+{
+    // 在真实项目中，您应该异步等待此操作。
+    while (!handle.IsDone)
+    {
+        await System.Threading.Tasks.Task.Yield(); // 或者在协程中 yield return null
+    }
+    
+    if (handle.Asset)
+    {
+        var go = UnityEngine.Object.Instantiate(handle.Asset);
+    }
+}
+```
+请注意，某些功能（如包版本控制和预下载）是 YooAsset 特有的，在 Addressables 适配器中没有直接的对应实现。
 
 ## 其他用法
 
