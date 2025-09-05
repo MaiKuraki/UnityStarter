@@ -9,7 +9,7 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
 
-## 概述
+## 💉 DI / IoC
 此模板支持多种依赖注入框架。您可以切换不同的 Git 分支来查看各个框架的专用示例。**GameplayFramework** 和 **Factory** 模块包含了具体的 DI 实现范例。
 
 - **DI/IoC 框架支持**，预配置适配器：(列出的这些 DI/IoC 框架均为作者在大型商业项目中验证使用过的)
@@ -136,11 +136,11 @@
 - **网络**: [Mirror](https://github.com/MirrorNetworking/Mirror)
 
 ### 架构亮点
-- **依赖注入就绪**：所有模块都设计为可与 DI 容器无缝协作。
-- **程序集定义隔离**：强制实现清晰的代码分离，并缩短编译时间。
+- **依赖注入支持**：所有模块都设计为可与 DI 容器无缝协作。
+- **程序集定义隔离**：所有模块强制以独立的 asmdef 实现清晰的代码分离。
 - **ScriptableObject 配置**：利用数据驱动设计来管理能力、效果和设置。
 - **线程安全设计**：`Logger` 和 `Factory` 等核心系统专为多线程环境设计。
-- **零/低 GC 关注**：通过在关键循环中最小化垃圾回收来优化性能。
+- **零/低 GC**：所有模块在关键循环中最小化垃圾回收来优化性能。
 
 ---
 
