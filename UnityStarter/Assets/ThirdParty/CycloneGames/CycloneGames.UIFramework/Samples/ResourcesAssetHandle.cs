@@ -2,6 +2,7 @@ using System;
 using System.Threading.Tasks;
 using CycloneGames.AssetManagement.Runtime;
 using UnityEngine;
+using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.UIFramework.Runtime.Samples
 {
@@ -17,6 +18,7 @@ namespace CycloneGames.UIFramework.Runtime.Samples
         public bool IsDone => _request == null || _request.isDone;
         public float Progress => _request?.progress ?? 0f;
         public string Error => _request == null ? "Invalid Handle" : (_request.asset == null && _request.isDone ? "Asset not found" : string.Empty);
+        public Task Task => GetTask();
 
         public T Asset => _request?.asset as T;
         public UnityEngine.Object AssetObject => _request?.asset;
@@ -32,6 +34,12 @@ namespace CycloneGames.UIFramework.Runtime.Samples
         {
             // Resources.UnloadAsset can be used, but it's often better to manage memory with UnloadUnusedAssets.
             // For this handle, we do nothing, mirroring the lightweight nature of Resources.
+        }
+
+        private async Task GetTask()
+        {
+            if (IsDone) return;
+            await _request;
         }
     }
 

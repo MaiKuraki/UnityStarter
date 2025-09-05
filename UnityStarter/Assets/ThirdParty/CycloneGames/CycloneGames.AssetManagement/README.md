@@ -8,6 +8,7 @@ A DI-first, interface-driven, unified asset management abstraction layer for Uni
 
 - Unity 2022.3+
 - Optional: `com.tuyoogame.yooasset`
+- Optional: `com.unity.addressables`
 - Optional: `com.cysharp.unitask`, `jp.hadashikick.vcontainer`, `com.mackysoft.navigathena`, `com.cyclonegames.factory`, `com.cyclone-games.logger`, `com.harumak.addler`
 
 ## Quick Start
@@ -24,7 +25,7 @@ using System.Threading.Tasks;
 async Task LoadMyPlayer()
 {
     IAssetModule module = new ResourcesModule();
-    module.Initialize(new AssetModuleOptions());
+    module.Initialize(new AssetManagementOptions());
 
     var pkg = module.CreatePackage("MyResources");
 
@@ -112,33 +113,19 @@ Notes:
 
 ## Navigathena Integration (optional)
 
-To use Navigathena with YooAsset-backed scenes, use the provided identifier:
+To use Navigathena with scenes backed by this asset management system, use the provider-agnostic `AssetManagementSceneIdentifier`. This works regardless of whether you are using YooAsset or Addressables underneath.
 
 ```csharp
-using CycloneGames.AssetManagement.Integrations.Navigathena;
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.AssetManagement.Runtime.Integrations.Navigathena;
 using MackySoft.Navigathena.SceneManagement;
 
-IAssetPackage pkg = module.GetPackage("Default");
-ISceneIdentifier id = new YooAssetSceneIdentifier(pkg, "Assets/Scenes/Main.unity", LoadSceneMode.Additive, true, 100);
-await GlobalSceneNavigator.Instance.Change(new LoadSceneRequest(id));
-```
+// Get the IAssetPackage from your IAssetModule
+IAssetPackage pkg = assetModule.GetPackage("DefaultPackage");
 
-### Dual-stack switching (Addressables <-> YooAsset)
-
-Keep Addressables keys equal to YooAsset locations. At runtime, select the identifier:
-
-```csharp
-ISceneIdentifier id;
-if (useAddressables)
-{
-    // Addressables identifier (requires ENABLE_NAVIGATHENA_ADDRESSABLES)
-    id = new MackySoft.Navigathena.SceneManagement.AddressableAssets.AddressableSceneIdentifier("Assets/Scenes/Main.unity");
-}
-else
-{
-    id = new CycloneGames.AssetManagement.Integrations.Navigathena.YooAssetSceneIdentifier(pkg, "Assets/Scenes/Main.unity");
-}
-await GlobalSceneNavigator.Instance.Change(new LoadSceneRequest(id));
+// Create the identifier. It will use the provided package to load the scene.
+ISceneIdentifier id = new AssetManagementSceneIdentifier(pkg, "Assets/Scenes/Main.unity", LoadSceneMode.Additive, true);
+await GlobalSceneNavigator.Instance.Push(id);
 ```
 
 ## Addressables + YooAsset Coexistence (Short Notes)
@@ -185,7 +172,7 @@ var handle = pkg.LoadSceneSync("Assets/Scenes/Main.unity", LoadSceneMode.Single)
 - Handle tracking (diagnostics)
 
 ```csharp
-module.Initialize(new AssetModuleOptions(
+module.Initialize(new AssetManagementOptions(
   operationSystemMaxTimeSliceMs: 16,
   bundleLoadingMaxConcurrency: 8,
   logger: null,
@@ -208,13 +195,18 @@ factory.Dispose(); // release cached handle when finished
 
 This allows reusing a cached prefab handle for repeated instantiation without re-loading, and fits pooling/Factory patterns.
 
-## Macro Notes
+## Scripting Define Symbols
 
-- `NAVIGATHENA_PRESENT`: auto-defined when `com.mackysoft.navigathena` is present
-- `NAVIGATHENA_YOOASSET`: auto-defined when `com.tuyoogame.yooasset` is present (integration enabled automatically)
-- `ENABLE_NAVIGATHENA_ADDRESSABLES`: official Addressables integration from Navigathena
-- `VCONTAINER_PRESENT`: auto-defined when `jp.hadashikick.vcontainer` is present
-- `ADDLER_PRESENT`: auto-defined when `com.harumak.addler` is present (enables optional Addler adapter)
+This package uses Assembly Definition Files (`.asmdef`) to automatically define symbols based on which other packages are present in your project. This allows for optional integrations without causing compile errors if a dependency is missing.
+
+The following symbols are defined and used internally:
+
+- `YOOASSET_PRESENT`: Defined when `com.tuyoogame.yooasset` is installed. Enables the YooAsset provider.
+- `ADDRESSABLES_PRESENT`: Defined when `com.unity.addressables` is installed. Enables the Addressables provider.
+- `VCONTAINER_PRESENT`: Defined when `jp.hadashikick.vcontainer` is installed. Enables the VContainer integration.
+- `NAVIGATHENA_PRESENT`: Defined when `com.mackysoft.navigathena` is installed. Enables the Navigathena integration.
+
+You generally do not need to interact with these symbols directly.
 
 ## Scene Preload (optional)
 
@@ -270,7 +262,7 @@ public class GameLifetimeScope : LifetimeScope
         builder.RegisterBuildCallback(async resolver =>
         {
             var module = resolver.Resolve<IAssetModule>();
-            module.Initialize(new AssetModuleOptions(16, int.MaxValue));
+            module.Initialize(new AssetManagementOptions(16, int.MaxValue));
             var pkg = module.CreatePackage("Default");
             var host = new HostPlayModeParameters
             {
@@ -297,7 +289,7 @@ using YooAsset;
 
 // 1) Initialize the specific YooAssetModule
 IAssetModule module = new YooAssetModule();
-module.Initialize(new AssetModuleOptions(operationSystemMaxTimeSliceMs: 16));
+module.Initialize(new AssetManagementOptions(operationSystemMaxTimeSliceMs: 16));
 
 // 2) Create and initialize a package
 var pkg = module.CreatePackage("Default");
@@ -316,6 +308,37 @@ using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/M
 }
 ```
 For details on updating, downloading, and scene management with the YooAsset provider, please refer to the corresponding sections in this document.
+
+## Provider Example: Using the Addressables Adapter
+
+If you have `com.unity.addressables` in your project, you can use the provided adapter for it. The setup is straightforward.
+
+```csharp
+using CycloneGames.AssetManagement;
+
+// 1) Initialize the AddressableAssetModule
+IAssetModule module = new AddressableAssetModule();
+module.Initialize(new AssetManagementOptions());
+
+// 2) Create a package (name is logical and doesn't affect Addressables groups)
+var pkg = module.CreatePackage("Default");
+
+// 3) Load an asset using the unified API
+using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/MyCharacter.prefab"))
+{
+    // In a real project, you would await this asynchronously.
+    while (!handle.IsDone)
+    {
+        await System.Threading.Tasks.Task.Yield(); // Or yield return null in a coroutine
+    }
+    
+    if (handle.Asset)
+    {
+        var go = UnityEngine.Object.Instantiate(handle.Asset);
+    }
+}
+```
+Note that some features like package versioning and pre-downloading are specific to YooAsset and do not have a direct equivalent in the Addressables adapter.
 
 ## Other Tips
 
@@ -345,6 +368,37 @@ agg.Add(groupOp2, 1f);
 var p = agg.GetProgress(); // 0..1
 ```
 
-## Optional Addler Adapter
+## Addler Integration (Recommended for Lifetime Management)
 
-See `Runtime/Scripts/Integrations/Addler/AddlerAdapterREADME.md` for mapping Addler keys to YooAsset locations. Enabled with `ADDLER_PRESENT` when `com.harumak.addler` is present.
+While the `AssetManagement` package provides the necessary tools for memory management (via `IDisposable` handles), manually managing the lifetime of every handle in a large project can be error-prone. `Addler` is a higher-level framework that automates handle lifetime management and pooling.
+
+Our package provides a seamless integration with Addler.
+
+### How to Register
+
+During your application's bootstrap phase, after initializing the `AssetManagement` module, you can create an instance of our `AssetManagementAssetLoader` and register it with Addler's `AssetProvider`.
+
+```csharp
+using Addler.Runtime.Core;
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.AssetManagement.Runtime.Integrations.Addler;
+
+// 1. Initialize your IAssetModule as usual
+IAssetModule assetModule = new YooAssetModule(); // or AddressableAssetModule
+assetModule.Initialize(new AssetManagementOptions());
+IAssetPackage defaultPackage = assetModule.CreatePackage("DefaultPackage");
+// ... initialize the package
+
+// 2. Create our custom asset loader, backed by our IAssetPackage
+var assetLoader = new AssetManagementAssetLoader(defaultPackage);
+
+// 3. Set this loader as the default for Addler
+AssetProvider.Setup(assetLoader);
+
+// 4. Now, you can use Addler to load assets, and it will use our system underneath
+var playerHandle = await AssetProvider.LoadAssetAsync<GameObject>("player_prefab_key");
+// ... use the asset
+// Addler will automatically manage the release of the underlying handle when it's no longer needed.
+```
+
+By using this setup, you gain the benefits of Addler's automated memory management while still using our flexible, provider-agnostic asset loading backend.
