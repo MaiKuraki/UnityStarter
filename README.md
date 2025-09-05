@@ -9,37 +9,32 @@ This is a lightweight, modular Unity project template designed to provide a soli
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
 
-## Overview
-A lightweight Unity starter template designed to serve as a foundation for new projects. This repository integrates:
+## 💉 DI / IoC
+This template supports multiple Dependency Injection frameworks. You can switch between branches to see dedicated examples for each. The **GameplayFramework** and **Factory** modules contain specific DI implementation samples.
 
-- **Commonly used Unity Packages** (updated to recent versions).
 - **DI/IoC framework support** with pre-configured adapters for: (All **listed frameworks have been** tested in production environments.)
   - [VContainer](https://github.com/hadashiA/VContainer)
   - [StrangeIoC](https://github.com/strangeioc/strangeioc)
   - [Extenject(Zenject)](https://github.com/Mathijs-Bakker/Extenject) (no longer actively maintained.)
 > Since the author of [**Zenject**](https://github.com/Mathijs-Bakker/Extenject) announced the [discontinuation of project updates](https://github.com/Mathijs-Bakker/Extenject/issues/73), I recommend trying [**VContainer**](https://github.com/hadashiA/VContainer). If you prefer a higher degree of customization for your project, [**StrangeIoC**](https://github.com/strangeioc/strangeioc) is a better choice. If you decide to use [**Zenject**](https://github.com/Mathijs-Bakker/Extenject), [**MessagePipe**](https://github.com/Cysharp/MessagePipe) is a compatible messaging framework that works well with it.
-## DI Framework Selection
+### DI Framework Selection
 Switch between Git branches to explore implementation examples for each DI framework.</br>
 Note: The **GameplayFramework** and **Factory** modules **include** DI samples.</br>
 <img src="./Docs/ProjectDescription/Main/Des_01.png" alt="Branch Select" style="width: 50%; height: auto; max-width: 360px;" />
 
-## Usage
+---
 
-This repository can be used in two primary ways: as a complete template for a new project, or as a source of individual modules to be imported into an existing project.
+## ✨ Key Features
 
-### As a Full Project Template
-If you intend to use this repository as a starter for a new Unity project, follow these steps to rename it:
+-   **Modular Architecture**: All systems are built as decoupled Unity Packages, allowing you to easily include or exclude functionality.
+-   **Inspired by Unreal Engine**: Implements proven concepts like the Gameplay Framework, Gameplay Ability System (GAS), and Gameplay Tags.
+-   **Performance-Oriented**: Focuses on low/zero GC allocation in critical systems like Logging, Factory, and Audio.
+-   **DI/IoC Ready**: Comes with pre-configured support for **VContainer**, **StrangeIoC**, and **Zenject**.
+-   **CI/CD Friendly**: Includes command-line accessible build scripts and automatic versioning for seamless integration with automated pipelines.
+-   **Cross-Platform**: Optimized for Desktop, Mobile (Android/iOS), and WebGL.
 
-1.  **Locate the Renaming Tool**: Find the `rename_project` Go script or `.exe` executable inside the `Tools/` directory.
-2.  **Move the Renaming Tool**: Copy the `rename_project` script or executable into the `UnityStarter/` directory.
-3.  **Run the Tool**: Execute the script. It will automatically update project-specific components like namespaces and assembly definitions.
-4.  **Rename Manually**: Finally, manually rename the `UnityStarter/` root folder to your desired project name.
+---
 
-### Using Specific Modules
-If you only need specific modules for your project, you have two options:
-
-- **Simple Method**: Navigate to `Assets/ThirdParty/CycloneGames/` and simply delete the package folders you do not need.
-- **Recommended Method (Production)**: For a production environment, it is best practice to move the required packages from `Assets/ThirdParty/CycloneGames/` to a location *outside* your project's `Assets` folder. Then, add them to your project via the Unity Package Manager using the **"Add package from disk..."** option. This approach keeps your project clean and highly modular.
 ## Core Framework Modules
 
 ### 🎮 Gameplay Systems
@@ -60,12 +55,15 @@ If you only need specific modules for your project, you have two options:
 
 ### 🛠️ Utilities & Services
 - **[Utility](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Utility)** - Common utilities including FPS counter, safe area fitting, file operations, performance tools, and Unity splash screen control.
-- **[Services](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Services)** - Game service abstractions for camera management, graphics settings, and device configuration with YAML-based settings.
+- **[Service](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Services)** - Game service abstractions for camera management, graphics settings, and device configuration with YAML-based settings.
 - **[Cheat](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat)** - Type-safe command pipeline for debugging with [VitalRouter](https://github.com/hadashiA/VitalRouter) integration. Supports async operations and thread-safe execution.
 - **[FontAssets](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.FontAssets)** - Multilingual font collections and character sets for Latin, Chinese (Simplified/Traditional), Japanese, and Korean localization.
 
 ### 🌐 Networking
 - **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - Networking abstraction layer with [Mirror](https://github.com/MirrorNetworking/Mirror) adapter. Provides interfaces for transport, serialization, and ability system integration.
+
+### 🧰 Tools
+- **[Tools](Tools)** - A collection of utility scripts designed to streamline common tasks in Unity development and general project management.
 
 ## Project Structure
 The main source code for the modules is located in the `UnityStarter/Assets/ThirdParty/` directory. The project is developed using a Unity Package-based approach with separated Assembly Definitions (asmdef), which allows for easy removal of unwanted modules and ensures a clear separation of concerns.
@@ -81,20 +79,20 @@ The main source code for the modules is located in the `UnityStarter/Assets/Thir
     │   │   └── ...
     │   ├── ThirdParty/
     │   │   ├── CycloneGames/           # Core development suite
+    │   │   │   ├── AssetManagement/    # Asset loading and version management
+    │   │   │   ├── Audio/              # Enhanced audio management system
     │   │   │   ├── Cheat/              # Debug command pipeline system
     │   │   │   ├── Factory/            # High-performance object pooling
+    │   │   │   ├── FontAssets/         # Multilingual font collections
     │   │   │   ├── GameplayAbilities/  # Data-driven ability system (UnrealEngine GAS-inspired)
     │   │   │   ├── GameplayFramework/  # UE-style gameplay architecture (UnrealEngine GameplayFramework-inspired)
     │   │   │   ├── GameplayTags/       # Tag-based identification system (UnrealEngine GameplayTags-inspired)
     │   │   │   ├── InputSystem/        # Reactive input management with context stacks
     │   │   │   ├── Logger/             # Zero-GC multi-threaded logging
-    │   │   │   ├── AssetManagement/    # Asset loading and version management
-    │   │   │   ├── Services/           # Common game service abstractions
-    │   │   │   ├── UIFramework/        # Hierarchical UI management
     │   │   │   ├── Networking/         # Network abstraction layer
-    │   │   │   ├── FontAssets/         # Multilingual font collections
-    │   │   │   ├── Audio/              # Enhanced audio management system
     │   │   │   ├── RPGFoundation/      # RPG Foundation components (e.g., Movement)
+    │   │   │   ├── Service/            # Common game service abstractions
+    │   │   │   ├── UIFramework/        # Hierarchical UI management
     │   │   │   └── Utility/            # Performance tools and utilities
     │   │   └── ...
     │   └── ...
@@ -102,25 +100,60 @@ The main source code for the modules is located in the `UnityStarter/Assets/Thir
     └── ProjectSettings/                # Unity project settings
 ```
 
-## Technical Features & Dependencies
+## 🚀 Getting Started
+
+### Prerequisites
+- **Unity 2022.3+**
+
+### Using as a Full Project Template
+1.  **Clone or download** this repository.
+2.  **Locate the Renaming Tool**: Find the `rename_project` executable inside the `Tools/Executable` directory.
+3.  **Move the Tool**: Copy the executable to the project root (`UnityStarter/`).
+4.  **Run the Tool**: Execute it from the command line. It will guide you through renaming the project folder, company name, and application name across all necessary configuration files.
+5.  **Open in Unity**: You can now open the renamed project folder in Unity.
+
+### Using Specific Modules
+For existing projects, you can import individual modules:
+
+-   **Simple Method**: Copy the desired package folder from `UnityStarter/Assets/ThirdParty/CycloneGames/` into your project's `Assets` folder.
+-   **Recommended Method**: To keep your project clean, move the package folders to a location *outside* your `Assets` directory. Then, in Unity, use the **Package Manager** to **"Add package from disk..."** and select the `package.json` file for each module.
+
+---
+
+## ⚙️ Architecture & Technical Details
 
 ### Key Technology Stack
-- **Unity 2022.3+** - Required Unity version for all modules
-- **UniTask** - Async/await support for Unity operations
-- **R3** - Reactive Extensions for Unity (used in InputSystem)
-- **LitMotion** - A high-performance tweening library
-- **VYaml** - YAML serialization for configuration files
-- **VitalRouter** - Message routing system (used in Cheat system)
-- **YooAsset** - Asset management and hot-update support
-- **Mirror** - Networking framework adapter
+- **Unity 2022.3+**
+- **Asynchronous Programming**: [UniTask](https://github.com/Cysharp/UniTask)
+- **Reactive Programming**: [R3](https://github.com/Cysharp/R3) (formerly UniRx)
+- **Animation/Tweening**: [LitMotion](https://github.com/Cysharp/LitMotion)
+- **Serialization**: [VYaml](https://github.com/hadashiA/VYaml) for YAML configuration
+- **Message Bus**: [VitalRouter](https://github.com/hadashiA/VitalRouter)
+- **Asset Management**: [YooAsset](https://github.com/tuyoogame/YooAsset)
+- **Networking**: [Mirror](https://github.com/MirrorNetworking/Mirror)
 
 ### Architecture Highlights
-- **Dependency Injection Ready**: All modules support VContainer, StrangeIoC, and Zenject
-- **Assembly Definition Isolation**: Each module has its own asmdef for clean separation
-- **ScriptableObject Configuration**: Data-driven design for abilities, effects, and settings
-- **Thread-Safe Design**: Logger and Factory modules designed for multi-threaded operations
-- **Zero/Low-GC**: Performance-optimized with minimal garbage collection
-- **Cross-Platform**: Supports desktop, mobile, and WebGL deployment
+- **Dependency Injection Ready**: All modules are designed to work seamlessly with DI containers.
+- **Assembly Definition Isolation**: Enforces clean code separation and improves compile times.
+- **ScriptableObject Configuration**: Leverages data-driven design for abilities, effects, and settings.
+- **Thread-Safe by Design**: Core systems like `Logger` and `Factory` are built for multi-threaded environments.
+- **Zero/Low-GC Focus**: Optimized for performance by minimizing garbage collection in critical loops.
+
+---
+
+## 🚀 Build & CI/CD
+
+This template is designed for automated builds and seamless integration with CI/CD pipelines.
+
+-   **Automated Build Scripts**: The project includes a powerful build script located at `Assets/Editor/BuildScript.cs`. It provides menu items in the Unity Editor for one-click builds for multiple platforms (Windows, Mac, Android, WebGL).
+
+-   **Automatic Versioning**: Builds are automatically versioned using the Git commit count. The version number is formatted as `vX.Y.CommitCount` (e.g., `v0.1.123`), ensuring every build has a unique and traceable version.
+
+-   **Runtime Version Information**: Before each build, the script captures the current Git commit hash, commit count, and build date, and saves this information into a `VersionInfoData` ScriptableObject (`Assets/UnityStarter/Scripts/Build/VersionInfoData.cs`). This allows you to easily display detailed build information within your application for debugging and support purposes.
+
+-   **CI/CD Ready**: The build methods can be triggered from the command line, making it straightforward to integrate with CI/CD systems like Jenkins, GitHub Actions, or Unity Cloud Build.
+
+---
 
 ## Other Open Source Projects Based on This Project
 - [x] [Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse)
