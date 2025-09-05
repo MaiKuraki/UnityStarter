@@ -63,10 +63,10 @@ Note: The **GameplayFramework** and **Factory** modules **include** DI samples.<
 - **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - Networking abstraction layer with [Mirror](https://github.com/MirrorNetworking/Mirror) adapter. Provides interfaces for transport, serialization, and ability system integration.
 
 ### 🧰 Tools
-- **[Tools](Tools)** - A collection of utility scripts designed to streamline common tasks in Unity development and general project management.
+- **[Tools](Tools)** - A collection of utility scripts, contains specific initial pipeline for UnityStart and common tasks in Unity development and general project management.
 
 ## Project Structure
-The main source code for the modules is located in the `UnityStarter/Assets/ThirdParty/` directory. The project is developed using a Unity Package-based approach with separated Assembly Definitions (asmdef), which allows for easy removal of unwanted modules and ensures a clear separation of concerns.
+The main source code for the modules is located in the [`UnityStarter/Assets/ThirdParty/`](./UnityStarter/Assets/ThirdParty/) directory. The project is developed using a Unity Package-based approach with separated Assembly Definitions (asmdef), which allows for easy removal of unwanted modules and ensures a clear separation of concerns.
 
 ```
 .
@@ -120,27 +120,6 @@ For existing projects, you can import individual modules:
 
 ---
 
-## ⚙️ Architecture & Technical Details
-
-### Key Technology Stack
-- **Unity 2022.3+**
-- **Asynchronous Programming**: [UniTask](https://github.com/Cysharp/UniTask)
-- **Reactive Programming**: [R3](https://github.com/Cysharp/R3) (formerly UniRx)
-- **Animation/Tweening**: [LitMotion](https://github.com/annulusgames/LitMotion)
-- **Serialization**: [VYaml](https://github.com/hadashiA/VYaml) for YAML configuration
-- **Message Bus**: [VitalRouter](https://github.com/hadashiA/VitalRouter)
-- **Asset Management**: [YooAsset](https://github.com/tuyoogame/YooAsset)
-- **Networking**: [Mirror](https://github.com/MirrorNetworking/Mirror)
-
-### Architecture Highlights
-- **Dependency Injection Ready**: All modules are designed to work seamlessly with DI containers.
-- **Assembly Definition Isolation**: All modules are separated by specific asmdef Enforces clean code separation.
-- **ScriptableObject Configuration**: Leverages data-driven design for abilities, effects, and settings.
-- **Thread-Safe by Design**: Core systems like `Logger` and `Factory` are built for multi-threaded environments.
-- **Zero/Low-GC**: Optimized for performance by minimizing garbage collection in critical loops.
-
----
-
 ## 🚀 Build & CI/CD
 
 This template is designed for automated builds and seamless integration with CI/CD pipelines.
@@ -152,6 +131,22 @@ This template is designed for automated builds and seamless integration with CI/
 -   **Runtime Version Information**: Before each build, the script captures the current Git commit hash, commit count, and build date, and saves this information into a `VersionInfoData` ScriptableObject (`Assets/UnityStarter/Scripts/Build/VersionInfoData.cs`). This allows you to easily display detailed build information within your application for debugging and support purposes.
 
 -   **CI/CD Ready**: The build methods can be triggered from the command line, making it straightforward to integrate with CI/CD systems like Jenkins, TeamCity.
+
+---
+
+## ⚙️ Key Technology Stack (OpenSource Packages)
+
+- **Engine Requirement**: **Unity 2022.3+**
+- **Asynchronous Programming**: [UniTask](https://github.com/Cysharp/UniTask)
+- **Reactive Programming**: [R3](https://github.com/Cysharp/R3) (formerly UniRx)
+- **Animation/Tweening**: [LitMotion](https://github.com/annulusgames/LitMotion)
+- **Serialization**: [VYaml](https://github.com/hadashiA/VYaml) for YAML configuration
+- **Serialization (Optional)**: [MessagePack](https://github.com/MessagePack-CSharp/MessagePack-CSharp)
+- **Message Bus**: [VitalRouter](https://github.com/hadashiA/VitalRouter)
+- **Asset Management (Optional)**: [YooAsset](https://github.com/tuyoogame/YooAsset)
+- **Networking**: [Mirror](https://github.com/MirrorNetworking/Mirror)
+- **Scene Management (Optional)**: [Navigathena](https://github.com/mackysoft/Navigathena)
+- More plugins can be found in [package.json](./UnityStarter/Packages/manifest.json)
 
 ---
 
