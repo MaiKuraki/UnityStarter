@@ -1,158 +1,142 @@
-#if ADDRESSABLES_PRESENT
 using System;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using UnityEngine.AddressableAssets;
-using UnityEngine.ResourceManagement.AsyncOperations;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class AddressableAssetPackage : IAssetPackage
+    internal sealed class ResourcesAssetPackage : IAssetPackage
     {
         private readonly string packageName;
         private int nextId = 1;
 
         public string Name => packageName;
-        public bool IsAlive => true; // Addressables doesn't have a package-level lifecycle like YooAsset
+        public bool IsAlive => true;
 
-        public AddressableAssetPackage(string name)
+        public ResourcesAssetPackage(string name)
         {
             packageName = name;
         }
 
         public Task<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
         {
-            // Addressables initializes globally, so package-level initialization is a no-op.
+            // Resources don't require package-level initialization.
             return Task.FromResult(true);
         }
 
         public Task DestroyAsync()
         {
-            // Addressables doesn't have a package-level destroy concept.
+            // No-op
             return Task.CompletedTask;
         }
 
         public Task<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
-            // Addressables does not have a direct equivalent to YooAsset's package versioning.
-            // This could be implemented with custom catalog versioning if needed.
-            return Task.FromResult(string.Empty);
+            return Task.FromResult("N/A");
         }
 
         public Task<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
-            // This corresponds to Addressables.UpdateCatalogs
-            // For simplicity, we'll assume auto-updates or manual updates via Unity's tools.
-            // A more complex implementation could be added here.
-            return Task.FromResult(true);
+            throw new NotImplementedException("Resources does not support manifest updates.");
         }
 
         public Task<bool> ClearCacheFilesAsync(string clearMode, object clearParam = null, CancellationToken cancellationToken = default)
         {
-            // Caching.ClearCache() can be used, but it's global.
-            // We can add more specific logic if required.
-            return Task.FromResult(Caching.ClearCache());
+            // No-op, Resources are built-in.
+            return Task.FromResult(true);
         }
 
         public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
         {
-            throw new NotImplementedException("Addressables does not support creating a downloader for 'all' assets in this manner. Use tags or locations.");
+            throw new NotImplementedException("Resources does not support downloading.");
         }
 
         public IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
         {
-            if (tags == null || tags.Length == 0) return new AddressableDownloader(default(AsyncOperationHandle));
-            AsyncOperationHandle handle = Addressables.DownloadDependenciesAsync(tags, Addressables.MergeMode.Union);
-            return new AddressableDownloader(handle);
+            throw new NotImplementedException("Resources does not support downloading.");
         }
 
         public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
         {
-            if (locations == null || locations.Length == 0) return new AddressableDownloader(default(AsyncOperationHandle));
-            AsyncOperationHandle handle = Addressables.DownloadDependenciesAsync(locations, Addressables.MergeMode.Union);
-            return new AddressableDownloader(handle);
+            throw new NotImplementedException("Resources does not support downloading.");
         }
 
         public Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException();
+            throw new NotImplementedException("Resources does not support pre-downloading.");
         }
 
         public Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException();
+            throw new NotImplementedException("Resources does not support pre-downloading.");
         }
 
         public Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException();
+            throw new NotImplementedException("Resources does not support pre-downloading.");
         }
 
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object
         {
-            var handle = Addressables.LoadAssetAsync<TAsset>(location);
-            var wrapped = new AddressableAssetHandle<TAsset>(RegisterHandle(out int id), id, handle);
+            var asset = Resources.Load<TAsset>(location);
+            var handle = new ResourcesAssetHandle<TAsset>(RegisterHandle(out int id), id, asset);
             HandleTracker.Register(id, packageName, $"AssetSync {typeof(TAsset).Name} : {location}");
-            return wrapped;
+            return handle;
         }
 
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location) where TAsset : UnityEngine.Object
         {
-            var handle = Addressables.LoadAssetAsync<TAsset>(location);
-            var wrapped = new AddressableAssetHandle<TAsset>(RegisterHandle(out int id), id, handle);
+            // Simulate async loading for Resources
+            var asset = Resources.Load<TAsset>(location);
+            var handle = new ResourcesAssetHandle<TAsset>(RegisterHandle(out int id), id, asset);
             HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
-            return wrapped;
+            return handle;
         }
 
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location) where TAsset : UnityEngine.Object
         {
-            var handle = Addressables.LoadAssetsAsync<TAsset>(location, null);
-            var wrapped = new AddressableAllAssetsHandle<TAsset>(RegisterHandle(out int id), id, handle);
+            var assets = Resources.LoadAll<TAsset>(location);
+            var handle = new ResourcesAllAssetsHandle<TAsset>(RegisterHandle(out int id), id, assets);
             HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
-            return wrapped;
+            return handle;
         }
 
         public GameObject InstantiateSync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false)
         {
-            if (handle is AddressableAssetHandle<GameObject> h && h.Raw.IsDone)
+            if (handle.Asset)
             {
-                return GameObject.Instantiate(h.Asset, parent, worldPositionStays);
+                return GameObject.Instantiate(handle.Asset, parent, worldPositionStays);
             }
             return null;
         }
 
         public IInstantiateHandle InstantiateAsync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false, bool setActive = true)
         {
-            var op = Addressables.InstantiateAsync(handle.AssetObject, parent, worldPositionStays, setActive);
-            var wrapped = new AddressableInstantiateHandle(RegisterHandle(out int id), id, op);
+            GameObject instance = null;
+            if (handle.Asset)
+            {
+                instance = GameObject.Instantiate(handle.Asset, parent, worldPositionStays);
+                instance.SetActive(setActive);
+            }
+            var wrapped = new ResourcesInstantiateHandle(RegisterHandle(out int id), id, instance);
             HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle.AssetObject.name}");
             return wrapped;
         }
 
         public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100)
         {
-            var op = Addressables.LoadSceneAsync(sceneLocation, loadMode, activateOnLoad, priority);
-            var h = new AddressableSceneHandle(RegisterHandle(out int id), id, op);
-            HandleTracker.Register(id, packageName, $"SceneAsync : {sceneLocation}");
-            return h;
+            throw new NotImplementedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
         }
 
         public ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single)
         {
-            var op = Addressables.LoadSceneAsync(sceneLocation, loadMode, true);
-            var h = new AddressableSceneHandle(RegisterHandle(out int id), id, op);
-            HandleTracker.Register(id, packageName, $"SceneSync : {sceneLocation}");
-            return h;
+            throw new NotImplementedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
         }
 
-        public async Task UnloadSceneAsync(ISceneHandle sceneHandle)
+        public Task UnloadSceneAsync(ISceneHandle sceneHandle)
         {
-            if (sceneHandle is AddressableSceneHandle sh && sh.Raw.IsValid())
-            {
-                await Addressables.UnloadSceneAsync(sh.Raw).Task;
-            }
+            throw new NotImplementedException("Unloading scenes from Resources is not supported via this API.");
         }
 
         public async Task UnloadUnusedAssetsAsync()
@@ -173,4 +157,3 @@ namespace CycloneGames.AssetManagement.Runtime
         }
     }
 }
-#endif // ADDRESSABLES_PRESENT

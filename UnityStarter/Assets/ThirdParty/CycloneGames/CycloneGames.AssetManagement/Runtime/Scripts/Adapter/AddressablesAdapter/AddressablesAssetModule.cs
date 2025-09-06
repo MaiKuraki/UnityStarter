@@ -7,9 +7,9 @@ using UnityEngine.AddressableAssets;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    public sealed class AddressableAssetModule : IAssetModule
+    public sealed class AddressablesAssetModule : IAssetModule
     {
-        private readonly Dictionary<string, AddressableAssetPackage> packages = new Dictionary<string, AddressableAssetPackage>(StringComparer.Ordinal);
+        private readonly Dictionary<string, AddressablesAssetPackage> packages = new Dictionary<string, AddressablesAssetPackage>(StringComparer.Ordinal);
         private bool initialized;
         private AsyncOperationHandle initializationHandle;
 
@@ -52,11 +52,11 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetPackage CreatePackage(string packageName)
         {
-            if (string.IsNullOrEmpty(packageName)) throw new ArgumentException("[AddressableAssetModule] Package name is null or empty", nameof(packageName));
-            if (!initialized) throw new InvalidOperationException("[AddressableAssetModule] Asset module not initialized");
-            if (packages.ContainsKey(packageName)) throw new InvalidOperationException($"[AddressableAssetModule] Package already exists: {packageName}");
+            if (string.IsNullOrEmpty(packageName)) throw new ArgumentException("[AddressablesAssetModule] Package name is null or empty", nameof(packageName));
+            if (!initialized) throw new InvalidOperationException("[AddressablesAssetModule] Asset module not initialized");
+            if (packages.ContainsKey(packageName)) throw new InvalidOperationException($"[AddressablesAssetModule] Package already exists: {packageName}");
 
-            var package = new AddressableAssetPackage(packageName);
+            var package = new AddressablesAssetPackage(packageName);
             packages.Add(packageName, package);
             return package;
         }
