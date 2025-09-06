@@ -66,7 +66,7 @@ Note: The **GameplayFramework** and **Factory** modules **include** DI samples.<
 - **[Tools](Tools)** - A collection of utility scripts, contains specific initial pipeline for UnityStart and common tasks in Unity development and general project management.
 
 ## Project Structure
-The main source code for the modules is located in the [`UnityStarter/Assets/ThirdParty/`](./UnityStarter/Assets/ThirdParty/) directory. The project is developed using a Unity Package-based approach with separated Assembly Definitions (asmdef), which allows for easy removal of unwanted modules and ensures a clear separation of concerns.
+The main source code for the modules is located in the [`UnityStarter/Assets/ThirdParty/CycloneGames`](./UnityStarter/Assets/ThirdParty/CycloneGames) directory. The project is developed using a Unity Package-based approach with separated Assembly Definitions (asmdef), which allows for easy removal of unwanted modules and ensures a clear separation of concerns.
 
 ```
 .
