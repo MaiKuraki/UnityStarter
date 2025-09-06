@@ -67,7 +67,9 @@ namespace CycloneGames.UIFramework.Runtime.Samples
             try
             {
                 // Use the new Resources-based package.
-                var pkg = new ResourcesPackage();
+                IAssetModule module = new ResourcesAssetModule();
+                module.Initialize(new AssetManagementOptions());
+                var pkg = module.CreatePackage("DefaultResources");
                 await pkg.InitializeAsync(default);
                 AssetManagementLocator.DefaultPackage = pkg;
                 Debug.Log("[UIFrameworkSample] DefaultPackage set to ResourcesPackage.");

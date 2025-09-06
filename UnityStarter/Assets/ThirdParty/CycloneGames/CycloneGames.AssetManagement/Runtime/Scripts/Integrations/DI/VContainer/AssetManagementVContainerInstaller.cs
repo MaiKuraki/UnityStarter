@@ -28,7 +28,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
 #if YOOASSET_PRESENT
                 builder.Register<YooAssetModule>(Lifetime.Singleton).As<IAssetModule>();
 #elif ADDRESSABLES_PRESENT
-                builder.Register<AddressableAssetModule>(Lifetime.Singleton).As<IAssetModule>();
+                builder.Register<AddressablesAssetModule>(Lifetime.Singleton).As<IAssetModule>();
 #endif
             }
 

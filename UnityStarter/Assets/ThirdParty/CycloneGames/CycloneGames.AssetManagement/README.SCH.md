@@ -218,8 +218,8 @@ using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/M
 ```csharp
 using CycloneGames.AssetManagement;
 
-// 1) 初始化 AddressableAssetModule
-IAssetModule module = new AddressableAssetModule();
+// 1) 初始化 AddressablesAssetModule
+IAssetModule module = new AddressablesAssetModule();
 module.Initialize(new AssetManagementOptions());
 
 // 2) 创建一个资源包
