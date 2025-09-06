@@ -67,7 +67,7 @@
 - **[Tools](Tools)** - 一系列实用工具脚本，包含针对本项目的特有初始化处理脚本，以及常规项目管理中的常见任务。
 
 ## 项目结构说明
-项目主要源码位于 [`UnityStarter/Assets/ThirdParty/`](./UnityStarter/Assets/ThirdParty/) 目录下。采用 **Unity Package** 形式开发，分离 asmdef 设计，可轻易的选择移除不需要的包。
+项目主要源码位于 [`UnityStarter/Assets/ThirdParty/CycloneGames`](./UnityStarter/Assets/ThirdParty/CycloneGames) 目录下。采用 **Unity Package** 形式开发，模块独立的 asmdef 设计，可轻易的选择移除不需要的包。
 
 ```
 .
