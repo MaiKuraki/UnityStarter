@@ -225,8 +225,8 @@ If you have `com.unity.addressables` in your project, you can use the provided a
 ```csharp
 using CycloneGames.AssetManagement;
 
-// 1) Initialize the AddressableAssetModule
-IAssetModule module = new AddressableAssetModule();
+// 1) Initialize the AddressablesAssetModule
+IAssetModule module = new AddressablesAssetModule();
 module.Initialize(new AssetManagementOptions());
 
 // 2) Create a package (name is logical and doesn't affect Addressables groups)

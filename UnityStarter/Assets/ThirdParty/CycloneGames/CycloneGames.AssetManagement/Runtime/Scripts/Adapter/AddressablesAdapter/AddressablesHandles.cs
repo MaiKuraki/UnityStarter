@@ -13,7 +13,7 @@ namespace CycloneGames.AssetManagement.Runtime
 {
     // --- Handle Implementations ---
 
-    internal abstract class AddressableOperationHandle : IOperation
+    internal abstract class AddressablesOperationHandle : IOperation
     {
         protected readonly Action<int> Unregister;
         protected readonly int Id;
@@ -23,14 +23,14 @@ namespace CycloneGames.AssetManagement.Runtime
         public abstract System.Threading.Tasks.Task Task { get; }
         public abstract void WaitForAsyncComplete();
 
-        protected AddressableOperationHandle(Action<int> unregister, int id)
+        protected AddressablesOperationHandle(Action<int> unregister, int id)
         {
             Unregister = unregister;
             Id = id;
         }
     }
 
-    internal sealed class AddressableAssetHandle<TAsset> : AddressableOperationHandle, IAssetHandle<TAsset> where TAsset : UnityEngine.Object
+    internal sealed class AddressableAssetHandle<TAsset> : AddressablesOperationHandle, IAssetHandle<TAsset> where TAsset : UnityEngine.Object
     {
         internal readonly AsyncOperationHandle<TAsset> Raw;
         public override bool IsDone => Raw.IsDone;
@@ -54,7 +54,7 @@ namespace CycloneGames.AssetManagement.Runtime
         }
     }
 
-    internal sealed class AddressableAllAssetsHandle<TAsset> : AddressableOperationHandle, IAllAssetsHandle<TAsset> where TAsset : UnityEngine.Object
+    internal sealed class AddressableAllAssetsHandle<TAsset> : AddressablesOperationHandle, IAllAssetsHandle<TAsset> where TAsset : UnityEngine.Object
     {
         private readonly AsyncOperationHandle<IList<TAsset>> raw;
         public override bool IsDone => raw.IsDone;
@@ -77,7 +77,7 @@ namespace CycloneGames.AssetManagement.Runtime
         }
     }
 
-    internal sealed class AddressableInstantiateHandle : AddressableOperationHandle, IInstantiateHandle
+    internal sealed class AddressableInstantiateHandle : AddressablesOperationHandle, IInstantiateHandle
     {
         private readonly AsyncOperationHandle<GameObject> raw;
         public override bool IsDone => raw.IsDone;
@@ -100,7 +100,7 @@ namespace CycloneGames.AssetManagement.Runtime
         }
     }
 
-    internal sealed class AddressableSceneHandle : AddressableOperationHandle, ISceneHandle
+    internal sealed class AddressableSceneHandle : AddressablesOperationHandle, ISceneHandle
     {
         internal readonly AsyncOperationHandle<SceneInstance> Raw;
         public override bool IsDone => Raw.IsDone;
