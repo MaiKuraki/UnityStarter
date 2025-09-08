@@ -208,15 +208,15 @@ graph TD
     *   **当数量达到“海量”（成千上万）**: 此时遍历激活对象的缓存效率成为新瓶颈，**DOD** 成为唯一选择。
 *   **具体情景**:
     *   **常规射击游戏的子弹**: 使用对象池管理的 `GameObject` Prefab。
-    *   **弹幕射击游戏的弹幕海**: 使用我们实现的 `DODBulletManager`。
-    *   **VFX Graph / Particle System**: Unity内置的特效系统，其底层就是DOD思想。
+    *   **弹幕射击游戏的弹幕海**: 使用 DOD 设计。
+    *   **VFX Graph / Particle System**: 使用 DOD 思想。
 
 #### 5. 程序化环境 (适用：DOD)
 
 *   **特点**: 渲染一片广袤的森林、草原或陨石带，如果为每一棵草、每一块石头都创建一个`GameObject`，会瞬间耗尽性能。
 *   **具体情景**:
     *   **DOD 森林模拟**: 管理成千上万棵树的生长和渲染。
-    *   一个`GrassManager`，使用`DrawMeshInstanced`来渲染百万级别的草叶。(Unity 中的 API)
+    *   **草地模拟**，使用`DrawMeshInstanced`来渲染百万级别的草叶。(Unity 中的 API)
 
 #### 6. 大规模AI群组/模拟 (适用：ECS)
 
