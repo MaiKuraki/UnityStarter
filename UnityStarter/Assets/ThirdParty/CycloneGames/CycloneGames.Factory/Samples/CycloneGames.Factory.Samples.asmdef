@@ -3,7 +3,10 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
-        "CycloneGames.Factory.Runtime"
+        "CycloneGames.Factory.Runtime",
+        "Unity.Burst",
+        "Unity.Mathematics",
+        "Unity.Collections"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -12,6 +15,22 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.mathematics",
+            "expression": "",
+            "define": "PRESENT_MATHEMATICS"
+        },
+        {
+            "name": "com.unity.collections",
+            "expression": "",
+            "define": "PRESENT_COLLECTIONS"
+        },
+        {
+            "name": "com.unity.burst",
+            "expression": "",
+            "define": "PRESENT_BURST"
+        }
+    ],
     "noEngineReferences": false
 }
