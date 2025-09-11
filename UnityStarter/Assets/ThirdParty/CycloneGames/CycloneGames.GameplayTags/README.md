@@ -49,6 +49,32 @@ GameplayTagManager.RegisterDynamicTag("Runtime.Dynamic.Tag");
 GameplayTagManager.RegisterDynamicTags(new [] { "A.B", "A.C" });
 ```
 
+### 4) Declare tags in JSON files
+
+- Create `.json` files inside the `ProjectSettings/GameplayTags/` directory.
+- The manager will automatically scan these files and register the tags.
+- This method is ideal for designers or for managing large sets of tags without modifying code.
+
+Example `ProjectSettings/GameplayTags/DamageTags.json`:
+```json
+{
+  "Damage.Physical.Slash": {
+    "Comment": "Damage from a slashing weapon."
+  },
+  "Damage.Magical.Fire": {
+    "Comment": "Damage from a fire spell."
+  }
+}
+```
+
+## Editor Features
+
+The Inspector for `GameplayTagContainer` has been enhanced for a better workflow:
+- **Edit Tags Button**: Opens a popup window with a searchable and filterable tree view of all available tags.
+- **Add/Remove Directly**: Check or uncheck tags in the tree view to add or remove them from the container.
+- **Clear All**: A button to quickly remove all tags from the container.
+- **Live Reloading**: The editor automatically watches for changes in `.json` tag files and reloads the tag database.
+
 ## Usage
 
 ### Request and use tags
@@ -72,15 +98,16 @@ container.RegisterTagEventCallback(tag, GameplayTagEventType.AnyCountChange, (t,
 
 ## Differences vs Upstream (BandoWare/GameplayTags)
 
-- Namespace/package: `CycloneGames.GameplayTags` vs `BandoWare.GameplayTags`.
-- Added runtime dynamic registration APIs:
-  - `GameplayTagManager.RegisterDynamicTag(string name, string? description = null, GameplayTagFlags flags = GameplayTagFlags.None)`
-  - `GameplayTagManager.RegisterDynamicTags(IEnumerable<string> tags)`
-- Static-class registration support:
-  - `[assembly: RegisterGameplayTagsFrom(typeof(YourStaticClass))]` scans const string fields and registers them.
-- Startup safety:
-  - `GameplayTagManagerRuntimeInitialization` calls `InitializeIfNeeded` at `BeforeSceneLoad` to avoid build-time deserialization issues.
-- Behavioral tweaks:
-  - `RequestTag` no longer logs warnings for missing tags; returns `GameplayTag.None`. Use `TryRequestTag` to probe without allocations.
-- Minor utilities and naming alignment in runtime/editor folders.
+This package now incorporates many features from the upstream repository while retaining its unique extensions.
 
+- **Unified Registration**: Now supports four registration methods: assembly attributes, static classes, runtime dynamic registration, and **JSON files**.
+- **Enhanced Editor Workflow**: A significantly improved Inspector UI for `GameplayTagContainer` with a popup tree view for direct tag management.
+- **Added `GameplayTag.IsValid` Property**: A new boolean property on `GameplayTag` to check if a tag is registered and valid, which is useful for handling tags that may have been renamed or deleted.
+- **Performance & Stability**:
+  - Includes `GameplayTagContainerPool` to reduce runtime garbage collection.
+  - Tags are compiled into an efficient binary format during the build process for faster loading in standalone players.
+- **Retained CycloneGames Extensions**:
+  - Static-class registration (`[assembly: RegisterGameplayTagsFrom(...)]`).
+  - Runtime dynamic registration (`RegisterDynamicTag`, `RegisterDynamicTags`).
+  - Early runtime initialization via `GameplayTagManagerRuntimeInitialization`.
+- **Consistent API Behavior**: `RequestTag` still returns `GameplayTag.None` for missing tags, and `TryRequestTag` is available.

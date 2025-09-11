@@ -6,13 +6,13 @@ namespace CycloneGames.GameplayTags.Runtime
    {
       public static bool HasTag<T>(this T container, GameplayTag gameplayTag) where T : IGameplayTagContainer
       {
-         if (gameplayTag == GameplayTag.None || container == null || container.IsEmpty) return false;
+         if (gameplayTag.IsNone || container == null || container.IsEmpty) return false;
          return container.Indices.Implicit != null && BinarySearchUtility.Search(container.Indices.Implicit, gameplayTag.RuntimeIndex) >= 0;
       }
 
       public static bool HasTagExact<T>(this T container, GameplayTag gameplayTag) where T : IGameplayTagContainer
       {
-         if (gameplayTag == GameplayTag.None || container == null || container.IsEmpty) return false;
+         if (gameplayTag.IsNone || container == null || container.IsEmpty) return false;
          return container.Indices.Explicit != null && BinarySearchUtility.Search(container.Indices.Explicit, gameplayTag.RuntimeIndex) >= 0;
       }
 

@@ -539,7 +539,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 // Iterate through the tags in the effect's cue container.
                 foreach (var cueTag in effect.Spec.Def.GameplayCues)
                 {
-                    if (cueTag == GameplayTag.None) continue;
+                    if (cueTag.IsNone) continue;
 
                     GameplayCueManager.Instance.HandleCue(cueTag, eventType, effect.Spec).Forget();
 
@@ -576,7 +576,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 foreach (var cueTag in effect.Spec.Def.GameplayCues)
                 {
-                    if (cueTag == GameplayTag.None) continue;
+                    if (cueTag.IsNone) continue;
                     GameplayCueManager.Instance.HandleCue(cueTag, EGameplayCueEvent.Removed, effect.Spec).Forget();
                 }
             }
