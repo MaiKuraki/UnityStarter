@@ -49,7 +49,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void RegisterStaticCue(GameplayTag cueTag, string assetAddress)
         {
-            if (cueTag != GameplayTag.None && !string.IsNullOrEmpty(assetAddress))
+            if (cueTag.IsNone && !string.IsNullOrEmpty(assetAddress))
             {
                 staticCueAddressRegistry[cueTag] = assetAddress;
             }
@@ -60,7 +60,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void RegisterRuntimeHandler(GameplayTag cueTag, IGameplayCueHandler handler)
         {
-            if (cueTag == GameplayTag.None || handler == null) return;
+            if (cueTag.IsNone || handler == null) return;
             if (!runtimeCueHandlers.TryGetValue(cueTag, out var handlers))
             {
                 handlers = new List<IGameplayCueHandler>();
@@ -74,7 +74,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void UnregisterRuntimeHandler(GameplayTag cueTag, IGameplayCueHandler handler)
         {
-            if (cueTag == GameplayTag.None || handler == null) return;
+            if (cueTag.IsNone || handler == null) return;
             if (runtimeCueHandlers.TryGetValue(cueTag, out var handlers))
             {
                 handlers.Remove(handler);
@@ -86,7 +86,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public async UniTaskVoid HandleCue(GameplayTag cueTag, EGameplayCueEvent eventType, GameplayEffectSpec spec)
         {
-            if (!isInitialized || cueTag == GameplayTag.None) return;
+            if (!isInitialized || cueTag.IsNone) return;
 
             var parameters = new GameplayCueParameters(spec);
 

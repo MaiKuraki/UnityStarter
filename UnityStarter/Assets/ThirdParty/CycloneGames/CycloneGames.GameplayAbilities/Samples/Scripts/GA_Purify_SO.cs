@@ -89,7 +89,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         private bool CanDispelPoison(AbilitySystemComponent targetASC, int dispelLevel)
         {
             var poisonDebuffTag = GameplayTagManager.RequestTag(GASSampleTags.Debuff_Poison);
-            if (poisonDebuffTag == GameplayTag.None) return false;
+            if (poisonDebuffTag.IsNone) return false;
 
             foreach (var activeEffect in targetASC.ActiveEffects)
             {

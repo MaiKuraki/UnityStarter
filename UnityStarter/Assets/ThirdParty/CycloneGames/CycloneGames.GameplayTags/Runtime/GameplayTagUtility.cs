@@ -93,7 +93,7 @@ namespace CycloneGames.GameplayTags.Runtime
          return name[(indexOfPoint + 1)..];
       }
 
-      public static void ValidateName(string name)
+      public static bool IsNameValid(string name, out string errorMessage)
       {
          static bool IsValidLabelCharacter(char c)
          {
@@ -103,9 +103,7 @@ namespace CycloneGames.GameplayTags.Runtime
          static bool AcceptLabel(string name, ref int position)
          {
             if (position >= name.Length || !IsValidLabelCharacter(name[position]))
-            {
                return false;
-            }
 
             position++;
             while (position < name.Length && IsValidLabelCharacter(name[position]))
@@ -118,7 +116,8 @@ namespace CycloneGames.GameplayTags.Runtime
 
          if (string.IsNullOrEmpty(name))
          {
-            throw new ArgumentException("Tag name cannot be null or empty.");
+            errorMessage = "Tag name cannot be null or empty.";
+            return false;
          }
 
          int position = 0;
@@ -129,17 +128,26 @@ namespace CycloneGames.GameplayTags.Runtime
                position++;
                if (!AcceptLabel(name, ref position))
                {
-                  throw new ArgumentException($"Invalid tag name '{name}'. Unexpected character at position {position}.");
+                  errorMessage = $"Invalid tag name '{name}'. Unexpected character at position {position}.";
+                  return false;
                }
             }
          }
 
          if (position == name.Length)
          {
-            return;
+            errorMessage = null;
+            return true;
          }
 
-         throw new ArgumentException($"Invalid tag name '{name}'. Unexpected character at position {position}.");
+         errorMessage = $"Invalid tag name '{name}'. Unexpected character at position {position}.";
+         return false;
+      }
+
+      public static void ValidateName(string name)
+      {
+         if (!IsNameValid(name, out string errorMessage))
+            throw new ArgumentException(errorMessage);
       }
    }
 }

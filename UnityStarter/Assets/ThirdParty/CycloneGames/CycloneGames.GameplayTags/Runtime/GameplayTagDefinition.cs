@@ -8,7 +8,13 @@ namespace CycloneGames.GameplayTags.Runtime
    [DebuggerDisplay("{TagName,nq}")]
    internal class GameplayTagDefinition
    {
-      public GameplayTag Tag => new(TagName, RuntimeIndex);
+      public static GameplayTagDefinition NoneTagDefinition { get; } = new();
+
+      public GameplayTag Tag => new(this);
+
+      public bool IsValid => RuntimeIndex >= 0;
+
+      public int SourceCount => m_Sources.Count;
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public ReadOnlySpan<GameplayTagDefinition> Children => new(m_Children);
@@ -43,7 +49,7 @@ namespace CycloneGames.GameplayTags.Runtime
       /// <summary>
       /// The description of the tag. This is to provide more information about the tag during development.
       /// </summary>
-      public string Description { get; }
+      public string Description { get; internal set; }
 
       /// <summary>
       /// The flags of the tag.
@@ -63,10 +69,13 @@ namespace CycloneGames.GameplayTags.Runtime
       public int RuntimeIndex { get; internal set; }
       public GameplayTagDefinition ParentTagDefinition { get; private set; }
 
-      private GameplayTag[] m_ChildTags;
-      private GameplayTag[] m_HierarchyTags;
-      private GameplayTag[] m_ParentTags;
-      private GameplayTagDefinition[] m_Children;
+
+      private GameplayTag[] m_ParentTags = Array.Empty<GameplayTag>();
+      private GameplayTag[] m_ChildTags = Array.Empty<GameplayTag>();
+      private GameplayTag[] m_HierarchyTags = Array.Empty<GameplayTag>();
+      private GameplayTagDefinition[] m_Children = Array.Empty<GameplayTagDefinition>();
+      private List<IGameplayTagSource> m_Sources = new();
+      private int m_NameHash;
 
       /// <summary>
       /// Default constructor to create a "None" tag definition.
@@ -83,6 +92,7 @@ namespace CycloneGames.GameplayTags.Runtime
          m_ChildTags = Array.Empty<GameplayTag>();
          m_HierarchyTags = Array.Empty<GameplayTag>();
          m_Children = Array.Empty<GameplayTagDefinition>();
+         m_NameHash = TagName.GetHashCode();
       }
 
       public GameplayTagDefinition(string name, string description, GameplayTagFlags flags = GameplayTagFlags.None)
@@ -90,14 +100,17 @@ namespace CycloneGames.GameplayTags.Runtime
          TagName = name;
          Description = description;
          Flags = flags;
+         m_NameHash = name.GetHashCode();
 
          Label = GameplayTagUtility.GetLabel(name);
          HierarchyLevel = GameplayTagUtility.GetHeirarchyLevelFromName(name);
       }
 
-      public static GameplayTagDefinition CreateNoneTagDefinition()
+      public static GameplayTagDefinition CreateInvalidDefinition(string name)
       {
-         return new GameplayTagDefinition();
+         GameplayTagDefinition invalidDefinition = new(name, "Invalid Tag");
+         invalidDefinition.SetRuntimeIndex(-1);
+         return invalidDefinition;
       }
 
       /// <summary>
@@ -107,21 +120,15 @@ namespace CycloneGames.GameplayTags.Runtime
       public bool IsChildOf(GameplayTag tag)
       {
          if (RuntimeIndex <= tag.RuntimeIndex)
-         {
             return false;
-         }
 
          if (m_ParentTags.Length > 1 && tag.RuntimeIndex < m_ParentTags[0].RuntimeIndex)
-         {
             return false;
-         }
 
          for (int i = 0; i < m_ParentTags.Length; i++)
          {
             if (m_ParentTags[i] == tag)
-            {
                return true;
-            }
          }
 
          return false;
@@ -134,21 +141,15 @@ namespace CycloneGames.GameplayTags.Runtime
       public bool IsParentOf(GameplayTag tag)
       {
          if (RuntimeIndex >= tag.RuntimeIndex)
-         {
             return false;
-         }
 
          if (m_ChildTags.Length > 1 && tag.RuntimeIndex > m_ChildTags[^1].RuntimeIndex)
-         {
             return false;
-         }
 
          for (int i = 0; i < m_ChildTags.Length; i++)
          {
             if (m_ChildTags[i] == tag)
-            {
                return true;
-            }
          }
 
          return false;
@@ -184,6 +185,30 @@ namespace CycloneGames.GameplayTags.Runtime
       public void SetRuntimeIndex(int index)
       {
          RuntimeIndex = index;
+      }
+
+      public void AddSource(IGameplayTagSource source)
+      {
+         if (!m_Sources.Contains(source))
+            m_Sources.Add(source);
+      }
+
+      public override int GetHashCode()
+      {
+         return m_NameHash;
+      }
+
+      public IGameplayTagSource GetSource(int index)
+      {
+         if (index < 0 || index >= m_Sources.Count)
+            throw new ArgumentOutOfRangeException(nameof(index), "Index is out of range.");
+
+         return m_Sources[index];
+      }
+
+      public IEnumerable<IGameplayTagSource> GetAllSources()
+      {
+         return m_Sources.AsReadOnly();
       }
    }
 }
