@@ -34,43 +34,86 @@ namespace CycloneGames.GameplayTags.Editor
         {
             float indent = GetContentIndent(args.item);
             Rect rect = args.rowRect;
-            rect.xMin += indent - (hasSearch ? 14 : 0);
-            
-            GameplayTagTreeViewItem item = args.item as GameplayTagTreeViewItem;
-            
-            using (new EditorGUI.DisabledGroupScope(item.IsIncluded && !item.IsExplicitIncluded))
-            {
-                s_TempContent.text = hasSearch ? item.Tag.Name : args.label;
-                s_TempContent.tooltip = item.Tag.Description;
+            rect.xMin += indent + 2 - (hasSearch ? 14 : 0);
 
-                EditorGUI.BeginChangeCheck();
-                bool added = EditorGUI.ToggleLeft(rect, s_TempContent, item.IsIncluded);
-                if (EditorGUI.EndChangeCheck())
+            GameplayTagTreeViewItem item = args.item as GameplayTagTreeViewItem;
+            bool added;
+
+            EditorGUI.BeginChangeCheck();
+            EditorGUI.showMixedValue = item.IsIncluded && !item.IsExplicitIncluded;
+            added = EditorGUI.Toggle(rect, s_TempContent, item.IsIncluded);
+            EditorGUI.showMixedValue = false;
+
+            if (EditorGUI.EndChangeCheck())
+            {
+                if (added)
+                    AddTag(item.Tag);
+                else
+                    RemoveTag(item.Tag);
+            }
+
+            Rect baseRowRect = rect;
+            baseRowRect.xMin += 18;
+            DoTagRowGUI(baseRowRect, item);
+        }
+
+        protected override void OnTagAdded(GameplayTag tag)
+        {
+            AddTag(tag);
+        }
+
+        private void AddTag(GameplayTag tag)
+        {
+            if (!tag.IsValid)
+                return;
+
+            for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
+            {
+                SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
+                if (string.Equals(element.stringValue, tag.Name, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+
+            m_ExplicitTagsProperty.InsertArrayElementAtIndex(0);
+            SerializedProperty element1 = m_ExplicitTagsProperty.GetArrayElementAtIndex(0);
+            element1.stringValue = tag.Name;
+
+            m_ExplicitTagsProperty.serializedObject.ApplyModifiedProperties();
+            m_ExplicitTagsProperty.serializedObject.Update();
+            UpdateIncludedTags();
+        }
+
+        private void RemoveTag(GameplayTag tag)
+        {
+            for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
+            {
+                SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
+                if (string.Equals(element.stringValue, tag.Name, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (added)
-                    {
-                        m_ExplicitTagsProperty.InsertArrayElementAtIndex(0);
-                        SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(0);
-                        element.stringValue = item.Tag.Name;
-                    }
-                    else
-                    {
-                        for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
-                        {
-                            SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
-                            if (string.Equals(element.stringValue, item.Tag.Name, StringComparison.OrdinalIgnoreCase))
-                            {
-                                m_ExplicitTagsProperty.DeleteArrayElementAtIndex(i);
-                                break;
-                            }
-                        }
-                    }
-                    
-                    m_ExplicitTagsProperty.serializedObject.ApplyModifiedProperties();
-                    m_ExplicitTagsProperty.serializedObject.Update();
-                    UpdateIncludedTags();
+                    m_ExplicitTagsProperty.DeleteArrayElementAtIndex(i);
+                    break;
                 }
             }
+
+            m_ExplicitTagsProperty.serializedObject.ApplyModifiedProperties();
+            m_ExplicitTagsProperty.serializedObject.Update();
+            UpdateIncludedTags();
+        }
+
+        protected override void OnTagDeleted(GameplayTag tag)
+        {
+            for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
+            {
+                SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
+                if (string.Equals(element.stringValue, tag.Name, StringComparison.OrdinalIgnoreCase))
+                {
+                    m_ExplicitTagsProperty.DeleteArrayElementAtIndex(i);
+                    break;
+                }
+            }
+            m_ExplicitTagsProperty.serializedObject.ApplyModifiedProperties();
+            m_ExplicitTagsProperty.serializedObject.Update();
+            UpdateIncludedTags();
         }
 
         private void UpdateIncludedTags()
@@ -88,43 +131,48 @@ namespace CycloneGames.GameplayTags.Editor
             {
                 SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
                 GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue);
-                GameplayTagTreeViewItem item = FindItem(tag.RuntimeIndex);
-                if (item == null)
-                {
-                    Debug.Log($"Tag '{element.stringValue}' not found in TreeView.");
+                if (!tag.IsValid)
                     continue;
-                }
+
+                GameplayTagTreeViewItem item = FindItem(tag.RuntimeIndex);
+
+                if (item == null)
+                    continue;
 
                 item.IsExplicitIncluded = true;
                 item.IsIncluded = true;
-                
+
                 foreach (GameplayTag parentTag in tag.ParentTags)
                 {
                     GameplayTagTreeViewItem parentItem = FindItem(parentTag.RuntimeIndex);
-                    if (parentItem != null)
-                    {
-                        parentItem.IsIncluded = true;
-                    }
+                    if (parentItem == null)
+                        continue;
+
+                    parentItem.IsIncluded = true;
                 }
             }
         }
-        
+
         private void ExpandIncludedTagItems()
         {
             for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
             {
                 SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
                 GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue);
-                if (tag == GameplayTag.None) continue;
-                
+                if (!tag.IsValid)
+                    continue;
+
                 GameplayTagTreeViewItem item = FindItem(tag.RuntimeIndex);
-                if (item == null) continue;
-                
-                var parentItem = item.parent as GameplayTagTreeViewItem;
-                while (parentItem != null)
+                if (item == null)
+                    continue;
+
+                foreach (GameplayTag parentTag in tag.ParentTags)
                 {
+                    GameplayTagTreeViewItem parentItem = FindItem(parentTag.RuntimeIndex);
+                    if (parentItem == null)
+                        continue;
+
                     SetExpanded(parentItem.id, true);
-                    parentItem = parentItem.parent as GameplayTagTreeViewItem;
                 }
             }
         }

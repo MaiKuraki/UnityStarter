@@ -125,7 +125,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <param name="magnitude">The float value to store.</param>
         public void SetSetByCallerMagnitude(GameplayTag dataTag, float magnitude)
         {
-            if (dataTag == GameplayTag.None)
+            if (dataTag.IsNone)
             {
                 // Optional: Add a warning here if you want to prevent using invalid tags.
                 return;

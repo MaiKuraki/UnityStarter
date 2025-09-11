@@ -29,7 +29,7 @@ namespace CycloneGames.GameplayTags.Editor
 
          GameplayTag tag = GameplayTagManager.RequestTag(nameProperty.stringValue);
 
-         if (tag != GameplayTag.None)
+         if (tag.IsNone)
          {
             s_TempContent.text = tag.Name;
             s_TempContent.tooltip = tag.Description;
