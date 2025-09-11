@@ -3,11 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Diagnostics.CodeAnalysis;
-
-#if UNITY_2017_1_OR_NEWER
 using UnityEngine;
-#endif
 
 namespace CycloneGames.GameplayTags.Runtime
 {
@@ -80,7 +76,7 @@ namespace CycloneGames.GameplayTags.Runtime
       /// <summary>
       /// Gets the indeces of tags in this container.
       /// </summary>
-      GameplayTagContainerIndices Indices { get; }
+      public GameplayTagContainerIndices Indices { get; }
 
       /// <summary>
       /// Adds a tag to this container.
@@ -157,10 +153,7 @@ namespace CycloneGames.GameplayTags.Runtime
    [Serializable]
    [DebuggerTypeProxy(typeof(GameplayTagContainerDebugView))]
    [DebuggerDisplay("{DebuggerDisplay,nq}")]
-   public class GameplayTagContainer : IGameplayTagContainer, IEnumerable<GameplayTag>
-#if UNITY_2017_1_OR_NEWER
-   , ISerializationCallbackReceiver
-#endif
+   public class GameplayTagContainer : IGameplayTagContainer, ISerializationCallbackReceiver, IEnumerable<GameplayTag>
    {
       public static GameplayTagContainer Empty { get; } = new();
 
@@ -177,12 +170,9 @@ namespace CycloneGames.GameplayTags.Runtime
       public GameplayTagContainerIndices Indices => m_Indices;
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
-      [SuppressMessage("CodeQuality", "IDE0051:Remove unused private members", Justification = "It's used for debugging")]
       private string DebuggerDisplay => $"Count (Explicit, Total) = ({ExplicitTagCount}, {TagCount})";
 
-#if UNITY_2017_1_OR_NEWER
       [SerializeField]
-#endif
       private List<string> m_SerializedExplicitTags;
 
       private GameplayTagContainerIndices m_Indices = new();
@@ -190,7 +180,8 @@ namespace CycloneGames.GameplayTags.Runtime
       /// <summary>
       /// Default constructor.
       /// </summary>
-      public GameplayTagContainer() { }
+      public GameplayTagContainer()
+      { }
 
       /// <summary>
       /// Initializes a new instance of the <see cref="GameplayTagContainer"/> class by copying tags from another container.
@@ -306,7 +297,7 @@ namespace CycloneGames.GameplayTags.Runtime
       {
          static void OrderedListUnion(List<int> a, List<int> b, List<int> dst)
          {
-            dst.Capacity = Math.Max(dst.Capacity, a.Count + b.Count);
+            dst.Capacity = Mathf.Max(dst.Capacity, a.Count + b.Count);
 
             int i = 0, j = 0;
             while (i < a.Count && j < b.Count)
@@ -429,34 +420,42 @@ namespace CycloneGames.GameplayTags.Runtime
          return new GameplayTagEnumerator(m_Indices.Implicit);
       }
 
+      /// <inheritdoc />
       public void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags)
       {
          GameplayTagContainerUtility.GetParentTags(m_Indices.Implicit, tag, parentTags);
       }
 
+      /// <inheritdoc />
       public void GetChildTags(GameplayTag tag, List<GameplayTag> childTags)
       {
          GameplayTagContainerUtility.GetChildTags(m_Indices.Implicit, tag, childTags);
       }
 
+      /// <inheritdoc />
       public void GetExplicitParentTags(GameplayTag tag, List<GameplayTag> parentTags)
       {
          GameplayTagContainerUtility.GetParentTags(m_Indices.Explicit, tag, parentTags);
       }
 
+      /// <inheritdoc />
       public void GetExplicitChildTags(GameplayTag tag, List<GameplayTag> childTags)
       {
          GameplayTagContainerUtility.GetChildTags(m_Indices.Explicit, tag, childTags);
       }
 
+      /// <inheritdoc />
       public void Clear()
       {
          m_Indices.Clear();
          m_SerializedExplicitTags?.Clear();
       }
 
+      /// <inheritdoc />
       public void AddTag(GameplayTag tag)
       {
+         tag.ValidateIsValid();
+
          GameplayTagContainerIndices.Create(ref m_Indices);
          int index = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
          if (index >= 0)
@@ -466,14 +465,18 @@ namespace CycloneGames.GameplayTags.Runtime
          AddImplicitTagsFor(tag);
       }
 
+      /// <inheritdoc />
       public void AddTags<T>(in T container) where T : IGameplayTagContainer
       {
          foreach (GameplayTag tag in container.GetExplicitTags())
             AddTag(tag);
       }
 
+      /// <inheritdoc />
       public void RemoveTag(GameplayTag tag)
       {
+         tag.ValidateIsValid();
+
          if (!m_Indices.IsCreated)
             return;
 
@@ -488,6 +491,7 @@ namespace CycloneGames.GameplayTags.Runtime
          FillImplictTags();
       }
 
+      /// <inheritdoc />
       public void RemoveTags<T>(in T other) where T : IGameplayTagContainer
       {
          if (!m_Indices.IsCreated)
@@ -540,64 +544,25 @@ namespace CycloneGames.GameplayTags.Runtime
          }
       }
 
-      /// <summary>
-      /// Retrieves a list of tag names for serialization.
-      /// This replaces the Unity's OnBeforeSerialize callback.
-      /// </summary>
-      /// <returns>A list of strings representing the explicit tags in the container.</returns>
-      public List<string> GetTagsForSerialization()
+      void ISerializationCallbackReceiver.OnBeforeSerialize()
       {
-         m_SerializedExplicitTags ??= new();
-         m_SerializedExplicitTags.Clear();
-         if (m_Indices.Explicit == null)
-         {
-            return m_SerializedExplicitTags;
-         }
-
-         foreach (GameplayTag tag in new GameplayTagEnumerator(m_Indices.Explicit))
-         {
-            if (tag == GameplayTag.None) continue;
-            m_SerializedExplicitTags.Add(tag.Name);
-         }
-
-         return m_SerializedExplicitTags;
       }
 
-      /// <summary>
-      /// Initializes the container from a list of serialized tag names.
-      /// This replaces the Unity's OnAfterDeserialize callback.
-      /// </summary>
-      /// <param name="serializedTags">A list of tag names to populate the container with.</param>
-      public void InitializeFromSerializedTags(List<string> serializedTags)
+      void ISerializationCallbackReceiver.OnAfterDeserialize()
       {
          m_Indices = GameplayTagContainerIndices.Create();
-         if (serializedTags == null || serializedTags.Count == 0)
+         if (m_SerializedExplicitTags == null || m_SerializedExplicitTags.Count == 0)
             return;
 
-         m_SerializedExplicitTags = new List<string>(serializedTags);
-
-         for (int i = 0; i < m_SerializedExplicitTags.Count;)
+         for (int i = 0; i < m_SerializedExplicitTags.Count; i++)
          {
             GameplayTag tag = GameplayTagManager.RequestTag(m_SerializedExplicitTags[i]);
-            if (tag == GameplayTag.None)
-            {
-               // This tag is no longer valid, remove it.
-               m_SerializedExplicitTags.RemoveAt(i);
+            if (!tag.IsValid)
                continue;
-            }
 
             int index = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
             if (index < 0)
-            {
-               // It's a valid, new tag, add it to the runtime list.
                m_Indices.Explicit.Insert(~index, tag.RuntimeIndex);
-               i++;
-            }
-            else
-            {
-               // It's a duplicate tag name in the serialized list, remove the duplicate.
-               m_SerializedExplicitTags.RemoveAt(i);
-            }
          }
 
          FillImplictTags();
@@ -622,55 +587,5 @@ namespace CycloneGames.GameplayTags.Runtime
       {
          return GetEnumerator();
       }
-
-#if UNITY_2017_1_OR_NEWER
-      public void OnBeforeSerialize()
-      {
-         m_SerializedExplicitTags ??= new();
-         m_SerializedExplicitTags.Clear();
-         if (m_Indices.Explicit == null)
-            return;
-         foreach (GameplayTag tag in new GameplayTagEnumerator(m_Indices.Explicit))
-         {
-            if (tag == GameplayTag.None)
-               continue;
-            m_SerializedExplicitTags.Add(tag.Name);
-         }
-      }
-
-      public void OnAfterDeserialize()
-      {
-         m_Indices = GameplayTagContainerIndices.Create();
-         if (m_SerializedExplicitTags == null || m_SerializedExplicitTags.Count == 0)
-            return;
-         for (int i = 0; i < m_SerializedExplicitTags.Count;)
-         {
-            GameplayTag tag = GameplayTagManager.RequestTag(m_SerializedExplicitTags[i]);
-            if (tag == GameplayTag.None)
-            {
-               // TODO: if you remove some Old tags in code but not remove property from Prefab or in GameObject or ScriptableObject, there will be some invalid Tags,
-               //       but we dont have a good idea to resolve or autoremove in these stuff. The log behind can log the invalid Tags but can not find where the Tags required.
-
-               // Log an error when a serialized tag is no longer registered.
-               // This will be visible in the console and can be configured to break builds.
-
-               // string invalidTagName = m_SerializedExplicitTags[i];
-               // UnityEngine.Debug.LogError($"[GameplayTagContainer]: Tag '<b><color=red>{invalidTagName}</color></b>' was found in serialized data but is no longer registered in GameplayTagManager. It has been removed from the container. Please update your assets or re-register the tag.");
-
-               m_SerializedExplicitTags.RemoveAt(i);
-               continue;
-            }
-            int index = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
-            if (index < 0)
-            {
-               m_Indices.Explicit.Insert(~index, tag.RuntimeIndex);
-               i++;
-               continue;
-            }
-            m_SerializedExplicitTags.RemoveAt(i);
-         }
-         FillImplictTags();
-      }
-#endif
    }
 }

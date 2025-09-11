@@ -1,47 +1,56 @@
 ﻿using System;
 using System.Diagnostics;
-
-#if UNITY_2017_1_OR_NEWER
 using UnityEngine;
-#endif
 
 namespace CycloneGames.GameplayTags.Runtime
 {
    [Serializable]
    [DebuggerDisplay("{m_Name,nq}")]
-   public struct GameplayTag : IEquatable<GameplayTag>
-#if UNITY_2017_1_OR_NEWER
-      , ISerializationCallbackReceiver
-#endif
+   public struct GameplayTag : IEquatable<GameplayTag>, ISerializationCallbackReceiver
    {
-      public static readonly GameplayTag None = new() { m_RuntimeIndex = 0 };
+      /// <summary>
+      /// Represents an invalid tag.
+      /// </summary>
+      public static readonly GameplayTag None = new() { m_Definition = GameplayTagDefinition.NoneTagDefinition };
 
-      public readonly int RuntimeIndex => m_RuntimeIndex;
+      public readonly bool IsNone => m_Definition == null || m_Definition == GameplayTagDefinition.NoneTagDefinition;
+
+      public readonly bool IsValid => m_Definition != null && m_Definition.IsValid;
+
+      public readonly bool IsLeaf => m_Definition != null && m_Definition.Children.Length == 0;
+
+      internal readonly int RuntimeIndex => m_Definition.RuntimeIndex;
 
       internal readonly GameplayTagDefinition Definition
       {
          get
          {
             ValidateIsNotNone();
-            return GameplayTagManager.GetDefinitionFromRuntimeIndex(m_RuntimeIndex);
+            return m_Definition ?? GameplayTagDefinition.NoneTagDefinition;
          }
       }
 
+      /// <inheritdoc cref="GameplayTagDefinition.ParentTags" />
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public readonly ReadOnlySpan<GameplayTag> ParentTags => Definition.ParentTags;
 
+      /// <inheritdoc cref="GameplayTagDefinition.ChildTags" />
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public readonly ReadOnlySpan<GameplayTag> ChildTags => Definition.ChildTags;
 
+      /// <inheritdoc cref="GameplayTagDefinition.HierarchyTags" />
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public readonly ReadOnlySpan<GameplayTag> HierarchyTags => Definition.HierarchyTags;
 
+      /// <inheritdoc cref="GameplayTagDefinition.Label" />
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public readonly string Label => Definition.Label;
 
+      /// <inheritdoc cref="GameplayTagDefinition.HierarchyLevel" />
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public readonly int HierarchyLevel => Definition.HierarchyLevel;
 
+      /// <inheritdoc cref="GameplayTagDefinition.Description" />
       public readonly string Description => Definition.Description;
 
       /// <summary>
@@ -54,14 +63,13 @@ namespace CycloneGames.GameplayTags.Runtime
             GameplayTagDefinition parentDefinition = Definition.ParentTagDefinition;
 
             if (parentDefinition == null)
-            {
                return None;
-            }
 
             return parentDefinition.Tag;
          }
       }
 
+      /// <inheritdoc cref="GameplayTagDefinition.Flags" />
       public readonly GameplayTagFlags Flags => Definition.Flags;
 
       public readonly string Name
@@ -69,34 +77,31 @@ namespace CycloneGames.GameplayTags.Runtime
          get
          {
             ValidateIsNotNone();
-            // OnBeforeSerialize used to guarantee m_Name was up-to-date.
-            // Now, we ensure it's correct by looking it up if needed.
-            if (m_RuntimeIndex != 0)
-            {
-               return GameplayTagManager.GetDefinitionFromRuntimeIndex(m_RuntimeIndex).TagName;
-            }
             return m_Name;
          }
       }
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+      [SerializeField]
       private string m_Name;
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
-      private int m_RuntimeIndex;
+      private GameplayTagDefinition m_Definition;
 
-      internal GameplayTag(string name, int runtimeTagIndex)
+      internal GameplayTag(GameplayTagDefinition definition)
       {
-         m_Name = name;
-         m_RuntimeIndex = runtimeTagIndex;
+         m_Definition = definition ?? GameplayTagDefinition.NoneTagDefinition;
+         m_Name = m_Definition.TagName;
       }
 
+      /// <inheritdoc cref="GameplayTagDefinition.IsChildOf(GameplayTag)"/>/>
       public readonly bool IsParentOf(in GameplayTag tag)
       {
          ValidateIsNotNone();
          return Definition.IsParentOf(tag);
       }
 
+      /// <inheritdoc cref="GameplayTagDefinition.IsChildOf(GameplayTag)"/>/>
       public readonly bool IsChildOf(in GameplayTag parentTag)
       {
          ValidateIsNotNone();
@@ -105,80 +110,73 @@ namespace CycloneGames.GameplayTags.Runtime
 
       public readonly bool Equals(GameplayTag other)
       {
-         return m_RuntimeIndex == other.m_RuntimeIndex;
+         return m_Definition == other.m_Definition;
       }
 
       public override readonly bool Equals(object obj)
       {
          if (obj is GameplayTag other)
-         {
-            return other.m_RuntimeIndex == m_RuntimeIndex;
-         }
+            return m_Definition == other.m_Definition;
 
          if (obj is string otherStr)
-         {
             return m_Name == otherStr;
-         }
 
          return false;
       }
 
       public override readonly int GetHashCode()
       {
-         return m_RuntimeIndex;
+         return Definition.GetHashCode();
       }
 
       public override readonly string ToString()
       {
-         if (m_RuntimeIndex == 0)
-         {
+         if (IsNone)
             return "<None>";
-         }
-         // Use the Name property to ensure the name is correct.
+
          return m_Name;
       }
 
-      private readonly void ValidateIsNotNone()
-      {
-         if (m_RuntimeIndex == 0)
-         {
-            throw new InvalidOperationException("Cannot perform operation on GameplayTag.None.");
-         }
-      }
-#if UNITY_2017_1_OR_NEWER
-      public void OnBeforeSerialize()
-      {
-         if (m_RuntimeIndex == 0)
-         {
-            m_Name = null;
-            return;
-         }
-         GameplayTagDefinition definiton = GameplayTagManager.GetDefinitionFromRuntimeIndex(m_RuntimeIndex);
-         if (definiton == null)
-         {
-            m_Name = null;
-            return;
-         }
-         m_Name = definiton.TagName;
-      }
-
-      public void OnAfterDeserialize()
+      void ISerializationCallbackReceiver.OnAfterDeserialize()
       {
          if (string.IsNullOrEmpty(m_Name))
          {
             this = None;
             return;
          }
-         GameplayTag tag = GameplayTagManager.RequestTag(m_Name);
-         if (tag == None)
-         {
+
+         this = GameplayTagManager.RequestTag(m_Name);
+         if (!IsValid)
             UnityEngine.Debug.LogWarning($"No tag registered with name \"{m_Name}\".");
-            this = None;
+      }
+
+      void ISerializationCallbackReceiver.OnBeforeSerialize()
+      {
+         if (IsNone)
+         {
+            m_Name = null;
             return;
          }
-         this = tag;
+
+         m_Name = Definition.TagName;
       }
-#endif
+
+      [Conditional("DEBUG")]
+      private readonly void ValidateIsNotNone()
+      {
+         if (IsNone)
+            throw new InvalidOperationException("Cannot perform operation on GameplayTag.None.");
+      }
+
+      [Conditional("DEBUG")]
+      internal readonly void ValidateIsValid()
+      {
+         if (IsNone)
+            throw new InvalidOperationException("Cannot perform operation on GameplayTag.None.");
+
+         if (!IsValid)
+            throw new InvalidOperationException($"GameplayTag \"{m_Name}\" is not valid.");
+      }
 
       public static implicit operator GameplayTag(string tagName)
       {
@@ -187,12 +185,12 @@ namespace CycloneGames.GameplayTags.Runtime
 
       public static bool operator ==(in GameplayTag lhs, in GameplayTag rhs)
       {
-         return lhs.m_RuntimeIndex == rhs.m_RuntimeIndex;
+         return lhs.Definition == rhs.Definition;
       }
 
       public static bool operator !=(in GameplayTag lhs, in GameplayTag rhs)
       {
-         return lhs.m_RuntimeIndex != rhs.m_RuntimeIndex;
+         return lhs.Definition != rhs.Definition;
       }
    }
 }

@@ -1,185 +1,174 @@
-﻿using CycloneGames.GameplayTags.Runtime;
-using UnityEditor;
+﻿using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
+using CycloneGames.GameplayTags.Runtime;
 
 namespace CycloneGames.GameplayTags.Editor
 {
-    [CustomPropertyDrawer(typeof(GameplayTagContainer))]
-    public class GameplayTagContainerPropertyDrawer : PropertyDrawer
-    {
-        private const float k_Gap = 2.0f;
-        private const float k_ButtonsWidth = 110f;
-        private static readonly GUIContent s_TempContent = new();
-        private static readonly GUIContent s_RemoveTagContent = new("-", "Remove tag");
-        private static readonly GUIContent s_EditTagsContent = new("Edit Tags...", "Edit tags in a popup window.");
+   [CustomPropertyDrawer(typeof(GameplayTagContainer))]
+   public class GameplayTagContainerPropertyDrawer : PropertyDrawer
+   {
+      private const float k_Gap = 3.0f;
+      private const float k_TagGap = 4.0f;
+      private const float k_ButtonsWidth = 90f;
+      private const float k_ButtonHeight = 20f;
+      private const float k_TagHeight = 18f;
 
-        public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
-        {
-            SerializedProperty tagNamesProperty = property.FindPropertyRelative("m_SerializedExplicitTags");
-            if (tagNamesProperty.hasMultipleDifferentValues)
+      private static GUIContent s_TempContent = new();
+      private static GUIContent s_EditTagsContent;
+
+      private static GUIStyle s_TagBoxStyle;
+
+      private GUIContent m_RemoveTagContent;
+
+      public GameplayTagContainerPropertyDrawer()
+      {
+         m_RemoveTagContent = new GUIContent
+         {
+            image = EditorGUIUtility.IconContent("Toolbar Minus").image,
+            text = null,
+            tooltip = "Remove this tag."
+         };
+
+         s_EditTagsContent = new GUIContent("Edit Tags...", "Edit tags in a popup window.");
+         if (s_TagBoxStyle == null)
+         {
+            s_TagBoxStyle = new GUIStyle(EditorStyles.helpBox)
             {
-                return (EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing) * 2;
-            }
+               padding = new RectOffset(6, 6, 5, 5),
+               margin = new RectOffset(0, 0, 0, 0)
+            };
+         }
+      }
 
-            if (tagNamesProperty.arraySize > 0)
+      private static float CalcContentHeight(GUIStyle style, float innerHeight)
+      {
+         return innerHeight + style.padding.vertical + style.margin.vertical;
+      }
+
+      private static Rect GetPaddedRect(Rect rect, GUIStyle style)
+      {
+         return new Rect(
+            rect.x + style.padding.left,
+            rect.y + style.padding.top,
+            rect.width - style.padding.horizontal,
+            rect.height - style.padding.vertical
+         );
+      }
+
+      public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
+      {
+         float buttonsHeight = k_ButtonHeight * 2 + k_Gap;
+         float tagsInnerHeight = CalcTagsInnerHeight(property);
+         float tagsBoxHeight = CalcContentHeight(s_TagBoxStyle, tagsInnerHeight);
+
+         return Mathf.Max(buttonsHeight, tagsBoxHeight);
+      }
+
+      private float CalcTagsInnerHeight(SerializedProperty property)
+      {
+         SerializedProperty tags = property.FindPropertyRelative("m_SerializedExplicitTags");
+         if (tags.hasMultipleDifferentValues || tags.arraySize == 0)
+            return EditorGUIUtility.singleLineHeight;
+
+         return tags.arraySize * (k_TagHeight + k_TagGap) - k_TagGap;
+      }
+
+      public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
+      {
+         label = EditorGUI.BeginProperty(position, label, property);
+         position = EditorGUI.PrefixLabel(position, label);
+         int oldIndentLevel = EditorGUI.indentLevel;
+         EditorGUI.indentLevel = 0;
+
+         SerializedProperty explicitTagsProperty = property.FindPropertyRelative("m_SerializedExplicitTags");
+
+         Rect editButtonRect = new(position.x, position.y, k_ButtonsWidth, k_ButtonHeight);
+         using (new EditorGUI.DisabledScope(explicitTagsProperty.hasMultipleDifferentValues))
+         {
+            if (GUI.Button(editButtonRect, s_EditTagsContent))
             {
-                // The height is the maximum of the space needed for all tags and the space for the two buttons.
-                float tagsHeight = tagNamesProperty.arraySize * (EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing);
-                float buttonsHeight = (EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing) * 2;
-                return Mathf.Max(tagsHeight, buttonsHeight);
+               GameplayTagContainerTreeView tagTreeView = new(new TreeViewState(), explicitTagsProperty);
+               Rect activatorRect = editButtonRect;
+               activatorRect.width = position.width;
+               tagTreeView.ShowPopupWindow(activatorRect, 280f);
             }
-            // Default height for the "Edit Tags..." button.
-            return EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
-        }
+         }
 
-        public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
-        {
-            label = EditorGUI.BeginProperty(position, label, property);
-            position = EditorGUI.PrefixLabel(position, label);
+         Rect clearButtonRect = new(
+            position.x,
+            position.y + k_ButtonHeight + k_Gap,
+            k_ButtonsWidth,
+            k_ButtonHeight
+         );
 
-            int oldIndentLevel = EditorGUI.indentLevel;
-            EditorGUI.indentLevel = 0;
-
-            SerializedProperty explicitTagsProperty = property.FindPropertyRelative("m_SerializedExplicitTags");
-
-            EditorGUI.BeginDisabledGroup(!property.editable);
-
-            // --- "Edit Tags..." Button ---
-            Rect editButtonRect = position;
-            editButtonRect.width = k_ButtonsWidth;
-            editButtonRect.height = EditorGUIUtility.singleLineHeight;
-            if (GUI.Button(editButtonRect, s_EditTagsContent, EditorStyles.popup))
-            {
-                GameplayTagContainerTreeView tagTreeView = new(new TreeViewState(), explicitTagsProperty);
-                // The popup will be anchored to the button but span the full available width.
-                Rect activatorRect = position;
-                activatorRect.height = editButtonRect.height;
-                // This ShowPopupWindow method is a custom extension method provided in your original code.
-                TreeViewMethodExtensions.ShowPopupWindow(tagTreeView, activatorRect, 280f);
-            }
-
-            // --- "Clear All" Button ---
-            if (explicitTagsProperty.arraySize > 0)
-            {
-                DrawClearAllButton(position, explicitTagsProperty);
-            }
-
-            // --- Display Tags ---
-            if (explicitTagsProperty.hasMultipleDifferentValues)
-            {
-                OnMultipleValuesGUI(position);
-            }
-            else
-            {
-                OnAddedTagsGUI(position, explicitTagsProperty);
-            }
-
-            EditorGUI.EndDisabledGroup();
-
-            EditorGUI.indentLevel = oldIndentLevel;
-            EditorGUI.EndProperty();
-        }
-
-        private static void OnMultipleValuesGUI(Rect position)
-        {
-            s_TempContent.text = "—"; // Use em dash for multi-editing
-            s_TempContent.tooltip = "Multiple different values.";
-
-            Rect rect = position;
-            rect.xMin += k_ButtonsWidth + k_Gap;
-            rect.height = EditorGUIUtility.singleLineHeight;
-
-            // Draw a label inside an outline to match the tag display style
-            GUI.Label(rect, s_TempContent, EditorStyles.label);
-            DrawOutline(rect, new Color(1, 1, 1, 0.15f));
-        }
-
-        private static void OnAddedTagsGUI(Rect position, SerializedProperty explicitTagsProperty)
-        {
-            if (explicitTagsProperty.arraySize <= 0)
-            {
-                return;
-            }
-
-            Rect tagsListRect = position;
-            tagsListRect.xMin += k_ButtonsWidth + k_Gap;
-
-            Rect tagRect = tagsListRect;
-            tagRect.height = EditorGUIUtility.singleLineHeight;
-
-            float totalTagWidth = 0;
-
-            for (int i = explicitTagsProperty.arraySize - 1; i >= 0; i--)
-            {
-                SerializedProperty element = explicitTagsProperty.GetArrayElementAtIndex(i);
-                GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue);
-                s_TempContent.text = element.stringValue;
-
-                s_TempContent.tooltip = (tag != GameplayTag.None) ? tag.Description : "Tag not found.";
-
-                // Calculate width for this tag element
-                float currentTagWidth = EditorStyles.label.CalcSize(s_TempContent).x + 22f; // 22 is for padding and button
-                tagRect.width = currentTagWidth;
-                totalTagWidth = Mathf.Max(totalTagWidth, currentTagWidth);
-
-                // --- Remove Button ("-") ---
-                Rect removeButtonRect = tagRect;
-                removeButtonRect.width = 18f;
-                removeButtonRect.x = tagRect.x;
-
-                if (GUI.Button(removeButtonRect, s_RemoveTagContent))
-                {
-                    explicitTagsProperty.DeleteArrayElementAtIndex(i);
-                }
-                else
-                {
-                    // --- Tag Label ---
-                    Rect labelRect = tagRect;
-                    labelRect.xMin = removeButtonRect.xMax;
-                    GUI.Label(labelRect, s_TempContent);
-                }
-
-                // Move to the next line for the next tag
-                tagRect.y += EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing;
-            }
-
-            // Draw a single outline around all the tags.
-            Rect outlineRect = tagsListRect;
-            outlineRect.width = totalTagWidth;
-            outlineRect.height = explicitTagsProperty.arraySize * (EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing) - EditorGUIUtility.standardVerticalSpacing;
-            DrawOutline(outlineRect, new Color(1, 1, 1, 0.15f));
-        }
-
-        private static void DrawClearAllButton(Rect position, SerializedProperty explicitTagsProperty)
-        {
-            Rect clearButtonRect = new Rect(
-                position.x,
-                position.y + EditorGUIUtility.singleLineHeight + EditorGUIUtility.standardVerticalSpacing,
-                k_ButtonsWidth,
-                EditorGUIUtility.singleLineHeight
-            );
-
+         using (new EditorGUI.DisabledScope(explicitTagsProperty.arraySize == 0))
+         {
             if (GUI.Button(clearButtonRect, "Clear All"))
-            {
-                explicitTagsProperty.ClearArray();
-            }
-        }
+               explicitTagsProperty.arraySize = 0;
+         }
 
-        private static void DrawOutline(Rect rect, Color color, float thickness = 1)
-        {
-            if (Event.current.type != EventType.Repaint)
-            {
-                return;
-            }
+         float boxX = position.x + k_ButtonsWidth + k_Gap;
+         float boxWidth = position.width - k_ButtonsWidth - k_Gap;
+         float tagsInnerHeight = CalcTagsInnerHeight(property);
+         float tagsBoxHeight = CalcContentHeight(s_TagBoxStyle, tagsInnerHeight);
+         Rect boxRect = new(boxX, position.y, boxWidth, tagsBoxHeight);
 
-            var savedColor = GUI.color;
-            GUI.color = color;
-            GUI.DrawTexture(new Rect(rect.x, rect.y, rect.width, thickness), EditorGUIUtility.whiteTexture); // Top
-            GUI.DrawTexture(new Rect(rect.x, rect.yMax - thickness, rect.width, thickness), EditorGUIUtility.whiteTexture); // Bottom
-            GUI.DrawTexture(new Rect(rect.x, rect.y, thickness, rect.height), EditorGUIUtility.whiteTexture); // Left
-            GUI.DrawTexture(new Rect(rect.xMax - thickness, rect.y, thickness, rect.height), EditorGUIUtility.whiteTexture); // Right
-            GUI.color = savedColor;
-        }
-    }
+         GUI.Box(boxRect, GUIContent.none, s_TagBoxStyle);
+
+         Rect inner = GetPaddedRect(boxRect, s_TagBoxStyle);
+         Rect tagRect = new(inner.x, inner.y, inner.width, k_TagHeight);
+
+         Color prevColor = GUI.color;
+         if (explicitTagsProperty.hasMultipleDifferentValues)
+         {
+            GUI.color = new Color(1, 1, 1, 0.7f);
+            EditorGUI.LabelField(tagRect, "Tags have different values.");
+         }
+         else if (explicitTagsProperty.arraySize == 0)
+         {
+            GUI.color = new Color(1, 1, 1, 0.7f);
+            EditorGUI.LabelField(tagRect, "No tags added.");
+         }
+         else
+         {
+            GUI.color = Color.white;
+
+            for (int i = 0; i < explicitTagsProperty.arraySize; i++)
+            {
+               SerializedProperty element = explicitTagsProperty.GetArrayElementAtIndex(i);
+               GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue);
+
+               bool isValid = tag.IsValid;
+               s_TempContent.text = isValid ? element.stringValue : element.stringValue + " (Invalid)";
+               s_TempContent.tooltip = tag.Description ?? "No description";
+
+               Rect removeButtonRect = new(tagRect.x, tagRect.y, 22, tagRect.height);
+               if (GUI.Button(removeButtonRect, m_RemoveTagContent))
+               {
+                  explicitTagsProperty.DeleteArrayElementAtIndex(i);
+                  property.serializedObject.ApplyModifiedProperties();
+                  break;
+               }
+
+               Rect labelRect = new(removeButtonRect.xMax + 4, tagRect.y, tagRect.width - 20, tagRect.height);
+
+               Color previousColor = GUI.color;
+               if (!isValid)
+                  GUI.color = new Color(previousColor.g, previousColor.g, previousColor.b, previousColor.a * 0.5f);
+
+               EditorGUI.LabelField(labelRect, s_TempContent);
+
+               GUI.color = previousColor;
+
+               tagRect.y += k_TagHeight + k_TagGap;
+            }
+         }
+
+         GUI.color = prevColor;
+
+         EditorGUI.indentLevel = oldIndentLevel;
+         EditorGUI.EndProperty();
+      }
+   }
 }
