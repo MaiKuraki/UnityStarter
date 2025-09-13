@@ -32,22 +32,26 @@ namespace CycloneGames.GameplayTags.Runtime
             return s_TagsDefinitionsList[runtimeIndex];
         }
 
-        public static GameplayTag RequestTag(string name)
+        public static GameplayTag RequestTag(string name, bool logWarningIfNotFound = true)
         {
             if (string.IsNullOrEmpty(name))
             {
                 return GameplayTag.None;
             }
-            
-            InitializeIfNeeded();
-            if (s_TagDefinitionsByName.TryGetValue(name, out GameplayTagDefinition definition))
+
+            if (TryRequestTag(name, out GameplayTag tag))
             {
-                return definition.Tag;
+                return tag;
+            }
+
+            if (logWarningIfNotFound)
+            {
+                GameplayTagLogger.LogWarning($"No tag registered with name \"{name}\".");
             }
 
             return GameplayTag.None;
         }
-
+        
         public static bool TryRequestTag(string name, out GameplayTag tag)
         {
             if (string.IsNullOrEmpty(name))
