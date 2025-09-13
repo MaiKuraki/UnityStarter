@@ -536,10 +536,13 @@ namespace CycloneGames.GameplayTags.Runtime
 
             foreach (GameplayTag tag in definition.HierarchyTags)
             {
-               if (m_Indices.Implicit.Count > 0 && m_Indices.Implicit[^1] >= tag.RuntimeIndex)
+               int index = BinarySearchUtility.Search(m_Indices.Implicit, tag.RuntimeIndex);
+               if (index >= 0)
+               {
                   continue;
-
-               m_Indices.Implicit.Add(tag.RuntimeIndex);
+               }
+               
+               m_Indices.Implicit.Insert(~index, tag.RuntimeIndex);
             }
          }
       }
@@ -556,7 +559,7 @@ namespace CycloneGames.GameplayTags.Runtime
 
          for (int i = 0; i < m_SerializedExplicitTags.Count; i++)
          {
-            GameplayTag tag = GameplayTagManager.RequestTag(m_SerializedExplicitTags[i]);
+            GameplayTag tag = GameplayTagManager.RequestTag(m_SerializedExplicitTags[i], false);
             if (!tag.IsValid)
                continue;
 
