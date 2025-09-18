@@ -8,6 +8,7 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         private readonly Dictionary<string, IAssetPackage> packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
         private bool initialized;
+        private List<string> packageNamesCache;
 
         public bool Initialized => initialized;
 
@@ -35,6 +36,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
             var package = new ResourcesAssetPackage(packageName);
             packages.Add(packageName, package);
+            packageNamesCache = null; // Invalidate cache
             return package;
         }
 
@@ -48,15 +50,19 @@ namespace CycloneGames.AssetManagement.Runtime
         public bool RemovePackage(string packageName)
         {
             if (string.IsNullOrEmpty(packageName)) return false;
-            if (!packages.ContainsKey(packageName)) return false;
+            if (!packages.Remove(packageName)) return false;
             
-            packages.Remove(packageName);
+            packageNamesCache = null; // Invalidate cache
             return true;
         }
 
         public IReadOnlyList<string> GetAllPackageNames()
         {
-            return packages.Keys.ToList();
+            if (packageNamesCache == null)
+            {
+                packageNamesCache = packages.Keys.ToList();
+            }
+            return packageNamesCache;
         }
     }
 }

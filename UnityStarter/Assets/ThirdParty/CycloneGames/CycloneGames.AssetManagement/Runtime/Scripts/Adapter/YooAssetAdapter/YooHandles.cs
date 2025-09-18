@@ -1,4 +1,5 @@
 #if YOOASSET_PRESENT
+using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -23,7 +24,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		public bool IsDone => Raw == null || Raw.IsDone;
 		public float Progress => Raw?.Progress ?? 0f;
 		public string Error => Raw?.LastError ?? string.Empty;
-		public System.Threading.Tasks.Task Task => Raw?.Task;
+		public UniTask Task => Raw?.Task.AsUniTask() ?? UniTask.CompletedTask;
 		public void WaitForAsyncComplete() => Raw?.WaitForAsyncComplete();
 
 		public TAsset Asset => Raw != null ? Raw.GetAssetObject<TAsset>() : null;
@@ -54,7 +55,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		public bool IsDone => Raw == null || Raw.IsDone;
 		public float Progress => Raw?.Progress ?? 0f;
 		public string Error => Raw?.LastError ?? string.Empty;
-		public System.Threading.Tasks.Task Task => Raw?.Task;
+		public UniTask Task => Raw?.Task.AsUniTask() ?? UniTask.CompletedTask;
 		public void WaitForAsyncComplete() => Raw?.WaitForAsyncComplete();
 
 		public IReadOnlyList<TAsset> Assets
@@ -102,7 +103,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		public bool IsDone => Raw == null || Raw.IsDone;
 		public float Progress => Raw?.Progress ?? 0f;
 		public string Error => Raw?.Error ?? string.Empty;
-		public System.Threading.Tasks.Task Task => Raw?.Task;
+		public UniTask Task => Raw?.Task.AsUniTask() ?? UniTask.CompletedTask;
 		public void WaitForAsyncComplete() { /* not supported for scene handle in this YooAsset version */ }
 
 		public GameObject Instance => Raw?.Result;
@@ -130,7 +131,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		public bool IsDone => Raw == null || Raw.IsDone;
 		public float Progress => Raw?.Progress ?? 0f;
 		public string Error => Raw?.LastError ?? string.Empty;
-		public System.Threading.Tasks.Task Task => Raw?.Task;
+		public UniTask Task => Raw?.Task.AsUniTask() ?? UniTask.CompletedTask;
 		public void WaitForAsyncComplete() { /* YooAsset has no SceneHandle.WaitForAsyncComplete */ }
 
 		public string ScenePath => Raw?.SceneName;
@@ -164,7 +165,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
 		public void Begin() => _op?.BeginDownload();
 
-		public async System.Threading.Tasks.Task StartAsync(System.Threading.CancellationToken cancellationToken = default)
+		public async UniTask StartAsync(System.Threading.CancellationToken cancellationToken = default)
 		{
 			Begin();
 			while (!IsDone)
@@ -172,9 +173,9 @@ namespace CycloneGames.AssetManagement.Runtime
 				if (cancellationToken.IsCancellationRequested)
 				{
 					_op?.CancelDownload();
-					throw new System.OperationCanceledException(cancellationToken);
+					throw new OperationCanceledException(cancellationToken);
 				}
-				await YieldUtil.Next(cancellationToken);
+				await UniTask.Yield(cancellationToken);
 			}
 		}
 

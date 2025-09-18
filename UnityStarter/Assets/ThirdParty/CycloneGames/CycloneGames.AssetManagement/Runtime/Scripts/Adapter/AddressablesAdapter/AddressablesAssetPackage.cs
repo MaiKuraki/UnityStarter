@@ -1,7 +1,7 @@
 #if ADDRESSABLES_PRESENT
+using Cysharp.Threading.Tasks;
 using System;
 using System.Threading;
-using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.AddressableAssets;
@@ -21,34 +21,34 @@ namespace CycloneGames.AssetManagement.Runtime
             packageName = name;
         }
 
-        public Task<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
+        public UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
         {
             // Addressables initializes globally, so package-level initialization is a no-op.
-            return Task.FromResult(true);
+            return UniTask.FromResult(true);
         }
 
-        public Task DestroyAsync()
+        public UniTask DestroyAsync()
         {
             // Addressables doesn't have a package-level destroy concept.
-            return Task.CompletedTask;
+            return UniTask.CompletedTask;
         }
 
-        public Task<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public UniTask<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
             // Addressables does not have a direct equivalent to YooAsset's package versioning.
             // This could be implemented with custom catalog versioning if needed.
-            return Task.FromResult(string.Empty);
+            return UniTask.FromResult(string.Empty);
         }
 
-        public Task<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public UniTask<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
             // This corresponds to Addressables.UpdateCatalogs
             // For simplicity, we'll assume auto-updates or manual updates via Unity's tools.
             // A more complex implementation could be added here.
-            return Task.FromResult(true);
+            return UniTask.FromResult(true);
         }
 
-        public Task<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object clearParam = null, CancellationToken cancellationToken = default)
+        public UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object tags = null, CancellationToken cancellationToken = default)
         {
             // Addressables' caching is global. Caching.ClearCache() clears everything.
             // There's no built-in way to clear by tag or only unused assets.
@@ -57,7 +57,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 Debug.LogWarning("[AddressablesAssetPackage] ClearCacheFilesAsync by tags is not supported by Addressables. All cache will be cleared.");
             }
             
-            return Task.FromResult(Caching.ClearCache());
+            return UniTask.FromResult(Caching.ClearCache());
         }
 
         public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain)
@@ -79,19 +79,19 @@ namespace CycloneGames.AssetManagement.Runtime
             return new AddressableDownloader(handle);
         }
 
-        public Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
+        public UniTask<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException("Addressables does not support pre-downloading for a specific, non-active catalog version in this direct way.");
+            return UniTask.FromException<IDownloader>(new NotImplementedException("Addressables does not support pre-downloading for a specific, non-active catalog version in this direct way."));
         }
 
-        public Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
+        public UniTask<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException("Addressables does not support pre-downloading for a specific, non-active catalog version in this direct way.");
+            return UniTask.FromException<IDownloader>(new NotImplementedException("Addressables does not support pre-downloading for a specific, non-active catalog version in this direct way."));
         }
 
-        public Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
+        public UniTask<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException("Addressables does not support pre-downloading for a specific, non-active catalog version in this direct way.");
+            return UniTask.FromException<IDownloader>(new NotImplementedException("Addressables does not support pre-downloading for a specific, non-active catalog version in this direct way."));
         }
 
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object
@@ -153,18 +153,18 @@ namespace CycloneGames.AssetManagement.Runtime
             return h;
         }
 
-        public async Task UnloadSceneAsync(ISceneHandle sceneHandle)
+        public async UniTask UnloadSceneAsync(ISceneHandle sceneHandle)
         {
             if (sceneHandle is AddressableSceneHandle sh && sh.Raw.IsValid())
             {
-                await Addressables.UnloadSceneAsync(sh.Raw).Task;
+                await Addressables.UnloadSceneAsync(sh.Raw);
             }
         }
 
-        public async Task UnloadUnusedAssetsAsync()
+        public async UniTask UnloadUnusedAssetsAsync()
         {
             var op = Resources.UnloadUnusedAssets();
-            while (!op.isDone) await Task.Yield();
+            await op;
         }
 
         private Action<int> RegisterHandle(out int id)

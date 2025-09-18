@@ -1,6 +1,6 @@
+using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using UnityEngine;
 
 namespace CycloneGames.AssetManagement.Runtime
@@ -12,7 +12,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public virtual bool IsDone => true;
         public virtual float Progress => 1f;
         public virtual string Error => string.Empty;
-        public virtual Task Task => Task.CompletedTask;
+        public virtual UniTask Task => UniTask.CompletedTask;
         public virtual void WaitForAsyncComplete() { }
 
         protected ResourcesOperationHandle(Action<int> unregister, int id)
@@ -24,12 +24,26 @@ namespace CycloneGames.AssetManagement.Runtime
 
     internal sealed class ResourcesAssetHandle<TAsset> : ResourcesOperationHandle, IAssetHandle<TAsset> where TAsset : UnityEngine.Object
     {
-        public TAsset Asset { get; }
+        private readonly ResourceRequest request;
+        private readonly TAsset syncAsset; // Used for sync loads
+
+        public override bool IsDone => request?.isDone ?? true;
+        public override float Progress => request?.progress ?? 1f;
+        public override UniTask Task => request?.ToUniTask() ?? UniTask.CompletedTask;
+        
+        public TAsset Asset => syncAsset ? syncAsset : request?.asset as TAsset;
         public UnityEngine.Object AssetObject => Asset;
 
+        // Constructor for async loads
+        public ResourcesAssetHandle(Action<int> unregister, int id, ResourceRequest request) : base(unregister, id)
+        {
+            this.request = request;
+        }
+        
+        // Constructor for sync loads
         public ResourcesAssetHandle(Action<int> unregister, int id, TAsset asset) : base(unregister, id)
         {
-            Asset = asset;
+            this.syncAsset = asset;
         }
 
         public void Dispose()

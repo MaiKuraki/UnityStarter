@@ -60,7 +60,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
 
         public UniTask Unload(IProgress<float> progress = null, CancellationToken cancellationToken = default)
         {
-            return assetPackage.UnloadSceneAsync(cycloneHandle).AsUniTask();
+            return assetPackage.UnloadSceneAsync(cycloneHandle);
         }
 
         public void Dispose()

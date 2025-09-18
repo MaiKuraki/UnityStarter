@@ -1,8 +1,8 @@
 #if ADDRESSABLES_PRESENT
+using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.AddressableAssets;
@@ -20,7 +20,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public abstract bool IsDone { get; }
         public abstract float Progress { get; }
         public abstract string Error { get; }
-        public abstract System.Threading.Tasks.Task Task { get; }
+        public abstract UniTask Task { get; }
         public abstract void WaitForAsyncComplete();
 
         protected AddressablesOperationHandle(Action<int> unregister, int id)
@@ -36,7 +36,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public override bool IsDone => Raw.IsDone;
         public override float Progress => Raw.PercentComplete;
         public override string Error => Raw.OperationException?.Message;
-        public override System.Threading.Tasks.Task Task => Raw.Task;
+        public override UniTask Task => Raw.Task.AsUniTask();
         public TAsset Asset => Raw.Result;
         public UnityEngine.Object AssetObject => Raw.Result;
 
@@ -60,7 +60,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public override bool IsDone => raw.IsDone;
         public override float Progress => raw.PercentComplete;
         public override string Error => raw.OperationException?.Message;
-        public override System.Threading.Tasks.Task Task => raw.Task;
+        public override UniTask Task => raw.Task.AsUniTask();
         public IReadOnlyList<TAsset> Assets => (IReadOnlyList<TAsset>)raw.Result;
 
         public AddressableAllAssetsHandle(Action<int> unregister, int id, AsyncOperationHandle<IList<TAsset>> raw) : base(unregister, id)
@@ -83,7 +83,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public override bool IsDone => raw.IsDone;
         public override float Progress => raw.PercentComplete;
         public override string Error => raw.OperationException?.Message;
-        public override System.Threading.Tasks.Task Task => raw.Task;
+        public override UniTask Task => raw.Task.AsUniTask();
         public GameObject Instance => raw.Result;
 
         public AddressableInstantiateHandle(Action<int> unregister, int id, AsyncOperationHandle<GameObject> raw) : base(unregister, id)
@@ -106,7 +106,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public override bool IsDone => Raw.IsDone;
         public override float Progress => Raw.PercentComplete;
         public override string Error => Raw.OperationException?.Message;
-        public override System.Threading.Tasks.Task Task => Raw.Task;
+        public override UniTask Task => Raw.Task.AsUniTask();
         public string ScenePath { get; } // Addressables doesn't easily expose the path.
         public Scene Scene => Raw.Result.Scene;
 
@@ -137,7 +137,7 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         public void Begin() { }
-        public Task StartAsync(CancellationToken cancellationToken = default) => raw.Task;
+        public UniTask StartAsync(CancellationToken cancellationToken = default) => raw.ToUniTask(cancellationToken: cancellationToken);
         public void Pause() { } // Not supported
         public void Resume() { } // Not supported
         public void Cancel() { } // Not supported
