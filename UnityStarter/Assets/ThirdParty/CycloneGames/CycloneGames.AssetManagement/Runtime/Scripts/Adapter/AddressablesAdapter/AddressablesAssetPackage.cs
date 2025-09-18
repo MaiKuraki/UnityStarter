@@ -15,7 +15,6 @@ namespace CycloneGames.AssetManagement.Runtime
         private int nextId = 1;
 
         public string Name => packageName;
-        public bool IsAlive => true; // Addressables doesn't have a package-level lifecycle like YooAsset
 
         public AddressablesAssetPackage(string name)
         {
@@ -49,45 +48,50 @@ namespace CycloneGames.AssetManagement.Runtime
             return Task.FromResult(true);
         }
 
-        public Task<bool> ClearCacheFilesAsync(string clearMode, object clearParam = null, CancellationToken cancellationToken = default)
+        public Task<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object clearParam = null, CancellationToken cancellationToken = default)
         {
-            // Caching.ClearCache() can be used, but it's global.
-            // We can add more specific logic if required.
+            // Addressables' caching is global. Caching.ClearCache() clears everything.
+            // There's no built-in way to clear by tag or only unused assets.
+            if (clearMode == ClearCacheMode.ClearByTags)
+            {
+                Debug.LogWarning("[AddressablesAssetPackage] ClearCacheFilesAsync by tags is not supported by Addressables. All cache will be cleared.");
+            }
+            
             return Task.FromResult(Caching.ClearCache());
         }
 
-        public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
+        public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain)
         {
             throw new NotImplementedException("Addressables does not support creating a downloader for 'all' assets in this manner. Use tags or locations.");
         }
 
-        public IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
+        public IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain)
         {
             if (tags == null || tags.Length == 0) return new AddressableDownloader(default(AsyncOperationHandle));
             AsyncOperationHandle handle = Addressables.DownloadDependenciesAsync(tags, Addressables.MergeMode.Union);
             return new AddressableDownloader(handle);
         }
 
-        public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
+        public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain)
         {
             if (locations == null || locations.Length == 0) return new AddressableDownloader(default(AsyncOperationHandle));
             AsyncOperationHandle handle = Addressables.DownloadDependenciesAsync(locations, Addressables.MergeMode.Union);
             return new AddressableDownloader(handle);
         }
 
-        public Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException();
+            throw new NotImplementedException("Addressables does not support pre-downloading for a specific, non-active catalog version in this direct way.");
         }
 
-        public Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException();
+            throw new NotImplementedException("Addressables does not support pre-downloading for a specific, non-active catalog version in this direct way.");
         }
 
-        public Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException();
+            throw new NotImplementedException("Addressables does not support pre-downloading for a specific, non-active catalog version in this direct way.");
         }
 
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object
@@ -98,15 +102,17 @@ namespace CycloneGames.AssetManagement.Runtime
             return wrapped;
         }
 
-        public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location) where TAsset : UnityEngine.Object
+        public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
             var handle = Addressables.LoadAssetAsync<TAsset>(location);
+            // Note: Addressables handles don't directly take a CancellationToken.
+            // Cancellation can be managed by releasing the handle, which cancels the underlying operation.
             var wrapped = new AddressableAssetHandle<TAsset>(RegisterHandle(out int id), id, handle);
             HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
 
-        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location) where TAsset : UnityEngine.Object
+        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
             var handle = Addressables.LoadAssetsAsync<TAsset>(location, null);
             var wrapped = new AddressableAllAssetsHandle<TAsset>(RegisterHandle(out int id), id, handle);
@@ -163,7 +169,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private Action<int> RegisterHandle(out int id)
         {
-            id = nextId++;
+            id = Interlocked.Increment(ref nextId);
             return UnregisterHandle;
         }
 
