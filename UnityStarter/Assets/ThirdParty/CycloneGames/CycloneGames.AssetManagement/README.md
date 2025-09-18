@@ -2,45 +2,60 @@
 
 English | [简体中文](./README.SCH.md)
 
-A DI-first, interface-driven, unified asset management abstraction layer for Unity. It decouples your game logic from the underlying asset system (like YooAsset, Addressables, or Resources), allowing you to write cleaner, more portable code. A default provider for YooAsset is included.
+A DI-first, interface-driven, unified asset management abstraction layer for Unity. It decouples your game logic from the underlying asset system (like YooAsset, Addressables, or Resources), allowing you to write cleaner, more portable, and high-performance code. A default, zero-GC provider for YooAsset is included.
 
 ## Requirements
 
 - Unity 2022.3+
 - Optional: `com.tuyoogame.yooasset`
 - Optional: `com.unity.addressables`
-- Optional: `com.cysharp.unitask`, `jp.hadashikick.vcontainer`, `com.mackysoft.navigathena`, `com.cyclonegames.factory`, `com.cyclone-games.logger`
+- Optional: `com.cysharp.unitask`, `com.cysharp.r3`
+- Optional: `jp.hadashikick.vcontainer`
 
 ## Quick Start
 
-To get started, you need an implementation of the `IAssetModule` interface that works with your chosen asset system. The following example demonstrates how to use a custom module that loads assets from Unity's `Resources` folder. This showcases how your game code interacts with the unified API, completely decoupled from the underlying `Resources.Load` calls.
+To get started, you need an implementation of the `IAssetModule` interface. The following example demonstrates how to use the `YooAssetManagementModule` and load an asset, showcasing the unified, provider-agnostic API.
 
 ```csharp
-using CycloneGames.AssetManagement;
+using CycloneGames.AssetManagement.Runtime;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
-using System.Threading.Tasks;
+using YooAsset;
 
-// Assume you have written a 'ResourcesModule' that implements IAssetModule for the Resources system.
-// A minimal implementation might look like this:
-async Task LoadMyPlayer()
+public class MyGameManager
 {
-    IAssetModule module = new ResourcesModule();
-    module.Initialize(new AssetManagementOptions());
+    private IAssetModule assetModule;
 
-    var pkg = module.CreatePackage("MyResources");
-
-    // The API call is the same, regardless of the backend!
-    using (var handle = pkg.LoadAssetAsync<GameObject>("Prefabs/MyPlayer"))
+    public async UniTaskVoid Start()
     {
-        // In a real project, you would await this asynchronously.
-        while (!handle.IsDone)
-        {
-            await Task.Yield(); // Or yield return null in a coroutine
-        }
+        // 1. Initialize the Module (ideally in a DI container)
+        assetModule = new YooAssetManagementModule();
+        assetModule.Initialize(new AssetManagementOptions());
 
-        if (handle.Asset)
+        // 2. Create and initialize a package
+        var package = assetModule.CreatePackage("DefaultPackage");
+        var initOptions = new AssetPackageInitOptions(
+            AssetPlayMode.Host,
+            new HostPlayModeParameters() // Configure your YooAsset parameters here
+        );
+        await package.InitializeAsync(initOptions);
+
+        // 3. Load an asset using the unified API
+        await LoadMyPlayer(package);
+    }
+
+    private async UniTask LoadMyPlayer(IAssetPackage package)
+    {
+        // The API call is the same, regardless of the backend!
+        using (var handle = package.LoadAssetAsync<GameObject>("Prefabs/MyPlayer"))
         {
-            var go = Object.Instantiate(handle.Asset);
+            await handle.Task; // Asynchronously wait for the asset to load
+
+            if (handle.Asset)
+            {
+                // Use the provider-specific extension for Zero-GC instantiation
+                var go = package.InstantiateSync(handle);
+            }
         }
     }
 }
@@ -49,231 +64,96 @@ async Task LoadMyPlayer()
 ## Features
 
 - **Interface-First Design**: Decouples your game logic from the underlying asset system. Write your code against a stable interface and swap the backend anytime without major refactoring.
-- **DI-Friendly**: Designed from the ground up for dependency injection, making it easy to manage asset loading services in a clean and testable way.
-- **Unified API**: Provides a single, consistent API for all asset operations. Whether you're using `YooAsset`, `Addressables`, or a custom `Resources.Load` wrapper, the calling code remains the same.
-- **Extensible**: Easily create your own providers by implementing the `IAssetModule` and `IAssetPackage` interfaces to support any asset management system.
-- **Robust Tooling**: Includes built-in support for common needs like batch downloading, retries, caching, and progress aggregation.
+- **DI-Friendly**: Designed from the ground up for dependency injection (`VContainer`, `Zenject`, etc.), making it easy to manage asset loading services in a clean and testable way.
+- **Unified API**: Provides a single, consistent API for all asset operations. Whether you're using `YooAsset`, `Addressables`, or a custom `Resources` wrapper, the calling code remains the same.
+- **Zero-GC on Hot Path**: The default `YooAsset` provider supports zero-garbage collection for critical operations like asset instantiation.
+- **UniTask-Powered**: Fully asynchronous API based on `UniTask` for maximum performance and minimal overhead in Unity.
+- **Offline Mode Support**: Full support for single-player/offline games by configuring providers (e.g., YooAsset's `OfflinePlayMode`) to load all assets from the local build.
+- **Extensible**: Easily create your own providers by implementing the `IAssetModule` and `IAssetPackage` interfaces.
 
-## Update & Download
+## High-Level Update Workflow (YooAsset Provider)
 
-- Request latest version:
-
-```csharp
-string version = await pkg.RequestPackageVersionAsync();
-```
-
-- Update active manifest:
+For a streamlined update process, the `YooAsset` provider includes a high-level `IPatchService` that encapsulates the entire update state machine, inspired by best practices.
 
 ```csharp
-bool ok = await pkg.UpdatePackageManifestAsync(version);
+// 1. Get the patch service from the module
+IPatchService patchService = assetModule.CreatePatchService("DefaultPackage");
+
+// 2. Subscribe to patch events
+patchService.PatchEvents
+    .Subscribe(evt =>
+    {
+        var (patchEvent, args) = evt;
+        if (patchEvent == PatchEvent.FoundNewVersion)
+        {
+            var eventArgs = (FoundNewVersionEventArgs)args;
+            // Show a dialog to the user: "Found new version with size {eventArgs.TotalDownloadSizeBytes}"
+            // If user confirms, call patchService.Download();
+        }
+        else if (patchEvent == PatchEvent.PatchDone)
+        {
+            // Patch is complete, proceed to game
+        }
+    });
+
+// 3. Run the patch process
+await patchService.RunAsync(autoDownloadOnFoundNewVersion: false);
 ```
 
-- Pre-download a specific version (without switching active manifest yet):
+## Low-Level Update & Download API (YooAsset Provider)
+
+For more granular control, you can use the low-level `IAssetPackage` API.
+
+- **Request latest version**:
+  ```csharp
+  string version = await package.RequestPackageVersionAsync();
+  ```
+
+- **Pre-download a specific version** (without switching the active manifest):
+  ```csharp
+  var downloader = await package.CreatePreDownloaderForAllAsync(version, downloadingMaxNumber: 10, failedTryAgain: 3);
+  if (downloader != null)
+  {
+      await downloader.StartAsync(); // Supports cancellation
+  }
+  ```
+
+- **Update active manifest**:
+  ```csharp
+  bool manifestUpdated = await package.UpdatePackageManifestAsync(version);
+  ```
+
+- **Download by tags**:
+  ```csharp
+  IDownloader downloader = package.CreateDownloaderForTags(new[]{"Base", "UI"}, 10, 3);
+  downloader.Begin();
+  await downloader.StartAsync();
+  ```
+
+- **Clear cache**:
+  ```csharp
+  await package.ClearCacheFilesAsync(ClearCacheMode.Unused);
+  ```
+
+## Scene Management
 
 ```csharp
-var downloader = await pkg.CreatePreDownloaderForAllAsync(version, downloadingMaxNumber: 8, failedTryAgain: 2);
-await downloader.StartAsync();
+// Asynchronous load
+var sceneHandle = package.LoadSceneAsync("Assets/Scenes/Main.unity");
+await sceneHandle.Task;
+
+// Asynchronous unload
+await package.UnloadSceneAsync(sceneHandle);
 ```
-
-- Download by tags or by locations:
-
-```csharp
-IDownloader d1 = pkg.CreateDownloaderForTags(new[]{"Base","UI"}, 8, 2);
-IDownloader d2 = pkg.CreateDownloaderForLocations(new[]{"Assets/Prefabs/Hero.prefab"}, true, 8, 2);
-d1.Combine(d2);
-d1.Begin();
-await d1.StartAsync();
-```
-
-- Clear cache:
-
-```csharp
-await pkg.ClearCacheFilesAsync(clearMode: "All");
-```
-
-## Scenes (Basics)
-
-```csharp
-var scene = pkg.LoadSceneAsync("Assets/Scenes/Main.unity");
-scene.WaitForAsyncComplete();
-await pkg.UnloadSceneAsync(scene);
-```
-
-## Navigathena Integration (optional)
-
-To use Navigathena with scenes backed by this asset management system, use the provider-agnostic `AssetManagementSceneIdentifier`. This works regardless of whether you are using YooAsset or Addressables underneath.
-
-```csharp
-using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.AssetManagement.Runtime.Integrations.Navigathena;
-using MackySoft.Navigathena.SceneManagement;
-
-// Get the IAssetPackage from your IAssetModule
-IAssetPackage pkg = assetModule.GetPackage("DefaultPackage");
-
-// Create the identifier. It will use the provided package to load the scene.
-ISceneIdentifier id = new AssetManagementSceneIdentifier(pkg, "Assets/Scenes/Main.unity", LoadSceneMode.Additive, true);
-await GlobalSceneNavigator.Instance.Push(id);
-```
-
-## User-confirmed Update Flow
-
-The module supports a "check → confirm → update" UX.
-
-```csharp
-// 1) Check latest
-string latest = await pkg.RequestPackageVersionAsync();
-bool hasUpdate = !string.IsNullOrEmpty(latest) && latest != currentVersion;
-if (!hasUpdate) return;
-
-// 2) Pre-download to estimate size; ask user for confirmation
-var pre = await pkg.CreatePreDownloaderForAllAsync(latest, downloadingMaxNumber: 8, failedTryAgain: 2);
-long totalBytes = (pre?.TotalDownloadBytes) ?? 0;
-int totalFiles = (pre?.TotalDownloadCount) ?? 0;
-// Show a dialog: $"Update size {totalBytes} bytes ({totalFiles} files). Proceed?"
-await pre.StartAsync(); // user confirmed; supports cancellation
-
-// 3) Switch manifest
-bool switched = await pkg.UpdatePackageManifestAsync(latest);
-if (switched) { currentVersion = latest; /* persist */ }
-
-// Optional: purge old cache
-// await pkg.ClearCacheFilesAsync(clearMode: "All");
-```
-
-- For partial updates, use tag or location-based downloaders before switching the manifest.
-- Handle cancellations by catching `OperationCanceledException` from `StartAsync` and keeping the old manifest.
-
-## Additional Options
-
-- Synchronous scene loading
-
-```csharp
-var handle = pkg.LoadSceneSync("Assets/Scenes/Main.unity", LoadSceneMode.Single);
-```
-
-- Handle tracking (diagnostics)
-
-```csharp
-module.Initialize(new AssetManagementOptions(
-  operationSystemMaxTimeSliceMs: 16,
-  bundleLoadingMaxConcurrency: 8,
-  logger: null,
-  enableHandleTracking: true // Editor Tracker
-));
-```
+> [!WARNING]
+> Synchronous scene loading (`LoadSceneSync`) is deprecated as it can cause significant performance issues. Always prefer the asynchronous version.
 
 ## Scripting Define Symbols
 
-This package uses Assembly Definition Files (`.asmdef`) to automatically define symbols based on which other packages are present in your project. This allows for optional integrations without causing compile errors if a dependency is missing.
+This package uses Assembly Definition Files (`.asmdef`) to automatically define symbols based on which other packages are present in your project.
 
-The following symbols are defined and used internally:
+- `YOOASSET_PRESENT`: Enables the YooAsset provider.
+- `ADDRESSABLES_PRESENT`: Enables the Addressables provider.
+- `VCONTAINER_PRESENT`: Enables VContainer integration helpers.
 
-- `YOOASSET_PRESENT`: Defined when `com.tuyoogame.yooasset` is installed. Enables the YooAsset provider.
-- `ADDRESSABLES_PRESENT`: Defined when `com.unity.addressables` is installed. Enables the Addressables provider.
-- `VCONTAINER_PRESENT`: Defined when `jp.hadashikick.vcontainer` is installed. Enables the VContainer integration.
-- `NAVIGATHENA_PRESENT`: Defined when `com.mackysoft.navigathena` is installed. Enables the Navigathena integration.
-
-You generally do not need to interact with these symbols directly.
-
-## Scene Preload (optional)
-
-Pre-warm content per scene using manifests to reduce spikes during scene switches.
-
-### Setup
-
-1) Create one or more `PreloadManifest` assets (location + weight)
-2) Create a `ScenePreloadRegistry` asset mapping `sceneKey` -> list of manifests (sceneKey can be your scene location/name)
-3) Set `NavigathenaYooSceneFactory.DefaultPackage = pkg` at boot
-4) In `NavigathenaNetworkManager` (provided in NavigathenaMirror), assign `scenePreloadRegistry`
-5) Ensure Navigathena and YooAsset are installed; macros are auto-defined by asmdefs
-
-## YooAsset Adapter
-
-If you have `com.tuyoogame.yooasset` in your project, you can use the provided adapter for a powerful, production-ready asset solution. The setup is similar to the original Quick Start.
-
-```csharp
-using CycloneGames.AssetManagement;
-using YooAsset;
-
-// 1) Initialize the specific YooAssetModule
-IAssetModule module = new YooAssetModule();
-module.Initialize(new AssetManagementOptions(operationSystemMaxTimeSliceMs: 16));
-
-// 2) Create and initialize a package
-var pkg = module.CreatePackage("Default");
-var hostParams = new HostPlayModeParameters
-{
-    BuildinFileSystemParameters = FileSystemParameters.CreateDefaultBuildinFileSystemParameters(),
-    CacheFileSystemParameters = FileSystemParameters.CreateDefaultCacheFileSystemParameters(remoteServices: null)
-};
-await pkg.InitializeAsync(new AssetPackageInitOptions(AssetPlayMode.Host, hostParams, bundleLoadingMaxConcurrencyOverride: 8));
-
-// 3) Load and instantiate using the unified API
-using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/My.prefab"))
-{
-    handle.WaitForAsyncComplete();
-    var go = pkg.InstantiateSync(handle); // Note: InstantiateSync is a YooAsset-specific extension
-}
-```
-For details on updating, downloading, and scene management with the YooAsset provider, please refer to the corresponding sections in this document.
-
-## Addressables Adapter
-
-If you have `com.unity.addressables` in your project, you can use the provided adapter for it. The setup is straightforward.
-
-```csharp
-using CycloneGames.AssetManagement;
-
-// 1) Initialize the AddressablesAssetModule
-IAssetModule module = new AddressablesAssetModule();
-module.Initialize(new AssetManagementOptions());
-
-// 2) Create a package (name is logical and doesn't affect Addressables groups)
-var pkg = module.CreatePackage("Default");
-
-// 3) Load an asset using the unified API
-using (var handle = pkg.LoadAssetAsync<UnityEngine.GameObject>("Assets/Prefabs/MyCharacter.prefab"))
-{
-    // In a real project, you would await this asynchronously.
-    while (!handle.IsDone)
-    {
-        await System.Threading.Tasks.Task.Yield(); // Or yield return null in a coroutine
-    }
-    
-    if (handle.Asset)
-    {
-        var go = UnityEngine.Object.Instantiate(handle.Asset);
-    }
-}
-```
-> [!NOTE]
->  that some features like package versioning and pre-downloading are specific to YooAsset and do not have a direct equivalent in the Addressables adapter.
-
-## Other Tips
-
-### Caching
-
-```csharp
-var cache = new CycloneGames.AssetManagement.Cache.AssetCacheService(pkg, maxEntries: 128);
-var icon = cache.Get<Sprite>("Assets/Art/UI/Icons/Abilities/Fireball.png");
-cache.TryRelease("Assets/Art/UI/Icons/Abilities/Fireball.png");
-```
-
-### Retry
-
-```csharp
-using CycloneGames.AssetManagement.Retry;
-var policy = new RetryPolicy(maxAttempts: 3, initialDelaySeconds: 0.5, backoffFactor: 2.0);
-var handle = await pkg.LoadAssetWithRetryAsync<Sprite>("Assets/Art/.../Icon.png", policy, ct);
-```
-
-### Progress
-
-```csharp
-using CycloneGames.AssetManagement.Progressing;
-var agg = new ProgressAggregator();
-agg.Add(groupOp1, 2f);
-agg.Add(groupOp2, 1f);
-var p = agg.GetProgress(); // 0..1
-```
+You do not need to manage these symbols manually.
