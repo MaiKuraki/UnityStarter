@@ -11,8 +11,6 @@ using UnityEngine.ResourceManagement.ResourceProviders;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    // --- Handle Implementations ---
-
     internal abstract class AddressablesOperationHandle : IOperation
     {
         protected readonly Action<int> Unregister;
@@ -50,7 +48,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             HandleTracker.Unregister(Id);
             Unregister(Id);
-            Addressables.Release(Raw);
+            if (Raw.IsValid()) Addressables.Release(Raw);
         }
     }
 
@@ -73,7 +71,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             HandleTracker.Unregister(Id);
             Unregister(Id);
-            Addressables.Release(raw);
+            if (raw.IsValid()) Addressables.Release(raw);
         }
     }
 
@@ -96,8 +94,20 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             HandleTracker.Unregister(Id);
             Unregister(Id);
-            Addressables.Release(raw);
+            if (raw.IsValid()) Addressables.Release(raw);
         }
+    }
+    
+    internal sealed class FailedInstantiateHandle : IInstantiateHandle
+    {
+        public bool IsDone => true;
+        public float Progress => 1f;
+        public string Error { get; }
+        public UniTask Task => UniTask.CompletedTask;
+        public GameObject Instance => null;
+        public FailedInstantiateHandle(string error) { Error = error; }
+        public void WaitForAsyncComplete() { }
+        public void Dispose() { }
     }
 
     internal sealed class AddressableSceneHandle : AddressablesOperationHandle, ISceneHandle
@@ -107,7 +117,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public override float Progress => Raw.PercentComplete;
         public override string Error => Raw.OperationException?.Message;
         public override UniTask Task => Raw.Task.AsUniTask();
-        public string ScenePath { get; } // Addressables doesn't easily expose the path.
+        public string ScenePath { get; }
         public Scene Scene => Raw.Result.Scene;
 
         public AddressableSceneHandle(Action<int> unregister, int id, AsyncOperationHandle<SceneInstance> raw) : base(unregister, id)
@@ -125,8 +135,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public bool IsDone => raw.IsDone;
         public bool Succeed => raw.Status == AsyncOperationStatus.Succeeded;
         public float Progress => raw.PercentComplete;
-        public int TotalDownloadCount => 0; // Not easily available
-        public int CurrentDownloadCount => 0; // Not easily available
+        public int TotalDownloadCount => 0; // Not available
+        public int CurrentDownloadCount => 0; // Not available
         public long TotalDownloadBytes => raw.GetDownloadStatus().TotalBytes;
         public long CurrentDownloadBytes => raw.GetDownloadStatus().DownloadedBytes;
         public string Error => raw.OperationException?.Message;
@@ -138,10 +148,16 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Begin() { }
         public UniTask StartAsync(CancellationToken cancellationToken = default) => raw.ToUniTask(cancellationToken: cancellationToken);
-        public void Pause() { } // Not supported
-        public void Resume() { } // Not supported
-        public void Cancel() { } // Not supported
-        public void Combine(IDownloader other) => throw new NotImplementedException();
+        public void Pause() => Debug.LogWarning("[AddressableDownloader] Pause is not supported by Addressables.");
+        public void Resume() => Debug.LogWarning("[AddressableDownloader] Resume is not supported by Addressables.");
+        public void Cancel()
+        {
+            if (raw.IsValid())
+            {
+                Addressables.Release(raw);
+            }
+        }
+        public void Combine(IDownloader other) => Debug.LogWarning("[AddressableDownloader] Combine is not supported by Addressables.");
     }
 }
 #endif

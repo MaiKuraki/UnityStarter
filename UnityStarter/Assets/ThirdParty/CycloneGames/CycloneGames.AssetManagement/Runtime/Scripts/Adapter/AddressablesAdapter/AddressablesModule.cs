@@ -7,7 +7,7 @@ using UnityEngine.AddressableAssets;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    public sealed class AddressablesAssetModule : IAssetModule
+    public sealed class AddressablesModule : IAssetModule
     {
         private readonly Dictionary<string, IAssetPackage> packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
         private bool initialized;
@@ -91,6 +91,11 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
             }
             return packageNamesCache;
+        }
+
+        public IPatchService CreatePatchService(string packageName)
+        {
+            throw new NotSupportedException("Addressables does not support the patch workflow provided by this module.");
         }
     }
 }

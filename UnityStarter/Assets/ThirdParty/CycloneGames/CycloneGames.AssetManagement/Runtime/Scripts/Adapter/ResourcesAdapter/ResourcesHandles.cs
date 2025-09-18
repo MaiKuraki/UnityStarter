@@ -25,22 +25,20 @@ namespace CycloneGames.AssetManagement.Runtime
     internal sealed class ResourcesAssetHandle<TAsset> : ResourcesOperationHandle, IAssetHandle<TAsset> where TAsset : UnityEngine.Object
     {
         private readonly ResourceRequest request;
-        private readonly TAsset syncAsset; // Used for sync loads
+        private readonly TAsset syncAsset;
 
         public override bool IsDone => request?.isDone ?? true;
         public override float Progress => request?.progress ?? 1f;
         public override UniTask Task => request?.ToUniTask() ?? UniTask.CompletedTask;
         
-        public TAsset Asset => syncAsset ? syncAsset : request?.asset as TAsset;
+        public TAsset Asset => syncAsset != null ? syncAsset : request?.asset as TAsset;
         public UnityEngine.Object AssetObject => Asset;
 
-        // Constructor for async loads
         public ResourcesAssetHandle(Action<int> unregister, int id, ResourceRequest request) : base(unregister, id)
         {
             this.request = request;
         }
         
-        // Constructor for sync loads
         public ResourcesAssetHandle(Action<int> unregister, int id, TAsset asset) : base(unregister, id)
         {
             this.syncAsset = asset;
@@ -50,17 +48,28 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             HandleTracker.Unregister(Id);
             Unregister(Id);
-            // For Resources.Load, we don't unload individual assets. Let UnloadUnusedAssets handle it.
+            // Individual assets loaded from Resources cannot be unloaded.
         }
     }
 
     internal sealed class ResourcesAllAssetsHandle<TAsset> : ResourcesOperationHandle, IAllAssetsHandle<TAsset> where TAsset : UnityEngine.Object
     {
+        public override bool IsDone => _task.Status.IsCompleted();
+        public override float Progress => _task.Status.IsCompleted() ? 1f : 0f;
+        public override UniTask Task => _task;
+        private readonly UniTask _task;
+        
         public IReadOnlyList<TAsset> Assets { get; }
 
         public ResourcesAllAssetsHandle(Action<int> unregister, int id, TAsset[] assets) : base(unregister, id)
         {
             Assets = assets;
+            _task = SimulateAsync();
+        }
+
+        private async UniTask SimulateAsync()
+        {
+            await UniTask.Yield();
         }
 
         public void Dispose()
