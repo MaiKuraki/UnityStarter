@@ -40,10 +40,33 @@ namespace CycloneGames.AssetManagement.Runtime
 
 	public sealed class YooAllAssetsHandle<TAsset> : IAllAssetsHandle<TAsset> where TAsset : UnityEngine.Object
 	{
+		// Private utility class to wrap a list of Objects as a read-only list of TAsset, avoiding GC allocation of a new list.
+		private sealed class ReadOnlyListAdapter<T> : IReadOnlyList<T> where T : UnityEngine.Object
+		{
+			private readonly IReadOnlyList<UnityEngine.Object> _source;
+
+			public ReadOnlyListAdapter(IReadOnlyList<UnityEngine.Object> source)
+			{
+				_source = source ?? throw new ArgumentNullException(nameof(source));
+			}
+
+			public T this[int index] => _source[index] as T;
+			public int Count => _source.Count;
+			public System.Collections.Generic.IEnumerator<T> GetEnumerator()
+			{
+				foreach (var item in _source)
+				{
+					yield return item as T;
+				}
+			}
+			System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+		}
+		
 		private readonly Action<int> _onDispose;
 		private readonly int _id;
 		internal readonly AllAssetsHandle Raw;
-		private System.Collections.Generic.IReadOnlyList<TAsset> _cachedAssets; // cache to avoid per-access allocations
+		private IReadOnlyList<TAsset> _cachedAssets;
+		private IReadOnlyList<UnityEngine.Object> _assetObjects;
 
 		public YooAllAssetsHandle(Action<int> onDispose, int id, AllAssetsHandle raw)
 		{
@@ -63,19 +86,21 @@ namespace CycloneGames.AssetManagement.Runtime
 			get
 			{
 				if (_cachedAssets != null) return _cachedAssets;
-				if (Raw == null) return Array.Empty<TAsset>();
-				var objs = Raw.AllAssetObjects;
-				if (objs == null || objs.Count == 0) return Array.Empty<TAsset>();
-				// Only cache when operation is done to avoid capturing incomplete lists
-				if (Raw.IsDone)
+				if (Raw == null || !Raw.IsDone) return Array.Empty<TAsset>();
+
+				if (_assetObjects == null)
 				{
-					var list = new List<TAsset>(objs.Count);
-					for (int i = 0; i < objs.Count; i++) list.Add(objs[i] as TAsset);
-					_cachedAssets = list;
+					_assetObjects = Raw.AllAssetObjects;
+				}
+				
+				if (_assetObjects == null || _assetObjects.Count == 0)
+				{
+					_cachedAssets = Array.Empty<TAsset>();
 					return _cachedAssets;
 				}
-				// Not done yet: produce a transient empty list to avoid incorrect partial caching
-				return Array.Empty<TAsset>();
+
+				_cachedAssets = new ReadOnlyListAdapter<TAsset>(_assetObjects);
+				return _cachedAssets;
 			}
 		}
 

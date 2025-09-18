@@ -44,6 +44,11 @@ namespace CycloneGames.AssetManagement.Runtime
 		/// Returns a snapshot of existing package names.
 		/// </summary>
 		IReadOnlyList<string> GetAllPackageNames();
+
+		/// <summary>
+		/// Creates a patch service for the specified package to manage the update workflow.
+		/// </summary>
+		IPatchService CreatePatchService(string packageName);
 	}
 
 	/// <summary>
@@ -67,7 +72,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		// --- Update & Download ---
 		UniTask<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
 		UniTask<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
-		UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object clearParam = null, CancellationToken cancellationToken = default);
+		UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.All, object clearParam = null, CancellationToken cancellationToken = default);
 
 		// Downloaders based on ACTIVE manifest
 		IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain);
@@ -207,14 +212,14 @@ namespace CycloneGames.AssetManagement.Runtime
 		/// <summary>
 		/// Clear all cached files, including asset bundles and manifests.
 		/// </summary>
-		ClearAll,
+		All,
 		/// <summary>
 		/// Clear only the cached files that are no longer in use by the current manifest.
 		/// </summary>
-		ClearUnused,
+		Unused,
 		/// <summary>
 		/// Clear cached files associated with specific tags. The tags should be provided via the `clearParam`.
 		/// </summary>
-		ClearByTags
+		ByTags
 	}
 }
