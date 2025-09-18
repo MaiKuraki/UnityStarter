@@ -1,6 +1,6 @@
+using Cysharp.Threading.Tasks;
 using System;
 using System.Threading;
-using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -18,32 +18,32 @@ namespace CycloneGames.AssetManagement.Runtime
             packageName = name;
         }
 
-        public Task<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
+        public UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
         {
             // Resources don't require package-level initialization.
-            return Task.FromResult(true);
+            return UniTask.FromResult(true);
         }
 
-        public Task DestroyAsync()
+        public UniTask DestroyAsync()
         {
             // No-op
-            return Task.CompletedTask;
+            return UniTask.CompletedTask;
         }
 
-        public Task<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public UniTask<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
-            return Task.FromResult("N/A");
+            return UniTask.FromResult("N/A");
         }
 
-        public Task<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public UniTask<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException("Resources does not support manifest updates.");
+            return UniTask.FromException<bool>(new NotImplementedException("Resources does not support manifest updates."));
         }
 
-        public Task<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object clearParam = null, CancellationToken cancellationToken = default)
+        public UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object tags = null, CancellationToken cancellationToken = default)
         {
             // No-op, Resources are built-in and have no cache to clear.
-            return Task.FromResult(true);
+            return UniTask.FromResult(true);
         }
 
         public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain)
@@ -61,19 +61,19 @@ namespace CycloneGames.AssetManagement.Runtime
             throw new NotImplementedException("Resources does not support downloading.");
         }
 
-        public Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
+        public UniTask<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException("Resources does not support pre-downloading.");
+            return UniTask.FromException<IDownloader>(new NotImplementedException("Resources does not support pre-downloading."));
         }
 
-        public Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
+        public UniTask<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException("Resources does not support pre-downloading.");
+            return UniTask.FromException<IDownloader>(new NotImplementedException("Resources does not support pre-downloading."));
         }
 
-        public Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
+        public UniTask<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            throw new NotImplementedException("Resources does not support pre-downloading.");
+            return UniTask.FromException<IDownloader>(new NotImplementedException("Resources does not support pre-downloading."));
         }
 
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object
@@ -86,9 +86,9 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            // Simulate async loading for Resources. CancellationToken is ignored as Resources.Load is synchronous.
-            var asset = Resources.Load<TAsset>(location);
-            var handle = new ResourcesAssetHandle<TAsset>(RegisterHandle(out int id), id, asset);
+            // Use LoadAsync to better align with the async nature of the interface.
+            var request = Resources.LoadAsync<TAsset>(location);
+            var handle = new ResourcesAssetHandle<TAsset>(RegisterHandle(out int id), id, request);
             HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
             return handle;
         }
@@ -134,15 +134,14 @@ namespace CycloneGames.AssetManagement.Runtime
             throw new NotImplementedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
         }
 
-        public Task UnloadSceneAsync(ISceneHandle sceneHandle)
+        public UniTask UnloadSceneAsync(ISceneHandle sceneHandle)
         {
-            throw new NotImplementedException("Unloading scenes from Resources is not supported via this API.");
+            return UniTask.FromException(new NotImplementedException("Unloading scenes from Resources is not supported via this API."));
         }
 
-        public async Task UnloadUnusedAssetsAsync()
+        public async UniTask UnloadUnusedAssetsAsync()
         {
-            var op = Resources.UnloadUnusedAssets();
-            while (!op.isDone) await Task.Yield();
+            await Resources.UnloadUnusedAssets();
         }
 
         private Action<int> RegisterHandle(out int id)

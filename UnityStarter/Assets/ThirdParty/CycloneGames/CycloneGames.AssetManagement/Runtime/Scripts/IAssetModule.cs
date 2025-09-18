@@ -1,7 +1,7 @@
+using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -57,17 +57,17 @@ namespace CycloneGames.AssetManagement.Runtime
 		/// Initializes the package.
 		/// Provider-specific parameters are carried in <see cref="AssetPackageInitOptions.ProviderOptions"/>.
 		/// </summary>
-		Task<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default);
+		UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default);
 
 		/// <summary>
 		/// Destroys the package and releases all provider resources.
 		/// </summary>
-		Task DestroyAsync();
+		UniTask DestroyAsync();
 
 		// --- Update & Download ---
-		Task<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
-		Task<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
-		Task<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object clearParam = null, CancellationToken cancellationToken = default);
+		UniTask<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
+		UniTask<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
+		UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object clearParam = null, CancellationToken cancellationToken = default);
 
 		// Downloaders based on ACTIVE manifest
 		IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain);
@@ -75,9 +75,9 @@ namespace CycloneGames.AssetManagement.Runtime
 		IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain);
 
 		// Pre-download for a SPECIFIC manifest version (without switching active manifest)
-		Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default);
-		Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default);
-		Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default);
+		UniTask<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default);
+		UniTask<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default);
+		UniTask<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default);
 
 		// --- Asset Loading ---
 		IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object;
@@ -101,10 +101,10 @@ namespace CycloneGames.AssetManagement.Runtime
 		// --- Scene Loading ---
 		ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single);
 		ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100);
-		Task UnloadSceneAsync(ISceneHandle sceneHandle);
+		UniTask UnloadSceneAsync(ISceneHandle sceneHandle);
 
 		// --- Maintenance ---
-		Task UnloadUnusedAssetsAsync();
+		UniTask UnloadUnusedAssetsAsync();
 	}
 
 	public interface IDownloader
@@ -119,7 +119,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		string Error { get; }
 
 		void Begin();
-		Task StartAsync(CancellationToken cancellationToken = default);
+		UniTask StartAsync(CancellationToken cancellationToken = default);
 		void Pause();
 		void Resume();
 		void Cancel();
@@ -131,7 +131,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		bool IsDone { get; }
 		float Progress { get; }
 		string Error { get; }
-		System.Threading.Tasks.Task Task { get; }
+		UniTask Task { get; }
 		void WaitForAsyncComplete();
 	}
 
