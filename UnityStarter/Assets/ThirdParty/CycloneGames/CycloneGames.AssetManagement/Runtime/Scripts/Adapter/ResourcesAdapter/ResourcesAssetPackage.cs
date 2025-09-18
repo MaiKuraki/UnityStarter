@@ -12,7 +12,6 @@ namespace CycloneGames.AssetManagement.Runtime
         private int nextId = 1;
 
         public string Name => packageName;
-        public bool IsAlive => true;
 
         public ResourcesAssetPackage(string name)
         {
@@ -41,38 +40,38 @@ namespace CycloneGames.AssetManagement.Runtime
             throw new NotImplementedException("Resources does not support manifest updates.");
         }
 
-        public Task<bool> ClearCacheFilesAsync(string clearMode, object clearParam = null, CancellationToken cancellationToken = default)
+        public Task<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object clearParam = null, CancellationToken cancellationToken = default)
         {
-            // No-op, Resources are built-in.
+            // No-op, Resources are built-in and have no cache to clear.
             return Task.FromResult(true);
         }
 
-        public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
+        public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain)
         {
             throw new NotImplementedException("Resources does not support downloading.");
         }
 
-        public IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
+        public IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain)
         {
             throw new NotImplementedException("Resources does not support downloading.");
         }
 
-        public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
+        public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain)
         {
             throw new NotImplementedException("Resources does not support downloading.");
         }
 
-        public Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
             throw new NotImplementedException("Resources does not support pre-downloading.");
         }
 
-        public Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
             throw new NotImplementedException("Resources does not support pre-downloading.");
         }
 
-        public Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
             throw new NotImplementedException("Resources does not support pre-downloading.");
         }
@@ -85,17 +84,18 @@ namespace CycloneGames.AssetManagement.Runtime
             return handle;
         }
 
-        public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location) where TAsset : UnityEngine.Object
+        public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            // Simulate async loading for Resources
+            // Simulate async loading for Resources. CancellationToken is ignored as Resources.Load is synchronous.
             var asset = Resources.Load<TAsset>(location);
             var handle = new ResourcesAssetHandle<TAsset>(RegisterHandle(out int id), id, asset);
             HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
             return handle;
         }
 
-        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location) where TAsset : UnityEngine.Object
+        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
+            // CancellationToken is ignored as Resources.LoadAll is synchronous.
             var assets = Resources.LoadAll<TAsset>(location);
             var handle = new ResourcesAllAssetsHandle<TAsset>(RegisterHandle(out int id), id, assets);
             HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
@@ -147,7 +147,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private Action<int> RegisterHandle(out int id)
         {
-            id = nextId++;
+            id = Interlocked.Increment(ref nextId);
             return UnregisterHandle;
         }
 

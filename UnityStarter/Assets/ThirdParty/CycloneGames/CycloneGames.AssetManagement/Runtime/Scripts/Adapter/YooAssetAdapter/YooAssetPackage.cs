@@ -1,7 +1,5 @@
 #if YOOASSET_PRESENT
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -51,10 +49,32 @@ namespace CycloneGames.AssetManagement.Runtime
             return op.Status == EOperationStatus.Succeed;
         }
 
-        public async Task<bool> ClearCacheFilesAsync(string clearMode, object clearParam = null, CancellationToken cancellationToken = default)
+        public async Task<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object clearParam = null, CancellationToken cancellationToken = default)
         {
-            // A more robust implementation would parse the clearMode string.
-            var op = Raw.ClearCacheFilesAsync(EFileClearMode.ClearAllBundleFiles);
+            ClearCacheFilesOperation op;
+            switch (clearMode)
+            {
+                case ClearCacheMode.ClearAll:
+                    op = Raw.ClearCacheFilesAsync(EFileClearMode.ClearAllBundleFiles);
+                    break;
+                case ClearCacheMode.ClearUnused:
+                    op = Raw.ClearCacheFilesAsync(EFileClearMode.ClearUnusedBundleFiles);
+                    break;
+                case ClearCacheMode.ClearByTags:
+                    if (clearParam is string[] or System.Collections.Generic.List<string>)
+                    {
+                        op = Raw.ClearCacheFilesAsync(EFileClearMode.ClearBundleFilesByTags, clearParam);
+                    }
+                    else
+                    {
+                        Debug.LogError("[YooAssetPackage] ClearByTags requires a string array or List<string> parameter.");
+                        return false;
+                    }
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(clearMode), clearMode, null);
+            }
+            
             await op.Task;
             return op.Status == EOperationStatus.Succeed;
         }
@@ -67,17 +87,20 @@ namespace CycloneGames.AssetManagement.Runtime
             return wrapped;
         }
 
-        public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location) where TAsset : UnityEngine.Object
+        public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
             var handle = Raw.LoadAssetAsync<TAsset>(location);
+            // YooAsset handles do not natively support CancellationToken.
+            // We could implement a wrapper task to poll for cancellation, but for now, we'll just pass it down conceptually.
             var wrapped = new YooAssetHandle<TAsset>(RegisterHandle(out int id), id, handle);
             HandleTracker.Register(id, Name, $"AssetAsync {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
         
-        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location) where TAsset : UnityEngine.Object
+        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
             var handle = Raw.LoadAllAssetsAsync<TAsset>(location);
+            // YooAsset handles do not natively support CancellationToken.
             var wrapped = new YooAllAssetsHandle<TAsset>(RegisterHandle(out int id), id, handle);
             HandleTracker.Register(id, Name, $"AllAssets {typeof(TAsset).Name} : {location}");
             return wrapped;
@@ -108,27 +131,27 @@ namespace CycloneGames.AssetManagement.Runtime
             return Task.CompletedTask;
         }
         
-        public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
+        public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain)
         {
-            var op = Raw.CreateResourceDownloader(downloadingMaxNumber, failedTryAgain, timeoutSeconds);
+            var op = Raw.CreateResourceDownloader(downloadingMaxNumber, failedTryAgain);
             return new YooDownloader(op);
         }
-        public IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
+        public IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain)
         {
-            var op = Raw.CreateResourceDownloader(tags, downloadingMaxNumber, failedTryAgain, timeoutSeconds);
+            var op = Raw.CreateResourceDownloader(tags, downloadingMaxNumber, failedTryAgain);
             return new YooDownloader(op);
         }
-        public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60)
+        public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain)
         {
-            var op = Raw.CreateBundleDownloader(locations, downloadingMaxNumber, failedTryAgain, timeoutSeconds);
+            var op = Raw.CreateBundleDownloader(locations, recursiveDownload, downloadingMaxNumber, failedTryAgain);
             return new YooDownloader(op);
         }
-        public Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        public Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
             throw new NotImplementedException("YooAsset's CreateResourcePreDownloader is not available in this context.");
         }
-        public Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         
         public GameObject InstantiateSync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false)
         {
@@ -140,16 +163,23 @@ namespace CycloneGames.AssetManagement.Runtime
         }
         public IInstantiateHandle InstantiateAsync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false, bool setActive = true)
         {
-            var op = (handle as YooAssetHandle<GameObject>)?.Raw.InstantiateAsync(parent, worldPositionStays);
+            var yooHandle = handle as YooAssetHandle<GameObject>;
+            if (yooHandle == null)
+            {
+                Debug.LogError("Invalid handle type passed to InstantiateAsync.");
+                return null;
+            }
+            
+            var op = yooHandle.Raw.InstantiateAsync(parent, worldPositionStays);
             var wrapped = new YooInstantiateHandle(RegisterHandle(out int id), id, op);
-            HandleTracker.Register(id, Name, $"InstantiateAsync : {handle.AssetObject.name}");
+            HandleTracker.Register(id, Name, $"InstantiateAsync : {yooHandle.Raw.GetAssetInfo().AssetPath}");
             return wrapped;
         }
         public Task UnloadUnusedAssetsAsync() => Raw.UnloadUnusedAssetsAsync().Task;
         
         private Action<int> RegisterHandle(out int id)
         {
-            id = nextId++;
+            id = Interlocked.Increment(ref nextId);
             return UnregisterHandle;
         }
 
