@@ -15,7 +15,7 @@
     "com.svermeulen.extenject": "https://github.com/Mathijs-Bakker/Extenject.git?path=UnityProject/Assets/Plugins/Zenject/Source",
     "com.unity.2d.sprite": "1.0.0",
     "com.unity.addressables": "2.7.2",
-    "com.unity.burst": "1.8.24",
+    "com.unity.burst": "1.8.25",
     "com.unity.cinemachine": "3.1.4",
     "com.unity.collections": "2.5.7",
     "com.unity.device-simulator.devices": "1.0.0",

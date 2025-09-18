@@ -67,26 +67,26 @@ namespace CycloneGames.AssetManagement.Runtime
 		// --- Update & Download ---
 		Task<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
 		Task<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
-		Task<bool> ClearCacheFilesAsync(string clearMode, object clearParam = null, CancellationToken cancellationToken = default);
+		Task<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.ClearAll, object clearParam = null, CancellationToken cancellationToken = default);
 
 		// Downloaders based on ACTIVE manifest
-		IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60);
-		IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60);
-		IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60);
+		IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain);
+		IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain);
+		IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain);
 
 		// Pre-download for a SPECIFIC manifest version (without switching active manifest)
-		Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
-		Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
-		Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, int timeoutSeconds = 60, CancellationToken cancellationToken = default);
+		Task<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default);
+		Task<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default);
+		Task<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default);
 
 		// --- Asset Loading ---
 		IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object;
-		IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location) where TAsset : UnityEngine.Object;
+		IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object;
 
 		/// <summary>
 		/// Loads all sub-assets for a location (e.g., sprites in an atlas).
 		/// </summary>
-		IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location) where TAsset : UnityEngine.Object;
+		IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object;
 
 		/// <summary>
 		/// Instantiates a prefab synchronously using a previously loaded handle. Returns null on error.
@@ -200,5 +200,21 @@ namespace CycloneGames.AssetManagement.Runtime
 		Host,
 		Web,
 		Custom
+	}
+	
+	public enum ClearCacheMode
+	{
+		/// <summary>
+		/// Clear all cached files, including asset bundles and manifests.
+		/// </summary>
+		ClearAll,
+		/// <summary>
+		/// Clear only the cached files that are no longer in use by the current manifest.
+		/// </summary>
+		ClearUnused,
+		/// <summary>
+		/// Clear cached files associated with specific tags. The tags should be provided via the `clearParam`.
+		/// </summary>
+		ClearByTags
 	}
 }
