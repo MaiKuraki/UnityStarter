@@ -10,6 +10,7 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         private readonly Dictionary<string, IAssetPackage> _packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
         private bool _initialized;
+        private List<string> _packageNamesCache;
 
         public bool Initialized => _initialized;
 
@@ -25,7 +26,7 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 YooAssets.SetOperationSystemMaxTimeSlice(options.OperationSystemMaxTimeSliceMs);
             }
-            // HandleTracker.Enabled = options.EnableHandleTracking; // To be implemented
+            HandleTracker.Enabled = options.EnableHandleTracking;
             _initialized = true;
         }
 
@@ -46,6 +47,7 @@ namespace CycloneGames.AssetManagement.Runtime
             var yooPackage = YooAssets.CreatePackage(packageName);
             var wrapped = new YooAssetPackage(yooPackage);
             _packages.Add(packageName, wrapped);
+            _packageNamesCache = null; // Invalidate cache
             return wrapped;
         }
 
@@ -63,12 +65,17 @@ namespace CycloneGames.AssetManagement.Runtime
             
             _packages.Remove(packageName);
             YooAssets.RemovePackage(packageName);
+            _packageNamesCache = null; // Invalidate cache
             return true;
         }
 
         public IReadOnlyList<string> GetAllPackageNames()
         {
-            return _packages.Keys.ToList();
+            if (_packageNamesCache == null)
+            {
+                _packageNamesCache = _packages.Keys.ToList();
+            }
+            return _packageNamesCache;
         }
     }
 }
