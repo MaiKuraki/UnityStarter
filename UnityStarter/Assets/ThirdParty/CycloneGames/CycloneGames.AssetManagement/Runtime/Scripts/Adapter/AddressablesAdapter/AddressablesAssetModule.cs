@@ -9,9 +9,10 @@ namespace CycloneGames.AssetManagement.Runtime
 {
     public sealed class AddressablesAssetModule : IAssetModule
     {
-        private readonly Dictionary<string, AddressablesAssetPackage> packages = new Dictionary<string, AddressablesAssetPackage>(StringComparer.Ordinal);
+        private readonly Dictionary<string, IAssetPackage> packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
         private bool initialized;
         private AsyncOperationHandle initializationHandle;
+        private List<string> packageNamesCache;
 
         public bool Initialized => initialized;
 
@@ -25,7 +26,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private async UniTaskVoid InitializeAsync()
         {
             initializationHandle = Addressables.InitializeAsync();
-            await initializationHandle.Task;
+            await initializationHandle;
             
             if (initializationHandle.Status == AsyncOperationStatus.Succeeded)
             {
@@ -58,6 +59,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
             var package = new AddressablesAssetPackage(packageName);
             packages.Add(packageName, package);
+            packageNamesCache = null; // Invalidate cache
             return package;
         }
 
@@ -71,20 +73,24 @@ namespace CycloneGames.AssetManagement.Runtime
         public bool RemovePackage(string packageName)
         {
             if (string.IsNullOrEmpty(packageName)) return false;
-            if (!packages.TryGetValue(packageName, out var pkg)) return false;
+            if (!packages.Remove(packageName)) return false;
             
-            packages.Remove(packageName);
+            packageNamesCache = null; // Invalidate cache
             return true;
         }
 
         public IReadOnlyList<string> GetAllPackageNames()
         {
-            var names = new List<string>(packages.Count);
-            foreach (var kv in packages)
+            if (packageNamesCache == null)
             {
-                names.Add(kv.Key);
+                // This is a simplified ToList() to avoid LINQ dependency for clarity.
+                packageNamesCache = new List<string>(packages.Count);
+                foreach (var kvp in packages)
+                {
+                    packageNamesCache.Add(kvp.Key);
+                }
             }
-            return names;
+            return packageNamesCache;
         }
     }
 }
