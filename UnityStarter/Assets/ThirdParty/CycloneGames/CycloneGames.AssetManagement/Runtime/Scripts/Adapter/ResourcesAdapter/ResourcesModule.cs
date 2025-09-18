@@ -4,7 +4,7 @@ using System.Linq;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    public sealed class ResourcesAssetModule : IAssetModule
+    public sealed class ResourcesModule : IAssetModule
     {
         private readonly Dictionary<string, IAssetPackage> packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
         private bool initialized;
@@ -63,6 +63,11 @@ namespace CycloneGames.AssetManagement.Runtime
                 packageNamesCache = packages.Keys.ToList();
             }
             return packageNamesCache;
+        }
+
+        public IPatchService CreatePatchService(string packageName)
+        {
+            throw new NotSupportedException("Resources does not support the patch workflow.");
         }
     }
 }

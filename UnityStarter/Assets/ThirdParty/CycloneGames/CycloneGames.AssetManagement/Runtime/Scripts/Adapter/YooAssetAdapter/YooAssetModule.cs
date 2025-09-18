@@ -77,6 +77,16 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             return _packageNamesCache;
         }
+
+        public IPatchService CreatePatchService(string packageName)
+        {
+            var package = GetPackage(packageName);
+            if (package == null)
+            {
+                throw new ArgumentException($"Package not found: {packageName}", nameof(packageName));
+            }
+            return new YooAssetPatchService(package);
+        }
     }
 }
 #endif // YOOASSET_PRESENT
