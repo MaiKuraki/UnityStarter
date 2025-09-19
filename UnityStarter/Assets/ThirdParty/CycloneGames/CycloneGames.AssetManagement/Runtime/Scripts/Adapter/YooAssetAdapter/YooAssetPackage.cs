@@ -84,7 +84,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object
         {
             var handle = _rawPackage.LoadAssetSync<TAsset>(location);
-            var wrapped = new YooAssetHandle<TAsset>(RegisterHandle(out int id), id, handle);
+            var id = RegisterHandle();
+            var wrapped = new YooAssetHandle<TAsset>(id, handle, CancellationToken.None); // Sync operation has no cancellation.
             HandleTracker.Register(id, Name, $"AssetSync {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
@@ -92,8 +93,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
             var handle = _rawPackage.LoadAssetAsync<TAsset>(location);
-            handle.WithCancellation(cancellationToken).Forget(); // Fire-and-forget the cancellation wrapper
-            var wrapped = new YooAssetHandle<TAsset>(RegisterHandle(out int id), id, handle);
+            var id = RegisterHandle();
+            var wrapped = new YooAssetHandle<TAsset>(id, handle, cancellationToken);
             HandleTracker.Register(id, Name, $"AssetAsync {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
@@ -101,8 +102,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
             var handle = _rawPackage.LoadAllAssetsAsync<TAsset>(location);
-            handle.WithCancellation(cancellationToken).Forget(); // Fire-and-forget the cancellation wrapper
-            var wrapped = new YooAllAssetsHandle<TAsset>(RegisterHandle(out int id), id, handle);
+            var id = RegisterHandle();
+            var wrapped = new YooAllAssetsHandle<TAsset>(id, handle, cancellationToken);
             HandleTracker.Register(id, Name, $"AllAssets {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
@@ -110,7 +111,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single)
         {
             var handle = _rawPackage.LoadSceneSync(sceneLocation, loadMode);
-            var wrapped = new YooSceneHandle(RegisterHandle(out int id), id, handle);
+            var id = RegisterHandle();
+            var wrapped = new YooSceneHandle(id, handle);
             HandleTracker.Register(id, Name, $"SceneSync : {sceneLocation}");
             return wrapped;
         }
@@ -118,7 +120,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100)
         {
             var handle = _rawPackage.LoadSceneAsync(sceneLocation, loadMode, suspendLoad: !activateOnLoad, priority: (uint)priority);
-            var wrapped = new YooSceneHandle(RegisterHandle(out int id), id, handle);
+            var id = RegisterHandle();
+            var wrapped = new YooSceneHandle(id, handle);
             HandleTracker.Register(id, Name, $"SceneAsync : {sceneLocation}");
             return wrapped;
         }
@@ -198,7 +201,8 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             
             var op = yooHandle.Raw.InstantiateAsync(parent, worldPositionStays);
-            var wrapped = new YooInstantiateHandle(RegisterHandle(out int id), id, op);
+            var id = RegisterHandle();
+            var wrapped = new YooInstantiateHandle(id, op);
             HandleTracker.Register(id, Name, $"InstantiateAsync : {yooHandle.Raw.GetAssetInfo().AssetPath}");
             return wrapped;
         }
@@ -207,15 +211,9 @@ namespace CycloneGames.AssetManagement.Runtime
             await _rawPackage.UnloadUnusedAssetsAsync();
         }
         
-        private Action<int> RegisterHandle(out int id)
+        private int RegisterHandle()
         {
-            id = Interlocked.Increment(ref nextId);
-            return UnregisterHandle;
-        }
-
-        private void UnregisterHandle(int id)
-        {
-            // Can be used for internal tracking if needed
+            return Interlocked.Increment(ref nextId);
         }
     }
 }

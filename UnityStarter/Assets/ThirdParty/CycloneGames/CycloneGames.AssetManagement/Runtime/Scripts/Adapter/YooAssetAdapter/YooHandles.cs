@@ -1,6 +1,7 @@
 #if YOOASSET_PRESENT
 using Cysharp.Threading.Tasks;
 using System;
+using System.Threading;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -10,21 +11,20 @@ namespace CycloneGames.AssetManagement.Runtime
 {
 	public sealed class YooAssetHandle<TAsset> : IAssetHandle<TAsset> where TAsset : UnityEngine.Object
 	{
-		private readonly Action<int> _onDispose;
 		private readonly int _id;
 		internal readonly AssetHandle Raw;
 
-		public YooAssetHandle(Action<int> onDispose, int id, AssetHandle raw)
+		public YooAssetHandle(int id, AssetHandle raw, CancellationToken cancellationToken)
 		{
-			_onDispose = onDispose;
 			_id = id;
 			Raw = raw;
+			Task = raw.ToUniTask(cancellationToken: cancellationToken);
 		}
 
 		public bool IsDone => Raw == null || Raw.IsDone;
 		public float Progress => Raw?.Progress ?? 0f;
 		public string Error => Raw?.LastError ?? string.Empty;
-		public UniTask Task => Raw?.Task.AsUniTask() ?? UniTask.CompletedTask;
+		public UniTask Task { get; }
 		public void WaitForAsyncComplete() => Raw?.WaitForAsyncComplete();
 
 		public TAsset Asset => Raw != null ? Raw.GetAssetObject<TAsset>() : null;
@@ -33,7 +33,6 @@ namespace CycloneGames.AssetManagement.Runtime
 		public void Dispose()
 		{
 			Raw?.Dispose();
-			_onDispose?.Invoke(_id);
 			HandleTracker.Unregister(_id);
 		}
 	}
@@ -62,23 +61,22 @@ namespace CycloneGames.AssetManagement.Runtime
 			System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
 		}
 		
-		private readonly Action<int> _onDispose;
 		private readonly int _id;
 		internal readonly AllAssetsHandle Raw;
 		private IReadOnlyList<TAsset> _cachedAssets;
 		private IReadOnlyList<UnityEngine.Object> _assetObjects;
 
-		public YooAllAssetsHandle(Action<int> onDispose, int id, AllAssetsHandle raw)
+		public YooAllAssetsHandle(int id, AllAssetsHandle raw, CancellationToken cancellationToken)
 		{
-			_onDispose = onDispose;
 			_id = id;
 			Raw = raw;
+			Task = raw.ToUniTask(cancellationToken: cancellationToken);
 		}
 
 		public bool IsDone => Raw == null || Raw.IsDone;
 		public float Progress => Raw?.Progress ?? 0f;
 		public string Error => Raw?.LastError ?? string.Empty;
-		public UniTask Task => Raw?.Task.AsUniTask() ?? UniTask.CompletedTask;
+		public UniTask Task { get; }
 		public void WaitForAsyncComplete() => Raw?.WaitForAsyncComplete();
 
 		public IReadOnlyList<TAsset> Assets
@@ -107,20 +105,17 @@ namespace CycloneGames.AssetManagement.Runtime
 		public void Dispose()
 		{
 			Raw?.Dispose();
-			_onDispose?.Invoke(_id);
 			HandleTracker.Unregister(_id);
 		}
 	}
 
 	public sealed class YooInstantiateHandle : IInstantiateHandle
 	{
-		private readonly Action<int> _onDispose;
 		private readonly int _id;
 		internal readonly InstantiateOperation Raw;
 
-		public YooInstantiateHandle(Action<int> onDispose, int id, InstantiateOperation raw)
+		public YooInstantiateHandle(int id, InstantiateOperation raw)
 		{
-			_onDispose = onDispose;
 			_id = id;
 			Raw = raw;
 		}
@@ -135,20 +130,17 @@ namespace CycloneGames.AssetManagement.Runtime
 
 		public void Dispose()
 		{
-			_onDispose?.Invoke(_id);
 			HandleTracker.Unregister(_id);
 		}
 	}
 
 	public sealed class YooSceneHandle : ISceneHandle
 	{
-		private readonly Action<int> _onDispose;
 		private readonly int _id;
 		public readonly SceneHandle Raw;
 
-		public YooSceneHandle(Action<int> onDispose, int id, SceneHandle raw)
+		public YooSceneHandle(int id, SceneHandle raw)
 		{
-			_onDispose = onDispose;
 			_id = id;
 			Raw = raw;
 		}
@@ -165,7 +157,6 @@ namespace CycloneGames.AssetManagement.Runtime
 		public void Dispose()
 		{
 			Raw?.Dispose();
-			_onDispose?.Invoke(_id);
 			HandleTracker.Unregister(_id);
 		}
 	}

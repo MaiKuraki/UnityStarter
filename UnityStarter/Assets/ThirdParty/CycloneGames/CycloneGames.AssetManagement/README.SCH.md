@@ -60,6 +60,115 @@ public class MyGameManager
 }
 ```
 
+## 更多用法示例
+
+### 离线运行模式 (YooAsset)
+
+以下示例展示了如何初始化资源包以在 `OfflinePlayMode`（离线模式）下运行。这种模式常用于所有资源都已包含在初始安装包内的单机游戏。
+
+```csharp
+// 1. 像往常一样初始化模块
+assetModule = new YooAssetModule();
+assetModule.Initialize(new AssetManagementOptions());
+
+// 2. 创建资源包
+var package = assetModule.CreatePackage("DefaultPackage");
+
+// 3. 创建 YooAsset 的离线模式特定参数
+var yooAssetOfflineParams = new OfflinePlayModeParameters(); 
+// 在此模式下，YooAsset 通过一个内置的文件查询服务来定位资源，
+// 该服务通常在 YooAsset 编辑器中进行配置。
+
+// 4. 将提供者专属的参数包装进通用的 InitOptions
+var initOptions = new AssetPackageInitOptions(
+    AssetPlayMode.Offline,      // a. 设置运行模式
+    yooAssetOfflineParams       // b. 传入提供者专属的参数对象
+);
+
+// 5. 初始化资源包
+bool success = await package.InitializeAsync(initOptions);
+if (success)
+{
+    // 资源包现在已准备好从本地加载资源。
+}
+```
+
+### Addressables 提供器
+
+Addressables 提供器的初始化流程更简单，因为它是全局初始化的。请注意，Addressables 提供器不支持同步操作。
+
+```csharp
+using Cysharp.Threading.Tasks;
+using UnityEngine;
+
+public class MyAddressablesManager
+{
+    private IAssetModule assetModule;
+
+    public async UniTaskVoid Start()
+    {
+        // 1. 创建模块
+        assetModule = new AddressablesModule();
+        
+        // 2. 初始化并等待其就绪
+        // Addressables 在后台异步初始化。
+        // 我们必须等待 'Initialized' 标志位变为 true。
+        assetModule.Initialize();
+        await UniTask.WaitUntil(() => assetModule.Initialized);
+
+        Debug.Log("Addressables 模块初始化完成。");
+
+        // 3. 创建一个“资源包”（对于 Addressables 来说，这是一个逻辑分组）
+        var package = assetModule.CreatePackage("DefaultPackage");
+        
+        // 4. 加载资源
+        // 注意：Addressables 提供器仅支持异步操作。
+        using (var handle = package.LoadAssetAsync<GameObject>("MyAddressablePrefab"))
+        {
+            await handle.Task;
+            if (handle.Asset)
+            {
+                var go = await package.InstantiateAsync(handle).Task;
+            }
+        }
+    }
+}
+```
+> [!NOTE]
+> 与 YooAsset 提供器相比，Addressables 提供器存在一些限制：
+> - 不支持同步加载或实例化。
+> - 不支持 `IPatchService` 热更新工作流。
+> - 无法使用版本查询、预下载指定版本等高级功能。
+
+### Resources 提供器
+
+`Resources` 提供器是最简单的，适用于快速原型开发或访问直接打包到游戏中的资源。它不需要任何特殊的初始化。
+
+```csharp
+// 1. 创建并初始化模块
+assetModule = new ResourcesModule();
+assetModule.Initialize(); // 初始化是同步的
+
+// 2. 创建资源包
+var package = assetModule.CreatePackage("DefaultPackage");
+
+// 3. 加载资源 (同步和异步均支持)
+using (var handle = package.LoadAssetAsync<GameObject>("Path/In/Resources/Folder"))
+{
+    await handle.Task;
+    if (handle.Asset)
+    {
+        var go = package.InstantiateSync(handle);
+    }
+}
+```
+> [!WARNING]
+> `Resources` 提供器有诸多限制：
+> - 无法加载场景。
+> - 不支持任何下载或热更新功能。
+> - `LoadAllAssetsAsync` 是一个阻塞主线程的同步操作。
+> - 从 `Resources` 加载的资源无法被单独卸载，可能导致内存占用过高。通常不建议在大型项目的正式产品中使用。
+
 ## 核心特性
 
 - **接口优先设计**: 将您的游戏逻辑与底层资源系统解耦。面向稳定的接口编程，随时可以切换后端实现，无需大规模重构。

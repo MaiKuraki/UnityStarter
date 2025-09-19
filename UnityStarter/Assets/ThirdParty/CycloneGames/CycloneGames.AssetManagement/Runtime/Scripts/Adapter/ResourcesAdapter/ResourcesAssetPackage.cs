@@ -76,7 +76,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object
         {
             var asset = Resources.Load<TAsset>(location);
-            var handle = new ResourcesAssetHandle<TAsset>(RegisterHandle(out int id), id, asset);
+            var id = RegisterHandle();
+            var handle = new ResourcesAssetHandle<TAsset>(id, asset);
             HandleTracker.Register(id, packageName, $"AssetSync {typeof(TAsset).Name} : {location}");
             return handle;
         }
@@ -84,7 +85,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
             var request = Resources.LoadAsync<TAsset>(location);
-            var handle = new ResourcesAssetHandle<TAsset>(RegisterHandle(out int id), id, request);
+            var id = RegisterHandle();
+            var handle = new ResourcesAssetHandle<TAsset>(id, request, cancellationToken);
             HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
             return handle;
         }
@@ -92,7 +94,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
             var assets = Resources.LoadAll<TAsset>(location);
-            var handle = new ResourcesAllAssetsHandle<TAsset>(RegisterHandle(out int id), id, assets);
+            var id = RegisterHandle();
+            var handle = new ResourcesAllAssetsHandle<TAsset>(id, assets);
             HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
             return handle;
         }
@@ -114,7 +117,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 instance = GameObject.Instantiate(handle.Asset, parent, worldPositionStays);
                 instance.SetActive(setActive);
             }
-            var wrapped = new ResourcesInstantiateHandle(RegisterHandle(out int id), id, instance);
+            var id = RegisterHandle();
+            var wrapped = new ResourcesInstantiateHandle(id, instance);
             HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle?.AssetObject?.name ?? "null"}");
             return wrapped;
         }
@@ -140,15 +144,9 @@ namespace CycloneGames.AssetManagement.Runtime
             return UniTask.CompletedTask;
         }
 
-        private Action<int> RegisterHandle(out int id)
+        private int RegisterHandle()
         {
-            id = Interlocked.Increment(ref nextId);
-            return UnregisterHandle;
-        }
-
-        private void UnregisterHandle(int id)
-        {
-            // No-op
+            return Interlocked.Increment(ref nextId);
         }
     }
 }
