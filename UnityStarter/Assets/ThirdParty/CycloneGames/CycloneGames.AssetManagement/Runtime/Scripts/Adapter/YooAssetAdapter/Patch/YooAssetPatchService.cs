@@ -4,7 +4,7 @@ using System;
 using System.Threading;
 using R3;
 
-namespace CycloneGames.AssetManagement.Runtime.Adapter.YooAssetAdapter
+namespace CycloneGames.AssetManagement.Runtime
 {
     public class YooAssetPatchService : IPatchService
     {
