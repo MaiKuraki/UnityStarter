@@ -13,7 +13,6 @@ namespace CycloneGames.AssetManagement.Runtime
 {
     internal abstract class AddressablesOperationHandle : IOperation
     {
-        protected readonly Action<int> Unregister;
         protected readonly int Id;
         public abstract bool IsDone { get; }
         public abstract float Progress { get; }
@@ -21,9 +20,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public abstract UniTask Task { get; }
         public abstract void WaitForAsyncComplete();
 
-        protected AddressablesOperationHandle(Action<int> unregister, int id)
+        protected AddressablesOperationHandle(int id)
         {
-            Unregister = unregister;
             Id = id;
         }
     }
@@ -34,20 +32,20 @@ namespace CycloneGames.AssetManagement.Runtime
         public override bool IsDone => Raw.IsDone;
         public override float Progress => Raw.PercentComplete;
         public override string Error => Raw.OperationException?.Message;
-        public override UniTask Task => Raw.Task.AsUniTask();
+        public override UniTask Task { get; }
         public TAsset Asset => Raw.Result;
         public UnityEngine.Object AssetObject => Raw.Result;
 
-        public AddressableAssetHandle(Action<int> unregister, int id, AsyncOperationHandle<TAsset> raw) : base(unregister, id)
+        public AddressableAssetHandle(int id, AsyncOperationHandle<TAsset> raw, CancellationToken cancellationToken) : base(id)
         {
             Raw = raw;
+            Task = raw.ToUniTask(cancellationToken: cancellationToken);
         }
 
         public override void WaitForAsyncComplete() => Raw.WaitForCompletion();
         public void Dispose()
         {
             HandleTracker.Unregister(Id);
-            Unregister(Id);
             if (Raw.IsValid()) Addressables.Release(Raw);
         }
     }
@@ -58,19 +56,19 @@ namespace CycloneGames.AssetManagement.Runtime
         public override bool IsDone => raw.IsDone;
         public override float Progress => raw.PercentComplete;
         public override string Error => raw.OperationException?.Message;
-        public override UniTask Task => raw.Task.AsUniTask();
+        public override UniTask Task { get; }
         public IReadOnlyList<TAsset> Assets => (IReadOnlyList<TAsset>)raw.Result;
 
-        public AddressableAllAssetsHandle(Action<int> unregister, int id, AsyncOperationHandle<IList<TAsset>> raw) : base(unregister, id)
+        public AddressableAllAssetsHandle(int id, AsyncOperationHandle<IList<TAsset>> raw, CancellationToken cancellationToken) : base(id)
         {
             this.raw = raw;
+            Task = raw.ToUniTask(cancellationToken: cancellationToken);
         }
 
         public override void WaitForAsyncComplete() => raw.WaitForCompletion();
         public void Dispose()
         {
             HandleTracker.Unregister(Id);
-            Unregister(Id);
             if (raw.IsValid()) Addressables.Release(raw);
         }
     }
@@ -81,19 +79,19 @@ namespace CycloneGames.AssetManagement.Runtime
         public override bool IsDone => raw.IsDone;
         public override float Progress => raw.PercentComplete;
         public override string Error => raw.OperationException?.Message;
-        public override UniTask Task => raw.Task.AsUniTask();
+        public override UniTask Task { get; }
         public GameObject Instance => raw.Result;
 
-        public AddressableInstantiateHandle(Action<int> unregister, int id, AsyncOperationHandle<GameObject> raw) : base(unregister, id)
+        public AddressableInstantiateHandle(int id, AsyncOperationHandle<GameObject> raw, CancellationToken cancellationToken) : base(id)
         {
             this.raw = raw;
+            Task = raw.ToUniTask(cancellationToken: cancellationToken);
         }
 
         public override void WaitForAsyncComplete() => raw.WaitForCompletion();
         public void Dispose()
         {
             HandleTracker.Unregister(Id);
-            Unregister(Id);
             if (raw.IsValid()) Addressables.Release(raw);
         }
     }
@@ -116,14 +114,15 @@ namespace CycloneGames.AssetManagement.Runtime
         public override bool IsDone => Raw.IsDone;
         public override float Progress => Raw.PercentComplete;
         public override string Error => Raw.OperationException?.Message;
-        public override UniTask Task => Raw.Task.AsUniTask();
+        public override UniTask Task { get; }
         public string ScenePath { get; }
         public Scene Scene => Raw.Result.Scene;
 
-        public AddressableSceneHandle(Action<int> unregister, int id, AsyncOperationHandle<SceneInstance> raw) : base(unregister, id)
+        public AddressableSceneHandle(int id, AsyncOperationHandle<SceneInstance> raw, CancellationToken cancellationToken) : base(id)
         {
             Raw = raw;
             ScenePath = raw.DebugName;
+            Task = raw.ToUniTask(cancellationToken: cancellationToken);
         }
 
         public override void WaitForAsyncComplete() => Raw.WaitForCompletion();

@@ -7,7 +7,6 @@ namespace CycloneGames.AssetManagement.Runtime
 {
     internal abstract class ResourcesOperationHandle : IOperation
     {
-        protected readonly Action<int> Unregister;
         protected readonly int Id;
         public virtual bool IsDone => true;
         public virtual float Progress => 1f;
@@ -15,9 +14,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public virtual UniTask Task => UniTask.CompletedTask;
         public virtual void WaitForAsyncComplete() { }
 
-        protected ResourcesOperationHandle(Action<int> unregister, int id)
+        protected ResourcesOperationHandle(int id)
         {
-            Unregister = unregister;
             Id = id;
         }
     }
@@ -29,25 +27,28 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public override bool IsDone => request?.isDone ?? true;
         public override float Progress => request?.progress ?? 1f;
-        public override UniTask Task => request?.ToUniTask() ?? UniTask.CompletedTask;
+        public override UniTask Task { get; }
         
         public TAsset Asset => syncAsset != null ? syncAsset : request?.asset as TAsset;
         public UnityEngine.Object AssetObject => Asset;
 
-        public ResourcesAssetHandle(Action<int> unregister, int id, ResourceRequest request) : base(unregister, id)
+        // Async handle
+        public ResourcesAssetHandle(int id, ResourceRequest request, System.Threading.CancellationToken cancellationToken) : base(id)
         {
             this.request = request;
+            this.Task = request.ToUniTask(cancellationToken: cancellationToken);
         }
         
-        public ResourcesAssetHandle(Action<int> unregister, int id, TAsset asset) : base(unregister, id)
+        // Sync handle
+        public ResourcesAssetHandle(int id, TAsset asset) : base(id)
         {
             this.syncAsset = asset;
+            this.Task = UniTask.CompletedTask;
         }
 
         public void Dispose()
         {
             HandleTracker.Unregister(Id);
-            Unregister(Id);
             // Individual assets loaded from Resources cannot be unloaded.
         }
     }
@@ -61,7 +62,7 @@ namespace CycloneGames.AssetManagement.Runtime
         
         public IReadOnlyList<TAsset> Assets { get; }
 
-        public ResourcesAllAssetsHandle(Action<int> unregister, int id, TAsset[] assets) : base(unregister, id)
+        public ResourcesAllAssetsHandle(int id, TAsset[] assets) : base(id)
         {
             Assets = assets;
             _task = SimulateAsync();
@@ -75,7 +76,6 @@ namespace CycloneGames.AssetManagement.Runtime
         public void Dispose()
         {
             HandleTracker.Unregister(Id);
-            Unregister(Id);
         }
     }
 
@@ -83,7 +83,7 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         public GameObject Instance { get; }
 
-        public ResourcesInstantiateHandle(Action<int> unregister, int id, GameObject instance) : base(unregister, id)
+        public ResourcesInstantiateHandle(int id, GameObject instance) : base(id)
         {
             Instance = instance;
         }
@@ -91,7 +91,6 @@ namespace CycloneGames.AssetManagement.Runtime
         public void Dispose()
         {
             HandleTracker.Unregister(Id);
-            Unregister(Id);
             // The user is responsible for destroying the instantiated GameObject.
         }
     }
