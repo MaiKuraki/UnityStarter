@@ -1,4 +1,3 @@
-#if YOOASSET_PRESENT
 using Cysharp.Threading.Tasks;
 using System;
 using System.Threading;
@@ -39,4 +38,3 @@ namespace CycloneGames.AssetManagement.Runtime
         void Cancel();
     }
 }
-#endif
