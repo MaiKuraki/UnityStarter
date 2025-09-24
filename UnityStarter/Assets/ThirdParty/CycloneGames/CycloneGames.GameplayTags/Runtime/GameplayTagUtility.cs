@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace CycloneGames.GameplayTags.Runtime
 {
@@ -47,21 +47,17 @@ namespace CycloneGames.GameplayTags.Runtime
          return names;
       }
 
-      public static bool TryGetParentName(string name, out string parentName)
+      public static string GetParentName(string name)
       {
          ValidateName(name);
-
-         for (int i = name.Length - 1; i >= 0; i--)
+         
+         int lastDot = name.LastIndexOf('.');
+         if (lastDot == -1)
          {
-            if (name[i] == '.')
-            {
-               parentName = name[..i];
-               return true;
-            }
+            return null;
          }
 
-         parentName = null;
-         return false;
+         return name.Substring(0, lastDot);
       }
 
       public static int GetHeirarchyLevelFromName(string name)
