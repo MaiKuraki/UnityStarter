@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -49,9 +49,9 @@ namespace CycloneGames.GameplayTags.Runtime
                 GameplayTagLogger.LogWarning($"No tag registered with name \"{name}\".");
             }
 
-            return GameplayTag.None;
+            return GameplayTagDefinition.CreateInvalidDefinition(name).Tag;
         }
-        
+
         public static bool TryRequestTag(string name, out GameplayTag tag)
         {
             if (string.IsNullOrEmpty(name))
@@ -150,30 +150,25 @@ namespace CycloneGames.GameplayTags.Runtime
         public static void RegisterDynamicTags(IEnumerable<string> tags)
         {
             if (tags == null) return;
-
             InitializeIfNeeded();
-            var context = new GameplayTagRegistrationContext(s_TagsDefinitionsList);
 
             foreach (string tag in tags)
             {
                 if (string.IsNullOrEmpty(tag)) continue;
-                context.RegisterTag(tag, string.Empty, GameplayTagFlags.None);
+                RegisterDynamicTag(tag, string.Empty, GameplayTagFlags.None, false);
             }
-
-            s_TagsDefinitionsList = context.GenerateDefinitions(false);
             
-            s_TagDefinitionsByName.Clear();
-            foreach (var definition in s_TagsDefinitionsList)
-            {
-                s_TagDefinitionsByName[definition.TagName] = definition;
-            }
-            RebuildTagArray();
+            RebuildTagHierarchyAndArray();
         }
 
         public static void RegisterDynamicTag(string name, string description = null, GameplayTagFlags flags = GameplayTagFlags.None)
         {
-            if (string.IsNullOrEmpty(name)) return;
+            RegisterDynamicTag(name, description, flags, true);
+        }
 
+        private static void RegisterDynamicTag(string name, string description, GameplayTagFlags flags, bool rebuildHierarchy)
+        {
+            if (string.IsNullOrEmpty(name)) return;
             InitializeIfNeeded();
 
             if (s_TagDefinitionsByName.ContainsKey(name))
@@ -181,15 +176,58 @@ namespace CycloneGames.GameplayTags.Runtime
                 return;
             }
 
-            var context = new GameplayTagRegistrationContext(s_TagsDefinitionsList);
-            context.RegisterTag(name, description, flags);
+            var newDefinition = new GameplayTagDefinition(name, description, flags);
+            s_TagDefinitionsByName.Add(name, newDefinition);
+            s_TagsDefinitionsList.Add(newDefinition);
+            
+            if (rebuildHierarchy)
+            {
+                RebuildTagHierarchyAndArray();
+            }
+        }
 
-            s_TagsDefinitionsList = context.GenerateDefinitions(false);
-            s_TagDefinitionsByName.Clear();
+        private static void RebuildTagHierarchyAndArray()
+        {
+            // Sort definitions to ensure parent tags are processed before children.
+            s_TagsDefinitionsList.Sort((a, b) => string.Compare(a.TagName, b.TagName, StringComparison.Ordinal));
+            
+            // Update runtime indices after sorting.
+            for (int i = 0; i < s_TagsDefinitionsList.Count; i++)
+            {
+                s_TagsDefinitionsList[i].SetRuntimeIndex(i);
+            }
+
+            // Rebuild hierarchy relationships.
+            var definitionsByName = s_TagsDefinitionsList.ToDictionary(d => d.TagName);
             foreach (var definition in s_TagsDefinitionsList)
             {
-                s_TagDefinitionsByName[definition.TagName] = definition;
+                if (definition.IsNone()) continue;
+
+                string parentName = GameplayTagUtility.GetParentName(definition.TagName);
+                if (!string.IsNullOrEmpty(parentName) && definitionsByName.TryGetValue(parentName, out var parentDef))
+                {
+                    definition.SetParent(parentDef);
+                }
             }
+            
+            foreach (var definition in s_TagsDefinitionsList)
+            {
+                if (definition.IsNone()) continue;
+                
+                var children = s_TagsDefinitionsList.Where(d => d.ParentTagDefinition == definition).ToList();
+                definition.SetChildren(children);
+
+                var hierarchyTags = new List<GameplayTag>();
+                var current = definition;
+                while (current != null && !current.IsNone())
+                {
+                    hierarchyTags.Add(current.Tag);
+                    current = current.ParentTagDefinition;
+                }
+                hierarchyTags.Reverse();
+                definition.SetHierarchyTags(hierarchyTags.ToArray());
+            }
+
             RebuildTagArray();
         }
 
