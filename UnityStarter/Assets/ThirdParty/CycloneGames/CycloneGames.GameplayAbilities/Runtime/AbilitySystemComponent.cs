@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using CycloneGames.Factory.Runtime;
 using CycloneGames.GameplayTags.Runtime;
