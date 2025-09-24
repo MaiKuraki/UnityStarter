@@ -193,6 +193,11 @@ namespace CycloneGames.GameplayTags.Runtime
             m_Sources.Add(source);
       }
 
+      public bool IsNone()
+      {
+         return this == NoneTagDefinition;
+      }
+
       public override int GetHashCode()
       {
          return m_NameHash;
