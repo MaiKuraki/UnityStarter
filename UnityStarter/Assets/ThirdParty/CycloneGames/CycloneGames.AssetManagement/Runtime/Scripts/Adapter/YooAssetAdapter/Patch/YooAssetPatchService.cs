@@ -98,18 +98,19 @@ namespace CycloneGames.AssetManagement.Runtime
             }
 
             _downloader.Begin();
+
+            var progressArgs = new DownloadProgressEventArgs();
             
             while (!_downloader.IsDone)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var args = new DownloadProgressEventArgs
-                {
-                    TotalDownloadCount = _downloader.TotalDownloadCount,
-                    CurrentDownloadCount = _downloader.CurrentDownloadCount,
-                    TotalDownloadSizeBytes = _downloader.TotalDownloadBytes,
-                    CurrentDownloadSizeBytes = _downloader.CurrentDownloadBytes
-                };
-                _patchEvents.OnNext((PatchEvent.DownloadProgress, args));
+
+                progressArgs.TotalDownloadCount = _downloader.TotalDownloadCount;
+                progressArgs.CurrentDownloadCount = _downloader.CurrentDownloadCount;
+                progressArgs.TotalDownloadSizeBytes = _downloader.TotalDownloadBytes;
+                progressArgs.CurrentDownloadSizeBytes = _downloader.CurrentDownloadBytes;
+                
+                _patchEvents.OnNext((PatchEvent.DownloadProgress, progressArgs));
                 await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
             }
 
