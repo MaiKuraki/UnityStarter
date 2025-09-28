@@ -437,7 +437,7 @@ public class HealAbilitySO : GameplayAbilitySO
 本包依赖于以下外部和内部包：
 
 *   `com.cysharp.unitask`: 用于异步操作。
-*   `com.unity.addressables`: 用于异步加载资产。
+*   `com.cyclone-games.assetmanagement`: 资源加载接口。
 *   `com.cyclone-games.gameplay-tags`: 用于底层的 `GameplayTag` 系统。
 *   `com.cyclone-games.logger`: 用于调试日志记录。
 *   `com.cyclone-games.factory`: 用于对象创建和池化。

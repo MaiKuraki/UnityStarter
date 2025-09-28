@@ -437,7 +437,7 @@ Run the scene. You won't see attributes in the Inspector because `PlayerAttribut
 This package relies on the following external and internal packages:
 
 *   `com.cysharp.unitask`: For asynchronous operations.
-*   `com.unity.addressables`: For loading assets asynchronously.
-*   `com.cyclone-games.gameplay-tags`: For the underlying `GameplayTag` system.
+*   `com.cyclone-games.assetmanagement`: For loading assets.
+*   `com.cyclone-games.gameplay-tags`: For the underlying `GameplayTa g` system.
 *   `com.cyclone-games.logger`: For debug logging.
 *   `com.cyclone-games.factory`: For object creation and pooling.
