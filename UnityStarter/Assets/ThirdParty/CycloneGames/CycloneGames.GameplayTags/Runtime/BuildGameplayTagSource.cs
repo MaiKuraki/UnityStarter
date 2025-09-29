@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using UnityEngine;
-using CycloneGames.GameplayTags.Runtime;
+using UnityEngine.Networking;
 
 namespace CycloneGames.GameplayTags.Runtime
 {
@@ -13,8 +13,11 @@ namespace CycloneGames.GameplayTags.Runtime
       {
          try
          {
-            using FileStream file = File.OpenRead(Path.Combine(Application.streamingAssetsPath, "GameplayTags"));
-            using BinaryReader reader = new(file);
+            string path = Path.Combine(Application.streamingAssetsPath, "GameplayTags");
+            byte[] data = LoadData(path);
+
+            using MemoryStream memoryStream = new(data);
+            using BinaryReader reader = new(memoryStream);
 
             while (reader.BaseStream.Position != reader.BaseStream.Length)
             {
@@ -26,6 +29,48 @@ namespace CycloneGames.GameplayTags.Runtime
          {
             Debug.LogError($"Failed to load gameplay tags from StreamingAssets: {e.Message}");
          }
+      }
+      
+      private byte[] LoadData(string dataPath)
+      {
+         return Application.platform switch
+         {
+            RuntimePlatform.Android => LoadDataFromAndroidPackage(dataPath),
+            _ => LoadDataFromFile(dataPath),
+         };
+      }
+
+      private byte[] LoadDataFromAndroidPackage(string dataPath)
+      {
+         using UnityWebRequest request = UnityWebRequest.Get(dataPath);
+         UnityWebRequestAsyncOperation operation = request.SendWebRequest();
+         while (!operation.isDone) { }
+
+#if UNITY_2020_2_OR_NEWER
+         if (request.result != UnityWebRequest.Result.Success)
+#else
+         if (request.isNetworkError || request.isHttpError)
+#endif
+         {
+            if (request.responseCode == 404)
+               Debug.LogError($"GameplayTags file not found at path: {dataPath}");
+            else
+               Debug.LogError($"Failed to load gameplay tags from StreamingAssets: {request.error}");
+
+            return Array.Empty<byte>();
+         }
+
+         return request.downloadHandler.data;
+      }
+
+      private byte[] LoadDataFromFile(string path)
+      {
+         if (!File.Exists(path))
+         {
+            Debug.LogError($"GameplayTags file not found at path: {path}");
+            return Array.Empty<byte>();
+         }
+         return File.ReadAllBytes(path);
       }
    }
 }
