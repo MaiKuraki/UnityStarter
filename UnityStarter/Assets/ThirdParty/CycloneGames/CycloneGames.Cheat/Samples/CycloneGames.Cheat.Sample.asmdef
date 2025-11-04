@@ -2,8 +2,8 @@
     "name": "CycloneGames.Cheat.Sample",
     "rootNamespace": "",
     "references": [
-        "VitalRouter",
         "UniTask",
+        "VitalRouter.Unity",
         "CycloneGames.Cheat.Runtime"
     ],
     "includePlatforms": [],
