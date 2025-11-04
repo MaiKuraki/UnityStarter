@@ -3,7 +3,7 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
-        "VitalRouter"
+        "VitalRouter.Unity"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
