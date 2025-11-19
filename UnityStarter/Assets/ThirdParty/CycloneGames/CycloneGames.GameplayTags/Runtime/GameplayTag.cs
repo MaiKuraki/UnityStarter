@@ -1,12 +1,17 @@
 using System;
 using System.Diagnostics;
+#if UNITY_5_3_OR_NEWER
 using UnityEngine;
+#endif
 
 namespace CycloneGames.GameplayTags.Runtime
 {
    [Serializable]
    [DebuggerDisplay("{m_Name,nq}")]
-   public struct GameplayTag : IEquatable<GameplayTag>, ISerializationCallbackReceiver
+   public struct GameplayTag : IEquatable<GameplayTag>
+#if UNITY_5_3_OR_NEWER
+      , ISerializationCallbackReceiver
+#endif
    {
       /// <summary>
       /// Represents an invalid tag.
@@ -82,7 +87,9 @@ namespace CycloneGames.GameplayTags.Runtime
       }
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
+#if UNITY_5_3_OR_NEWER
       [SerializeField]
+#endif
       private string m_Name;
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
@@ -137,6 +144,7 @@ namespace CycloneGames.GameplayTags.Runtime
          return m_Name;
       }
 
+#if UNITY_5_3_OR_NEWER
       void ISerializationCallbackReceiver.OnAfterDeserialize()
       {
          if (string.IsNullOrEmpty(m_Name))
@@ -160,6 +168,7 @@ namespace CycloneGames.GameplayTags.Runtime
 
          m_Name = Definition.TagName;
       }
+#endif
 
       [Conditional("DEBUG")]
       private readonly void ValidateIsNotNone()

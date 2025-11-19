@@ -66,8 +66,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // Caches which active effects affect which attributes, to optimize RecalculateDirtyAttributes.
         private readonly Dictionary<GameplayAttribute, List<ActiveGameplayEffect>> attributeToActiveEffectsMap = new Dictionary<GameplayAttribute, List<ActiveGameplayEffect>>();
 
-        private static readonly List<ActiveGameplayEffect> expiredEffectsScratchPad = new List<ActiveGameplayEffect>(16);
-        private static List<ModifierInfo> executionOutputScratchPad = new List<ModifierInfo>(16);
+        [ThreadStatic]
+        private static List<ActiveGameplayEffect> expiredEffectsScratchPad;
+        [ThreadStatic]
+        private static List<ModifierInfo> executionOutputScratchPad;
 
         // --- Prediction ---
         private PredictionKey currentPredictionKey;
@@ -337,16 +339,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             using (Pools.ListPool<ActiveGameplayEffect>.Get(out var removedEffects))
             {
-                // The predicate captures the effects to be removed into a temporary list for post-processing.
-                activeEffects.RemoveAll(effect =>
+                for (int i = activeEffects.Count - 1; i >= 0; i--)
                 {
+                    var effect = activeEffects[i];
                     bool shouldRemove = effect.Spec.Def.GrantedTags.HasAny(tags) || effect.Spec.Def.AssetTags.HasAny(tags);
                     if (shouldRemove)
                     {
+                        activeEffects.RemoveAt(i);
                         removedEffects.Add(effect);
                     }
-                    return shouldRemove;
-                });
+                }
 
                 foreach (var effect in removedEffects)
                 {
@@ -382,6 +384,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Prediction of instant damage is complex and often avoided.
             if (spec.Def.Execution != null)
             {
+                if (executionOutputScratchPad == null) executionOutputScratchPad = new List<ModifierInfo>(16);
                 executionOutputScratchPad.Clear();
                 spec.Def.Execution.Execute(spec, ref executionOutputScratchPad);
                 foreach (var modInfo in executionOutputScratchPad)
@@ -420,6 +423,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Server is authoritative over effect duration
             if (isServer)
             {
+                if (expiredEffectsScratchPad == null) expiredEffectsScratchPad = new List<ActiveGameplayEffect>(16);
                 expiredEffectsScratchPad.Clear();
                 for (int i = activeEffects.Count - 1; i >= 0; i--)
                 {

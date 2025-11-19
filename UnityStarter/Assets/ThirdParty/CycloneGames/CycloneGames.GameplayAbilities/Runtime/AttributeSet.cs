@@ -14,6 +14,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         // Static cache for attribute properties per AttributeSet subclass
         private static readonly Dictionary<Type, List<PropertyInfo>> s_AttributePropertyCache = new Dictionary<Type, List<PropertyInfo>>();
+        private static readonly object s_CacheLock = new object();
 
         private readonly Dictionary<string, AttributeData> attributeData = new Dictionary<string, AttributeData>();
         private readonly Dictionary<string, GameplayAttribute> discoveredAttributes = new Dictionary<string, GameplayAttribute>();
@@ -28,17 +29,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void DiscoverAndInitAttributes()
         {
             Type setType = GetType();
-            if (!s_AttributePropertyCache.TryGetValue(setType, out var properties))
+            List<PropertyInfo> properties;
+            
+            lock (s_CacheLock)
             {
-                properties = new List<PropertyInfo>();
-                foreach (var prop in setType.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                if (!s_AttributePropertyCache.TryGetValue(setType, out properties))
                 {
-                    if (prop.PropertyType == typeof(GameplayAttribute))
+                    properties = new List<PropertyInfo>();
+                    foreach (var prop in setType.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                     {
-                        properties.Add(prop);
+                        if (prop.PropertyType == typeof(GameplayAttribute))
+                        {
+                            properties.Add(prop);
+                        }
                     }
+                    s_AttributePropertyCache[setType] = properties;
                 }
-                s_AttributePropertyCache[setType] = properties;
             }
 
             foreach (var prop in properties)

@@ -17,9 +17,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public static T GetTask<T>() where T : AbilityTask, new()
         {
             var taskType = typeof(T);
-            if (taskPools.TryGetValue(taskType, out var pool) && pool.Count > 0)
+            lock (taskPools)
             {
-                return (T)pool.Pop();
+                if (taskPools.TryGetValue(taskType, out var pool) && pool.Count > 0)
+                {
+                    return (T)pool.Pop();
+                }
             }
             return new T();
         }
@@ -30,12 +33,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public static void ReturnTask(AbilityTask task)
         {
             var taskType = task.GetType();
-            if (!taskPools.TryGetValue(taskType, out var pool))
+            lock (taskPools)
             {
-                pool = new Stack<AbilityTask>();
-                taskPools[taskType] = pool;
+                if (!taskPools.TryGetValue(taskType, out var pool))
+                {
+                    pool = new Stack<AbilityTask>();
+                    taskPools[taskType] = pool;
+                }
+                pool.Push(task);
             }
-            pool.Push(task);
         }
 
         /// <summary>
@@ -45,9 +51,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public static T GetAbility<T>() where T : GameplayAbility, new()
         {
             var abilityType = typeof(T);
-            if (abilityPools.TryGetValue(abilityType, out var pool) && pool.Count > 0)
+            lock (abilityPools)
             {
-                return (T)pool.Pop();
+                if (abilityPools.TryGetValue(abilityType, out var pool) && pool.Count > 0)
+                {
+                    return (T)pool.Pop();
+                }
             }
             return new T();
         }
@@ -58,15 +67,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public static void ReturnAbility(GameplayAbility ability)
         {
             var abilityType = ability.GetType();
-            if (!abilityPools.TryGetValue(abilityType, out var pool))
-            {
-                pool = new Stack<GameplayAbility>();
-                abilityPools[abilityType] = pool;
-            }
-            
             // Ensure the ability is in a clean state before being pooled.
             ability.OnReturnedToPool();
-            pool.Push(ability);
+
+            lock (abilityPools)
+            {
+                if (!abilityPools.TryGetValue(abilityType, out var pool))
+                {
+                    pool = new Stack<GameplayAbility>();
+                    abilityPools[abilityType] = pool;
+                }
+                pool.Push(ability);
+            }
         }
     }
 }

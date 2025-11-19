@@ -18,13 +18,16 @@ namespace CycloneGames.GameplayTags.Runtime
         public T Get()
         {
             T element;
-            if (_stack.Count == 0)
+            lock (_stack)
             {
-                element = new T();
-            }
-            else
-            {
-                element = _stack.Pop();
+                if (_stack.Count == 0)
+                {
+                    element = new T();
+                }
+                else
+                {
+                    element = _stack.Pop();
+                }
             }
             _onGet?.Invoke(element);
             return element;
@@ -37,7 +40,10 @@ namespace CycloneGames.GameplayTags.Runtime
                 throw new ArgumentNullException(nameof(element));
             }
             _onRelease?.Invoke(element);
-            _stack.Push(element);
+            lock (_stack)
+            {
+                _stack.Push(element);
+            }
         }
     }
 
