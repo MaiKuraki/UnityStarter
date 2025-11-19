@@ -77,8 +77,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var asset = Resources.Load<TAsset>(location);
             var id = RegisterHandle();
-            var handle = new ResourcesAssetHandle<TAsset>(id, asset);
-            HandleTracker.Register(id, packageName, $"AssetSync {typeof(TAsset).Name} : {location}");
+            var handle = ResourcesAssetHandle<TAsset>.Create(id, asset);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetSync {typeof(TAsset).Name} : {location}");
             return handle;
         }
 
@@ -86,8 +86,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var request = Resources.LoadAsync<TAsset>(location);
             var id = RegisterHandle();
-            var handle = new ResourcesAssetHandle<TAsset>(id, request, cancellationToken);
-            HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
+            var handle = ResourcesAssetHandle<TAsset>.Create(id, request, cancellationToken);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
             return handle;
         }
 
@@ -95,8 +95,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var assets = Resources.LoadAll<TAsset>(location);
             var id = RegisterHandle();
-            var handle = new ResourcesAllAssetsHandle<TAsset>(id, assets);
-            HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
+            var handle = ResourcesAllAssetsHandle<TAsset>.Create(id, assets);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
             return handle;
         }
 
@@ -115,11 +115,11 @@ namespace CycloneGames.AssetManagement.Runtime
             if (handle?.Asset != null)
             {
                 instance = GameObject.Instantiate(handle.Asset, parent, worldPositionStays);
-                instance.SetActive(setActive);
+                if (instance != null) instance.SetActive(setActive);
             }
             var id = RegisterHandle();
-            var wrapped = new ResourcesInstantiateHandle(id, instance);
-            HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle?.AssetObject?.name ?? "null"}");
+            var wrapped = ResourcesInstantiateHandle.Create(id, instance);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle?.AssetObject?.name ?? "null"}");
             return wrapped;
         }
 
