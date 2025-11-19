@@ -19,5 +19,16 @@ namespace CycloneGames.GameplayFramework.Sample.Zenject
 
             return diContainer.InstantiatePrefabForComponent<T>(origin);
         }
+
+        public T Create<T>(T origin, Transform parent) where T : Object
+        {
+            if (origin == null)
+            {
+                CLogger.LogError("Invalid prefab to spawn");
+                return null;
+            }
+
+            return diContainer.InstantiatePrefabForComponent<T>(origin, parent);
+        }
     }
 }
