@@ -135,11 +135,17 @@ namespace CycloneGames.Utility.Runtime
         protected virtual void Start()
         {
             // Sort FPSColors by FPSValue in descending order to ensure correct color selection logic
-            FPSColors.Sort((a, b) => b.FPSValue.CompareTo(a.FPSValue));
+            // Use a static comparison to avoid delegate allocation
+            FPSColors.Sort(CompareFPSColorsDescending);
 
             _timeLeft = UpdateInterval;
             UpdateFontDetails(); // Initialize font size
             _foregroundColor = DefaultForegroundColor;
+        }
+
+        private static int CompareFPSColorsDescending(FPSColor a, FPSColor b)
+        {
+            return b.FPSValue.CompareTo(a.FPSValue);
         }
 
         protected virtual void Update()
