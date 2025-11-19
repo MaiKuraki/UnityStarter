@@ -24,6 +24,10 @@ namespace CycloneGames.GameplayAbilities.Sample
         public GameplayAttribute BonusDamageMultiplier { get; } = new GameplayAttribute(GASSampleTags.Data_DamageMultiplier);
         public GameplayAttribute Damage { get; } = new GameplayAttribute(GASSampleTags.Attribute_Meta_Damage);
 
+        private static readonly GameplayTag Tag_DamageMultiplier = GameplayTagManager.RequestTag(GASSampleTags.Data_DamageMultiplier);
+        private static readonly GameplayTag Tag_State_Dead = GameplayTagManager.RequestTag(GASSampleTags.State_Dead);
+        private static readonly GameplayTag Tag_Event_ExpGain = GameplayTagManager.RequestTag(GASSampleTags.Event_Experience_Gain);
+
         public CharacterAttributeSet()
         {
             // This is where you would initialize default values if needed,
@@ -64,7 +68,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 // Get the multiplier from the incoming Spec's SetByCaller data.
                 // If the tag doesn't exist in the Spec, default to 1.0f.
                 float damageMultiplier = data.EffectSpec.GetSetByCallerMagnitude(
-                    GameplayTagManager.RequestTag(GASSampleTags.Data_DamageMultiplier),
+                    Tag_DamageMultiplier,
                     warnIfNotFound: false,
                     defaultValue: 1.0f);
 
@@ -89,7 +93,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 if (newHealth <= 0 && currentHealth > 0)
                 {
                     var targetASC = data.Target;
-                    targetASC.AddLooseGameplayTag(GameplayTagManager.RequestTag(GASSampleTags.State_Dead));
+                    targetASC.AddLooseGameplayTag(Tag_State_Dead);
                     CLogger.LogWarning($"{targetASC.OwnerActor} has died!");
 
                     var killerASC = data.EffectSpec.Source;
@@ -117,7 +121,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             base.PostProcessInstantEffect(data);
 
             var attribute = GetAttribute(data.Modifier.AttributeName);
-            if (attribute == Experience && data.EffectSpec.Def.AssetTags.HasTag(GameplayTagManager.RequestTag(GASSampleTags.Event_Experience_Gain)))
+            if (attribute == Experience && data.EffectSpec.Def.AssetTags.HasTag(Tag_Event_ExpGain))
             {
                 if (data.Target.OwnerActor is Character character)
                 {
@@ -137,9 +141,6 @@ namespace CycloneGames.GameplayAbilities.Sample
             var attribute = GetAttribute(data.Modifier.AttributeName);
             if (attribute == null) return;
 
-            // After any modification, clamp Health and Mana to their max values.
-            // This is the correct place to clamp the BaseValue, preventing it from growing indefinitely
-            // from effects like regeneration, while PreAttributeChange clamps the CurrentValue.
             if (attribute == Health)
             {
                 SetBaseValue(Health, System.Math.Clamp(GetBaseValue(Health), 0, GetCurrentValue(MaxHealth)));
@@ -153,7 +154,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             {
                 if (data.Target.OwnerActor is Character character)
                 {
-                    bool hasExpGainTag = data.EffectSpec.Def.AssetTags.HasTag(GameplayTagManager.RequestTag(GASSampleTags.Event_Experience_Gain));
+                    bool hasExpGainTag = data.EffectSpec.Def.AssetTags.HasTag(Tag_Event_ExpGain);
                     if (hasExpGainTag)
                     {
                         character.CheckForLevelUp();
