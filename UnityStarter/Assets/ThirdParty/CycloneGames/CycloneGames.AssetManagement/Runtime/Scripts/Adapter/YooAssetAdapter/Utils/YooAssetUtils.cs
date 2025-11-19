@@ -18,24 +18,13 @@ namespace CycloneGames.AssetManagement.Runtime
                 return operation;
             }
 
-            // Fast path: if token is already cancelled.
-            if (cancellationToken.IsCancellationRequested)
-            {
-                // NOTE: YooAsset operations cannot be truly cancelled once started.
-                // We release the handle to prevent further use and signal failure.
-                (operation as IDisposable)?.Dispose();
-                throw new OperationCanceledException(cancellationToken);
-            }
-
-            // Slow path: poll for completion while checking the token.
             try
             {
-                await UniTask.WaitUntil(() => operation.IsDone, PlayerLoopTiming.Update, cancellationToken);
+                await operation.Task.AsUniTask().AttachExternalCancellation(cancellationToken);
             }
             catch (OperationCanceledException)
             {
-                // Operation was cancelled during the wait.
-                (operation as IDisposable)?.Dispose();
+                // YooAsset operations can't be truly cancelled, just ignore the result.
                 throw;
             }
 

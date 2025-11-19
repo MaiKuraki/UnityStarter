@@ -5,67 +5,123 @@ using UnityEngine;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
+    internal static class ResourcesHandlePool<T> where T : class, new()
+    {
+        private static readonly Stack<T> _pool = new Stack<T>(32);
+
+        public static T Get()
+        {
+            lock (_pool)
+            {
+                return _pool.Count > 0 ? _pool.Pop() : new T();
+            }
+        }
+
+        public static void Release(T item)
+        {
+            if (item == null) return;
+            lock (_pool)
+            {
+                _pool.Push(item);
+            }
+        }
+    }
+
     internal abstract class ResourcesOperationHandle : IOperation
     {
-        protected readonly int Id;
+        protected int Id;
         public virtual bool IsDone => true;
         public virtual float Progress => 1f;
         public virtual string Error => string.Empty;
         public virtual UniTask Task => UniTask.CompletedTask;
         public virtual void WaitForAsyncComplete() { }
 
-        protected ResourcesOperationHandle(int id)
-        {
-            Id = id;
-        }
+        protected ResourcesOperationHandle() { }
+        protected void SetId(int id) => Id = id;
     }
 
     internal sealed class ResourcesAssetHandle<TAsset> : ResourcesOperationHandle, IAssetHandle<TAsset> where TAsset : UnityEngine.Object
     {
-        private readonly ResourceRequest request;
-        private readonly TAsset syncAsset;
+        private ResourceRequest request;
+        private TAsset syncAsset;
+        private UniTask _task;
 
         public override bool IsDone => request?.isDone ?? true;
         public override float Progress => request?.progress ?? 1f;
-        public override UniTask Task { get; }
+        public override UniTask Task => _task;
         
         public TAsset Asset => syncAsset != null ? syncAsset : request?.asset as TAsset;
         public UnityEngine.Object AssetObject => Asset;
 
-        // Async handle
-        public ResourcesAssetHandle(int id, ResourceRequest request, System.Threading.CancellationToken cancellationToken) : base(id)
+        public ResourcesAssetHandle() { }
+
+        // Async handle init
+        public void Initialize(int id, ResourceRequest request, System.Threading.CancellationToken cancellationToken)
         {
+            SetId(id);
             this.request = request;
-            this.Task = request.ToUniTask(cancellationToken: cancellationToken);
+            this.syncAsset = null;
+            this._task = request.ToUniTask(cancellationToken: cancellationToken);
         }
         
-        // Sync handle
-        public ResourcesAssetHandle(int id, TAsset asset) : base(id)
+        // Sync handle init
+        public void Initialize(int id, TAsset asset)
         {
+            SetId(id);
+            this.request = null;
             this.syncAsset = asset;
-            this.Task = UniTask.CompletedTask;
+            this._task = UniTask.CompletedTask;
+        }
+
+        public static ResourcesAssetHandle<TAsset> Create(int id, ResourceRequest request, System.Threading.CancellationToken cancellationToken)
+        {
+            var h = ResourcesHandlePool<ResourcesAssetHandle<TAsset>>.Get();
+            h.Initialize(id, request, cancellationToken);
+            return h;
+        }
+
+        public static ResourcesAssetHandle<TAsset> Create(int id, TAsset asset)
+        {
+            var h = ResourcesHandlePool<ResourcesAssetHandle<TAsset>>.Get();
+            h.Initialize(id, asset);
+            return h;
         }
 
         public void Dispose()
         {
-            HandleTracker.Unregister(Id);
+            if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             // Individual assets loaded from Resources cannot be unloaded.
+            request = null;
+            syncAsset = null;
+            _task = default;
+            ResourcesHandlePool<ResourcesAssetHandle<TAsset>>.Release(this);
         }
     }
 
     internal sealed class ResourcesAllAssetsHandle<TAsset> : ResourcesOperationHandle, IAllAssetsHandle<TAsset> where TAsset : UnityEngine.Object
     {
+        private UniTask _task;
+        
         public override bool IsDone => _task.Status.IsCompleted();
         public override float Progress => _task.Status.IsCompleted() ? 1f : 0f;
         public override UniTask Task => _task;
-        private readonly UniTask _task;
         
-        public IReadOnlyList<TAsset> Assets { get; }
+        public IReadOnlyList<TAsset> Assets { get; private set; }
 
-        public ResourcesAllAssetsHandle(int id, TAsset[] assets) : base(id)
+        public ResourcesAllAssetsHandle() { }
+
+        public void Initialize(int id, TAsset[] assets)
         {
+            SetId(id);
             Assets = assets;
-            _task = SimulateAsync();
+            _task = SimulateAsync(); // Assuming this simulation is still desired
+        }
+
+        public static ResourcesAllAssetsHandle<TAsset> Create(int id, TAsset[] assets)
+        {
+            var h = ResourcesHandlePool<ResourcesAllAssetsHandle<TAsset>>.Get();
+            h.Initialize(id, assets);
+            return h;
         }
 
         private async UniTask SimulateAsync()
@@ -75,23 +131,37 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Dispose()
         {
-            HandleTracker.Unregister(Id);
+            if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
+            Assets = null;
+            _task = default;
+            ResourcesHandlePool<ResourcesAllAssetsHandle<TAsset>>.Release(this);
         }
     }
 
     internal sealed class ResourcesInstantiateHandle : ResourcesOperationHandle, IInstantiateHandle
     {
-        public GameObject Instance { get; }
+        public GameObject Instance { get; private set; }
 
-        public ResourcesInstantiateHandle(int id, GameObject instance) : base(id)
+        public ResourcesInstantiateHandle() { }
+
+        public void Initialize(int id, GameObject instance)
         {
+            SetId(id);
             Instance = instance;
+        }
+
+        public static ResourcesInstantiateHandle Create(int id, GameObject instance)
+        {
+            var h = ResourcesHandlePool<ResourcesInstantiateHandle>.Get();
+            h.Initialize(id, instance);
+            return h;
         }
 
         public void Dispose()
         {
-            HandleTracker.Unregister(Id);
-            // The user is responsible for destroying the instantiated GameObject.
+            if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
+            Instance = null;
+            ResourcesHandlePool<ResourcesInstantiateHandle>.Release(this);
         }
     }
 }

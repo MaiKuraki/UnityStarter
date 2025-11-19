@@ -102,8 +102,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var handle = Addressables.LoadAssetAsync<TAsset>(location);
             var id = RegisterHandle();
-            var wrapped = new AddressableAssetHandle<TAsset>(id, handle, cancellationToken);
-            HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
+            var wrapped = AddressableAssetHandle<TAsset>.Create(id, handle, cancellationToken);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
 
@@ -111,8 +111,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var handle = Addressables.LoadAssetsAsync<TAsset>(location, null);
             var id = RegisterHandle();
-            var wrapped = new AddressableAllAssetsHandle<TAsset>(id, handle, cancellationToken);
-            HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
+            var wrapped = AddressableAllAssetsHandle<TAsset>.Create(id, handle, cancellationToken);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
 
@@ -132,8 +132,8 @@ namespace CycloneGames.AssetManagement.Runtime
             var op = Addressables.InstantiateAsync(handle.AssetObject, parent, worldPositionStays, setActive);
             var id = RegisterHandle();
             // Pass CancellationToken.None as instantiation cancellation is typically handled by releasing the handle, which Addressables does automatically.
-            var wrapped = new AddressableInstantiateHandle(id, op, CancellationToken.None);
-            HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle.AssetObject.name}");
+            var wrapped = AddressableInstantiateHandle.Create(id, op, CancellationToken.None);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle.AssetObject.name}");
             return wrapped;
         }
 
@@ -141,8 +141,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var op = Addressables.LoadSceneAsync(sceneLocation, loadMode, activateOnLoad, priority);
             var id = RegisterHandle();
-            var h = new AddressableSceneHandle(id, op, CancellationToken.None); // Scene loading cancellation is handled by unloading.
-            HandleTracker.Register(id, packageName, $"SceneAsync : {sceneLocation}");
+            var h = AddressableSceneHandle.Create(id, op, CancellationToken.None); // Scene loading cancellation is handled by unloading.
+            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"SceneAsync : {sceneLocation}");
             return h;
         }
 
@@ -154,9 +154,14 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public async UniTask UnloadSceneAsync(ISceneHandle sceneHandle)
         {
-            if (sceneHandle is AddressableSceneHandle sh && sh.Raw.IsValid())
+            if (sceneHandle is AddressableSceneHandle sh)
             {
-                await Addressables.UnloadSceneAsync(sh.Raw);
+                if (sh.Raw.IsValid())
+                {
+                    await Addressables.UnloadSceneAsync(sh.Raw);
+                }
+                // Return to pool manually since ISceneHandle is not IDisposable in this architecture
+                sh.ReturnToPool();
             }
         }
 
