@@ -85,7 +85,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                 };
                 
                 var particle = pool.Spawn(data);
-                pool.Tick(); // Process despawn
+                pool.Maintenance(); // Process despawn
             });
             
             pool.Dispose();
@@ -119,7 +119,8 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                 }
                 
                 // Tick all particles
-                pool.Tick();
+                pool.UpdateActiveItems(p => p.Tick());
+                pool.Maintenance();
                 
                 // Remove despawned particles from our tracking
                 activeParticles.RemoveAll(p => p.IsDestroyed);
@@ -158,14 +159,14 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                     // Process several ticks to allow natural despawning
                     for (int tick = 0; tick < 10; tick++)
                     {
-                        pool.Tick();
+                        pool.Maintenance();
                     }
                 }
                 
                 // Phase 2: Let pool shrink
                 for (int i = 0; i < 50; i++)
                 {
-                    pool.Tick();
+                    pool.Maintenance();
                 }
             });
             
@@ -210,7 +211,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                 }
                 
                 System.Threading.Tasks.Task.WaitAll(tasks.ToArray());
-                pool.Tick();
+                pool.Maintenance();
             });
             
             pool.Dispose();

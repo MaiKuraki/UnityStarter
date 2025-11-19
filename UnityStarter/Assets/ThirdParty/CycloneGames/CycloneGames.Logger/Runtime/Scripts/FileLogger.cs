@@ -14,10 +14,11 @@ namespace CycloneGames.Logger
     public sealed class FileLogger : ILogger
     {
         private readonly StreamWriter _writer;
-        private readonly object _writeLock = new object(); // Lock to ensure thread-safe writes.
+        private readonly object _writeLock = new object();
         private volatile bool _disposed;
         private readonly string _logFilePath;
         private readonly FileLoggerOptions _options;
+        private readonly char[] _buffer = new char[4096];
 
         public FileLogger(string logFilePath, FileLoggerOptions options = null)
         {
@@ -75,7 +76,19 @@ namespace CycloneGames.Logger
                     sb.Append(logMessage.Category);
                     sb.Append("] ");
                 }
-                if (logMessage.OriginalMessage != null) sb.Append(logMessage.OriginalMessage);
+                
+                if (logMessage.MessageBuilder != null)
+                {
+                    var mb = logMessage.MessageBuilder;
+                    for (int i = 0; i < mb.Length; i++)
+                    {
+                        sb.Append(mb[i]);
+                    }
+                }
+                else if (logMessage.OriginalMessage != null) 
+                {
+                    sb.Append(logMessage.OriginalMessage);
+                }
                 
                 // File/line info can be very useful in file logs.
                 if (!string.IsNullOrEmpty(logMessage.FilePath))
@@ -106,7 +119,16 @@ namespace CycloneGames.Logger
                 {
                     if (!_disposed)
                     {
-                        _writer.Write(sb.ToString());
+                        int length = sb.Length;
+                        int offset = 0;
+                        while (offset < length)
+                        {
+                            int count = Math.Min(_buffer.Length, length - offset);
+                            sb.CopyTo(offset, _buffer, 0, count);
+                            _writer.Write(_buffer, 0, count);
+                            offset += count;
+                        }
+
                         // Opportunistic maintenance: cheap size check after writes
                         if (_options.MaintenanceMode != FileMaintenanceMode.None)
                         {

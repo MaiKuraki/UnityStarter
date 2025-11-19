@@ -38,7 +38,8 @@ namespace CycloneGames.Factory.Samples.PureCSharp
             }
 
             // Update all currently active particles
-            _particlePool.Tick();
+            _particlePool.UpdateActiveItems(p => p.Tick());
+            _particlePool.Maintenance();
 
             Console.WriteLine($"Pool Status - Active: {_particlePool.NumActive}, Inactive: {_particlePool.NumInactive}");
         }

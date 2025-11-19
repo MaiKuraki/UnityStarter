@@ -27,7 +27,19 @@ namespace CycloneGames.Logger
                     sb.Append(logMessage.Category);
                     sb.Append("] ");
                 }
-                if (logMessage.OriginalMessage != null) sb.Append(logMessage.OriginalMessage);
+                
+                if (logMessage.MessageBuilder != null)
+                {
+                    var mb = logMessage.MessageBuilder;
+                    for (int i = 0; i < mb.Length; i++)
+                    {
+                        sb.Append(mb[i]);
+                    }
+                }
+                else if (logMessage.OriginalMessage != null) 
+                {
+                    sb.Append(logMessage.OriginalMessage);
+                }
 
                 // Append clickable file path and line number for Unity Console without extra string allocations.
                 if (!string.IsNullOrEmpty(logMessage.FilePath))

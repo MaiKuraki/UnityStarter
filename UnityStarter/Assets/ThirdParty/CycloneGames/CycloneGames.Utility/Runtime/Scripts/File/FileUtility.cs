@@ -410,9 +410,8 @@ namespace CycloneGames.Utility.Runtime
 
         /// <summary>
         /// Compares two byte arrays for equality up to a specified length.
-        /// Requires 'Allow unsafe code' in Unity project settings. This method is synchronous.
         /// </summary>
-        private static unsafe bool CompareByteArrays(byte[] array1, byte[] array2, int lengthToCompare = -1)
+        private static bool CompareByteArrays(byte[] array1, byte[] array2, int lengthToCompare = -1)
         {
             if (array1 == array2) return true;
             if (array1 == null || array2 == null) return false;
@@ -429,24 +428,8 @@ namespace CycloneGames.Utility.Runtime
             if (lengthToCompare == 0) return true;
             if (len1 < lengthToCompare || len2 < lengthToCompare) return false;
 
-            fixed (byte* p1Fixed = array1, p2Fixed = array2)
-            {
-                byte* p1 = p1Fixed;
-                byte* p2 = p2Fixed;
-                int n = lengthToCompare / 8;
-                for (int i = 0; i < n; i++)
-                {
-                    if (*(long*)p1 != *(long*)p2) return false;
-                    p1 += 8; p2 += 8;
-                }
-                int remainder = lengthToCompare % 8;
-                while (remainder > 0)
-                {
-                    if (*p1 != *p2) return false;
-                    p1++; p2++; remainder--;
-                }
-            }
-            return true;
+            return new ReadOnlySpan<byte>(array1, 0, lengthToCompare)
+                .SequenceEqual(new ReadOnlySpan<byte>(array2, 0, lengthToCompare));
         }
     }
 }
