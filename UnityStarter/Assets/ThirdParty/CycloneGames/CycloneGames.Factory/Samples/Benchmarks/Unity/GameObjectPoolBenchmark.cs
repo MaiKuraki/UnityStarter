@@ -162,7 +162,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
 
                 // Reclaim pooled objects (do not clear pool), and clean up non-pooled
                 _bulletPool.DespawnAllActive();
-                _bulletPool.Tick();
+                _bulletPool.Maintenance();
                 if (_directInstantiatedObjects != null && _directInstantiatedObjects.Count > 0)
                 {
                     for (int i = 0; i < _directInstantiatedObjects.Count; i++)
@@ -278,7 +278,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
             System.Action cleanup = () =>
             {
                 if (enableDetailedProfiling) Profiler.BeginSample("Op.Pool.Tick");
-                _bulletPool.Tick(); // Process despawns
+                _bulletPool.Maintenance(); // Process despawns
                 if (enableDetailedProfiling) Profiler.EndSample();
             };
 
@@ -364,7 +364,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
             }
             long poolingMemory = Profiler.GetTotalAllocatedMemoryLong();
             foreach (var bullet in pooledBullets) { _bulletPool.Despawn(bullet); }
-            _bulletPool.Tick();
+            _bulletPool.Maintenance();
             pooledBullets.Clear();
 
             // --- Report ---
@@ -421,7 +421,8 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 if (enableDetailedProfiling) Profiler.EndSample();
 
                 if (enableDetailedProfiling) Profiler.BeginSample("Op.Stress.PoolTick");
-                _bulletPool.Tick();
+                _bulletPool.UpdateActiveItems(b => b.Tick());
+                _bulletPool.Maintenance();
                 if (enableDetailedProfiling) Profiler.EndSample();
 
                 frameTimes.Add((Time.realtimeSinceStartup - frameStart) * 1000f);
@@ -495,7 +496,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
 
             // Prepare pool size
             _bulletPool.DespawnAllActive();
-            _bulletPool.Tick();
+            _bulletPool.Maintenance();
             if (prewarm > 0)
             {
                 _bulletPool.Resize(prewarm);
@@ -519,13 +520,13 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 {
                     _bulletPool.Despawn(temp[i]);
                 }
-                _bulletPool.Tick();
+                _bulletPool.Maintenance();
             };
 
             System.Action trialCleanup = () =>
             {
                 _bulletPool.DespawnAllActive();
-                _bulletPool.Tick();
+                _bulletPool.Maintenance();
                 _bulletPool.Resize(prewarm > 0 ? prewarm : 0);
             };
 
