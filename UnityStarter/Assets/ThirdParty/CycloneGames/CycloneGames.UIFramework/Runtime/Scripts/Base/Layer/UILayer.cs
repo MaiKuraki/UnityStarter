@@ -12,33 +12,38 @@ namespace CycloneGames.UIFramework.Runtime
         [SerializeField] private string layerName;
 
         [Tooltip("The amount of window to expand when the window array is full")]
-        [SerializeField] private int expansionAmount = 3;
+        [SerializeField] private int expansionAmount = 5;
 
         private Canvas uiCanvas;
         public Canvas UICanvas => uiCanvas;
         private GraphicRaycaster graphicRaycaster;
         public GraphicRaycaster WindowGraphicRaycaster => graphicRaycaster;
         public string LayerName => layerName;
+
         private UIWindow[] uiWindowArray; // Internal array of managed windows
         public UIWindow[] UIWindowArray => uiWindowArray; // Public accessor for editor or specific cases
         public int WindowCount { get; private set; }
         public bool IsFinishedLayerInit { get; private set; }
+        private static readonly List<UIWindow> _tempWindowList = new List<UIWindow>(64);
 
-        // Static comparer to avoid delegate allocation on each sort if Comparer.Create was an issue.
+        // comparer
         private static readonly IComparer<UIWindow> _priorityComparer = Comparer<UIWindow>.Create((a, b) =>
         {
-            if (a == null && b == null) return 0;
-            if (a == null) return 1; // Nulls go to the end
-            if (b == null) return -1;
+            if (ReferenceEquals(a, b)) return 0;
+            if (ReferenceEquals(a, null)) return 1;
+            if (ReferenceEquals(b, null)) return -1;
             return a.Priority.CompareTo(b.Priority);
         });
-        
+
         protected void Awake()
         {
             uiCanvas = GetComponent<Canvas>();
             graphicRaycaster = GetComponent<GraphicRaycaster>();
             // TODO: maybe your UI layer is not named 'UI'
-            WindowGraphicRaycaster.blockingMask = LayerMask.GetMask("UI");
+            if (WindowGraphicRaycaster != null)
+            {
+                WindowGraphicRaycaster.blockingMask = LayerMask.GetMask("UI");
+            }
             InitLayer();
         }
 
@@ -46,39 +51,47 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (transform.childCount == 0)
             {
-                uiWindowArray = new UIWindow[expansionAmount > 0 ? expansionAmount : 1]; // Initialize with some capacity
+                uiWindowArray = new UIWindow[expansionAmount > 0 ? expansionAmount : 4];
                 WindowCount = 0;
                 IsFinishedLayerInit = true;
-                // Debug.Log($"{DEBUG_FLAG} Finished init Layer: {LayerName}, no initial children.");
                 return;
             }
 
-            // GetComponentsInChildren also includes self if component is on self, ensure it's intended.
-            // It also allocates a new array.
-            var tempWindowArrayFromChildren = GetComponentsInChildren<UIWindow>(false); // 'false' to not include self
-            
-            // Filter out windows that are not direct children if UILayer should only manage direct children
-            List<UIWindow> directChildrenWindows = new List<UIWindow>();
-            foreach (var window in tempWindowArrayFromChildren)
+            // Optimization: Use GetComponentsInChildren with a reusable List to avoid array allocation
+            _tempWindowList.Clear();
+            GetComponentsInChildren(false, _tempWindowList);
+
+            int validCount = 0;
+            for (int i = 0; i < _tempWindowList.Count; i++)
             {
-                if (window.transform.parent == this.transform)
+                if (_tempWindowList[i].transform.parent == this.transform)
                 {
-                    directChildrenWindows.Add(window);
+                    validCount++;
+                }
+                else
+                {
+                    _tempWindowList[i] = null;
                 }
             }
 
-            uiWindowArray = new UIWindow[Mathf.Max(directChildrenWindows.Count, expansionAmount > 0 ? expansionAmount : 1)];
+            int initialCapacity = Mathf.Max(validCount, expansionAmount > 0 ? expansionAmount : 4);
+            uiWindowArray = new UIWindow[initialCapacity];
             WindowCount = 0;
 
-            foreach (UIWindow window in directChildrenWindows)
+            for (int i = 0; i < _tempWindowList.Count; i++)
             {
-                window.SetWindowName(window.gameObject.name); // Or a more robust naming scheme
-                window.SetUILayer(this);
-                // Directly add to array without sorting yet, will sort once all are added
-                uiWindowArray[WindowCount++] = window; 
+                var window = _tempWindowList[i];
+                if (window != null)
+                {
+                    window.SetWindowName(window.gameObject.name);
+                    window.SetUILayer(this);
+                    uiWindowArray[WindowCount++] = window;
+                }
             }
 
-            SortUIWindowByPriority(); // This also sets sibling index
+            _tempWindowList.Clear();
+
+            SortUIWindowByPriority();
             IsFinishedLayerInit = true;
             Debug.Log($"{DEBUG_FLAG} Finished init Layer: {LayerName}, found {WindowCount} initial windows.");
         }
@@ -86,11 +99,13 @@ namespace CycloneGames.UIFramework.Runtime
         public UIWindow GetUIWindow(string InWindowName)
         {
             if (string.IsNullOrEmpty(InWindowName) || uiWindowArray == null) return null;
+
             for (int i = 0; i < WindowCount; i++)
             {
-                if (uiWindowArray[i] != null && uiWindowArray[i].WindowName == InWindowName)
+                var w = uiWindowArray[i];
+                if (w != null && string.Equals(w.WindowName, InWindowName, System.StringComparison.Ordinal))
                 {
-                    return uiWindowArray[i];
+                    return w;
                 }
             }
             return null;
@@ -98,16 +113,7 @@ namespace CycloneGames.UIFramework.Runtime
 
         public bool HasWindow(string InWindowName)
         {
-            if (string.IsNullOrEmpty(InWindowName) || uiWindowArray == null) return false;
-            for (int i = 0; i < WindowCount; i++)
-            {
-                // Using OrdinalIgnoreCase for case-insensitive comparison without new string allocations (like ToLower)
-                if (uiWindowArray[i] != null && uiWindowArray[i].WindowName.Equals(InWindowName, System.StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-            return false;
+            return GetUIWindow(InWindowName) != null;
         }
 
         public void AddWindow(UIWindow newWindow)
@@ -122,31 +128,34 @@ namespace CycloneGames.UIFramework.Runtime
                 Debug.LogError($"{DEBUG_FLAG} Cannot add a null window to layer: {LayerName}");
                 return;
             }
-            if (HasWindow(newWindow.WindowName)) // Check if a window with the same name already exists
+
+            if (HasWindow(newWindow.WindowName))
             {
                 Debug.LogError($"{DEBUG_FLAG} Window already exists: {newWindow.WindowName} in layer: {LayerName}");
                 return;
             }
 
-            newWindow.gameObject.name = newWindow.WindowName; // Ensure GameObject name matches
+            newWindow.gameObject.name = newWindow.WindowName;
             newWindow.SetUILayer(this);
-            newWindow.transform.SetParent(transform, false); // Set parent
+            newWindow.transform.SetParent(transform, false);
 
-            // Resize array if full
+            //  expand
             if (uiWindowArray == null || WindowCount == uiWindowArray.Length)
             {
-                int newSize = (uiWindowArray?.Length ?? 0) + (expansionAmount > 0 ? expansionAmount : 1);
-                // Note: Array.Resize creates a new array and copies, causing GC for the old array.
-                System.Array.Resize(ref uiWindowArray, newSize);
-                Debug.Log($"{DEBUG_FLAG} Resized UIWindowArray for layer {LayerName} to {newSize}");
+                int newSize = (uiWindowArray?.Length ?? 0) + (expansionAmount > 0 ? expansionAmount : 4);
+                var newArray = new UIWindow[newSize];
+                if (uiWindowArray != null)
+                {
+                    System.Array.Copy(uiWindowArray, newArray, uiWindowArray.Length);
+                }
+                uiWindowArray = newArray;
+                // Debug.Log($"{DEBUG_FLAG} Resized UIWindowArray for layer {LayerName} to {newSize}");
             }
 
-            // Add window and then re-sort. Simpler than finding insert index if additions are not extremely frequent.
             uiWindowArray[WindowCount++] = newWindow;
-            SortUIWindowByPriority(); // This will place the new window correctly and update sibling indices.
+            SortUIWindowByPriority();
         }
 
-        // This method is called by UIWindow.OnDestroy to notify the layer
         public void NotifyWindowDestroyed(UIWindow window)
         {
             if (window == null || uiWindowArray == null) return;
@@ -154,7 +163,7 @@ namespace CycloneGames.UIFramework.Runtime
             int windowIndex = -1;
             for (int i = 0; i < WindowCount; i++)
             {
-                if (uiWindowArray[i] == window)
+                if (ReferenceEquals(uiWindowArray[i], window))
                 {
                     windowIndex = i;
                     break;
@@ -163,78 +172,61 @@ namespace CycloneGames.UIFramework.Runtime
 
             if (windowIndex != -1)
             {
-                // Shift elements to fill the gap
-                for (int j = windowIndex; j < WindowCount - 1; j++)
+                if (windowIndex < WindowCount - 1)
                 {
-                    uiWindowArray[j] = uiWindowArray[j + 1];
+                    System.Array.Copy(uiWindowArray, windowIndex + 1, uiWindowArray, windowIndex, WindowCount - windowIndex - 1);
                 }
-                uiWindowArray[WindowCount - 1] = null; // Clear the last valid spot
+
                 WindowCount--;
-                Debug.Log($"{DEBUG_FLAG} Window {window.WindowName} removed from layer {LayerName}. New count: {WindowCount}");
+                uiWindowArray[WindowCount] = null; // Avoid object reference leak
+
+                // Debug.Log($"{DEBUG_FLAG} Window {window.WindowName} removed from layer {LayerName}. New count: {WindowCount}");
             }
         }
-        
-        // This method now only initiates the closing of the window.
-        // The actual removal from the array happens in NotifyWindowDestroyed when the window's OnDestroy is called.
+
         public void RemoveWindow(string InWindowName)
         {
-            if (!IsFinishedLayerInit)
-            {
-                Debug.LogError($"{DEBUG_FLAG} Layer not initialized, cannot remove window. Current layer: {LayerName}");
-                return;
-            }
+            if (!IsFinishedLayerInit) return;
 
             UIWindow windowToClose = GetUIWindow(InWindowName);
             if (windowToClose != null)
             {
-                windowToClose.Close(); // Tell the window to close itself.
-                                       // It will call Destroy(gameObject) and its OnDestroy will trigger NotifyWindowDestroyed.
-            }
-            else
-            {
-                Debug.LogWarning($"{DEBUG_FLAG} Window not found to remove: {InWindowName} in layer: {LayerName}");
+                windowToClose.Close();
             }
         }
 
         private void SortUIWindowByPriority()
         {
             if (uiWindowArray == null || WindowCount <= 1) return;
-            
-            // Sort the populated part of the array
+
             System.Array.Sort(uiWindowArray, 0, WindowCount, _priorityComparer);
 
-            // Update GameObject sibling index based on sorted order for rendering
             for (int i = 0; i < WindowCount; i++)
             {
-                if (uiWindowArray[i] != null && uiWindowArray[i].transform.parent == this.transform)
+                var w = uiWindowArray[i];
+                if (w != null && w.transform.parent == this.transform)
                 {
-                     uiWindowArray[i].transform.SetSiblingIndex(i);
+                    w.transform.SetSiblingIndex(i);
                 }
             }
         }
 
-        // Called when the UILayer GameObject itself is being destroyed
         public void OnDestroy()
         {
             if (uiWindowArray != null)
             {
                 for (int i = 0; i < WindowCount; i++)
                 {
-                    if (uiWindowArray[i] != null)
+                    var w = uiWindowArray[i];
+                    if (w != null)
                     {
-                        // Inform windows that their parent layer is gone.
-                        // This prevents them from trying to call NotifyWindowDestroyed on a destroyed layer.
-                        uiWindowArray[i].SetUILayer(null);
-                        // Optionally, explicitly destroy windows if the layer's destruction means they should also be gone
-                        // if they weren't already handled by their own logic or UIManager.
-                        // However, UIManager should typically handle the lifecycle of windows it creates.
+                        w.SetUILayer(null);
                     }
                 }
             }
-            uiWindowArray = null; // Release the array reference
+            uiWindowArray = null;
             WindowCount = 0;
-            IsFinishedLayerInit = false; // Mark as no longer initialized
-            Debug.Log($"{DEBUG_FLAG} Layer {LayerName} is being destroyed.");
+            IsFinishedLayerInit = false;
         }
     }
 }
