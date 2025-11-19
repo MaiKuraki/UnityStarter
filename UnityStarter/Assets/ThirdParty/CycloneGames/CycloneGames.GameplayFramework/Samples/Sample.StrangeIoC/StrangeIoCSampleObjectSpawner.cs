@@ -21,5 +21,18 @@ namespace CycloneGames.GameplayFramework.Sample.StrangeIoC
             injectionBinder.injector.Inject(obj);
             return obj;
         }
+
+        public T Create<T>(T origin, Transform parent) where T : Object
+        {
+            if (origin == null)
+            {
+                CLogger.LogError($"Invalid Prefab to spawn");
+                return null;
+            }
+
+            var obj = UnityEngine.Object.Instantiate(origin, parent);
+            injectionBinder.injector.Inject(obj);
+            return obj;
+        }
     }
 }
