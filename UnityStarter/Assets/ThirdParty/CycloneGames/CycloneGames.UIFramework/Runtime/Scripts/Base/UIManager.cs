@@ -115,6 +115,45 @@ namespace CycloneGames.UIFramework.Runtime
             // If UIManager is a scene object and Initialize is called later, Awake can find UIRoot.
             TryGetUIRoot();
         }
+
+        private void OnEnable()
+        {
+            UnityEngine.SceneManagement.SceneManager.sceneUnloaded += OnSceneUnloaded;
+        }
+
+        private void OnDisable()
+        {
+            UnityEngine.SceneManagement.SceneManager.sceneUnloaded -= OnSceneUnloaded;
+        }
+
+        private void OnSceneUnloaded(UnityEngine.SceneManagement.Scene scene)
+        {
+            // clean up the window handles to prevent leaks.
+            if (uiRoot == null || uiRoot.gameObject.scene == scene)
+            {
+                CleanupAllWindows();
+            }
+        }
+
+        private void CleanupAllWindows()
+        {
+            CLogger.LogInfo($"{DEBUG_FLAG} Cleaning up all active windows due to scene unload.");
+
+            foreach (var kv in loadedConfigHandles)
+            {
+                kv.Value?.Dispose();
+            }
+            loadedConfigHandles.Clear();
+            activeWindows.Clear();
+
+            foreach (var kv in uiOpenTCS)
+            {
+                kv.Value.TrySetCanceled();
+            }
+            uiOpenTCS.Clear();
+            uiRoot = null;
+        }
+        
         private void ResetPerFrameBudget()
         {
             instantiatesThisFrame = 0;
