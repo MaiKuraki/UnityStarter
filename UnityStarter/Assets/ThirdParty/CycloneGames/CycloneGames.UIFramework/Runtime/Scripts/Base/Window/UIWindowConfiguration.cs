@@ -31,6 +31,13 @@ namespace CycloneGames.UIFramework.Runtime
 #if UNITY_EDITOR
         private void OnValidate()
         {
+            // Auto-cleanup logic to ensure 0-overhead when using Location mode
+            if (source == PrefabSource.Location && windowPrefab != null)
+            {
+                Debug.LogWarning($"[UIWindowConfiguration] Source switched to 'Location', clearing 'WindowPrefab' reference to prevent memory overhead for '{this.name}'.", this);
+                windowPrefab = null;
+            }
+
             if (windowPrefab != null)
             {
                 // Ensure the prefab actually has a UIWindow component.
