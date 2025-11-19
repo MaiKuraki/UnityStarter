@@ -262,7 +262,7 @@ namespace CycloneGames.Logger
             try
             {
                 var logEntry = LogMessagePool.Get();
-                logEntry.Initialize(DateTime.Now, level, originalMessage, category, filePath, lineNumber, memberName);
+                logEntry.Initialize(DateTime.Now, level, originalMessage, null, category, filePath, lineNumber, memberName);
                 _processor.Enqueue(logEntry);
             }
             catch (InvalidOperationException) { /* Ignore if shutting down. */ }
@@ -275,20 +275,18 @@ namespace CycloneGames.Logger
             if (!ShouldLog(level, category)) return;
 
             StringBuilder sb = StringBuilderPool.Get();
-            string builtMessage = string.Empty;
             try
             {
                 messageBuilder?.Invoke(sb);
-                builtMessage = StringBuilderPool.GetStringAndReturn(sb);
+                var logEntry = LogMessagePool.Get();
+                logEntry.Initialize(DateTime.Now, level, null, sb, category, filePath, lineNumber, memberName);
+                _processor.Enqueue(logEntry);
             }
             catch
             {
-                // Ensure the builder is returned on exceptions
                 StringBuilderPool.Return(sb);
                 throw;
             }
-
-            EnqueueMessage(level, builtMessage, category, filePath, lineNumber, memberName);
         }
 
         internal void DispatchToLoggers(LogMessage logMessage)

@@ -1,4 +1,5 @@
 using System;
+using System.Text;
 
 namespace CycloneGames.Logger
 {
@@ -35,6 +36,7 @@ namespace CycloneGames.Logger
         public DateTime Timestamp { get; private set; }
         public LogLevel Level { get; private set; }
         public string OriginalMessage { get; private set; }
+        public StringBuilder MessageBuilder { get; private set; }
         public string Category { get; private set; }
         public string FilePath { get; private set; }
         public int LineNumber { get; private set; }
@@ -46,12 +48,12 @@ namespace CycloneGames.Logger
         /// <summary>
         /// Initializes a LogMessage instance with data. Called when an object is retrieved from the pool.
         /// </summary>
-        internal void Initialize(DateTime timestamp, LogLevel level, string originalMessage, string category, string filePath, int lineNumber, string memberName)
+        internal void Initialize(DateTime timestamp, LogLevel level, string originalMessage, StringBuilder messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
             Timestamp = timestamp;
             Level = level;
-            // Avoid extra allocations by keeping null when no message, downstream formatters must handle null as empty
             OriginalMessage = originalMessage;
+            MessageBuilder = messageBuilder;
             Category = category;
             FilePath = filePath;
             LineNumber = lineNumber;
@@ -63,6 +65,12 @@ namespace CycloneGames.Logger
         /// </summary>
         internal void Reset()
         {
+            if (MessageBuilder != null)
+            {
+                CycloneGames.Logger.Util.StringBuilderPool.Return(MessageBuilder);
+                MessageBuilder = null;
+            }
+
             // Reset reference types to null to release references and allow GC if necessary.
             OriginalMessage = null;
             Category = null;

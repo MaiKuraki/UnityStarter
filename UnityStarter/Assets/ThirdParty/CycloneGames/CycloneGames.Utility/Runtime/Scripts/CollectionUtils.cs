@@ -84,6 +84,38 @@ namespace CycloneGames.Utility.Runtime
             }
         }
 
+        /// <summary>
+        /// Attempts to remove and return the last element of the List<T>.
+        /// This is an O(1) operation and is 0GC.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool TryPop<T>(this List<T> list, out T result)
+        {
+            if (list != null && list.Count > 0)
+            {
+                int lastIndex = list.Count - 1;
+                result = list[lastIndex];
+                list.RemoveAt(lastIndex);
+                return true;
+            }
+            result = default;
+            return false;
+        }
+
+        /// <summary>
+        /// Removes and returns the last element of the List<T>.
+        /// Throws InvalidOperationException if the list is empty.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static T Pop<T>(this List<T> list)
+        {
+            if (list == null || list.Count == 0) throw new InvalidOperationException("List is empty");
+            int lastIndex = list.Count - 1;
+            T item = list[lastIndex];
+            list.RemoveAt(lastIndex);
+            return item;
+        }
+
         // --- T[] (Array) ---
 
         /// <summary>

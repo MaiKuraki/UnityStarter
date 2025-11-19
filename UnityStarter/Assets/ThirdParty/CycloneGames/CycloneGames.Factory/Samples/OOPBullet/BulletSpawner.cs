@@ -112,7 +112,8 @@ namespace CycloneGames.Factory.OOPBullet
         {
             if (_bulletPool == null) return;
             
-            _bulletPool.Tick();
+            _bulletPool.UpdateActiveItems(b => b.Tick());
+            _bulletPool.Maintenance();
             
             float currentTime = Time.time;
             int bulletsToSpawn = 0;

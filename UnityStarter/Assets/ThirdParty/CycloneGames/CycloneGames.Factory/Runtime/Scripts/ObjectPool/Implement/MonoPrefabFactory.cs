@@ -27,19 +27,22 @@ namespace CycloneGames.Factory.Runtime
                 throw new InvalidOperationException("Prefab is null. The factory cannot create an instance from a null prefab.");
             }
 
-            var instance = _spawner.Create(_prefab);
+            T instance;
+            if (_parent)
+            {
+                instance = _spawner.Create(_prefab, _parent);
+            }
+            else
+            {
+                instance = _spawner.Create(_prefab);
+            }
+
             if (instance == null)
             {
                 // This can happen if the spawner implementation fails or if Object.Instantiate returns null
                 // (e.g., during application shutdown). Returning null here is acceptable, but the primary
                 // checks above are more critical for configuration errors.
                 return null;
-            }
-
-            if (_parent)
-            {
-                // avoid an extra transform update.
-                instance.transform.SetParent(_parent, false);
             }
 
             instance.gameObject.SetActive(false);
