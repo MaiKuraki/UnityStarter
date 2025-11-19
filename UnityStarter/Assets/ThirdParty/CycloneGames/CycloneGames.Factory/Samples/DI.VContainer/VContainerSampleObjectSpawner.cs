@@ -15,5 +15,12 @@ namespace CycloneGames.Factory.Samples.VContainer
             _objectResolver.Inject(obj); // The critical DI step
             return obj;
         }
+
+        public T Create<T>(T origin, UnityEngine.Transform parent) where T : UnityEngine.Object
+        {
+            var obj = UnityEngine.Object.Instantiate(origin, parent);
+            _objectResolver.Inject(obj); // The critical DI step
+            return obj;
+        }
     }
 }
