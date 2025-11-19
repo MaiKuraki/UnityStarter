@@ -9,8 +9,8 @@ High-performance, low-GC factory and object-pooling utilities for Unity and pure
 - **Factory interfaces**: `IFactory<TValue>`, `IFactory<TArg, TValue>` for creation; `IUnityObjectSpawner` for Unity `Object` instantiation.
 - **Default spawner**: `DefaultUnityObjectSpawner` wraps `Object.Instantiate` (safe default for non-DI or as DI binding).
 - **Prefab factory**: `MonoPrefabFactory<T>` creates disabled instances from a prefab via an injected `IUnityObjectSpawner` (optional parent).
-- **Object pool**: `ObjectPool<TParam1, TValue>` is thread-safe and auto-scaling. Requires `TValue : IPoolable<TParam1, IMemoryPool>, ITickable`.
-- **Low-GC hot paths**: swap-and-pop O(1) despawn; deferred despawns during `Tick()` to reduce lock contention.
+- **Object pool**: `ObjectPool<TParam1, TValue>` is thread-safe and auto-scaling. Requires `TValue : IPoolable<TParam1, IMemoryPool>`.
+- **Low-GC hot paths**: swap-and-pop O(1) despawn; deferred despawns during `Maintenance()` to reduce lock contention.
 
 ### Compatibility
 - Unity 2022.3+
@@ -55,13 +55,15 @@ public class MySpawner
 using UnityEngine;
 using CycloneGames.Factory.Runtime;
 
-// Pooled item must implement IPoolable<TParam1, IMemoryPool> and ITickable
-public sealed class Bullet : MonoBehaviour, IPoolable<BulletData, IMemoryPool>, ITickable
+// Pooled item must implement IPoolable<TParam1, IMemoryPool>
+public sealed class Bullet : MonoBehaviour, IPoolable<BulletData, IMemoryPool>
 {
     private IMemoryPool owningPool;
     public void OnSpawned(BulletData data, IMemoryPool pool) { owningPool = pool; /* init */ }
     public void OnDespawned() { owningPool = null; /* reset */ }
-    public void Tick() { /* per-frame update; call owningPool.Despawn(this) when done */ }
+    
+    // Optional: Logic can be driven by Unity Update, or via pool.UpdateActiveItems()
+    public void GameUpdate() { /* per-frame update */ }
 }
 
 public struct BulletData { public Vector3 Position; public Vector3 Velocity; }
@@ -73,8 +75,12 @@ var pool = new ObjectPool<BulletData, Bullet>(factory, initialCapacity: 16);
 
 // Use
 var bullet = pool.Spawn(new BulletData { Position = start, Velocity = dir });
-// In your game loop
-pool.Tick();
+
+// In your game loop (e.g. Update)
+// 1. Drive logic (optional, thread-safe iteration)
+pool.UpdateActiveItems(b => b.GameUpdate());
+// 2. Perform maintenance (required for cleanup and auto-scaling)
+pool.Maintenance();
 ```
 
 ### DI containers
@@ -91,7 +97,8 @@ builder.Register<IFactory<Bullet>>(c => new MonoPrefabFactory<Bullet>(
 ### Object pool notes
 - Expands when empty by `expansionFactor` (default 50% of current total).
 - Shrinks after `shrinkCooldownTicks`, keeping a buffer above the recent high-water mark.
-- `Tick()` reads active items, processes deferred despawns, and evaluates shrink.
+- `Maintenance()` processes deferred despawns and evaluates shrink logic (call periodically).
+- `UpdateActiveItems(action)` allows thread-safe iteration over active items.
 
 ### Samples
 Under `Samples/`:

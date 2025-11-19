@@ -14,7 +14,7 @@ namespace CycloneGames.Factory.ECS.Runtime
         private readonly EntityManager entityManager;
         private readonly IEntityFactory<TData> factory;
         private readonly Stack<Entity> inactiveEntities = new Stack<Entity>();
-        private readonly List<Entity> activeEntities = new List<Entity>();
+        private readonly HashSet<Entity> activeEntities = new HashSet<Entity>();
 
         public EntityPool(EntityManager manager, IEntityFactory<TData> entityFactory, int initialCapacity = 0)
         {
@@ -164,9 +164,9 @@ namespace CycloneGames.Factory.ECS.Runtime
             activeEntities.Clear();
         }
 
-        public IReadOnlyList<Entity> GetActiveEntities()
+        public IReadOnlyCollection<Entity> GetActiveEntities()
         {
-            return activeEntities.AsReadOnly();
+            return activeEntities;
         }
     }
 }

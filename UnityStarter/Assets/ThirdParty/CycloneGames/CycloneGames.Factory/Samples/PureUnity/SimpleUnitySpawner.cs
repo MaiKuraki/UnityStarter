@@ -9,5 +9,10 @@ namespace CycloneGames.Factory.Samples.PureUnity
         {
             return UnityEngine.Object.Instantiate(origin);
         }
+
+        public T Create<T>(T origin, UnityEngine.Transform parent) where T : UnityEngine.Object
+        {
+            return UnityEngine.Object.Instantiate(origin, parent);
+        }
     }
 }

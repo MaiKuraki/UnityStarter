@@ -45,6 +45,15 @@ namespace CycloneGames.Factory.Runtime
         /// <typeparam name="T">The type of the object, constrained to <see cref="UnityEngine.Object"/>.</typeparam>
         /// <returns>A new instance of the object.</returns>
         T Create<T>(T origin) where T : UnityEngine.Object;
+
+        /// <summary>
+        /// Creates a new instance of a <see cref="UnityEngine.Object"/> with a parent.
+        /// </summary>
+        /// <param name="origin">The original object to clone or instantiate.</param>
+        /// <param name="parent">The parent transform to assign to the new object.</param>
+        /// <typeparam name="T">The type of the object, constrained to <see cref="UnityEngine.Object"/>.</typeparam>
+        /// <returns>A new instance of the object.</returns>
+        T Create<T>(T origin, UnityEngine.Transform parent) where T : UnityEngine.Object;
     }
 
     /// <summary>
@@ -57,6 +66,12 @@ namespace CycloneGames.Factory.Runtime
         {
             if (origin == null) return null;
             return UnityEngine.Object.Instantiate(origin);
+        }
+
+        public T Create<T>(T origin, UnityEngine.Transform parent) where T : UnityEngine.Object
+        {
+            if (origin == null) return null;
+            return UnityEngine.Object.Instantiate(origin, parent);
         }
     }
 }

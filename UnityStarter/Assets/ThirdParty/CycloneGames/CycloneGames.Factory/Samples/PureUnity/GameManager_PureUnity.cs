@@ -34,7 +34,8 @@ namespace CycloneGames.Factory.Samples.PureUnity
             }
 
             // 4. Update all active bullets
-            _bulletPool.Tick();
+            _bulletPool.UpdateActiveItems(b => b.Tick());
+            _bulletPool.Maintenance();
         }
 
         void OnDestroy()
