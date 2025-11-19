@@ -85,8 +85,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var handle = _rawPackage.LoadAssetSync<TAsset>(location);
             var id = RegisterHandle();
-            var wrapped = new YooAssetHandle<TAsset>(id, handle, CancellationToken.None); // Sync operation has no cancellation.
-            HandleTracker.Register(id, Name, $"AssetSync {typeof(TAsset).Name} : {location}");
+            var wrapped = YooAssetHandle<TAsset>.Create(id, handle, CancellationToken.None);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"AssetSync {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
 
@@ -94,8 +94,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var handle = _rawPackage.LoadAssetAsync<TAsset>(location);
             var id = RegisterHandle();
-            var wrapped = new YooAssetHandle<TAsset>(id, handle, cancellationToken);
-            HandleTracker.Register(id, Name, $"AssetAsync {typeof(TAsset).Name} : {location}");
+            var wrapped = YooAssetHandle<TAsset>.Create(id, handle, cancellationToken);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"AssetAsync {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
         
@@ -103,8 +103,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var handle = _rawPackage.LoadAllAssetsAsync<TAsset>(location);
             var id = RegisterHandle();
-            var wrapped = new YooAllAssetsHandle<TAsset>(id, handle, cancellationToken);
-            HandleTracker.Register(id, Name, $"AllAssets {typeof(TAsset).Name} : {location}");
+            var wrapped = YooAllAssetsHandle<TAsset>.Create(id, handle, cancellationToken);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"AllAssets {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
 
@@ -112,8 +112,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var handle = _rawPackage.LoadSceneSync(sceneLocation, loadMode);
             var id = RegisterHandle();
-            var wrapped = new YooSceneHandle(id, handle);
-            HandleTracker.Register(id, Name, $"SceneSync : {sceneLocation}");
+            var wrapped = YooSceneHandle.Create(id, handle);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"SceneSync : {sceneLocation}");
             return wrapped;
         }
 
@@ -121,8 +121,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var handle = _rawPackage.LoadSceneAsync(sceneLocation, loadMode, suspendLoad: !activateOnLoad, priority: (uint)priority);
             var id = RegisterHandle();
-            var wrapped = new YooSceneHandle(id, handle);
-            HandleTracker.Register(id, Name, $"SceneAsync : {sceneLocation}");
+            var wrapped = YooSceneHandle.Create(id, handle);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"SceneAsync : {sceneLocation}");
             return wrapped;
         }
 
@@ -137,17 +137,17 @@ namespace CycloneGames.AssetManagement.Runtime
         public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain)
         {
             var op = _rawPackage.CreateResourceDownloader(downloadingMaxNumber, failedTryAgain);
-            return new YooDownloader(op);
+            return YooDownloader.Create(op);
         }
         public IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain)
         {
             var op = _rawPackage.CreateResourceDownloader(tags, downloadingMaxNumber, failedTryAgain);
-            return new YooDownloader(op);
+            return YooDownloader.Create(op);
         }
         public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain)
         {
             var op = _rawPackage.CreateBundleDownloader(locations, recursiveDownload, downloadingMaxNumber, failedTryAgain);
-            return new YooDownloader(op);
+            return YooDownloader.Create(op);
         }
         
         private async UniTask<IDownloader> CreatePreDownloaderInternal(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken, string[] tags = null)
@@ -165,7 +165,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 ? _rawPackage.CreateResourceDownloader(downloadingMaxNumber, failedTryAgain)
                 : _rawPackage.CreateResourceDownloader(tags, downloadingMaxNumber, failedTryAgain);
             
-            return new YooDownloader(downloaderOp);
+            return YooDownloader.Create(downloaderOp);
         }
 
         public async UniTask<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
@@ -202,8 +202,8 @@ namespace CycloneGames.AssetManagement.Runtime
             
             var op = yooHandle.Raw.InstantiateAsync(parent, worldPositionStays);
             var id = RegisterHandle();
-            var wrapped = new YooInstantiateHandle(id, op);
-            HandleTracker.Register(id, Name, $"InstantiateAsync : {yooHandle.Raw.GetAssetInfo().AssetPath}");
+            var wrapped = YooInstantiateHandle.Create(id, op);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"InstantiateAsync : {yooHandle.Raw.GetAssetInfo().AssetPath}");
             return wrapped;
         }
         public async UniTask UnloadUnusedAssetsAsync()
