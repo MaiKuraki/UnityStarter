@@ -1,212 +1,292 @@
 #if YOOASSET_PRESENT
 using Cysharp.Threading.Tasks;
 using System;
-using System.Threading;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using YooAsset;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-	public sealed class YooAssetHandle<TAsset> : IAssetHandle<TAsset> where TAsset : UnityEngine.Object
-	{
-		private readonly int _id;
-		internal readonly AssetHandle Raw;
+    internal static class HandlePool<T> where T : class, new()
+    {
+        private static readonly Stack<T> _pool = new Stack<T>(32);
 
-		public YooAssetHandle(int id, AssetHandle raw, CancellationToken cancellationToken)
-		{
-			_id = id;
-			Raw = raw;
-			Task = raw.ToUniTask(cancellationToken: cancellationToken);
-		}
+        public static T Get()
+        {
+            lock (_pool)
+            {
+                return _pool.Count > 0 ? _pool.Pop() : new T();
+            }
+        }
 
-		public bool IsDone => Raw == null || Raw.IsDone;
-		public float Progress => Raw?.Progress ?? 0f;
-		public string Error => Raw?.LastError ?? string.Empty;
-		public UniTask Task { get; }
-		public void WaitForAsyncComplete() => Raw?.WaitForAsyncComplete();
+        public static void Release(T item)
+        {
+            if (item == null) return;
+            lock (_pool)
+            {
+                _pool.Push(item);
+            }
+        }
+    }
 
-		public TAsset Asset => Raw != null ? Raw.GetAssetObject<TAsset>() : null;
-		public UnityEngine.Object AssetObject => Raw?.AssetObject;
+    public sealed class YooAssetHandle<TAsset> : IAssetHandle<TAsset> where TAsset : UnityEngine.Object
+    {
+        private int _id;
+        internal AssetHandle Raw;
+        private UniTask _task;
 
-		public void Dispose()
-		{
-			Raw?.Dispose();
-			HandleTracker.Unregister(_id);
-		}
-	}
+        // Private constructor to force pooling usage (optional, but keeping public for simplicity unless enforced)
+        public YooAssetHandle() { }
 
-	public sealed class YooAllAssetsHandle<TAsset> : IAllAssetsHandle<TAsset> where TAsset : UnityEngine.Object
-	{
-		// Private utility class to wrap a list of Objects as a read-only list of TAsset, avoiding GC allocation of a new list.
-		private sealed class ReadOnlyListAdapter<T> : IReadOnlyList<T> where T : UnityEngine.Object
-		{
-			private readonly IReadOnlyList<UnityEngine.Object> _source;
+        internal void Initialize(int id, AssetHandle raw, CancellationToken cancellationToken)
+        {
+            _id = id;
+            Raw = raw;
+            _task = raw.ToUniTask(cancellationToken: cancellationToken);
+        }
 
-			public ReadOnlyListAdapter(IReadOnlyList<UnityEngine.Object> source)
-			{
-				_source = source ?? throw new ArgumentNullException(nameof(source));
-			}
+        public static YooAssetHandle<TAsset> Create(int id, AssetHandle raw, CancellationToken cancellationToken)
+        {
+            var h = HandlePool<YooAssetHandle<TAsset>>.Get();
+            h.Initialize(id, raw, cancellationToken);
+            return h;
+        }
 
-			public T this[int index] => _source[index] as T;
-			public int Count => _source.Count;
-			public System.Collections.Generic.IEnumerator<T> GetEnumerator()
-			{
-				foreach (var item in _source)
-				{
-					yield return item as T;
-				}
-			}
-			System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
-		}
-		
-		private readonly int _id;
-		internal readonly AllAssetsHandle Raw;
-		private IReadOnlyList<TAsset> _cachedAssets;
-		private IReadOnlyList<UnityEngine.Object> _assetObjects;
+        public bool IsDone => Raw == null || Raw.IsDone;
+        public float Progress => Raw?.Progress ?? 0f;
+        public string Error => Raw?.LastError ?? string.Empty;
+        public UniTask Task => _task;
+        public void WaitForAsyncComplete() => Raw?.WaitForAsyncComplete();
 
-		public YooAllAssetsHandle(int id, AllAssetsHandle raw, CancellationToken cancellationToken)
-		{
-			_id = id;
-			Raw = raw;
-			Task = raw.ToUniTask(cancellationToken: cancellationToken);
-		}
+        public TAsset Asset => Raw != null ? Raw.GetAssetObject<TAsset>() : null;
+        public UnityEngine.Object AssetObject => Raw?.AssetObject;
 
-		public bool IsDone => Raw == null || Raw.IsDone;
-		public float Progress => Raw?.Progress ?? 0f;
-		public string Error => Raw?.LastError ?? string.Empty;
-		public UniTask Task { get; }
-		public void WaitForAsyncComplete() => Raw?.WaitForAsyncComplete();
+        public void Dispose()
+        {
+            Raw?.Dispose();
+            Raw = null;
+            if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
+            _task = default;
+            HandlePool<YooAssetHandle<TAsset>>.Release(this);
+        }
+    }
 
-		public IReadOnlyList<TAsset> Assets
-		{
-			get
-			{
-				if (_cachedAssets != null) return _cachedAssets;
-				if (Raw == null || !Raw.IsDone) return Array.Empty<TAsset>();
+    public sealed class YooAllAssetsHandle<TAsset> : IAllAssetsHandle<TAsset> where TAsset : UnityEngine.Object
+    {
+        // Private utility class to wrap a list of Objects as a read-only list of TAsset, avoiding GC allocation of a new list.
+        private sealed class ReadOnlyListAdapter : IReadOnlyList<TAsset>
+        {
+            private IReadOnlyList<UnityEngine.Object> _source;
 
-				if (_assetObjects == null)
-				{
-					_assetObjects = Raw.AllAssetObjects;
-				}
-				
-				if (_assetObjects == null || _assetObjects.Count == 0)
-				{
-					_cachedAssets = Array.Empty<TAsset>();
-					return _cachedAssets;
-				}
+            public void Initialize(IReadOnlyList<UnityEngine.Object> source)
+            {
+                _source = source;
+            }
 
-				_cachedAssets = new ReadOnlyListAdapter<TAsset>(_assetObjects);
-				return _cachedAssets;
-			}
-		}
+            public void Clear()
+            {
+                _source = null;
+            }
 
-		public void Dispose()
-		{
-			Raw?.Dispose();
-			HandleTracker.Unregister(_id);
-		}
-	}
+            public TAsset this[int index] => _source[index] as TAsset;
+            public int Count => _source?.Count ?? 0;
+            public IEnumerator<TAsset> GetEnumerator()
+            {
+                if (_source == null) yield break;
+                foreach (var item in _source)
+                {
+                    yield return item as TAsset;
+                }
+            }
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+        }
+        
+        private int _id;
+        internal AllAssetsHandle Raw;
+        private readonly ReadOnlyListAdapter _listAdapter = new ReadOnlyListAdapter();
+        private UniTask _task;
 
-	public sealed class YooInstantiateHandle : IInstantiateHandle
-	{
-		private readonly int _id;
-		internal readonly InstantiateOperation Raw;
+        public YooAllAssetsHandle() { }
 
-		public YooInstantiateHandle(int id, InstantiateOperation raw)
-		{
-			_id = id;
-			Raw = raw;
-		}
+        internal void Initialize(int id, AllAssetsHandle raw, CancellationToken cancellationToken)
+        {
+            _id = id;
+            Raw = raw;
+            _task = raw.ToUniTask(cancellationToken: cancellationToken);
+            _listAdapter.Clear(); // Reset adapter
+        }
 
-		public bool IsDone => Raw == null || Raw.IsDone;
-		public float Progress => Raw?.Progress ?? 0f;
-		public string Error => Raw?.Error ?? string.Empty;
-		public UniTask Task => Raw?.Task.AsUniTask() ?? UniTask.CompletedTask;
-		public void WaitForAsyncComplete() { /* not supported for scene handle in this YooAsset version */ }
+        public static YooAllAssetsHandle<TAsset> Create(int id, AllAssetsHandle raw, CancellationToken cancellationToken)
+        {
+            var h = HandlePool<YooAllAssetsHandle<TAsset>>.Get();
+            h.Initialize(id, raw, cancellationToken);
+            return h;
+        }
 
-		public GameObject Instance => Raw?.Result;
+        public bool IsDone => Raw == null || Raw.IsDone;
+        public float Progress => Raw?.Progress ?? 0f;
+        public string Error => Raw?.LastError ?? string.Empty;
+        public UniTask Task => _task;
+        public void WaitForAsyncComplete() => Raw?.WaitForAsyncComplete();
 
-		public void Dispose()
-		{
-			HandleTracker.Unregister(_id);
-		}
-	}
+        public IReadOnlyList<TAsset> Assets
+        {
+            get
+            {
+                if (Raw == null || !Raw.IsDone) return Array.Empty<TAsset>();
+                // Re-use the adapter, check if it's already set for current Raw
+                // Since we clear on Initialize, we just need to set it if empty.
+                // Note: This assumes Assets is called after completion.
+                if (_listAdapter.Count == 0 && Raw.AllAssetObjects != null)
+                {
+                    _listAdapter.Initialize(Raw.AllAssetObjects);
+                }
+                return _listAdapter;
+            }
+        }
 
-	public sealed class YooSceneHandle : ISceneHandle
-	{
-		private readonly int _id;
-		public readonly SceneHandle Raw;
+        public void Dispose()
+        {
+            Raw?.Dispose();
+            Raw = null;
+            _listAdapter.Clear();
+            if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
+            _task = default;
+            HandlePool<YooAllAssetsHandle<TAsset>>.Release(this);
+        }
+    }
 
-		public YooSceneHandle(int id, SceneHandle raw)
-		{
-			_id = id;
-			Raw = raw;
-		}
+    public sealed class YooInstantiateHandle : IInstantiateHandle
+    {
+        private int _id;
+        internal InstantiateOperation Raw;
+        
+        public YooInstantiateHandle() { }
 
-		public bool IsDone => Raw == null || Raw.IsDone;
-		public float Progress => Raw?.Progress ?? 0f;
-		public string Error => Raw?.LastError ?? string.Empty;
-		public UniTask Task => Raw?.Task.AsUniTask() ?? UniTask.CompletedTask;
-		public void WaitForAsyncComplete() { /* YooAsset has no SceneHandle.WaitForAsyncComplete */ }
+        internal void Initialize(int id, InstantiateOperation raw)
+        {
+            _id = id;
+            Raw = raw;
+        }
 
-		public string ScenePath => Raw?.SceneName;
-		public Scene Scene => Raw.SceneObject;
+        public static YooInstantiateHandle Create(int id, InstantiateOperation raw)
+        {
+            var h = HandlePool<YooInstantiateHandle>.Get();
+            h.Initialize(id, raw);
+            return h;
+        }
 
-		public void Dispose()
-		{
-			Raw?.Dispose();
-			HandleTracker.Unregister(_id);
-		}
-	}
+        public bool IsDone => Raw == null || Raw.IsDone;
+        public float Progress => Raw?.Progress ?? 0f;
+        public string Error => Raw?.Error ?? string.Empty;
+        public UniTask Task => Raw?.Task.AsUniTask() ?? UniTask.CompletedTask;
+        public void WaitForAsyncComplete() { /* not supported */ }
 
-	public sealed class YooDownloader : IDownloader
-	{
-		private readonly ResourceDownloaderOperation _op;
+        public GameObject Instance => Raw?.Result;
 
-		public YooDownloader(ResourceDownloaderOperation op)
-		{
-			_op = op;
-		}
+        public void Dispose()
+        {
+            Raw = null; // InstantiateOperation doesn't need Dispose, but we clear ref.
+            if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
+            HandlePool<YooInstantiateHandle>.Release(this);
+        }
+    }
 
-		public bool IsDone => _op == null || _op.IsDone;
-		public bool Succeed => _op != null && _op.Status == EOperationStatus.Succeed;
-		public float Progress => _op?.Progress ?? 1f;
-		public int TotalDownloadCount => _op?.TotalDownloadCount ?? 0;
-		public int CurrentDownloadCount => _op?.CurrentDownloadCount ?? 0;
-		public long TotalDownloadBytes => _op?.TotalDownloadBytes ?? 0;
-		public long CurrentDownloadBytes => _op?.CurrentDownloadBytes ?? 0;
-		public string Error => _op?.Error ?? string.Empty;
+    public sealed class YooSceneHandle : ISceneHandle
+    {
+        private int _id;
+        public SceneHandle Raw;
+        
+        public YooSceneHandle() { }
 
-		public void Begin() => _op?.BeginDownload();
+        internal void Initialize(int id, SceneHandle raw)
+        {
+            _id = id;
+            Raw = raw;
+        }
 
-		public async UniTask StartAsync(System.Threading.CancellationToken cancellationToken = default)
-		{
-			Begin();
-			while (!IsDone)
-			{
-				if (cancellationToken.IsCancellationRequested)
-				{
-					_op?.CancelDownload();
-					throw new OperationCanceledException(cancellationToken);
-				}
-				await UniTask.Yield(cancellationToken);
-			}
-		}
+        public static YooSceneHandle Create(int id, SceneHandle raw)
+        {
+            var h = HandlePool<YooSceneHandle>.Get();
+            h.Initialize(id, raw);
+            return h;
+        }
 
-		public void Pause() => _op?.PauseDownload();
-		public void Resume() => _op?.ResumeDownload();
-		public void Cancel() => _op?.CancelDownload();
+        public bool IsDone => Raw == null || Raw.IsDone;
+        public float Progress => Raw?.Progress ?? 0f;
+        public string Error => Raw?.LastError ?? string.Empty;
+        public UniTask Task => Raw?.Task.AsUniTask() ?? UniTask.CompletedTask;
+        public void WaitForAsyncComplete() { /* not supported */ }
 
-		public void Combine(IDownloader other)
-		{
-			if (_op == null) return;
-			if (other is YooDownloader yd && yd._op != null)
-			{
-				_op.Combine(yd._op);
-			}
-		}
-	}
+        public string ScenePath => Raw?.SceneName;
+        public Scene Scene => Raw?.SceneObject ?? default;
+
+        public void Dispose()
+        {
+            Raw?.UnloadAsync();
+            Raw = null;
+            if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
+            HandlePool<YooSceneHandle>.Release(this);
+        }
+    }
+
+    public sealed class YooDownloader : IDownloader
+    {
+        private ResourceDownloaderOperation _op;
+
+        public YooDownloader() { }
+        
+        internal void Initialize(ResourceDownloaderOperation op)
+        {
+            _op = op;
+        }
+
+        public static YooDownloader Create(ResourceDownloaderOperation op)
+        {
+            var d = HandlePool<YooDownloader>.Get();
+            d.Initialize(op);
+            return d;
+        }
+
+        public bool IsDone => _op == null || _op.IsDone;
+        public bool Succeed => _op != null && _op.Status == EOperationStatus.Succeed;
+        public float Progress => _op?.Progress ?? 1f;
+        public int TotalDownloadCount => _op?.TotalDownloadCount ?? 0;
+        public int CurrentDownloadCount => _op?.CurrentDownloadCount ?? 0;
+        public long TotalDownloadBytes => _op?.TotalDownloadBytes ?? 0;
+        public long CurrentDownloadBytes => _op?.CurrentDownloadBytes ?? 0;
+        public string Error => _op?.Error ?? string.Empty;
+
+        public void Begin() => _op?.BeginDownload();
+
+        public async UniTask StartAsync(System.Threading.CancellationToken cancellationToken = default)
+        {
+            Begin();
+            while (!IsDone)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    _op?.CancelDownload();
+                    throw new OperationCanceledException(cancellationToken);
+                }
+                await UniTask.Yield(cancellationToken);
+            }
+        }
+
+        public void Pause() => _op?.PauseDownload();
+        public void Resume() => _op?.ResumeDownload();
+        public void Cancel() => _op?.CancelDownload();
+
+        public void Combine(IDownloader other)
+        {
+            if (_op == null) return;
+            if (other is YooDownloader yd && yd._op != null)
+            {
+                _op.Combine(yd._op);
+            }
+        }
+    }
 }
-#endif // YOOASSET_PRESENT
+#endif
