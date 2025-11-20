@@ -2,10 +2,13 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
+using UnityEngine.Audio;
 using System.Globalization;
 using System.Collections;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System;
+using System.Threading;
 using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.Audio.Runtime
@@ -13,26 +16,34 @@ namespace CycloneGames.Audio.Runtime
     /// <summary>
     /// The manager that handles the playback of AudioEvents
     /// </summary>
-    public class AudioManager : MonoBehaviour
+    public class AudioManager : MonoBehaviour, IAudioService
     {
         /// <summary>
         /// Singleton instance of the audio manager
         /// </summary>
-        private static AudioManager Instance;
+        public static AudioManager Instance { get; private set; }
         /// <summary>
         /// Flag for creating instances, set to false during shutdown 
         /// </summary>
         private static bool AllowCreateInstance = true;
+
+        private static int mainThreadId;
+
         /// <summary>
         /// The currently-playing events at runtime
         /// </summary>
         public static List<ActiveEvent> ActiveEvents { get; private set; }
+
+        // Pool for ActiveEvent objects to avoid GC allocations
+        private static readonly Stack<ActiveEvent> activeEventPool = new Stack<ActiveEvent>();
         /// <summary>
         /// The AudioSource components that are not currently playing.
         /// Using a Queue for efficient acquisition and release (O(1) operations).
         /// </summary>
         private static readonly Queue<AudioSource> availableSources = new Queue<AudioSource>();
         public static IReadOnlyCollection<AudioSource> AvailableSources => availableSources;
+        private static readonly ConcurrentQueue<Action> commandQueue = new ConcurrentQueue<Action>();
+
         /// <summary>
         /// List of the previously started events
         /// </summary>
@@ -52,6 +63,11 @@ namespace CycloneGames.Audio.Runtime
         [SerializeField]
         private int customPoolSize = 0;
 
+        [Header("Mixing")]
+        [SerializeField]
+        private AudioMixer mainMixer;
+        private static AudioMixer staticMainMixer;
+
         private static bool isInitialized = false;
         /// <summary>
         /// The total list of AudioSources for the manager to use
@@ -62,10 +78,10 @@ namespace CycloneGames.Audio.Runtime
         // Memory tracking fields
         private static readonly Dictionary<AudioClip, int> activeClipRefCount = new Dictionary<AudioClip, int>();
         private static readonly Dictionary<AudioClip, long> clipMemoryCache = new Dictionary<AudioClip, long>();
-        
+
         // A reusable HashSet to avoid GC allocations in TrackMemory when collecting unique clips.
         private static readonly HashSet<AudioClip> reusableClipSet = new HashSet<AudioClip>();
-        
+
         public static long TotalMemoryUsage { get; private set; } = 0;
         public static IReadOnlyDictionary<AudioClip, int> ActiveClipRefCount => activeClipRefCount;
         public static IReadOnlyDictionary<AudioClip, long> ClipMemoryCache => clipMemoryCache;
@@ -79,20 +95,57 @@ namespace CycloneGames.Audio.Runtime
 
         #region Interface
 
+        ActiveEvent IAudioService.PlayEvent(AudioEvent eventToPlay, GameObject emitterObject) => PlayEvent(eventToPlay, emitterObject);
+        ActiveEvent IAudioService.PlayEvent(AudioEvent eventToPlay, Vector3 position) => PlayEvent(eventToPlay, position);
+        ActiveEvent IAudioService.PlayEventScheduled(AudioEvent eventToPlay, GameObject emitterObject, double dspTime) => PlayEventScheduled(eventToPlay, emitterObject, dspTime);
+        void IAudioService.StopAll(AudioEvent eventsToStop) => StopAll(eventsToStop);
+        void IAudioService.StopAll(int groupNum) => StopAll(groupNum);
+
+        public void SetMixerVolume(string parameterName, float volume)
+        {
+            if (mainMixer != null)
+            {
+                mainMixer.SetFloat(parameterName, volume);
+            }
+            else
+            {
+                Debug.LogWarning("AudioManager: Main Mixer not assigned.");
+            }
+        }
+
+        public float GetMixerVolume(string parameterName)
+        {
+            if (mainMixer != null)
+            {
+                if (mainMixer.GetFloat(parameterName, out float value))
+                {
+                    return value;
+                }
+            }
+            return 0f;
+        }
+
         /// <summary>
-        /// Start playing an AudioEvent
+        /// Start playing an AudioEvent. Thread-safe (returns null if called from background thread).
         /// </summary>
         /// <param name="eventToPlay">The AudioEvent to play</param>
         /// <param name="emitterObject">The GameObject to play the event on</param>
         /// <returns>The reference for the runtime event that can be modified or stopped explicitly</returns>
         public static ActiveEvent PlayEvent(AudioEvent eventToPlay, GameObject emitterObject)
         {
+            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
+            {
+                commandQueue.Enqueue(() => PlayEvent(eventToPlay, emitterObject));
+                return null;
+            }
+
             if (!ValidateManager() || !ValidateEvent(eventToPlay))
             {
                 return null;
             }
 
-            ActiveEvent tempEvent = new ActiveEvent(eventToPlay, emitterObject.transform);
+            Transform emitterTransform = emitterObject != null ? emitterObject.transform : null;
+            ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitterTransform);
             tempEvent.Play();
 
             if (tempEvent.status != EventStatus.Error)
@@ -105,12 +158,18 @@ namespace CycloneGames.Audio.Runtime
 
         public static ActiveEvent PlayEvent(AudioEvent eventToPlay, Vector3 position)
         {
+            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
+            {
+                commandQueue.Enqueue(() => PlayEvent(eventToPlay, position));
+                return null;
+            }
+
             if (!ValidateManager() || !ValidateEvent(eventToPlay))
             {
                 return null;
             }
 
-            ActiveEvent tempEvent = new ActiveEvent(eventToPlay, null);
+            ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, null);
             tempEvent.Play();
             tempEvent.SetAllSourcePositions(position);
 
@@ -123,6 +182,56 @@ namespace CycloneGames.Audio.Runtime
         }
 
         /// <summary>
+        /// Start playing an AudioEvent at a specific DSP time (high precision for rhythm games).
+        /// </summary>
+        /// <param name="eventToPlay">The AudioEvent to play</param>
+        /// <param name="emitterObject">The GameObject to play the event on</param>
+        /// <param name="dspTime">The AudioSettings.dspTime to play at</param>
+        public static ActiveEvent PlayEventScheduled(AudioEvent eventToPlay, GameObject emitterObject, double dspTime)
+        {
+            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
+            {
+                // Scheduled playback from background thread is tricky because dspTime moves on. 
+                // We still queue it, but the user must be aware of the delay.
+                commandQueue.Enqueue(() => PlayEventScheduled(eventToPlay, emitterObject, dspTime));
+                return null;
+            }
+
+            if (!ValidateManager() || !ValidateEvent(eventToPlay))
+            {
+                return null;
+            }
+
+            Transform emitterTransform = emitterObject != null ? emitterObject.transform : null;
+            ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitterTransform);
+            tempEvent.scheduledDspTime = dspTime;
+            tempEvent.Play();
+
+            if (tempEvent.status != EventStatus.Error)
+            {
+                TrackMemory(tempEvent, true);
+            }
+
+            return tempEvent;
+        }
+
+        private static ActiveEvent GetActiveEventFromPool(AudioEvent eventToPlay, Transform emitter)
+        {
+            ActiveEvent activeEvent;
+            if (activeEventPool.Count > 0)
+            {
+                activeEvent = activeEventPool.Pop();
+                activeEvent.Initialize(eventToPlay, emitter);
+            }
+            else
+            {
+                activeEvent = new ActiveEvent();
+                activeEvent.Initialize(eventToPlay, emitter);
+            }
+            return activeEvent;
+        }
+
+        /// <summary>
         /// Start playing an AudioEvent
         /// </summary>
         /// <param name="eventToPlay">The AudioEvent to play</param>
@@ -130,13 +239,19 @@ namespace CycloneGames.Audio.Runtime
         /// <returns>The reference for the runtime event that can be modified or stopped explicitly</returns>
         public static ActiveEvent PlayEvent(AudioEvent eventToPlay, AudioSource emitter)
         {
+            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
+            {
+                commandQueue.Enqueue(() => PlayEvent(eventToPlay, emitter));
+                return null;
+            }
+
             Debug.LogWarningFormat("AudioManager: deprecated function called on event {0} - play on an AudioSource no longer supported");
             if (!ValidateManager() || !ValidateEvent(eventToPlay))
             {
                 return null;
             }
 
-            ActiveEvent tempEvent = new ActiveEvent(eventToPlay, emitter.transform);
+            ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitter.transform);
             tempEvent.Play();
 
             if (tempEvent.status != EventStatus.Error)
@@ -153,6 +268,12 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="eventsToStop">The event to stop all instances of</param>
         public static void StopAll(AudioEvent eventsToStop)
         {
+            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
+            {
+                commandQueue.Enqueue(() => StopAll(eventsToStop));
+                return;
+            }
+
             if (!ValidateManager())
             {
                 return;
@@ -174,6 +295,12 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="groupNum">The group number to stop all instances of</param>
         public static void StopAll(int groupNum)
         {
+            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
+            {
+                commandQueue.Enqueue(() => StopAll(groupNum));
+                return;
+            }
+
             if (!ValidateManager())
             {
                 return;
@@ -216,6 +343,11 @@ namespace CycloneGames.Audio.Runtime
 
             TrackMemory(stoppedEvent, false);
             ActiveEvents.Remove(stoppedEvent);
+
+            // Return ActiveEvent to pool
+            stoppedEvent.Reset();
+            activeEventPool.Push(stoppedEvent);
+
             stoppedEvent = null;
         }
 
@@ -259,7 +391,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 // Use UniTask.Delay for a GC-friendly, cancellable delay.
                 await UniTask.Delay(TimeSpan.FromSeconds(delay), ignoreTimeScale: false, cancellationToken: eventToRemove.GetCancellationToken());
-                
+
                 // If the task was not cancelled, proceed with removal.
                 if (eventToRemove.status != EventStatus.Error)
                 {
@@ -272,12 +404,12 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        #endregion
-
-        #region Private Functions
+        // ...
 
         private void Awake()
         {
+            mainThreadId = Thread.CurrentThread.ManagedThreadId;
+
             if (Instance != null)
             {
                 // If an instance already exists and it's not this one, destroy this one.
@@ -300,6 +432,12 @@ namespace CycloneGames.Audio.Runtime
 
         private void Update()
         {
+            // Process command queue
+            while (commandQueue.TryDequeue(out Action command))
+            {
+                command.Invoke();
+            }
+
             // The Update loop is now significantly leaner, only responsible for updating active events.
             // Delayed removals are handled by UniTask.
             for (int i = ActiveEvents.Count - 1; i >= 0; i--)
@@ -321,7 +459,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 return;
             }
-            
+
             // This will create the object, and its Awake() method will handle all initialization.
             new GameObject("AudioManager").AddComponent<AudioManager>();
         }
@@ -332,13 +470,14 @@ namespace CycloneGames.Audio.Runtime
         private void Initialize()
         {
             CurrentLanguage = 0;
+            staticMainMixer = this.mainMixer;
             ActiveEvents = new List<ActiveEvent>();
             CreateSources();
             ValidateAudioListener();
             Application.quitting += HandleQuitting;
             isInitialized = true;
         }
-        
+
         /// <summary>
         /// Ensures that there is an AudioListener in the scene.
         /// It prioritizes adding it to the main camera for correct 3D audio positioning.
@@ -364,7 +503,7 @@ namespace CycloneGames.Audio.Runtime
                 this.gameObject.AddComponent<AudioListener>();
             }
         }
-        
+
         /// <summary>
         /// On shutdown we cannot create an instance
         /// </summary>
@@ -385,13 +524,13 @@ namespace CycloneGames.Audio.Runtime
             }
             else
             {
-                #if UNITY_WEBGL
+#if UNITY_WEBGL
                     poolCount = 32;
-                #elif UNITY_ANDROID || UNITY_IOS
+#elif UNITY_ANDROID || UNITY_IOS
                     poolCount = 48;
-                #else
-                    poolCount = 128; // Desktop default
-                #endif
+#else
+                poolCount = 128; // Desktop default
+#endif
             }
 
             for (int i = 0; i < poolCount; i++)

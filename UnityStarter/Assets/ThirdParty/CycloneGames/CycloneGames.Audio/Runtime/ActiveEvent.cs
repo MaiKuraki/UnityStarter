@@ -14,15 +14,52 @@ using UnityEditor;
 
 namespace CycloneGames.Audio.Runtime
 {
+    public struct AudioHandle
+    {
+        private ActiveEvent internalEvent;
+        private int generation;
+
+        public AudioHandle(ActiveEvent activeEvent)
+        {
+            this.internalEvent = activeEvent;
+            this.generation = activeEvent != null ? activeEvent.generation : 0;
+        }
+
+        public bool IsValid => internalEvent != null && internalEvent.generation == generation && internalEvent.status != EventStatus.Stopped;
+
+        public void Stop()
+        {
+            if (IsValid)
+            {
+                internalEvent.Stop();
+            }
+        }
+
+        public void StopImmediate()
+        {
+            if (IsValid)
+            {
+                internalEvent.StopImmediate();
+            }
+        }
+        
+        // Expose other necessary methods safely
+        public float EstimatedRemainingTime => IsValid ? internalEvent.EstimatedRemainingTime : 0f;
+        public bool IsPlaying => IsValid;
+    }
+
     /// <summary>
     /// The runtime event of an Audio Event that is currently playing
     /// </summary>
     [System.Serializable]
     public class ActiveEvent
     {
+        // Internal generation count for handle validation
+        internal int generation = 0;
+        
         // Cached reference to the main camera to avoid repeated calls to Camera.main, which can impact performance.
         private static Camera mainCamera;
-        
+
         /// <summary>
         /// The name of the audio event to be played
         /// </summary>
@@ -43,7 +80,7 @@ namespace CycloneGames.Audio.Runtime
         /// The AudioParameters in use by the event
         /// </summary>
         private ActiveParameter[] activeParameters;
-        public string timeStarted = "";
+        public float timeStarted = 0f;
         /// <summary>
         /// The Transform to use to calculate the user's gaze position
         /// </summary>
@@ -52,6 +89,7 @@ namespace CycloneGames.Audio.Runtime
         /// The transform that the sound should follow in the scene
         /// </summary>
         internal Transform emitterTransform = null;
+        private Vector3 lastEmitterPos;
         /// <summary>
         /// The text associated with the event, usually for subtitles
         /// </summary>
@@ -110,6 +148,11 @@ namespace CycloneGames.Audio.Runtime
         private CancellationTokenSource cancellationTokenSource;
 
         /// <summary>
+        /// The DSP time at which the event is scheduled to play. -1 means play immediately.
+        /// </summary>
+        internal double scheduledDspTime = -1;
+
+        /// <summary>
         /// The time left on the event unless it is stopped or the pitch changes
         /// </summary>
         public float EstimatedRemainingTime { get; private set; }
@@ -133,15 +176,28 @@ namespace CycloneGames.Audio.Runtime
         public event EventCompleted CompletionCallback;
 
         /// <summary>
-        /// Constructor: Create a new ActiveEvent from an AudioEvent and play it on an AudioSource
+        /// Default Constructor for pooling.
         /// </summary>
-        /// <param name="eventToPlay">The AudioEvent to play</param>
-        /// <param name="source">The AudioSource use for the AudioEvent</param>
-        public ActiveEvent(AudioEvent eventToPlay, Transform emitterTransform)
+        public ActiveEvent()
         {
+            this.sources = new List<EventSource>(4); // Pre-allocate for efficiency
+        }
+
+        public void Initialize(AudioEvent eventToPlay, Transform emitterTransform)
+        {
+            this.generation++; // Increment generation on initialization
             this.rootEvent = eventToPlay;
             this.name = eventToPlay.name;
             this.emitterTransform = emitterTransform;
+            if (emitterTransform != null)
+            {
+                this.lastEmitterPos = emitterTransform.position;
+            }
+
+            if (this.cancellationTokenSource != null)
+            {
+                this.cancellationTokenSource.Dispose();
+            }
             this.cancellationTokenSource = new CancellationTokenSource();
 
             InitializeParameters();
@@ -152,7 +208,7 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public void Play()
         {
-            this.timeStarted = Time.time.ToString();
+            this.timeStarted = Time.time;
             this.rootEvent.SetActiveEventProperties(this);
 
             if (this.sources.Count == 0 && !this.hasSnapshotTransition && !this.isAsync)
@@ -177,12 +233,12 @@ namespace CycloneGames.Audio.Runtime
         {
             if (this.rootEvent == null)
             {
-                Debug.LogWarningFormat(this.emitterTransform, "AudioManager: Can't find audio event for {0}!", this.name);
                 StopImmediate();
                 return;
             }
 
-            this.elapsedTime += Time.deltaTime;
+            float dt = Time.deltaTime;
+            this.elapsedTime += dt;
 
             if (!this.hasPlayed && this.elapsedTime >= this.initialDelay)
             {
@@ -192,12 +248,17 @@ namespace CycloneGames.Audio.Runtime
 
             if (this.emitterTransform != null)
             {
-                SetAllSourcePositions(this.emitterTransform.position);
+                Vector3 newPos = this.emitterTransform.position;
+                if ((newPos - this.lastEmitterPos).sqrMagnitude > 0.000001f)
+                {
+                    SetAllSourcePositions(newPos);
+                    this.lastEmitterPos = newPos;
+                }
             }
 
             if (this.hasPlayed && this.currentFadeTime < this.targetFadeTime)
             {
-                UpdateFade();
+                UpdateFade(dt);
             }
 
             if (!this.rootEvent.Output.loop)
@@ -460,8 +521,20 @@ namespace CycloneGames.Audio.Runtime
         {
             for (int i = 0; i < this.sources.Count; i++)
             {
-                this.sources[i].source.Play();
-                this.sources[i].source.time = this.sources[i].startTime;
+                EventSource eventSource = this.sources[i];
+                if (this.scheduledDspTime > 0)
+                {
+                    eventSource.source.PlayScheduled(this.scheduledDspTime + eventSource.startTime);
+                }
+                else
+                {
+                    eventSource.source.Play();
+                    // Only set time if not using PlayScheduled, as PlayScheduled handles timing
+                    if (eventSource.startTime > 0)
+                    {
+                        eventSource.source.time = eventSource.startTime;
+                    }
+                }
             }
         }
 
@@ -473,6 +546,8 @@ namespace CycloneGames.Audio.Runtime
                 if (tempSource != null && tempSource.source != null)
                 {
                     tempSource.source.Stop();
+                    // Reset scheduled time to avoid accidental replays or logic errors
+                    tempSource.source.SetScheduledEndTime(double.MaxValue); 
                 }
             }
         }
@@ -571,7 +646,7 @@ namespace CycloneGames.Audio.Runtime
         /// <summary>
         /// Internal AudioManager use: update volume on ActiveEvents fading in and out
         /// </summary>
-        private void UpdateFade()
+        private void UpdateFade(float dt)
         {
             float percentageFaded = (this.currentFadeTime / this.targetFadeTime);
 
@@ -584,7 +659,7 @@ namespace CycloneGames.Audio.Runtime
                 this.eventVolume = this.fadeOriginVolume - ((this.fadeOriginVolume - this.targetVolume) * percentageFaded);
             }
 
-            this.currentFadeTime += Time.deltaTime;
+            this.currentFadeTime += dt;
 
             if (this.currentFadeTime >= this.targetFadeTime)
             {
@@ -597,6 +672,51 @@ namespace CycloneGames.Audio.Runtime
             }
 
             SetallSourceVolumes(this.eventVolume);
+        }
+
+        public void Reset()
+        {
+            // generation is NOT reset here, it increments on Initialize. 
+            // Or we can increment here to invalidate old handles immediately.
+            // Incrementing in Initialize is safer as it marks the start of a new life.
+            
+            this.name = "";
+            this.rootEvent = null;
+            this.sources.Clear(); // Keep capacity
+            this.status = EventStatus.Initialized;
+            this.activeParameters = null;
+            this.timeStarted = 0;
+            this.gazeReference = null;
+            this.emitterTransform = null;
+            this.text = "";
+            this.initialDelay = 0;
+            this.eventVolume = 0;
+            this.targetVolume = 1;
+            this.eventPitch = 1;
+            this.targetFadeTime = 0;
+            this.currentFadeTime = 0;
+            this.elapsedTime = 0;
+            this.fadeOriginVolume = 0;
+            this.fadeStopQueued = false;
+            this.hasPlayed = false;
+            this.isAsync = false;
+            this.useGaze = false;
+            this.callbackActivated = false;
+            this.hasTimeAdvanced = false;
+            this.hasSnapshotTransition = false;
+            this.scheduledDspTime = -1;
+            
+            if (this.cancellationTokenSource != null)
+            {
+                this.cancellationTokenSource.Cancel();
+                this.cancellationTokenSource.Dispose();
+                this.cancellationTokenSource = null;
+            }
+
+            this.EstimatedRemainingTime = 0;
+            this.Muted = false;
+            this.Soloed = false;
+            this.CompletionCallback = null;
         }
 
         /// <summary>
@@ -669,7 +789,7 @@ namespace CycloneGames.Audio.Runtime
         private void UpdateGaze()
         {
             if (this.sources.Count == 0) return;
-            
+
             AudioSource mainSource = this.sources[0].source;
             if (mainSource == null) return;
 
