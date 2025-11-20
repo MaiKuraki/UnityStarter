@@ -3,21 +3,83 @@ using System.Collections.Generic;
 
 namespace CycloneGames.Networking
 {
+    /// <summary>
+    /// Standardized Quality of Service (QoS) channels for game networking.
+    /// </summary>
+    public enum NetworkChannel
+    {
+        /// <summary>
+        /// Guaranteed delivery, ordered. Use for critical gameplay events (RPCs, Spawning).
+        /// </summary>
+        Reliable,
+
+        /// <summary>
+        /// No guarantee, unordered (or sequenced). Use for high-frequency data (Position/Rotation updates).
+        /// </summary>
+        Unreliable,
+        
+        /// <summary>
+        /// Reliable but unordered. Good for file transfer or chat where global order doesn't matter.
+        /// </summary>
+        ReliableUnordered,
+        
+        /// <summary>
+        /// Unreliable but sequenced (older packets are dropped). Good for VoIP.
+        /// </summary>
+        UnreliableSequenced
+    }
+
+    /// <summary>
+    /// Low-level transport interface responsible for raw byte delivery and connection lifecycle.
+    /// </summary>
     public interface INetTransport
     {
         bool IsServer { get; }
         bool IsClient { get; }
+        bool IsRunning { get; }
         bool IsEncrypted { get; }
 
+        // --- Channels ---
+        
         /// <summary>
-        /// Reliable channel id (implementation-defined). Use for important state.
+        /// Maps a standardized channel type to the underlying transport's integer channel ID.
         /// </summary>
-        int ReliableChannel { get; }
+        int GetChannelId(NetworkChannel channel);
+
+        // --- Lifecycle Events ---
 
         /// <summary>
-        /// Unreliable channel id (implementation-defined). Use for frequent transforms.
+        /// Invoked on Server when a client connects.
         /// </summary>
-        int UnreliableChannel { get; }
+        event Action<INetConnection> OnClientConnected;
+
+        /// <summary>
+        /// Invoked on Server when a client disconnects.
+        /// </summary>
+        event Action<INetConnection> OnClientDisconnected;
+
+        /// <summary>
+        /// Invoked on Client when successfully connected to server.
+        /// </summary>
+        event Action OnConnectedToServer;
+
+        /// <summary>
+        /// Invoked on Client when disconnected from server.
+        /// </summary>
+        event Action OnDisconnectedFromServer;
+
+        // --- Control ---
+
+        void StartServer();
+        void StartClient(string address);
+        void Stop();
+        
+        /// <summary>
+        /// Forcefully disconnects a connection (Server kicking client, or Client disconnecting self).
+        /// </summary>
+        void Disconnect(INetConnection connection);
+
+        // --- Raw I/O ---
 
         /// <summary>
         /// Send a raw payload to a connection using given channel.
