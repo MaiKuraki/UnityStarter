@@ -103,9 +103,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Handle dynamic, code-based cues.
             if (runtimeCueHandlers.TryGetValue(cueTag, out var handlers))
             {
-                foreach (var handler in new List<IGameplayCueHandler>(handlers))
+                using (CycloneGames.GameplayTags.Runtime.Pools.ListPool<IGameplayCueHandler>.Get(out var safeHandlers))
                 {
-                    handler.HandleCue(cueTag, eventType, parameters);
+                    safeHandlers.AddRange(handlers);
+                    for (int i = 0; i < safeHandlers.Count; i++)
+                    {
+                        safeHandlers[i].HandleCue(cueTag, eventType, parameters);
+                    }
                 }
             }
         }
