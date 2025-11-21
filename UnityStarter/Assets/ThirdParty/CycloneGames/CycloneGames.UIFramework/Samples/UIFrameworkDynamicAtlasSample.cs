@@ -32,10 +32,10 @@ namespace CycloneGames.UIFramework.Samples
         {
             _assetModule = new ResourcesModule();
             _assetModule.Initialize();
-            
+
             _assetPackage = _assetModule.CreatePackage("AtlasSamplePackage");
             await _assetPackage.InitializeAsync(new AssetPackageInitOptions(AssetPlayMode.EditorSimulate, null));
-            
+
             Debug.Log("[AtlasSample] Asset System Initialized.");
         }
 
@@ -43,7 +43,7 @@ namespace CycloneGames.UIFramework.Samples
         {
             // Inject our custom loader into the Atlas System
             DynamicAtlasManager.Instance.Configure(
-                load: (path) => 
+                load: (path) =>
                 {
                     // Synchronous load requirement for DynamicAtlas
                     var handle = _assetPackage.LoadAssetSync<Texture2D>(path);
@@ -55,13 +55,13 @@ namespace CycloneGames.UIFramework.Samples
                     // Note: In a real system, you should cache the handle to release it later.
                     return handle.Asset;
                 },
-                unload: (path, tex) => 
+                unload: (path, tex) =>
                 {
                     // Simple unload for Resources
                     Resources.UnloadAsset(tex);
                 }
             );
-            
+
             Debug.Log("[AtlasSample] Dynamic Atlas Configured.");
         }
 
@@ -86,7 +86,7 @@ namespace CycloneGames.UIFramework.Samples
 
             // LOAD FROM ATLAS
             Sprite sprite = DynamicAtlasManager.Instance.GetSprite(testIconPath);
-            
+
             if (sprite != null)
             {
                 img.sprite = sprite;
@@ -104,4 +104,3 @@ namespace CycloneGames.UIFramework.Samples
         }
     }
 }
-

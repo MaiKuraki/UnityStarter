@@ -46,9 +46,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public float Duration { get; private set; }
 
-        // A cache of calculated magnitudes for each modifier in the effect definition.
-        // This is a critical performance optimization to avoid re-calculating magnitudes on every evaluation.
-        private readonly Dictionary<ModifierInfo, float> calculatedMagnitudes = new Dictionary<ModifierInfo, float>();
+        // Optimization: Use raw arrays instead of List for maximum performance (direct memory access).
+        // These arrays act as buffers. Their Length might be larger than the actual modifier count.
+        // We rely on Def.Modifiers.Count to know how many elements are valid.
+        public float[] ModifierMagnitudes = System.Array.Empty<float>();
+        public GameplayAttribute[] TargetAttributes = System.Array.Empty<GameplayAttribute>();
 
         private readonly Dictionary<GameplayTag, float> setByCallerMagnitudes = new Dictionary<GameplayTag, float>();
 
@@ -76,10 +78,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Set the instigator of this effect. The ability instance can be null if the effect is not applied from an ability.
             spec.Context.AddInstigator(source, null);
 
+            // Ensure capacity without creating new List objects
+            int modCount = def.Modifiers.Count;
+            spec.EnsureCapacity(modCount);
+
             // Pre-calculate the magnitude of all modifiers based on the spec's level and context at creation time.
-            // This captures the values "on creation," which is essential for snapshotting behavior and performance.
-            foreach (var mod in def.Modifiers)
+            for (int i = 0; i < modCount; i++)
             {
+                var mod = def.Modifiers[i];
                 float magnitude;
                 if (mod.CustomCalculation != null)
                 {
@@ -89,9 +95,24 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     magnitude = mod.Magnitude.GetValueAtLevel(level);
                 }
-                spec.calculatedMagnitudes[mod] = magnitude;
+
+                // Direct array access - Fastest possible write
+                spec.ModifierMagnitudes[i] = magnitude;
+                spec.TargetAttributes[i] = null; // Reset target attribute cache
             }
             return spec;
+        }
+
+        private void EnsureCapacity(int count)
+        {
+            if (ModifierMagnitudes.Length < count)
+            {
+                // Expand array. In a pooled system, this only happens during "warmup".
+                // We double the required size or pick a minimum to reduce future resizes.
+                int newSize = System.Math.Max(count, ModifierMagnitudes.Length == 0 ? 8 : ModifierMagnitudes.Length * 2);
+                System.Array.Resize(ref ModifierMagnitudes, newSize);
+                System.Array.Resize(ref TargetAttributes, newSize);
+            }
         }
 
         /// <summary>
@@ -112,7 +133,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Context = null;
             Level = 0;
             Duration = 0;
-            calculatedMagnitudes.Clear();
+
+            // Fast clear of references to avoid memory leaks
+            System.Array.Clear(TargetAttributes, 0, TargetAttributes.Length);
+
             setByCallerMagnitudes.Clear();
 
             pool.Push(this);
@@ -164,7 +188,25 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <returns>The calculated magnitude, or 0 if the modifier is not found in the cache.</returns>
         public float GetCalculatedMagnitude(ModifierInfo modifier)
         {
-            return calculatedMagnitudes.TryGetValue(modifier, out var magnitude) ? magnitude : 0;
+            if (Def == null || Def.Modifiers == null) return 0f;
+            int index = Def.Modifiers.IndexOf(modifier);
+            if (index >= 0 && index < ModifierMagnitudes.Length)
+            {
+                return ModifierMagnitudes[index];
+            }
+            return 0f;
+        }
+
+        /// <summary>
+        /// Retrieves the pre-calculated magnitude by index. Faster if index is known.
+        /// </summary>
+        public float GetCalculatedMagnitude(int index)
+        {
+            if (index >= 0 && index < ModifierMagnitudes.Length)
+            {
+                return ModifierMagnitudes[index];
+            }
+            return 0f;
         }
 
         /// <summary>
@@ -175,6 +217,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void SetTarget(AbilitySystemComponent target)
         {
             Target = target;
+            // Resolve and cache target attributes for fast lookup during recalculation.
+            // This avoids string comparisons in the hot path.
+            if (Def != null && Def.Modifiers != null)
+            {
+                for (int i = 0; i < Def.Modifiers.Count; i++)
+                {
+                    if (i < TargetAttributes.Length)
+                    {
+                        TargetAttributes[i] = target.GetAttribute(Def.Modifiers[i].AttributeName);
+                    }
+                }
+            }
         }
     }
 }
