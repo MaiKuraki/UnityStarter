@@ -25,6 +25,12 @@ namespace CycloneGames.UIFramework.Runtime
         private UILayer parentLayerInternal;
         public UILayer ParentLayer => parentLayerInternal; // Public getter
 
+        private CanvasGroup canvasGroup;
+        private string sourceAssetPath;
+        public System.Action<string> OnReleaseAssetReference;
+        
+        public void SetSourceAssetPath(string path) => sourceAssetPath = path;
+
         private bool _isDestroying = false; // Flag to prevent multiple destruction logic paths
 
         /// <summary>
@@ -155,6 +161,50 @@ namespace CycloneGames.UIFramework.Runtime
             {
                 windowNameInternal = gameObject.name; // Fallback, but UIManager should set it.
             }
+            canvasGroup = GetComponent<CanvasGroup>();
+        }
+
+        /// <summary>
+        /// Sets the visibility of the window using CanvasGroup if available, otherwise SetActive.
+        /// This is more performant than SetActive for frequent toggling.
+        /// </summary>
+        public virtual void SetVisible(bool visible)
+        {
+            if (canvasGroup != null)
+            {
+                canvasGroup.alpha = visible ? 1f : 0f;
+                canvasGroup.interactable = visible;
+                canvasGroup.blocksRaycasts = visible;
+            }
+            else
+            {
+                gameObject.SetActive(visible);
+            }
+        }
+
+        [ContextMenu("Optimize Hierarchy (Disable RaycastTargets)")]
+        public void OptimizeHierarchy()
+        {
+            var graphics = GetComponentsInChildren<UnityEngine.UI.Graphic>(true);
+            foreach (var g in graphics)
+            {
+                // Skip if it's a button or explicitly interactive (rough heuristic)
+                if (g.GetComponent<UnityEngine.UI.Button>() != null || 
+                    g.GetComponent<UnityEngine.UI.InputField>() != null || 
+                    g.GetComponent<UnityEngine.UI.Toggle>() != null ||
+                    g.GetComponent<UnityEngine.UI.ScrollRect>() != null ||
+                    g.GetComponent<UnityEngine.UI.Slider>() != null ||
+                    g.GetComponent<UnityEngine.UI.Dropdown>() != null)
+                {
+                    continue;
+                }
+                
+                // If it's just an Image or Text serving as decoration
+                g.raycastTarget = false;
+            }
+#if UNITY_EDITOR
+            UnityEditor.EditorUtility.SetDirty(this);
+#endif
         }
 
         /// <summary>
@@ -243,6 +293,13 @@ namespace CycloneGames.UIFramework.Runtime
             // so it can clean up its internal list of windows.
             parentLayerInternal?.NotifyWindowDestroyed(this);
             parentLayerInternal = null; // Clear reference to prevent further calls
+
+            // Notify UIManager to release asset reference
+            if (!string.IsNullOrEmpty(sourceAssetPath))
+            {
+                OnReleaseAssetReference?.Invoke(sourceAssetPath);
+                OnReleaseAssetReference = null;
+            }
 
             // Ensure the current state's OnExit is called if it hasn't been through a normal close.
             // This is important if the GameObject is destroyed externally without going through Close().

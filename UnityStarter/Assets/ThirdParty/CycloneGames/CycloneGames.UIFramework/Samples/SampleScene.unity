@@ -122,6 +122,52 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
+--- !u!1 &434097965
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 434097967}
+  - component: {fileID: 434097966}
+  m_Layer: 0
+  m_Name: DynamicAtlasSample
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &434097966
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 434097965}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 85fe50c76dc5d444bad6e41f7069be2a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  testIconPath: svg-spinners--tadpole
+  uiRoot: {fileID: 991521749}
+--- !u!4 &434097967
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 434097965}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1001 &740374941
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -201,6 +247,12 @@ Camera:
     type: 3}
   m_PrefabInstance: {fileID: 740374941}
   m_PrefabAsset: {fileID: 0}
+--- !u!224 &991521749 stripped
+RectTransform:
+  m_CorrespondingSourceObject: {fileID: 8055301421395394971, guid: f743a9e5598a5c34ab5f5d8a68ebc654,
+    type: 3}
+  m_PrefabInstance: {fileID: 740374941}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &1523045861
 GameObject:
   m_ObjectHideFlags: 0
@@ -231,7 +283,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   firstWindowName: UIWindow_SampleUI
-  autoSetupAddressablesPackage: 1
 --- !u!4 &1523045863
 Transform:
   m_ObjectHideFlags: 0
@@ -407,3 +458,4 @@ SceneRoots:
   - {fileID: 1523045863}
   - {fileID: 1616322958}
   - {fileID: 740374941}
+  - {fileID: 434097967}
