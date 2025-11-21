@@ -6,10 +6,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class GameplayAbilitySpec
     {
+        private static readonly System.Collections.Generic.Stack<GameplayAbilitySpec> pool = new System.Collections.Generic.Stack<GameplayAbilitySpec>(16);
+
         /// <summary>
         /// The stateless definition of the ability. This is the template from which instances are created.
         /// </summary>
-        public GameplayAbility Ability { get; }
+        public GameplayAbility Ability { get; private set; }
 
         /// <summary>
         /// A convenience accessor for the ability's Class Default Object (CDO).
@@ -38,10 +40,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public AbilitySystemComponent Owner { get; private set; }
 
-        public GameplayAbilitySpec(GameplayAbility ability, int level = 1)
+        private GameplayAbilitySpec() { }
+
+        public static GameplayAbilitySpec Create(GameplayAbility ability, int level = 1)
         {
-            Ability = ability;
-            Level = level;
+            var spec = pool.Count > 0 ? pool.Pop() : new GameplayAbilitySpec();
+            spec.Ability = ability;
+            spec.Level = level;
+            spec.IsActive = false;
+            spec.AbilityInstance = null;
+            spec.Owner = null;
+            return spec;
         }
 
         internal void Init(AbilitySystemComponent owner)
@@ -100,6 +109,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 AbilityInstance = null;
             }
             AbilityCDO?.OnRemoveAbility();
+
+            // Return self to pool
+            Ability = null;
+            Owner = null;
+            Level = 0;
+            IsActive = false;
+            pool.Push(this);
         }
     }
 }

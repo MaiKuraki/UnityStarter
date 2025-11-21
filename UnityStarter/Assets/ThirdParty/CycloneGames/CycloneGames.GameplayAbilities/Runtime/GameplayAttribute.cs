@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -10,10 +11,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
     {
         public string Name { get; }
         public AttributeSet OwningSet { get; internal set; }
-        
-        // BaseValue and CurrentValue are now managed by the AttributeSet to centralize logic.
-        public float BaseValue => OwningSet.GetBaseValue(this);
-        public float CurrentValue => OwningSet.GetCurrentValue(this);
+        private float _baseValue;
+        private float _currentValue;
+        internal bool IsDirty;
+        internal readonly List<ActiveGameplayEffect> AffectingEffects = new List<ActiveGameplayEffect>(8);
+
+        public float BaseValue => _baseValue;
+        public float CurrentValue => _currentValue;
 
         public event Action<float, float> OnCurrentValueChanged; // old, new
 
@@ -22,9 +26,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Name = name;
         }
 
-        internal void InvokeCurrentValueChanged(float oldValue, float newValue)
+        public void SetBaseValue(float value)
         {
-            OnCurrentValueChanged?.Invoke(oldValue, newValue);
+            _baseValue = value;
+        }
+
+        public void SetCurrentValue(float value)
+        {
+            float oldValue = _currentValue;
+            _currentValue = value;
+            if (Math.Abs(oldValue - value) > float.Epsilon)
+            {
+                OnCurrentValueChanged?.Invoke(oldValue, value);
+            }
         }
     }
 }

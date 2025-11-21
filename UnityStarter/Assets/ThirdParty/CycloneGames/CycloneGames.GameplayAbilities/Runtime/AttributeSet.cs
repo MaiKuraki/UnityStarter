@@ -6,17 +6,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     public abstract class AttributeSet
     {
-        private class AttributeData
-        {
-            public float BaseValue;
-            public float CurrentValue;
-        }
-
         // Static cache for attribute properties per AttributeSet subclass
         private static readonly Dictionary<Type, List<PropertyInfo>> s_AttributePropertyCache = new Dictionary<Type, List<PropertyInfo>>();
         private static readonly object s_CacheLock = new object();
 
-        private readonly Dictionary<string, AttributeData> attributeData = new Dictionary<string, AttributeData>();
         private readonly Dictionary<string, GameplayAttribute> discoveredAttributes = new Dictionary<string, GameplayAttribute>();
 
         public AbilitySystemComponent OwningAbilitySystemComponent { get; internal set; }
@@ -30,7 +23,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             Type setType = GetType();
             List<PropertyInfo> properties;
-            
+
             lock (s_CacheLock)
             {
                 if (!s_AttributePropertyCache.TryGetValue(setType, out properties))
@@ -53,7 +46,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (attr != null)
                 {
                     attr.OwningSet = this;
-                    attributeData[attr.Name] = new AttributeData();
                     discoveredAttributes[attr.Name] = attr;
                 }
             }
@@ -61,32 +53,21 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public IReadOnlyCollection<GameplayAttribute> GetAttributes() => discoveredAttributes.Values;
 
-        public float GetBaseValue(GameplayAttribute attribute) => attributeData.TryGetValue(attribute.Name, out var data) ? data.BaseValue : 0f;
-        public float GetCurrentValue(GameplayAttribute attribute) => attributeData.TryGetValue(attribute.Name, out var data) ? data.CurrentValue : 0f;
+        public float GetBaseValue(GameplayAttribute attribute) => attribute.BaseValue;
+        public float GetCurrentValue(GameplayAttribute attribute) => attribute.CurrentValue;
 
         public void SetBaseValue(GameplayAttribute attribute, float value)
         {
-            if (attributeData.TryGetValue(attribute.Name, out var data))
+            if (Math.Abs(attribute.BaseValue - value) > float.Epsilon)
             {
-                if (Math.Abs(data.BaseValue - value) > float.Epsilon)
-                {
-                    data.BaseValue = value;
-                    OwningAbilitySystemComponent?.MarkAttributeDirty(attribute);
-                }
+                attribute.SetBaseValue(value);
+                OwningAbilitySystemComponent?.MarkAttributeDirty(attribute);
             }
         }
 
         public void SetCurrentValue(GameplayAttribute attribute, float value)
         {
-            if (attributeData.TryGetValue(attribute.Name, out var data))
-            {
-                float oldValue = data.CurrentValue;
-                if (Math.Abs(oldValue - value) > float.Epsilon)
-                {
-                    data.CurrentValue = value;
-                    attribute.InvokeCurrentValueChanged(oldValue, value);
-                }
-            }
+            attribute.SetCurrentValue(value);
         }
 
         /// <summary>
