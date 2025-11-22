@@ -12,7 +12,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
     public class DynamicAtlasPage : IDisposable
     {
         private const int Padding = 2;
-        
+
         public Texture2D Texture { get; private set; }
         public int Width => _width;
         public int Height => _height;
@@ -24,7 +24,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private readonly int _width;
         private readonly int _height;
         private readonly CopyTextureSupport _copySupport;
-        
+
         // Shelf Packing Cursor
         private int _currentX;
         private int _currentY;
@@ -35,7 +35,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _width = size;
             _height = size;
             _copySupport = SystemInfo.copyTextureSupport;
-            
+
             InitializeTexture();
         }
 
@@ -46,6 +46,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             Texture.wrapMode = TextureWrapMode.Clamp;
             Texture.name = $"DynamicAtlasPage_{Guid.NewGuid().ToString().Substring(0, 4)}";
 
+            // Clear texture
             var rawData = Texture.GetRawTextureData<Color32>();
             unsafe
             {
@@ -78,78 +79,87 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             int xPos = _currentX;
             int yPos = _currentY;
 
-            CopyPixels(source, xPos, yPos, w, h);
+            if (CopyPixels(source, xPos, yPos, w, h))
+            {
+                _currentX += w + Padding;
+                if (h > _maxYInRow) _maxYInRow = h;
 
-            _currentX += w + Padding;
-            if (h > _maxYInRow) _maxYInRow = h;
+                uvRect.x = (float)xPos / _width;
+                uvRect.y = (float)yPos / _height;
+                uvRect.width = (float)w / _width;
+                uvRect.height = (float)h / _height;
 
-            uvRect.x = (float)xPos / _width;
-            uvRect.y = (float)yPos / _height;
-            uvRect.width = (float)w / _width;
-            uvRect.height = (float)h / _height;
+                ActiveSpriteCount++;
+                return true;
+            }
 
-            ActiveSpriteCount++;
-            return true;
+            return false;
         }
 
-        private void CopyPixels(Texture2D source, int x, int y, int w, int h)
+        private bool CopyPixels(Texture2D source, int x, int y, int w, int h)
         {
             bool useCopyTexture = (_copySupport & CopyTextureSupport.Basic) != 0;
+            bool gpuCopySuccess = false;
 
-            // Fast path: GPU Copy
+            // Attempt GPU Copy (Fastest, 0GC)
+            // Requires: System support + Format match
             if (useCopyTexture && source.format == Texture.format)
             {
                 try
                 {
                     Graphics.CopyTexture(source, 0, 0, 0, 0, w, h, Texture, 0, 0, x, y);
-                    return;
+                    gpuCopySuccess = true;
                 }
                 catch
                 {
-                    // Fallback to CPU copy if Graphics.CopyTexture fails (e.g. protected content)
+                    // Fallback to CPU if runtime error occurs (e.g. protection, driver bug)
+                    gpuCopySuccess = false;
                 }
             }
 
-            // CPU Fallback
-            if (source.isReadable)
+            if (gpuCopySuccess) return true;
+
+            // Fallback to CPU (Slower, higher memory usage if source is readable)
+            // Requires: Source to be Readable
+            if (!source.isReadable)
             {
-                if (source.format == TextureFormat.RGBA32)
+                Debug.LogError($"[DynamicAtlasPage] Insert failed. GPU CopyTexture failed (Supported: {useCopyTexture}, Format Match: {source.format == Texture.format}) and Source is NOT Readable.");
+                return false;
+            }
+
+            // CPU Copy Implementation
+            if (source.format == TextureFormat.RGBA32)
+            {
+                var srcData = source.GetRawTextureData<Color32>();
+                var dstData = Texture.GetRawTextureData<Color32>();
+
+                unsafe
                 {
-                    var srcData = source.GetRawTextureData<Color32>();
-                    var dstData = Texture.GetRawTextureData<Color32>();
-                    
-                    unsafe
+                    Color32* srcPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafePtr(srcData);
+                    Color32* dstPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafePtr(dstData);
+
+                    int srcWidth = source.width;
+                    int dstWidth = _width;
+
+                    for (int row = 0; row < h; row++)
                     {
-                        Color32* srcPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafePtr(srcData);
-                        Color32* dstPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafePtr(dstData);
+                        Color32* srcRowPtr = srcPtr + (row * srcWidth);
+                        Color32* dstRowPtr = dstPtr + ((y + row) * dstWidth + x);
 
-                        int srcWidth = source.width;
-                        int dstWidth = _width;
-
-                        for (int row = 0; row < h; row++)
-                        {
-                            // Source offset: row * srcWidth
-                            // Dest offset: (y + row) * dstWidth + x
-                            
-                            Color32* srcRowPtr = srcPtr + (row * srcWidth);
-                            Color32* dstRowPtr = dstPtr + ((y + row) * dstWidth + x);
-                            
-                            UnsafeUtility.MemCpy(dstRowPtr, srcRowPtr, w * UnsafeUtility.SizeOf<Color32>());
-                        }
+                        UnsafeUtility.MemCpy(dstRowPtr, srcRowPtr, w * UnsafeUtility.SizeOf<Color32>());
                     }
-                    Texture.Apply();
-                }
-                else
-                {
-                    var pixels = source.GetPixels32();
-                    Texture.SetPixels32(x, y, w, h, pixels);
-                    Texture.Apply();
                 }
             }
             else
             {
-                Debug.LogError($"[DynamicAtlasPage] Cannot copy texture '{source.name}' (Not Readable & CopyTexture failed).");
+                // Slowest path: GetPixels32 (Format conversion)
+                // Handles TextureFormat mismatch (e.g. DXT5 -> RGBA32)
+                var pixels = source.GetPixels32();
+                Texture.SetPixels32(x, y, w, h, pixels);
             }
+
+            Texture.Apply(); // Upload CPU changes to GPU
+            return true;
         }
 
         public void DecrementActiveCount()
