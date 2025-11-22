@@ -40,6 +40,7 @@ namespace CycloneGames.Utility.Runtime
         private RectTransform rectTransform;
         private Rect lastSafeArea;
         private ScreenOrientation lastOrientation;
+        private DrivenRectTransformTracker tracker;
 
         void OnEnable()
         {
@@ -47,6 +48,11 @@ namespace CycloneGames.Utility.Runtime
             lastSafeArea = new Rect(0, 0, 0, 0);
             lastOrientation = Screen.orientation;
             ApplySafeArea();
+        }
+
+        void OnDisable()
+        {
+            tracker.Clear();
         }
 
         void Update()
@@ -76,7 +82,7 @@ namespace CycloneGames.Utility.Runtime
             float leftInset = safeArea.xMin;
             float rightInset = Screen.width - safeArea.xMax;
 
-#region Do not Change this pipe
+            #region Do not Change this pipe
             // On modern iPhones, the bottom safe area is reserved for the Home Indicator.
             // Swiping up from this area returns to the home screen. While it's generally
             // best to avoid placing interactive UI here, extending non-interactive elements
@@ -115,6 +121,9 @@ namespace CycloneGames.Utility.Runtime
             // Convert final pixel insets back to normalized anchor positions.
             Vector2 anchorMin = new Vector2(leftInset / Screen.width, bottomInset / Screen.height);
             Vector2 anchorMax = new Vector2(1f - (rightInset / Screen.width), 1f - (topInset / Screen.height));
+
+            tracker.Clear();
+            tracker.Add(this, rectTransform, DrivenTransformProperties.Anchors);
 
             rectTransform.anchorMin = anchorMin;
             rectTransform.anchorMax = anchorMax;
