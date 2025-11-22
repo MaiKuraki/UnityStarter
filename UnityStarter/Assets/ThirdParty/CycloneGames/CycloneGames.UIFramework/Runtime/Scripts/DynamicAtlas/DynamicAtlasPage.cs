@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using UnityEngine.Rendering;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
@@ -45,9 +46,11 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             Texture.wrapMode = TextureWrapMode.Clamp;
             Texture.name = $"DynamicAtlasPage_{Guid.NewGuid().ToString().Substring(0, 4)}";
 
-            // Clear to transparent
-            Color32[] clear = new Color32[_width * _height];
-            Texture.SetPixels32(clear);
+            var rawData = Texture.GetRawTextureData<Color32>();
+            unsafe
+            {
+                UnsafeUtility.MemClear(NativeArrayUnsafeUtility.GetUnsafePtr(rawData), rawData.Length * UnsafeUtility.SizeOf<Color32>());
+            }
             Texture.Apply();
         }
 
@@ -93,6 +96,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             bool useCopyTexture = (_copySupport & CopyTextureSupport.Basic) != 0;
 
+            // Fast path: GPU Copy
             if (useCopyTexture && source.format == Texture.format)
             {
                 try
@@ -102,16 +106,45 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 }
                 catch
                 {
-                    // Fallback
+                    // Fallback to CPU copy if Graphics.CopyTexture fails (e.g. protected content)
                 }
             }
 
             // CPU Fallback
             if (source.isReadable)
             {
-                var pixels = source.GetPixels32();
-                Texture.SetPixels32(x, y, w, h, pixels);
-                Texture.Apply();
+                if (source.format == TextureFormat.RGBA32)
+                {
+                    var srcData = source.GetRawTextureData<Color32>();
+                    var dstData = Texture.GetRawTextureData<Color32>();
+                    
+                    unsafe
+                    {
+                        Color32* srcPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafePtr(srcData);
+                        Color32* dstPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafePtr(dstData);
+
+                        int srcWidth = source.width;
+                        int dstWidth = _width;
+
+                        for (int row = 0; row < h; row++)
+                        {
+                            // Source offset: row * srcWidth
+                            // Dest offset: (y + row) * dstWidth + x
+                            
+                            Color32* srcRowPtr = srcPtr + (row * srcWidth);
+                            Color32* dstRowPtr = dstPtr + ((y + row) * dstWidth + x);
+                            
+                            UnsafeUtility.MemCpy(dstRowPtr, srcRowPtr, w * UnsafeUtility.SizeOf<Color32>());
+                        }
+                    }
+                    Texture.Apply();
+                }
+                else
+                {
+                    var pixels = source.GetPixels32();
+                    Texture.SetPixels32(x, y, w, h, pixels);
+                    Texture.Apply();
+                }
             }
             else
             {
