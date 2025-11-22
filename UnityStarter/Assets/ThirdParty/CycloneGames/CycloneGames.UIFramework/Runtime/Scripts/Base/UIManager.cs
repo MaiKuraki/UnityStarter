@@ -25,12 +25,12 @@ namespace CycloneGames.UIFramework.Runtime
 
         // Prefab Cache (GameObject)
         private readonly Dictionary<string, AssetCacheEntry<GameObject>> prefabHandleCache = new Dictionary<string, AssetCacheEntry<GameObject>>(16);
-        private readonly LinkedList<string> prefabHandleLru = new LinkedList<string>();
+        private readonly List<string> prefabHandleLru = new List<string>(16);
         private const int PrefabHandleCacheMax = 16;
 
         // Config Cache (UIWindowConfiguration)
         private readonly Dictionary<string, AssetCacheEntry<UIWindowConfiguration>> configHandleCache = new Dictionary<string, AssetCacheEntry<UIWindowConfiguration>>(16);
-        private readonly LinkedList<string> configHandleLru = new LinkedList<string>();
+        private readonly List<string> configHandleLru = new List<string>(16);
         private const int ConfigHandleCacheMax = 16;
 
         // Throttling instantiate per frame
@@ -276,7 +276,7 @@ namespace CycloneGames.UIFramework.Runtime
 
                     configEntry = new AssetCacheEntry<UIWindowConfiguration> { Handle = windowConfigHandle, RefCount = 0 };
                     configHandleCache[windowName] = configEntry;
-                    configHandleLru.AddLast(windowName);
+                    configHandleLru.Add(windowName); // Add to end (MRU)
 
                     // Enforce Config Cache Limit
                     EnforceConfigCacheSize();
@@ -387,7 +387,7 @@ namespace CycloneGames.UIFramework.Runtime
 
                         cacheEntry = new AssetCacheEntry<GameObject> { Handle = prefabLoadHandle, RefCount = 0 };
                         prefabHandleCache[windowConfig.PrefabLocation] = cacheEntry;
-                        prefabHandleLru.AddLast(windowConfig.PrefabLocation);
+                        prefabHandleLru.Add(windowConfig.PrefabLocation); // Add to end (MRU)
 
                         // Ensure cache constraints (eviction)
                         EnforcePrefabCacheSize();
@@ -649,21 +649,17 @@ namespace CycloneGames.UIFramework.Runtime
         private void TouchPrefabCache(string key)
         {
             // Move accessed key to end (MRU)
-            var node = prefabHandleLru.Find(key);
-            if (node != null)
+            if (prefabHandleLru.Remove(key))
             {
-                prefabHandleLru.Remove(node);
-                prefabHandleLru.AddLast(node);
+                prefabHandleLru.Add(key);
             }
         }
 
         private void TouchConfigCache(string key)
         {
-            var node = configHandleLru.Find(key);
-            if (node != null)
+            if (configHandleLru.Remove(key))
             {
-                configHandleLru.Remove(node);
-                configHandleLru.AddLast(node);
+                configHandleLru.Add(key);
             }
         }
 
@@ -672,15 +668,11 @@ namespace CycloneGames.UIFramework.Runtime
             // Try to reduce size to Max by evicting unused items (RefCount == 0) from the front (LRU)
             while (prefabHandleCache.Count > PrefabHandleCacheMax)
             {
-                var node = prefabHandleLru.First;
                 bool evictedAny = false;
 
-                // Scan from oldest to newest to find an unused item
-                while (node != null)
+                for (int i = 0; i < prefabHandleLru.Count; i++)
                 {
-                    var nextNode = node.Next;
-                    string key = node.Value;
-
+                    string key = prefabHandleLru[i];
                     if (prefabHandleCache.TryGetValue(key, out var entry))
                     {
                         if (entry.RefCount <= 0)
@@ -688,27 +680,20 @@ namespace CycloneGames.UIFramework.Runtime
                             // Safe to evict
                             entry.Handle?.Dispose();
                             prefabHandleCache.Remove(key);
-                            prefabHandleLru.Remove(node);
+                            prefabHandleLru.RemoveAt(i);
                             evictedAny = true;
-                            break; // Cache count decreased, re-check loop condition
+                            break;
                         }
                     }
                     else
                     {
-                        // Should not happen, but clean up
-                        prefabHandleLru.Remove(node);
+                        prefabHandleLru.RemoveAt(i);
                         evictedAny = true;
                         break;
                     }
-
-                    node = nextNode;
                 }
 
-                if (!evictedAny)
-                {
-                    // Cache is full of used items. Cannot evict.
-                    break;
-                }
+                if (!evictedAny) break;
             }
         }
 
@@ -716,33 +701,28 @@ namespace CycloneGames.UIFramework.Runtime
         {
             while (configHandleCache.Count > ConfigHandleCacheMax)
             {
-                var node = configHandleLru.First;
                 bool evictedAny = false;
 
-                while (node != null)
+                for (int i = 0; i < configHandleLru.Count; i++)
                 {
-                    var nextNode = node.Next;
-                    string key = node.Value;
-
+                    string key = configHandleLru[i];
                     if (configHandleCache.TryGetValue(key, out var entry))
                     {
                         if (entry.RefCount <= 0)
                         {
                             entry.Handle?.Dispose();
                             configHandleCache.Remove(key);
-                            configHandleLru.Remove(node);
+                            configHandleLru.RemoveAt(i);
                             evictedAny = true;
                             break;
                         }
                     }
                     else
                     {
-                        configHandleLru.Remove(node);
+                        configHandleLru.RemoveAt(i);
                         evictedAny = true;
                         break;
                     }
-
-                    node = nextNode;
                 }
 
                 if (!evictedAny) break;

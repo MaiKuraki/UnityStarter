@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CycloneGames.Logger;
 using UnityEngine;
 
 namespace CycloneGames.UIFramework.DynamicAtlas
@@ -20,7 +21,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private readonly List<DynamicAtlasPage> _pages = new List<DynamicAtlasPage>();
         private readonly Dictionary<string, AtlasItem> _itemCache = new Dictionary<string, AtlasItem>();
-        
+        private readonly Stack<AtlasItem> _itemPool = new Stack<AtlasItem>(64);
+
         private readonly Func<string, Texture2D> _loadFunc;
         private readonly Action<string, Texture2D> _unloadFunc;
         private readonly int _pageSize;
@@ -48,41 +50,37 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             if (string.IsNullOrEmpty(path)) return null;
 
-            // 1. Check Cache
             if (_itemCache.TryGetValue(path, out var item))
             {
                 if (item.Sprite != null && item.Sprite.texture != null)
                 {
                     item.RefCount++;
-                    // Debug.Log($"[DynamicAtlas] Ref++ {path} : {item.RefCount}");
+                    // CLogger.LogInfo($"[DynamicAtlas] Ref++ {path} : {item.RefCount}");
                     return item.Sprite;
                 }
                 // Invalid item, remove
                 _itemCache.Remove(path);
+                ReleaseItemToPool(item);
             }
 
-            // 2. Load Source
             Texture2D source = _loadFunc(path);
             if (source == null)
             {
-                Debug.LogError($"[DynamicAtlas] Failed to load: {path}");
+                CLogger.LogError($"[DynamicAtlas] Failed to load: {path}");
                 return null;
             }
 
-            // 3. Insert into Pages
             if (!TryInsertIntoAnyPage(source, path, out item))
             {
-                // All pages full? Create new one
                 CreateNewPage();
                 if (!TryInsertIntoAnyPage(source, path, out item))
                 {
-                    Debug.LogError($"[DynamicAtlas] Critical Failure: Cannot insert {path} even after creating new page.");
+                    CLogger.LogError($"[DynamicAtlas] Critical Failure: Cannot insert {path} even after creating new page.");
                     _unloadFunc(path, source);
                     return null;
                 }
             }
 
-            // 4. Finalize
             _unloadFunc(path, source);
             
             item.RefCount = 1;
@@ -98,7 +96,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             if (_itemCache.TryGetValue(path, out var item))
             {
                 item.RefCount--;
-                // Debug.Log($"[DynamicAtlas] Ref-- {path} : {item.RefCount}");
+                // CLogger.LogInfo($"[DynamicAtlas] Ref-- {path} : {item.RefCount}");
 
                 if (item.RefCount <= 0)
                 {
@@ -115,6 +113,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     {
                         UnityEngine.Object.Destroy(item.Sprite);
                     }
+                    
+                    ReleaseItemToPool(item);
                 }
             }
         }
@@ -148,7 +148,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             var page = new DynamicAtlasPage(_pageSize);
             _pages.Add(page);
-            Debug.Log($"[DynamicAtlas] Created Page {_pages.Count} ({_pageSize}x{_pageSize})");
+            // CLogger.LogInfo($"[DynamicAtlas] Created Page {_pages.Count} ({_pageSize}x{_pageSize})");
         }
 
         private AtlasItem CreateItem(DynamicAtlasPage page, Texture2D source, Rect uvRect, string path)
@@ -159,20 +159,38 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             Sprite newSprite = Sprite.Create(page.Texture, spriteRect, pivot, 100.0f, 0, SpriteMeshType.FullRect);
             newSprite.name = $"{path}_Atlas";
 
-            return new AtlasItem
+            AtlasItem item = GetItemFromPool();
+            item.Sprite = newSprite;
+            item.Page = page;
+            item.Path = path;
+            item.RefCount = 0; // Will be set to 1 by caller
+            
+            return item;
+        }
+
+        private AtlasItem GetItemFromPool()
+        {
+            if (_itemPool.Count > 0)
             {
-                Sprite = newSprite,
-                Page = page,
-                Path = path,
-                RefCount = 0 // Will be set to 1 by caller
-            };
+                return _itemPool.Pop();
+            }
+            return new AtlasItem();
+        }
+
+        private void ReleaseItemToPool(AtlasItem item)
+        {
+            item.Sprite = null;
+            item.Page = null;
+            item.Path = null;
+            item.RefCount = 0;
+            _itemPool.Push(item);
         }
 
         private void TryReleasePage(DynamicAtlasPage page)
         {
             if (page.IsEmpty)
             {
-                Debug.Log($"[DynamicAtlas] Page Empty. Destroying page.");
+                // CLogger.LogInfo($"[DynamicAtlas] Page Empty. Destroying page.");
                 page.Dispose();
                 _pages.Remove(page);
             }
@@ -186,6 +204,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             }
             _pages.Clear();
             _itemCache.Clear();
+            _itemPool.Clear();
         }
 
         public void Dispose()
