@@ -20,5 +20,3 @@ namespace CycloneGames.Logger
         public static readonly FileLoggerOptions Default = new FileLoggerOptions();
     }
 }
-
-
