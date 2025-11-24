@@ -41,7 +41,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// A list of attribute modifications to apply to the target. Modifiers are the primary mechanism for predictable attribute changes.
         /// </summary>
-        public List<ModifierInfo> Modifiers { get; }
+        public IReadOnlyList<ModifierInfo> Modifiers { get; }
 
         /// <summary>
         /// A custom, non-predictable calculation class that can perform complex, multi-attribute logic.
@@ -58,7 +58,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// A list of abilities to grant to the target for the duration of this effect.
         /// Only applicable to <c>HasDuration</c> and <c>Infinite</c> effects.
         /// </summary>
-        public List<GameplayAbility> GrantedAbilities { get; }
+        public IReadOnlyList<GameplayAbility> GrantedAbilities { get; }
 
         /// <summary>
         /// A list of GameplayCue tags to trigger when this effect is applied, removed, or executed.

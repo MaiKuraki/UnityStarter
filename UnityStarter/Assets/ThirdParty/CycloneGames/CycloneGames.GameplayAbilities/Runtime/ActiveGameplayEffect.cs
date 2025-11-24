@@ -18,6 +18,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public bool IsExpired { get; private set; }
 
         private float periodTimer;
+        private float cachedPeriod;
+        private EDurationPolicy cachedDurationPolicy;
+
         private ActiveGameplayEffect() { }
 
         public static ActiveGameplayEffect Create(GameplayEffectSpec spec)
@@ -28,9 +31,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             activeEffect.StackCount = 1;
             activeEffect.IsExpired = false;
 
+            // Cache high-frequency data
+            activeEffect.cachedPeriod = spec.Def.Period;
+            activeEffect.cachedDurationPolicy = spec.Def.DurationPolicy;
+
             // If the effect is periodic, set the timer to 0 to ensure the first tick executes on the very next AbilitySystemComponent update.
             // This implements the common behavior where a periodic effect's first tick is applied immediately upon application.
-            activeEffect.periodTimer = spec.Def.Period > 0 ? 0f : -1f;
+            activeEffect.periodTimer = activeEffect.cachedPeriod > 0 ? 0f : -1f;
 
             return activeEffect;
         }
@@ -60,7 +67,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (periodTimer > 0)
             {
-                periodTimer = Spec.Def.Period;
+                periodTimer = cachedPeriod;
             }
         }
 
@@ -70,14 +77,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void RefreshDurationAndPeriod()
         {
-            if (Spec.Def.DurationPolicy == EDurationPolicy.HasDuration)
+            if (cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
                 TimeRemaining = Spec.Duration;
             }
 
             if (periodTimer >= 0)
             {
-                periodTimer = Spec.Def.Period;
+                periodTimer = cachedPeriod;
             }
         }
 
@@ -90,7 +97,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public bool Tick(float deltaTime, AbilitySystemComponent asc)
         {
             // --- Duration Handling ---
-            if (!IsExpired && Spec.Def.DurationPolicy == EDurationPolicy.HasDuration)
+            if (!IsExpired && cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
                 TimeRemaining -= deltaTime;
                 if (TimeRemaining <= 0)
@@ -111,7 +118,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                     // Reset the timer for the next period, carrying over any leftover time.
                     // This prevents timer drift due to frame rate fluctuations.
-                    periodTimer += Spec.Def.Period;
+                    periodTimer += cachedPeriod;
                 }
             }
 

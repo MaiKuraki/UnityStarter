@@ -54,10 +54,28 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("A list of GameplayCue tags (e.g., 'GameplayCue.VFX.Fireball.Impact') to trigger for cosmetic effects like particles and sounds when the effect is applied, executed, or removed.")]
         public GameplayTagContainer GameplayCues;
 
+        private GameplayEffect _runtimeCache;
+        public GameplayEffect GetGameplayEffect()
+        {
+            if (_runtimeCache == null)
+            {
+                _runtimeCache = CreateGameplayEffect();
+            }
+            return _runtimeCache;
+        }
+
         /// <summary>
         /// Creates a runtime, stateless instance of the GameplayEffect based on the data configured in this ScriptableObject.
         /// </summary>
         /// <returns>A new <see cref="GameplayEffect"/> instance.</returns>
-        public abstract GameplayEffect CreateGameplayEffect();
+        protected abstract GameplayEffect CreateGameplayEffect();
+
+        /// <summary>
+        /// Clears the cache. Useful for editor-time live reloading or memory management.
+        /// </summary>
+        public void ClearCache()
+        {
+            _runtimeCache = null;
+        }
     }
 }

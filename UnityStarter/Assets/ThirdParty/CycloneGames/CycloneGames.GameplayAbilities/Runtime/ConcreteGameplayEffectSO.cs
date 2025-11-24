@@ -13,7 +13,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Creates a runtime instance of the GameplayEffect based on the data defined in this ScriptableObject.
         /// </summary>
-        public override GameplayEffect CreateGameplayEffect()
+        protected override GameplayEffect CreateGameplayEffect()
         {
             var grantedAbilities = new List<GameplayAbility>();
             if (GrantedAbilities != null)

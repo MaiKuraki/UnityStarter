@@ -60,6 +60,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly List<GameplayAbilitySpec> activatableAbilities = new List<GameplayAbilitySpec>(16);
         public IReadOnlyList<GameplayAbilitySpec> GetActivatableAbilities() => activatableAbilities.AsReadOnly();
 
+        private readonly List<GameplayAbilitySpec> tickingAbilities = new List<GameplayAbilitySpec>(16);
         private readonly Dictionary<ActiveGameplayEffect, List<GameplayAbilitySpec>> effectGrantedAbilities = new Dictionary<ActiveGameplayEffect, List<GameplayAbilitySpec>>(16);
 
         private readonly List<GameplayAttribute> dirtyAttributes = new List<GameplayAttribute>(32);
@@ -214,6 +215,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.currentPredictionKey = activationInfo.PredictionKey;
 
             spec.IsActive = true;
+            tickingAbilities.Add(spec);
+
             ability.ActivateAbility(new GameplayAbilityActorInfo(OwnerActor, AvatarActor), spec, activationInfo);
 
             // Clear prediction key after atomic activation
@@ -270,7 +273,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (ability.Spec != null)
             {
-                ability.Spec.IsActive = false;
+                if (ability.Spec.IsActive)
+                {
+                    ability.Spec.IsActive = false;
+                    tickingAbilities.Remove(ability.Spec);
+                }
+
                 // This ensures that flags like 'isEnding' are ready for the next activation.
                 ability.InternalOnEndAbility();
 
@@ -421,33 +429,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // --- Tick and State Management ---
         public void Tick(float deltaTime, bool isServer)
         {
-            // Tick tasks for active abilities
-            foreach (var spec in activatableAbilities)
+            for (int i = tickingAbilities.Count - 1; i >= 0; i--)
             {
-                if (spec.IsActive) spec.GetPrimaryInstance()?.TickTasks(deltaTime);
+                var spec = tickingAbilities[i];
+                spec.GetPrimaryInstance()?.TickTasks(deltaTime);
             }
 
             // Server is authoritative over effect duration
             if (isServer)
             {
-                if (expiredEffectsScratchPad == null) expiredEffectsScratchPad = new List<ActiveGameplayEffect>(16);
-                expiredEffectsScratchPad.Clear();
                 for (int i = activeEffects.Count - 1; i >= 0; i--)
                 {
-                    if (activeEffects[i].Tick(deltaTime, this))
+                    var effect = activeEffects[i];
+                    if (effect.Tick(deltaTime, this))
                     {
-                        expiredEffectsScratchPad.Add(activeEffects[i]);
+                        RemoveActiveEffectAtIndex(i);
+                        OnEffectRemoved(effect, true);
                     }
-                }
-
-                if (expiredEffectsScratchPad.Count > 0)
-                {
-                    foreach (var expiredEffect in expiredEffectsScratchPad)
-                    {
-                        activeEffects.Remove(expiredEffect);
-                        OnEffectRemoved(expiredEffect, true);
-                    }
-                    expiredEffectsScratchPad.Clear();
                 }
             }
 
@@ -455,6 +453,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 RecalculateDirtyAttributes();
             }
+        }
+
+        private void RemoveActiveEffectAtIndex(int index)
+        {
+            int lastIndex = activeEffects.Count - 1;
+            if (index != lastIndex)
+            {
+                activeEffects[index] = activeEffects[lastIndex];
+            }
+            activeEffects.RemoveAt(lastIndex);
         }
 
         private void RecalculateDirtyAttributes()
@@ -732,19 +740,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Ensure the effect and its definition are valid.
             if (activeEffect?.Spec?.Def?.Modifiers == null) return;
 
-            // Iterate through all modifiers defined in the effect.
-            foreach (var modifier in activeEffect.Spec.Def.Modifiers)
+            var targetAttributes = activeEffect.Spec.TargetAttributes;
+            if (targetAttributes == null) return;
+
+            for (int i = 0; i < targetAttributes.Length; i++)
             {
-                // We cannot just use modifier.Attribute directly anymore as it doesn't exist.
-                // We use the attribute's name string to find the actual attribute instance.
-                if (!string.IsNullOrEmpty(modifier.AttributeName))
+                var attribute = targetAttributes[i];
+                if (attribute != null)
                 {
-                    var attribute = GetAttribute(modifier.AttributeName);
-                    if (attribute != null)
-                    {
-                        // Mark the resolved attribute instance as dirty.
-                        MarkAttributeDirty(attribute);
-                    }
+                    MarkAttributeDirty(attribute);
                 }
             }
         }
