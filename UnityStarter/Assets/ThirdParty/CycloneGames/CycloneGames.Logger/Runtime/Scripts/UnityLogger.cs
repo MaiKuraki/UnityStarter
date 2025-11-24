@@ -27,7 +27,7 @@ namespace CycloneGames.Logger
                     sb.Append(logMessage.Category);
                     sb.Append("] ");
                 }
-                
+
                 if (logMessage.MessageBuilder != null)
                 {
                     var mb = logMessage.MessageBuilder;
@@ -36,7 +36,7 @@ namespace CycloneGames.Logger
                         sb.Append(mb[i]);
                     }
                 }
-                else if (logMessage.OriginalMessage != null) 
+                else if (logMessage.OriginalMessage != null)
                 {
                     sb.Append(logMessage.OriginalMessage);
                 }
@@ -76,14 +76,14 @@ namespace CycloneGames.Logger
                 case LogLevel.Trace:
                 case LogLevel.Debug:
                 case LogLevel.Info:
-                    UnityEngine.Debug.Log(unityMessage);
+                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage);
                     break;
                 case LogLevel.Warning:
-                    UnityEngine.Debug.LogWarning(unityMessage);
+                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage);
                     break;
                 case LogLevel.Error:
                 case LogLevel.Fatal: // Fatal errors are typically logged as errors in Unity.
-                    UnityEngine.Debug.LogError(unityMessage);
+                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage);
                     break;
                     // LogLevel.None should be filtered by CLogger.ShouldLog and not reach here.
             }
