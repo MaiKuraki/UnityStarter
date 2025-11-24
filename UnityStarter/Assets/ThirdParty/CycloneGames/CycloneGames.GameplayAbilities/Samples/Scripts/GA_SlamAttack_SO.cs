@@ -128,14 +128,14 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override GameplayAbility CreateAbility()
         {
-            var effect = DamageEffect ? DamageEffect.CreateGameplayEffect() : null;
+            var effect = DamageEffect ? DamageEffect.GetGameplayEffect() : null;
             var ability = new GA_SlamAttack(effect, Radius);
             ability.Initialize(
                 AbilityName,
                 InstancingPolicy,
                 NetExecutionPolicy,
-                CostEffect?.CreateGameplayEffect(),
-                CooldownEffect?.CreateGameplayEffect(),
+                CostEffect?.GetGameplayEffect(),
+                CooldownEffect?.GetGameplayEffect(),
                 AbilityTags,
                 ActivationBlockedTags,
                 ActivationRequiredTags,

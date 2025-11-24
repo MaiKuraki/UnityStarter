@@ -55,7 +55,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         {
             if (InitialAttributesEffect != null && AbilitySystemComponent != null)
             {
-                var ge = InitialAttributesEffect.CreateGameplayEffect();
+                var ge = InitialAttributesEffect.GetGameplayEffect();
                 var spec = GameplayEffectSpec.Create(ge, AbilitySystemComponent);
                 AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
             }
@@ -66,7 +66,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 {
                     if (passiveEffectSO != null)
                     {
-                        var ge = passiveEffectSO.CreateGameplayEffect();
+                        var ge = passiveEffectSO.GetGameplayEffect();
                         var spec = GameplayEffectSpec.Create(ge, AbilitySystemComponent);
                         AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
                     }
@@ -160,7 +160,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 return;
             }
 
-            var ge = BountyEffect.CreateGameplayEffect();
+            var ge = BountyEffect.GetGameplayEffect();
             var spec = GameplayEffectSpec.Create(ge, this.AbilitySystemComponent); // Source is the dead character
 
             // Apply the bounty effect to the killer

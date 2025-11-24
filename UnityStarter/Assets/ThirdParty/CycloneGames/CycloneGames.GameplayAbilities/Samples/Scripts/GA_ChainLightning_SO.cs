@@ -131,14 +131,14 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override GameplayAbility CreateAbility()
         {
-            var effect = LightningDamageEffect ? LightningDamageEffect.CreateGameplayEffect() : null;
+            var effect = LightningDamageEffect ? LightningDamageEffect.GetGameplayEffect() : null;
             var ability = new GA_ChainLightning(effect, MaxBounces, DamageFalloffPerBounce);
             ability.Initialize(
                 AbilityName,
                 InstancingPolicy,
                 NetExecutionPolicy,
-                CostEffect?.CreateGameplayEffect(),
-                CooldownEffect?.CreateGameplayEffect(),
+                CostEffect?.GetGameplayEffect(),
+                CooldownEffect?.GetGameplayEffect(),
                 AbilityTags,
                 ActivationBlockedTags,
                 ActivationRequiredTags,
