@@ -9,6 +9,8 @@ namespace CycloneGames.Logger
     public static class LogMessagePool
     {
         private static readonly ConcurrentQueue<LogMessage> Pool = new ConcurrentQueue<LogMessage>();
+        private static int _poolSize = 0;
+        private const int MaxPoolSize = 4096;
 
         /// <summary>
         /// Retrieves a LogMessage object from the pool.
@@ -19,6 +21,7 @@ namespace CycloneGames.Logger
         {
             if (Pool.TryDequeue(out var message))
             {
+                System.Threading.Interlocked.Decrement(ref _poolSize);
                 return message;
             }
             return new LogMessage();
@@ -32,8 +35,12 @@ namespace CycloneGames.Logger
         {
             if (message != null)
             {
+                // If pool is full, let GC collect the message
+                if (_poolSize >= MaxPoolSize) return;
+
                 message.Reset();
                 Pool.Enqueue(message);
+                System.Threading.Interlocked.Increment(ref _poolSize);
             }
         }
     }

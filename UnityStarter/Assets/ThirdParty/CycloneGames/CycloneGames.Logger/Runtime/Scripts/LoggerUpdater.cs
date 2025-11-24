@@ -31,8 +31,10 @@ namespace CycloneGames.Logger
         {
             CLogger.Instance.Pump();
 
-            int count = 0;
-            while (count < 64 && UnityLogQueue.TryDequeue(out var item))
+            long startTime = System.Diagnostics.Stopwatch.GetTimestamp();
+            long budgetTicks = System.Diagnostics.Stopwatch.Frequency / 500;
+
+            while (UnityLogQueue.TryDequeue(out var item))
             {
                 switch (item.level)
                 {
@@ -49,7 +51,11 @@ namespace CycloneGames.Logger
                         UnityEngine.Debug.LogError(item.message);
                         break;
                 }
-                count++;
+
+                if (System.Diagnostics.Stopwatch.GetTimestamp() - startTime > budgetTicks)
+                {
+                    break; // Defer remaining logs to next frame
+                }
             }
         }
 
