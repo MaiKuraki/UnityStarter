@@ -13,7 +13,7 @@ namespace CycloneGames.Logger
     /// </summary>
     public sealed class FileLogger : ILogger
     {
-        private readonly StreamWriter _writer;
+        private StreamWriter _writer;
         private readonly object _writeLock = new object();
         private volatile bool _disposed;
         private readonly string _logFilePath;
@@ -34,12 +34,7 @@ namespace CycloneGames.Logger
                     Directory.CreateDirectory(directory);
                 }
 
-                // Use a larger buffer for FileStream for better IO performance.
-                // AutoFlush is set to true to ensure logs are written immediately, which is simpler and safer
-                // now that CLogger handles the background processing.
-                var fileStream = new FileStream(logFilePath, FileMode.Append, FileAccess.Write, FileShare.Read, bufferSize: 8192, useAsync: false);
-                _writer = new StreamWriter(fileStream, Encoding.UTF8) { AutoFlush = true };
-
+                InitializeWriter();
                 PerformMaintenanceIfNeeded();
             }
             catch (Exception ex)
@@ -48,6 +43,12 @@ namespace CycloneGames.Logger
                 Console.Error.WriteLine($"[CRITICAL] FileLogger: Failed to initialize for path '{logFilePath}'. {ex.Message}");
                 throw new InvalidOperationException($"Failed to initialize FileLogger for path '{logFilePath}'", ex);
             }
+        }
+
+        private void InitializeWriter()
+        {
+            var fileStream = new FileStream(_logFilePath, FileMode.Append, FileAccess.Write, FileShare.Read, bufferSize: 8192, useAsync: false);
+            _writer = new StreamWriter(fileStream, Encoding.UTF8) { AutoFlush = true };
         }
 
         public void LogTrace(LogMessage logMessage) => WriteLog(logMessage);
@@ -76,7 +77,7 @@ namespace CycloneGames.Logger
                     sb.Append(logMessage.Category);
                     sb.Append("] ");
                 }
-                
+
                 if (logMessage.MessageBuilder != null)
                 {
                     var mb = logMessage.MessageBuilder;
@@ -85,11 +86,11 @@ namespace CycloneGames.Logger
                         sb.Append(mb[i]);
                     }
                 }
-                else if (logMessage.OriginalMessage != null) 
+                else if (logMessage.OriginalMessage != null)
                 {
                     sb.Append(logMessage.OriginalMessage);
                 }
-                
+
                 // File/line info can be very useful in file logs.
                 if (!string.IsNullOrEmpty(logMessage.FilePath))
                 {
@@ -189,14 +190,15 @@ namespace CycloneGames.Logger
         private void RotateFiles(FileInfo current)
         {
             // Close writer temporarily to allow rename
-            _writer.Flush();
-            var timestamp = DateTime.Now.ToString(_options.ArchiveTimestampFormat);
-            string archivePath = Path.Combine(current.DirectoryName!, Path.GetFileNameWithoutExtension(current.Name) + "_" + timestamp + current.Extension);
             try
             {
-                _writer.BaseStream.Dispose();
+                _writer.Flush();
+                _writer.Dispose();
             }
             catch { }
+
+            var timestamp = DateTime.Now.ToString(_options.ArchiveTimestampFormat);
+            string archivePath = Path.Combine(current.DirectoryName!, Path.GetFileNameWithoutExtension(current.Name) + "_" + timestamp + current.Extension);
 
             try
             {
@@ -208,10 +210,7 @@ namespace CycloneGames.Logger
             }
 
             // Reopen writer on original path
-            var fileStream = new FileStream(_logFilePath, FileMode.Append, FileAccess.Write, FileShare.Read, bufferSize: 8192, useAsync: false);
-            typeof(StreamWriter)
-                .GetField("_stream", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-                ?.SetValue(_writer, fileStream);
+            InitializeWriter();
 
             // Cleanup old archives
             try
@@ -238,12 +237,12 @@ namespace CycloneGames.Logger
         public void Dispose()
         {
             if (_disposed) return;
-            
+
             lock (_writeLock)
             {
                 if (_disposed) return;
                 _disposed = true;
-                
+
                 // StreamWriter.Dispose() also disposes the underlying stream.
                 try
                 {

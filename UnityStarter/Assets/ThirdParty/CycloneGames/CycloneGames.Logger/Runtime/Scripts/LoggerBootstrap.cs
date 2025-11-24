@@ -70,8 +70,8 @@ namespace CycloneGames.Logger
                 CLogger.Instance.SetLogLevel(settings.defaultLevel);
                 CLogger.Instance.SetLogFilter(settings.defaultFilter);
             }
+
+            LoggerUpdater.EnsureInstance();
         }
     }
 }
-
-

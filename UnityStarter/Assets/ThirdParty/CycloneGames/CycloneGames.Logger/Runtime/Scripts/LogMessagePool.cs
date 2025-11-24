@@ -8,9 +8,7 @@ namespace CycloneGames.Logger
     /// </summary>
     public static class LogMessagePool
     {
-        // Using ConcurrentBag for thread-safe, lock-free pooling.
-        // It's optimized for scenarios where the same thread both produces and consumes items.
-        private static readonly ConcurrentBag<LogMessage> Pool = new ConcurrentBag<LogMessage>();
+        private static readonly ConcurrentQueue<LogMessage> Pool = new ConcurrentQueue<LogMessage>();
 
         /// <summary>
         /// Retrieves a LogMessage object from the pool.
@@ -19,7 +17,7 @@ namespace CycloneGames.Logger
         /// <returns>An initialized LogMessage object.</returns>
         public static LogMessage Get()
         {
-            if (Pool.TryTake(out var message))
+            if (Pool.TryDequeue(out var message))
             {
                 return message;
             }
@@ -35,7 +33,7 @@ namespace CycloneGames.Logger
             if (message != null)
             {
                 message.Reset();
-                Pool.Add(message);
+                Pool.Enqueue(message);
             }
         }
     }
