@@ -122,16 +122,16 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override GameplayAbility CreateAbility()
         {
-            var effect_fireball = FireballDamageEffect ? FireballDamageEffect.CreateGameplayEffect() : null;
-            var effect_burn = BurnEffect ? BurnEffect.CreateGameplayEffect() : null;
+            var effect_fireball = FireballDamageEffect ? FireballDamageEffect.GetGameplayEffect() : null;
+            var effect_burn = BurnEffect ? BurnEffect.GetGameplayEffect() : null;
             var ability = new GA_Fireball(effect_fireball, effect_burn);
 
             ability.Initialize(
                 AbilityName,
                 InstancingPolicy,
                 NetExecutionPolicy,
-                CostEffect?.CreateGameplayEffect(),
-                CooldownEffect?.CreateGameplayEffect(),
+                CostEffect?.GetGameplayEffect(),
+                CooldownEffect?.GetGameplayEffect(),
                 AbilityTags,
                 ActivationBlockedTags,
                 ActivationRequiredTags,

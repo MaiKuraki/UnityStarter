@@ -189,7 +189,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public float GetCalculatedMagnitude(ModifierInfo modifier)
         {
             if (Def == null || Def.Modifiers == null) return 0f;
-            int index = Def.Modifiers.IndexOf(modifier);
+            
+            int index = -1;
+            for (int i = 0; i < Def.Modifiers.Count; i++)
+            {
+                if (Def.Modifiers[i].Equals(modifier))
+                {
+                    index = i;
+                    break;
+                }
+            }
+
             if (index >= 0 && index < ModifierMagnitudes.Length)
             {
                 return ModifierMagnitudes[index];
