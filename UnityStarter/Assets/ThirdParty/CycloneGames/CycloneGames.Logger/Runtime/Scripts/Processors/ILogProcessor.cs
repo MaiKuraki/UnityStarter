@@ -17,5 +17,3 @@ namespace CycloneGames.Logger
         void Pump(int maxItems);
     }
 }
-
-

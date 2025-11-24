@@ -76,7 +76,7 @@ namespace CycloneGames.Logger
             Category = null;
             FilePath = null;
             MemberName = null;
-            
+
             // Reset value types to default.
             Timestamp = default;
             Level = default;

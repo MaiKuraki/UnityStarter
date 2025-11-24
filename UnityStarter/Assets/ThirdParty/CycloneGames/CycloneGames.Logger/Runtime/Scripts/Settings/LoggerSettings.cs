@@ -40,5 +40,3 @@ namespace CycloneGames.Logger
         public LogFilter defaultFilter = LogFilter.LogAll;
     }
 }
-
-
