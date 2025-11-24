@@ -84,7 +84,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 // Grant XP by applying a GameplayEffect
                 if (Player != null && DebugXpEffect != null)
                 {
-                    var ge = DebugXpEffect.CreateGameplayEffect();
+                    var ge = DebugXpEffect.GetGameplayEffect();
                     var spec = GameplayEffectSpec.Create(ge, Player.AbilitySystemComponent);
                     Player.AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
                     CLogger.LogInfo("Granted debug XP to player.");

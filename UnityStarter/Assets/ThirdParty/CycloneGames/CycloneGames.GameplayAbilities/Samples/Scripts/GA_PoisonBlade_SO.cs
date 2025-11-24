@@ -79,8 +79,8 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override GameplayAbility CreateAbility()
         {
-            var impactDamage = ImpactDamageEffect ? ImpactDamageEffect.CreateGameplayEffect() : null;
-            var poison = PoisonEffect ? PoisonEffect.CreateGameplayEffect() : null;
+            var impactDamage = ImpactDamageEffect ? ImpactDamageEffect.GetGameplayEffect() : null;
+            var poison = PoisonEffect ? PoisonEffect.GetGameplayEffect() : null;
             
             var ability = new GA_PoisonBlade(impactDamage, poison);
             
@@ -88,8 +88,8 @@ namespace CycloneGames.GameplayAbilities.Sample
                 AbilityName,
                 InstancingPolicy,
                 NetExecutionPolicy,
-                CostEffect?.CreateGameplayEffect(),
-                CooldownEffect?.CreateGameplayEffect(),
+                CostEffect?.GetGameplayEffect(),
+                CooldownEffect?.GetGameplayEffect(),
                 AbilityTags,
                 ActivationBlockedTags,
                 ActivationRequiredTags,
