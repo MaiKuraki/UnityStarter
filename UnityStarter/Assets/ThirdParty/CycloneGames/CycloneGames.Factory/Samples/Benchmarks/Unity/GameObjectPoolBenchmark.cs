@@ -647,7 +647,6 @@ public static class ListExtensions
         }
         return max;
     }
-
     public static float Min(this List<float> values)
     {
         if (values.Count == 0) return 0f;
