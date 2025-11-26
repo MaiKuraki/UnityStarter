@@ -1,37 +1,36 @@
+using System.Collections.Generic;
 using CycloneGames.Factory.Runtime;
 using UnityEngine;
 
 namespace CycloneGames.Factory.OOPBullet
 {
-    public class BulletSpawner : MonoBehaviour, ITickable
+    public class BulletSpawner : MonoBehaviour
     {
         [Header("Spawner Settings")]
         [SerializeField] private Bullet bulletPrefab;
         [SerializeField] private float spawnsPerSecond = 200f;
         [SerializeField] private int initialPoolSize = 100;
         [SerializeField] private bool autoSpawn = true;
-        
+
         [Header("Bullet Settings")]
         [SerializeField] private Vector3 defaultVelocity = new Vector3(0, 0, 10f);
         [SerializeField] private float defaultLifetime = 5f;
-        
+
         [Header("Screen Bounds")]
         [SerializeField] private bool useScreenBounds = true;
         [SerializeField] private Vector2 screenBoundsOffset = Vector2.zero;
-        
-        // Pool and factory
-        private ObjectPool<BulletData, Bullet> _bulletPool;
-        private MonoPrefabFactory<Bullet> _bulletFactory;
-        private DefaultUnityObjectSpawner _unitySpawner;
-        
+
+        private MonoFastPool<Bullet> _bulletPool;
+
+        private List<Bullet> _activeBullets;
+
         // Spawning state
         private float _nextSpawnTime;
         private float _spawnRate;
         private Camera _mainCamera;
         private Bounds _screenBounds;
-        
+
         private int _totalSpawned;
-        private int _totalDespawned;
 
         private void Awake()
         {
@@ -40,7 +39,7 @@ namespace CycloneGames.Factory.OOPBullet
             {
                 Debug.LogError("No main camera found! Bullet spawner needs a main camera for screen bounds calculation.");
             }
-            
+
             InitializeSpawner();
         }
 
@@ -50,22 +49,36 @@ namespace CycloneGames.Factory.OOPBullet
             {
                 UpdateScreenBounds();
             }
-
-            // Pre-warm the pool to prevent runtime GC allocation from pool expansion.
-            // Calculate the maximum number of bullets that could be active at any time.
-            int requiredPoolSize = Mathf.CeilToInt(spawnsPerSecond * defaultLifetime * 1.1f); // 10% buffer
-            if (_bulletPool.NumTotal < requiredPoolSize)
-            {
-                _bulletPool.Resize(requiredPoolSize);
-                Debug.Log($"Pool pre-warmed to {requiredPoolSize} to prevent runtime allocations.");
-            }
         }
 
         private void Update()
         {
+            // Spawn logic
             if (autoSpawn)
             {
-                Tick();
+                float currentTime = Time.time;
+                while (currentTime >= _nextSpawnTime)
+                {
+                    SpawnBullet();
+                    _nextSpawnTime += _spawnRate;
+                }
+            }
+
+            for (int i = _activeBullets.Count - 1; i >= 0; i--)
+            {
+                var bullet = _activeBullets[i];
+
+                // If bullet returned itself to the pool, remove it from our active list
+                if (!bullet.IsActive)
+                {
+                    // Swap-back removal (O(1))
+                    int lastIndex = _activeBullets.Count - 1;
+                    _activeBullets[i] = _activeBullets[lastIndex];
+                    _activeBullets.RemoveAt(lastIndex);
+                    continue;
+                }
+
+                bullet.Tick();
             }
         }
 
@@ -77,17 +90,10 @@ namespace CycloneGames.Factory.OOPBullet
                 return;
             }
 
-            _unitySpawner = new DefaultUnityObjectSpawner();
-            _bulletFactory = new MonoPrefabFactory<Bullet>(_unitySpawner, bulletPrefab, transform);
-            
-            _bulletPool = new ObjectPool<BulletData, Bullet>(
-                _bulletFactory,
-                initialPoolSize,
-                expansionFactor: 0.5f,
-                shrinkBufferFactor: 0.2f,
-                shrinkCooldownTicks: 600
-            );
-            
+            _bulletPool = new MonoFastPool<Bullet>(bulletPrefab, initialPoolSize, transform);
+
+            _activeBullets = new List<Bullet>(initialPoolSize);
+
             _spawnRate = 1.0f / spawnsPerSecond;
             _nextSpawnTime = Time.time;
         }
@@ -95,56 +101,32 @@ namespace CycloneGames.Factory.OOPBullet
         private void UpdateScreenBounds()
         {
             if (_mainCamera == null) return;
-            
+
             Vector3 bottomLeft = _mainCamera.ScreenToWorldPoint(new Vector3(0, 0, 10));
             Vector3 topRight = _mainCamera.ScreenToWorldPoint(new Vector3(Screen.width, Screen.height, 10));
-            
+
             bottomLeft += (Vector3)screenBoundsOffset;
             topRight += (Vector3)screenBoundsOffset;
-            
+
             _screenBounds = new Bounds(
                 (bottomLeft + topRight) * 0.5f,
                 topRight - bottomLeft
             );
         }
 
-        public void Tick()
-        {
-            if (_bulletPool == null) return;
-            
-            _bulletPool.UpdateActiveItems(b => b.Tick());
-            _bulletPool.Maintenance();
-            
-            float currentTime = Time.time;
-            int bulletsToSpawn = 0;
-            
-            while (currentTime >= _nextSpawnTime)
-            {
-                bulletsToSpawn++;
-                _nextSpawnTime += _spawnRate;
-            }
-            
-            // Spawn the calculated number of bullets
-            for (int i = 0; i < bulletsToSpawn; i++)
-            {
-                SpawnBullet();
-            }
-        }
-
         public void SpawnBullet()
         {
             if (_bulletPool == null) return;
-            
+
             var bulletData = new BulletData(defaultVelocity, defaultLifetime);
-            
-            var bullet = _bulletPool.Spawn(bulletData);
-            if (bullet != null)
-            {
-                Vector3 spawnPosition = GetRandomSpawnPosition();
-                bullet.SetPositionAndVelocity(spawnPosition, bulletData.Velocity);
-                
-                _totalSpawned++;
-            }
+
+            var bullet = _bulletPool.Spawn();
+            bullet.OnSpawned(bulletData, _bulletPool);
+            Vector3 spawnPosition = GetRandomSpawnPosition();
+            bullet.SetPositionAndVelocity(spawnPosition, bulletData.Velocity);
+
+            _activeBullets.Add(bullet);
+            _totalSpawned++;
         }
 
         private Vector3 GetRandomSpawnPosition()
@@ -155,44 +137,28 @@ namespace CycloneGames.Factory.OOPBullet
                 float randomY = UnityEngine.Random.Range(_screenBounds.min.y, _screenBounds.max.y);
                 return new Vector3(randomX, randomY, 0);
             }
-            
-            return transform.position;
-        }
 
-        public void SpawnBulletAt(Vector3 position, Vector3 velocity, float lifetime)
-        {
-            if (_bulletPool == null) return;
-            
-            var bulletData = new BulletData(velocity, lifetime);
-            var bullet = _bulletPool.Spawn(bulletData);
-            if (bullet != null)
-            {
-                bullet.SetPositionAndVelocity(position, velocity);
-                _totalSpawned++;
-            }
+            return transform.position;
         }
 
         public void DespawnAllBullets()
         {
-            _bulletPool?.DespawnAllActive();
+            foreach (var bullet in _activeBullets)
+            {
+                if (bullet.IsActive) _bulletPool.Despawn(bullet);
+            }
+            _activeBullets.Clear();
         }
 
         public string GetPoolStats()
         {
             if (_bulletPool == null) return "Pool not initialized";
-            
-            // NOTE: This string formatting causes GC allocation. Avoid calling it in performance-critical code.
-            return $"Pool Stats - Total: {_bulletPool.NumTotal}, Active: {_bulletPool.NumActive}, Inactive: {_bulletPool.NumInactive}, Spawned: {_totalSpawned}";
-        }
-
-        public void ResizePool(int newSize)
-        {
-            _bulletPool?.Resize(newSize);
+            return $"Pool Stats - Active: {_bulletPool.NumActive}, Inactive: {_bulletPool.NumInactive}, Spawned: {_totalSpawned}";
         }
 
         private void OnDestroy()
         {
-            _bulletPool?.Dispose();
+            _bulletPool?.Clear();
         }
 
         private void OnDrawGizmosSelected()
@@ -203,11 +169,9 @@ namespace CycloneGames.Factory.OOPBullet
                 Gizmos.DrawWireCube(_screenBounds.center, _screenBounds.size);
             }
         }
-        
+
         public int TotalSpawned => _totalSpawned;
-        public int TotalDespawned => _totalDespawned;
         public int ActiveBullets => _bulletPool?.NumActive ?? 0;
         public int InactiveBullets => _bulletPool?.NumInactive ?? 0;
-        public bool IsPoolInitialized => _bulletPool != null;
     }
 }
