@@ -21,7 +21,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         public bool IsInitialized { get; private set; }
         private float lockedFOV;
         public float GetLockedFOV() => lockedFOV;
-        private Actor PendingViewTarget;
+        private Transform PendingViewTargetTF;
 
         /// <summary>
         /// Sets the provided camera as the new active camera.
@@ -46,14 +46,14 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        public virtual void SetViewTarget(Actor NewTarget)
+        public virtual void SetViewTarget(Transform NewTargetTF)
         {
-            PendingViewTarget = NewTarget;
+            PendingViewTargetTF = NewTargetTF;
             // This also operates on the active camera.
-            if (ActiveVirtualCamera != null && PendingViewTarget != null)
+            if (ActiveVirtualCamera != null && PendingViewTargetTF != null)
             {
-                ActiveVirtualCamera.Follow = PendingViewTarget.transform;
-                ActiveVirtualCamera.LookAt = PendingViewTarget.transform;
+                ActiveVirtualCamera.Follow = PendingViewTargetTF;
+                ActiveVirtualCamera.LookAt = PendingViewTargetTF;
             }
         }
 
@@ -61,7 +61,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             PCOwner = PlayerController;
             SetFOV(DefaultFOV);
-            SetViewTarget(PlayerController);
+            SetViewTarget(PlayerController?.transform);
             // If no active virtual camera has been explicitly set, attempt to find one at runtime.
             if (ActiveVirtualCamera == null)
             {
@@ -75,7 +75,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                         // Choose first for determinism; callers can override later via SetActiveVirtualCamera
                         SetActiveVirtualCamera(candidates[0]);
                         // Ensure follow/look target are set
-                        SetViewTarget(PlayerController);
+                        SetViewTarget(PlayerController?.transform);
                     }
                 }
             }
