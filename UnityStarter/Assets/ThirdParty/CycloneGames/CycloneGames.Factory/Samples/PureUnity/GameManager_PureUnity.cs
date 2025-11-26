@@ -6,21 +6,17 @@ namespace CycloneGames.Factory.Samples.PureUnity
     public class GameManager_PureUnity : MonoBehaviour
     {
         public Bullet BulletPrefab; // Assign in Inspector
-        private ObjectPool<BulletData, Bullet> _bulletPool;
-        private IFactory<Bullet> _bulletFactory;
+        private MonoFastPool<Bullet> _bulletPool;
 
         void Start()
         {
-            // 1. Manually create the dependencies
-            var spawner = new SimpleUnitySpawner();
-            _bulletFactory = new MonoPrefabFactory<Bullet>(spawner, BulletPrefab, null);
-            _bulletPool = new ObjectPool<BulletData, Bullet>(_bulletFactory, 10);
+            _bulletPool = new MonoFastPool<Bullet>(BulletPrefab, 10);
+            
             Debug.Log($"Pool Initialized. Inactive objects: {_bulletPool.NumInactive}");
         }
 
         void Update()
         {
-            // 3. Spawn a bullet on mouse click
             if (Input.GetMouseButtonDown(0))
             {
                 var bulletData = new BulletData
@@ -29,19 +25,17 @@ namespace CycloneGames.Factory.Samples.PureUnity
                     Direction = transform.forward,
                     Speed = 20f
                 };
-                _bulletPool.Spawn(bulletData);
+                
+                var bullet = _bulletPool.Spawn();
+                bullet.OnSpawned(bulletData, _bulletPool);
+                
                 Debug.Log($"Bullet spawned. Active: {_bulletPool.NumActive}, Inactive: {_bulletPool.NumInactive}");
             }
-
-            // 4. Update all active bullets
-            _bulletPool.UpdateActiveItems(b => b.Tick());
-            _bulletPool.Maintenance();
         }
 
         void OnDestroy()
         {
-            // 5. Clean up the pool when this manager is destroyed
-            _bulletPool.Dispose();
+            _bulletPool?.Clear();
         }
     }
 }
