@@ -38,7 +38,7 @@ namespace CycloneGames.Editor.Build
             VersionControlProvider = VersionControlFactory.CreateProvider(vcType);
         }
 
-        [MenuItem("Build/Game(NoHotUpdate)/Print Debug Info", priority = 100)]
+        [MenuItem("Build/Game(Standard)/Print Debug Info", priority = 100)]
         public static void PrintDebugInfo()
         {
             var sceneList = GetBuildSceneList();
@@ -55,7 +55,9 @@ namespace CycloneGames.Editor.Build
             }
         }
 
-        [MenuItem("Build/Game(NoHotUpdate)/Build Android APK (IL2CPP)", priority = 400)]
+        #region Menu Items - Standard Builds (Clean)
+
+        [MenuItem("Build/Game(Standard)/Build Android APK (IL2CPP)", priority = 400)]
         public static void PerformBuild_AndroidAPK()
         {
             EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
@@ -69,7 +71,7 @@ namespace CycloneGames.Editor.Build
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(NoHotUpdate)/Build Windows (IL2CPP)", priority = 401)]
+        [MenuItem("Build/Game(Standard)/Build Windows (IL2CPP)", priority = 401)]
         public static void PerformBuild_Windows()
         {
             PerformBuild(
@@ -82,7 +84,7 @@ namespace CycloneGames.Editor.Build
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(NoHotUpdate)/Build Mac (IL2CPP)", priority = 402)]
+        [MenuItem("Build/Game(Standard)/Build Mac (IL2CPP)", priority = 402)]
         public static void PerformBuild_Mac()
         {
             PerformBuild(
@@ -95,7 +97,7 @@ namespace CycloneGames.Editor.Build
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(NoHotUpdate)/Export Android Project (IL2CPP)", priority = 404)]
+        [MenuItem("Build/Game(Standard)/Export Android Project (IL2CPP)", priority = 404)]
         public static void PerformBuild_AndroidProject()
         {
             EditorUserBuildSettings.exportAsGoogleAndroidProject = true;
@@ -109,7 +111,7 @@ namespace CycloneGames.Editor.Build
                 bOutputIsFolderTarget: true);
         }
 
-        [MenuItem("Build/Game(NoHotUpdate)/Build WebGL", priority = 403)]
+        [MenuItem("Build/Game(Standard)/Build WebGL", priority = 403)]
         public static void PerformBuild_WebGL()
         {
             PerformBuild(
@@ -121,6 +123,162 @@ namespace CycloneGames.Editor.Build
                 bDeleteDebugFiles: true,
                 bOutputIsFolderTarget: true);
         }
+
+        #endregion
+
+        #region Menu Items - Fast Builds (No Clean)
+
+        [MenuItem("Build/Game(Standard)/Fast/Build Android APK (Fast)", priority = 500)]
+        public static void PerformBuild_AndroidAPK_Fast()
+        {
+            EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
+            PerformBuild(
+                BuildTarget.Android,
+                NamedBuildTarget.Android,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.Android)}/{ApplicationName}.apk",
+                bCleanBuild: false,
+                bDeleteDebugFiles: false,
+                bOutputIsFolderTarget: false);
+        }
+
+        [MenuItem("Build/Game(Standard)/Fast/Build Windows (Fast)", priority = 501)]
+        public static void PerformBuild_Windows_Fast()
+        {
+            PerformBuild(
+                BuildTarget.StandaloneWindows64,
+                NamedBuildTarget.Standalone,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.StandaloneWindows64)}/{ApplicationName}.exe",
+                bCleanBuild: false,
+                bDeleteDebugFiles: false,
+                bOutputIsFolderTarget: false);
+        }
+
+        #endregion
+
+        #region CI/CD
+
+        /// <summary>
+        /// Entry point for CI/CD. Parses command line arguments to configure the build.
+        /// Usage: -executeMethod CycloneGames.Editor.Build.BuildScript.PerformBuild_CI -buildTarget <Target> -output <Path> [-clean] [-buildHybridCLR] [-buildYooAsset]
+        /// </summary>
+        public static void PerformBuild_CI()
+        {
+            Debug.Log($"{DEBUG_FLAG} Starting CI Build...");
+
+            // Parse arguments
+            string[] args = System.Environment.GetCommandLineArgs();
+            BuildTarget buildTarget = BuildTarget.NoTarget;
+            string outputPath = "";
+            bool clean = false;
+            bool forceHybridCLR = false;
+            bool forceYooAsset = false;
+            
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (args[i] == "-buildTarget" && i + 1 < args.Length)
+                {
+                    // Try parse enum
+                    if (Enum.TryParse(args[i + 1], true, out BuildTarget target))
+                    {
+                        buildTarget = target;
+                    }
+                }
+                else if (args[i] == "-output" && i + 1 < args.Length)
+                {
+                    outputPath = args[i + 1];
+                }
+                else if (args[i] == "-clean")
+                {
+                    clean = true;
+                }
+                else if (args[i] == "-buildHybridCLR")
+                {
+                    forceHybridCLR = true;
+                }
+                else if (args[i] == "-buildYooAsset")
+                {
+                    forceYooAsset = true;
+                }
+            }
+
+            if (buildTarget == BuildTarget.NoTarget)
+            {
+                Debug.LogError($"{DEBUG_FLAG} No valid -buildTarget provided for CI build.");
+                return;
+            }
+
+            // Load Build Data to ensure it's in memory
+            TryGetBuildData();
+
+            // Apply overrides from CI args using Reflection if needed
+            if (buildData != null)
+            {
+                if (forceHybridCLR)
+                {
+                    BuildUtils.SetField(buildData, "useHybridCLR", true);
+                    Debug.Log($"{DEBUG_FLAG} CI Override: HybridCLR enabled.");
+                }
+                if (forceYooAsset)
+                {
+                    BuildUtils.SetField(buildData, "useYooAsset", true);
+                    Debug.Log($"{DEBUG_FLAG} CI Override: YooAsset enabled.");
+                }
+            }
+
+            // Determine NamedBuildTarget and defaults
+            NamedBuildTarget namedTarget = NamedBuildTarget.Standalone;
+            bool isFolder = false;
+
+            switch (buildTarget)
+            {
+                case BuildTarget.Android:
+                    namedTarget = NamedBuildTarget.Android;
+                    if (outputPath.EndsWith(".apk") || outputPath.EndsWith(".aab")) isFolder = false;
+                    else 
+                    {
+                        isFolder = true;
+                        EditorUserBuildSettings.exportAsGoogleAndroidProject = true;
+                    }
+                    break;
+                case BuildTarget.StandaloneWindows64:
+                    namedTarget = NamedBuildTarget.Standalone;
+                    isFolder = false;
+                    break;
+                case BuildTarget.StandaloneOSX:
+                    namedTarget = NamedBuildTarget.Standalone;
+                    isFolder = false; 
+                    break;
+                case BuildTarget.WebGL:
+                    namedTarget = NamedBuildTarget.WebGL;
+                    isFolder = true;
+                    break;
+                case BuildTarget.iOS:
+                    namedTarget = NamedBuildTarget.iOS;
+                    isFolder = true;
+                    break;
+            }
+
+            // Fallback output path if not provided
+            if (string.IsNullOrEmpty(outputPath))
+            {
+                 outputPath = $"{GetPlatformFolderName(buildTarget)}/{ApplicationName}";
+                 if (!isFolder && buildTarget == BuildTarget.StandaloneWindows64) outputPath += ".exe";
+                 if (!isFolder && buildTarget == BuildTarget.Android) outputPath += ".apk";
+            }
+
+            PerformBuild(
+                buildTarget,
+                namedTarget,
+                ScriptingImplementation.IL2CPP,
+                outputPath,
+                bCleanBuild: clean,
+                bDeleteDebugFiles: true,
+                bOutputIsFolderTarget: isFolder);
+        }
+
+        #endregion
 
         private static string GetPlatformFolderName(BuildTarget TargetPlatform)
         {
@@ -235,7 +393,9 @@ namespace CycloneGames.Editor.Build
         }
 
         private static void PerformBuild(BuildTarget TargetPlatform, NamedBuildTarget BuildTargetName,
-            ScriptingImplementation BackendScriptImpl, string OutputTarget, bool bCleanBuild = true, bool bDeleteDebugFiles = true,
+            ScriptingImplementation BackendScriptImpl, string OutputTarget, 
+            bool bCleanBuild = true, 
+            bool bDeleteDebugFiles = true,
             bool bOutputIsFolderTarget = true)
         {
             //  cache curernt scene
@@ -248,10 +408,14 @@ namespace CycloneGames.Editor.Build
             //  new template scene for build
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
-            bool versionInfoAssetExisted = File.Exists(Path.Combine(Directory.GetCurrentDirectory(), VersionInfoAssetPath));
+            // Check if version info asset exists using project-relative path
+            bool versionInfoAssetExisted = File.Exists(VersionInfoAssetPath);
 
             try
             {
+                // Load Build Data
+                TryGetBuildData();
+                
                 var previousTarget = EditorUserBuildSettings.activeBuildTarget;
 
                 if (bCleanBuild)
@@ -259,28 +423,48 @@ namespace CycloneGames.Editor.Build
                     DeletePlatformBuildFolder(TargetPlatform);
                 }
 
-                // If switching platforms, clear platform-specific caches to avoid stale artifacts
-                if (previousTarget != TargetPlatform)
+                if (bCleanBuild && previousTarget != TargetPlatform)
                 {
-                    Debug.Log($"{DEBUG_FLAG} Platform switch detected: {previousTarget} -> {TargetPlatform}. Clearing caches...");
+                    Debug.Log($"{DEBUG_FLAG} Clean build & Platform switch detected: {previousTarget} -> {TargetPlatform}. Clearing caches...");
                     TryClearPlatformSwitchCaches();
                 }
 
-                // Ensure Android export flag is only set for Android builds
                 if (TargetPlatform != BuildTarget.Android)
                 {
                     EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
                 }
 
-                TryBuildalonSyncSolution();
+                if (buildData != null && buildData.UseBuildalon)
+                {
+                    BuildalonIntegrator.SyncSolution();
+                }
+
+                // HybridCLR Generation & Copy
+                if (buildData != null && buildData.UseHybridCLR)
+                {
+                    // This ensures DLLs are compiled, metadata generated, and then copied to HotUpdateDLL folder with .bytes extension
+                    // ready for YooAsset to pack them.
+                    HybridCLRBuilder.GenerateAllAndCopy();
+                }
 
                 InitializeVersionControl(DefaultVersionControlType);
                 string commitHash = VersionControlProvider?.GetCommitHash();
                 string commitCount = VersionControlProvider?.GetCommitCount();
                 VersionControlProvider?.UpdateVersionInfoAsset(VersionInfoAssetPath, commitHash, commitCount);
 
+                string buildNumber = string.IsNullOrEmpty(commitCount) ? "0" : commitCount;
+                string fullBuildVersion = $"{ApplicationVersion}.{buildNumber}";
+
+                // YooAsset Build
+                if (buildData != null && buildData.UseYooAsset)
+                {
+                    // Note: YooAsset build should happen AFTER HybridCLR copy, 
+                    // because YooAsset needs to pack the .bytes files generated by HybridCLR.
+                    YooAssetBuilder.Build(TargetPlatform, fullBuildVersion);
+                }
+
                 Debug.Log($"{DEBUG_FLAG} Start Build, Platform: {EditorUserBuildSettings.activeBuildTarget}");
-                TryGetBuildData();
+                
                 if (EditorUserBuildSettings.activeBuildTarget != TargetPlatform)
                 {
                     Debug.Log($"{DEBUG_FLAG} Switching active build target to {TargetPlatform}...");
@@ -293,12 +477,15 @@ namespace CycloneGames.Editor.Build
 
                 // After target switch, refresh assets and optionally sync solution/build scripts
                 AssetDatabase.SaveAssets();
-                TryBuildalonSyncSolution();
+                
+                if (buildData != null && buildData.UseBuildalon)
+                {
+                    BuildalonIntegrator.SyncSolution();
+                }
+                
                 TryCleanAddressablesPlayerContent();
 
                 string originalVersion = PlayerSettings.bundleVersion;
-                string buildNumber = string.IsNullOrEmpty(commitCount) ? "0" : commitCount;
-                string fullBuildVersion = $"{ApplicationVersion}.{buildNumber}";
 
                 PlayerSettings.SetScriptingBackend(BuildTargetName, BackendScriptImpl);
                 PlayerSettings.companyName = CompanyName;
@@ -313,7 +500,13 @@ namespace CycloneGames.Editor.Build
                     buildPlayerOptions.scenes = GetBuildSceneList();
                     buildPlayerOptions.locationPathName = GetOutputTarget(TargetPlatform, OutputTarget, bOutputIsFolderTarget);
                     buildPlayerOptions.target = TargetPlatform;
-                    buildPlayerOptions.options = BuildOptions.CleanBuildCache;
+                    buildPlayerOptions.options = BuildOptions.None;
+                    
+                    if (bCleanBuild)
+                    {
+                        buildPlayerOptions.options |= BuildOptions.CleanBuildCache;
+                    }
+                    
                     buildPlayerOptions.options |= BuildOptions.CompressWithLz4;
                     buildReport = BuildPipeline.BuildPlayer(buildPlayerOptions);
                 }
@@ -341,20 +534,17 @@ namespace CycloneGames.Editor.Build
             {
                 if (versionInfoAssetExisted)
                 {
-                    // If the file existed before, clear its contents to restore its state.
                     VersionControlProvider?.ClearVersionInfoAsset(VersionInfoAssetPath);
                 }
                 else
                 {
-                    // If the file was created during the build, delete it.
-                    if (File.Exists(Path.Combine(Directory.GetCurrentDirectory(), VersionInfoAssetPath)))
+                    if (File.Exists(VersionInfoAssetPath))
                     {
                         AssetDatabase.DeleteAsset(VersionInfoAssetPath);
                     }
                 }
 
                 Debug.Log($"{DEBUG_FLAG} Restoring original scene setup.");
-                //  In batch mode (CI/CD), the initial setup might be empty and invalid for restoration.
                 if (sceneSetup != null && sceneSetup.Length > 0)
                 {
                     EditorSceneManager.RestoreSceneManagerSetup(sceneSetup);
@@ -365,57 +555,6 @@ namespace CycloneGames.Editor.Build
         private static string GetPlatformBuildOutputFolder(BuildTarget TargetPlatform)
         {
             return $"{OutputBasePath}/{GetPlatformFolderName(TargetPlatform)}";
-        }
-
-        public static void CopyAllFilesRecursively(string sourceFolderPath, string destinationFolderPath)
-        {
-            // Check if the source directory exists
-            if (!Directory.Exists(sourceFolderPath))
-            {
-                throw new DirectoryNotFoundException($"Source directory does not exist: {sourceFolderPath}");
-            }
-
-            // Ensure the destination directory exists
-            // Note: If the destination path is a network path, network permissions are required to create the directory
-            try
-            {
-                if (!Directory.Exists(destinationFolderPath))
-                {
-                    Directory.CreateDirectory(destinationFolderPath);
-                }
-            }
-            catch (Exception ex)
-            {
-                // Handle more specific exceptions, such as UnauthorizedAccessException for lack of permissions on network paths
-                throw new Exception($"Error creating destination directory: {destinationFolderPath}. Exception: {ex.Message}");
-            }
-
-            // Get the files in the source directory and copy them to the destination directory
-            foreach (string sourceFilePath in Directory.GetFiles(sourceFolderPath, "*", SearchOption.AllDirectories))
-            {
-                // Create a relative path that is the same for both source and destination
-                string relativePath = sourceFilePath.Substring(sourceFolderPath.Length + 1);
-                string destinationFilePath = Path.Combine(destinationFolderPath, relativePath);
-
-                // Ensure the directory for the destination file exists (since it might be a subdirectory that doesn't exist yet)
-                string destinationFileDirectory = Path.GetDirectoryName(destinationFilePath);
-                if (!Directory.Exists(destinationFileDirectory))
-                {
-                    Directory.CreateDirectory(destinationFileDirectory);
-                }
-
-                // Copy the file and overwrite if it already exists
-                // Note: If the destination path is a network path, network permissions are also required to copy files
-                try
-                {
-                    File.Copy(sourceFilePath, destinationFilePath, true);
-                }
-                catch (Exception ex)
-                {
-                    // Handle more specific exceptions as well
-                    throw new Exception($"Error copying file: {sourceFilePath} to {destinationFilePath}. Exception: {ex.Message}");
-                }
-            }
         }
 
         // Clears common Unity caches that often cause cross-platform build failures (Bee, IL2CPP, Burst, PlayerData)
@@ -448,7 +587,6 @@ namespace CycloneGames.Editor.Build
                     }
                 }
 
-                // Purge Unity build cache if available (reflection to avoid hard dependency)
                 TryPurgeUnityBuildCache();
             }
             catch (Exception ex)
@@ -499,7 +637,6 @@ namespace CycloneGames.Editor.Build
             }
         }
 
-        // If Addressables package is present, clean player content to avoid stale catalog/bundles across platform switches
         private static void TryCleanAddressablesPlayerContent()
         {
             try
@@ -510,7 +647,6 @@ namespace CycloneGames.Editor.Build
                     var addrType = asm.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
                     if (addrType == null) continue;
 
-                    // Try zero-parameter CleanPlayerContent first
                     MethodInfo cleanMethod = null;
                     foreach (var m in addrType.GetMethods(BindingFlags.Public | BindingFlags.Static))
                     {
@@ -528,7 +664,6 @@ namespace CycloneGames.Editor.Build
                         return;
                     }
 
-                    // Fallback: some versions require a settings instance; try to get default settings and invoke overload
                     var getSettingsMethod = addrType.GetMethod("Default", BindingFlags.Public | BindingFlags.Static) ??
                                             addrType.GetProperty("Default", BindingFlags.Public | BindingFlags.Static)?.GetGetMethod();
                     var settingsInstance = getSettingsMethod != null ? getSettingsMethod.Invoke(null, null) : null;
@@ -557,44 +692,6 @@ namespace CycloneGames.Editor.Build
             catch (Exception ex)
             {
                 Debug.LogWarning($"{DEBUG_FLAG} Addressables clean skipped: {ex.Message}");
-            }
-        }
-
-        // If Buildalon is installed, sync solution to ensure project files are updated (safe, no exit)
-        private static void TryBuildalonSyncSolution()
-        {
-            try
-            {
-                Debug.Log($"{DEBUG_FLAG} Probing Buildalon for SyncSolution...");
-                var assemblies = System.AppDomain.CurrentDomain.GetAssemblies();
-                bool toolsFound = false;
-                bool invoked = false;
-                foreach (var asm in assemblies)
-                {
-                    var toolsType = asm.GetType("Buildalon.Editor.BuildPipeline.UnityPlayerBuildTools");
-                    if (toolsType == null) continue;
-                    toolsFound = true;
-                    var syncMethod = toolsType.GetMethod("SyncSolution", BindingFlags.Public | BindingFlags.Static);
-                    if (syncMethod != null)
-                    {
-                        syncMethod.Invoke(null, null);
-                        Debug.Log($"{DEBUG_FLAG} Buildalon SyncSolution executed.");
-                        invoked = true;
-                    }
-                    return;
-                }
-                if (!toolsFound)
-                {
-                    Debug.Log($"{DEBUG_FLAG} Buildalon not detected. Skipping SyncSolution.");
-                }
-                else if (!invoked)
-                {
-                    Debug.Log($"{DEBUG_FLAG} Buildalon detected but SyncSolution method not found.");
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"{DEBUG_FLAG} Buildalon SyncSolution skipped: {ex.Message}");
             }
         }
     }
