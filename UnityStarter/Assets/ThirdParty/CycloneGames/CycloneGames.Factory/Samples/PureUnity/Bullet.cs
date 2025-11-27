@@ -21,12 +21,11 @@ namespace CycloneGames.Factory.Samples.PureUnity
             _data = data;
             _pool = pool;
             _isActive = true;
-            
+
             transform.position = _data.InitialPosition;
             gameObject.SetActive(true);
-            
-            // Despawn after 3 seconds
-            CancelInvoke(nameof(Recycle)); // Safety
+
+            CancelInvoke(nameof(Recycle));
             Invoke(nameof(Recycle), 3f);
         }
 
@@ -37,12 +36,10 @@ namespace CycloneGames.Factory.Samples.PureUnity
             gameObject.SetActive(false);
         }
 
-        // Standard Unity Update - simplest way for "Pure Unity" sample
         private void Update()
         {
             if (!_isActive) return;
-            
-            // Move the bullet
+
             transform.position += _data.Direction * _data.Speed * Time.deltaTime;
         }
 
