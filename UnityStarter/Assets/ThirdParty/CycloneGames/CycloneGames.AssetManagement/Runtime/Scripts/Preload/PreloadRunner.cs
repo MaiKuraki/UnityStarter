@@ -19,7 +19,7 @@ namespace CycloneGames.AssetManagement.Runtime.Preload
 		{
 			IsDone = false; Progress = 0f; Error = null;
 			if (Manifest == null || Package == null) { IsDone = true; return; }
-			
+
 			var group = new GroupOperation();
 			_retained.Clear();
 			for (int i = 0; i < Manifest.Assets.Count; i++)
@@ -32,9 +32,9 @@ namespace CycloneGames.AssetManagement.Runtime.Preload
 
 			// Run progress updates in the background without blocking the main await.
 			UpdateProgress(group, cancellationToken).Forget();
-			
+
 			await group.StartAsync(cancellationToken);
-			
+
 			Error = group.Error;
 			IsDone = true;
 		}

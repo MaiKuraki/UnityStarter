@@ -9,6 +9,7 @@ namespace CycloneGames.AssetManagement.Runtime
 {
     public sealed class YooAssetModule : IAssetModule
     {
+        private const string DEBUG_FLAG = "[YooAssetModule]";
         private readonly Dictionary<string, IAssetPackage> _packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
         private bool _initialized;
         private List<string> _packageNamesCache;
@@ -19,9 +20,6 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (_initialized) return UniTask.CompletedTask;
             
-            // The user's original code had a more complex initialization.
-            // For now, let's stick to the basics to ensure compilation.
-            // We can add the logger adapter back later if needed.
             YooAssets.Initialize();
             if (options.OperationSystemMaxTimeSliceMs > 0)
             {
@@ -42,9 +40,9 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetPackage CreatePackage(string packageName)
         {
-            if (string.IsNullOrEmpty(packageName)) throw new ArgumentException("Package name is null or empty", nameof(packageName));
-            if (!_initialized) throw new InvalidOperationException("Asset module not initialized");
-            if (_packages.ContainsKey(packageName)) throw new InvalidOperationException($"Package already exists: {packageName}");
+            if (string.IsNullOrEmpty(packageName)) throw new ArgumentException($"{DEBUG_FLAG} Package name is null or empty", nameof(packageName));
+            if (!_initialized) throw new InvalidOperationException($"{DEBUG_FLAG} Asset module not initialized");
+            if (_packages.ContainsKey(packageName)) throw new InvalidOperationException($"{DEBUG_FLAG} Package already exists: {packageName}");
 
             var yooPackage = YooAssets.CreatePackage(packageName);
             var wrapped = new YooAssetPackage(yooPackage);
@@ -85,7 +83,7 @@ namespace CycloneGames.AssetManagement.Runtime
             var package = GetPackage(packageName);
             if (package == null)
             {
-                throw new ArgumentException($"Package not found: {packageName}", nameof(packageName));
+                throw new ArgumentException($"{DEBUG_FLAG} Package not found: {packageName}", nameof(packageName));
             }
             return new YooAssetPatchService(package);
         }
