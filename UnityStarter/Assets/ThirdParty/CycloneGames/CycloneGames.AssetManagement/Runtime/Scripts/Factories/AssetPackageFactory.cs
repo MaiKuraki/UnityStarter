@@ -41,7 +41,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (!success)
             {
                 UnityEngine.Debug.LogError($"{DEBUG_FLAG} Initialize asset package failed, package name: {package.Name}");
-                module.RemovePackage(packageName);
+                await module.RemovePackageAsync(packageName);
                 return null;
             }
 
