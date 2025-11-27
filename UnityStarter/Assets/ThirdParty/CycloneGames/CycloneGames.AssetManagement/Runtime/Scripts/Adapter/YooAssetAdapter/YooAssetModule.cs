@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using YooAsset;
+using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -14,9 +15,9 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public bool Initialized => _initialized;
 
-        public void Initialize(AssetManagementOptions options = default)
+        public UniTask InitializeAsync(AssetManagementOptions options = default)
         {
-            if (_initialized) return;
+            if (_initialized) return UniTask.CompletedTask;
             
             // The user's original code had a more complex initialization.
             // For now, let's stick to the basics to ensure compilation.
@@ -28,6 +29,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             HandleTracker.Enabled = options.EnableHandleTracking;
             _initialized = true;
+            return UniTask.CompletedTask;
         }
 
         public void Destroy()
