@@ -15,8 +15,14 @@ namespace CycloneGames.Editor.Build
         [SerializeField] private SceneAsset launchScene;
         
         [Header("------ Build Pipeline Options ------")] 
-        [Tooltip("If enabled and Buildalon package is present, use Buildalon helpers (e.g. SyncSolution). Actual build still uses this project's pipeline and naming.")]
+        [Tooltip("If enabled and Buildalon package is present, use Buildalon helpers (e.g. SyncSolution).")]
         [SerializeField] private bool useBuildalon = false;
+
+        [Tooltip("If enabled and HybridCLR package is present, perform HybridCLR generation before build.")]
+        [SerializeField] private bool useHybridCLR = false;
+
+        [Tooltip("If enabled and YooAsset package is present, perform YooAsset bundle build before player build.")]
+        [SerializeField] private bool useYooAsset = false;
         
         public SceneAsset LaunchScene => launchScene;
         
@@ -24,7 +30,6 @@ namespace CycloneGames.Editor.Build
         {
             if (launchScene != null)
             {
-                // 获取 launchScene 的实例 ID
                 string path = AssetDatabase.GetAssetPath(launchScene);
                 return path;
             }
@@ -33,6 +38,8 @@ namespace CycloneGames.Editor.Build
         }
 
         public bool UseBuildalon => useBuildalon;
+        public bool UseHybridCLR => useHybridCLR;
+        public bool UseYooAsset => useYooAsset;
 #endif
     }
 }
