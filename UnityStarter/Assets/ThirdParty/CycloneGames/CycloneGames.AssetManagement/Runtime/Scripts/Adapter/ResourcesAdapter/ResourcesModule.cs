@@ -7,6 +7,7 @@ namespace CycloneGames.AssetManagement.Runtime
 {
     public sealed class ResourcesModule : IAssetModule
     {
+        private const string DEBUG_FLAG = "[ResourcesAssetModule]";
         private readonly Dictionary<string, IAssetPackage> packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
         private bool initialized;
         private List<string> packageNamesCache;
@@ -32,9 +33,9 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetPackage CreatePackage(string packageName)
         {
-            if (string.IsNullOrEmpty(packageName)) throw new ArgumentException("[ResourcesAssetModule] Package name is null or empty", nameof(packageName));
-            if (!initialized) throw new InvalidOperationException("[ResourcesAssetModule] Asset module not initialized");
-            if (packages.ContainsKey(packageName)) throw new InvalidOperationException($"[ResourcesAssetModule] Package already exists: {packageName}");
+            if (string.IsNullOrEmpty(packageName)) throw new ArgumentException($"{DEBUG_FLAG} Package name is null or empty", nameof(packageName));
+            if (!initialized) throw new InvalidOperationException($"{DEBUG_FLAG} Asset module not initialized");
+            if (packages.ContainsKey(packageName)) throw new InvalidOperationException($"{DEBUG_FLAG} Package already exists: {packageName}");
 
             var package = new ResourcesAssetPackage(packageName);
             packages.Add(packageName, package);
@@ -69,7 +70,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IPatchService CreatePatchService(string packageName)
         {
-            throw new NotSupportedException("Resources does not support the patch workflow.");
+            throw new NotSupportedException($"{DEBUG_FLAG} Resources does not support the patch workflow.");
         }
     }
 }
