@@ -31,7 +31,7 @@ namespace CycloneGames.UIFramework.Samples
         private async UniTask InitializeAssetSystemAsync()
         {
             _assetModule = new ResourcesModule();
-            _assetModule.Initialize();
+            await _assetModule.InitializeAsync();
 
             _assetPackage = _assetModule.CreatePackage("AtlasSamplePackage");
             await _assetPackage.InitializeAsync(new AssetPackageInitOptions(AssetPlayMode.EditorSimulate, null));

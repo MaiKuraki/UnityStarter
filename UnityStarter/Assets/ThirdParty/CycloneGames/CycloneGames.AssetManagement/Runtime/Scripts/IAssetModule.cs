@@ -15,10 +15,10 @@ namespace CycloneGames.AssetManagement.Runtime
 		bool Initialized { get; }
 
 		/// <summary>
-		/// Initializes the module. Idempotent. Safe to call multiple times.
+		/// Initializes the module asynchronously. Idempotent. Safe to call multiple times.
 		/// </summary>
 		/// <param name="options">Global options (time slice, concurrency, logger etc.).</param>
-		void Initialize(AssetManagementOptions options = default);
+		UniTask InitializeAsync(AssetManagementOptions options = default);
 
 		/// <summary>
 		/// Destroys the module and releases all resources.
