@@ -33,9 +33,12 @@ namespace CycloneGames.AssetManagement.Editor
         private void OnGUI()
         {
             EditorGUILayout.LabelField("Asset Handle Tracker", EditorStyles.boldLabel);
-            
+
             bool wasEnabled = HandleTracker.Enabled;
             HandleTracker.Enabled = EditorGUILayout.Toggle("Enable Tracking", wasEnabled);
+
+            bool stackTraceEnabled = HandleTracker.EnableStackTrace;
+            HandleTracker.EnableStackTrace = EditorGUILayout.Toggle("Enable Stack Trace (Heavy)", stackTraceEnabled);
 
             if (wasEnabled != HandleTracker.Enabled)
             {
@@ -72,6 +75,13 @@ namespace CycloneGames.AssetManagement.Editor
                 EditorGUILayout.LabelField("Package:", handle.PackageName);
                 EditorGUILayout.LabelField("Description:", handle.Description);
                 EditorGUILayout.LabelField("Registered At:", handle.RegistrationTime.ToLocalTime().ToString("HH:mm:ss.fff"));
+
+                if (!string.IsNullOrEmpty(handle.StackTrace))
+                {
+                    EditorGUILayout.LabelField("Stack Trace:", EditorStyles.boldLabel);
+                    EditorGUILayout.TextArea(handle.StackTrace);
+                }
+
                 EditorGUILayout.EndVertical();
                 EditorGUILayout.Space(2);
             }
