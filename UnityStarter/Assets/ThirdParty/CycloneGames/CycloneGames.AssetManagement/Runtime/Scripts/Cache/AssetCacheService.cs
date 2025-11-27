@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using UnityEngine;
 
 namespace CycloneGames.AssetManagement.Runtime.Cache
 {
@@ -40,7 +39,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 		private readonly IAssetPackage _package;
 		private readonly int _maxEntries;
 		private readonly Dictionary<string, Node> _map;
-		
+
 		private Node _head;
 		private Node _tail;
 		private bool _disposed;
