@@ -206,7 +206,7 @@ func main() {
 	}
 
 	// 2. Update BuildScript.cs with the new names
-	buildScriptPath := filepath.Join(projectRoot, "Assets", "Editor", "BuildScript.cs")
+	buildScriptPath := filepath.Join(projectRoot, "Assets", "Editor", "Build", "BuildScript.cs")
 	err = updateBuildScript(buildScriptPath, oldName, newProjectName, oldCompanyName, newCompanyName, oldAppName, newAppName)
 	if err != nil {
 		fmt.Println("Error updating BuildScript.cs:", err)
