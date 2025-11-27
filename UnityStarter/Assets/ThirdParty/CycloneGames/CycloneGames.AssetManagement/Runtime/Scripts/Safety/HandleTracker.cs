@@ -14,9 +14,11 @@ namespace CycloneGames.AssetManagement.Runtime
             public string PackageName;
             public string Description;
             public System.DateTime RegistrationTime;
+            public string StackTrace;
         }
 
         public static bool Enabled { get; set; }
+        public static bool EnableStackTrace { get; set; }
 
         private static readonly Dictionary<int, HandleInfo> activeHandles = new Dictionary<int, HandleInfo>();
         private static readonly object lockObject = new object();
@@ -25,6 +27,12 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (!Enabled) return;
 
+            string stackTrace = null;
+            if (EnableStackTrace)
+            {
+                stackTrace = UnityEngine.StackTraceUtility.ExtractStackTrace();
+            }
+
             lock (lockObject)
             {
                 var info = new HandleInfo
@@ -32,7 +40,8 @@ namespace CycloneGames.AssetManagement.Runtime
                     Id = id,
                     PackageName = packageName,
                     Description = description,
-                    RegistrationTime = System.DateTime.UtcNow
+                    RegistrationTime = System.DateTime.UtcNow,
+                    StackTrace = stackTrace
                 };
                 activeHandles[id] = info;
             }
@@ -78,6 +87,10 @@ namespace CycloneGames.AssetManagement.Runtime
             foreach (var handle in handles)
             {
                 sb.AppendLine($"[ID: {handle.Id}] [Package: {handle.PackageName}] [Time: {handle.RegistrationTime:HH:mm:ss}] - {handle.Description}");
+                if (!string.IsNullOrEmpty(handle.StackTrace))
+                {
+                    sb.AppendLine($"Stack Trace:\n{handle.StackTrace}");
+                }
             }
             return sb.ToString();
         }

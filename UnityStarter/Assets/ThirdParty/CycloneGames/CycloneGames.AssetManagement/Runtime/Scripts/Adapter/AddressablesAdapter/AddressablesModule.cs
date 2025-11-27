@@ -66,20 +66,24 @@ namespace CycloneGames.AssetManagement.Runtime
             return pkg;
         }
 
-        public bool RemovePackage(string packageName)
+        public UniTask<bool> RemovePackageAsync(string packageName)
         {
-            if (string.IsNullOrEmpty(packageName)) return false;
-            if (!packages.Remove(packageName)) return false;
+            if (string.IsNullOrEmpty(packageName)) return UniTask.FromResult(false);
+            if (!packages.TryGetValue(packageName, out var package)) return UniTask.FromResult(false);
             
-            packageNamesCache = null; // Invalidate cache
-            return true;
+            // Addressables doesn't support destroying packages, 
+            // In current impl, DestroyAsync is no-op/completed task.
+            // await package.DestroyAsync(); 
+
+            packages.Remove(packageName);
+            packageNamesCache = null;
+            return UniTask.FromResult(true);
         }
 
         public IReadOnlyList<string> GetAllPackageNames()
         {
             if (packageNamesCache == null)
             {
-                // This is a simplified ToList() to avoid LINQ dependency for clarity.
                 packageNamesCache = new List<string>(packages.Count);
                 foreach (var kvp in packages)
                 {
