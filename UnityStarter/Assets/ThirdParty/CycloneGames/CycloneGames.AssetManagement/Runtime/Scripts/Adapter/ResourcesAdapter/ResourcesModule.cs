@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -12,12 +13,13 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public bool Initialized => initialized;
 
-        public void Initialize(AssetManagementOptions options = default)
+        public UniTask InitializeAsync(AssetManagementOptions options = default)
         {
-            if (initialized) return;
+            if (initialized) return UniTask.CompletedTask;
             
             // Resources don't require special initialization.
             initialized = true;
+            return UniTask.CompletedTask;
         }
 
         public void Destroy()
