@@ -9,13 +9,13 @@ namespace CycloneGames.Factory.OOPBullet
         [Header("Bullet Settings")]
         [SerializeField] private float lifetime = 5f;
         [SerializeField] private float speed = 10f;
-        
+
         private BulletData _bulletData;
         private IMemoryPool _pool;
         private float _despawnTime;
         private bool _isActive;
         private Rigidbody _rigidbody;
-        
+
         public float Lifetime => lifetime;
         public float Speed => speed;
         public bool IsActive => _isActive;
@@ -24,7 +24,7 @@ namespace CycloneGames.Factory.OOPBullet
         private void Awake()
         {
             gameObject.SetActive(false);
-            
+
             _rigidbody = GetComponent<Rigidbody>();
             if (_rigidbody == null)
             {
@@ -37,16 +37,16 @@ namespace CycloneGames.Factory.OOPBullet
             _rigidbody.mass = 0.1f;
             _rigidbody.isKinematic = false;
         }
-        
+
         public void OnSpawned(BulletData bulletData, IMemoryPool pool)
         {
             _bulletData = bulletData;
             _pool = pool;
             _despawnTime = Time.time + bulletData.Lifetime;
             _isActive = true;
-            
+
             gameObject.SetActive(true);
-            
+
             if (_rigidbody != null)
             {
                 _rigidbody.velocity = bulletData.Velocity;
@@ -64,13 +64,13 @@ namespace CycloneGames.Factory.OOPBullet
             _bulletData = default;
             _pool = null;
             _despawnTime = 0f;
-            
+
             if (_rigidbody != null)
             {
                 _rigidbody.velocity = Vector3.zero;
                 _rigidbody.angularVelocity = Vector3.zero;
             }
-            
+
             gameObject.SetActive(false);
         }
 
@@ -91,7 +91,7 @@ namespace CycloneGames.Factory.OOPBullet
                 _pool.Despawn(this);
             }
         }
-        
+
         public void Dispose()
         {
 
@@ -100,7 +100,7 @@ namespace CycloneGames.Factory.OOPBullet
         public void SetPositionAndVelocity(Vector3 position, Vector3 velocity)
         {
             transform.position = position;
-            
+
             if (_rigidbody != null)
             {
                 _rigidbody.velocity = velocity;
@@ -123,7 +123,7 @@ namespace CycloneGames.Factory.OOPBullet
     {
         public Vector3 Velocity;
         public float Lifetime;
-        
+
         public BulletData(Vector3 velocity, float lifetime)
         {
             Velocity = velocity;
