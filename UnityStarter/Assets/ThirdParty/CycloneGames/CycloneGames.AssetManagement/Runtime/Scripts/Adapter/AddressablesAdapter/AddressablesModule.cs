@@ -16,15 +16,10 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public bool Initialized => initialized;
 
-        public void Initialize(AssetManagementOptions options = default)
+        public async UniTask InitializeAsync(AssetManagementOptions options = default)
         {
             if (initialized) return;
             
-            InitializeAsync().Forget();
-        }
-
-        private async UniTaskVoid InitializeAsync()
-        {
             initializationHandle = Addressables.InitializeAsync();
             await initializationHandle;
             
@@ -34,7 +29,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             else
             {
-                //TODO: Log Error
+                UnityEngine.Debug.LogError($"[AddressablesAssetModule] Initialization failed. Status: {initializationHandle.Status}, Exception: {initializationHandle.OperationException}");
             }
         }
 
