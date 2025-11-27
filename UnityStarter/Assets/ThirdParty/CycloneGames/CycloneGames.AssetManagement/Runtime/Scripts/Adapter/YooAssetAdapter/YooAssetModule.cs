@@ -19,7 +19,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public UniTask InitializeAsync(AssetManagementOptions options = default)
         {
             if (_initialized) return UniTask.CompletedTask;
-            
+
             YooAssets.Initialize();
             if (options.OperationSystemMaxTimeSliceMs > 0)
             {
@@ -58,13 +58,18 @@ namespace CycloneGames.AssetManagement.Runtime
             return pkg;
         }
 
-        public bool RemovePackage(string packageName)
+        public async UniTask<bool> RemovePackageAsync(string packageName)
         {
             if (string.IsNullOrEmpty(packageName)) return false;
             if (!_packages.TryGetValue(packageName, out var pkg)) return false;
-            
+
+            // Ensure resources are released before removing the package.
+            // We await the destruction to ensure all async cleanup (if any) completes.
+            await pkg.DestroyAsync();
+
             _packages.Remove(packageName);
-            YooAssets.RemovePackage(packageName);
+            // Since YooAssetPackage.DestroyAsync already calls YooAssets.RemovePackage(packageName),
+
             _packageNamesCache = null; // Invalidate cache
             return true;
         }

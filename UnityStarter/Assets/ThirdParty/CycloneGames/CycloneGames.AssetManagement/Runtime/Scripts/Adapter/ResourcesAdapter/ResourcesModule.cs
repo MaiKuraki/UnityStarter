@@ -17,7 +17,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public UniTask InitializeAsync(AssetManagementOptions options = default)
         {
             if (initialized) return UniTask.CompletedTask;
-            
+
             // Resources don't require special initialization.
             initialized = true;
             return UniTask.CompletedTask;
@@ -26,7 +26,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public void Destroy()
         {
             if (!initialized) return;
-            
+
             packages.Clear();
             initialized = false;
         }
@@ -50,13 +50,16 @@ namespace CycloneGames.AssetManagement.Runtime
             return pkg;
         }
 
-        public bool RemovePackage(string packageName)
+        public UniTask<bool> RemovePackageAsync(string packageName)
         {
-            if (string.IsNullOrEmpty(packageName)) return false;
-            if (!packages.Remove(packageName)) return false;
-            
+            if (string.IsNullOrEmpty(packageName)) return UniTask.FromResult(false);
+            if (!packages.TryGetValue(packageName, out var package)) return UniTask.FromResult(false);
+
+            // await package.DestroyAsync(); // Currently no-op for Resources
+
+            packages.Remove(packageName);
             packageNamesCache = null; // Invalidate cache
-            return true;
+            return UniTask.FromResult(true);
         }
 
         public IReadOnlyList<string> GetAllPackageNames()

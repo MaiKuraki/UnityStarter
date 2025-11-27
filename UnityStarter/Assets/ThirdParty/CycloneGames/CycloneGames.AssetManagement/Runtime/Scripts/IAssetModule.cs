@@ -38,7 +38,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		/// <summary>
 		/// Removes a package. Only allowed after the package has been destroyed.
 		/// </summary>
-		bool RemovePackage(string packageName);
+		UniTask<bool> RemovePackageAsync(string packageName);
 
 		/// <summary>
 		/// Returns a snapshot of existing package names.
@@ -206,7 +206,7 @@ namespace CycloneGames.AssetManagement.Runtime
 		Web,
 		Custom
 	}
-	
+
 	public enum ClearCacheMode
 	{
 		/// <summary>
