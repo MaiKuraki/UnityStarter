@@ -1,0 +1,19 @@
+{
+    "name": "Build.Pipeline.Editor",
+    "rootNamespace": "",
+    "references": [
+        "Build.Data",
+        "Build.VersionControl.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
