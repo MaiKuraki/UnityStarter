@@ -206,7 +206,7 @@ func main() {
 	}
 
 	// 2. Update BuildScript.cs with the new names
-	buildScriptPath := filepath.Join(projectRoot, "Assets", "Editor", "Build", "BuildScript.cs")
+	buildScriptPath := filepath.Join(projectRoot, "Assets", "Build", "Editor", "BuildPipeline", "BuildScript.cs")
 	err = updateBuildScript(buildScriptPath, oldName, newProjectName, oldCompanyName, newCompanyName, oldAppName, newAppName)
 	if err != nil {
 		fmt.Println("Error updating BuildScript.cs:", err)
@@ -308,19 +308,28 @@ func updateProjectSettings(filePath, oldCompanyName, newCompanyName, oldAppName,
 	}
 
 	content := string(input)
-	content = strings.Replace(content, "companyName: "+oldCompanyName, "companyName: "+newCompanyName, -1)
-	content = strings.Replace(content, "productName: "+oldAppName, "productName: "+newAppName, -1)
+
+	// Helper function for regex replacement
+	replacePattern := func(pattern, replacement string) {
+		re := regexp.MustCompile(pattern)
+		content = re.ReplaceAllString(content, replacement)
+	}
+
+	// Update companyName and productName
+	replacePattern(`companyName: .*`, "companyName: "+newCompanyName)
+	replacePattern(`productName: .*`, "productName: "+newAppName)
 
 	// Update applicationIdentifier
-	oldAppIDPrefix := "com." + oldCompanyName + "." + oldAppName
-	newAppIDPrefix := "com." + newCompanyName + "." + newAppName
-	content = strings.Replace(content, "Android: "+oldAppIDPrefix, "Android: "+newAppIDPrefix, -1)
-	content = strings.Replace(content, "Standalone: "+oldAppIDPrefix, "Standalone: "+newAppIDPrefix, -1)
-	content = strings.Replace(content, "iPhone: "+oldAppIDPrefix, "iPhone: "+newAppIDPrefix, -1)
+	newAppID := "com." + newCompanyName + "." + newAppName
+	// Use capture group ${1} to preserve indentation (e.g. "    Android: ")
+	replacePattern(`(Android: ).*`, "${1}"+newAppID)
+	replacePattern(`(Standalone: ).*`, "${1}"+newAppID)
+	replacePattern(`(iPhone: ).*`, "${1}"+newAppID)
+	replacePattern(`(WebGL: ).*`, "${1}"+newAppID)
 
 	// Update metroPackageName and metroApplicationDescription
-	content = strings.Replace(content, "metroPackageName: "+oldAppName, "metroPackageName: "+newAppName, -1)
-	content = strings.Replace(content, "metroApplicationDescription: "+oldAppName, "metroApplicationDescription: "+newAppName, -1)
+	replacePattern(`(metroPackageName: ).*`, "${1}"+newAppName)
+	replacePattern(`(metroApplicationDescription: ).*`, "${1}"+newAppName)
 
 	err = ioutil.WriteFile(filePath, []byte(content), 0644)
 	if err != nil {
