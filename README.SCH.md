@@ -75,8 +75,13 @@
 ├── Tools/                              # 实用工具集 (含项目重命名、清理工具等)
 └── UnityStarter/                       # Unity 主工程
     ├── Assets/
-    │   ├── Editor/
-    │   │   ├── BuildScript.cs          # 用于 CI/CD 的构建工具
+    │   ├── Build/                      # 构建管线与工具
+    │   │   ├── Editor/
+    │   │   │   ├── BuildPipeline/      # 构建脚本与逻辑
+    │   │   │   └── ...
+    │   │   ├── Runtime/
+    │   │   │   ├── Data/               # 构建数据 (VersionInfo 等)
+    │   │   │   └── ...
     │   │   └── ...
     │   ├── ThirdParty/
     │   │   ├── CycloneGames/           # 核心开发套件
@@ -127,13 +132,19 @@
 
 此模板专为自动化构建和与 CI/CD 流水线无缝集成而设计。
 
--   **自动化构建脚本**：项目在 `Assets/Editor/BuildScript.cs` 中包含一个强大的构建脚本。它在 Unity 编辑器中提供菜单项，支持一键为多个平台（Windows、Mac、Android、WebGL）进行构建。
+-   **自动化构建脚本**：项目在 `Assets/Build/Editor/BuildPipeline/BuildScript.cs` 中包含一个强大的构建脚本。它在 Unity 编辑器中提供菜单项，支持一键为多个平台（Windows、Mac、Android、WebGL）进行构建。
 
 -   **自动版本控制**：构建版本号会根据 Git 的提交次数自动生成。版本号格式为 `vX.Y.CommitCount`（例如 `v0.1.123`），确保每个构建版本都有唯一且可追溯的标识。
 
--   **运行时版本信息**：每次构建前，脚本会捕获当前的 Git 提交哈希、提交总数和构建日期，并将这些信息保存到 `VersionInfoData` ScriptableObject（位于 `Assets/UnityStarter/Scripts/Build/VersionInfoData.cs`）。这使您可以在应用程序内轻松显示详细的构建信息，便于调试和技术支持。
+-   **运行时版本信息**：每次构建前，脚本会捕获当前的 Git 提交哈希、提交总数和构建日期，并将这些信息保存到 `VersionInfoData` ScriptableObject（位于 `Assets/Build/Runtime/Data/VersionInfoData.cs`）。这使您可以在应用程序内轻松显示详细的构建信息，便于调试和技术支持。
+
+-   **HybridCLR & YooAsset 支持**：构建流程适配了 **HybridCLR** 用于代码热更新，以及 **YooAsset** 用于高效资源管理。这些功能可以通过 `BuildData` 配置或 CI 参数开启 (HybridCLR, YooAsset 需自行引入项目)。
 
 -   **CI/CD 就绪**：所有构建方法都可以通过命令行触发，从而轻松与 Jenkins、TeamCity 等 CI/CD 系统集成。
+    ```bash
+    # CI 命令示例
+    -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget Android -output Build/Android/MyGame.apk -clean -buildHybridCLR -buildYooAsset
+    ```
 
 ---
 

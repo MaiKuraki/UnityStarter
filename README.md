@@ -74,8 +74,13 @@ The main source code for the modules is located in the [`UnityStarter/Assets/Thi
 ├── Tools/                              # Utility tools (project renaming, cleanup, etc.)
 └── UnityStarter/                       # Unity project root
     ├── Assets/
-    │   ├── Editor/
-    │   │   ├── BuildScript.cs          # Build tools for CI/CD
+    │   ├── Build/                      # Build pipeline & tools
+    │   │   ├── Editor/
+    │   │   │   ├── BuildPipeline/      # Build scripts & logic
+    │   │   │   └── ...
+    │   │   ├── Runtime/
+    │   │   │   ├── Data/               # Build data (VersionInfo, etc.)
+    │   │   │   └── ...
     │   │   └── ...
     │   ├── ThirdParty/
     │   │   ├── CycloneGames/           # Core development suite
@@ -124,13 +129,19 @@ For existing projects, you can import individual modules:
 
 This template is designed for automated builds and seamless integration with CI/CD pipelines.
 
--   **Automated Build Scripts**: The project includes a powerful build script located at `Assets/Editor/BuildScript.cs`. It provides menu items in the Unity Editor for one-click builds for multiple platforms (Windows, Mac, Android, WebGL).
+-   **Automated Build Scripts**: The project includes a powerful build script located at `Assets/Build/Editor/BuildPipeline/BuildScript.cs`. It provides menu items in the Unity Editor for one-click builds for multiple platforms (Windows, Mac, Android, WebGL).
 
 -   **Automatic Versioning**: Builds are automatically versioned using the Git commit count. The version number is formatted as `vX.Y.CommitCount` (e.g., `v0.1.123`), ensuring every build has a unique and traceable version.
 
--   **Runtime Version Information**: Before each build, the script captures the current Git commit hash, commit count, and build date, and saves this information into a `VersionInfoData` ScriptableObject (`Assets/UnityStarter/Scripts/Build/VersionInfoData.cs`). This allows you to easily display detailed build information within your application for debugging and support purposes.
+-   **Runtime Version Information**: Before each build, the script captures the current Git commit hash, commit count, and build date, and saves this information into a `VersionInfoData` ScriptableObject (`Assets/Build/Runtime/Data/VersionInfoData.cs`). This allows you to easily display detailed build information within your application for debugging and support purposes.
+
+-   **HybridCLR & YooAsset Support**: The build pipeline compatible with **HybridCLR** for code hot-updates and **YooAsset** for efficient asset management. These can be enabled via the `BuildData` configuration or CI arguments (you should add HybridCLR and YooAsset in package by yourself if needed).
 
 -   **CI/CD Ready**: The build methods can be triggered from the command line, making it straightforward to integrate with CI/CD systems like Jenkins, TeamCity.
+    ```bash
+    # Example CI Command
+    -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget Android -output Build/Android/MyGame.apk -clean -buildHybridCLR -buildYooAsset
+    ```
 
 ---
 
