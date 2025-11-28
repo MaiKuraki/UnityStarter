@@ -6,7 +6,7 @@ using UnityEngine;
 using UnityEditorInternal;
 #endif
 
-namespace CycloneGames.Editor.Build
+namespace Build.Pipeline.Editor
 {
     [CreateAssetMenu(menuName = "CycloneGames/Build/HybridCLR Build Config")]
     public class HybridCLRBuildConfig : ScriptableObject

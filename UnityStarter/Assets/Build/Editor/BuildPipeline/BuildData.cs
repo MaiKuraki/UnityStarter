@@ -4,7 +4,7 @@ using UnityEditor;
 
 using UnityEngine;
 
-namespace CycloneGames.Editor.Build
+namespace Build.Pipeline.Editor
 {
     [CreateAssetMenu(menuName = "CycloneGames/Build/BuildData")]
     public class BuildData : ScriptableObject

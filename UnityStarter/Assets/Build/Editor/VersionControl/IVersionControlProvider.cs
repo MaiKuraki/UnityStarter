@@ -1,4 +1,4 @@
-namespace CycloneGames.Editor.VersionControl
+namespace Build.VersionControl.Editor
 {
     public interface IVersionControlProvider
     {
