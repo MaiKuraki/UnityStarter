@@ -1,8 +1,9 @@
 using System.Diagnostics;
+using Build.Data;
 using UnityEditor;
 using UnityEngine;
 
-namespace CycloneGames.Editor.VersionControl
+namespace Build.VersionControl.Editor
 {
     public class VersionControlProviderPerforce : IVersionControlProvider
     {

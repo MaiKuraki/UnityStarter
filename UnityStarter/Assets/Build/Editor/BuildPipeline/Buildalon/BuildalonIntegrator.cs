@@ -2,7 +2,7 @@ using System;
 using System.Reflection;
 using UnityEngine;
 
-namespace CycloneGames.Editor.Build
+namespace Build.Pipeline.Editor
 {
     public static class BuildalonIntegrator
     {

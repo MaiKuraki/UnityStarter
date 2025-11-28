@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace CycloneGames.Editor.Build
+namespace Build.Pipeline.Editor
 {
     public enum YooAssetVersionMode
     {
@@ -30,4 +30,3 @@ namespace CycloneGames.Editor.Build
         public string buildOutputDirectory = "";
     }
 }
-
