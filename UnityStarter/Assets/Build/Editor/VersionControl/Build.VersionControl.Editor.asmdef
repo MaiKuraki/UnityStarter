@@ -1,0 +1,18 @@
+{
+    "name": "Build.VersionControl.Editor",
+    "rootNamespace": "",
+    "references": [
+        "GUID:f35dec81a8204ca4bb8af3320bef9147"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

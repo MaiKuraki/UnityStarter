@@ -1,11 +1,11 @@
 using System;
 using System.Collections;
 using System.Reflection;
-using CycloneGames.Editor.VersionControl;
+using Build.VersionControl.Editor;
 using UnityEditor;
 using UnityEngine;
 
-namespace CycloneGames.Editor.Build
+namespace Build.Pipeline.Editor
 {
     public static class YooAssetBuilder
     {

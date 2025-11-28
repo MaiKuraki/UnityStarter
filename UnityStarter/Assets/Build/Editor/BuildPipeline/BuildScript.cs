@@ -3,12 +3,12 @@ using System.IO;
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.Build;
-using CycloneGames.Editor.VersionControl;
 using UnityEditor.SceneManagement;
 using UnityEditor.Build.Reporting;
 using System.Reflection;
+using Build.VersionControl.Editor;
 
-namespace CycloneGames.Editor.Build
+namespace Build.Pipeline.Editor
 {
     [Serializable]
     public class VersionInfo

@@ -4,7 +4,7 @@ using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 
-namespace CycloneGames.Editor.Build
+namespace Build.Pipeline.Editor
 {
     public static class HybridCLRBuilder
     {
