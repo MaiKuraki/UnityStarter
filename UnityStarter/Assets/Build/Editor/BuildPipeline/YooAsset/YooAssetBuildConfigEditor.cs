@@ -43,10 +43,21 @@ namespace Build.Pipeline.Editor
             else if (mode == YooAssetVersionMode.GitCommitCount)
             {
                 EditorGUILayout.PropertyField(versionPrefix);
+
+                string bundleVersion = PlayerSettings.bundleVersion;
+                int lastDotIndex = bundleVersion.LastIndexOf('.');
+                if (lastDotIndex > 0)
+                {
+                    string expectedPrefix = bundleVersion.Substring(0, lastDotIndex);
+
+                    if (versionPrefix.stringValue != expectedPrefix)
+                    {
+                        EditorGUILayout.HelpBox($"Version mismatch! Project Version is '{bundleVersion}'. Expected prefix: '{expectedPrefix}'.", MessageType.Warning);
+                    }
+                }
             }
             
             // Version Preview (Mockup)
-            // We can't easily get the real git commit count here without lag, so just showing static info or simple preview
             if (mode == YooAssetVersionMode.Timestamp)
             {
                 EditorGUILayout.HelpBox($"Example Version: {System.DateTime.Now:yyyy-MM-dd-HHmmss}", MessageType.Info);
