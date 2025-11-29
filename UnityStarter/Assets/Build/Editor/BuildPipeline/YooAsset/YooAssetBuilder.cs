@@ -37,6 +37,23 @@ namespace Build.Pipeline.Editor
         {
             Debug.Log($"{DEBUG_FLAG} Checking availability...");
 
+            // Cache configuration values locally at start to avoid any potential object invalidation during build
+            bool useCopyToStreamingAssets = true; // Default true if config missing
+            bool useCopyToOutputDirectory = true; // Default true if config missing
+            string useBuildOutputDirectory = "";
+
+            if (config != null)
+            {
+                useCopyToStreamingAssets = config.copyToStreamingAssets;
+                useCopyToOutputDirectory = config.copyToOutputDirectory;
+                useBuildOutputDirectory = config.buildOutputDirectory;
+                Debug.Log($"{DEBUG_FLAG} Using Configuration -> CopyToStreamingAssets: <color={(useCopyToStreamingAssets ? "green" : "red")}>{useCopyToStreamingAssets}</color>, CopyToOutput: <color={(useCopyToOutputDirectory ? "green" : "red")}>{useCopyToOutputDirectory}</color>");
+            }
+            else
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} No configuration provided. Using default settings (True/True).");
+            }
+
             // Reflection types lookup
             Type collectorSettingDataType = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.AssetBundleCollectorSettingData");
             Type builderSettingType = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.AssetBundleBuilderSetting");
@@ -92,7 +109,7 @@ namespace Build.Pipeline.Editor
 
                 if (eBuildinFileCopyOption != null)
                 {
-                    bool copyToStreaming = config != null ? config.copyToStreamingAssets : true;
+                    bool copyToStreaming = useCopyToStreamingAssets;
                     string enumName = copyToStreaming ? "ClearAndCopyAll" : "None";
                     try { fileCopyOption = Enum.Parse(eBuildinFileCopyOption, enumName); }
                     catch { Debug.LogWarning($"{DEBUG_FLAG} Could not parse {enumName} for EBuildinFileCopyOption"); }
@@ -125,9 +142,36 @@ namespace Build.Pipeline.Editor
                 MethodInfo getStreamingAssetsRoot = builderHelperType.GetMethod("GetStreamingAssetsRoot", BindingFlags.Public | BindingFlags.Static);
 
                 string outputRoot = (string)getDefaultOutputRoot.Invoke(null, null);
-                if (config != null && !string.IsNullOrEmpty(config.buildOutputDirectory))
+
+                string customDestRoot = null;
+                if (useCopyToOutputDirectory)
                 {
-                    outputRoot = config.buildOutputDirectory;
+                    string targetDir = useBuildOutputDirectory;
+                    if (string.IsNullOrEmpty(targetDir))
+                    {
+                        targetDir = "Build/HotUpdateBundle";
+                    }
+
+                    if (targetDir.StartsWith("/"))
+                    {
+                        // Relative to Assets folder's parent (Project Root)
+                        targetDir = targetDir.Substring(1);
+                        customDestRoot = System.IO.Path.Combine(System.IO.Directory.GetParent(Application.dataPath).FullName, targetDir);
+                    }
+                    else if (System.IO.Path.IsPathRooted(targetDir))
+                    {
+                        // Absolute path
+                        customDestRoot = targetDir;
+                    }
+                    else
+                    {
+                        // Relative to Project Root
+                        customDestRoot = System.IO.Path.Combine(System.IO.Directory.GetParent(Application.dataPath).FullName, targetDir);
+                    }
+
+                    // Ensure we can write to destination
+                    BuildUtils.CreateDirectory(customDestRoot);
+                    Debug.Log($"{DEBUG_FLAG} Copy to output directory enabled. Target: {customDestRoot}");
                 }
 
                 string streamingRoot = (string)getStreamingAssetsRoot.Invoke(null, null);
@@ -191,7 +235,7 @@ namespace Build.Pipeline.Editor
                         if (System.IO.Directory.Exists(packageOutputRoot))
                         {
                             Debug.Log($"{DEBUG_FLAG} Cleaning old package output: {packageOutputRoot}");
-                            System.IO.Directory.Delete(packageOutputRoot, true);
+                            BuildUtils.DeleteDirectory(packageOutputRoot);
                         }
 
                         MethodInfo runMethod = pipelineInstance.GetType().GetMethod("Run", new Type[] { buildParameters.GetType().BaseType, typeof(bool) });
@@ -225,6 +269,80 @@ namespace Build.Pipeline.Editor
                         if (isSuccess)
                         {
                             Debug.Log($"{DEBUG_FLAG} Build package {packageName} success!");
+
+                            if (!string.IsNullOrEmpty(customDestRoot))
+                            {
+                                try
+                                {
+                                    // Instead of copying from the raw build output (which contains cache, hash files, versions folders etc.),
+                                    // we copy from the StreamingAssets folder if 'copyToStreamingAssets' is enabled.
+                                    // This ensures the output directory contains exactly what the runtime expects (BuiltinFileSystem).
+                                    // If copyToStreamingAssets is false, we fallback to copying the raw output, but warn the user.
+
+                                    string srcDir;
+                                    bool isFromStreaming = false;
+
+                                    if (useCopyToStreamingAssets)
+                                    {
+                                        // Source is Assets/StreamingAssets/yoo/PackageName
+                                        srcDir = System.IO.Path.Combine(streamingRoot, packageName);
+                                        isFromStreaming = true;
+                                    }
+                                    else
+                                    {
+                                        // Fallback to raw output (OutputCache/Version folders)
+                                        srcDir = packageOutputRoot;
+                                        
+                                        // IMPORTANT: If user explicitly disabled copyToStreamingAssets, 
+                                        // we must ensure the StreamingAssets folder is CLEAN to avoid misleading old files.
+                                        // streamingRoot is "Assets/StreamingAssets/yoo"
+                                        string streamingPackageDir = System.IO.Path.Combine(streamingRoot, packageName);
+                                        if (System.IO.Directory.Exists(streamingPackageDir))
+                                        {
+                                            Debug.Log($"{DEBUG_FLAG} [Cleanup] 'Copy To Streaming Assets' is OFF. Cleaning up old files in: {streamingPackageDir}");
+                                            BuildUtils.DeleteDirectory(streamingPackageDir);
+                                            
+                                            // Also delete the .meta file associated with the directory to keep AssetDatabase in sync
+                                            string metaFilePath = streamingPackageDir + ".meta";
+                                            if (System.IO.File.Exists(metaFilePath))
+                                            {
+                                                try
+                                                {
+                                                    System.IO.File.Delete(metaFilePath);
+                                                    Debug.Log($"{DEBUG_FLAG} [Cleanup] Deleted associated meta file: {metaFilePath}");
+                                                }
+                                                catch (Exception ex)
+                                                {
+                                                    Debug.LogWarning($"{DEBUG_FLAG} Failed to delete meta file {metaFilePath}: {ex.Message}");
+                                                }
+                                            }
+                                        }
+
+                                        Debug.LogWarning($"{DEBUG_FLAG} 'Copy To Streaming Assets' is disabled. Copying raw build output to custom destination. " +
+                                                         "This may include cache/hash files not needed for runtime. " +
+                                                         "Enable 'Copy To Streaming Assets' for a clean, ready-to-use output.");
+                                    }
+
+                                    string dstDir = System.IO.Path.Combine(customDestRoot, buildTarget.ToString(), packageName);
+
+                                    Debug.Log($"{DEBUG_FLAG} Copying build result from {(isFromStreaming ? "StreamingAssets" : "BuildOutput")} to: {dstDir}");
+
+                                    if (System.IO.Directory.Exists(srcDir))
+                                    {
+                                        BuildUtils.ClearDirectory(dstDir);
+                                        // Copy files but ignore .meta files as they are not needed for distribution/runtime
+                                        BuildUtils.CopyAllFilesRecursively(srcDir, dstDir, new string[] { ".meta" });
+                                    }
+                                    else
+                                    {
+                                        Debug.LogError($"{DEBUG_FLAG} Source directory for copy not found: {srcDir}");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    Debug.LogError($"{DEBUG_FLAG} Failed to copy build result to custom directory: {ex.Message}");
+                                }
+                            }
                         }
                         else
                         {
@@ -265,9 +383,24 @@ namespace Build.Pipeline.Editor
             string[] guids = AssetDatabase.FindAssets("t:YooAssetBuildConfig");
             if (guids.Length > 0)
             {
-                string path = AssetDatabase.GUIDToAssetPath(guids[0]);
-                return AssetDatabase.LoadAssetAtPath<YooAssetBuildConfig>(path);
+                if (guids.Length > 1)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} Found multiple YooAssetBuildConfig assets. Using the first one found.");
+                }
+
+                foreach (var guid in guids)
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guid);
+                    YooAssetBuildConfig config = AssetDatabase.LoadAssetAtPath<YooAssetBuildConfig>(path);
+                    if (config != null)
+                    {
+                        Debug.Log($"{DEBUG_FLAG} Loaded config from: {path}. [StreamingAssets: {config.copyToStreamingAssets}]");
+                        return config;
+                    }
+                }
             }
+
+            Debug.LogError($"{DEBUG_FLAG} No YooAssetBuildConfig found! Please create a configuration asset.");
             return null;
         }
 
