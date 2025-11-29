@@ -138,7 +138,7 @@ namespace Build.Pipeline.Editor
                 ScriptingImplementation.IL2CPP,
                 $"{GetPlatformFolderName(BuildTarget.Android)}/{ApplicationName}.apk",
                 bCleanBuild: false,
-                bDeleteDebugFiles: false,
+                bDeleteDebugFiles: true, // Clean up debug files even in fast mode
                 bOutputIsFolderTarget: false);
         }
 
@@ -151,7 +151,7 @@ namespace Build.Pipeline.Editor
                 ScriptingImplementation.IL2CPP,
                 $"{GetPlatformFolderName(BuildTarget.StandaloneWindows64)}/{ApplicationName}.exe",
                 bCleanBuild: false,
-                bDeleteDebugFiles: false,
+                bDeleteDebugFiles: true, // Clean up debug files even in fast mode
                 bOutputIsFolderTarget: false);
         }
 
@@ -174,7 +174,7 @@ namespace Build.Pipeline.Editor
             bool clean = false;
             bool forceHybridCLR = false;
             bool forceYooAsset = false;
-            
+
             for (int i = 0; i < args.Length; i++)
             {
                 if (args[i] == "-buildTarget" && i + 1 < args.Length)
@@ -236,7 +236,7 @@ namespace Build.Pipeline.Editor
                 case BuildTarget.Android:
                     namedTarget = NamedBuildTarget.Android;
                     if (outputPath.EndsWith(".apk") || outputPath.EndsWith(".aab")) isFolder = false;
-                    else 
+                    else
                     {
                         isFolder = true;
                         EditorUserBuildSettings.exportAsGoogleAndroidProject = true;
@@ -248,7 +248,7 @@ namespace Build.Pipeline.Editor
                     break;
                 case BuildTarget.StandaloneOSX:
                     namedTarget = NamedBuildTarget.Standalone;
-                    isFolder = false; 
+                    isFolder = false;
                     break;
                 case BuildTarget.WebGL:
                     namedTarget = NamedBuildTarget.WebGL;
@@ -263,9 +263,9 @@ namespace Build.Pipeline.Editor
             // Fallback output path if not provided
             if (string.IsNullOrEmpty(outputPath))
             {
-                 outputPath = $"{GetPlatformFolderName(buildTarget)}/{ApplicationName}";
-                 if (!isFolder && buildTarget == BuildTarget.StandaloneWindows64) outputPath += ".exe";
-                 if (!isFolder && buildTarget == BuildTarget.Android) outputPath += ".apk";
+                outputPath = $"{GetPlatformFolderName(buildTarget)}/{ApplicationName}";
+                if (!isFolder && buildTarget == BuildTarget.StandaloneWindows64) outputPath += ".exe";
+                if (!isFolder && buildTarget == BuildTarget.Android) outputPath += ".apk";
             }
 
             PerformBuild(
@@ -346,7 +346,7 @@ namespace Build.Pipeline.Editor
             if (Directory.Exists(platformOutputFullPath))
             {
                 Debug.Log($"{DEBUG_FLAG} Clean old build {Path.GetFullPath(platformBuildOutputPath)}");
-                Directory.Delete(platformOutputFullPath, true);
+                BuildUtils.DeleteDirectory(platformOutputFullPath);
             }
         }
 
@@ -356,19 +356,49 @@ namespace Build.Pipeline.Editor
             string platformOutputFullPath =
                 platformBuildOutputPath != INVALID_FLAG ? Path.GetFullPath(platformBuildOutputPath) : INVALID_FLAG;
 
-            string BackUpPath = Path.Combine(platformOutputFullPath, $"{ApplicationName}_BackUpThisFolder_ButDontShipItWithYourGame");
-            if (Directory.Exists(BackUpPath))
+            if (platformOutputFullPath == INVALID_FLAG) return;
+
+            string[] foldersToDelete = new[]
             {
-                Debug.Log($"{DEBUG_FLAG} Delete Backup Folder: {Path.GetFullPath(BackUpPath)}");
-                Directory.Delete(BackUpPath, true);
+                Path.Combine(platformOutputFullPath, $"{ApplicationName}_BackUpThisFolder_ButDontShipItWithYourGame"),
+                Path.Combine(platformOutputFullPath, $"{ApplicationName}_BurstDebugInformation_DoNotShip")
+            };
+
+            // Unity might create these folders asynchronously AFTER BuildPlayer returns, especially with IL2CPP.
+            // We implement a "watch and kill" strategy: check repeatedly for a few seconds.
+            int maxWaitTimeMs = 3000;
+            int checkIntervalMs = 500;
+            int totalChecks = maxWaitTimeMs / checkIntervalMs;
+
+            Debug.Log($"{DEBUG_FLAG} Starting post-build cleanup monitoring ({maxWaitTimeMs}ms)...");
+
+            for (int i = 0; i < totalChecks; i++)
+            {
+                foreach (var folderPath in foldersToDelete)
+                {
+                    if (Directory.Exists(folderPath))
+                    {
+                        Debug.Log($"{DEBUG_FLAG} Detected unwanted folder: {folderPath}. Deleting...");
+                        try
+                        {
+                            BuildUtils.DeleteDirectory(folderPath);
+                            Debug.Log($"{DEBUG_FLAG} Successfully deleted: {folderPath}");
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"{DEBUG_FLAG} Failed to delete debug folder: {folderPath}. Error: {ex.Message}");
+                        }
+                    }
+                }
+
+                // Only sleep if we are not at the last check
+                if (i < totalChecks - 1)
+                {
+                    System.Threading.Thread.Sleep(checkIntervalMs);
+                }
             }
 
-            string BurstDebugPath = Path.Combine(platformOutputFullPath, $"{ApplicationName}_BurstDebugInformation_DoNotShip");
-            if (Directory.Exists(BurstDebugPath))
-            {
-                Debug.Log($"{DEBUG_FLAG} Delete Burst Debug Folder: {Path.GetFullPath(BurstDebugPath)}");
-                Directory.Delete(BurstDebugPath, true);
-            }
+            Debug.Log($"{DEBUG_FLAG} Post-build cleanup finished.");
         }
 
         private static string GetOutputTarget(BuildTarget TargetPlatform, string TargetPath,
@@ -380,21 +410,21 @@ namespace Build.Pipeline.Editor
             if (!Directory.Exists(Path.GetFullPath(platformOutFolder)))
             {
                 Debug.Log($"{DEBUG_FLAG} result path: {resultPath}, platformFolder: {platformOutFolder}, platform fullPath:{Path.GetFullPath(platformOutFolder)}");
-                Directory.CreateDirectory(platformOutFolder);
+                BuildUtils.CreateDirectory(platformOutFolder);
             }
 
 #if UNITY_IOS
             if (!Directory.Exists($"{resultPath}/Unity-iPhone/Images.xcassets/LaunchImage.launchimage"))
             {
-                Directory.CreateDirectory($"{resultPath}/Unity-iPhone/Images.xcassets/LaunchImage.launchimage");
+                BuildUtils.CreateDirectory($"{resultPath}/Unity-iPhone/Images.xcassets/LaunchImage.launchimage");
             }
 #endif
             return resultPath;
         }
 
         private static void PerformBuild(BuildTarget TargetPlatform, NamedBuildTarget BuildTargetName,
-            ScriptingImplementation BackendScriptImpl, string OutputTarget, 
-            bool bCleanBuild = true, 
+            ScriptingImplementation BackendScriptImpl, string OutputTarget,
+            bool bCleanBuild = true,
             bool bDeleteDebugFiles = true,
             bool bOutputIsFolderTarget = true)
         {
@@ -415,7 +445,7 @@ namespace Build.Pipeline.Editor
             {
                 // Load Build Data
                 TryGetBuildData();
-                
+
                 var previousTarget = EditorUserBuildSettings.activeBuildTarget;
 
                 if (bCleanBuild)
@@ -464,7 +494,7 @@ namespace Build.Pipeline.Editor
                 }
 
                 Debug.Log($"{DEBUG_FLAG} Start Build, Platform: {EditorUserBuildSettings.activeBuildTarget}");
-                
+
                 if (EditorUserBuildSettings.activeBuildTarget != TargetPlatform)
                 {
                     Debug.Log($"{DEBUG_FLAG} Switching active build target to {TargetPlatform}...");
@@ -477,12 +507,12 @@ namespace Build.Pipeline.Editor
 
                 // After target switch, refresh assets and optionally sync solution/build scripts
                 AssetDatabase.SaveAssets();
-                
+
                 if (buildData != null && buildData.UseBuildalon)
                 {
                     BuildalonIntegrator.SyncSolution();
                 }
-                
+
                 TryCleanAddressablesPlayerContent();
 
                 string originalVersion = PlayerSettings.bundleVersion;
@@ -501,12 +531,12 @@ namespace Build.Pipeline.Editor
                     buildPlayerOptions.locationPathName = GetOutputTarget(TargetPlatform, OutputTarget, bOutputIsFolderTarget);
                     buildPlayerOptions.target = TargetPlatform;
                     buildPlayerOptions.options = BuildOptions.None;
-                    
+
                     if (bCleanBuild)
                     {
                         buildPlayerOptions.options |= BuildOptions.CleanBuildCache;
                     }
-                    
+
                     buildPlayerOptions.options |= BuildOptions.CompressWithLz4;
                     buildReport = BuildPipeline.BuildPlayer(buildPlayerOptions);
                 }
