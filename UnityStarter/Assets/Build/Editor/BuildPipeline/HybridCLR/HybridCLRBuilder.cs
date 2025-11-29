@@ -137,9 +137,15 @@ namespace Build.Pipeline.Editor
             HybridCLRBuildConfig config = GetConfig();
             if (config == null)
             {
-                Debug.LogError($"{DEBUG_FLAG} Config not found. Please create a HybridCLRBuildConfig asset (CycloneGames/Build/HybridCLR Build Config).");
+                Debug.LogError($"{DEBUG_FLAG} Config not found. Please create a HybridCLRBuildConfig asset (Assets/CMRPG/Editor/Build/HybridCLR Build Config.asset).");
                 return;
             }
+
+            // Cache config values immediately to avoid potential loss during execution
+            string targetDirRelative = config.hotUpdateDllOutputDirectory;
+            var assemblyNames = config.GetHotUpdateAssemblyNames();
+
+            Debug.Log($"{DEBUG_FLAG} Using Config -> OutputDir: {targetDirRelative}, Assemblies: {assemblyNames.Count}");
 
             BuildTarget target = EditorUserBuildSettings.activeBuildTarget;
             string outputDir = GetHybridCLROutputDir(target);
@@ -151,14 +157,11 @@ namespace Build.Pipeline.Editor
             }
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            string destinationDir = Path.Combine(projectRoot, config.hotUpdateDllOutputDirectory);
+            string destinationDir = Path.Combine(projectRoot, targetDirRelative);
 
-            if (!Directory.Exists(destinationDir))
-            {
-                Directory.CreateDirectory(destinationDir);
-            }
+            // Use BuildUtils to ensure directory exists
+            BuildUtils.CreateDirectory(destinationDir);
 
-            var assemblyNames = config.GetHotUpdateAssemblyNames();
             if (assemblyNames.Count == 0)
             {
                 Debug.LogWarning($"{DEBUG_FLAG} No hot update assemblies defined in config.");
@@ -173,8 +176,11 @@ namespace Build.Pipeline.Editor
 
                 if (File.Exists(srcFile))
                 {
-                    File.Copy(srcFile, dstFile, true);
-                    Debug.Log($"{DEBUG_FLAG} Copied: {asmName}.dll -> {config.hotUpdateDllOutputDirectory}/{asmName}.dll.bytes");
+                    // Use BuildUtils for copying. 
+                    // Note: We do NOT clear the destination directory to preserve existing .meta files.
+                    // Overwriting ensures GUIDs remain stable if files are updated.
+                    BuildUtils.CopyFile(srcFile, dstFile, true);
+                    Debug.Log($"{DEBUG_FLAG} Copied: {asmName}.dll -> {targetDirRelative}/{asmName}.dll.bytes");
                     copyCount++;
                 }
                 else
@@ -192,13 +198,27 @@ namespace Build.Pipeline.Editor
 
         private static HybridCLRBuildConfig GetConfig()
         {
-            // Try searching by type first as the path might change
             string[] guids = AssetDatabase.FindAssets("t:HybridCLRBuildConfig");
             if (guids.Length > 0)
             {
-                string path = AssetDatabase.GUIDToAssetPath(guids[0]);
-                return AssetDatabase.LoadAssetAtPath<HybridCLRBuildConfig>(path);
+                if (guids.Length > 1)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} Found multiple HybridCLRBuildConfig assets. Using the first one found.");
+                }
+
+                foreach (var guid in guids)
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guid);
+                    HybridCLRBuildConfig config = AssetDatabase.LoadAssetAtPath<HybridCLRBuildConfig>(path);
+                    if (config != null)
+                    {
+                        Debug.Log($"{DEBUG_FLAG} Loaded config from: {path}");
+                        return config;
+                    }
+                }
             }
+            
+            Debug.LogError($"{DEBUG_FLAG} No HybridCLRBuildConfig found! Please create a configuration asset.");
             return null;
         }
 
