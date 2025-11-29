@@ -137,7 +137,7 @@ namespace Build.Pipeline.Editor
             HybridCLRBuildConfig config = GetConfig();
             if (config == null)
             {
-                Debug.LogError($"{DEBUG_FLAG} Config not found. Please create a HybridCLRBuildConfig asset (Assets/CMRPG/Editor/Build/HybridCLR Build Config.asset).");
+                Debug.LogError($"{DEBUG_FLAG} Config not found. Please create a HybridCLRBuildConfig asset.");
                 return;
             }
 
