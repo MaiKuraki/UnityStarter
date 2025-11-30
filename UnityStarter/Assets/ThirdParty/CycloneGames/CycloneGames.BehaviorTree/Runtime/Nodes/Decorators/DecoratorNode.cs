@@ -1,4 +1,5 @@
-﻿using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -24,14 +25,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             }
             return clone;
         }
-        public override BTState Evaluate(BlackBoard blackBoard)
+        public override BTState Evaluate(IBlackBoard blackBoard)
         {
             if (Child == null) return BTState.SUCCESS;
             if (!Child.CanReEvaluate) return BTState.SUCCESS;
             return OnEvaluate(blackBoard);
         }
-        protected virtual BTState OnEvaluate(BlackBoard blackBoard) => Child.Evaluate(blackBoard);
-        protected override void OnStop(BlackBoard blackBoard)
+        protected virtual BTState OnEvaluate(IBlackBoard blackBoard) => Child.Evaluate(blackBoard);
+        protected override void OnStop(IBlackBoard blackBoard)
         {
             Child?.BTStop(blackBoard);
         }

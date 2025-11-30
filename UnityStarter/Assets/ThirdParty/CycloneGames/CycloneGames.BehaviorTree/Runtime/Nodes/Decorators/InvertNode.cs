@@ -1,11 +1,12 @@
-﻿using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
 {
     public class InvertNode : DecoratorNode
     {
-        protected override void OnStart(BlackBoard blackBoard) { }
-        protected override BTState OnEvaluate(BlackBoard blackBoard)
+        protected override void OnStart(IBlackBoard blackBoard) { }
+        protected override BTState OnEvaluate(IBlackBoard blackBoard)
         {
             var result = Child.Evaluate(blackBoard);
             if (result == BTState.SUCCESS)
@@ -15,7 +16,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             return BTState.SUCCESS;
         }
 
-        protected override BTState OnRun(BlackBoard blackBoard)
+        protected override BTState OnRun(IBlackBoard blackBoard)
         {
             switch (Child.Run(blackBoard))
             {
@@ -28,6 +29,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             }
             return BTState.SUCCESS;
         }
-        protected override void OnStop(BlackBoard blackBoard) { }
+        protected override void OnStop(IBlackBoard blackBoard) { }
     }
 }

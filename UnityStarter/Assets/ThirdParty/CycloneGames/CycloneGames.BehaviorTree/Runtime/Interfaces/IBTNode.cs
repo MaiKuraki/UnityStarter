@@ -1,5 +1,4 @@
 using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Nodes;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Interfaces
@@ -13,10 +12,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Interfaces
         Vector2 Position { get; set; }
         string GUID { get; }
 
-        BTState Run(BlackBoard blackBoard);
-        BTState Evaluate(BlackBoard blackBoard);
-        void BTStop(BlackBoard blackBoard);
-        
+        BTState Run(IBlackBoard blackBoard);
+        BTState Evaluate(IBlackBoard blackBoard);
+        void BTStop(IBlackBoard blackBoard);
+
         /// <summary>
         /// Inject dependencies into the node.
         /// </summary>

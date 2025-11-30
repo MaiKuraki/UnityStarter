@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
@@ -73,7 +74,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return clone;
         }
 
-        protected override BTState OnRun(BlackBoard blackBoard)
+        protected override BTState OnRun(IBlackBoard blackBoard)
         {
             // Self abort
             if (AbortType is ConditionalAbortType.BOTH or ConditionalAbortType.SELF)
@@ -88,7 +89,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return RunChildren(blackBoard);
         }
 
-        public override BTState Evaluate(BlackBoard blackBoard)
+        public override BTState Evaluate(IBlackBoard blackBoard)
         {
             return IsStarted ? OnActiveEvaluate(blackBoard) : OnDeActiveEvaluate(blackBoard);
         }
@@ -98,7 +99,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
         /// </summary>
         /// <param name="blackBoard"> BlackBoard </param>
         /// <returns> BTState </returns>
-        protected virtual BTState OnDeActiveEvaluate(BlackBoard blackBoard)
+        protected virtual BTState OnDeActiveEvaluate(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
             {
@@ -113,23 +114,23 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return BTState.SUCCESS;
         }
 
-        protected abstract BTState OnActiveEvaluate(BlackBoard blackBoard);
+        protected abstract BTState OnActiveEvaluate(IBlackBoard blackBoard);
 
         /// <summary>
         /// Handle the low priority abort
         /// </summary>
         /// <param name="blackBoard"> BlackBoard </param>
-        protected virtual BTState OnLowerPriorityEvaluate(BlackBoard blackBoard) => BTState.SUCCESS;
+        protected virtual BTState OnLowerPriorityEvaluate(IBlackBoard blackBoard) => BTState.SUCCESS;
 
         /// <summary>
         /// Handle the children nodes
         /// </summary>
         /// <param name="blackBoard"> BlackBoard </param>
         /// <returns> BTState </returns>
-        protected abstract BTState RunChildren(BlackBoard blackBoard);
+        protected abstract BTState RunChildren(IBlackBoard blackBoard);
 
 
-        protected override void OnStop(BlackBoard blackBoard)
+        protected override void OnStop(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
             {

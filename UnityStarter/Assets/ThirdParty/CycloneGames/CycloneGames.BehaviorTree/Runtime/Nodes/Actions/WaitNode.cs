@@ -1,4 +1,5 @@
-﻿using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
@@ -9,12 +10,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
         [SerializeField] private bool _useRandomBetweenTwoConstants = false;
         [SerializeField] private Vector2 _range = new Vector2(1f, 2f);
         [SerializeField] private float _duration = 1f;
-        
+
         public float Duration { get => _duration; set => _duration = value; }
-        
+
         private float _time;
-        
-        protected override void OnStart(BlackBoard blackBoard)
+
+        protected override void OnStart(IBlackBoard blackBoard)
         {
             _time = 0;
             if (_useRandomBetweenTwoConstants)
@@ -22,7 +23,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
                 _duration = Random.Range(_range.x, _range.y);
             }
         }
-        protected override BTState OnRun(BlackBoard blackBoard)
+        protected override BTState OnRun(IBlackBoard blackBoard)
         {
             _time += Time.deltaTime;
             return _time < _duration ? BTState.RUNNING : BTState.SUCCESS;

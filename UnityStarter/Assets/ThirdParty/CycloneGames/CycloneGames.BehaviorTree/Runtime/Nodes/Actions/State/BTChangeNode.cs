@@ -1,4 +1,5 @@
 using CycloneGames.BehaviorTree.Runtime.Components;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.State
@@ -11,7 +12,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.State
         {
             _stateMachine = Tree.Owner.GetComponent<BTStateMachineComponent>();
         }
-        protected override void OnStart(BlackBoard blackBoard)
+        protected override void OnStart(IBlackBoard blackBoard)
         {
             if (_stateMachine == null) return;
             if (string.IsNullOrEmpty(_stateId)) return;
