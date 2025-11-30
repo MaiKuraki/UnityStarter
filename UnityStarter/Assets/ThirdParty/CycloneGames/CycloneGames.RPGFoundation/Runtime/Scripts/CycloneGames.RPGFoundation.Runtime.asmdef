@@ -1,7 +1,9 @@
 {
     "name": "CycloneGames.RPGFoundation.Runtime",
     "rootNamespace": "",
-    "references": [],
+    "references": [
+        "Unity.Mathematics"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
