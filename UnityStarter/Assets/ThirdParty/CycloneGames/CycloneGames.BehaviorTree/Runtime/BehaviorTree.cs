@@ -41,14 +41,14 @@ namespace CycloneGames.BehaviorTree.Runtime
         public BTState TreeState { get; private set; } = BTState.RUNNING;
         public List<BTNode> Nodes = new List<BTNode>();
 
-        private BlackBoard _lastBlackBoard = new BlackBoard();
+        private IBlackBoard _lastBlackBoard = new BlackBoard();
         private bool _isCloned = false;
 
         // Cached collections to eliminate per-call allocations
         private readonly List<BTNode> _childrenCache = new List<BTNode>(8);
         private readonly Stack<BTNode> _traverseStack = new Stack<BTNode>(16);
 
-        public BTState BTUpdate(BlackBoard blackBoard)
+        public BTState BTUpdate(IBlackBoard blackBoard)
         {
             if (Root == null)
             {

@@ -1,4 +1,5 @@
 using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
 {
@@ -6,7 +7,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
     {
         private int _current = 0;
 
-        protected override BTState OnActiveEvaluate(BlackBoard blackBoard)
+        protected override BTState OnActiveEvaluate(IBlackBoard blackBoard)
         {
             if (Children.Count == 0) return BTState.SUCCESS;
 
@@ -21,7 +22,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return BTState.SUCCESS;
         }
 
-        protected override BTState OnLowerPriorityEvaluate(BlackBoard blackBoard)
+        protected override BTState OnLowerPriorityEvaluate(IBlackBoard blackBoard)
         {
             if (Children.Count == 0) return BTState.SUCCESS;
 
@@ -37,12 +38,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return BTState.SUCCESS;
         }
 
-        protected override void OnStart(BlackBoard blackBoard)
+        protected override void OnStart(IBlackBoard blackBoard)
         {
             _current = 0;
         }
 
-        protected override BTState RunChildren(BlackBoard blackBoard)
+        protected override BTState RunChildren(IBlackBoard blackBoard)
         {
             if (Children.Count == 0) return BTState.SUCCESS;
             if (_current < 0 || _current >= Children.Count)
