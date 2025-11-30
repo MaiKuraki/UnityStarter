@@ -1,4 +1,5 @@
 using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
 {
@@ -6,7 +7,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
     {
         private int _current = 0;
 
-        protected override BTState OnActiveEvaluate(BlackBoard blackBoard)
+        protected override BTState OnActiveEvaluate(IBlackBoard blackBoard)
         {
             if (Children.Count == 0) return BTState.FAILURE;
 
@@ -23,7 +24,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return BTState.FAILURE;
         }
 
-        protected override BTState OnDeActiveEvaluate(BlackBoard blackBoard)
+        protected override BTState OnDeActiveEvaluate(IBlackBoard blackBoard)
         {
             if (Children.Count == 0) return BTState.FAILURE;
 
@@ -40,13 +41,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return BTState.FAILURE;
         }
 
-        protected override BTState OnLowerPriorityEvaluate(BlackBoard blackBoard)
+        protected override BTState OnLowerPriorityEvaluate(IBlackBoard blackBoard)
         {
             HandleLowerPriority(blackBoard);
             return BTState.SUCCESS;
         }
 
-        private void HandleLowerPriority(BlackBoard blackBoard)
+        private void HandleLowerPriority(IBlackBoard blackBoard)
         {
             if (Children.Count == 0 || _current < 0 || _current >= Children.Count) return;
 
@@ -67,12 +68,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             }
         }
 
-        protected override void OnStart(BlackBoard blackBoard)
+        protected override void OnStart(IBlackBoard blackBoard)
         {
             _current = 0;
         }
 
-        protected override BTState RunChildren(BlackBoard blackBoard)
+        protected override BTState RunChildren(IBlackBoard blackBoard)
         {
             if (Children.Count == 0) return BTState.FAILURE;
             if (_current < 0 || _current >= Children.Count)

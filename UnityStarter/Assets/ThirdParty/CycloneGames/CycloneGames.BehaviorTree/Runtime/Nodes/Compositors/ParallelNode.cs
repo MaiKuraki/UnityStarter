@@ -1,4 +1,5 @@
-﻿using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
@@ -13,7 +14,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             UntilAnySuccess,
         }
         [SerializeField] private ParallelMode _mode = ParallelMode.Default;
-        protected override BTState OnActiveEvaluate(BlackBoard blackBoard)
+        protected override BTState OnActiveEvaluate(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
             {
@@ -24,7 +25,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return BTState.SUCCESS;
         }
 
-        protected override BTState RunChildren(BlackBoard blackBoard)
+        protected override BTState RunChildren(IBlackBoard blackBoard)
         {
             switch (_mode)
             {
@@ -40,7 +41,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
                     return BTState.FAILURE;
             }
         }
-        private BTState RunDefault(BlackBoard blackBoard)
+        private BTState RunDefault(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
             {
@@ -48,7 +49,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             }
             return BTState.RUNNING;
         }
-        private BTState RunUntilAnyComplete(BlackBoard blackBoard)
+        private BTState RunUntilAnyComplete(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
             {
@@ -58,7 +59,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             }
             return BTState.RUNNING;
         }
-        private BTState RunUntilAnyFailure(BlackBoard blackBoard)
+        private BTState RunUntilAnyFailure(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
             {
@@ -67,7 +68,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             }
             return BTState.RUNNING;
         }
-        private BTState RunUntilAnySuccess(BlackBoard blackBoard)
+        private BTState RunUntilAnySuccess(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
             {

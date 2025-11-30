@@ -1,4 +1,5 @@
-﻿using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -11,7 +12,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         [SerializeField] private float _waitTime = 1f;
         private float _timer = 0f;
 
-        protected override void OnStart(BlackBoard blackBoard)
+        protected override void OnStart(IBlackBoard blackBoard)
         {
             _timer = 0f;
             if (_useRandomBetweenTwoConstants)
@@ -19,7 +20,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
                 _waitTime = Random.Range(_waitTimeRange.x, _waitTimeRange.y);
             }
         }
-        protected override BTState OnRun(BlackBoard blackBoard)
+        protected override BTState OnRun(IBlackBoard blackBoard)
         {
             _timer += Time.deltaTime;
             if (_timer >= _waitTime)
