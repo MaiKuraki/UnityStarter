@@ -1,0 +1,144 @@
+#node-border {
+    background-color: rgb(56, 56, 56);
+    border-top-width: 1px;
+    border-right-width: 1px;
+    border-bottom-width: 1px;
+    border-left-width: 1px;
+    border-left-color: rgb(88, 88, 88);
+    border-right-color: rgb(88, 88, 88);
+    border-top-color: rgb(88, 88, 88);
+    border-bottom-color: rgb(88, 88, 88);
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+    border-bottom-left-radius: 5px;
+}
+
+#input {
+    align-self: stretch;
+    justify-content: space-around;
+}
+
+#title {
+    min-height: 50px;
+    align-self: stretch;
+    justify-content: center;
+    width: 100%;
+}
+
+#title-label {
+    flex-grow: 1;
+    -unity-text-align: middle-center;
+    -unity-font-style: bold;
+    font-size: 12px;
+    color: rgb(255, 255, 255);
+    height: 100%;
+    width: 100%;
+    white-space: normal;
+    text-overflow: ellipsis;
+    align-self: stretch;
+}
+
+#output {
+    justify-content: center;
+    align-self: center;
+    flex-wrap: wrap;
+    flex-direction: column-reverse;
+}
+
+#selection-border {
+    border-left-color: rgb(0, 151, 255);
+    border-right-color: rgb(0, 151, 255);
+    border-top-color: rgb(0, 151, 255);
+    border-bottom-color: rgb(0, 151, 255);
+    border-top-width: 0;
+    border-right-width: 0;
+    border-bottom-width: 0;
+    border-left-width: 0;
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+    border-bottom-left-radius: 5px;
+}
+
+:hover > #selection-border {
+    border-top-width: 1px;
+    border-right-width: 1px;
+    border-bottom-width: 1px;
+    border-left-width: 1px;
+}
+
+:selected > #selection-border {
+    border-top-width: 1.5px;
+    border-right-width: 1.5px;
+    border-bottom-width: 1.5px;
+    border-left-width: 1.5px;
+}
+
+:hover:selected > #selection-border {
+    border-top-width: 3px;
+    border-right-width: 3px;
+    border-bottom-width: 3px;
+    border-left-width: 3px;
+}
+
+.node {
+    min-width: 100px;
+    max-width: 100px;
+}
+
+.action #input {
+    background-color: rgb(127, 161, 74);
+}
+
+.condition #input {
+    background-color: rgb(161, 74, 139);
+}
+
+.composite #input {
+    background-color: rgb(214, 158, 60);
+}
+
+.decorator #input {
+    background-color: rgb(54, 152, 209);
+}
+
+.root #input {
+    background-color: rgb(180, 50, 54);
+    height: 20px;
+}
+
+#node-state-border {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    border-bottom-right-radius: 5px;
+    border-bottom-left-radius: 5px;
+}
+
+.running #node-border {
+    background-color: rgb(70, 143, 73);
+    transition-property: background-color;
+    transition-timing-function: ease-in-out-sine;
+    transition-duration: 0.25s;
+}
+
+.failure #node-state-border {
+    background-color: rgb(255, 0, 0);
+}
+
+.success #node-state-border {
+    background-color: rgb(39, 255, 0);
+}
+
+.not-entered #node-state-border {
+}
