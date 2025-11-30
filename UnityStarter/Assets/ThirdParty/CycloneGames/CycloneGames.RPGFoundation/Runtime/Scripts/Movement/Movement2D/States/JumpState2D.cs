@@ -1,0 +1,68 @@
+using CycloneGames.RPGFoundation.Runtime.Movement;
+using Unity.Mathematics;
+
+namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
+{
+    public class JumpState2D : MovementStateBase2D
+    {
+        public override Movement.MovementStateType StateType => Movement.MovementStateType.Jump;
+
+        private int _jumpCount;
+
+        public override void OnEnter(ref MovementContext2D context)
+        {
+            float horizontalVelocity = context.Rigidbody.velocity.x;
+            context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, context.Config.jumpForce);
+            _jumpCount++;
+
+            if (context.Animator != null)
+            {
+                context.Animator.SetTrigger(context.Config.AnimIDJump);
+            }
+        }
+
+        public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
+        {
+            float airControl = context.Config.runSpeed * context.Config.airControlMultiplier;
+            float horizontalVelocity = context.InputDirection.x * airControl;
+
+            velocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
+            context.CurrentSpeed = math.abs(horizontalVelocity);
+            context.CurrentVelocity = velocity;
+
+            if (context.Animator != null)
+            {
+                context.Animator.SetFloat(context.Config.AnimIDMovementSpeed, context.CurrentSpeed);
+                context.Animator.SetFloat(context.Config.AnimIDVerticalSpeed, velocity.y);
+            }
+        }
+
+        public override MovementStateBase2D EvaluateTransition(ref MovementContext2D context)
+        {
+            if (context.IsGrounded && context.Rigidbody.velocity.y <= 0)
+            {
+                _jumpCount = 0;
+                return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+            }
+
+            if (context.Rigidbody.velocity.y < 0)
+            {
+                return StatePool<MovementStateBase2D>.GetState<FallState2D>();
+            }
+
+            if (context.JumpPressed && _jumpCount < context.Config.maxJumpCount)
+            {
+                float horizontalVelocity = context.Rigidbody.velocity.x;
+                context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, context.Config.jumpForce);
+                _jumpCount++;
+            }
+
+            return null;
+        }
+
+        public override void OnExit(ref MovementContext2D context)
+        {
+            _jumpCount = 0;
+        }
+    }
+}
