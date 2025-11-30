@@ -1,12 +1,13 @@
 ﻿using System;
 using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes
 {
-    public abstract class BTNode : ScriptableObject
+    public abstract class BTNode : ScriptableObject, IBTNode
     {
-        [HideInInspector] public BTState State = BTState.NOT_ENTERED;
+        [HideInInspector] public BTState State { get; set; } = BTState.NOT_ENTERED;
         [HideInInspector] public string GUID;
         public Vector2 Position
         {
@@ -14,7 +15,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             set
             {
                 _position = value;
-                Tree.OnValidate();
+                if (Tree != null)
+                {
+#if UNITY_EDITOR
+                    Tree.OnValidate();
+#endif
+                }
             }
         }
         public BehaviorTree Tree
@@ -38,12 +44,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         private bool _isInitialized = false;
         private bool _isStarted = false;
 
+        string IBTNode.GUID => GUID;
+
         private void Awake() { }
 
         /// <summary>
         /// This method is called when the behavior tree runner is awake.
         /// </summary>
         public virtual void OnAwake() { }
+        
+        /// <summary>
+        /// Inject dependencies into the node.
+        /// </summary>
+        /// <param name="container">Dependency container</param>
+        public virtual void Inject(object container) { }
+
         /// <summary>
         /// This method is called when the node is run.
         /// </summary>

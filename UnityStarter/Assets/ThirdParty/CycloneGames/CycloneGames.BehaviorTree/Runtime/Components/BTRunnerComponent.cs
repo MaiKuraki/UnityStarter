@@ -59,7 +59,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
             else
             {
-                behaviorTree = behaviorTree.Clone(gameObject);
+                behaviorTree = (BehaviorTree)behaviorTree.Clone(gameObject);
                 if (behaviorTree != null)
                 {
                     behaviorTree.OnAwake();
@@ -128,7 +128,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 Debug.LogWarning($"[BTRunnerComponent] Cannot set null behavior tree on {gameObject.name}.");
                 return;
             }
-            _nextTree = newTree.IsCloned ? newTree : newTree.Clone(gameObject);
+            _nextTree = newTree.IsCloned ? newTree : (BehaviorTree)newTree.Clone(gameObject);
             if (_nextTree != null)
             {
                 _nextTree.OnAwake();
