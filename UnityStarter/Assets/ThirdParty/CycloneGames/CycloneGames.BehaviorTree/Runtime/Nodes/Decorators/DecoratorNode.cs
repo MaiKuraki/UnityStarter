@@ -8,6 +8,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         public override bool CanReEvaluate => Child != null && Child.CanReEvaluate;
         public override bool EnableHijack => Child != null && Child.EnableHijack;
         [HideInInspector] public BTNode Child;
+
+        public override void Inject(object container)
+        {
+            base.Inject(container);
+            Child?.Inject(container);
+        }
+
         public override BTNode Clone()
         {
             var clone = (DecoratorNode)base.Clone();

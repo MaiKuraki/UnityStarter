@@ -7,6 +7,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
     {
         [HideInInspector] public BTNode Child;
 
+        public override void Inject(object container)
+        {
+            base.Inject(container);
+            Child?.Inject(container);
+        }
+
         protected override BTState OnRun(BlackBoard blackBoard)
         {
             if (Child == null) return BTState.FAILURE;
