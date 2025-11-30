@@ -1,0 +1,20 @@
+﻿{
+  "name": "com.cyclone-games.behavior-tree",
+  "version": "1.0.0",
+  "displayName": "Cyclone Games Behavior Tree",
+  "description": "Cyclone Games Behavior Tree is a simple and easy to use behavior tree system for Unity.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.5.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Behavior"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}

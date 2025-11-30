@@ -1,0 +1,21 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
+    <Style src="project://database/Assets/Plugins/BehaviorTree/Editor/Nodes/BTNodeView.uss?fileID=7433441132597879392&amp;guid=58cd66f66a7c2b243b22592bb0975bf7&amp;type=3#BTNodeView" />
+    <ui:VisualElement name="node-state-border" picking-mode="Ignore" />
+    <ui:VisualElement name="node-border">
+        <ui:VisualElement name="contents">
+            <ui:VisualElement name="top">
+                <ui:VisualElement name="input" />
+                <ui:VisualElement name="title">
+                    <ui:Label name="title-label" text="Content" class="unity-text-element unity-label" />
+                    <ui:VisualElement name="title-button-container">
+                        <ui:VisualElement name="collapse-button">
+                            <ui:VisualElement name="icon" />
+                        </ui:VisualElement>
+                    </ui:VisualElement>
+                </ui:VisualElement>
+                <ui:VisualElement name="output" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:VisualElement>
+    <ui:VisualElement name="selection-border" picking-mode="Ignore" style="top: 0; right: 1px; left: 0; bottom: 0;" />
+</ui:UXML>
