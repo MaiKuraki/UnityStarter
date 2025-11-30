@@ -1,4 +1,5 @@
 using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -9,7 +10,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         [SerializeField] private bool _resetOnSuccess = false;
         private float _lastTime = 0f;
         private bool _isCoolDownStarted = false;
-        public override BTState Evaluate(BlackBoard blackBoard)
+        public override BTState Evaluate(IBlackBoard blackBoard)
         {
             if (Time.time - _lastTime > _coolDown)
             {
@@ -18,7 +19,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             return BTState.FAILURE;
         }
 
-        protected override BTState OnRun(BlackBoard blackBoard)
+        protected override BTState OnRun(IBlackBoard blackBoard)
         {
             if (Time.time - _lastTime > _coolDown)
             {
@@ -27,7 +28,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             }
             return BTState.FAILURE;
         }
-        protected override void OnStop(BlackBoard blackBoard)
+        protected override void OnStop(IBlackBoard blackBoard)
         {
             if (!_isCoolDownStarted)
             {

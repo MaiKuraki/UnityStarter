@@ -1,18 +1,19 @@
-﻿using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
 {
     public class SimpleParallelNode : CompositeNode
     {
-        protected override BTState OnDeActiveEvaluate(BlackBoard blackBoard)
+        protected override BTState OnDeActiveEvaluate(IBlackBoard blackBoard)
         {
             return BTState.SUCCESS;
         }
-        protected override BTState OnActiveEvaluate(BlackBoard blackBoard)
+        protected override BTState OnActiveEvaluate(IBlackBoard blackBoard)
         {
             return BTState.SUCCESS;
         }
-        public override BTState Evaluate(BlackBoard blackBoard)
+        public override BTState Evaluate(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
             {
@@ -22,7 +23,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             }
             return BTState.SUCCESS;
         }
-        protected override BTState RunChildren(BlackBoard blackBoard)
+        protected override BTState RunChildren(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
             {

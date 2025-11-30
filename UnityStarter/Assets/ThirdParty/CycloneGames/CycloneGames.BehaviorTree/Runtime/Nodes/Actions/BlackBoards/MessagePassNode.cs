@@ -1,5 +1,6 @@
-﻿using CycloneGames.BehaviorTree.Runtime.Attributes;
+using CycloneGames.BehaviorTree.Runtime.Attributes;
 using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.BlackBoards
@@ -9,7 +10,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.BlackBoards
     {
         [SerializeField] private string _key = "Key";
         [SerializeField] private string _message = "Message";
-        protected override BTState OnRun(BlackBoard blackBoard)
+        protected override BTState OnRun(IBlackBoard blackBoard)
         {
             //Debug.Log($"MessagePassNode : {_key} : {_message}");
             blackBoard?.Set(_key, _message);

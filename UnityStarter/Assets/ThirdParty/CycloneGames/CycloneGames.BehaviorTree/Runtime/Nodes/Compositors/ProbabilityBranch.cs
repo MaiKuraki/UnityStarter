@@ -1,5 +1,6 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 using Random = UnityEngine.Random;
 
@@ -9,17 +10,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
     {
         [SerializeField] private List<float> _probabilities = new List<float>();
         private int _currentBranch = 0;
-        
-        protected override BTState OnActiveEvaluate(BlackBoard blackBoard)
+
+        protected override BTState OnActiveEvaluate(IBlackBoard blackBoard)
         {
             if (Children.Count == 0 || _currentBranch < 0 || _currentBranch >= Children.Count)
                 return BTState.FAILURE;
-            
+
             if (!Children[_currentBranch].CanReEvaluate) return BTState.SUCCESS;
             return Children[_currentBranch].Evaluate(blackBoard);
         }
-        
-        protected override void OnStart(BlackBoard blackBoard)
+
+        protected override void OnStart(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
             {
@@ -43,15 +44,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
                 }
             }
         }
-        
-        protected override BTState RunChildren(BlackBoard blackBoard)
+
+        protected override BTState RunChildren(IBlackBoard blackBoard)
         {
             if (Children.Count == 0 || _currentBranch < 0 || _currentBranch >= Children.Count)
                 return BTState.FAILURE;
-            
+
             return Children[_currentBranch].Run(blackBoard);
         }
-        
+
         public override BTNode Clone()
         {
             var clone = (ProbabilityBranch)base.Clone();

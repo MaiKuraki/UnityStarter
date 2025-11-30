@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
@@ -52,7 +52,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         /// This method is called when the behavior tree runner is awake.
         /// </summary>
         public virtual void OnAwake() { }
-        
+
         /// <summary>
         /// Inject dependencies into the node.
         /// </summary>
@@ -64,7 +64,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         /// </summary>
         /// <param name="blackBoard"> The blackboard of the behavior tree. </param>
         /// <returns> The state of the node. </returns>
-        public BTState Run(BlackBoard blackBoard)
+        public BTState Run(IBlackBoard blackBoard)
         {
             if (!_isStarted)
             {
@@ -81,7 +81,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         /// <summary>
         /// This method is called when the node is started.
         /// </summary>
-        private void BTStart(BlackBoard blackBoard)
+        private void BTStart(IBlackBoard blackBoard)
         {
             Initialize(blackBoard);
             OnStart(blackBoard);
@@ -90,7 +90,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         /// <summary>
         /// This method is called when the node is stopped.
         /// </summary>
-        public void BTStop(BlackBoard blackBoard)
+        public void BTStop(IBlackBoard blackBoard)
         {
             if (!_isStarted) return;
             OnStop(blackBoard);
@@ -99,7 +99,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         /// <summary>
         /// This method is called once when the behavior tree is initialized.
         /// </summary>
-        private void Initialize(BlackBoard blackBoard)
+        private void Initialize(IBlackBoard blackBoard)
         {
             if (_isInitialized) return;
             _isInitialized = true;
@@ -109,7 +109,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         /// <summary>
         /// This method is called when the node is started.
         /// </summary>
-        protected virtual void OnStart(BlackBoard blackBoard) { }
+        protected virtual void OnStart(IBlackBoard blackBoard) { }
 
         /// <summary>
         /// This method is called every frame while the node is running.
@@ -117,22 +117,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         /// </summary>
         /// <param name="blackBoard"> The blackboard of the behavior tree. </param>
         /// <returns> The state of the node. </returns>
-        protected virtual BTState OnRun(BlackBoard blackBoard) { return BTState.SUCCESS; }
+        protected virtual BTState OnRun(IBlackBoard blackBoard) { return BTState.SUCCESS; }
 
         /// <summary>
         /// This method is called when the node is stopped.
         /// </summary>
-        protected virtual void OnStop(BlackBoard blackBoard) { }
+        protected virtual void OnStop(IBlackBoard blackBoard) { }
         /// <summary>
         /// This method is called when the behavior tree is initialized.
         /// </summary>
-        protected virtual void OnInitialize(BlackBoard blackBoard) { }
+        protected virtual void OnInitialize(IBlackBoard blackBoard) { }
         /// <summary>
         /// This method is called when the node is evaluated.
         /// </summary>
         /// <param name="blackBoard"> The blackboard of the behavior tree. </param>
         /// <returns> The state of the node. </returns>
-        public abstract BTState Evaluate(BlackBoard blackBoard);
+        public abstract BTState Evaluate(IBlackBoard blackBoard);
         public void OnValidate()
         {
             try
