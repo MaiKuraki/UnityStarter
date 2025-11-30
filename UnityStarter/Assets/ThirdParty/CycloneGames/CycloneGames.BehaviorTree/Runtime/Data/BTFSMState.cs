@@ -11,11 +11,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Data
         [SerializeField] private string _id;
         [SerializeField] private BehaviorTree _tree;
         private BehaviorTree _behaviorTree = null;
+        
         public BehaviorTree GetTree(GameObject owner)
         {
-            if (_behaviorTree == null)
+            if (_behaviorTree == null && _tree != null)
             {
-                _behaviorTree = _tree.Clone(owner);
+                _behaviorTree = (BehaviorTree)_tree.Clone(owner);
             }
             return _behaviorTree;
         }

@@ -43,6 +43,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
 
         private static readonly NodePositionComparer _positionComparer = new NodePositionComparer();
 
+        public override void Inject(object container)
+        {
+            base.Inject(container);
+            for (int i = 0; i < Children.Count; i++)
+            {
+                Children[i]?.Inject(container);
+            }
+        }
+
         public override BTNode Clone()
         {
             var clone = (CompositeNode)base.Clone();

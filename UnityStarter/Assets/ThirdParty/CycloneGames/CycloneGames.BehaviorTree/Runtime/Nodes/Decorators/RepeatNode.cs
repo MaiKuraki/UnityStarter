@@ -13,12 +13,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         [SerializeField] private int _repeatCount = 1;
         [SerializeField] private Vector2 _randomRepeatCountRange = new Vector2(1, 3);
         private int _currentRepeatCount = 0;
+        
         protected override void OnStart(BlackBoard blackBoard)
         {
             if (_repeatForever) return;
             _repeatCount = _useRandomRepeatCount ? Random.Range((int)_randomRepeatCountRange.x, (int)_randomRepeatCountRange.y) : _repeatCount;
             _currentRepeatCount = 0;
         }
+        
         protected override BTState OnRun(BlackBoard blackBoard)
         {
             var state = Child.Run(blackBoard);
@@ -32,12 +34,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             }
             return _currentRepeatCount >= _repeatCount ? BTState.SUCCESS : BTState.RUNNING;
         }
+        
         protected override void CheckIntegrity()
         {
             base.CheckIntegrity();
             if (_repeatForever)
             {
                 _useRandomRepeatCount = false;
+            }
+            
+            // Validate random range
+            if (_useRandomRepeatCount && _randomRepeatCountRange.x > _randomRepeatCountRange.y)
+            {
+                float temp = _randomRepeatCountRange.x;
+                _randomRepeatCountRange.x = _randomRepeatCountRange.y;
+                _randomRepeatCountRange.y = temp;
             }
         }
 
