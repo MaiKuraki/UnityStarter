@@ -9,7 +9,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
         [SerializeField] private bool _useRandomBetweenTwoConstants = false;
         [SerializeField] private Vector2 _range = new Vector2(1f, 2f);
         [SerializeField] private float _duration = 1f;
+        
+        public float Duration { get => _duration; set => _duration = value; }
+        
         private float _time;
+        
         protected override void OnStart(BlackBoard blackBoard)
         {
             _time = 0;

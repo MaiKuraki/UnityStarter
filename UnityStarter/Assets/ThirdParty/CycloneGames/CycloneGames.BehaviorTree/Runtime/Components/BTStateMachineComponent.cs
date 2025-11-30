@@ -1,4 +1,3 @@
-using System;
 using CycloneGames.BehaviorTree.Runtime.Data;
 using UnityEngine;
 
@@ -9,15 +8,30 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     {
         [SerializeField] private string _initialState;
         [SerializeField] private BTFSMState[] _states;
+
         private void Start()
         {
             SetState(_initialState);
         }
+
         public void SetState(string id)
         {
             if (string.IsNullOrEmpty(id)) return;
-            var state = Array.Find(_states, s => s.ID == id);
-            SetTree(state.GetTree(gameObject));
+
+            BTFSMState targetState = null;
+            for (int i = 0; i < _states.Length; i++)
+            {
+                if (_states[i].ID == id)
+                {
+                    targetState = _states[i];
+                    break;
+                }
+            }
+
+            if (targetState != null)
+            {
+                SetTree(targetState.GetTree(gameObject));
+            }
         }
     }
 }

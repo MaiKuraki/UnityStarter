@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Data;
+using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Decorators;
@@ -14,7 +15,7 @@ using UnityEngine;
 namespace CycloneGames.BehaviorTree.Runtime
 {
     [CreateAssetMenu(fileName = "BehaviorTree", menuName = "CycloneGames/AI/BehaviorTree")]
-    public class BehaviorTree : ScriptableObject
+    public class BehaviorTree : ScriptableObject, IBehaviorTree
     {
         #region Static Parts
         private static event Action<BTNode> NodeModifier;
@@ -37,7 +38,7 @@ namespace CycloneGames.BehaviorTree.Runtime
         public bool IsCloned => _isCloned;
         public GameObject Owner { get; private set; } = null;
         public BTNode Root;
-        public BTState TreeState = BTState.RUNNING;
+        public BTState TreeState { get; private set; } = BTState.RUNNING;
         public List<BTNode> Nodes = new List<BTNode>();
 
         private BlackBoard _lastBlackBoard = new BlackBoard();
@@ -61,6 +62,14 @@ namespace CycloneGames.BehaviorTree.Runtime
                 TreeState = Root.Run(_lastBlackBoard);
             }
             return TreeState;
+        }
+
+        public void Inject(object container)
+        {
+            for (int i = 0; i < Nodes.Count; i++)
+            {
+                Nodes[i]?.Inject(container);
+            }
         }
 
         /// <summary>
@@ -93,7 +102,12 @@ namespace CycloneGames.BehaviorTree.Runtime
             return _childrenCache;
         }
 
-        public BehaviorTree Clone(GameObject owner)
+        public IBehaviorTree Clone(GameObject owner)
+        {
+            return CloneTree(owner);
+        }
+
+        public BehaviorTree CloneTree(GameObject owner)
         {
             if (Root == null)
             {
