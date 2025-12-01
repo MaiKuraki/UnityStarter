@@ -30,7 +30,7 @@
 -   **模块化架构**：所有模块都构建为解耦的 Unity Package (包括独立的 asmdef 以及配置完成的 package.json)，让您可以轻松地包含或排除功能。
 -   **借鉴于虚幻引擎**：实现了经过验证的设计理念，如游戏玩法框架（Gameplay Framework）、游戏能力系统（GAS）和游戏标签（Gameplay Tags）。
 -   **性能优先**：在日志、工厂和音频等关键系统中专注于低/零 GC 分配。
--   **热更新支持**：完整的热更新解决方案，集成 **HybridCLR** 实现 C# 代码热更新，以及 **YooAsset** 实现高效资源管理。简化的构建管线支持快速迭代和部署。
+-   **热更新支持**：完整的热更新解决方案，集成 **HybridCLR** 实现 C# 代码热更新，以及 **YooAsset** 或 **Addressables** 实现高效资源管理。简化的构建管线支持快速迭代和部署。
 -   **DI/IoC 就绪**：预配置了对 **VContainer**、**StrangeIoC** 和 **Zenject** 的支持。
 -   **CI/CD 友好**：包含可通过命令行访问的构建脚本和自动版本控制，可无缝集成到自动化流水线中。
 -   **跨平台**：已为桌面、移动端（Android/iOS）和 WebGL 实行特有优化。
@@ -63,7 +63,7 @@
 - **[FontAssets](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.FontAssets)** - 多语言字体集合和字符集，支持拉丁文、中文（简体/繁体）、日文和韩文本地化。
 
 ### 🔧 构建与部署
-- **[Build](UnityStarter/Assets/Build)** - 集成 HybridCLR 和 YooAsset 的全面构建管线。支持代码（C# DLL）和资源（AssetBundle）的自动化热更新。包含 `BuildScript(整包构建)` 以及 `HotUpdateBuilder(热更新构建)` 简化的完整/快速构建工作流，以及适配 CI/CD 的命令行接口。
+- **[Build](UnityStarter/Assets/Build)** - 集成 HybridCLR 和资源管理系统（YooAsset/Addressables）的全面构建管线。支持代码（C# DLL）和资源（AssetBundle）的自动化热更新。包含 `BuildScript(整包构建)` 以及 `HotUpdateBuilder(热更新构建)` 简化的完整/快速构建工作流，以及适配 CI/CD 的命令行接口。
 
 ### 🌐 网络
 - **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - 网络抽象层，提供 [Mirror](https://github.com/MirrorNetworking/Mirror) 适配器。为传输、序列化和技能系统集成提供接口。
@@ -85,6 +85,7 @@
     │   │   │   ├── BuildPipeline/            # 构建脚本与热更新逻辑
     │   │   │   │   ├── HybridCLR/            # HybridCLR 代码热更新构建器
     │   │   │   │   ├── YooAsset/             # YooAsset 资源热更新构建器
+    │   │   │   │   ├── Addressables/         # Addressables 资源热更新构建器
     │   │   │   │   ├── BuildScript.cs        # 完整游戏构建脚本
     │   │   │   │   └── HotUpdateBuilder.cs   # 统一热更新管线
     │   │   │   └── ...
@@ -150,18 +151,30 @@
 
 -   **热更新支持**：无需完整重装即可更新游戏的完整解决方案。
     - **HybridCLR 集成**：通过将脚本编译为 DLL 并打包为 StreamingAssets 或远程服务器中的 `.bytes` 文件，实现 C# 代码热更新。非常适合修复 bug 和添加功能，无需重新提交应用商店。
-    - **YooAsset 集成**：高效的资源热更新系统，支持版本管理、增量下载和内置缓存。支持在 CDN/远程服务器上托管资源。
+    - **资源管理集成**：高效的资源热更新系统，支持版本管理、增量下载和内置缓存。支持在 CDN/远程服务器上托管资源。
+        - **YooAsset**：轻量级、高性能的资源管理系统。
+        - **Addressables**：Unity 官方资源管理系统。
     - **统一构建管线** (`HotUpdateBuilder.cs`)：简化热更新工作流，提供两种模式：
-        - **完整构建**：完整的代码生成和资源打包（`HybridCLR -> GenerateAllAndCopy + YooAsset -> Build Bundles`）。当 C# 代码结构变化或需要干净构建时使用。
-        - **快速构建**：快速 DLL 编译和资源打包（`HybridCLR -> CompileDLLAndCopy + YooAsset -> Build Bundles`）。当仅方法实现变化时使用，支持快速迭代。
-
+        - **完整构建**：完整的代码生成和资源打包（`HybridCLR -> GenerateAllAndCopy + 资源管理 -> Build Bundles`）。当 C# 代码结构变化或需要干净构建时使用。
+        - **快速构建**：快速 DLL 编译和资源打包（`HybridCLR -> CompileDLLAndCopy + 资源管理 -> Build Bundles`）。当仅方法实现变化时使用，支持快速迭代。
+        - 资源管理系统（YooAsset 或 Addressables）会根据 `BuildData` 配置自动选择。
+    
 -   **CI/CD 就绪**：所有构建方法都可以通过命令行触发，从而轻松与 Jenkins、TeamCity、GitHub Actions 等 CI/CD 系统集成。
     ```bash
-    # 完整游戏构建 CI 命令示例
+    # 完整游戏构建 CI 命令示例（使用 HybridCLR 和 YooAsset）
     -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget Android -output Build/Android/MyGame.apk -clean -buildHybridCLR -buildYooAsset
     
-    # 热更新构建 CI 命令示例
+    # 完整游戏构建 CI 命令示例（使用 HybridCLR 和 Addressables）
+    -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget Android -output Build/Android/MyGame.apk -clean -buildHybridCLR -buildAddressables
+    
+    # 带版本覆盖的 CI 命令示例
+    -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget StandaloneWindows64 -output Build/Windows/MyGame.exe -clean -version v1.0.0
+    
+    # 热更新完整构建 CI 命令示例
     -executeMethod Build.Pipeline.Editor.HotUpdateBuilder.FullBuild
+    
+    # 热更新快速构建 CI 命令示例
+    -executeMethod Build.Pipeline.Editor.HotUpdateBuilder.FastBuild
     ```
 
 ---
@@ -175,7 +188,7 @@
 - **序列化**: [VYaml](https://github.com/hadashiA/VYaml) 用于 YAML 配置
 - **序列化(可选)**: [MessagePack](https://github.com/MessagePack-CSharp/MessagePack-CSharp)
 - **消息总线**: [VitalRouter](https://github.com/hadashiA/VitalRouter)
-- **资源管理(可选)**: [YooAsset](https://github.com/tuyoogame/YooAsset)
+- **资源管理(可选)**: [YooAsset](https://github.com/tuyoogame/YooAsset) 或 Unity Addressables
 - **网络**: [Mirror](https://github.com/MirrorNetworking/Mirror)
 - **场景管理(可选)**: [Navigathena](https://github.com/mackysoft/Navigathena)
 - 更多插件请查看 [package.json](./UnityStarter/Packages/manifest.json)

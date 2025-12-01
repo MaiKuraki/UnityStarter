@@ -4,13 +4,13 @@ using UnityEngine;
 
 namespace Build.Pipeline.Editor
 {
-    [CustomEditor(typeof(YooAssetBuildConfig))]
-    public class YooAssetBuildConfigEditor : UnityEditor.Editor
+    [CustomEditor(typeof(AddressablesBuildConfig))]
+    public class AddressablesBuildConfigEditor : UnityEditor.Editor
     {
         private SerializedProperty versionMode;
         private SerializedProperty manualVersion;
         private SerializedProperty versionPrefix;
-        private SerializedProperty copyToStreamingAssets;
+        private SerializedProperty buildRemoteCatalog;
         private SerializedProperty copyToOutputDirectory;
         private SerializedProperty buildOutputDirectory;
 
@@ -26,21 +26,9 @@ namespace Build.Pipeline.Editor
             versionMode = serializedObject.FindProperty("versionMode");
             manualVersion = serializedObject.FindProperty("manualVersion");
             versionPrefix = serializedObject.FindProperty("versionPrefix");
-            copyToStreamingAssets = serializedObject.FindProperty("copyToStreamingAssets");
+            buildRemoteCatalog = serializedObject.FindProperty("buildRemoteCatalog");
             copyToOutputDirectory = serializedObject.FindProperty("copyToOutputDirectory");
             buildOutputDirectory = serializedObject.FindProperty("buildOutputDirectory");
-        }
-
-        private string GetBuildDataVersion()
-        {
-            double currentTime = EditorApplication.timeSinceStartup;
-            if (currentTime - _lastVersionCheckTime > VersionCheckCacheInterval || _cachedBuildDataVersion == null)
-            {
-                BuildData buildData = BuildConfigHelper.GetBuildData();
-                _cachedBuildDataVersion = buildData != null ? buildData.ApplicationVersion : null;
-                _lastVersionCheckTime = currentTime;
-            }
-            return _cachedBuildDataVersion;
         }
 
         public override void OnInspectorGUI()
@@ -48,52 +36,50 @@ namespace Build.Pipeline.Editor
             serializedObject.Update();
             hasValidationErrors = false;
 
-            EditorGUILayout.LabelField("YooAsset Build Configuration", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Addressables Build Configuration", EditorStyles.boldLabel);
             EditorGUILayout.Space(5);
 
             // Version Settings
             EditorGUILayout.LabelField("Version Settings", EditorStyles.boldLabel);
             EditorGUILayout.PropertyField(versionMode);
 
-            YooAssetVersionMode mode = (YooAssetVersionMode)versionMode.enumValueIndex;
-            if (mode == YooAssetVersionMode.Manual)
+            AddressablesVersionMode mode = (AddressablesVersionMode)versionMode.enumValueIndex;
+            if (mode == AddressablesVersionMode.Manual)
             {
                 EditorGUILayout.PropertyField(manualVersion);
                 ValidateManualVersion();
             }
-            else if (mode == YooAssetVersionMode.GitCommitCount)
+            else if (mode == AddressablesVersionMode.GitCommitCount)
             {
                 EditorGUILayout.PropertyField(versionPrefix);
                 ValidateVersionPrefix();
             }
-            
+
             // Version Preview
             DrawVersionPreview(mode);
 
             EditorGUILayout.Space(10);
 
-            // Build Options
+            // Build Options Section
             EditorGUILayout.LabelField("Build Options", EditorStyles.boldLabel);
 
-            EditorGUILayout.PropertyField(copyToStreamingAssets);
-            if (copyToStreamingAssets.boolValue)
+            EditorGUILayout.PropertyField(buildRemoteCatalog);
+            if (buildRemoteCatalog.boolValue)
             {
                 DrawHelpBox(
-                    "✓ Copy to StreamingAssets is enabled.\n\n" +
+                    "✓ Build Remote Catalog is enabled.\n\n" +
                     "Required for:\n" +
-                    "• Offline Mode (Single Player)\n" +
-                    "• Host Mode - Base Build (First Install)\n\n" +
-                    "The built bundles will be copied to StreamingAssets folder for local access.",
+                    "• Remote content hosting\n" +
+                    "• CDN-based hot-update\n\n" +
+                    "The remote catalog will be generated for content delivery.",
                     MessageType.Info);
             }
             else
             {
                 DrawHelpBox(
-                    "⚠ Copy to StreamingAssets is disabled.\n\n" +
-                    "Suitable for:\n" +
-                    "• Host Mode - Patch Build (Hotfix Only)\n\n" +
-                    "Note: StreamingAssets will NOT be updated. Make sure you have a base build with bundles in StreamingAssets.",
-                    MessageType.Warning);
+                    "ℹ Build Remote Catalog is disabled.\n\n" +
+                    "Only local catalog will be built. Remote content delivery will not be available.",
+                    MessageType.Info);
             }
 
             EditorGUILayout.Space(5);
@@ -108,39 +94,25 @@ namespace Build.Pipeline.Editor
                     "Required for:\n" +
                     "• Host Mode - Patch Build (Upload files to CDN)\n" +
                     "• Backup / Inspecting build artifacts\n\n" +
-                    "The built bundles will be copied to the specified output directory for distribution.",
+                    "The built Addressables content will be copied to the specified output directory.",
                     MessageType.Info);
             }
             else
             {
-                if (!copyToStreamingAssets.boolValue)
-                {
-                    hasValidationErrors = true;
-                    DrawHelpBox(
-                        "❌ WARNING: Both copy options are disabled!\n\n" +
-                        "How to fix:\n" +
-                        "Enable at least one of the following:\n" +
-                        "• Copy to StreamingAssets (for local builds)\n" +
-                        "• Copy to Output Directory (for CDN distribution)\n\n" +
-                        "If both are disabled, build results will only exist in the temporary cache and may be lost.",
-                        MessageType.Error);
-                }
-                else
-                {
-                    DrawHelpBox(
-                        "ℹ Copy to Output Directory is disabled.\n\n" +
-                        "Build results will only be copied to StreamingAssets. This is suitable for local-only builds.",
-                        MessageType.Info);
-                }
+                DrawHelpBox(
+                    "⚠ Copy to Output Directory is disabled.\n\n" +
+                    "Build results will only exist in the Addressables build cache.\n" +
+                    "Consider enabling this if you need to upload content to a CDN.",
+                    MessageType.Warning);
             }
 
             EditorGUILayout.Space(10);
-            
+
             if (GUILayout.Button("Open Build Output Folder"))
             {
                 string path = buildOutputDirectory.stringValue;
-                if (string.IsNullOrEmpty(path)) path = "Build/HotUpdateBundle";
-                
+                if (string.IsNullOrEmpty(path)) path = "Build/AddressablesContent";
+
                 string fullPath = Path.GetFullPath(Path.Combine(Application.dataPath, "..", path));
                 if (Directory.Exists(fullPath))
                 {
@@ -148,7 +120,7 @@ namespace Build.Pipeline.Editor
                 }
                 else
                 {
-                    Debug.LogWarning($"[YooAssetBuildConfig] Folder not found: {fullPath}");
+                    Debug.LogWarning($"[AddressablesBuildConfig] Folder not found: {fullPath}");
                 }
             }
 
@@ -160,6 +132,18 @@ namespace Build.Pipeline.Editor
             }
 
             serializedObject.ApplyModifiedProperties();
+        }
+
+        private string GetBuildDataVersion()
+        {
+            double currentTime = EditorApplication.timeSinceStartup;
+            if (currentTime - _lastVersionCheckTime > VersionCheckCacheInterval || _cachedBuildDataVersion == null)
+            {
+                BuildData buildData = BuildConfigHelper.GetBuildData();
+                _cachedBuildDataVersion = buildData != null ? buildData.ApplicationVersion : null;
+                _lastVersionCheckTime = currentTime;
+            }
+            return _cachedBuildDataVersion;
         }
 
         private void ValidateManualVersion()
@@ -177,7 +161,7 @@ namespace Build.Pipeline.Editor
                     "• 1.2.3\n" +
                     "• 2.0.0-beta.1\n" +
                     "• v1.0.0 (with prefix)\n\n" +
-                    "This version will be used as the package version when Version Mode is set to Manual.",
+                    "This version will be used as the Addressables content version when Version Mode is set to Manual.",
                     MessageType.Error);
             }
             else
@@ -200,20 +184,20 @@ namespace Build.Pipeline.Editor
                     {
                         string buildDataVersionWithoutV = buildDataVersion.StartsWith("v") ? buildDataVersion.Substring(1) : buildDataVersion;
                         string manualVersionWithoutV = trimmed.StartsWith("v") ? trimmed.Substring(1) : trimmed;
-                        
+
                         // Extract base version (before any commit count suffix)
                         string buildDataBase = buildDataVersionWithoutV.Split('.')[0];
                         string manualBase = manualVersionWithoutV.Split('.')[0];
-                        
+
                         if (buildDataBase != manualBase)
                         {
                             DrawHelpBox(
                                 $"⚠ Version mismatch with BuildData!\n\n" +
                                 $"BuildData ApplicationVersion: {buildDataVersion}\n" +
-                                $"YooAsset Manual Version: {trimmed}\n\n" +
+                                $"Addressables Manual Version: {trimmed}\n\n" +
                                 "How to fix:\n" +
-                                "Consider aligning the YooAsset package version with the BuildData ApplicationVersion for consistency.\n\n" +
-                                "Note: The YooAsset package version is independent from the application version, but keeping them aligned helps with version management.",
+                                "Consider aligning the Addressables content version with the BuildData ApplicationVersion for consistency.\n\n" +
+                                "Note: The Addressables content version is independent from the application version, but keeping them aligned helps with version management.",
                                 MessageType.Warning);
                         }
                     }
@@ -259,17 +243,17 @@ namespace Build.Pipeline.Editor
                     {
                         string prefixWithoutV = trimmed.StartsWith("v") ? trimmed.Substring(1) : trimmed;
                         string buildDataWithoutV = buildDataVersion.StartsWith("v") ? buildDataVersion.Substring(1) : buildDataVersion;
-                        
+
                         // Extract base version (before any commit count suffix)
                         string buildDataBase = buildDataWithoutV.Split('.')[0];
                         string prefixBase = prefixWithoutV.Split('.')[0];
-                        
+
                         if (prefixBase != buildDataBase && trimmed != buildDataVersion)
                         {
                             DrawHelpBox(
                                 $"⚠ Version Prefix mismatch with BuildData!\n\n" +
                                 $"BuildData ApplicationVersion: {buildDataVersion}\n" +
-                                $"YooAsset Version Prefix: {trimmed}\n\n" +
+                                $"Addressables Version Prefix: {trimmed}\n\n" +
                                 "How to fix:\n" +
                                 "Update the Version Prefix to match your BuildData ApplicationVersion for consistency.\n\n" +
                                 "Example:\n" +
@@ -317,11 +301,11 @@ namespace Build.Pipeline.Editor
                 DrawHelpBox(
                     "ℹ Build Output Directory is empty.\n\n" +
                     "How to fill:\n" +
-                    "Enter a path relative to your project root (e.g., 'Build/HotUpdateBundle').\n\n" +
+                    "Enter a path relative to your project root (e.g., 'Build/AddressablesContent').\n\n" +
                     "Correct Examples:\n" +
-                    "• Build/HotUpdateBundle\n" +
-                    "• Build/YooAsset/Bundles\n" +
-                    "• Output/Bundles\n\n" +
+                    "• Build/AddressablesContent\n" +
+                    "• Build/Addressables/Bundles\n" +
+                    "• Output/Addressables\n\n" +
                     "The directory will be created automatically if it doesn't exist. If left empty, a default path will be used.",
                     MessageType.Info);
             }
@@ -353,9 +337,9 @@ namespace Build.Pipeline.Editor
                             "How to fix:\n" +
                             "Remove all invalid characters from the path. Use only letters, numbers, underscores, hyphens, and forward slashes.\n\n" +
                             "Correct Examples:\n" +
-                            "• Build/HotUpdateBundle\n" +
-                            "• Build/HotUpdate_Bundle\n" +
-                            "• Build/HotUpdate-Bundle\n\n" +
+                            "• Build/AddressablesContent\n" +
+                            "• Build/Addressables_Content\n" +
+                            "• Build/Addressables-Content\n\n" +
                             "Invalid Characters:\n" +
                             "• < > : \" | ? * and other special characters",
                             MessageType.Error);
@@ -368,17 +352,17 @@ namespace Build.Pipeline.Editor
                             "How to fix:\n" +
                             "Use a direct path relative to the project root instead of using '..'.\n\n" +
                             "Correct Examples:\n" +
-                            "• Build/HotUpdateBundle (instead of Build/../HotUpdateBundle)\n" +
-                            "• Output/Bundles",
+                            "• Build/AddressablesContent (instead of Build/../AddressablesContent)\n" +
+                            "• Output/Addressables",
                             MessageType.Warning);
                     }
                 }
             }
         }
 
-        private void DrawVersionPreview(YooAssetVersionMode mode)
+        private void DrawVersionPreview(AddressablesVersionMode mode)
         {
-            if (mode == YooAssetVersionMode.Timestamp)
+            if (mode == AddressablesVersionMode.Timestamp)
             {
                 DrawHelpBox(
                     $"ℹ Version Mode: Timestamp\n\n" +
@@ -386,7 +370,7 @@ namespace Build.Pipeline.Editor
                     "The version will be automatically generated based on the current date and time when building.",
                     MessageType.Info);
             }
-            else if (mode == YooAssetVersionMode.GitCommitCount)
+            else if (mode == AddressablesVersionMode.GitCommitCount)
             {
                 string prefix = versionPrefix.stringValue;
                 if (string.IsNullOrWhiteSpace(prefix))
@@ -408,7 +392,7 @@ namespace Build.Pipeline.Editor
                         MessageType.Info);
                 }
             }
-            else if (mode == YooAssetVersionMode.Manual)
+            else if (mode == AddressablesVersionMode.Manual)
             {
                 string version = manualVersion.stringValue;
                 if (string.IsNullOrWhiteSpace(version))
@@ -424,7 +408,7 @@ namespace Build.Pipeline.Editor
                     DrawHelpBox(
                         $"ℹ Version Mode: Manual\n\n" +
                         $"Version: {version}\n\n" +
-                        "This version will be used as the package version.",
+                        "This version will be used as the Addressables content version.",
                         MessageType.Info);
                 }
             }

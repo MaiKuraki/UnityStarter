@@ -84,6 +84,7 @@ The main source code for the modules is located in the [`UnityStarter/Assets/Thi
     │   │   │   ├── BuildPipeline/            # Build scripts & hot update logic
     │   │   │   │   ├── HybridCLR/            # HybridCLR code hot-update builder
     │   │   │   │   ├── YooAsset/             # YooAsset resource hot-update builder
+    │   │   │   │   ├── Addressables/         # Addressables resource hot-update builder
     │   │   │   │   ├── BuildScript.cs        # Full Game build script
     │   │   │   │   └── HotUpdateBuilder.cs   # Unified hot update pipeline
     │   │   │   └── ...
@@ -147,18 +148,30 @@ This template is designed for automated builds and seamless integration with CI/
 
 -   **Hot Update Support**: Complete solution for updating your game without requiring full reinstallation.
     - **HybridCLR Integration**: Enables C# code hot-updates by compiling your scripts into DLLs and packaging them as `.bytes` files in StreamingAssets or remote servers. Perfect for fixing bugs and adding features without app store resubmission.
-    - **YooAsset Integration**: Efficient asset hot-update system with version management, incremental downloading, and built-in caching. Supports hosting assets on CDN/remote servers.
+    - **Asset Management Integration**: Efficient asset hot-update system with version management, incremental downloading, and built-in caching. Supports hosting assets on CDN/remote servers.
+        - **YooAsset**: Lightweight and high-performance asset management system.
+        - **Addressables**: Unity's official asset management system.
     - **Unified Build Pipeline** (`HotUpdateBuilder.cs`): Streamlines the hot update workflow with two modes:
-        - **Full Build**: Complete code generation and asset bundling (`HybridCLR -> GenerateAllAndCopy + YooAsset -> Build Bundles`). Use when C# code structure changes or for clean builds.
-        - **Fast Build**: Quick DLL compilation and asset bundling (`HybridCLR -> CompileDLLAndCopy + YooAsset -> Build Bundles`). Use for rapid iteration when only method implementations change.
+        - **Full Build**: Complete code generation and asset bundling (`HybridCLR -> GenerateAllAndCopy + Asset Management -> Build Bundles`). Use when C# code structure changes or for clean builds.
+        - **Fast Build**: Quick DLL compilation and asset bundling (`HybridCLR -> CompileDLLAndCopy + Asset Management -> Build Bundles`). Use for rapid iteration when only method implementations change.
+        - The asset management system (YooAsset or Addressables) is automatically selected based on `BuildData` configuration.
     
 -   **CI/CD Ready**: The build methods can be triggered from the command line, making it straightforward to integrate with CI/CD systems like Jenkins, TeamCity, GitHub Actions.
     ```bash
-    # Example CI Command for Full Game Build
+    # Example CI Command for Full Game Build (with HybridCLR and YooAsset)
     -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget Android -output Build/Android/MyGame.apk -clean -buildHybridCLR -buildYooAsset
     
-    # Example CI Command for Hot Update Build
+    # Example CI Command for Full Game Build (with HybridCLR and Addressables)
+    -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget Android -output Build/Android/MyGame.apk -clean -buildHybridCLR -buildAddressables
+    
+    # Example CI Command with version override
+    -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget StandaloneWindows64 -output Build/Windows/MyGame.exe -clean -version v1.0.0
+    
+    # Example CI Command for Hot Update Full Build
     -executeMethod Build.Pipeline.Editor.HotUpdateBuilder.FullBuild
+    
+    # Example CI Command for Hot Update Fast Build
+    -executeMethod Build.Pipeline.Editor.HotUpdateBuilder.FastBuild
     ```
 
 ---
@@ -172,7 +185,7 @@ This template is designed for automated builds and seamless integration with CI/
 - **Serialization**: [VYaml](https://github.com/hadashiA/VYaml) for YAML configuration
 - **Serialization (Optional)**: [MessagePack](https://github.com/MessagePack-CSharp/MessagePack-CSharp)
 - **Message Bus**: [VitalRouter](https://github.com/hadashiA/VitalRouter)
-- **Asset Management (Optional)**: [YooAsset](https://github.com/tuyoogame/YooAsset)
+- **Asset Management (Optional)**: [YooAsset](https://github.com/tuyoogame/YooAsset) or Unity Addressables
 - **Networking**: [Mirror](https://github.com/MirrorNetworking/Mirror)
 - **Scene Management (Optional)**: [Navigathena](https://github.com/mackysoft/Navigathena)
 - More plugins can be found in [package.json](./UnityStarter/Packages/manifest.json)

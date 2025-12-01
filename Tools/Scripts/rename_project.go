@@ -285,10 +285,11 @@ func updateBuildScript(filePath, oldFolderName, newFolderName, oldCompanyName, n
 
 	lines := strings.Split(string(input), "\n")
 	for i, line := range lines {
-		// More careful replacement could be done here if needed, but for now, this matches original behavior.
-		lines[i] = strings.Replace(line, oldFolderName, newFolderName, -1)
-		lines[i] = strings.Replace(line, oldCompanyName, newCompanyName, -1)
-		lines[i] = strings.Replace(line, oldAppName, newAppName, -1)
+		// Apply replacements sequentially on the same line
+		line = strings.Replace(line, oldFolderName, newFolderName, -1)
+		line = strings.Replace(line, oldCompanyName, newCompanyName, -1)
+		line = strings.Replace(line, oldAppName, newAppName, -1)
+		lines[i] = line
 	}
 
 	output := strings.Join(lines, "\n")
