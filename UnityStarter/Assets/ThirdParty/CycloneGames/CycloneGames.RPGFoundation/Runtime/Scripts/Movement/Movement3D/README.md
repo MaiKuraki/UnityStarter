@@ -1,6 +1,8 @@
-# RPG Movement System
+# RPG Movement Component
 
 A high-performance, state machine-based character movement system for Unity RPG games with zero GC allocation and compatible with Gameplay Ability System (GAS).
+
+<p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
 ## ✨ Features
 
