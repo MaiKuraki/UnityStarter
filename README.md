@@ -95,6 +95,7 @@ The main source code for the modules is located in the [`UnityStarter/Assets/Thi
     │   │   ├── CycloneGames/                 # Core development suite
     │   │   │   ├── AssetManagement/          # Asset loading and version management
     │   │   │   ├── Audio/                    # Enhanced audio management system
+    │   │   │   ├── BehaviorTree/             # High performance BehaviorTree with Graph Editor
     │   │   │   ├── Cheat/                    # Debug command pipeline system
     │   │   │   ├── Factory/                  # High-performance object pooling
     │   │   │   ├── FontAssets/               # Multilingual font collections
