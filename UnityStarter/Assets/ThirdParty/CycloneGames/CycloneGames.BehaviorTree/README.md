@@ -37,7 +37,7 @@ Open the tree asset in Inspector and use the built-in editor to:
 - Create root node
 - Add composite nodes (Sequence, Selector, Parallel)
 - Add decorator nodes (Repeater, Inverter, UntilFail)
--Add action nodes (custom logic)
+- Add action nodes (custom logic)
 - Add condition nodes (decision making)
 
 <img src="./Documents~/BehaviorTreePreview.png" alt="Behavior Tree Editor Preview" style="width: 100%; height: auto; max-width: 1000px;" />
