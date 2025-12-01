@@ -40,6 +40,8 @@ Open the tree asset in Inspector and use the built-in editor to:
 -Add action nodes (custom logic)
 - Add condition nodes (decision making)
 
+<img src="./Documents~/BehaviorTreePreview.png" alt="Behavior Tree Editor Preview" style="width: 100%; height: auto; max-width: 1000px;" />
+
 ### 3. Attach to GameObject
 
 Add `BTRunnerComponent` to your AI GameObject:
