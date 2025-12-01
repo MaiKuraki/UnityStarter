@@ -16,8 +16,8 @@ namespace Build.Pipeline.Editor
             Debug.Log($"{DEBUG_FLAG} Checking availability...");
 
             // Use Reflection to avoid compilation errors if HybridCLR is not installed
-            Type prebuildCommandType = BuildUtils.GetTypeInAllAssemblies("HybridCLR.Editor.Commands.PrebuildCommand");
-            Type installerControllerType = BuildUtils.GetTypeInAllAssemblies("HybridCLR.Editor.Installer.InstallerController");
+            Type prebuildCommandType = ReflectionCache.GetType("HybridCLR.Editor.Commands.PrebuildCommand");
+            Type installerControllerType = ReflectionCache.GetType("HybridCLR.Editor.Installer.InstallerController");
 
             if (prebuildCommandType == null)
             {
@@ -31,7 +31,7 @@ namespace Build.Pipeline.Editor
                 try
                 {
                     object installer = Activator.CreateInstance(installerControllerType);
-                    MethodInfo hasInstalledMethod = installerControllerType.GetMethod("HasInstalledHybridCLR");
+                    MethodInfo hasInstalledMethod = ReflectionCache.GetMethod(installerControllerType, "HasInstalledHybridCLR", BindingFlags.Public | BindingFlags.Instance);
 
                     bool isInstalled = false;
                     if (hasInstalledMethod != null)
@@ -42,7 +42,7 @@ namespace Build.Pipeline.Editor
                     if (!isInstalled)
                     {
                         Debug.LogWarning($"{DEBUG_FLAG} HybridCLR not initialized. Attempting to install default version...");
-                        MethodInfo installMethod = installerControllerType.GetMethod("InstallDefaultHybridCLR");
+                        MethodInfo installMethod = ReflectionCache.GetMethod(installerControllerType, "InstallDefaultHybridCLR", BindingFlags.Public | BindingFlags.Instance);
                         if (installMethod != null)
                         {
                             installMethod.Invoke(installer, null);
@@ -65,7 +65,7 @@ namespace Build.Pipeline.Editor
             try
             {
                 // Call PrebuildCommand.GenerateAll()
-                MethodInfo generateAllMethod = prebuildCommandType.GetMethod("GenerateAll", BindingFlags.Public | BindingFlags.Static);
+                MethodInfo generateAllMethod = ReflectionCache.GetMethod(prebuildCommandType, "GenerateAll", BindingFlags.Public | BindingFlags.Static);
                 if (generateAllMethod != null)
                 {
                     generateAllMethod.Invoke(null, null);
@@ -89,7 +89,7 @@ namespace Build.Pipeline.Editor
         public static void CompileDllOnly()
         {
             Debug.Log($"{DEBUG_FLAG} Start compiling DLLs...");
-            Type compileDllCommandType = BuildUtils.GetTypeInAllAssemblies("HybridCLR.Editor.Commands.CompileDllCommand");
+            Type compileDllCommandType = ReflectionCache.GetType("HybridCLR.Editor.Commands.CompileDllCommand");
             if (compileDllCommandType == null)
             {
                 Debug.LogWarning($"{DEBUG_FLAG} HybridCLR package not found.");
@@ -99,6 +99,7 @@ namespace Build.Pipeline.Editor
             try
             {
                 // CompileDllCommand.CompileDll(BuildTarget target);
+                // Note: GetMethod with parameter types requires direct call, cache key would be complex
                 MethodInfo compileDllMethod = compileDllCommandType.GetMethod("CompileDll", new Type[] { typeof(BuildTarget) });
                 if (compileDllMethod != null)
                 {
@@ -198,37 +199,16 @@ namespace Build.Pipeline.Editor
 
         private static HybridCLRBuildConfig GetConfig()
         {
-            string[] guids = AssetDatabase.FindAssets("t:HybridCLRBuildConfig");
-            if (guids.Length > 0)
-            {
-                if (guids.Length > 1)
-                {
-                    Debug.LogWarning($"{DEBUG_FLAG} Found multiple HybridCLRBuildConfig assets. Using the first one found.");
-                }
-
-                foreach (var guid in guids)
-                {
-                    string path = AssetDatabase.GUIDToAssetPath(guid);
-                    HybridCLRBuildConfig config = AssetDatabase.LoadAssetAtPath<HybridCLRBuildConfig>(path);
-                    if (config != null)
-                    {
-                        Debug.Log($"{DEBUG_FLAG} Loaded config from: {path}");
-                        return config;
-                    }
-                }
-            }
-            
-            Debug.LogError($"{DEBUG_FLAG} No HybridCLRBuildConfig found! Please create a configuration asset.");
-            return null;
+            return BuildConfigHelper.GetHybridCLRConfig();
         }
 
         private static string GetHybridCLROutputDir(BuildTarget target)
         {
             // Try to get path via HybridCLR SettingsUtil reflection
-            Type settingsUtilType = BuildUtils.GetTypeInAllAssemblies("HybridCLR.Editor.Settings.SettingsUtil");
+            Type settingsUtilType = ReflectionCache.GetType("HybridCLR.Editor.Settings.SettingsUtil");
             if (settingsUtilType != null)
             {
-                MethodInfo getDirMethod = settingsUtilType.GetMethod("GetHotUpdateDllsOutputDirByTarget", BindingFlags.Public | BindingFlags.Static);
+                MethodInfo getDirMethod = ReflectionCache.GetMethod(settingsUtilType, "GetHotUpdateDllsOutputDirByTarget", BindingFlags.Public | BindingFlags.Static);
                 if (getDirMethod != null)
                 {
                     return (string)getDirMethod.Invoke(null, new object[] { target });

@@ -24,9 +24,6 @@ namespace Build.Pipeline.Editor
 
         private const string CompanyName = "CycloneGames";
         private const string ApplicationName = "UnityStarter";
-        private const string ApplicationVersion = "v0.1";
-        private const string OutputBasePath = "Build";
-        private const string BuildDataConfig = "Assets/UnityStarter/Editor/Build/BuildData.asset";
         private const string VersionInfoAssetPath = "Assets/Resources/VersionInfoData.asset";
 
         private static BuildData buildData;
@@ -44,8 +41,7 @@ namespace Build.Pipeline.Editor
             var sceneList = GetBuildSceneList();
             if (sceneList == null || sceneList.Length == 0)
             {
-                Debug.LogError(
-                    $"{DEBUG_FLAG} Invalid scene list, please check the file <color=cyan>{BuildDataConfig}</color>");
+                Debug.LogError($"{DEBUG_FLAG} Invalid scene list, please check BuildData configuration.");
                 return;
             }
 
@@ -161,19 +157,30 @@ namespace Build.Pipeline.Editor
 
         /// <summary>
         /// Entry point for CI/CD. Parses command line arguments to configure the build.
-        /// Usage: -executeMethod CycloneGames.Editor.Build.BuildScript.PerformBuild_CI -buildTarget <Target> -output <Path> [-clean] [-buildHybridCLR] [-buildYooAsset]
+        /// Usage: -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget <Target> -output <Path> [-clean] [-buildHybridCLR] [-buildYooAsset] [-buildAddressables] [-version <Version>] [-outputBasePath <Path>]
         /// </summary>
         public static void PerformBuild_CI()
         {
             Debug.Log($"{DEBUG_FLAG} Starting CI Build...");
 
+            // Load Build Data first
+            buildData = BuildConfigHelper.GetBuildData();
+            if (buildData == null)
+            {
+                Debug.LogError($"{DEBUG_FLAG} BuildData not found. Cannot proceed with CI build.");
+                return;
+            }
+
             // Parse arguments
             string[] args = System.Environment.GetCommandLineArgs();
             BuildTarget buildTarget = BuildTarget.NoTarget;
             string outputPath = "";
+            string overrideVersion = null;
+            string overrideOutputBasePath = null;
             bool clean = false;
             bool forceHybridCLR = false;
             bool forceYooAsset = false;
+            bool forceAddressables = false;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -189,6 +196,14 @@ namespace Build.Pipeline.Editor
                 {
                     outputPath = args[i + 1];
                 }
+                else if (args[i] == "-version" && i + 1 < args.Length)
+                {
+                    overrideVersion = args[i + 1];
+                }
+                else if (args[i] == "-outputBasePath" && i + 1 < args.Length)
+                {
+                    overrideOutputBasePath = args[i + 1];
+                }
                 else if (args[i] == "-clean")
                 {
                     clean = true;
@@ -201,6 +216,10 @@ namespace Build.Pipeline.Editor
                 {
                     forceYooAsset = true;
                 }
+                else if (args[i] == "-buildAddressables")
+                {
+                    forceAddressables = true;
+                }
             }
 
             if (buildTarget == BuildTarget.NoTarget)
@@ -209,21 +228,58 @@ namespace Build.Pipeline.Editor
                 return;
             }
 
-            // Load Build Data to ensure it's in memory
-            TryGetBuildData();
-
-            // Apply overrides from CI args using Reflection if needed
-            if (buildData != null)
+            // Validate asset management system selection (only one can be specified)
+            if (forceYooAsset && forceAddressables)
             {
-                if (forceHybridCLR)
+                Debug.LogError($"{DEBUG_FLAG} CI Error: Both -buildYooAsset and -buildAddressables are specified. Only one asset management system can be used at a time.");
+                return;
+            }
+
+            // Apply overrides from CI args
+            if (overrideVersion != null)
+            {
+                BuildUtils.SetField(buildData, "applicationVersion", overrideVersion);
+                Debug.Log($"{DEBUG_FLAG} CI Override: ApplicationVersion set to {overrideVersion}");
+            }
+
+            if (overrideOutputBasePath != null)
+            {
+                BuildUtils.SetField(buildData, "outputBasePath", overrideOutputBasePath);
+                Debug.Log($"{DEBUG_FLAG} CI Override: OutputBasePath set to {overrideOutputBasePath}");
+            }
+
+            if (forceHybridCLR)
+            {
+                BuildUtils.SetField(buildData, "useHybridCLR", true);
+                Debug.Log($"{DEBUG_FLAG} CI Override: HybridCLR enabled.");
+            }
+
+            // Apply asset management system override (only one can be active)
+            if (forceYooAsset)
+            {
+                BuildUtils.SetField(buildData, "assetManagementType", AssetManagementType.YooAsset);
+                Debug.Log($"{DEBUG_FLAG} CI Override: YooAsset enabled.");
+            }
+            else if (forceAddressables)
+            {
+                BuildUtils.SetField(buildData, "assetManagementType", AssetManagementType.Addressables);
+                Debug.Log($"{DEBUG_FLAG} CI Override: Addressables enabled.");
+            }
+            else
+            {
+                // Use BuildData configuration if no override is specified
+                AssetManagementType currentType = buildData.AssetManagementType;
+                if (currentType == AssetManagementType.YooAsset)
                 {
-                    BuildUtils.SetField(buildData, "useHybridCLR", true);
-                    Debug.Log($"{DEBUG_FLAG} CI Override: HybridCLR enabled.");
+                    Debug.Log($"{DEBUG_FLAG} Using YooAsset from BuildData configuration.");
                 }
-                if (forceYooAsset)
+                else if (currentType == AssetManagementType.Addressables)
                 {
-                    BuildUtils.SetField(buildData, "useYooAsset", true);
-                    Debug.Log($"{DEBUG_FLAG} CI Override: YooAsset enabled.");
+                    Debug.Log($"{DEBUG_FLAG} Using Addressables from BuildData configuration.");
+                }
+                else
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} No asset management system selected in BuildData. Asset bundles will not be built.");
                 }
             }
 
@@ -263,6 +319,7 @@ namespace Build.Pipeline.Editor
             // Fallback output path if not provided
             if (string.IsNullOrEmpty(outputPath))
             {
+                string basePath = buildData.OutputBasePath;
                 outputPath = $"{GetPlatformFolderName(buildTarget)}/{ApplicationName}";
                 if (!isFolder && buildTarget == BuildTarget.StandaloneWindows64) outputPath += ".exe";
                 if (!isFolder && buildTarget == BuildTarget.Android) outputPath += ".apk";
@@ -322,19 +379,19 @@ namespace Build.Pipeline.Editor
 
         private static BuildData TryGetBuildData()
         {
-            return buildData ??= AssetDatabase.LoadAssetAtPath<BuildData>($"{BuildDataConfig}");
+            return buildData ??= BuildConfigHelper.GetBuildData();
         }
 
         private static string[] GetBuildSceneList()
         {
-            if (!TryGetBuildData())
+            BuildData data = TryGetBuildData();
+            if (data == null)
             {
-                Debug.LogError(
-                    $"{DEBUG_FLAG} Invalid Build Data Config, please check the file <color=cyan>{BuildDataConfig}</color>");
+                Debug.LogError($"{DEBUG_FLAG} Invalid Build Data Config. Please create a BuildData asset.");
                 return default;
             }
 
-            return new[] { TryGetBuildData().GetLaunchScenePath() };
+            return new[] { data.GetLaunchScenePath() };
         }
 
         private static void DeletePlatformBuildFolder(BuildTarget TargetPlatform)
@@ -405,7 +462,8 @@ namespace Build.Pipeline.Editor
             bool bTargetIsFolder = true)
         {
             string platformOutFolder = GetPlatformBuildOutputFolder(TargetPlatform);
-            string resultPath = Path.Combine(OutputBasePath, TargetPath);
+            string basePath = buildData != null ? buildData.OutputBasePath : "Build";
+            string resultPath = Path.Combine(basePath, TargetPath);
 
             if (!Directory.Exists(Path.GetFullPath(platformOutFolder)))
             {
@@ -444,7 +502,10 @@ namespace Build.Pipeline.Editor
             try
             {
                 // Load Build Data
-                TryGetBuildData();
+                if (buildData == null)
+                {
+                    buildData = BuildConfigHelper.GetBuildData();
+                }
 
                 var previousTarget = EditorUserBuildSettings.activeBuildTarget;
 
@@ -483,14 +544,24 @@ namespace Build.Pipeline.Editor
                 VersionControlProvider?.UpdateVersionInfoAsset(VersionInfoAssetPath, commitHash, commitCount);
 
                 string buildNumber = string.IsNullOrEmpty(commitCount) ? "0" : commitCount;
-                string fullBuildVersion = $"{ApplicationVersion}.{buildNumber}";
+                string appVersion = buildData != null ? buildData.ApplicationVersion : "v0.1";
+                string fullBuildVersion = $"{appVersion}.{buildNumber}";
 
-                // YooAsset Build
-                if (buildData != null && buildData.UseYooAsset)
+                // Asset Management Build
+                if (buildData != null)
                 {
-                    // Note: YooAsset build should happen AFTER HybridCLR copy, 
-                    // because YooAsset needs to pack the .bytes files generated by HybridCLR.
-                    YooAssetBuilder.Build(TargetPlatform, fullBuildVersion);
+                    if (buildData.UseYooAsset)
+                    {
+                        // Note: YooAsset build should happen AFTER HybridCLR copy, 
+                        // because YooAsset needs to pack the .bytes files generated by HybridCLR.
+                        YooAssetBuilder.Build(TargetPlatform, fullBuildVersion);
+                    }
+                    else if (buildData.UseAddressables)
+                    {
+                        // Note: Addressables build should happen AFTER HybridCLR copy,
+                        // because Addressables may need to include the .bytes files generated by HybridCLR.
+                        AddressablesBuilder.Build(TargetPlatform, fullBuildVersion);
+                    }
                 }
 
                 Debug.Log($"{DEBUG_FLAG} Start Build, Platform: {EditorUserBuildSettings.activeBuildTarget}");
@@ -513,52 +584,78 @@ namespace Build.Pipeline.Editor
                     BuildalonIntegrator.SyncSolution();
                 }
 
-                TryCleanAddressablesPlayerContent();
+                // Clean Addressables player content if Addressables is being used
+                if (buildData != null && buildData.UseAddressables)
+                {
+                    TryCleanAddressablesPlayerContent();
+                }
 
+                // Save original PlayerSettings values for restoration
                 string originalVersion = PlayerSettings.bundleVersion;
+                string originalCompanyName = PlayerSettings.companyName;
+                string originalProductName = PlayerSettings.productName;
+                string originalApplicationIdentifier = PlayerSettings.GetApplicationIdentifier(BuildTargetName);
 
-                PlayerSettings.SetScriptingBackend(BuildTargetName, BackendScriptImpl);
-                PlayerSettings.companyName = CompanyName;
-                PlayerSettings.productName = ApplicationName;
-                PlayerSettings.bundleVersion = fullBuildVersion;
-                PlayerSettings.SetApplicationIdentifier(BuildTargetName, $"com.{CompanyName}.{ApplicationName}");
-
-                BuildReport buildReport;
-
+                try
                 {
-                    var buildPlayerOptions = new BuildPlayerOptions();
-                    buildPlayerOptions.scenes = GetBuildSceneList();
-                    buildPlayerOptions.locationPathName = GetOutputTarget(TargetPlatform, OutputTarget, bOutputIsFolderTarget);
-                    buildPlayerOptions.target = TargetPlatform;
-                    buildPlayerOptions.options = BuildOptions.None;
+                    PlayerSettings.SetScriptingBackend(BuildTargetName, BackendScriptImpl);
+                    PlayerSettings.companyName = CompanyName;
+                    PlayerSettings.productName = ApplicationName;
+                    PlayerSettings.bundleVersion = fullBuildVersion;
+                    PlayerSettings.SetApplicationIdentifier(BuildTargetName, $"com.{CompanyName}.{ApplicationName}");
 
-                    if (bCleanBuild)
+                    // Force save PlayerSettings changes
+                    AssetDatabase.SaveAssets();
+
+                    BuildReport buildReport;
+
                     {
-                        buildPlayerOptions.options |= BuildOptions.CleanBuildCache;
-                    }
+                        var buildPlayerOptions = new BuildPlayerOptions();
+                        buildPlayerOptions.scenes = GetBuildSceneList();
+                        buildPlayerOptions.locationPathName = GetOutputTarget(TargetPlatform, OutputTarget, bOutputIsFolderTarget);
+                        buildPlayerOptions.target = TargetPlatform;
+                        buildPlayerOptions.options = BuildOptions.None;
 
-                    buildPlayerOptions.options |= BuildOptions.CompressWithLz4;
-                    buildReport = BuildPipeline.BuildPlayer(buildPlayerOptions);
-                }
-
-                var summary = buildReport.summary;
-                if (summary.result == BuildResult.Succeeded)
-                {
-                    if (bDeleteDebugFiles)
-                    {
-                        string platformNameStr = GetPlatformFolderName(TargetPlatform);
-                        if (platformNameStr == "Windows" || platformNameStr == "Mac") // TODO: May Linux
+                        if (bCleanBuild)
                         {
-                            DeleteDebugFiles(TargetPlatform);
+                            buildPlayerOptions.options |= BuildOptions.CleanBuildCache;
                         }
+
+                        buildPlayerOptions.options |= BuildOptions.CompressWithLz4;
+                        buildReport = BuildPipeline.BuildPlayer(buildPlayerOptions);
                     }
 
-                    Debug.Log($"{DEBUG_FLAG} Build <color=#29ff50>SUCCESS</color>, size: {summary.totalSize} bytes, path: {summary.outputPath}\n");
+                    var summary = buildReport.summary;
+                    if (summary.result == BuildResult.Succeeded)
+                    {
+                        if (bDeleteDebugFiles)
+                        {
+                            string platformNameStr = GetPlatformFolderName(TargetPlatform);
+                            if (platformNameStr == "Windows" || platformNameStr == "Mac") // TODO: May Linux
+                            {
+                                DeleteDebugFiles(TargetPlatform);
+                            }
+                        }
+
+                        Debug.Log($"{DEBUG_FLAG} Build <color=#29ff50>SUCCESS</color>, size: {summary.totalSize} bytes, path: {summary.outputPath}\n");
+                    }
+
+                    if (summary.result == BuildResult.Failed) Debug.Log($"{DEBUG_FLAG} Build <color=red>FAILURE</color>");
                 }
+                finally
+                {
+                    // Restore original PlayerSettings values
+                    Debug.Log($"{DEBUG_FLAG} Restoring original PlayerSettings...");
+                    PlayerSettings.bundleVersion = originalVersion;
+                    PlayerSettings.companyName = originalCompanyName;
+                    PlayerSettings.productName = originalProductName;
+                    PlayerSettings.SetApplicationIdentifier(BuildTargetName, originalApplicationIdentifier);
 
-                if (summary.result == BuildResult.Failed) Debug.Log($"{DEBUG_FLAG} Build <color=red>FAILURE</color>");
-
-                PlayerSettings.bundleVersion = originalVersion;
+                    // Force save restored PlayerSettings
+                    AssetDatabase.SaveAssets();
+                    
+                    Debug.Log($"{DEBUG_FLAG} PlayerSettings restored successfully.");
+                }
             }
             finally
             {
@@ -584,7 +681,8 @@ namespace Build.Pipeline.Editor
 
         private static string GetPlatformBuildOutputFolder(BuildTarget TargetPlatform)
         {
-            return $"{OutputBasePath}/{GetPlatformFolderName(TargetPlatform)}";
+            string basePath = buildData != null ? buildData.OutputBasePath : "Build";
+            return $"{basePath}/{GetPlatformFolderName(TargetPlatform)}";
         }
 
         // Clears common Unity caches that often cause cross-platform build failures (Bee, IL2CPP, Burst, PlayerData)
