@@ -12,11 +12,9 @@ namespace Build.Pipeline.Editor
     public class HybridCLRBuildConfig : ScriptableObject
     {
 #if UNITY_EDITOR
-        [Header("Hot Update Configuration")]
         [Tooltip("Drag Assembly Definition Assets (.asmdef) here that need to be hot updated.")]
         public List<AssemblyDefinitionAsset> hotUpdateAssemblies;
 
-        [Header("Output Settings")]
         [Tooltip("The directory within Assets to copy the hot update DLLs to. (e.g., 'Assets/HotUpdateDLL')")]
         public string hotUpdateDllOutputDirectory = "Assets/HotUpdateDLL";
 
