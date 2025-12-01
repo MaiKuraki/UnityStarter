@@ -29,6 +29,7 @@ Note: The **GameplayFramework** and **Factory** modules **include** DI samples.<
 -   **Modular Architecture**: All systems are built as decoupled Unity Packages, allowing you to easily include or exclude functionality.
 -   **Inspired by Unreal Engine**: Implements proven concepts like the Gameplay Framework, Gameplay Ability System (GAS), and Gameplay Tags.
 -   **Performance-Oriented**: Focuses on low/zero GC allocation in critical systems like Logging, Factory, and Audio.
+-   **Hot Update Support**: Complete hot update solution with **HybridCLR** for C# code updates and **YooAsset** for efficient asset management. Streamlined build pipeline for rapid iteration and deployment.
 -   **DI/IoC Ready**: Comes with pre-configured support for **VContainer**, **StrangeIoC**, and **Zenject**.
 -   **CI/CD Friendly**: Includes command-line accessible build scripts and automatic versioning for seamless integration with automated pipelines.
 -   **Cross-Platform**: Optimized for Desktop, Mobile (Android/iOS), and WebGL.
@@ -42,6 +43,7 @@ Note: The **GameplayFramework** and **Factory** modules **include** DI samples.<
 - **[GameplayAbilities](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities)** - Powerful data-driven ability system inspired by Unreal Engine's GAS. Supports complex skills, attributes, status effects with ScriptableObject-based design.
 - **[GameplayTags](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags)** - Tag-based identification system for abilities, effects, and game states, inspired by Unreal Engine's GameplayTags. Supports dynamic runtime tag registration and auto-generation.
 - **[RPGFoundation](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)** - Contains basic extensions for RPG-type games.
+- **[BehaviorTree](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree)** - Behavior tree system for AI. Supports complex logic with composite/decorator/action nodes, ScriptableObject-based design for easy authoring, and optimized for mobile/low-end devices.
 
 ### 🏗️ Core Infrastructure  
 - **[Factory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory)** - High-performance, low-GC factory and object pooling utilities. Thread-safe auto-scaling pools with O(1) operations.
@@ -59,6 +61,9 @@ Note: The **GameplayFramework** and **Factory** modules **include** DI samples.<
 - **[Cheat](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat)** - Type-safe command pipeline for debugging with [VitalRouter](https://github.com/hadashiA/VitalRouter) integration. Supports async operations and thread-safe execution.
 - **[FontAssets](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.FontAssets)** - Multilingual font collections and character sets for Latin, Chinese (Simplified/Traditional), Japanese, and Korean localization.
 
+### 🔧 Build & Deployment
+- **[Build](UnityStarter/Assets/Build)** - Comprehensive build pipeline with HybridCLR and YooAsset integration. Supports automated hot updates for both code (C# DLLs) and assets (AssetBundles). Includes `BuildScript(Full App Build)` and `HotUpdateBuilder(HotUpdate Build)` for streamlined full/fast build workflows and CI/CD-ready command-line interface.
+
 ### 🌐 Networking
 - **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking)** - Networking abstraction layer with [Mirror](https://github.com/MirrorNetworking/Mirror) adapter. Provides interfaces for transport, serialization, and ability system integration.
 
@@ -70,39 +75,43 @@ The main source code for the modules is located in the [`UnityStarter/Assets/Thi
 
 ```
 .
-├── Docs/                               # Documentation
-├── Tools/                              # Utility tools (project renaming, cleanup, etc.)
-└── UnityStarter/                       # Unity project root
+├── Docs/                                     # Documentation
+├── Tools/                                    # Utility tools (project renaming, cleanup, etc.)
+└── UnityStarter/                             # Unity project root
     ├── Assets/
-    │   ├── Build/                      # Build pipeline & tools
+    │   ├── Build/                            # Build pipeline & hot update tools
     │   │   ├── Editor/
-    │   │   │   ├── BuildPipeline/      # Build scripts & logic
+    │   │   │   ├── BuildPipeline/            # Build scripts & hot update logic
+    │   │   │   │   ├── HybridCLR/            # HybridCLR code hot-update builder
+    │   │   │   │   ├── YooAsset/             # YooAsset resource hot-update builder
+    │   │   │   │   ├── BuildScript.cs        # Full Game build script
+    │   │   │   │   └── HotUpdateBuilder.cs   # Unified hot update pipeline
     │   │   │   └── ...
     │   │   ├── Runtime/
-    │   │   │   ├── Data/               # Build data (VersionInfo, etc.)
+    │   │   │   ├── Data/                     # Build data (VersionInfo, etc.)
     │   │   │   └── ...
     │   │   └── ...
     │   ├── ThirdParty/
-    │   │   ├── CycloneGames/           # Core development suite
-    │   │   │   ├── AssetManagement/    # Asset loading and version management
-    │   │   │   ├── Audio/              # Enhanced audio management system
-    │   │   │   ├── Cheat/              # Debug command pipeline system
-    │   │   │   ├── Factory/            # High-performance object pooling
-    │   │   │   ├── FontAssets/         # Multilingual font collections
-    │   │   │   ├── GameplayAbilities/  # Data-driven ability system (UnrealEngine GAS-inspired)
-    │   │   │   ├── GameplayFramework/  # UE-style gameplay architecture (UnrealEngine GameplayFramework-inspired)
-    │   │   │   ├── GameplayTags/       # Tag-based identification system (UnrealEngine GameplayTags-inspired)
-    │   │   │   ├── InputSystem/        # Reactive input management with context stacks
-    │   │   │   ├── Logger/             # Zero-GC multi-threaded logging
-    │   │   │   ├── Networking/         # Network abstraction layer
-    │   │   │   ├── RPGFoundation/      # RPG Foundation components (e.g., Movement)
-    │   │   │   ├── Service/            # Common game service abstractions
-    │   │   │   ├── UIFramework/        # Hierarchical UI management
-    │   │   │   └── Utility/            # Performance tools and utilities
-    │   │   └── ...
-    │   └── ...
-    ├── Packages/                       # Package manifests and configurations
-    └── ProjectSettings/                # Unity project settings
+    │   │   ├── CycloneGames/                 # Core development suite
+    │   │   │   ├── AssetManagement/          # Asset loading and version management
+    │   │   │   ├── Audio/                    # Enhanced audio management system
+    │   │   │   ├── Cheat/                    # Debug command pipeline system
+    │   │   │   ├── Factory/                  # High-performance object pooling
+    │   │   │   ├── FontAssets/               # Multilingual font collections
+    │   │   │   ├── GameplayAbilities/        # Data-driven ability system (UnrealEngine GAS-inspired)
+    │   │   │   ├── GameplayFramework/        # UE-style gameplay architecture (UnrealEngine GameplayFramework-inspired)
+    │   │   │   ├── GameplayTags/             # Tag-based identification system (UnrealEngine GameplayTags-inspired)
+    │   │   │   ├── InputSystem/              # Reactive input management with context stacks
+    │   │   │   ├── Logger/                   # Zero-GC multi-threaded logging
+    │   │   │   ├── Networking/               # Network abstraction layer
+    │   │   │   ├── RPGFoundation/            # RPG Foundation components (e.g., Movement)
+    │   │   │   ├── Service/                  # Common game service abstractions
+    │   │   │   ├── UIFramework/              # Hierarchical UI management
+    │   │   │   └── Utility/                  # Performance tools and utilities
+    │   │   └── ...     
+    │   └── ...     
+    ├── Packages/                             # Package manifests and configurations
+    └── ProjectSettings/                      # Unity project settings
 ```
 
 ## 🚀 Getting Started
@@ -135,12 +144,20 @@ This template is designed for automated builds and seamless integration with CI/
 
 -   **Runtime Version Information**: Before each build, the script captures the current Git commit hash, commit count, and build date, and saves this information into a `VersionInfoData` ScriptableObject (`Assets/Build/Runtime/Data/VersionInfoData.cs`). This allows you to easily display detailed build information within your application for debugging and support purposes.
 
--   **HybridCLR & YooAsset Support**: The build pipeline compatible with **HybridCLR** for code hot-updates and **YooAsset** for efficient asset management. These can be enabled via the `BuildData` configuration or CI arguments (you should add HybridCLR and YooAsset in package by yourself if needed).
-
--   **CI/CD Ready**: The build methods can be triggered from the command line, making it straightforward to integrate with CI/CD systems like Jenkins, TeamCity.
+-   **Hot Update Support**: Complete solution for updating your game without requiring full reinstallation.
+    - **HybridCLR Integration**: Enables C# code hot-updates by compiling your scripts into DLLs and packaging them as `.bytes` files in StreamingAssets or remote servers. Perfect for fixing bugs and adding features without app store resubmission.
+    - **YooAsset Integration**: Efficient asset hot-update system with version management, incremental downloading, and built-in caching. Supports hosting assets on CDN/remote servers.
+    - **Unified Build Pipeline** (`HotUpdateBuilder.cs`): Streamlines the hot update workflow with two modes:
+        - **Full Build**: Complete code generation and asset bundling (`HybridCLR -> GenerateAllAndCopy + YooAsset -> Build Bundles`). Use when C# code structure changes or for clean builds.
+        - **Fast Build**: Quick DLL compilation and asset bundling (`HybridCLR -> CompileDLLAndCopy + YooAsset -> Build Bundles`). Use for rapid iteration when only method implementations change.
+    
+-   **CI/CD Ready**: The build methods can be triggered from the command line, making it straightforward to integrate with CI/CD systems like Jenkins, TeamCity, GitHub Actions.
     ```bash
-    # Example CI Command
+    # Example CI Command for Full Game Build
     -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget Android -output Build/Android/MyGame.apk -clean -buildHybridCLR -buildYooAsset
+    
+    # Example CI Command for Hot Update Build
+    -executeMethod Build.Pipeline.Editor.HotUpdateBuilder.FullBuild
     ```
 
 ---

@@ -1,6 +1,8 @@
-# RPG 2D 移动系统
+# RPG 2D 移动模块
 
-基于状态机的高性能 2D 角色移动系统，专为 Unity 平台游戏和横版卷轴游戏设计，零 GC 分配，可选的 Gameplay Ability System (GAS) 集成。
+基于状态机的高性能 2D 角色移动模块，专为 Unity 平台游戏和横版卷轴游戏设计，零 GC 分配，可选的 Gameplay Ability System (GAS) 集成。
+
+<p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
 ## ✨ 特性
 
