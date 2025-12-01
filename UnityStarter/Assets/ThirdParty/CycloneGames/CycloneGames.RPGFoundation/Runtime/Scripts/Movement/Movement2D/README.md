@@ -1,6 +1,8 @@
-# RPG Movement System 2D
+# RPG Movement Component 2D
 
 A high-performance, state machine-based 2D character movement system for Unity platformer and side-scrolling games with zero GC allocation and optional Gameplay Ability System (GAS) integration.
+
+<p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
 ## ✨ Features
 
