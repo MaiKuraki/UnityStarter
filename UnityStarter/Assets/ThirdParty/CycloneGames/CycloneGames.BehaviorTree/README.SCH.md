@@ -40,6 +40,8 @@ Unity AI 的高性能、基于 ScriptableObject 的行为树系统。
 - 添加动作节点（自定义逻辑）
 - 添加条件节点（决策制定）
 
+<img src="./Documents~/BehaviorTreePreview.png" alt="Behavior Tree Editor Preview" style="width: 100%; height: auto; max-width: 1000px;" />
+
 ### 3. 附加到 GameObject
 
 将 `BTRunnerComponent` 添加到您的 AI GameObject：

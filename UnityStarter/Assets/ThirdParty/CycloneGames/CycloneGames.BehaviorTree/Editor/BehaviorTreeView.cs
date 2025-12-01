@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.Experimental.GraphView;
@@ -328,9 +328,12 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             // Get the children of the current node
             List<BTNode> children = _tree.GetChildren(node);
-            //Debug.Log("Position : " + position + " : " + node.GetType().Name + " : " + children.Count);
+            // Create a copy of the children list to avoid "Collection was modified" exception
+            // when the collection is modified during enumeration
+            List<BTNode> childrenCopy = new List<BTNode>(children);
+            //Debug.Log("Position : " + position + " : " + node.GetType().Name + " : " + childrenCopy.Count);
             // If the node has no children, set its position to the input position and return
-            if (children.Count == 0)
+            if (childrenCopy.Count == 0)
             {
                 node.Position = position;
                 Vector3 result = new Vector3(position.x, position.y, NODE_X_GAP);
@@ -338,9 +341,9 @@ namespace CycloneGames.BehaviorTree.Editor
             }
 
             // If the node has one child, recursively sort the child and set the node's position
-            if (children.Count == 1)
+            if (childrenCopy.Count == 1)
             {
-                Vector3 result = SortNodes(new Vector3(position.x, position.y + NODE_Y_GAP, position.z + NODE_X_GAP), children[0]);
+                Vector3 result = SortNodes(new Vector3(position.x, position.y + NODE_Y_GAP, position.z + NODE_X_GAP), childrenCopy[0]);
                 node.Position = new Vector2(position.x + (result.z - NODE_X_GAP) / 2, position.y);
                 return result;
             }
@@ -350,7 +353,7 @@ namespace CycloneGames.BehaviorTree.Editor
             float nextY = position.y + NODE_Y_GAP;
             float totalWidth = 0;
 
-            foreach (var child in children)
+            foreach (var child in childrenCopy)
             {
                 Vector3 childPosition = SortNodes(new Vector3(nextX, nextY, totalWidth), child);
                 nextX = childPosition.x + NODE_X_GAP;
