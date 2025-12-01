@@ -4,6 +4,15 @@
 
 一个为 Unity 设计的简洁、健壮且数据驱动的 UI 框架，旨在实现可扩展性和易用性。它为管理 UI 窗口、层级和过渡动画提供了清晰的架构，并利用了异步加载和解耦的动画系统。
 
+## 特性
+
+- **原生异步**: 所有资源加载和实例化操作都使用 `UniTask` 完全异步执行，确保流畅、无阻塞的用户体验。
+- **数据驱动**: 使用 `ScriptableObject` 资产配置窗口和层级，以实现最大的灵活性和设计师友好性。
+- **健壮的状态管理**: 通过正式的状态机管理每个 `UIWindow` 的生命周期，防止常见的错误和竞态条件。
+- **可扩展的动画系统**: 轻松为窗口创建和分配自定义的过渡动画。
+- **面向服务的架构**: 与 `AssetManagement`, `Factory`, `Logger` 等其他服务无缝集成，接口编程可以完美兼容各 DI/IoC 框架。
+- **注重性能**: 包含预制体缓存、实例化节流和动态图集系统等功能，以保持高性能。
+
 ## 核心架构
 
 该框架由几个关键组件构建而成，它们协同工作，提供了一套全面的 UI 管理解决方案。
@@ -37,14 +46,55 @@
 ### 6. `IUIWindowTransitionDriver` (解耦的动画)
 一个接口，定义了窗口在打开和关闭时的动画方式。这个强大的抽象允许您使用任何动画系统（如 Unity Animator, LitMotion, DOTween）来实现过渡逻辑，并将其应用于窗口，而无需修改其核心逻辑。
 
-## 特性
+## 动态图集系统 (Dynamic Atlas System)
 
-- **原生异步**: 所有资源加载和实例化操作都使用 `UniTask` 完全异步执行，确保流畅、无阻塞的用户体验。
-- **数据驱动**: 使用 `ScriptableObject` 资产配置窗口和层级，以实现最大的灵活性和设计师友好性。
-- **健壮的状态管理**: 通过正式的状态机管理每个 `UIWindow` 的生命周期，防止常见的错误和竞态条件。
-- **可扩展的动画系统**: 轻松为窗口创建和分配自定义的过渡动画。
-- **面向服务的架构**: 与 `AssetManagement`, `Factory`, `Logger` 等其他服务无缝集成，接口编程可以完美兼容各 DI/IoC 框架。
-- **注重性能**: 包含预制体缓存和实例化节流等功能，以保持高性能。
+本框架包含一个生产级的 **动态图集系统** (`DynamicAtlasService`)，通过在运行时批处理 UI 精灵来大幅减少 Draw Call。
+
+### 关键特性
+-   **运行时打包**: 在运行时将单独的纹理合并为单个大纹理。
+-   **多页面支持**: 当当前图集页面已满时，自动创建新页面。
+-   **引用计数**: 当精灵不再使用时，自动释放图集空间。
+-   **零配置**: 开箱即用，提供合理的默认值，也可自定义。
+
+### 用法
+```csharp
+// 注入或获取服务
+IDynamicAtlas dynamicAtlas = ...; 
+
+// 获取精灵（自动加载并打包）
+Sprite sprite = dynamicAtlas.GetSprite("Icons/SkillIcon_01");
+myImage.sprite = sprite;
+
+// 完成时释放（减少引用计数，如果为0则释放空间）
+dynamicAtlas.ReleaseSprite("Icons/SkillIcon_01");
+```
+
+## 高级特性 (Advanced Features)
+
+### 自定义过渡驱动器 (Custom Transition Drivers)
+你可以使用 `IUIWindowTransitionDriver` 覆盖默认的打开/关闭动画。这允许你使用 **DOTween**, **LitMotion**, 或 Unity 的 **Animator**。
+
+```csharp
+public class MyTransitionDriver : IUIWindowTransitionDriver
+{
+    public async UniTask PlayOpenAsync(UIWindow window, CancellationToken ct) {
+        // 使用 LitMotion 的示例
+        await LMotion.Create(0f, 1f, 0.5f)
+            .BindToAlpha(window.GetComponent<CanvasGroup>())
+            .ToUniTask(ct);
+    }
+    // ... PlayCloseAsync 实现
+}
+```
+
+### 性能优化工具 (Performance Optimization Tools)
+
+#### `OptimizeHierarchy`
+在 Inspector 中右键单击你的 `UIWindow` 组件，选择 **Optimize Hierarchy**。此工具会扫描你的 UI 层级结构，并禁用非交互元素（如装饰性图像或文本）上的 `RaycastTarget`，从而显著降低 Unity 事件系统射线检测的开销。
+
+#### `SetVisible` API
+使用 `window.SetVisible(bool)` 而不是 `gameObject.SetActive(bool)`。
+-   **SetVisible**: 切换 `CanvasGroup.alpha`, `interactable`, 和 `blocksRaycasts`。这避免了启用/禁用 GameObject 时发生的昂贵的 UI 布局和网格重建。
 
 ## 依赖项
 
@@ -125,3 +175,50 @@ public class GameInitializer : MonoBehaviour
         uiService.CloseUI("UIWindow_MainMenu");
     }
 }
+
+## 架构模式 (MVC/MVP)
+
+虽然 `CycloneGames.UIFramework` 是架构无关的，但它旨在支持像 **MVC (Model-View-Controller)** 或 **MVP (Model-View-Presenter)** 这样的结构化模式。
+
+### 视图 (The View - `UIWindow`)
+你的 `UIWindow` 子类充当 **视图 (View)**。它应该：
+-   持有对 UI 组件（按钮、文本）的引用。
+-   暴露更新可视化效果的方法（例如 `SetHealth(float value)`）。
+-   暴露用户交互的事件（例如 `OnPlayClicked`）。
+-   **避免** 包含复杂的业务逻辑。
+
+### 控制器 / 展示器 (The Controller / Presenter)
+你可以实现一个单独的 Controller 类，或者将 `UIWindow` 用作轻量级控制器。
+-   **控制器**: 订阅 `UIWindow` 事件，与游戏模型/服务交互，并更新视图。
+-   **模型**: 持有游戏数据的纯 C# 类。
+
+**示例 (MVP):**
+```csharp
+public class MainMenuWindow : UIWindow // 视图 (View)
+{
+    [SerializeField] private Button playButton;
+    public event Action OnPlayClicked;
+
+    protected override void Awake() {
+        base.Awake();
+        playButton.onClick.AddListener(() => OnPlayClicked?.Invoke());
+    }
+}
+
+public class MainMenuController // 展示器 (Presenter)
+{
+    private MainMenuWindow _view;
+    private GameService _gameService;
+
+    public MainMenuController(MainMenuWindow view, GameService gameService) {
+        _view = view;
+        _gameService = gameService;
+        _view.OnPlayClicked += HandlePlay;
+    }
+
+    private void HandlePlay() {
+        _gameService.StartGame();
+        _view.Close();
+    }
+}
+```
