@@ -54,19 +54,19 @@ namespace Build.Pipeline.Editor
                 Debug.LogWarning($"{DEBUG_FLAG} No configuration provided. Using default settings (True/True).");
             }
 
-            // Reflection types lookup
-            Type collectorSettingDataType = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.AssetBundleCollectorSettingData");
-            Type builderSettingType = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.AssetBundleBuilderSetting");
-            Type builderHelperType = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.AssetBundleBuilderHelper");
-            Type builtinPipelineType = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.BuiltinBuildPipeline");
-            Type scriptablePipelineType = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.ScriptableBuildPipeline");
-            Type builtinParamsType = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.BuiltinBuildParameters");
-            Type scriptableParamsType = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.ScriptableBuildParameters");
+            // Reflection types lookup (cached)
+            Type collectorSettingDataType = ReflectionCache.GetType("YooAsset.Editor.AssetBundleCollectorSettingData");
+            Type builderSettingType = ReflectionCache.GetType("YooAsset.Editor.AssetBundleBuilderSetting");
+            Type builderHelperType = ReflectionCache.GetType("YooAsset.Editor.AssetBundleBuilderHelper");
+            Type builtinPipelineType = ReflectionCache.GetType("YooAsset.Editor.BuiltinBuildPipeline");
+            Type scriptablePipelineType = ReflectionCache.GetType("YooAsset.Editor.ScriptableBuildPipeline");
+            Type builtinParamsType = ReflectionCache.GetType("YooAsset.Editor.BuiltinBuildParameters");
+            Type scriptableParamsType = ReflectionCache.GetType("YooAsset.Editor.ScriptableBuildParameters");
 
             // Enums - Try strict first, then fallback to search
-            Type eBuildinFileCopyOption = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.EBuildinFileCopyOption");
-            Type eBuildBundleType = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.EBuildBundleType");
-            Type eCompressOption = BuildUtils.GetTypeInAllAssemblies("YooAsset.Editor.ECompressOption");
+            Type eBuildinFileCopyOption = ReflectionCache.GetType("YooAsset.Editor.EBuildinFileCopyOption");
+            Type eBuildBundleType = ReflectionCache.GetType("YooAsset.Editor.EBuildBundleType");
+            Type eCompressOption = ReflectionCache.GetType("YooAsset.Editor.ECompressOption");
 
             // If EBuildBundleType is still not found, it might not exist in this version of YooAsset.
             // Some versions use int constants or different enum names.
@@ -85,12 +85,13 @@ namespace Build.Pipeline.Editor
             try
             {
                 // Access AssetBundleCollectorSettingData.Setting
-                PropertyInfo settingProp = collectorSettingDataType.GetProperty("Setting", BindingFlags.Public | BindingFlags.Static);
+                PropertyInfo settingProp = ReflectionCache.GetProperty(collectorSettingDataType, "Setting", BindingFlags.Public | BindingFlags.Static);
                 object settingInstance = settingProp.GetValue(null);
 
                 // Access Packages list
-                FieldInfo packagesField = settingInstance.GetType().GetField("Packages", BindingFlags.Public | BindingFlags.Instance);
-                if (packagesField == null) packagesField = settingInstance.GetType().GetField("Packages"); // Try implicit
+                Type settingInstanceType = settingInstance.GetType();
+                FieldInfo packagesField = ReflectionCache.GetField(settingInstanceType, "Packages", BindingFlags.Public | BindingFlags.Instance);
+                if (packagesField == null) packagesField = ReflectionCache.GetField(settingInstanceType, "Packages", BindingFlags.Default);
                 // It's actually a List<AssetBundleCollectorPackage>
                 IList packagesList = packagesField.GetValue(settingInstance) as IList;
 
@@ -138,8 +139,8 @@ namespace Build.Pipeline.Editor
                 }
 
                 // Helper methods
-                MethodInfo getDefaultOutputRoot = builderHelperType.GetMethod("GetDefaultBuildOutputRoot", BindingFlags.Public | BindingFlags.Static);
-                MethodInfo getStreamingAssetsRoot = builderHelperType.GetMethod("GetStreamingAssetsRoot", BindingFlags.Public | BindingFlags.Static);
+                MethodInfo getDefaultOutputRoot = ReflectionCache.GetMethod(builderHelperType, "GetDefaultBuildOutputRoot", BindingFlags.Public | BindingFlags.Static);
+                MethodInfo getStreamingAssetsRoot = ReflectionCache.GetMethod(builderHelperType, "GetStreamingAssetsRoot", BindingFlags.Public | BindingFlags.Static);
 
                 string outputRoot = (string)getDefaultOutputRoot.Invoke(null, null);
 
@@ -178,12 +179,13 @@ namespace Build.Pipeline.Editor
 
                 foreach (object packageObj in packagesList)
                 {
-                    FieldInfo packageNameField = packageObj.GetType().GetField("PackageName", BindingFlags.Public | BindingFlags.Instance);
+                    Type packageObjType = packageObj.GetType();
+                    FieldInfo packageNameField = ReflectionCache.GetField(packageObjType, "PackageName", BindingFlags.Public | BindingFlags.Instance);
                     string packageName = (string)packageNameField.GetValue(packageObj);
 
                     Debug.Log($"{DEBUG_FLAG} Building package: {packageName}");
 
-                    MethodInfo getPipelineMethod = builderSettingType.GetMethod("GetPackageBuildPipeline", BindingFlags.Public | BindingFlags.Static);
+                    MethodInfo getPipelineMethod = ReflectionCache.GetMethod(builderSettingType, "GetPackageBuildPipeline", BindingFlags.Public | BindingFlags.Static);
                     string pipelineName = (string)getPipelineMethod.Invoke(null, new object[] { packageName });
 
                     if (string.IsNullOrEmpty(pipelineName)) pipelineName = "BuiltinBuildPipeline";
@@ -238,8 +240,20 @@ namespace Build.Pipeline.Editor
                             BuildUtils.DeleteDirectory(packageOutputRoot);
                         }
 
-                        MethodInfo runMethod = pipelineInstance.GetType().GetMethod("Run", new Type[] { buildParameters.GetType().BaseType, typeof(bool) });
-                        if (runMethod == null) runMethod = pipelineInstance.GetType().GetMethod("Run");
+                        Type pipelineInstanceType = pipelineInstance.GetType();
+                        // Run method may have overloads, try to find the one matching our parameters
+                        MethodInfo runMethod = pipelineInstanceType.GetMethod("Run", new Type[] { buildParameters.GetType().BaseType, typeof(bool) });
+                        if (runMethod == null)
+                        {
+                            // Fallback: try without parameter types
+                            runMethod = ReflectionCache.GetMethod(pipelineInstanceType, "Run", BindingFlags.Public | BindingFlags.Instance);
+                        }
+
+                        if (runMethod == null)
+                        {
+                            Debug.LogError($"{DEBUG_FLAG} Run method not found on pipeline type: {pipelineInstanceType.Name}");
+                            continue;
+                        }
 
                         object result = runMethod.Invoke(pipelineInstance, new object[] { buildParameters, true });
 
@@ -248,14 +262,14 @@ namespace Build.Pipeline.Editor
                         string errorInfo = "Unknown Error";
 
                         Type resultType = result.GetType();
-                        FieldInfo successField = resultType.GetField("Success");
+                        FieldInfo successField = ReflectionCache.GetField(resultType, "Success", BindingFlags.Public | BindingFlags.Instance);
                         if (successField != null)
                         {
                             isSuccess = (bool)successField.GetValue(result);
                         }
                         else
                         {
-                            PropertyInfo successProp = resultType.GetProperty("Success");
+                            PropertyInfo successProp = ReflectionCache.GetProperty(resultType, "Success", BindingFlags.Public | BindingFlags.Instance);
                             if (successProp != null)
                             {
                                 isSuccess = (bool)successProp.GetValue(result);
@@ -346,7 +360,7 @@ namespace Build.Pipeline.Editor
                         }
                         else
                         {
-                            FieldInfo errorInfoField = resultType.GetField("ErrorInfo");
+                            FieldInfo errorInfoField = ReflectionCache.GetField(resultType, "ErrorInfo", BindingFlags.Public | BindingFlags.Instance);
                             if (errorInfoField != null)
                             {
                                 object val = errorInfoField.GetValue(result);
@@ -354,7 +368,7 @@ namespace Build.Pipeline.Editor
                             }
                             else
                             {
-                                PropertyInfo errorInfoProp = resultType.GetProperty("ErrorInfo");
+                                PropertyInfo errorInfoProp = ReflectionCache.GetProperty(resultType, "ErrorInfo", BindingFlags.Public | BindingFlags.Instance);
                                 if (errorInfoProp != null)
                                 {
                                     object val = errorInfoProp.GetValue(result);
@@ -380,28 +394,12 @@ namespace Build.Pipeline.Editor
 
         private static YooAssetBuildConfig GetConfig()
         {
-            string[] guids = AssetDatabase.FindAssets("t:YooAssetBuildConfig");
-            if (guids.Length > 0)
+            YooAssetBuildConfig config = BuildConfigHelper.GetYooAssetConfig();
+            if (config != null)
             {
-                if (guids.Length > 1)
-                {
-                    Debug.LogWarning($"{DEBUG_FLAG} Found multiple YooAssetBuildConfig assets. Using the first one found.");
-                }
-
-                foreach (var guid in guids)
-                {
-                    string path = AssetDatabase.GUIDToAssetPath(guid);
-                    YooAssetBuildConfig config = AssetDatabase.LoadAssetAtPath<YooAssetBuildConfig>(path);
-                    if (config != null)
-                    {
-                        Debug.Log($"{DEBUG_FLAG} Loaded config from: {path}. [StreamingAssets: {config.copyToStreamingAssets}]");
-                        return config;
-                    }
-                }
+                Debug.Log($"{DEBUG_FLAG} Loaded config. [StreamingAssets: {config.copyToStreamingAssets}]");
             }
-
-            Debug.LogError($"{DEBUG_FLAG} No YooAssetBuildConfig found! Please create a configuration asset.");
-            return null;
+            return config;
         }
 
         private static string GeneratePackageVersion(YooAssetBuildConfig config)

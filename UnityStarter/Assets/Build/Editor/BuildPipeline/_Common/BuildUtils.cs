@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using UnityEngine;
@@ -70,14 +71,52 @@ namespace Build.Pipeline.Editor
             }
         }
 
+        private static readonly Dictionary<string, Type> _typeCache = new Dictionary<string, Type>();
+
+        /// <summary>
+        /// Gets a type by name from all loaded assemblies. Results are cached for performance.
+        /// </summary>
         public static Type GetTypeInAllAssemblies(string typeName)
         {
+            if (string.IsNullOrEmpty(typeName))
+                return null;
+
+            // Check cache first
+            if (_typeCache.TryGetValue(typeName, out Type cachedType))
+            {
+                return cachedType;
+            }
+
+            // Search in all assemblies
+            Type foundType = null;
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                Type t = assembly.GetType(typeName);
-                if (t != null) return t;
+                try
+                {
+                    Type t = assembly.GetType(typeName);
+                    if (t != null)
+                    {
+                        foundType = t;
+                        break;
+                    }
+                }
+                catch
+                {
+                    // Ignore assembly load errors
+                }
             }
-            return null;
+
+            // Cache the result (even if null, to avoid repeated searches)
+            _typeCache[typeName] = foundType;
+            return foundType;
+        }
+
+        /// <summary>
+        /// Clears the type cache. Call this if assemblies are reloaded.
+        /// </summary>
+        public static void ClearTypeCache()
+        {
+            _typeCache.Clear();
         }
 
         public static void SetField(object target, string fieldName, object value)
@@ -118,7 +157,7 @@ namespace Build.Pipeline.Editor
             {
                 bool deleted = false;
                 int attempts = 0;
-                
+
                 while (!deleted && attempts < 3)
                 {
                     try
@@ -150,19 +189,19 @@ namespace Build.Pipeline.Editor
                         string parentDir = Path.GetDirectoryName(directoryPath);
                         string tempName = $"_Trash_{Guid.NewGuid()}";
                         string tempPath = Path.Combine(parentDir, tempName);
-                        
+
                         Debug.Log($"[BuildUtils] Moving locked directory to temp path: {tempPath}");
                         Directory.Move(directoryPath, tempPath);
-                        
-                        try 
+
+                        try
                         {
-                            Directory.Delete(tempPath, true); 
+                            Directory.Delete(tempPath, true);
                         }
-                        catch 
-                        { 
+                        catch
+                        {
                             Debug.LogWarning($"[BuildUtils] Could not delete temp trash folder {tempPath}, but original folder is cleared.");
                         }
-                        
+
                         deleted = true;
                     }
                     catch (Exception ex)
