@@ -1,6 +1,8 @@
-# RPG 移动系统
+# RPG 移动模块
 
-基于状态机的高性能角色移动系统，专为 Unity RPG 游戏设计，零 GC，Gameplay Ability System (GAS) 适配良好。
+基于状态机的高性能角色移动模块，专为 Unity RPG 游戏设计，零 GC，Gameplay Ability System (GAS) 适配良好。
+
+<p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
 ## ✨ 特性
 
