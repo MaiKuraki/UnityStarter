@@ -4,6 +4,15 @@
 
 A simple, robust, and data-driven UI framework for Unity, designed for scalability and ease of use. It provides a clear architecture for managing UI windows, layers, and transitions, leveraging asynchronous loading and a decoupled animation system.
 
+## Features
+
+- **Asynchronous by Design**: All resource loading and instantiation operations are fully asynchronous using `UniTask`, ensuring a smooth, non-blocking user experience.
+- **Data-Driven**: Configure windows and layers with `ScriptableObject` assets for maximum flexibility and designer-friendliness.
+- **Robust State Management**: A formal state machine manages the lifecycle of each `UIWindow`, preventing common bugs and race conditions.
+- **Extensible Animation System**: Easily create and assign custom transition animations for windows.
+- **Service-Based Architecture**: Integrates seamlessly with other services like `AssetManagement`, `Factory`, and `Logger`. Perfectly compatible with DI/IoC.
+- **Performance-Minded**: Includes features like prefab caching, instantiation throttling, and a Dynamic Atlas system to maintain high performance.
+
 ## Core Architecture
 
 The framework is built upon several key components that work together to provide a comprehensive UI management solution.
@@ -37,14 +46,55 @@ A `ScriptableObject` that defines the properties of a `UIWindow`. This data-driv
 ### 6. `IUIWindowTransitionDriver` (Decoupled Animations)
 An interface that defines how a window animates when opening and closing. This powerful abstraction allows you to implement transition logic using any animation system (e.g., Unity Animator, LitMotion, DOTween) and apply it to windows without modifying their core logic.
 
-## Features
+## Dynamic Atlas System
 
-- **Asynchronous by Design**: All resource loading and instantiation operations are fully asynchronous using `UniTask`, ensuring a smooth, non-blocking user experience.
-- **Data-Driven**: Configure windows and layers with `ScriptableObject` assets for maximum flexibility and designer-friendliness.
-- **Robust State Management**: A formal state machine manages the lifecycle of each `UIWindow`, preventing common bugs and race conditions.
-- **Extensible Animation System**: Easily create and assign custom transition animations for windows.
-- **Service-Based Architecture**: Integrates seamlessly with other services like `AssetManagement`, `Factory`, and `Logger`. Perfectly compatible with DI/IoC.
-- **Performance-Minded**: Includes features like prefab caching and instantiation throttling to maintain high performance.
+The framework includes a production-grade **Dynamic Atlas System** (`DynamicAtlasService`) to drastically reduce draw calls by batching UI sprites at runtime.
+
+### Key Features
+-   **Runtime Packing**: Combines individual textures into a single large texture at runtime.
+-   **Multi-Page Support**: Automatically creates new atlas pages when the current one is full.
+-   **Reference Counting**: Automatically frees space in the atlas when sprites are no longer in use.
+-   **Zero-Config**: Works out of the box with reasonable defaults, or can be customized.
+
+### Usage
+```csharp
+// Inject or get the service
+IDynamicAtlas dynamicAtlas = ...; 
+
+// Get a sprite (automatically loaded and packed)
+Sprite sprite = dynamicAtlas.GetSprite("Icons/SkillIcon_01");
+myImage.sprite = sprite;
+
+// Release when done (decrements ref count, frees space if 0)
+dynamicAtlas.ReleaseSprite("Icons/SkillIcon_01");
+```
+
+## Advanced Features
+
+### Custom Transition Drivers
+You can override the default open/close animations using `IUIWindowTransitionDriver`. This allows you to use **DOTween**, **LitMotion**, or Unity's **Animator**.
+
+```csharp
+public class MyTransitionDriver : IUIWindowTransitionDriver
+{
+    public async UniTask PlayOpenAsync(UIWindow window, CancellationToken ct) {
+        // Example using LitMotion
+        await LMotion.Create(0f, 1f, 0.5f)
+            .BindToAlpha(window.GetComponent<CanvasGroup>())
+            .ToUniTask(ct);
+    }
+    // ... PlayCloseAsync implementation
+}
+```
+
+### Performance Optimization Tools
+
+#### `OptimizeHierarchy`
+Right-click your `UIWindow` component in the Inspector and select **Optimize Hierarchy**. This tool scans your UI hierarchy and disables `RaycastTarget` on non-interactive elements (like decorative Images or Texts), significantly reducing the cost of Unity's event system raycasts.
+
+#### `SetVisible` API
+Use `window.SetVisible(bool)` instead of `gameObject.SetActive(bool)`.
+-   **SetVisible**: Toggles `CanvasGroup.alpha`, `interactable`, and `blocksRaycasts`. This avoids the expensive rebuilding of the UI layout and mesh that happens when enabling/disabling GameObjects.
 
 ## Dependencies
 
@@ -125,3 +175,50 @@ public class GameInitializer : MonoBehaviour
         uiService.CloseUI("UIWindow_MainMenu");
     }
 }
+
+## Architecture Patterns (MVC/MVP)
+
+While `CycloneGames.UIFramework` is architecture-agnostic, it is designed to support structured patterns like **MVC (Model-View-Controller)** or **MVP (Model-View-Presenter)**.
+
+### The View (`UIWindow`)
+Your `UIWindow` subclass acts as the **View**. It should:
+-   Hold references to UI components (Buttons, Texts).
+-   Expose methods to update the visualization (e.g., `SetHealth(float value)`).
+-   Expose events for user interactions (e.g., `OnPlayClicked`).
+-   **Avoid** containing complex business logic.
+
+### The Controller / Presenter
+You can implement a separate Controller class or use the `UIWindow` as a lightweight controller.
+-   **Controller**: Subscribes to `UIWindow` events, interacts with the game model/services, and updates the View.
+-   **Model**: Pure C# classes holding your game data.
+
+**Example (MVP):**
+```csharp
+public class MainMenuWindow : UIWindow // The View
+{
+    [SerializeField] private Button playButton;
+    public event Action OnPlayClicked;
+
+    protected override void Awake() {
+        base.Awake();
+        playButton.onClick.AddListener(() => OnPlayClicked?.Invoke());
+    }
+}
+
+public class MainMenuController // The Presenter
+{
+    private MainMenuWindow _view;
+    private GameService _gameService;
+
+    public MainMenuController(MainMenuWindow view, GameService gameService) {
+        _view = view;
+        _gameService = gameService;
+        _view.OnPlayClicked += HandlePlay;
+    }
+
+    private void HandlePlay() {
+        _gameService.StartGame();
+        _view.Close();
+    }
+}
+```
