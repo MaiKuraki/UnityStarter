@@ -96,6 +96,7 @@
     │   │   ├── CycloneGames/                 # 核心开发套件
     │   │   │   ├── AssetManagement/          # 资源加载和版本管理
     │   │   │   ├── Audio/                    # 增强型音频管理系统
+    │   │   │   ├── BehaviorTree/             # 高性能行为树，附有可视化编辑器
     │   │   │   ├── Cheat/                    # 调试命令管道系统
     │   │   │   ├── Factory/                  # 高性能对象池
     │   │   │   ├── FontAssets/               # 多语言字体集合
