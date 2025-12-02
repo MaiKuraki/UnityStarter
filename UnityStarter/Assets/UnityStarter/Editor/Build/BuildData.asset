@@ -17,4 +17,4 @@ MonoBehaviour:
   outputBasePath: Build
   useBuildalon: 0
   useHybridCLR: 0
-  assetManagementType: 2
+  assetManagementType: 0
