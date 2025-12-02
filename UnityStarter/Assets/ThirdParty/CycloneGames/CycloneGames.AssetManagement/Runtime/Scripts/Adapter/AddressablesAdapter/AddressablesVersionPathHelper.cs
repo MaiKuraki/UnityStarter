@@ -25,7 +25,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         /// <summary>
         /// Gets the streaming assets path for version file (read-only, initial version).
-        /// Addressables stores content in StreamingAssets/aa/&lt;Platform&gt; structure.
+        /// Addressables stores content in StreamingAssets/aa/<Platform> structure.
         /// This method returns the expected path based on current platform.
         /// The actual file existence should be checked by the caller.
         /// </summary>
@@ -43,16 +43,33 @@ namespace CycloneGames.AssetManagement.Runtime
         /// <summary>
         /// Gets all possible paths where version file might be located in StreamingAssets.
         /// Returns paths in order of priority.
+        /// 
+        /// Priority order:
+        /// - Bundle directory (StreamingAssets/aa/<BuildTarget>/AddressablesVersion.json) - where bundle files are located (correct location)
+        /// - Other platform directories (in case of cross-platform builds)
+        /// - Root StreamingAssets (for backward compatibility)
         /// </summary>
         public static string[] GetStreamingAssetsVersionPaths()
         {
             var paths = new System.Collections.Generic.List<string>();
 
-            // Priority 1: Platform-specific path (StreamingAssets/aa/<Platform>/AddressablesVersion.json)
+            string buildTargetName = GetBuildTargetName();
             string platformName = GetPlatformName();
+            
+            // Priority 1: Bundle directory (correct location where bundle files are located)
+            // This is StreamingAssets/aa/<BuildTarget>/AddressablesVersion.json
+            // Unity copies BuildPath contents to StreamingAssets/aa, so the BuildTarget subdirectory
+            // becomes StreamingAssets/aa/<BuildTarget>
+            if (!string.IsNullOrEmpty(buildTargetName))
+            {
+                string bundleDirPath = Path.Combine(Application.streamingAssetsPath, "aa", buildTargetName, VERSION_FILE_NAME);
+                paths.Add(bundleDirPath);
+            }
+
+            // StreamingAssets/aa/<Platform>/AddressablesVersion.json
             paths.Add(Path.Combine(Application.streamingAssetsPath, "aa", platformName, VERSION_FILE_NAME));
 
-            // Priority 2: Check other platform directories (in case of cross-platform builds)
+            // Check other platform directories and their subdirectories (in case of cross-platform builds)
             try
             {
                 string addressablesRoot = Path.Combine(Application.streamingAssetsPath, "aa");
@@ -61,10 +78,22 @@ namespace CycloneGames.AssetManagement.Runtime
                     string[] platformDirs = Directory.GetDirectories(addressablesRoot);
                     foreach (string platformDir in platformDirs)
                     {
-                        string versionPath = Path.Combine(platformDir, VERSION_FILE_NAME);
-                        if (!paths.Contains(versionPath))
+                        // Check subdirectories (bundle directories) first
+                        try
                         {
-                            paths.Add(versionPath);
+                            string[] subdirs = Directory.GetDirectories(platformDir);
+                            foreach (string subdir in subdirs)
+                            {
+                                string versionPath = Path.Combine(subdir, VERSION_FILE_NAME);
+                                if (!paths.Contains(versionPath))
+                                {
+                                    paths.Add(versionPath);
+                                }
+                            }
+                        }
+                        catch
+                        {
+
                         }
                     }
                 }
@@ -75,16 +104,20 @@ namespace CycloneGames.AssetManagement.Runtime
                 // Continue with fallback path
             }
 
-            // Priority 3: Root StreamingAssets (for backward compatibility)
             paths.Add(Path.Combine(Application.streamingAssetsPath, VERSION_FILE_NAME));
 
             return paths.ToArray();
         }
 
-        private static string GetPlatformName()
+        /// <summary>
+        /// Gets the BuildTarget name at runtime (e.g., "StandaloneWindows64", "Android", "iOS").
+        /// This is used to locate the bundle directory where version file is stored.
+        /// </summary>
+        private static string GetBuildTargetName()
         {
 #if UNITY_EDITOR
-            return UnityEditor.EditorUserBuildSettings.activeBuildTarget.ToString();
+            var buildTarget = UnityEditor.EditorUserBuildSettings.activeBuildTarget;
+            return buildTarget.ToString();
 #elif UNITY_STANDALONE_WIN
             return "StandaloneWindows64";
 #elif UNITY_STANDALONE_OSX
@@ -98,7 +131,118 @@ namespace CycloneGames.AssetManagement.Runtime
 #elif UNITY_WEBGL
             return "WebGL";
 #else
-            return Application.platform.ToString();
+            // For unknown platforms, try to map RuntimePlatform to BuildTarget name
+            var runtimePlatform = Application.platform;
+            switch (runtimePlatform)
+            {
+                case RuntimePlatform.WindowsPlayer:
+                case RuntimePlatform.WindowsEditor:
+                    return "StandaloneWindows64";
+                case RuntimePlatform.OSXPlayer:
+                case RuntimePlatform.OSXEditor:
+                    return "StandaloneOSX";
+                case RuntimePlatform.LinuxPlayer:
+                case RuntimePlatform.LinuxEditor:
+                    return "StandaloneLinux64";
+                case RuntimePlatform.Android:
+                    return "Android";
+                case RuntimePlatform.IPhonePlayer:
+                    return "iOS";
+                case RuntimePlatform.WebGLPlayer:
+                    return "WebGL";
+                default:
+                    return runtimePlatform.ToString();
+            }
+#endif
+        }
+
+        private static string GetPlatformName()
+        {
+            // Use Unity Addressables' PlatformMappingService to get the correct platform path
+            // This ensures consistency between build-time and runtime paths
+            // For example: StandaloneWindows64 -> "Windows", StandaloneOSX -> "OSX"
+#if ADDRESSABLES_PRESENT
+            try
+            {
+                // Use reflection to call PlatformMappingService.GetPlatformPathSubFolder()
+                // This matches what Addressables.BuildPath uses internally
+                var platformMappingType = System.Type.GetType("UnityEngine.AddressableAssets.PlatformMappingService, Unity.Addressables");
+                if (platformMappingType != null)
+                {
+                    var method = platformMappingType.GetMethod("GetPlatformPathSubFolder", 
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+                    if (method != null)
+                    {
+                        string platformPath = method.Invoke(null, null)?.ToString();
+                        if (!string.IsNullOrEmpty(platformPath))
+                        {
+                            return platformPath;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Fall through to hardcoded mapping if reflection fails
+            }
+#endif
+
+            // Fallback to hardcoded mapping (matches Unity's PlatformMappingService logic)
+#if UNITY_EDITOR
+            var buildTarget = UnityEditor.EditorUserBuildSettings.activeBuildTarget;
+            switch (buildTarget)
+            {
+                case UnityEditor.BuildTarget.StandaloneWindows:
+                case UnityEditor.BuildTarget.StandaloneWindows64:
+                    return "Windows";
+                case UnityEditor.BuildTarget.StandaloneOSX:
+                    return "OSX";
+                case UnityEditor.BuildTarget.StandaloneLinux64:
+                    return "Linux";
+                case UnityEditor.BuildTarget.Android:
+                    return "Android";
+                case UnityEditor.BuildTarget.iOS:
+                    return "iOS";
+                case UnityEditor.BuildTarget.WebGL:
+                    return "WebGL";
+                default:
+                    return buildTarget.ToString();
+            }
+#elif UNITY_STANDALONE_WIN
+            return "Windows";
+#elif UNITY_STANDALONE_OSX
+            return "OSX";
+#elif UNITY_STANDALONE_LINUX
+            return "Linux";
+#elif UNITY_ANDROID
+            return "Android";
+#elif UNITY_IOS
+            return "iOS";
+#elif UNITY_WEBGL
+            return "WebGL";
+#else
+            // For unknown platforms, try to map RuntimePlatform to AddressablesPlatform
+            var runtimePlatform = Application.platform;
+            switch (runtimePlatform)
+            {
+                case RuntimePlatform.WindowsPlayer:
+                case RuntimePlatform.WindowsEditor:
+                    return "Windows";
+                case RuntimePlatform.OSXPlayer:
+                case RuntimePlatform.OSXEditor:
+                    return "OSX";
+                case RuntimePlatform.LinuxPlayer:
+                case RuntimePlatform.LinuxEditor:
+                    return "Linux";
+                case RuntimePlatform.Android:
+                    return "Android";
+                case RuntimePlatform.IPhonePlayer:
+                    return "iOS";
+                case RuntimePlatform.WebGLPlayer:
+                    return "WebGL";
+                default:
+                    return runtimePlatform.ToString();
+            }
 #endif
         }
 
