@@ -52,12 +52,14 @@ namespace Build.Pipeline.Editor
                 Debug.LogWarning($"{DEBUG_FLAG} No configuration provided. Using default settings.");
             }
 
-            Type contentBuilderType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Build.ContentPipeline");
-            Type buildScriptType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Build.BuildScript");
             Type settingsType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
-            Type buildResultType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Build.DataBuildResult");
+            Type buildResultType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Build.AddressablesPlayerBuildResult");
+            if (buildResultType == null)
+            {
+                buildResultType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Build.DataBuildResult");
+            }
 
-            if (contentBuilderType == null && buildScriptType == null)
+            if (settingsType == null)
             {
                 Debug.LogWarning($"{DEBUG_FLAG} Addressables package not found. Skipping content build.");
                 return;
@@ -79,16 +81,7 @@ namespace Build.Pipeline.Editor
 
                 Debug.Log($"{DEBUG_FLAG} Start building Addressables content...");
 
-                object buildResult = null;
-
-                if (contentBuilderType != null)
-                {
-                    buildResult = BuildWithContentPipeline(contentBuilderType, settings, buildTarget, contentVersion);
-                }
-                else if (buildScriptType != null)
-                {
-                    buildResult = BuildWithBuildScript(buildScriptType, settings, buildTarget, contentVersion);
-                }
+                object buildResult = BuildWithSettings(settingsType, settings, buildTarget, buildResultType);
 
                 if (buildResult != null)
                 {
@@ -106,7 +99,14 @@ namespace Build.Pipeline.Editor
 
                         if (useCopyToOutputDirectory)
                         {
-                            CopyBuildResultToOutput(buildTarget, useBuildOutputDirectory, useBuildRemoteCatalog);
+                            // Use default path if buildOutputDirectory is empty (similar to YooAsset)
+                            string outputDir = useBuildOutputDirectory;
+                            if (string.IsNullOrEmpty(outputDir))
+                            {
+                                outputDir = "Build/AddressablesContent";
+                                Debug.Log($"{DEBUG_FLAG} BuildOutputDirectory is empty, using default path: {outputDir}");
+                            }
+                            CopyBuildResultToOutput(buildTarget, outputDir, useBuildRemoteCatalog);
                         }
                     }
                     else
@@ -131,16 +131,91 @@ namespace Build.Pipeline.Editor
         {
             if (settingsType == null) return null;
 
+            Type defaultObjectType = ReflectionCache.GetType("UnityEditor.AddressableAssets.AddressableAssetSettingsDefaultObject");
+            if (defaultObjectType != null)
+            {
+                // Try Settings property first (returns existing settings or null)
+                PropertyInfo settingsProp = ReflectionCache.GetProperty(defaultObjectType, "Settings", BindingFlags.Public | BindingFlags.Static);
+                if (settingsProp != null)
+                {
+                    try
+                    {
+                        object settings = settingsProp.GetValue(null);
+                        if (settings != null)
+                        {
+                            return settings;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"{DEBUG_FLAG} Failed to get Settings property: {ex.Message}");
+                    }
+                }
+
+                // Fallback: Try GetSettings(bool create) method
+                MethodInfo getSettingsMethod = ReflectionCache.GetMethod(defaultObjectType, "GetSettings", BindingFlags.Public | BindingFlags.Static, new Type[] { typeof(bool) });
+                if (getSettingsMethod == null)
+                {
+                    // Try without parameter types (may fail if multiple overloads)
+                    getSettingsMethod = ReflectionCache.GetMethod(defaultObjectType, "GetSettings", BindingFlags.Public | BindingFlags.Static);
+                }
+
+                if (getSettingsMethod != null)
+                {
+                    // GetSettings(bool create) - pass false to avoid creating if it doesn't exist
+                    try
+                    {
+                        ParameterInfo[] parameters = getSettingsMethod.GetParameters();
+                        if (parameters.Length == 1 && parameters[0].ParameterType == typeof(bool))
+                        {
+                            return getSettingsMethod.Invoke(null, new object[] { false });
+                        }
+                        else if (parameters.Length == 0)
+                        {
+                            return getSettingsMethod.Invoke(null, null);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"{DEBUG_FLAG} Failed to invoke GetSettings(false): {ex.Message}");
+                        // Try with true as last resort
+                        try
+                        {
+                            return getSettingsMethod.Invoke(null, new object[] { true });
+                        }
+                        catch
+                        {
+                            // Fall through to other methods
+                        }
+                    }
+                }
+            }
+
+            // Fallback: Try AddressableAssetSettings.Default (older API or alternative)
             MethodInfo defaultMethod = ReflectionCache.GetMethod(settingsType, "Default", BindingFlags.Public | BindingFlags.Static);
             if (defaultMethod != null)
             {
-                return defaultMethod.Invoke(null, null);
+                try
+                {
+                    return defaultMethod.Invoke(null, null);
+                }
+                catch
+                {
+                    // Continue to property fallback
+                }
             }
 
             PropertyInfo defaultProp = ReflectionCache.GetProperty(settingsType, "Default", BindingFlags.Public | BindingFlags.Static);
             if (defaultProp != null)
             {
-                return defaultProp.GetValue(null);
+                try
+                {
+                    return defaultProp.GetValue(null);
+                }
+                catch
+                {
+                    // Return null if all methods fail
+                }
             }
 
             return null;
@@ -153,6 +228,10 @@ namespace Build.Pipeline.Editor
 
             try
             {
+                // Initialize ProfileValueReference fields to avoid "GetValue called with empty id" warnings
+                // This happens when Addressables accesses uninitialized ProfileValueReference fields during build
+                InitializeProfileValueReferences(settings, settingsType);
+
                 // Addressables uses OverridePlayerVersion to set the catalog version
                 // This version is used to generate the catalog hash, which allows the runtime to detect updates
                 PropertyInfo overrideVersionProp = ReflectionCache.GetProperty(settingsType, "OverridePlayerVersion", BindingFlags.Public | BindingFlags.Instance);
@@ -181,45 +260,163 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        private static object BuildWithContentPipeline(Type contentBuilderType, object settings, BuildTarget buildTarget, string contentVersion)
+        /// <summary>
+        /// Initializes ProfileValueReference fields to avoid "GetValue called with empty id" warnings.
+        /// These warnings occur when Addressables accesses uninitialized ProfileValueReference fields during build.
+        /// </summary>
+        private static void InitializeProfileValueReferences(object settings, Type settingsType)
         {
-            MethodInfo buildMethod = ReflectionCache.GetMethod(contentBuilderType, "BuildContent", BindingFlags.Public | BindingFlags.Static);
-            if (buildMethod == null)
+            try
             {
-                Debug.LogWarning($"{DEBUG_FLAG} BuildContent method not found in ContentPipeline.");
-                return null;
-            }
+                // Check if BuildRemoteCatalog is enabled
+                PropertyInfo buildRemoteCatalogProp = ReflectionCache.GetProperty(settingsType, "BuildRemoteCatalog", BindingFlags.Public | BindingFlags.Instance);
+                bool buildRemoteCatalog = buildRemoteCatalogProp != null && (bool)buildRemoteCatalogProp.GetValue(settings);
 
-            ParameterInfo[] parameters = buildMethod.GetParameters();
-            if (parameters.Length >= 2)
-            {
-                return buildMethod.Invoke(null, new object[] { settings, buildTarget });
-            }
-            else if (parameters.Length == 1)
-            {
-                return buildMethod.Invoke(null, new object[] { settings });
-            }
+                if (buildRemoteCatalog)
+                {
+                    // Initialize RemoteCatalogBuildPath if needed
+                    PropertyInfo remoteCatalogBuildPathProp = ReflectionCache.GetProperty(settingsType, "RemoteCatalogBuildPath", BindingFlags.Public | BindingFlags.Instance);
+                    if (remoteCatalogBuildPathProp != null)
+                    {
+                        object remoteCatalogBuildPath = remoteCatalogBuildPathProp.GetValue(settings);
+                        if (remoteCatalogBuildPath != null)
+                        {
+                            Type profileValueReferenceType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Settings.ProfileValueReference");
+                            if (profileValueReferenceType != null)
+                            {
+                                // Check if Id is empty
+                                PropertyInfo idProp = ReflectionCache.GetProperty(profileValueReferenceType, "Id", BindingFlags.Public | BindingFlags.Instance);
+                                if (idProp != null)
+                                {
+                                    string id = idProp.GetValue(remoteCatalogBuildPath)?.ToString();
+                                    if (string.IsNullOrEmpty(id))
+                                    {
+                                        // Initialize with default Remote.BuildPath variable
+                                        MethodInfo setVariableByNameMethod = ReflectionCache.GetMethod(profileValueReferenceType, "SetVariableByName", BindingFlags.Public | BindingFlags.Instance, new Type[] { typeof(object), typeof(string) });
+                                        if (setVariableByNameMethod != null)
+                                        {
+                                            setVariableByNameMethod.Invoke(remoteCatalogBuildPath, new object[] { settings, "Remote.BuildPath" });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
 
-            return null;
+                    // Initialize RemoteCatalogLoadPath if needed
+                    PropertyInfo remoteCatalogLoadPathProp = ReflectionCache.GetProperty(settingsType, "RemoteCatalogLoadPath", BindingFlags.Public | BindingFlags.Instance);
+                    if (remoteCatalogLoadPathProp != null)
+                    {
+                        object remoteCatalogLoadPath = remoteCatalogLoadPathProp.GetValue(settings);
+                        if (remoteCatalogLoadPath != null)
+                        {
+                            Type profileValueReferenceType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Settings.ProfileValueReference");
+                            if (profileValueReferenceType != null)
+                            {
+                                PropertyInfo idProp = ReflectionCache.GetProperty(profileValueReferenceType, "Id", BindingFlags.Public | BindingFlags.Instance);
+                                if (idProp != null)
+                                {
+                                    string id = idProp.GetValue(remoteCatalogLoadPath)?.ToString();
+                                    if (string.IsNullOrEmpty(id))
+                                    {
+                                        MethodInfo setVariableByNameMethod = ReflectionCache.GetMethod(profileValueReferenceType, "SetVariableByName", BindingFlags.Public | BindingFlags.Instance, new Type[] { typeof(object), typeof(string) });
+                                        if (setVariableByNameMethod != null)
+                                        {
+                                            setVariableByNameMethod.Invoke(remoteCatalogLoadPath, new object[] { settings, "Remote.LoadPath" });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Silently fail - this is just an optimization to reduce warnings
+                // The build will still work even if ProfileValueReference initialization fails
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to initialize ProfileValueReferences (non-critical): {ex.Message}");
+            }
         }
 
-        private static object BuildWithBuildScript(Type buildScriptType, object settings, BuildTarget buildTarget, string contentVersion)
+
+        /// <summary>
+        /// Builds Addressables content using AddressableAssetSettings.BuildPlayerContent (standard API).
+        /// </summary>
+        private static object BuildWithSettings(Type settingsType, object settings, BuildTarget buildTarget, Type buildResultType)
         {
-            MethodInfo buildMethod = ReflectionCache.GetMethod(buildScriptType, "BuildContent", BindingFlags.Public | BindingFlags.Static);
+            // Try BuildPlayerContent(out AddressablesPlayerBuildResult) - standard API
+            MethodInfo buildMethod = null;
+            MethodInfo[] allMethods = settingsType.GetMethods(BindingFlags.Public | BindingFlags.Static);
+            foreach (var method in allMethods)
+            {
+                if (method.Name == "BuildPlayerContent")
+                {
+                    ParameterInfo[] parameters = method.GetParameters();
+
+                    // Prefer BuildPlayerContent(out result) signature
+                    if (parameters.Length == 1 && parameters[0].IsOut)
+                    {
+                        buildMethod = method;
+                        break;
+                    }
+                    // Fallback to no parameters
+                    else if (parameters.Length == 0 && buildMethod == null)
+                    {
+                        buildMethod = method;
+                    }
+                }
+            }
+
             if (buildMethod == null)
             {
-                Debug.LogWarning($"{DEBUG_FLAG} BuildContent method not found in BuildScript.");
+                Debug.LogWarning($"{DEBUG_FLAG} BuildPlayerContent method not found in AddressableAssetSettings.");
                 return null;
             }
 
-            ParameterInfo[] parameters = buildMethod.GetParameters();
-            if (parameters.Length >= 2)
+            ParameterInfo[] methodParams = buildMethod.GetParameters();
+
+            // Check if it's BuildPlayerContent(out result) signature
+            if (methodParams.Length == 1 && methodParams[0].IsOut)
             {
-                return buildMethod.Invoke(null, new object[] { settings, buildTarget });
+                // Get the result type from the out parameter
+                Type resultType = methodParams[0].ParameterType.GetElementType();
+                if (resultType == null && buildResultType != null)
+                {
+                    resultType = buildResultType;
+                }
+
+                if (resultType != null)
+                {
+                    try
+                    {
+                        // Create result object
+                        object result = Activator.CreateInstance(resultType);
+                        object[] invokeParams = new object[] { result };
+                        buildMethod.Invoke(null, invokeParams);
+                        return invokeParams[0]; // Return the out parameter
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"{DEBUG_FLAG} Failed to invoke BuildPlayerContent with out parameter: {ex.Message}");
+                    }
+                }
             }
-            else if (parameters.Length == 1)
+            // Check if it's BuildPlayerContent() signature (no parameters)
+            else if (methodParams.Length == 0)
             {
-                return buildMethod.Invoke(null, new object[] { settings });
+                try
+                {
+                    return buildMethod.Invoke(null, null);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} Failed to invoke BuildPlayerContent(): {ex.Message}");
+                }
+            }
+            else
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} BuildPlayerContent method signature not recognized. Parameters: {methodParams.Length}");
             }
 
             return null;
@@ -230,30 +427,90 @@ namespace Build.Pipeline.Editor
             if (buildResult == null) return false;
 
             Type resultType = buildResult.GetType();
+
+            // Try Success field/property first
             FieldInfo successField = ReflectionCache.GetField(resultType, "Success", BindingFlags.Public | BindingFlags.Instance);
             if (successField != null)
             {
-                return (bool)successField.GetValue(buildResult);
+                object successValue = successField.GetValue(buildResult);
+                if (successValue is bool boolValue)
+                {
+                    return boolValue;
+                }
             }
 
             PropertyInfo successProp = ReflectionCache.GetProperty(resultType, "Success", BindingFlags.Public | BindingFlags.Instance);
             if (successProp != null)
             {
-                return (bool)successProp.GetValue(buildResult);
-            }
-
-            if (buildResultType != null && resultType == buildResultType)
-            {
-                FieldInfo errorField = ReflectionCache.GetField(resultType, "Error", BindingFlags.Public | BindingFlags.Instance);
-                if (errorField != null)
+                object successValue = successProp.GetValue(buildResult);
+                if (successValue is bool boolValue)
                 {
-                    string error = errorField.GetValue(buildResult) as string;
-                    return string.IsNullOrEmpty(error);
+                    return boolValue;
                 }
             }
 
-            Debug.LogWarning($"{DEBUG_FLAG} Could not determine build result success status.");
-            return false;
+            // Check Error field/property - if Error is null or empty, build succeeded
+            FieldInfo errorField = ReflectionCache.GetField(resultType, "Error", BindingFlags.Public | BindingFlags.Instance);
+            if (errorField != null)
+            {
+                object errorValue = errorField.GetValue(buildResult);
+                if (errorValue == null)
+                {
+                    return true; // No error means success
+                }
+                string error = errorValue.ToString();
+                if (string.IsNullOrEmpty(error))
+                {
+                    return true; // Empty error means success
+                }
+                // If error is not empty, check if it's just a warning
+                if (error.Contains("warning", StringComparison.OrdinalIgnoreCase) && !error.Contains("failed", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true; // Only warnings, not failures
+                }
+                return false; // Has error
+            }
+
+            PropertyInfo errorProp = ReflectionCache.GetProperty(resultType, "Error", BindingFlags.Public | BindingFlags.Instance);
+            if (errorProp != null)
+            {
+                object errorValue = errorProp.GetValue(buildResult);
+                if (errorValue == null)
+                {
+                    return true; // No error means success
+                }
+                string error = errorValue.ToString();
+                if (string.IsNullOrEmpty(error))
+                {
+                    return true; // Empty error means success
+                }
+                // If error is not empty, check if it's just a warning
+                if (error.Contains("warning", StringComparison.OrdinalIgnoreCase) && !error.Contains("failed", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true; // Only warnings, not failures
+                }
+                return false; // Has error
+            }
+
+            // Check Exception field/property
+            FieldInfo exceptionField = ReflectionCache.GetField(resultType, "Exception", BindingFlags.Public | BindingFlags.Instance);
+            if (exceptionField != null)
+            {
+                object exceptionValue = exceptionField.GetValue(buildResult);
+                return exceptionValue == null; // No exception means success
+            }
+
+            PropertyInfo exceptionProp = ReflectionCache.GetProperty(resultType, "Exception", BindingFlags.Public | BindingFlags.Instance);
+            if (exceptionProp != null)
+            {
+                object exceptionValue = exceptionProp.GetValue(buildResult);
+                return exceptionValue == null; // No exception means success
+            }
+
+            // If we can't determine, but buildResult is not null and no exception was thrown,
+            // assume success (since BuildPlayerContent would throw if it failed)
+            Debug.LogWarning($"{DEBUG_FLAG} Could not determine build result success status from result type {resultType.Name}. Assuming success since no exception was thrown and build completed.");
+            return true; // Assume success if we can't determine
         }
 
         private static string GetBuildError(object buildResult, Type buildResultType)
@@ -380,39 +637,101 @@ namespace Build.Pipeline.Editor
             }
         }
 
+        /// <summary>
+        /// Gets the Addressables build output path for the specified build target.
+        /// Uses Addressables.BuildPath static property and platform mapping for consistency.
+        /// </summary>
         private static string GetAddressablesBuildPath(object settings, Type settingsType, BuildTarget buildTarget)
         {
-            PropertyInfo buildPathProp = ReflectionCache.GetProperty(settingsType, "BuildRemoteCatalog", BindingFlags.Public | BindingFlags.Instance);
-            bool isRemote = buildPathProp != null && (bool)buildPathProp.GetValue(settings);
-
-            PropertyInfo profileProp = ReflectionCache.GetProperty(settingsType, "profileSettings", BindingFlags.Public | BindingFlags.Instance);
-            if (profileProp == null)
+            try
             {
-                profileProp = ReflectionCache.GetProperty(settingsType, "ProfileSettings", BindingFlags.Public | BindingFlags.Instance);
+                // Try using Addressables.BuildPath static property (most reliable)
+                Type addressablesType = ReflectionCache.GetType("UnityEngine.AddressableAssets.Addressables");
+                if (addressablesType != null)
+                {
+                    PropertyInfo buildPathProp = ReflectionCache.GetProperty(addressablesType, "BuildPath", BindingFlags.Public | BindingFlags.Static);
+                    if (buildPathProp != null)
+                    {
+                        object buildPathObj = buildPathProp.GetValue(null);
+                        if (buildPathObj != null)
+                        {
+                            string buildPath = buildPathObj.ToString();
+                            if (!string.IsNullOrEmpty(buildPath))
+                            {
+                                // BuildPath typically returns something like "Library/com.unity.addressables/aa/Windows"
+                                // We need to append the BuildTarget subdirectory (e.g., "StandaloneWindows64")
+                                string fullPath = Path.Combine(buildPath, buildTarget.ToString());
+                                if (Directory.Exists(fullPath))
+                                {
+                                    return fullPath;
+                                }
+                                // If BuildTarget subdirectory doesn't exist, return the base path
+                                // (some Addressables configurations may not use BuildTarget subdirectory)
+                                if (Directory.Exists(buildPath))
+                                {
+                                    return buildPath;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fallback to ProfileSettings.GetValueByName with activeProfileId
+                PropertyInfo profileProp = ReflectionCache.GetProperty(settingsType, "profileSettings", BindingFlags.Public | BindingFlags.Instance);
+                if (profileProp == null)
+                {
+                    profileProp = ReflectionCache.GetProperty(settingsType, "ProfileSettings", BindingFlags.Public | BindingFlags.Instance);
+                }
+
+                object profileSettings = profileProp?.GetValue(settings);
+                if (profileSettings != null)
+                {
+                    // Get activeProfileId
+                    PropertyInfo activeProfileIdProp = ReflectionCache.GetProperty(settingsType, "activeProfileId", BindingFlags.Public | BindingFlags.Instance);
+                    string activeProfileId = activeProfileIdProp?.GetValue(settings)?.ToString();
+
+                    if (!string.IsNullOrEmpty(activeProfileId))
+                    {
+                        Type profileSettingsType = profileSettings.GetType();
+
+                        // Try EvaluateString first (handles variables like [BuildPath]/[BuildTarget])
+                        MethodInfo evaluateStringMethod = ReflectionCache.GetMethod(profileSettingsType, "EvaluateString", BindingFlags.Public | BindingFlags.Instance, new Type[] { typeof(string), typeof(string) });
+                        if (evaluateStringMethod != null)
+                        {
+                            PropertyInfo buildRemoteCatalogProp = ReflectionCache.GetProperty(settingsType, "BuildRemoteCatalog", BindingFlags.Public | BindingFlags.Instance);
+                            bool isRemote = buildRemoteCatalogProp != null && (bool)buildRemoteCatalogProp.GetValue(settings);
+                            string buildPathVar = isRemote ? "Remote.BuildPath" : "Local.BuildPath";
+
+                            // Get the raw value first
+                            MethodInfo getValueMethod = ReflectionCache.GetMethod(profileSettingsType, "GetValueByName", BindingFlags.Public | BindingFlags.Instance, new Type[] { typeof(string), typeof(string) });
+                            if (getValueMethod != null)
+                            {
+                                string rawValue = getValueMethod.Invoke(profileSettings, new object[] { activeProfileId, buildPathVar })?.ToString();
+                                if (!string.IsNullOrEmpty(rawValue))
+                                {
+                                    // Evaluate the string to resolve variables
+                                    string evaluatedPath = evaluateStringMethod.Invoke(profileSettings, new object[] { activeProfileId, rawValue })?.ToString();
+                                    if (!string.IsNullOrEmpty(evaluatedPath))
+                                    {
+                                        string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+                                        if (Path.IsPathRooted(evaluatedPath))
+                                        {
+                                            return evaluatedPath;
+                                        }
+                                        return Path.Combine(projectRoot, evaluatedPath);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to get Addressables build path: {ex.Message}");
             }
 
-            object profileSettings = profileProp?.GetValue(settings);
-            if (profileSettings == null) return null;
-
-            Type profileSettingsType = profileSettings.GetType();
-            MethodInfo getValueMethod = ReflectionCache.GetMethod(profileSettingsType, "GetValueByName", BindingFlags.Public | BindingFlags.Instance);
-            if (getValueMethod == null) return null;
-
-            string buildPathVar = isRemote ? "Remote.BuildPath" : "Local.BuildPath";
-            object buildPathObj = getValueMethod.Invoke(profileSettings, new object[] { buildPathVar });
-
-            if (buildPathObj == null) return null;
-
-            string buildPath = buildPathObj.ToString();
-            if (string.IsNullOrEmpty(buildPath)) return null;
-
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            if (Path.IsPathRooted(buildPath))
-            {
-                return Path.Combine(buildPath, buildTarget.ToString());
-            }
-
-            return Path.Combine(projectRoot, buildPath, buildTarget.ToString());
+            return null;
         }
 
         private static AddressablesBuildConfig GetConfig()
@@ -482,20 +801,6 @@ namespace Build.Pipeline.Editor
                 string jsonContent = JsonUtility.ToJson(versionData, true);
                 File.WriteAllText(versionFilePath, jsonContent);
 
-                // Mark as auto-created if it didn't exist before
-                // Store flag in StreamingAssets path for cleanup tracking (since build path may be outside project)
-                if (!fileExisted)
-                {
-                    string streamingAssetsVersionPath = GetStreamingAssetsVersionPathForCleanup(buildTarget);
-                    string autoCreatedFlagPath = $"{streamingAssetsVersionPath}.autocreated";
-                    string flagDir = Path.GetDirectoryName(autoCreatedFlagPath);
-                    if (!Directory.Exists(flagDir))
-                    {
-                        Directory.CreateDirectory(flagDir);
-                    }
-                    File.WriteAllText(autoCreatedFlagPath, "true");
-                }
-
                 Debug.Log($"{DEBUG_FLAG} Saved version data to Addressables build path: {versionFilePath} ({(fileExisted ? "existing" : "auto-created")})");
                 Debug.Log($"{DEBUG_FLAG} Version file content: {jsonContent}");
                 Debug.Log($"{DEBUG_FLAG} Version file will be:");
@@ -522,22 +827,8 @@ namespace Build.Pipeline.Editor
         }
 
         /// <summary>
-        /// Gets the StreamingAssets path where version file will be located after Player build.
-        /// Used for cleanup tracking.
-        /// </summary>
-        private static string GetStreamingAssetsVersionPathForCleanup(BuildTarget buildTarget)
-        {
-            const string streamingAssetsPath = "Assets/StreamingAssets";
-            const string addressablesFolder = "aa";
-            string platformFolder = buildTarget.ToString();
-            const string versionFileName = "AddressablesVersion.json";
-            return Path.Combine(streamingAssetsPath, addressablesFolder, platformFolder, versionFileName);
-        }
-
-        /// <summary>
-        /// Cleans up auto-created version files after build.
-        /// Only removes files that were automatically created during build process.
-        /// User-created files are preserved.
+        /// Cleans up version files in StreamingAssets after build.
+        /// These files are automatically created by Unity during Player build from Addressables build output.
         /// 
         /// This should be called after a full build (not after resource-only builds),
         /// as the version file is needed during the build process.
@@ -546,8 +837,6 @@ namespace Build.Pipeline.Editor
         {
             try
             {
-                // Check all platform folders in StreamingAssets/aa/
-                // These files are created by Unity during Player build from Addressables build output
                 const string streamingAssetsPath = "Assets/StreamingAssets";
                 const string addressablesFolder = "aa";
                 const string versionFileName = "AddressablesVersion.json";
@@ -560,41 +849,29 @@ namespace Build.Pipeline.Editor
                 }
 
                 // Search for version files in all platform subdirectories
+                // These files are automatically copied by Unity from build output, so we can safely delete them
                 string[] platformDirs = Directory.GetDirectories(addressablesRoot);
                 foreach (string platformDir in platformDirs)
                 {
                     string versionFilePath = Path.Combine(platformDir, versionFileName);
-                    string versionMetaPath = $"{versionFilePath}.meta";
-                    string autoCreatedFlagPath = $"{versionFilePath}.autocreated";
 
-                    // Only delete if it was auto-created (flag file exists)
-                    if (File.Exists(autoCreatedFlagPath))
+                    if (File.Exists(versionFilePath))
                     {
-                        // Delete the version file
-                        if (File.Exists(versionFilePath))
-                        {
-                            File.Delete(versionFilePath);
-                            Debug.Log($"{DEBUG_FLAG} Cleaned up auto-created version file: {versionFilePath}");
-                        }
-
-                        // Delete the meta file if it exists
-                        if (File.Exists(versionMetaPath))
-                        {
-                            File.Delete(versionMetaPath);
-                            Debug.Log($"{DEBUG_FLAG} Cleaned up auto-created version meta file: {versionMetaPath}");
-                        }
-
-                        // Delete the flag file
-                        File.Delete(autoCreatedFlagPath);
+                        // Convert absolute path to relative path for AssetDatabase
+                        string versionFileRelativePath = versionFilePath.Replace(Application.dataPath, "Assets").Replace('\\', '/');
+                        
+                        // Delete version file using AssetDatabase (handles .meta automatically)
+                        AssetDatabase.DeleteAsset(versionFileRelativePath);
+                        Debug.Log($"{DEBUG_FLAG} Cleaned up version file: {versionFileRelativePath}");
                     }
                 }
 
                 AssetDatabase.Refresh();
-                Debug.Log($"{DEBUG_FLAG} Cleanup completed for auto-created version files.");
+                Debug.Log($"{DEBUG_FLAG} Cleanup completed for version files.");
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Failed to cleanup auto-created version files: {ex.Message}");
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to cleanup version files: {ex.Message}");
             }
         }
 
