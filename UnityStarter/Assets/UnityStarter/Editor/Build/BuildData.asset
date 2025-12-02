@@ -13,3 +13,8 @@ MonoBehaviour:
   m_Name: BuildData
   m_EditorClassIdentifier: 
   launchScene: {fileID: 102900000, guid: 99c9720ab356a0642a771bea13969a05, type: 3}
+  applicationVersion: v0.1
+  outputBasePath: Build
+  useBuildalon: 0
+  useHybridCLR: 0
+  assetManagementType: 2
