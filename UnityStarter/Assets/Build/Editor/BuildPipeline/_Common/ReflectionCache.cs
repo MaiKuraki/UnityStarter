@@ -54,7 +54,36 @@ namespace Build.Pipeline.Editor
                 return cachedMethod;
             }
 
-            MethodInfo method = type.GetMethod(methodName, bindingFlags);
+            try
+            {
+                MethodInfo method = type.GetMethod(methodName, bindingFlags);
+                _methodCache[cacheKey] = method;
+                return method;
+            }
+            catch (AmbiguousMatchException)
+            {
+                // If multiple overloads exist, return null to let caller use GetMethod with parameter types
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Gets a method from a type with specific parameter types, using cache if available.
+        /// Use this when there are multiple overloads of the same method name.
+        /// </summary>
+        public static MethodInfo GetMethod(Type type, string methodName, BindingFlags bindingFlags, Type[] parameterTypes)
+        {
+            if (type == null || string.IsNullOrEmpty(methodName))
+                return null;
+
+            string paramTypesStr = parameterTypes != null ? string.Join(",", Array.ConvertAll(parameterTypes, t => t?.FullName ?? "null")) : "null";
+            string cacheKey = $"{type.FullName}.{methodName}.{bindingFlags}.{paramTypesStr}";
+            if (_methodCache.TryGetValue(cacheKey, out MethodInfo cachedMethod))
+            {
+                return cachedMethod;
+            }
+
+            MethodInfo method = type.GetMethod(methodName, bindingFlags, null, parameterTypes ?? Type.EmptyTypes, null);
             _methodCache[cacheKey] = method;
             return method;
         }

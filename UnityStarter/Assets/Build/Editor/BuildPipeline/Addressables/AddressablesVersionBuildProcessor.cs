@@ -31,7 +31,6 @@ namespace Build.Pipeline.Editor
 
             try
             {
-                // Get Addressables build config
                 AddressablesBuildConfig config = BuildConfigHelper.GetAddressablesConfig();
                 if (config == null)
                 {
@@ -230,41 +229,95 @@ namespace Build.Pipeline.Editor
 
         /// <summary>
         /// Gets the Addressables build path for bundle files.
-        /// This returns the path that includes the BuildTarget subdirectory (e.g., Library/com.unity.addressables/aa/Windows/StandaloneWindows64).
+        /// Uses Addressables.BuildPath static property and platform mapping for consistency.
         /// </summary>
         private static string GetAddressablesBuildPath(object settings, Type settingsType, BuildTarget buildTarget)
         {
-            PropertyInfo buildPathProp = ReflectionCache.GetProperty(settingsType, "BuildRemoteCatalog", BindingFlags.Public | BindingFlags.Instance);
-            bool isRemote = buildPathProp != null && (bool)buildPathProp.GetValue(settings);
-
-            PropertyInfo profileProp = ReflectionCache.GetProperty(settingsType, "profileSettings", BindingFlags.Public | BindingFlags.Instance);
-            if (profileProp == null)
+            try
             {
-                profileProp = ReflectionCache.GetProperty(settingsType, "ProfileSettings", BindingFlags.Public | BindingFlags.Instance);
+                // Try using Addressables.BuildPath static property (most reliable)
+                Type addressablesType = ReflectionCache.GetType("UnityEngine.AddressableAssets.Addressables");
+                if (addressablesType != null)
+                {
+                    PropertyInfo buildPathProp = ReflectionCache.GetProperty(addressablesType, "BuildPath", BindingFlags.Public | BindingFlags.Static);
+                    if (buildPathProp != null)
+                    {
+                        object buildPathObj = buildPathProp.GetValue(null);
+                        if (buildPathObj != null)
+                        {
+                            string buildPath = buildPathObj.ToString();
+                            if (!string.IsNullOrEmpty(buildPath))
+                            {
+                                // BuildPath typically returns something like "Library/com.unity.addressables/aa/Windows"
+                                // We need to append the BuildTarget subdirectory (e.g., "StandaloneWindows64")
+                                string fullPath = Path.Combine(buildPath, buildTarget.ToString());
+                                if (Directory.Exists(fullPath))
+                                {
+                                    return fullPath;
+                                }
+                                // If BuildTarget subdirectory doesn't exist, return the base path
+                                if (Directory.Exists(buildPath))
+                                {
+                                    return buildPath;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fallback to ProfileSettings with activeProfileId
+                PropertyInfo profileProp = ReflectionCache.GetProperty(settingsType, "profileSettings", BindingFlags.Public | BindingFlags.Instance);
+                if (profileProp == null)
+                {
+                    profileProp = ReflectionCache.GetProperty(settingsType, "ProfileSettings", BindingFlags.Public | BindingFlags.Instance);
+                }
+
+                object profileSettings = profileProp?.GetValue(settings);
+                if (profileSettings != null)
+                {
+                    PropertyInfo activeProfileIdProp = ReflectionCache.GetProperty(settingsType, "activeProfileId", BindingFlags.Public | BindingFlags.Instance);
+                    string activeProfileId = activeProfileIdProp?.GetValue(settings)?.ToString();
+
+                    if (!string.IsNullOrEmpty(activeProfileId))
+                    {
+                        Type profileSettingsType = profileSettings.GetType();
+
+                        // Try EvaluateString to resolve variables
+                        MethodInfo evaluateStringMethod = ReflectionCache.GetMethod(profileSettingsType, "EvaluateString", BindingFlags.Public | BindingFlags.Instance, new Type[] { typeof(string), typeof(string) });
+                        if (evaluateStringMethod != null)
+                        {
+                            PropertyInfo buildRemoteCatalogProp = ReflectionCache.GetProperty(settingsType, "BuildRemoteCatalog", BindingFlags.Public | BindingFlags.Instance);
+                            bool isRemote = buildRemoteCatalogProp != null && (bool)buildRemoteCatalogProp.GetValue(settings);
+                            string buildPathVar = isRemote ? "Remote.BuildPath" : "Local.BuildPath";
+
+                            MethodInfo getValueMethod = ReflectionCache.GetMethod(profileSettingsType, "GetValueByName", BindingFlags.Public | BindingFlags.Instance, new Type[] { typeof(string), typeof(string) });
+                            if (getValueMethod != null)
+                            {
+                                string rawValue = getValueMethod.Invoke(profileSettings, new object[] { activeProfileId, buildPathVar })?.ToString();
+                                if (!string.IsNullOrEmpty(rawValue))
+                                {
+                                    string evaluatedPath = evaluateStringMethod.Invoke(profileSettings, new object[] { activeProfileId, rawValue })?.ToString();
+                                    if (!string.IsNullOrEmpty(evaluatedPath))
+                                    {
+                                        string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+                                        if (Path.IsPathRooted(evaluatedPath))
+                                        {
+                                            return evaluatedPath;
+                                        }
+                                        return Path.Combine(projectRoot, evaluatedPath);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AddressablesVersionBuildProcessor] Failed to get Addressables build path: {ex.Message}");
             }
 
-            object profileSettings = profileProp?.GetValue(settings);
-            if (profileSettings == null) return null;
-
-            Type profileSettingsType = profileSettings.GetType();
-            MethodInfo getValueMethod = ReflectionCache.GetMethod(profileSettingsType, "GetValueByName", BindingFlags.Public | BindingFlags.Instance);
-            if (getValueMethod == null) return null;
-
-            string buildPathVar = isRemote ? "Remote.BuildPath" : "Local.BuildPath";
-            object buildPathObj = getValueMethod.Invoke(profileSettings, new object[] { buildPathVar });
-
-            if (buildPathObj == null) return null;
-
-            string buildPath = buildPathObj.ToString();
-            if (string.IsNullOrEmpty(buildPath)) return null;
-
-            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            if (Path.IsPathRooted(buildPath))
-            {
-                return Path.Combine(buildPath, buildTarget.ToString());
-            }
-
-            return Path.Combine(projectRoot, buildPath, buildTarget.ToString());
+            return null;
         }
 
         /// <summary>
@@ -275,18 +328,89 @@ namespace Build.Pipeline.Editor
         {
             if (settingsType == null) return null;
 
-            // Try "Default" method first (matches AddressablesBuilder implementation)
+            // Try AddressableAssetSettingsDefaultObject.Settings property first (correct API for 2.7.6)
+            Type defaultObjectType = ReflectionCache.GetType("UnityEditor.AddressableAssets.AddressableAssetSettingsDefaultObject");
+            if (defaultObjectType != null)
+            {
+                // Try Settings property first (returns existing settings or null)
+                PropertyInfo settingsProp = ReflectionCache.GetProperty(defaultObjectType, "Settings", BindingFlags.Public | BindingFlags.Static);
+                if (settingsProp != null)
+                {
+                    try
+                    {
+                        object settings = settingsProp.GetValue(null);
+                        if (settings != null)
+                        {
+                            return settings;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"[AddressablesVersionBuildProcessor] Failed to get Settings property: {ex.Message}");
+                    }
+                }
+
+                // Fallback: Try GetSettings(bool create) method
+                MethodInfo getSettingsMethod = ReflectionCache.GetMethod(defaultObjectType, "GetSettings", BindingFlags.Public | BindingFlags.Static, new Type[] { typeof(bool) });
+                if (getSettingsMethod == null)
+                {
+                    getSettingsMethod = ReflectionCache.GetMethod(defaultObjectType, "GetSettings", BindingFlags.Public | BindingFlags.Static);
+                }
+
+                if (getSettingsMethod != null)
+                {
+                    try
+                    {
+                        ParameterInfo[] parameters = getSettingsMethod.GetParameters();
+                        if (parameters.Length == 1 && parameters[0].ParameterType == typeof(bool))
+                        {
+                            return getSettingsMethod.Invoke(null, new object[] { false });
+                        }
+                        else if (parameters.Length == 0)
+                        {
+                            return getSettingsMethod.Invoke(null, null);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"[AddressablesVersionBuildProcessor] Failed to invoke GetSettings(false): {ex.Message}");
+                        try
+                        {
+                            return getSettingsMethod.Invoke(null, new object[] { true });
+                        }
+                        catch
+                        {
+                            // Fall through to other methods
+                        }
+                    }
+                }
+            }
+
+            // Fallback: Try AddressableAssetSettings.Default (older API or alternative)
             MethodInfo defaultMethod = ReflectionCache.GetMethod(settingsType, "Default", BindingFlags.Public | BindingFlags.Static);
             if (defaultMethod != null)
             {
-                return defaultMethod.Invoke(null, null);
+                try
+                {
+                    return defaultMethod.Invoke(null, null);
+                }
+                catch
+                {
+                    // Continue to property fallback
+                }
             }
 
-            // Fallback to "Default" property
             PropertyInfo defaultProp = ReflectionCache.GetProperty(settingsType, "Default", BindingFlags.Public | BindingFlags.Static);
             if (defaultProp != null)
             {
-                return defaultProp.GetValue(null);
+                try
+                {
+                    return defaultProp.GetValue(null);
+                }
+                catch
+                {
+                    // Return null if all methods fail
+                }
             }
 
             return null;
