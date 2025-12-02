@@ -671,6 +671,12 @@ namespace Build.Pipeline.Editor
                     }
                 }
 
+                // Cleanup auto-created Addressables version files
+                if (buildData != null && buildData.UseAddressables)
+                {
+                    AddressablesBuilder.CleanupAutoCreatedVersionFiles();
+                }
+
                 Debug.Log($"{DEBUG_FLAG} Restoring original scene setup.");
                 if (sceneSetup != null && sceneSetup.Length > 0)
                 {
