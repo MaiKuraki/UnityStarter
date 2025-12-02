@@ -774,46 +774,73 @@ namespace Build.Pipeline.Editor
         {
             try
             {
-                var assemblies = System.AppDomain.CurrentDomain.GetAssemblies();
-                foreach (var asm in assemblies)
+                Type addrType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
+                if (addrType == null)
                 {
-                    var addrType = asm.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
-                    if (addrType == null) continue;
+                    return;
+                }
 
-                    MethodInfo cleanMethod = null;
-                    foreach (var m in addrType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                // Try CleanPlayerContent() without parameters first
+                MethodInfo cleanMethod = ReflectionCache.GetMethod(addrType, "CleanPlayerContent", BindingFlags.Public | BindingFlags.Static);
+                if (cleanMethod != null && cleanMethod.GetParameters().Length == 0)
+                {
+                    cleanMethod.Invoke(null, null);
+                    Debug.Log($"{DEBUG_FLAG} Addressables CleanPlayerContent executed.");
+                    return;
+                }
+
+                // Try AddressableAssetSettingsDefaultObject.GetSettings() first (correct API)
+                object settingsInstance = null;
+                Type defaultObjectType = ReflectionCache.GetType("UnityEditor.AddressableAssets.AddressableAssetSettingsDefaultObject");
+                if (defaultObjectType != null)
+                {
+                    MethodInfo getSettingsMethod = ReflectionCache.GetMethod(defaultObjectType, "GetSettings", BindingFlags.Public | BindingFlags.Static);
+                    if (getSettingsMethod != null)
                     {
-                        if (m.Name != "CleanPlayerContent") continue;
-                        if (m.GetParameters().Length == 0)
+                        try
                         {
-                            cleanMethod = m;
-                            break;
+                            settingsInstance = getSettingsMethod.Invoke(null, new object[] { false });
                         }
-                    }
-                    if (cleanMethod != null)
-                    {
-                        cleanMethod.Invoke(null, null);
-                        Debug.Log($"{DEBUG_FLAG} Addressables CleanPlayerContent executed.");
-                        return;
-                    }
-
-                    var getSettingsMethod = addrType.GetMethod("Default", BindingFlags.Public | BindingFlags.Static) ??
-                                            addrType.GetProperty("Default", BindingFlags.Public | BindingFlags.Static)?.GetGetMethod();
-                    var settingsInstance = getSettingsMethod != null ? getSettingsMethod.Invoke(null, null) : null;
-                    if (settingsInstance != null)
-                    {
-                        MethodInfo cleanWithSettings = null;
-                        foreach (var m in addrType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                        catch
                         {
-                            if (m.Name != "CleanPlayerContent") continue;
-                            var ps = m.GetParameters();
-                            if (ps.Length == 1 && ps[0].ParameterType == addrType)
+                            try
                             {
-                                cleanWithSettings = m;
-                                break;
+                                settingsInstance = getSettingsMethod.Invoke(null, new object[] { true });
+                            }
+                            catch
+                            {
+                                // Fall through to fallback
                             }
                         }
-                        if (cleanWithSettings != null)
+                    }
+                }
+
+                // Fallback: Try AddressableAssetSettings.Default (older API)
+                if (settingsInstance == null)
+                {
+                    MethodInfo defaultMethod = ReflectionCache.GetMethod(addrType, "Default", BindingFlags.Public | BindingFlags.Static);
+                    if (defaultMethod != null)
+                    {
+                        settingsInstance = defaultMethod.Invoke(null, null);
+                    }
+                    else
+                    {
+                        PropertyInfo defaultProp = ReflectionCache.GetProperty(addrType, "Default", BindingFlags.Public | BindingFlags.Static);
+                        if (defaultProp != null)
+                        {
+                            settingsInstance = defaultProp.GetValue(null);
+                        }
+                    }
+                }
+
+                if (settingsInstance != null)
+                {
+                    // Try CleanPlayerContent(AddressableAssetSettings) with settings parameter
+                    MethodInfo cleanWithSettings = ReflectionCache.GetMethod(addrType, "CleanPlayerContent", BindingFlags.Public | BindingFlags.Static);
+                    if (cleanWithSettings != null)
+                    {
+                        var ps = cleanWithSettings.GetParameters();
+                        if (ps.Length == 1 && ps[0].ParameterType == addrType)
                         {
                             cleanWithSettings.Invoke(null, new[] { settingsInstance });
                             Debug.Log($"{DEBUG_FLAG} Addressables CleanPlayerContent(settings) executed.");
