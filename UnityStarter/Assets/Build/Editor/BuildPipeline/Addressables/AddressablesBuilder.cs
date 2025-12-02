@@ -97,6 +97,13 @@ namespace Build.Pipeline.Editor
                     {
                         Debug.Log($"{DEBUG_FLAG} Build content success!");
 
+                        // Save version data to StreamingAssets/aa/<Platform> (for initial package)
+                        // Returns true if file was auto-created (for cleanup tracking)
+                        bool wasAutoCreated = SaveVersionDataToStreamingAssets(contentVersion, buildTarget);
+
+                        // Save version data to build output directory (for hot update)
+                        SaveVersionDataToBuildOutput(contentVersion, buildTarget, settings, settingsType);
+
                         if (useCopyToOutputDirectory)
                         {
                             CopyBuildResultToOutput(buildTarget, useBuildOutputDirectory, useBuildRemoteCatalog);
@@ -402,6 +409,150 @@ namespace Build.Pipeline.Editor
                 if (string.IsNullOrEmpty(count)) count = "0";
                 return $"{config.versionPrefix}.{count}";
             }
+        }
+
+        private static bool SaveVersionDataToStreamingAssets(string contentVersion, BuildTarget buildTarget)
+        {
+            try
+            {
+                // Addressables stores content in StreamingAssets/aa/<Platform> structure
+                // We place the version file in the same directory as Addressables content
+                const string streamingAssetsPath = "Assets/StreamingAssets";
+                const string addressablesFolder = "aa";
+                string platformFolder = buildTarget.ToString();
+                string versionFileName = "AddressablesVersion.json";
+
+                string addressablesDir = Path.Combine(streamingAssetsPath, addressablesFolder, platformFolder);
+                string versionFilePath = Path.Combine(addressablesDir, versionFileName);
+                string versionMetaPath = $"{versionFilePath}.meta";
+
+                // Check if file already exists (user-created)
+                bool fileExisted = File.Exists(versionFilePath);
+                bool metaExisted = File.Exists(versionMetaPath);
+
+                // Create directory structure if needed
+                if (!Directory.Exists(addressablesDir))
+                {
+                    Directory.CreateDirectory(addressablesDir);
+                }
+
+                var versionData = new VersionDataJson { contentVersion = contentVersion };
+                string jsonContent = JsonUtility.ToJson(versionData, true);
+                File.WriteAllText(versionFilePath, jsonContent);
+
+                AssetDatabase.Refresh();
+
+                // Mark as auto-created if it didn't exist before
+                if (!fileExisted)
+                {
+                    // Store flag in a temporary file to track auto-created files
+                    string autoCreatedFlagPath = $"{versionFilePath}.autocreated";
+                    File.WriteAllText(autoCreatedFlagPath, "true");
+                }
+
+                Debug.Log($"{DEBUG_FLAG} Saved version data to StreamingAssets/aa/{platformFolder}: {contentVersion} ({(fileExisted ? "existing" : "auto-created")})");
+                return !fileExisted; // Return true if auto-created
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to save version data to StreamingAssets: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Cleans up auto-created version files after build.
+        /// Only removes files that were automatically created during build process.
+        /// User-created files are preserved.
+        /// 
+        /// This should be called after a full build (not after resource-only builds),
+        /// as the version file is needed during the build process.
+        /// </summary>
+        public static void CleanupAutoCreatedVersionFiles()
+        {
+            try
+            {
+                // Check all platform folders in StreamingAssets/aa/
+                const string streamingAssetsPath = "Assets/StreamingAssets";
+                const string addressablesFolder = "aa";
+                const string versionFileName = "AddressablesVersion.json";
+
+                string addressablesRoot = Path.Combine(streamingAssetsPath, addressablesFolder);
+
+                if (!Directory.Exists(addressablesRoot))
+                {
+                    return; // No Addressables folder, nothing to clean
+                }
+
+                // Search for version files in all platform subdirectories
+                string[] platformDirs = Directory.GetDirectories(addressablesRoot);
+                foreach (string platformDir in platformDirs)
+                {
+                    string versionFilePath = Path.Combine(platformDir, versionFileName);
+                    string versionMetaPath = $"{versionFilePath}.meta";
+                    string autoCreatedFlagPath = $"{versionFilePath}.autocreated";
+
+                    // Only delete if it was auto-created (flag file exists)
+                    if (File.Exists(autoCreatedFlagPath))
+                    {
+                        // Delete the version file
+                        if (File.Exists(versionFilePath))
+                        {
+                            File.Delete(versionFilePath);
+                            Debug.Log($"{DEBUG_FLAG} Cleaned up auto-created version file: {versionFilePath}");
+                        }
+
+                        // Delete the meta file if it exists
+                        if (File.Exists(versionMetaPath))
+                        {
+                            File.Delete(versionMetaPath);
+                            Debug.Log($"{DEBUG_FLAG} Cleaned up auto-created version meta file: {versionMetaPath}");
+                        }
+
+                        // Delete the flag file
+                        File.Delete(autoCreatedFlagPath);
+                    }
+                }
+
+                AssetDatabase.Refresh();
+                Debug.Log($"{DEBUG_FLAG} Cleanup completed for auto-created version files.");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to cleanup auto-created version files: {ex.Message}");
+            }
+        }
+
+        private static void SaveVersionDataToBuildOutput(string contentVersion, BuildTarget buildTarget, object settings, Type settingsType)
+        {
+            try
+            {
+                string buildPath = GetAddressablesBuildPath(settings, settingsType, buildTarget);
+                if (string.IsNullOrEmpty(buildPath) || !Directory.Exists(buildPath))
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} Build path not found, skipping version data save to build output.");
+                    return;
+                }
+
+                const string versionFileName = "AddressablesVersion.json";
+                string versionFilePath = Path.Combine(buildPath, versionFileName);
+
+                var versionData = new VersionDataJson { contentVersion = contentVersion };
+                string jsonContent = JsonUtility.ToJson(versionData, true);
+                File.WriteAllText(versionFilePath, jsonContent);
+
+                Debug.Log($"{DEBUG_FLAG} Saved version data to build output: {versionFilePath}");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to save version data to build output: {ex.Message}");
+            }
+        }
+
+        [System.Serializable]
+        private class VersionDataJson
+        {
+            public string contentVersion;
         }
     }
 }
