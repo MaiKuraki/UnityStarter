@@ -53,7 +53,7 @@ namespace Build.Pipeline.Editor
 
         #region Menu Items - Standard Builds (Clean)
 
-        [MenuItem("Build/Game(Standard)/Build Android APK (IL2CPP)", priority = 400)]
+        [MenuItem("Build/Game(Standard)/Build Android APK (IL2CPP)", priority = 500)]
         public static void PerformBuild_AndroidAPK()
         {
             EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
@@ -67,7 +67,7 @@ namespace Build.Pipeline.Editor
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(Standard)/Build Windows (IL2CPP)", priority = 401)]
+        [MenuItem("Build/Game(Standard)/Build Windows (IL2CPP)", priority = 501)]
         public static void PerformBuild_Windows()
         {
             PerformBuild(
@@ -80,7 +80,7 @@ namespace Build.Pipeline.Editor
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(Standard)/Build Mac (IL2CPP)", priority = 402)]
+        [MenuItem("Build/Game(Standard)/Build Mac (IL2CPP)", priority = 502)]
         public static void PerformBuild_Mac()
         {
             PerformBuild(
@@ -93,7 +93,20 @@ namespace Build.Pipeline.Editor
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(Standard)/Export Android Project (IL2CPP)", priority = 404)]
+        [MenuItem("Build/Game(Standard)/Build WebGL", priority = 503)]
+        public static void PerformBuild_WebGL()
+        {
+            PerformBuild(
+                BuildTarget.WebGL,
+                NamedBuildTarget.WebGL,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.WebGL)}/{ApplicationName}",
+                bCleanBuild: true,
+                bDeleteDebugFiles: true,
+                bOutputIsFolderTarget: true);
+        }
+
+        [MenuItem("Build/Game(Standard)/Export Android Project (IL2CPP)", priority = 504)]
         public static void PerformBuild_AndroidProject()
         {
             EditorUserBuildSettings.exportAsGoogleAndroidProject = true;
@@ -107,24 +120,11 @@ namespace Build.Pipeline.Editor
                 bOutputIsFolderTarget: true);
         }
 
-        [MenuItem("Build/Game(Standard)/Build WebGL", priority = 403)]
-        public static void PerformBuild_WebGL()
-        {
-            PerformBuild(
-                BuildTarget.WebGL,
-                NamedBuildTarget.WebGL,
-                ScriptingImplementation.IL2CPP,
-                $"{GetPlatformFolderName(BuildTarget.WebGL)}/{ApplicationName}",
-                bCleanBuild: true,
-                bDeleteDebugFiles: true,
-                bOutputIsFolderTarget: true);
-        }
-
         #endregion
 
         #region Menu Items - Fast Builds (No Clean)
 
-        [MenuItem("Build/Game(Standard)/Fast/Build Android APK (Fast)", priority = 500)]
+        [MenuItem("Build/Game(Standard)/Fast/Build Android APK (Fast)", priority = 510)]
         public static void PerformBuild_AndroidAPK_Fast()
         {
             EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
@@ -138,7 +138,7 @@ namespace Build.Pipeline.Editor
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(Standard)/Fast/Build Windows (Fast)", priority = 501)]
+        [MenuItem("Build/Game(Standard)/Fast/Build Windows (Fast)", priority = 511)]
         public static void PerformBuild_Windows_Fast()
         {
             PerformBuild(
@@ -153,11 +153,101 @@ namespace Build.Pipeline.Editor
 
         #endregion
 
+        #region Menu Items - Debug Builds
+
+        [MenuItem("Build/Game(Debug)/Build Android APK (Debug)", priority = 600)]
+        public static void PerformBuild_AndroidAPK_Debug()
+        {
+            EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
+            PerformBuild(
+                BuildTarget.Android,
+                NamedBuildTarget.Android,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.Android)}/{ApplicationName}.apk",
+                bCleanBuild: true,
+                bDeleteDebugFiles: false,
+                bOutputIsFolderTarget: false,
+                bIsDebugBuild: true);
+        }
+
+        [MenuItem("Build/Game(Debug)/Build Windows (Debug)", priority = 601)]
+        public static void PerformBuild_Windows_Debug()
+        {
+            PerformBuild(
+                BuildTarget.StandaloneWindows64,
+                NamedBuildTarget.Standalone,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.StandaloneWindows64)}/{ApplicationName}.exe",
+                bCleanBuild: true,
+                bDeleteDebugFiles: false,
+                bOutputIsFolderTarget: false,
+                bIsDebugBuild: true);
+        }
+
+        [MenuItem("Build/Game(Debug)/Build Mac (Debug)", priority = 602)]
+        public static void PerformBuild_Mac_Debug()
+        {
+            PerformBuild(
+                BuildTarget.StandaloneOSX,
+                NamedBuildTarget.Standalone,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.StandaloneOSX)}/{ApplicationName}.app",
+                bCleanBuild: true,
+                bDeleteDebugFiles: false,
+                bOutputIsFolderTarget: false,
+                bIsDebugBuild: true);
+        }
+
+        [MenuItem("Build/Game(Debug)/Export Android Project (Debug)", priority = 604)]
+        public static void PerformBuild_AndroidProject_Debug()
+        {
+            EditorUserBuildSettings.exportAsGoogleAndroidProject = true;
+            PerformBuild(
+                BuildTarget.Android,
+                NamedBuildTarget.Android,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.Android)}/{ApplicationName}",
+                bCleanBuild: true,
+                bDeleteDebugFiles: false,
+                bOutputIsFolderTarget: true,
+                bIsDebugBuild: true);
+        }
+
+        [MenuItem("Build/Game(Debug)/Build WebGL (Debug)", priority = 603)]
+        public static void PerformBuild_WebGL_Debug()
+        {
+            PerformBuild(
+                BuildTarget.WebGL,
+                NamedBuildTarget.WebGL,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.WebGL)}/{ApplicationName}",
+                bCleanBuild: true,
+                bDeleteDebugFiles: false,
+                bOutputIsFolderTarget: true,
+                bIsDebugBuild: true);
+        }
+
+        [MenuItem("Build/Game(Debug)/Build iOS (Debug)", priority = 605)]
+        public static void PerformBuild_iOS_Debug()
+        {
+            PerformBuild(
+                BuildTarget.iOS,
+                NamedBuildTarget.iOS,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.iOS)}/{ApplicationName}",
+                bCleanBuild: true,
+                bDeleteDebugFiles: false,
+                bOutputIsFolderTarget: true,
+                bIsDebugBuild: true);
+        }
+
+        #endregion
+
         #region CI/CD
 
         /// <summary>
         /// Entry point for CI/CD. Parses command line arguments to configure the build.
-        /// Usage: -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget <Target> -output <Path> [-clean] [-buildHybridCLR] [-buildYooAsset] [-buildAddressables] [-version <Version>] [-outputBasePath <Path>]
+        /// Usage: -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget <Target> -output <Path> [-clean] [-debug] [-buildHybridCLR] [-buildYooAsset] [-buildAddressables] [-version <Version>] [-outputBasePath <Path>]
         /// </summary>
         public static void PerformBuild_CI()
         {
@@ -178,6 +268,7 @@ namespace Build.Pipeline.Editor
             string overrideVersion = null;
             string overrideOutputBasePath = null;
             bool clean = false;
+            bool isDebugBuild = false;
             bool forceHybridCLR = false;
             bool forceYooAsset = false;
             bool forceAddressables = false;
@@ -207,6 +298,10 @@ namespace Build.Pipeline.Editor
                 else if (args[i] == "-clean")
                 {
                     clean = true;
+                }
+                else if (args[i] == "-debug")
+                {
+                    isDebugBuild = true;
                 }
                 else if (args[i] == "-buildHybridCLR")
                 {
@@ -331,8 +426,9 @@ namespace Build.Pipeline.Editor
                 ScriptingImplementation.IL2CPP,
                 outputPath,
                 bCleanBuild: clean,
-                bDeleteDebugFiles: true,
-                bOutputIsFolderTarget: isFolder);
+                bDeleteDebugFiles: !isDebugBuild, // Keep debug files for debug builds
+                bOutputIsFolderTarget: isFolder,
+                bIsDebugBuild: isDebugBuild);
         }
 
         #endregion
@@ -356,6 +452,42 @@ namespace Build.Pipeline.Editor
             }
 
             return INVALID_FLAG;
+        }
+
+        /// <summary>
+        /// Adds "Debug" suffix to output path for debug builds.
+        /// Example: "Windows/UnityStarter.exe" -> "Windows/UnityStarter_Debug.exe"
+        /// </summary>
+        private static string AddDebugSuffixToOutputPath(string outputPath, bool isFolderTarget)
+        {
+            if (string.IsNullOrEmpty(outputPath))
+                return "Debug";
+
+            if (isFolderTarget)
+            {
+                // For folder targets, add "_Debug" before the folder name
+                string directory = Path.GetDirectoryName(outputPath);
+                string folderName = Path.GetFileName(outputPath);
+                if (string.IsNullOrEmpty(directory))
+                {
+                    return $"{folderName}_Debug";
+                }
+                return Path.Combine(directory, $"{folderName}_Debug");
+            }
+            else
+            {
+                // For file targets, add "_Debug" before the extension
+                string directory = Path.GetDirectoryName(outputPath);
+                string fileName = Path.GetFileNameWithoutExtension(outputPath);
+                string extension = Path.GetExtension(outputPath);
+                string newFileName = $"{fileName}_Debug{extension}";
+
+                if (string.IsNullOrEmpty(directory))
+                {
+                    return newFileName;
+                }
+                return Path.Combine(directory, newFileName);
+            }
         }
 
         private static RuntimePlatform GetRuntimePlatformFromBuildTarget(BuildTarget TargetPlatform)
@@ -484,7 +616,8 @@ namespace Build.Pipeline.Editor
             ScriptingImplementation BackendScriptImpl, string OutputTarget,
             bool bCleanBuild = true,
             bool bDeleteDebugFiles = true,
-            bool bOutputIsFolderTarget = true)
+            bool bOutputIsFolderTarget = true,
+            bool bIsDebugBuild = false)
         {
             //  cache curernt scene
             var sceneSetup = EditorSceneManager.GetSceneManagerSetup();
@@ -611,13 +744,33 @@ namespace Build.Pipeline.Editor
                     {
                         var buildPlayerOptions = new BuildPlayerOptions();
                         buildPlayerOptions.scenes = GetBuildSceneList();
-                        buildPlayerOptions.locationPathName = GetOutputTarget(TargetPlatform, OutputTarget, bOutputIsFolderTarget);
+
+                        // For debug builds, add "Debug" suffix to output path
+                        string finalOutputTarget = bIsDebugBuild ? AddDebugSuffixToOutputPath(OutputTarget, bOutputIsFolderTarget) : OutputTarget;
+                        buildPlayerOptions.locationPathName = GetOutputTarget(TargetPlatform, finalOutputTarget, bOutputIsFolderTarget);
                         buildPlayerOptions.target = TargetPlatform;
                         buildPlayerOptions.options = BuildOptions.None;
 
                         if (bCleanBuild)
                         {
                             buildPlayerOptions.options |= BuildOptions.CleanBuildCache;
+                        }
+
+                        // Debug build options
+                        if (bIsDebugBuild)
+                        {
+                            buildPlayerOptions.options |= BuildOptions.Development;
+                            buildPlayerOptions.options |= BuildOptions.AllowDebugging;
+
+                            // Enable Autoconnect Profiler for Debug builds
+                            buildPlayerOptions.options |= BuildOptions.ConnectWithProfiler;
+
+                            Debug.Log($"{DEBUG_FLAG} <color=yellow>Debug Build Configuration:</color>");
+                            Debug.Log($"{DEBUG_FLAG}   ✓ Development Build: Enabled");
+                            Debug.Log($"{DEBUG_FLAG}   ✓ Allow Debugging: Enabled");
+                            Debug.Log($"{DEBUG_FLAG}   ✓ Autoconnect Profiler: Enabled");
+                            Debug.Log($"{DEBUG_FLAG} <color=cyan>Info:</color> The built game will automatically connect to Unity Profiler on startup.");
+                            Debug.Log($"{DEBUG_FLAG} <color=cyan>Note:</color> Autoconnect Profiler may increase startup time by 5-10 seconds.");
                         }
 
                         buildPlayerOptions.options |= BuildOptions.CompressWithLz4;
@@ -627,7 +780,8 @@ namespace Build.Pipeline.Editor
                     var summary = buildReport.summary;
                     if (summary.result == BuildResult.Succeeded)
                     {
-                        if (bDeleteDebugFiles)
+                        // Don't delete debug files for debug builds
+                        if (bDeleteDebugFiles && !bIsDebugBuild)
                         {
                             string platformNameStr = GetPlatformFolderName(TargetPlatform);
                             if (platformNameStr == "Windows" || platformNameStr == "Mac") // TODO: May Linux
@@ -635,8 +789,13 @@ namespace Build.Pipeline.Editor
                                 DeleteDebugFiles(TargetPlatform);
                             }
                         }
+                        else if (bIsDebugBuild)
+                        {
+                            Debug.Log($"{DEBUG_FLAG} <color=yellow>Debug build:</color> Debug files preserved for debugging.");
+                        }
 
-                        Debug.Log($"{DEBUG_FLAG} Build <color=#29ff50>SUCCESS</color>, size: {summary.totalSize} bytes, path: {summary.outputPath}\n");
+                        string buildType = bIsDebugBuild ? "Debug" : "Release";
+                        Debug.Log($"{DEBUG_FLAG} Build <color=#29ff50>SUCCESS</color> ({buildType}), size: {summary.totalSize} bytes, path: {summary.outputPath}\n");
                     }
 
                     if (summary.result == BuildResult.Failed) Debug.Log($"{DEBUG_FLAG} Build <color=red>FAILURE</color>");
