@@ -26,8 +26,8 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
 
         public MackySoft.Navigathena.SceneManagement.ISceneHandle CreateHandle()
         {
-            var cycloneHandle = assetPackage.LoadSceneAsync(location, loadSceneMode, activateOnLoad);
-            return new NavigathenaSceneHandleAdapter(cycloneHandle, assetPackage);
+            var sceneHandle = assetPackage.LoadSceneAsync(location, loadSceneMode, activateOnLoad);
+            return new NavigathenaSceneHandleAdapter(sceneHandle, assetPackage);
         }
     }
 
@@ -36,36 +36,41 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
     /// </summary>
     public class NavigathenaSceneHandleAdapter : MackySoft.Navigathena.SceneManagement.ISceneHandle
     {
-        private readonly ISceneHandle cycloneHandle;
+        private readonly ISceneHandle sceneHandle;
         private readonly IAssetPackage assetPackage;
 
-        public UnityEngine.SceneManagement.Scene Scene => cycloneHandle.Scene;
+        public UnityEngine.SceneManagement.Scene Scene => sceneHandle.Scene;
 
-        public NavigathenaSceneHandleAdapter(ISceneHandle cycloneHandle, IAssetPackage assetPackage)
+        public NavigathenaSceneHandleAdapter(ISceneHandle inSceneHandle, IAssetPackage assetPackage)
         {
-            this.cycloneHandle = cycloneHandle;
+            this.sceneHandle = inSceneHandle;
             this.assetPackage = assetPackage;
         }
 
         public async UniTask<UnityEngine.SceneManagement.Scene> Load(IProgress<float> progress = null, CancellationToken cancellationToken = default)
         {
-            while (!cycloneHandle.IsDone)
+            while (!sceneHandle.IsDone)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                progress?.Report(cycloneHandle.Progress);
+                progress?.Report(sceneHandle.Progress);
                 await UniTask.Yield(cancellationToken);
             }
-            return cycloneHandle.Scene;
+            
+            // Wait for one frame to ensure all scene objects are fully instantiated
+            // This is necessary for Navigathena to find LifetimeScope components
+            await UniTask.Yield(cancellationToken);
+            
+            return sceneHandle.Scene;
         }
 
         public UniTask Unload(IProgress<float> progress = null, CancellationToken cancellationToken = default)
         {
-            return assetPackage.UnloadSceneAsync(cycloneHandle);
+            return assetPackage.UnloadSceneAsync(sceneHandle);
         }
 
         public void Dispose()
         {
-            (cycloneHandle as IDisposable)?.Dispose();
+            (sceneHandle as IDisposable)?.Dispose();
         }
     }
 }
