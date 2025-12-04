@@ -35,7 +35,7 @@ namespace Build.Pipeline.Editor
             VersionControlProvider = VersionControlFactory.CreateProvider(vcType);
         }
 
-        [MenuItem("Build/Game(Standard)/Print Debug Info", priority = 100)]
+        [MenuItem("Build/Game(Release)/Print Debug Info", priority = 10)]
         public static void PrintDebugInfo()
         {
             var sceneList = GetBuildSceneList();
@@ -51,9 +51,9 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        #region Menu Items - Standard Builds (Clean)
+        #region Menu Items - Release Builds (Clean)
 
-        [MenuItem("Build/Game(Standard)/Build Android APK (IL2CPP)", priority = 500)]
+        [MenuItem("Build/Game(Release)/Build Android APK (IL2CPP)", priority = 11)]
         public static void PerformBuild_AndroidAPK()
         {
             EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
@@ -67,7 +67,7 @@ namespace Build.Pipeline.Editor
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(Standard)/Build Windows (IL2CPP)", priority = 501)]
+        [MenuItem("Build/Game(Release)/Build Windows (IL2CPP)", priority = 12)]
         public static void PerformBuild_Windows()
         {
             PerformBuild(
@@ -80,7 +80,7 @@ namespace Build.Pipeline.Editor
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(Standard)/Build Mac (IL2CPP)", priority = 502)]
+        [MenuItem("Build/Game(Release)/Build Mac (IL2CPP)", priority = 13)]
         public static void PerformBuild_Mac()
         {
             PerformBuild(
@@ -93,7 +93,7 @@ namespace Build.Pipeline.Editor
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(Standard)/Build WebGL", priority = 503)]
+        [MenuItem("Build/Game(Release)/Build WebGL", priority = 14)]
         public static void PerformBuild_WebGL()
         {
             PerformBuild(
@@ -106,7 +106,7 @@ namespace Build.Pipeline.Editor
                 bOutputIsFolderTarget: true);
         }
 
-        [MenuItem("Build/Game(Standard)/Export Android Project (IL2CPP)", priority = 504)]
+        [MenuItem("Build/Game(Release)/Export Android Project (IL2CPP)", priority = 15)]
         public static void PerformBuild_AndroidProject()
         {
             EditorUserBuildSettings.exportAsGoogleAndroidProject = true;
@@ -124,7 +124,7 @@ namespace Build.Pipeline.Editor
 
         #region Menu Items - Fast Builds (No Clean)
 
-        [MenuItem("Build/Game(Standard)/Fast/Build Android APK (Fast)", priority = 510)]
+        [MenuItem("Build/Game(Release)/Fast/Build Android APK (Fast)", priority = 16)]
         public static void PerformBuild_AndroidAPK_Fast()
         {
             EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
@@ -138,7 +138,7 @@ namespace Build.Pipeline.Editor
                 bOutputIsFolderTarget: false);
         }
 
-        [MenuItem("Build/Game(Standard)/Fast/Build Windows (Fast)", priority = 511)]
+        [MenuItem("Build/Game(Release)/Fast/Build Windows (Fast)", priority = 17)]
         public static void PerformBuild_Windows_Fast()
         {
             PerformBuild(
@@ -155,7 +155,7 @@ namespace Build.Pipeline.Editor
 
         #region Menu Items - Debug Builds
 
-        [MenuItem("Build/Game(Debug)/Build Android APK (Debug)", priority = 600)]
+        [MenuItem("Build/Game(Debug)/Build Android APK (Debug)", priority = 20)]
         public static void PerformBuild_AndroidAPK_Debug()
         {
             EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
@@ -170,7 +170,7 @@ namespace Build.Pipeline.Editor
                 bIsDebugBuild: true);
         }
 
-        [MenuItem("Build/Game(Debug)/Build Windows (Debug)", priority = 601)]
+        [MenuItem("Build/Game(Debug)/Build Windows (Debug)", priority = 21)]
         public static void PerformBuild_Windows_Debug()
         {
             PerformBuild(
@@ -184,7 +184,7 @@ namespace Build.Pipeline.Editor
                 bIsDebugBuild: true);
         }
 
-        [MenuItem("Build/Game(Debug)/Build Mac (Debug)", priority = 602)]
+        [MenuItem("Build/Game(Debug)/Build Mac (Debug)", priority = 22)]
         public static void PerformBuild_Mac_Debug()
         {
             PerformBuild(
@@ -198,7 +198,7 @@ namespace Build.Pipeline.Editor
                 bIsDebugBuild: true);
         }
 
-        [MenuItem("Build/Game(Debug)/Export Android Project (Debug)", priority = 604)]
+        [MenuItem("Build/Game(Debug)/Export Android Project (Debug)", priority = 24)]
         public static void PerformBuild_AndroidProject_Debug()
         {
             EditorUserBuildSettings.exportAsGoogleAndroidProject = true;
@@ -213,7 +213,7 @@ namespace Build.Pipeline.Editor
                 bIsDebugBuild: true);
         }
 
-        [MenuItem("Build/Game(Debug)/Build WebGL (Debug)", priority = 603)]
+        [MenuItem("Build/Game(Debug)/Build WebGL (Debug)", priority = 23)]
         public static void PerformBuild_WebGL_Debug()
         {
             PerformBuild(
@@ -227,7 +227,7 @@ namespace Build.Pipeline.Editor
                 bIsDebugBuild: true);
         }
 
-        [MenuItem("Build/Game(Debug)/Build iOS (Debug)", priority = 605)]
+        [MenuItem("Build/Game(Debug)/Build iOS (Debug)", priority = 25)]
         public static void PerformBuild_iOS_Debug()
         {
             PerformBuild(
@@ -238,6 +238,39 @@ namespace Build.Pipeline.Editor
                 bCleanBuild: true,
                 bDeleteDebugFiles: false,
                 bOutputIsFolderTarget: true,
+                bIsDebugBuild: true);
+        }
+
+        #endregion
+
+        #region Menu Items - Debug Fast Builds (No Clean)
+
+        [MenuItem("Build/Game(Debug)/Fast/Build Android APK (Debug Fast)", priority = 26)]
+        public static void PerformBuild_AndroidAPK_Debug_Fast()
+        {
+            EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
+            PerformBuild(
+                BuildTarget.Android,
+                NamedBuildTarget.Android,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.Android)}/{ApplicationName}.apk",
+                bCleanBuild: false,
+                bDeleteDebugFiles: false, // Keep debug files for debug builds
+                bOutputIsFolderTarget: false,
+                bIsDebugBuild: true);
+        }
+
+        [MenuItem("Build/Game(Debug)/Fast/Build Windows (Debug Fast)", priority = 27)]
+        public static void PerformBuild_Windows_Debug_Fast()
+        {
+            PerformBuild(
+                BuildTarget.StandaloneWindows64,
+                NamedBuildTarget.Standalone,
+                ScriptingImplementation.IL2CPP,
+                $"{GetPlatformFolderName(BuildTarget.StandaloneWindows64)}/{ApplicationName}.exe",
+                bCleanBuild: false,
+                bDeleteDebugFiles: false, // Keep debug files for debug builds
+                bOutputIsFolderTarget: false,
                 bIsDebugBuild: true);
         }
 
