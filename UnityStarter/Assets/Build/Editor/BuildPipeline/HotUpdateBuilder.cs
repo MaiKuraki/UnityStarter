@@ -34,9 +34,7 @@ namespace Build.Pipeline.Editor
             return BuildConfigHelper.GetBuildData();
         }
 
-        // Priority 2000 ensures these items appear at the bottom of the Build menu, 
-        // below standard Game builds (priority ~400-500) and individual tool builds (priority ~100-200).
-        [MenuItem("Build/HotUpdate Pipeline/Full Build (Generate Code + Bundles)", priority = 2000)]
+        [MenuItem("Build/HotUpdate Pipeline/Full Build (Generate Code + Bundles)", priority = 28)]
         public static void FullBuild()
         {
             Debug.Log($"{DEBUG_FLAG} Starting Full HotUpdate Build Pipeline...");
@@ -73,7 +71,7 @@ namespace Build.Pipeline.Editor
             Debug.Log($"{DEBUG_FLAG} Full HotUpdate Build Pipeline Completed Successfully!");
         }
 
-        [MenuItem("Build/HotUpdate Pipeline/Fast Build (Compile Code + Bundles)", priority = 2001)]
+        [MenuItem("Build/HotUpdate Pipeline/Fast Build (Compile Code + Bundles)", priority = 29)]
         public static void FastBuild()
         {
             Debug.Log($"{DEBUG_FLAG} Starting Fast HotUpdate Build Pipeline...");
