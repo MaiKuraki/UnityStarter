@@ -13,7 +13,12 @@ namespace Build.Pipeline.Editor
         [MenuItem("Build/HybridCLR/Generate All", priority = 100)]
         public static void Build()
         {
-            Debug.Log($"{DEBUG_FLAG} Checking availability...");
+            Build(EditorUserBuildSettings.activeBuildTarget);
+        }
+
+        public static void Build(BuildTarget target)
+        {
+            Debug.Log($"{DEBUG_FLAG} Checking availability for platform: {target}...");
 
             // Use Reflection to avoid compilation errors if HybridCLR is not installed
             Type prebuildCommandType = ReflectionCache.GetType("HybridCLR.Editor.Commands.PrebuildCommand");
@@ -25,7 +30,6 @@ namespace Build.Pipeline.Editor
                 return;
             }
 
-            // Check installation status and install if needed
             if (installerControllerType != null)
             {
                 try
@@ -61,15 +65,21 @@ namespace Build.Pipeline.Editor
                 }
             }
 
-            Debug.Log($"{DEBUG_FLAG} Start generating all...");
+            BuildTarget currentTarget = EditorUserBuildSettings.activeBuildTarget;
+            if (currentTarget != target)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Warning: Current active build target ({currentTarget}) does not match requested target ({target}). " +
+                    $"PrebuildCommand.GenerateAll() will use the active target. Consider switching platform first.");
+            }
+
+            Debug.Log($"{DEBUG_FLAG} Start generating all for platform: {target}...");
             try
             {
-                // Call PrebuildCommand.GenerateAll()
                 MethodInfo generateAllMethod = ReflectionCache.GetMethod(prebuildCommandType, "GenerateAll", BindingFlags.Public | BindingFlags.Static);
                 if (generateAllMethod != null)
                 {
                     generateAllMethod.Invoke(null, null);
-                    Debug.Log($"{DEBUG_FLAG} Generation success.");
+                    Debug.Log($"{DEBUG_FLAG} Generation success for platform: {target}.");
                 }
                 else
                 {
@@ -78,9 +88,7 @@ namespace Build.Pipeline.Editor
             }
             catch (Exception e)
             {
-                Debug.LogError($"{DEBUG_FLAG} Generation failed: {e.Message}");
-                // We choose NOT to throw here to allow the build to proceed if HybridCLR fails, 
-                // but usually this is fatal for hotfix. Uncomment throw if strict.
+                Debug.LogError($"{DEBUG_FLAG} Generation failed for platform {target}: {e.Message}");
                 throw;
             }
         }
@@ -88,7 +96,12 @@ namespace Build.Pipeline.Editor
         [MenuItem("Build/HybridCLR/Compile DLL Only (Fast)", priority = 101)]
         public static void CompileDllOnly()
         {
-            Debug.Log($"{DEBUG_FLAG} Start compiling DLLs...");
+            CompileDllOnly(EditorUserBuildSettings.activeBuildTarget);
+        }
+
+        public static void CompileDllOnly(BuildTarget target)
+        {
+            Debug.Log($"{DEBUG_FLAG} Start compiling DLLs for platform: {target}...");
             Type compileDllCommandType = ReflectionCache.GetType("HybridCLR.Editor.Commands.CompileDllCommand");
             if (compileDllCommandType == null)
             {
@@ -98,13 +111,11 @@ namespace Build.Pipeline.Editor
 
             try
             {
-                // CompileDllCommand.CompileDll(BuildTarget target);
-                // Note: GetMethod with parameter types requires direct call, cache key would be complex
                 MethodInfo compileDllMethod = compileDllCommandType.GetMethod("CompileDll", new Type[] { typeof(BuildTarget) });
                 if (compileDllMethod != null)
                 {
-                    compileDllMethod.Invoke(null, new object[] { EditorUserBuildSettings.activeBuildTarget });
-                    Debug.Log($"{DEBUG_FLAG} Compile DLL success.");
+                    compileDllMethod.Invoke(null, new object[] { target });
+                    Debug.Log($"{DEBUG_FLAG} Compile DLL success for platform: {target}.");
                 }
                 else
                 {
@@ -113,7 +124,7 @@ namespace Build.Pipeline.Editor
             }
             catch (Exception e)
             {
-                Debug.LogError($"{DEBUG_FLAG} Compile DLL failed: {e.Message}");
+                Debug.LogError($"{DEBUG_FLAG} Compile DLL failed for platform {target}: {e.Message}");
                 throw;
             }
         }
@@ -121,19 +132,34 @@ namespace Build.Pipeline.Editor
         [MenuItem("Build/HybridCLR/Pipeline: Generate All + Copy", priority = 200)]
         public static void GenerateAllAndCopy()
         {
-            Build();
-            CopyHotUpdateDlls();
+            GenerateAllAndCopy(EditorUserBuildSettings.activeBuildTarget);
+        }
+
+        public static void GenerateAllAndCopy(BuildTarget target)
+        {
+            Build(target);
+            CopyHotUpdateDlls(target);
         }
 
         [MenuItem("Build/HybridCLR/Pipeline: Compile DLL + Copy (Fast)", priority = 201)]
         public static void CompileDllAndCopy()
         {
-            CompileDllOnly();
-            CopyHotUpdateDlls();
+            CompileDllAndCopy(EditorUserBuildSettings.activeBuildTarget);
+        }
+
+        public static void CompileDllAndCopy(BuildTarget target)
+        {
+            CompileDllOnly(target);
+            CopyHotUpdateDlls(target);
         }
 
         [MenuItem("Build/HybridCLR/Copy HotUpdate DLLs", priority = 102)]
         public static void CopyHotUpdateDlls()
+        {
+            CopyHotUpdateDlls(EditorUserBuildSettings.activeBuildTarget);
+        }
+
+        public static void CopyHotUpdateDlls(BuildTarget target)
         {
             HybridCLRBuildConfig config = GetConfig();
             if (config == null)
@@ -146,9 +172,8 @@ namespace Build.Pipeline.Editor
             string targetDirRelative = config.hotUpdateDllOutputDirectory;
             var assemblyNames = config.GetHotUpdateAssemblyNames();
 
-            Debug.Log($"{DEBUG_FLAG} Using Config -> OutputDir: {targetDirRelative}, Assemblies: {assemblyNames.Count}");
+            Debug.Log($"{DEBUG_FLAG} Using Config -> OutputDir: {targetDirRelative}, Assemblies: {assemblyNames.Count}, Target: {target}");
 
-            BuildTarget target = EditorUserBuildSettings.activeBuildTarget;
             string outputDir = GetHybridCLROutputDir(target);
 
             if (string.IsNullOrEmpty(outputDir) || !Directory.Exists(outputDir))
@@ -204,7 +229,6 @@ namespace Build.Pipeline.Editor
 
         private static string GetHybridCLROutputDir(BuildTarget target)
         {
-            // Try to get path via HybridCLR SettingsUtil reflection
             Type settingsUtilType = ReflectionCache.GetType("HybridCLR.Editor.Settings.SettingsUtil");
             if (settingsUtilType != null)
             {

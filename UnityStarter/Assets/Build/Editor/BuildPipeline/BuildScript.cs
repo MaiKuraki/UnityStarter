@@ -134,8 +134,9 @@ namespace Build.Pipeline.Editor
                 ScriptingImplementation.IL2CPP,
                 $"{GetPlatformFolderName(BuildTarget.Android)}/{ApplicationName}.apk",
                 bCleanBuild: false,
-                bDeleteDebugFiles: true, // Clean up debug files even in fast mode
-                bOutputIsFolderTarget: false);
+                bDeleteDebugFiles: true,
+                bOutputIsFolderTarget: false,
+                bIsFastBuild: true);
         }
 
         [MenuItem("Build/Game(Release)/Fast/Build Windows (Fast)", priority = 17)]
@@ -147,8 +148,9 @@ namespace Build.Pipeline.Editor
                 ScriptingImplementation.IL2CPP,
                 $"{GetPlatformFolderName(BuildTarget.StandaloneWindows64)}/{ApplicationName}.exe",
                 bCleanBuild: false,
-                bDeleteDebugFiles: true, // Clean up debug files even in fast mode
-                bOutputIsFolderTarget: false);
+                bDeleteDebugFiles: true,
+                bOutputIsFolderTarget: false,
+                bIsFastBuild: true);
         }
 
         #endregion
@@ -255,9 +257,10 @@ namespace Build.Pipeline.Editor
                 ScriptingImplementation.IL2CPP,
                 $"{GetPlatformFolderName(BuildTarget.Android)}/{ApplicationName}.apk",
                 bCleanBuild: false,
-                bDeleteDebugFiles: false, // Keep debug files for debug builds
+                bDeleteDebugFiles: false,
                 bOutputIsFolderTarget: false,
-                bIsDebugBuild: true);
+                bIsDebugBuild: true,
+                bIsFastBuild: true);
         }
 
         [MenuItem("Build/Game(Debug)/Fast/Build Windows (Debug Fast)", priority = 27)]
@@ -269,9 +272,10 @@ namespace Build.Pipeline.Editor
                 ScriptingImplementation.IL2CPP,
                 $"{GetPlatformFolderName(BuildTarget.StandaloneWindows64)}/{ApplicationName}.exe",
                 bCleanBuild: false,
-                bDeleteDebugFiles: false, // Keep debug files for debug builds
+                bDeleteDebugFiles: false,
                 bOutputIsFolderTarget: false,
-                bIsDebugBuild: true);
+                bIsDebugBuild: true,
+                bIsFastBuild: true);
         }
 
         #endregion
@@ -459,7 +463,7 @@ namespace Build.Pipeline.Editor
                 ScriptingImplementation.IL2CPP,
                 outputPath,
                 bCleanBuild: clean,
-                bDeleteDebugFiles: !isDebugBuild, // Keep debug files for debug builds
+                bDeleteDebugFiles: !isDebugBuild,
                 bOutputIsFolderTarget: isFolder,
                 bIsDebugBuild: isDebugBuild);
         }
@@ -650,7 +654,8 @@ namespace Build.Pipeline.Editor
             bool bCleanBuild = true,
             bool bDeleteDebugFiles = true,
             bool bOutputIsFolderTarget = true,
-            bool bIsDebugBuild = false)
+            bool bIsDebugBuild = false,
+            bool bIsFastBuild = false)
         {
             //  cache curernt scene
             var sceneSetup = EditorSceneManager.GetSceneManagerSetup();
@@ -691,17 +696,43 @@ namespace Build.Pipeline.Editor
                     EditorUserBuildSettings.exportAsGoogleAndroidProject = false;
                 }
 
+                // Switch platform BEFORE HybridCLR operations to ensure correct platform DLLs are generated
+                Debug.Log($"{DEBUG_FLAG} Preparing for build, Current Platform: {EditorUserBuildSettings.activeBuildTarget}, Target Platform: {TargetPlatform}");
+
+                if (EditorUserBuildSettings.activeBuildTarget != TargetPlatform)
+                {
+                    Debug.Log($"{DEBUG_FLAG} Switching active build target to {TargetPlatform}...");
+                    EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetName, TargetPlatform);
+                }
+                else
+                {
+                    Debug.Log($"{DEBUG_FLAG} Active build target already {TargetPlatform}, skipping switch.");
+                }
+
+                // Buildalon SyncSolution should be called AFTER platform switch to ensure project files reflect the correct platform configuration
+                AssetDatabase.SaveAssets();
+
                 if (buildData != null && buildData.UseBuildalon)
                 {
+                    Debug.Log($"{DEBUG_FLAG} Syncing solution after platform switch...");
                     BuildalonIntegrator.SyncSolution();
                 }
 
                 // HybridCLR Generation & Copy
                 if (buildData != null && buildData.UseHybridCLR)
                 {
-                    // This ensures DLLs are compiled, metadata generated, and then copied to HotUpdateDLL folder with .bytes extension
-                    // ready for YooAsset to pack them.
-                    HybridCLRBuilder.GenerateAllAndCopy();
+                    if (bIsFastBuild)
+                    {
+                        // Fast build: Only compile DLLs and copy (skip full generation)
+                        Debug.Log($"{DEBUG_FLAG} Using HybridCLR FastBuild (CompileDllAndCopy) for platform: {TargetPlatform}...");
+                        HybridCLRBuilder.CompileDllAndCopy(TargetPlatform);
+                    }
+                    else
+                    {
+                        // Full build: Generate all metadata and compile DLLs, then copy
+                        Debug.Log($"{DEBUG_FLAG} Using HybridCLR FullBuild (GenerateAllAndCopy) for platform: {TargetPlatform}...");
+                        HybridCLRBuilder.GenerateAllAndCopy(TargetPlatform);
+                    }
                 }
 
                 InitializeVersionControl(DefaultVersionControlType);
@@ -732,30 +763,11 @@ namespace Build.Pipeline.Editor
 
                 Debug.Log($"{DEBUG_FLAG} Start Build, Platform: {EditorUserBuildSettings.activeBuildTarget}");
 
-                if (EditorUserBuildSettings.activeBuildTarget != TargetPlatform)
-                {
-                    Debug.Log($"{DEBUG_FLAG} Switching active build target to {TargetPlatform}...");
-                    EditorUserBuildSettings.SwitchActiveBuildTarget(BuildTargetName, TargetPlatform);
-                }
-                else
-                {
-                    Debug.Log($"{DEBUG_FLAG} Active build target already {TargetPlatform}, skipping switch.");
-                }
-
-                // After target switch, refresh assets and optionally sync solution/build scripts
-                AssetDatabase.SaveAssets();
-
-                if (buildData != null && buildData.UseBuildalon)
-                {
-                    BuildalonIntegrator.SyncSolution();
-                }
-
                 if (buildData != null && buildData.UseAddressables)
                 {
                     TryCleanAddressablesPlayerContent();
                 }
 
-                // Save original PlayerSettings values for restoration
                 string originalVersion = PlayerSettings.bundleVersion;
                 string originalCompanyName = PlayerSettings.companyName;
                 string originalProductName = PlayerSettings.productName;
@@ -769,7 +781,6 @@ namespace Build.Pipeline.Editor
                     PlayerSettings.bundleVersion = fullBuildVersion;
                     PlayerSettings.SetApplicationIdentifier(BuildTargetName, $"com.{CompanyName}.{ApplicationName}");
 
-                    // Force save PlayerSettings changes
                     AssetDatabase.SaveAssets();
 
                     BuildReport buildReport;
