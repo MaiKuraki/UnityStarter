@@ -56,10 +56,6 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
                 await UniTask.Yield(cancellationToken);
             }
             
-            // Wait for one frame to ensure all scene objects are fully instantiated
-            // This is necessary for Navigathena to find LifetimeScope components
-            await UniTask.Yield(cancellationToken);
-            
             return sceneHandle.Scene;
         }
 
