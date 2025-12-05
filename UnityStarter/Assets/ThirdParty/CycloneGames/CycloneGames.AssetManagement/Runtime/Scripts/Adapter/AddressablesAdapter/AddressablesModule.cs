@@ -21,16 +21,73 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (initialized) return;
             
-            initializationHandle = Addressables.InitializeAsync();
-            await initializationHandle;
-            
-            if (initializationHandle.Status == AsyncOperationStatus.Succeeded)
+            // Check if Addressables is already initialized
+            try
             {
-                initialized = true;
+                var resourceLocators = Addressables.ResourceLocators;
+                if (resourceLocators != null)
+                {
+                    // Addressables is already initialized
+                    initialized = true;
+                    UnityEngine.Debug.Log($"{DEBUG_FLAG} Addressables already initialized, skipping initialization.");
+                    return;
+                }
             }
-            else
+            catch
             {
-                UnityEngine.Debug.LogError($"{DEBUG_FLAG} Initialization failed. Status: {initializationHandle.Status}, Exception: {initializationHandle.OperationException}");
+                // ResourceLocators access failed, need to initialize
+            }
+            
+            // Initialize Addressables if not already initialized
+            try
+            {
+                initializationHandle = Addressables.InitializeAsync();
+                
+                if (!initializationHandle.IsValid())
+                {
+                    initialized = true;
+                    UnityEngine.Debug.Log($"{DEBUG_FLAG} Addressables initialization handle invalid, assuming already initialized.");
+                    return;
+                }
+                
+                await initializationHandle;
+                
+                if (initializationHandle.IsValid())
+                {
+                    if (initializationHandle.Status == AsyncOperationStatus.Succeeded)
+                    {
+                        initialized = true;
+                    }
+                    else
+                    {
+                        UnityEngine.Debug.LogError($"{DEBUG_FLAG} Initialization failed. Status: {initializationHandle.Status}, Exception: {initializationHandle.OperationException}");
+                    }
+                }
+                else
+                {
+                    initialized = true;
+                    UnityEngine.Debug.Log($"{DEBUG_FLAG} Initialization handle became invalid after await, assuming initialization succeeded.");
+                }
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    var resourceLocators = Addressables.ResourceLocators;
+                    if (resourceLocators != null)
+                    {
+                        initialized = true;
+                        UnityEngine.Debug.Log($"{DEBUG_FLAG} Initialization exception caught but Addressables appears initialized: {ex.Message}");
+                    }
+                    else
+                    {
+                        UnityEngine.Debug.LogError($"{DEBUG_FLAG} Initialization exception: {ex.Message}");
+                    }
+                }
+                catch
+                {
+                    UnityEngine.Debug.LogError($"{DEBUG_FLAG} Initialization exception and cannot verify status: {ex.Message}");
+                }
             }
         }
 
