@@ -50,7 +50,7 @@ namespace CycloneGames.UIFramework.Runtime
     public class UIService : IDisposable, IUIService
     {
         private const string DEBUG_FLAG = "[UIService]";
-        private UIManager uiManagerInstance; // Renamed for clarity
+        private UIManager uiManagerInstance;
 
         // Dependencies are injected via constructor
         private IAssetPathBuilderFactory assetPathBuilderFactory;
@@ -63,22 +63,27 @@ namespace CycloneGames.UIFramework.Runtime
         // However, constructor injection is generally preferred for clarity of dependencies.
         public UIService()
         {
-            // This constructor implies dependencies will be set via properties or an Init method,
-            // or that a parameterless constructor is needed for some DI frameworks.
-            // For this example, assuming the parameterized constructor is primary.
-            UnityEngine.Debug.LogWarning($"{DEBUG_FLAG} UIService created with default constructor. Ensure Initialize or parameterized constructor is used.");
+            //  You must Initialize UIService
+            isInitialized = false;
         }
 
-        public UIService(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService)
-        {
-            Initialize(factory, spawner, cameraService);
-        }
-
-        public UIService(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService, IAssetPackage package)
-        {
-            Initialize(factory, spawner, cameraService, package);
-        }
-
+        /// <summary>
+        /// Initializes the UIService for projects using Unity's built-in Resources.Load for asset management.
+        /// This method does not require an explicit IAssetPackage parameter, as it will use the default package
+        /// from AssetManagementLocator (typically a ResourcesAssetPackage implementation).
+        /// 
+        /// Use this method when:
+        /// - Your project uses Unity's Resources.Load to manage UI assets
+        /// - You don't need hot-update capabilities for UI assets
+        /// - All UI resources are bundled with the application at build time
+        /// 
+        /// Note: If your project uses AssetBundle-based systems (Addressables, YooAsset, etc.) for hot-update
+        /// capabilities, use the overload that accepts an IAssetPackage parameter instead.
+        /// </summary>
+        /// <param name="factory">Factory for creating asset path builders to resolve UI asset paths.</param>
+        /// <param name="spawner">Service for instantiating UI prefabs with optional pooling support.</param>
+        /// <param name="cameraService">Service for managing main camera and UI camera stacking (can be null).</param>
+        /// <exception cref="ArgumentNullException">Thrown when factory or spawner is null.</exception>
         public virtual void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService)
         {
             if (isInitialized)
@@ -99,6 +104,31 @@ namespace CycloneGames.UIFramework.Runtime
             isInitialized = true;
         }
 
+        /// <summary>
+        /// Initializes the UIService for projects using AssetBundle-based asset management systems (Addressables, YooAsset, etc.)
+        /// that support hot-update capabilities.
+        /// 
+        /// Use this method when:
+        /// - Your project uses AssetBundle-based systems for asset management
+        /// - You need hot-update capabilities for UI assets
+        /// - UI resources are loaded from remote servers or downloaded dynamically
+        /// 
+        /// Important Design Limitation:
+        /// Currently, the UIService supports only a single IAssetPackage instance. This means all UI resources
+        /// (including UIWindowConfiguration assets and UI prefabs) must be managed within the same package.
+        /// If you have multiple packages in your project, ensure all UI-related assets are organized within
+        /// the single package passed to this method.
+        /// 
+        /// The package is used by UIManager to:
+        /// - Load UIWindowConfiguration ScriptableObject assets
+        /// - Load UI prefab GameObjects when using PrefabSource.Location mode
+        /// - Manage asset lifecycle and handle disposal
+        /// </summary>
+        /// <param name="factory">Factory for creating asset path builders to resolve UI asset paths.</param>
+        /// <param name="spawner">Service for instantiating UI prefabs with optional pooling support.</param>
+        /// <param name="cameraService">Service for managing main camera and UI camera stacking (can be null).</param>
+        /// <param name="package">The asset package that contains all UI resources. Must not be null.</param>
+        /// <exception cref="ArgumentNullException">Thrown when factory, spawner, or package is null.</exception>
         public virtual void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService, IAssetPackage package)
         {
             if (isInitialized)
@@ -108,6 +138,7 @@ namespace CycloneGames.UIFramework.Runtime
             }
             if (factory == null) throw new ArgumentNullException(nameof(factory));
             if (spawner == null) throw new ArgumentNullException(nameof(spawner));
+            if (package == null) throw new ArgumentNullException(nameof(package));
 
             this.assetPathBuilderFactory = factory;
             this.objectSpawner = spawner;
