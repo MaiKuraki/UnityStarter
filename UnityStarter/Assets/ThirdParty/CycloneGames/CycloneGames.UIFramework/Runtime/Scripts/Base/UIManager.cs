@@ -290,9 +290,6 @@ namespace CycloneGames.UIFramework.Runtime
                 configEntry.RefCount++;
                 windowConfig = configEntry.Handle.Asset;
 
-                // No longer using loadedConfigHandles dictionary
-                // loadedConfigHandles[windowName] = windowConfigHandle;
-
                 if (windowConfig.Source == UIWindowConfiguration.PrefabSource.PrefabReference && windowConfig.WindowPrefab == null)
                 {
                     CLogger.LogError($"{DEBUG_FLAG} WindowPrefab is null in WindowConfig for: {windowName}");
@@ -349,7 +346,7 @@ namespace CycloneGames.UIFramework.Runtime
                 if (activeWindows.TryGetValue(windowName, out var existingWindowInstance))
                 {
                     uiOpenTCS.Remove(windowName); // Remove the TCS for *this* duplicate open attempt
-                    tcs.TrySetResult(existingWindowInstance); // Resolve with the existing instance
+                    tcs.TrySetResult(existingWindowInstance);
                     onUIWindowCreated?.Invoke(existingWindowInstance);
                     return existingWindowInstance;
                 }
@@ -458,7 +455,7 @@ namespace CycloneGames.UIFramework.Runtime
             await uiWindowInstance.Open();
 
             onUIWindowCreated?.Invoke(uiWindowInstance);
-            tcs.TrySetResult(uiWindowInstance); // Resolve the task for this open operation
+            tcs.TrySetResult(uiWindowInstance);
             uiOpenTCS.Remove(windowName);
             return uiWindowInstance;
         }
