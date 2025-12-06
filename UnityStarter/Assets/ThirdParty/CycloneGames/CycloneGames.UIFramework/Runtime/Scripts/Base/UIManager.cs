@@ -486,32 +486,37 @@ namespace CycloneGames.UIFramework.Runtime
 
                 if (!activeWindows.TryGetValue(windowName, out UIWindow windowToClose))
                 {
-                    CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' not found in active windows. Cannot close.");
+                    CLogger.LogInfo($"{DEBUG_FLAG} Window '{windowName}' not found in active windows. Skipping close (may not have been opened).");
+                    return;
+                }
+
+                // Check if window is already closing or closed to prevent duplicate close operations
+                if (windowToClose == null || windowToClose?.gameObject == null)
+                {
+                    CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' is null or destroyed. Cannot close.");
+                    activeWindows.Remove(windowName);
                     return;
                 }
 
                 CLogger.LogInfo($"{DEBUG_FLAG} Attempting to close UI: {windowName}");
-                UILayer layer = windowToClose.ParentLayer; // Get layer directly from window
+                UILayer layer = windowToClose.ParentLayer;
 
                 if (layer != null)
                 {
-                    layer.RemoveWindow(windowName); // This is a synchronous call that likely triggers an async close.
+                    layer.RemoveWindow(windowName);
                 }
                 else
                 {
                     // Window is active but has no parent layer (should be rare if managed correctly)
                     CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' has no parent layer but is active. Attempting direct close.");
-                    windowToClose.Close(); // This is a synchronous call.
+                    windowToClose.Close();
                 }
 
-                // Remove from active tracking. The window's OnDestroy will handle UILayer's internal list.
                 activeWindows.Remove(windowName);
-                uiOpenTCS.Remove(windowName); // Clean up any residual open task completer for this window name
+                uiOpenTCS.Remove(windowName);
 
                 // Release the configuration asset loaded for this window
                 ReleaseConfigAsset(windowName);
-
-                // Handles are disposed explicitly; prefab instances follow normal GameObject lifecycle.
             }
             catch (System.OperationCanceledException)
             {
