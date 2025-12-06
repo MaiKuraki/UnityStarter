@@ -12,14 +12,15 @@ namespace Build.Pipeline.Editor
     /// <summary>
     /// Build processor to ensure Addressables version file is saved after Unity builds Addressables content
     /// and copied to StreamingAssets during Player build.
-    /// 
-    /// Uses both PrepareForBuild (to save before copy) and PostprocessBuild (to verify/restore after copy)
-    /// to handle cases where Unity rebuilds Addressables during Player build.
     /// </summary>
-    public class AddressablesVersionBuildProcessor : BuildPlayerProcessor, IPostprocessBuildWithReport
+    public class AddressablesVersionBuildProcessor : BuildPlayerProcessor, IPreprocessBuildWithReport, IPostprocessBuildWithReport
     {
-        // This controls when PrepareForBuild is called relative to other BuildPlayerProcessors
-        public override int callbackOrder => 2; // Execute after AddressablesPlayerBuildProcessor (order = 1) 
+        // Unity's AddressablesPlayerBuildProcessor has callbackOrder = 1
+        // IPreprocessBuildWithReport callback order (lower = earlier)
+        // This runs before the actual build starts, ensuring version file is in StreamingAssets
+        public override int callbackOrder => 0;
+
+        const string versionFileName = "AddressablesVersion.json";
 
         public override void PrepareForBuild(BuildPlayerContext buildPlayerContext)
         {
@@ -38,14 +39,8 @@ namespace Build.Pipeline.Editor
                     return;
                 }
 
-                // Get current build target from EditorUserBuildSettings
-                // BuildPlayerContext doesn't have BuildTarget property, so we use EditorUserBuildSettings
                 BuildTarget buildTarget = EditorUserBuildSettings.activeBuildTarget;
 
-                // Get Addressables settings to determine the actual build path
-                // We need to use the same logic as AddressablesBuilder.GetAddressablesBuildPath
-                // to get the bundle directory (which includes BuildTarget subdirectory)
-                // Note: This is a read-only operation and should not lock any files
                 Type settingsType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
                 if (settingsType == null)
                 {
@@ -60,35 +55,64 @@ namespace Build.Pipeline.Editor
                     return;
                 }
 
-                // Get the actual bundle directory path (e.g., Library/com.unity.addressables/aa/Windows/StandaloneWindows64)
-                // This is where bundle files are located, and where we should save the version file
+                // Get the Addressables build output directory
+                // Unity's AddressablesPlayerBuildProcessor (callbackOrder = 1) should have completed by now,
+                // so the build output should exist. If it doesn't, we'll create the version file in PostprocessBuild.
                 string bundleDirectory = GetAddressablesBuildPath(settings, settingsType, buildTarget);
+
                 if (string.IsNullOrEmpty(bundleDirectory))
                 {
                     Debug.LogWarning("[AddressablesVersionBuildProcessor] Bundle directory path is empty. Version file will be created in PostprocessBuild.");
                     return;
                 }
 
-                // Check if directory exists, but don't create it here if it doesn't
-                // The directory should already exist from Addressables build
                 if (!Directory.Exists(bundleDirectory))
                 {
-                    Debug.LogWarning($"[AddressablesVersionBuildProcessor] Bundle directory not found: {bundleDirectory}. Version file will be created in PostprocessBuild.");
+                    Debug.LogWarning($"[AddressablesVersionBuildProcessor] Bundle directory not found: {bundleDirectory}. This may happen if Addressables build hasn't completed yet. Version file will be created in PostprocessBuild.");
                     return;
                 }
 
-                Debug.Log($"[AddressablesVersionBuildProcessor] Bundle directory: {bundleDirectory}");
+                // Verify that Addressables build output exists
+                // If no catalog files exist, Addressables build may not have completed yet
+                string[] catalogFiles = Directory.GetFiles(bundleDirectory, "catalog_*.json", SearchOption.TopDirectoryOnly);
+                if (catalogFiles.Length == 0)
+                {
+                    catalogFiles = Directory.GetFiles(bundleDirectory, "*.json", SearchOption.TopDirectoryOnly);
+                    if (catalogFiles.Length == 0)
+                    {
+                        Debug.LogWarning($"[AddressablesVersionBuildProcessor] No catalog files found in bundle directory: {bundleDirectory}. Addressables build may not have completed yet. Version file will be created in PostprocessBuild.");
+                        return;
+                    }
+                }
+
+                Debug.Log($"[AddressablesVersionBuildProcessor] Bundle directory found: {bundleDirectory}");
 
                 // Generate version from config
                 string contentVersion = GenerateContentVersion(config);
+                string versionFilePath = Path.Combine(bundleDirectory, versionFileName);
+
+                if (File.Exists(versionFilePath))
+                {
+                    try
+                    {
+                        string existingJson = File.ReadAllText(versionFilePath);
+                        VersionDataJson existingData = JsonUtility.FromJson<VersionDataJson>(existingJson);
+                        if (existingData != null && !string.IsNullOrEmpty(existingData.contentVersion))
+                        {
+                            contentVersion = existingData.contentVersion;
+                            Debug.Log($"[AddressablesVersionBuildProcessor] Using existing version from pre-build: {contentVersion}");
+                        }
+                    }
+                    catch
+                    {
+                        // If we can't read existing version, use generated one
+                    }
+                }
 
                 // Save version file to bundle directory (same location as bundle files)
                 // Unity copies the BuildPath contents to StreamingAssets/aa during Player build
                 // Since bundleDirectory is BuildPath/{BuildTarget}, Unity will copy it to StreamingAssets/aa/{BuildTarget}
-                // So the file will be at: StreamingAssets/aa/{BuildTarget}/AddressablesVersion.json
-                const string versionFileName = "AddressablesVersion.json";
-                string versionFilePath = Path.Combine(bundleDirectory, versionFileName);
-
+                // So the file will be at: StreamingAssets/aa/{BuildTarget}/{versionFileName}
                 try
                 {
                     var versionData = new VersionDataJson { contentVersion = contentVersion };
@@ -100,11 +124,55 @@ namespace Build.Pipeline.Editor
                     {
                         Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Saved version file to bundle directory: {versionFilePath}");
                         Debug.Log($"[AddressablesVersionBuildProcessor] Version: {contentVersion}");
-                        Debug.Log($"[AddressablesVersionBuildProcessor] Unity will copy this to StreamingAssets/aa/{buildTarget}/AddressablesVersion.json during Player build.");
+                        Debug.Log($"[AddressablesVersionBuildProcessor] Unity will copy this to StreamingAssets/aa/{buildTarget}/{versionFileName} during Player build.");
                     }
                     else
                     {
-                        Debug.LogWarning($"[AddressablesVersionBuildProcessor] Version file was written but not found at: {versionFilePath}. Will create in PostprocessBuild.");
+                        Debug.LogWarning($"[AddressablesVersionBuildProcessor] Version file was written but not found at: {versionFilePath}. Will create in StreamingAssets directly.");
+                    }
+
+                    // For Android and other platforms, we also need to ensure the version file
+                    // is in Assets/StreamingAssets/aa/{BuildTarget}/ before Unity packages the build.
+                    string streamingAssetsPath = Path.Combine(Application.dataPath, "StreamingAssets");
+                    string streamingAssetsVersionDir = Path.Combine(streamingAssetsPath, "aa", buildTarget.ToString());
+                    string streamingAssetsVersionPath = Path.Combine(streamingAssetsVersionDir, versionFileName);
+
+                    // Also try platform-specific path (e.g., Android instead of StandaloneAndroid)
+                    string platformPath = GetAddressablesPlatformPath(buildTarget);
+                    string streamingAssetsPlatformVersionDir = Path.Combine(streamingAssetsPath, "aa", platformPath);
+                    string streamingAssetsPlatformVersionPath = Path.Combine(streamingAssetsPlatformVersionDir, versionFileName);
+
+                    // Copy to both possible locations to ensure it's found
+                    bool copiedToStreamingAssets = false;
+                    if (Directory.Exists(streamingAssetsVersionDir) || Directory.Exists(Path.GetDirectoryName(streamingAssetsVersionDir)))
+                    {
+                        if (!Directory.Exists(streamingAssetsVersionDir))
+                        {
+                            Directory.CreateDirectory(streamingAssetsVersionDir);
+                        }
+                        File.Copy(versionFilePath, streamingAssetsVersionPath, true);
+                        copiedToStreamingAssets = true;
+                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Copied version file to StreamingAssets: {streamingAssetsVersionPath}");
+                    }
+
+                    if (Directory.Exists(streamingAssetsPlatformVersionDir) || Directory.Exists(Path.GetDirectoryName(streamingAssetsPlatformVersionDir)))
+                    {
+                        if (!Directory.Exists(streamingAssetsPlatformVersionDir))
+                        {
+                            Directory.CreateDirectory(streamingAssetsPlatformVersionDir);
+                        }
+                        File.Copy(versionFilePath, streamingAssetsPlatformVersionPath, true);
+                        copiedToStreamingAssets = true;
+                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Copied version file to StreamingAssets (platform path): {streamingAssetsPlatformVersionPath}");
+                    }
+
+                    if (!copiedToStreamingAssets)
+                    {
+                        // If directories don't exist yet, create them and copy anyway
+                        // Unity will copy these when it processes StreamingAssets
+                        Directory.CreateDirectory(streamingAssetsVersionDir);
+                        File.Copy(versionFilePath, streamingAssetsVersionPath, true);
+                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Created and copied version file to StreamingAssets: {streamingAssetsVersionPath}");
                     }
                 }
                 catch (IOException ioEx)
@@ -115,9 +183,109 @@ namespace Build.Pipeline.Editor
             }
             catch (Exception ex)
             {
-                // Don't fail the build if version file creation fails
-                // We'll try again in PostprocessBuild
                 Debug.LogWarning($"[AddressablesVersionBuildProcessor] Failed to save version file in PrepareForBuild: {ex.Message}. Will create in PostprocessBuild.");
+            }
+        }
+
+        /// <summary>
+        /// Pre-process build to ensure version file exists in StreamingAssets before build starts.
+        /// This is critical for Android and other platforms where we can't modify the build after packaging.
+        /// </summary>
+        public void OnPreprocessBuild(BuildReport report)
+        {
+            BuildData buildData = BuildConfigHelper.GetBuildData();
+            if (buildData == null || !buildData.UseAddressables)
+            {
+                return; // Not using Addressables, skip
+            }
+
+            try
+            {
+                AddressablesBuildConfig config = BuildConfigHelper.GetAddressablesConfig();
+                if (config == null)
+                {
+                    return;
+                }
+
+                BuildTarget buildTarget = report.summary.platform;
+
+                // Get the Addressables build output path
+                Type settingsType = ReflectionCache.GetType("UnityEditor.AddressableAssets.Settings.AddressableAssetSettings");
+                if (settingsType == null)
+                {
+                    return;
+                }
+
+                object settings = GetDefaultSettings(settingsType);
+                if (settings == null)
+                {
+                    return;
+                }
+
+                string bundleDirectory = GetAddressablesBuildPath(settings, settingsType, buildTarget);
+                if (string.IsNullOrEmpty(bundleDirectory) || !Directory.Exists(bundleDirectory))
+                {
+                    // Build output may not exist yet, that's okay
+                    return;
+                }
+
+                string buildVersionPath = Path.Combine(bundleDirectory, versionFileName);
+
+                if (!File.Exists(buildVersionPath))
+                {
+                    // Version file doesn't exist in build output, generate it
+                    string contentVersion = GenerateContentVersion(config);
+                    var versionData = new VersionDataJson { contentVersion = contentVersion };
+                    string jsonContent = JsonUtility.ToJson(versionData, true);
+                    File.WriteAllText(buildVersionPath, jsonContent);
+                    Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Generated version file in build output: {buildVersionPath}");
+                }
+
+                // Ensure version file is in StreamingAssets (critical for Android)
+                string streamingAssetsPath = Path.Combine(Application.dataPath, "StreamingAssets");
+                string platformPath = GetAddressablesPlatformPath(buildTarget);
+
+                // Try both BuildTarget and platform-specific paths
+                string[] targetPaths = new string[] { buildTarget.ToString(), platformPath };
+
+                foreach (string targetPath in targetPaths)
+                {
+                    string streamingAssetsVersionDir = Path.Combine(streamingAssetsPath, "aa", targetPath);
+                    string streamingAssetsVersionPath = Path.Combine(streamingAssetsVersionDir, versionFileName);
+
+                    // Copy version file to StreamingAssets if it doesn't exist or is different
+                    bool needsCopy = true;
+                    if (File.Exists(streamingAssetsVersionPath))
+                    {
+                        try
+                        {
+                            string existingContent = File.ReadAllText(streamingAssetsVersionPath);
+                            string buildContent = File.ReadAllText(buildVersionPath);
+                            if (existingContent == buildContent)
+                            {
+                                needsCopy = false;
+                            }
+                        }
+                        catch
+                        {
+                            // If we can't compare, copy anyway
+                        }
+                    }
+
+                    if (needsCopy)
+                    {
+                        if (!Directory.Exists(streamingAssetsVersionDir))
+                        {
+                            Directory.CreateDirectory(streamingAssetsVersionDir);
+                        }
+                        File.Copy(buildVersionPath, streamingAssetsVersionPath, true);
+                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Ensured version file in StreamingAssets: {streamingAssetsVersionPath}");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[AddressablesVersionBuildProcessor] Failed to ensure version file in StreamingAssets during PreprocessBuild: {ex.Message}");
             }
         }
 
@@ -153,9 +321,49 @@ namespace Build.Pipeline.Editor
 
                 // Determine StreamingAssets path in built player
                 // For Windows: outputPath is .exe, StreamingAssets is in outputPath_Data/StreamingAssets
+                // For Android: outputPath is .apk or .aab (compressed), we can't modify it after build
                 // For folders: StreamingAssets is in outputPath/StreamingAssets
-                string playerStreamingAssetsPath;
-                if (File.Exists(outputPath) && outputPath.EndsWith(".exe"))
+                string playerStreamingAssetsPath = null;
+
+                if (buildTarget == BuildTarget.Android)
+                {
+                    // For Android, the APK/AAB is already built and we can't modify it
+                    // The version file should have been copied to Assets/StreamingAssets during PrepareForBuild
+                    // Just verify it exists in the source StreamingAssets folder
+                    string sourceStreamingAssetsPath = Path.Combine(Application.dataPath, "StreamingAssets");
+                    string sourceVersionPath = Path.Combine(sourceStreamingAssetsPath, "aa", buildTarget.ToString(), versionFileName);
+                    string platformPath = GetAddressablesPlatformPath(buildTarget);
+                    string sourcePlatformVersionPath = Path.Combine(sourceStreamingAssetsPath, "aa", platformPath, versionFileName);
+
+                    if (File.Exists(sourceVersionPath))
+                    {
+                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Version file verified in source StreamingAssets: {sourceVersionPath}");
+                        Debug.Log($"[AddressablesVersionBuildProcessor] Note: For Android APK/AAB, version file is already packaged. Cannot verify in built APK.");
+                        return;
+                    }
+                    else if (File.Exists(sourcePlatformVersionPath))
+                    {
+                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Version file verified in source StreamingAssets (platform path): {sourcePlatformVersionPath}");
+                        Debug.Log($"[AddressablesVersionBuildProcessor] Note: For Android APK/AAB, version file is already packaged. Cannot verify in built APK.");
+                        return;
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[AddressablesVersionBuildProcessor] Version file not found in source StreamingAssets. Creating it now (may be too late for current build).");
+                        // Try to create it anyway, though it may be too late for the current build
+                        string contentVersionStr = GenerateContentVersion(config);
+                        if (!Directory.Exists(Path.GetDirectoryName(sourceVersionPath)))
+                        {
+                            Directory.CreateDirectory(Path.GetDirectoryName(sourceVersionPath));
+                        }
+                        var versionDataJson = new VersionDataJson { contentVersion = contentVersionStr };
+                        string jsonContentStr = JsonUtility.ToJson(versionDataJson, true);
+                        File.WriteAllText(sourceVersionPath, jsonContentStr);
+                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Created version file in source StreamingAssets: {sourceVersionPath}");
+                        return;
+                    }
+                }
+                else if (File.Exists(outputPath) && outputPath.EndsWith(".exe"))
                 {
                     // Windows executable: StreamingAssets is in {exe}_Data/StreamingAssets
                     string dataPath = outputPath.Replace(".exe", "_Data");
@@ -172,15 +380,19 @@ namespace Build.Pipeline.Editor
                     return;
                 }
 
+                if (string.IsNullOrEmpty(playerStreamingAssetsPath))
+                {
+                    return;
+                }
+
                 // Version file should be in the bundle directory (same as bundle files)
-                // Path: StreamingAssets/aa/{BuildTarget}/AddressablesVersion.json
+                // Path: StreamingAssets/aa/{BuildTarget}/{versionFileName}
                 // Unity copies BuildPath contents to StreamingAssets/aa, so the BuildTarget subdirectory
                 // becomes StreamingAssets/aa/{BuildTarget}
-                string playerVersionPath = Path.Combine(playerStreamingAssetsPath, "aa", buildTarget.ToString(), "AddressablesVersion.json");
+                string playerVersionPath = Path.Combine(playerStreamingAssetsPath, "aa", buildTarget.ToString(), versionFileName);
                 string addressablesPlatformPath = GetAddressablesPlatformPath(buildTarget);
-                string fallbackVersionPath = Path.Combine(playerStreamingAssetsPath, "aa", addressablesPlatformPath, "AddressablesVersion.json");
+                string fallbackVersionPath = Path.Combine(playerStreamingAssetsPath, "aa", addressablesPlatformPath, versionFileName);
 
-                // Check if version file exists in built player (correct location with bundle files)
                 if (File.Exists(playerVersionPath))
                 {
                     Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Version file verified in built player: {playerVersionPath}");
