@@ -331,11 +331,58 @@ namespace CycloneGames.AssetManagement.Runtime
         public async UniTask<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
             // This corresponds to Addressables.UpdateCatalogs.
-            var handle = Addressables.UpdateCatalogs();
-            await handle.WithCancellation(cancellationToken);
-            var success = handle.Status == AsyncOperationStatus.Succeeded;
-            Addressables.Release(handle);
-            return success;
+            // For standalone games without remote catalogs, we should skip this operation
+            // to avoid triggering Unity's internal error logging.
+            
+            // Check if we have a remote catalog before attempting to update
+            // This prevents unnecessary errors for standalone games
+            bool hasRemoteCatalog = HasRemoteCatalog();
+            
+            if (!hasRemoteCatalog)
+            {
+                // No remote catalog available (standalone game scenario)
+                // Skip UpdateCatalogs to avoid triggering Unity's error logging
+                Debug.Log($"[AddressablesAssetPackage] No remote catalog detected (standalone game). Skipping catalog update. Using local content.");
+                return true; // Return true to indicate we can continue with local content
+            }
+            
+            // We have a remote catalog, attempt to update it
+            try
+            {
+                var handle = Addressables.UpdateCatalogs();
+                await handle.WithCancellation(cancellationToken);
+                
+                bool success = handle.Status == AsyncOperationStatus.Succeeded;
+                
+                // Check if the failure is due to "Content update not available" (edge case)
+                if (!success && handle.OperationException != null)
+                {
+                    string errorMessage = handle.OperationException.Message;
+                    if (errorMessage != null && errorMessage.Contains("Content update not available", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // This can happen if remote catalog was configured but is not available
+                        Debug.Log($"[AddressablesAssetPackage] Remote catalog not available. Using local content.");
+                        Addressables.Release(handle);
+                        return true; // Return true to indicate we can continue with local content
+                    }
+                }
+                
+                Addressables.Release(handle);
+                return success;
+            }
+            catch (Exception ex)
+            {
+                // Handle exceptions gracefully
+                string errorMessage = ex.Message ?? string.Empty;
+                if (errorMessage.Contains("Content update not available", StringComparison.OrdinalIgnoreCase))
+                {
+                    Debug.Log($"[AddressablesAssetPackage] Remote catalog not available. Using local content.");
+                    return true; // Return true to indicate we can continue with local content
+                }
+                
+                Debug.LogWarning($"[AddressablesAssetPackage] Failed to update catalogs: {ex.Message}");
+                return false;
+            }
         }
 
         public UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.All, object tags = null, CancellationToken cancellationToken = default)
