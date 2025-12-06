@@ -65,6 +65,11 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (_isDestroying) return; // Already in the process of closing/destroying
 
+            if (currentState is ClosingState || currentState is ClosedState)
+            {
+                return;
+            }
+
             // Transition to ClosingState, which might trigger animations.
             OnStartClose();
 
@@ -128,8 +133,6 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (_isDestroying) return;
             ChangeState(OpeningStateShared);
-            // Typically, make the GameObject active if it's not.
-            // Handled by OpeningState.OnEnter for this example.
         }
 
         protected virtual void OnFinishedOpen()
@@ -140,7 +143,12 @@ namespace CycloneGames.UIFramework.Runtime
 
         protected virtual void OnStartClose()
         {
-            // No need to check _isDestroying here as Close() method does it.
+            // Check if already closing or closed to prevent duplicate close operations
+            if (_isDestroying) return;
+            if (currentState is ClosingState || currentState is ClosedState)
+            {
+                return;
+            }
             ChangeState(ClosingStateShared);
         }
 
@@ -155,10 +163,7 @@ namespace CycloneGames.UIFramework.Runtime
 
             // The window is responsible for destroying its GameObject.
             // UILayer will be notified via this window's OnDestroy method.
-            if (gameObject) // Check if not already destroyed by some other means
-            {
-                Destroy(gameObject);
-            }
+            if (gameObject) Destroy(gameObject);
         }
 
         protected virtual void Awake()
