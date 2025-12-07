@@ -1,5 +1,7 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using Build.VersionControl.Editor;
 using UnityEditor;
@@ -60,8 +62,10 @@ namespace Build.Pipeline.Editor
             Type builderHelperType = ReflectionCache.GetType("YooAsset.Editor.AssetBundleBuilderHelper");
             Type builtinPipelineType = ReflectionCache.GetType("YooAsset.Editor.BuiltinBuildPipeline");
             Type scriptablePipelineType = ReflectionCache.GetType("YooAsset.Editor.ScriptableBuildPipeline");
+            Type rawFilePipelineType = ReflectionCache.GetType("YooAsset.Editor.RawFileBuildPipeline");
             Type builtinParamsType = ReflectionCache.GetType("YooAsset.Editor.BuiltinBuildParameters");
             Type scriptableParamsType = ReflectionCache.GetType("YooAsset.Editor.ScriptableBuildParameters");
+            Type rawFileParamsType = ReflectionCache.GetType("YooAsset.Editor.RawFileBuildParameters");
 
             // Enums - Try strict first, then fallback to search
             Type eBuildinFileCopyOption = ReflectionCache.GetType("YooAsset.Editor.EBuildinFileCopyOption");
@@ -185,15 +189,19 @@ namespace Build.Pipeline.Editor
 
                     Debug.Log($"{DEBUG_FLAG} Building package: {packageName}");
 
-                    MethodInfo getPipelineMethod = ReflectionCache.GetMethod(builderSettingType, "GetPackageBuildPipeline", BindingFlags.Public | BindingFlags.Static);
-                    string pipelineName = (string)getPipelineMethod.Invoke(null, new object[] { packageName });
-
-                    if (string.IsNullOrEmpty(pipelineName)) pipelineName = "BuiltinBuildPipeline";
+                    // Auto-detect pipeline based on Collector PackRule (not Package name)
+                    string pipelineName = AutoDetectPipelineForPackage(packageObj, packageName);
+                    Debug.Log($"{DEBUG_FLAG} Auto-detected pipeline for package '{packageName}': {pipelineName}");
 
                     object buildParameters = null;
                     object pipelineInstance = null;
 
-                    if (pipelineName == "BuiltinBuildPipeline" && builtinParamsType != null)
+                    if (pipelineName == "RawFileBuildPipeline" && rawFileParamsType != null && rawFilePipelineType != null)
+                    {
+                        buildParameters = Activator.CreateInstance(rawFileParamsType);
+                        pipelineInstance = Activator.CreateInstance(rawFilePipelineType);
+                    }
+                    else if (pipelineName == "BuiltinBuildPipeline" && builtinParamsType != null)
                     {
                         buildParameters = Activator.CreateInstance(builtinParamsType);
                         pipelineInstance = Activator.CreateInstance(builtinPipelineType);
@@ -210,13 +218,39 @@ namespace Build.Pipeline.Editor
                         BuildUtils.SetField(buildParameters, "BuildinFileRoot", streamingRoot);
                         BuildUtils.SetField(buildParameters, "BuildPipeline", pipelineName);
                         BuildUtils.SetField(buildParameters, "BuildTarget", buildTarget);
-                        if (buildBundleType_AssetBundle != null) BuildUtils.SetField(buildParameters, "BuildBundleType", buildBundleType_AssetBundle);
+
+                        // Set BuildBundleType based on pipeline
+                        if (pipelineName == "RawFileBuildPipeline")
+                        {
+                            // RawFileBuildPipeline uses RawBundle type
+                            if (eBuildBundleType != null)
+                            {
+                                try
+                                {
+                                    object buildBundleType_RawBundle = Enum.Parse(eBuildBundleType, "RawBundle");
+                                    BuildUtils.SetField(buildParameters, "BuildBundleType", buildBundleType_RawBundle);
+                                }
+                                catch { Debug.LogWarning($"{DEBUG_FLAG} Could not parse RawBundle for EBuildBundleType"); }
+                            }
+                        }
+                        else
+                        {
+                            // BuiltinBuildPipeline and ScriptableBuildPipeline use AssetBundle type
+                            if (buildBundleType_AssetBundle != null)
+                                BuildUtils.SetField(buildParameters, "BuildBundleType", buildBundleType_AssetBundle);
+                        }
+
                         BuildUtils.SetField(buildParameters, "PackageName", packageName);
                         BuildUtils.SetField(buildParameters, "PackageVersion", packageVersion);
                         BuildUtils.SetField(buildParameters, "VerifyBuildingResult", true);
                         if (fileCopyOption != null) BuildUtils.SetField(buildParameters, "BuildinFileCopyOption", fileCopyOption);
                         BuildUtils.SetField(buildParameters, "BuildinFileCopyParams", string.Empty);
-                        if (compressOption_LZ4 != null) BuildUtils.SetField(buildParameters, "CompressOption", compressOption_LZ4);
+
+                        // Only set CompressOption for non-RawFile pipelines
+                        if (pipelineName != "RawFileBuildPipeline" && compressOption_LZ4 != null)
+                        {
+                            BuildUtils.SetField(buildParameters, "CompressOption", compressOption_LZ4);
+                        }
 
                         // Use reflection to get EBuildinFileCopyOption enum value directly if strict mode failed
                         // Force ClearAndCopyAll if copyToStreaming is true, but first we need to handle the "Package output directory exists" error.
@@ -306,7 +340,7 @@ namespace Build.Pipeline.Editor
                                     {
                                         // Fallback to raw output (OutputCache/Version folders)
                                         srcDir = packageOutputRoot;
-                                        
+
                                         // IMPORTANT: If user explicitly disabled copyToStreamingAssets, 
                                         // we must ensure the StreamingAssets folder is CLEAN to avoid misleading old files.
                                         // streamingRoot is "Assets/StreamingAssets/yoo"
@@ -315,7 +349,7 @@ namespace Build.Pipeline.Editor
                                         {
                                             Debug.Log($"{DEBUG_FLAG} [Cleanup] 'Copy To Streaming Assets' is OFF. Cleaning up old files in: {streamingPackageDir}");
                                             BuildUtils.DeleteDirectory(streamingPackageDir);
-                                            
+
                                             // Also delete the .meta file associated with the directory to keep AssetDatabase in sync
                                             string metaFilePath = streamingPackageDir + ".meta";
                                             if (System.IO.File.Exists(metaFilePath))
@@ -432,6 +466,129 @@ namespace Build.Pipeline.Editor
                 }
             }
             return null;
+        }
+
+        /// <summary>
+        /// Auto-detect the appropriate build pipeline for a package based on its Collector PackRule configuration.
+        /// 
+        /// Detection Rules:
+        /// 1. If ALL Collectors use PackRawFile → RawFileBuildPipeline
+        /// 2. If NO Collectors use PackRawFile → ScriptableBuildPipeline
+        /// 3. If MIXED (some PackRawFile, some others) → ERROR (must separate packages)
+        /// 
+        /// Note: YooAsset limitation - one Package can only use one BuildBundleType.
+        /// RawFileBuildPipeline requires each bundle to contain only ONE file.
+        /// </summary>
+        /// <param name="packageObj">The package object from YooAsset's AssetBundleCollectorSetting</param>
+        /// <param name="packageName">The package name (for logging purposes)</param>
+        /// <returns>The detected pipeline name: "RawFileBuildPipeline" or "ScriptableBuildPipeline"</returns>
+        private static string AutoDetectPipelineForPackage(object packageObj, string packageName)
+        {
+            try
+            {
+                Type packageObjType = packageObj.GetType();
+
+                // Get Groups field from AssetBundleCollectorPackage
+                FieldInfo groupsField = ReflectionCache.GetField(packageObjType, "Groups", BindingFlags.Public | BindingFlags.Instance);
+                if (groupsField == null)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} Could not find 'Groups' field in package '{packageName}'. Falling back to ScriptableBuildPipeline.");
+                    return "ScriptableBuildPipeline";
+                }
+
+                IList groupsList = groupsField.GetValue(packageObj) as IList;
+                if (groupsList == null || groupsList.Count == 0)
+                {
+                    Debug.Log($"{DEBUG_FLAG} Package '{packageName}' has no groups. Using default ScriptableBuildPipeline.");
+                    return "ScriptableBuildPipeline";
+                }
+
+                // Collect all PackRuleNames to detect mixed usage
+                List<string> allPackRuleNames = new List<string>();
+                bool hasPackRawFile = false;
+                bool hasOtherRules = false;
+
+                // Check each group's collectors
+                foreach (object groupObj in groupsList)
+                {
+                    Type groupObjType = groupObj.GetType();
+
+                    // Get Collectors field from AssetBundleCollectorGroup
+                    FieldInfo collectorsField = ReflectionCache.GetField(groupObjType, "Collectors", BindingFlags.Public | BindingFlags.Instance);
+                    if (collectorsField == null)
+                        continue;
+
+                    IList collectorsList = collectorsField.GetValue(groupObj) as IList;
+                    if (collectorsList == null)
+                        continue;
+
+                    // Check each collector's PackRuleName
+                    foreach (object collectorObj in collectorsList)
+                    {
+                        Type collectorObjType = collectorObj.GetType();
+                        FieldInfo packRuleNameField = ReflectionCache.GetField(collectorObjType, "PackRuleName", BindingFlags.Public | BindingFlags.Instance);
+
+                        if (packRuleNameField != null)
+                        {
+                            string packRuleName = packRuleNameField.GetValue(collectorObj) as string;
+                            if (!string.IsNullOrEmpty(packRuleName))
+                            {
+                                allPackRuleNames.Add(packRuleName);
+
+                                if (packRuleName == "PackRawFile")
+                                {
+                                    hasPackRawFile = true;
+                                }
+                                else
+                                {
+                                    hasOtherRules = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Decision logic
+                if (hasPackRawFile && hasOtherRules)
+                {
+                    // MIXED: Cannot use RawFileBuildPipeline (requires each bundle to have only one file)
+                    // Cannot use ScriptableBuildPipeline for DLLs (Android/iOS requirement)
+                    string errorMessage = $"{DEBUG_FLAG} <color=red>ERROR:</color> Package '{packageName}' has MIXED PackRule configuration:\n" +
+                                         $"  - Found PackRawFile rules (for DLL files)\n" +
+                                         $"  - Found other rules: {string.Join(", ", allPackRuleNames.Where(r => r != "PackRawFile").Distinct())}\n\n" +
+                                         $"<color=yellow>SOLUTION:</color> You must separate DLL files into a DIFFERENT Package:\n" +
+                                         $"  1. Create a new Package (e.g., 'HotUpdatePackage') for DLL files\n" +
+                                         $"  2. Set all DLL Collectors to use 'PackRawFile' rule in the new Package\n" +
+                                         $"  3. Keep other resources (textures, models, etc.) in '{packageName}' with other PackRules\n" +
+                                         $"  4. Each Package will automatically use the correct Pipeline based on its Collectors\n\n" +
+                                         $"<color=cyan>Why?</color> YooAsset limitation: one Package can only use one BuildBundleType.\n" +
+                                         $"RawFileBuildPipeline requires each bundle to contain only ONE file.";
+
+                    Debug.LogError(errorMessage);
+                    throw new Exception($"Package '{packageName}' has mixed PackRule configuration. DLL files must be in a separate Package. See console for details.");
+                }
+                else if (hasPackRawFile)
+                {
+                    // ALL PackRawFile: Use RawFileBuildPipeline
+                    Debug.Log($"{DEBUG_FLAG} Package '{packageName}' detected ALL PackRawFile rules. Using RawFileBuildPipeline.");
+                    return "RawFileBuildPipeline";
+                }
+                else
+                {
+                    // NO PackRawFile: Use ScriptableBuildPipeline (default for asset resources)
+                    Debug.Log($"{DEBUG_FLAG} Package '{packageName}' has no PackRawFile rules. Using ScriptableBuildPipeline.");
+                    return "ScriptableBuildPipeline";
+                }
+            }
+            catch (Exception ex)
+            {
+                // Re-throw if it's our custom exception
+                if (ex.Message.Contains("mixed PackRule configuration"))
+                    throw;
+
+                Debug.LogWarning($"{DEBUG_FLAG} Error auto-detecting pipeline for package '{packageName}': {ex.Message}. Falling back to ScriptableBuildPipeline.");
+                return "ScriptableBuildPipeline";
+            }
         }
     }
 }
