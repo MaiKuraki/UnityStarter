@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using CycloneGames.Cheat.Runtime;
 using Cysharp.Threading.Tasks;
@@ -8,14 +9,18 @@ using VitalRouter;
 
 namespace CycloneGames.Cheat.Sample
 {
-    // --- Context that owns the private routers ---
+    /// <summary>
+    /// Context that owns private routers for domain-specific command routing.
+    /// </summary>
     public class MultiRouterContext
     {
         public Router UIRouter { get; } = new();
         public Router GameplayRouter { get; } = new();
     }
 
-    // --- A system that ONLY listens to the UI Router ---
+    /// <summary>
+    /// UI system that only listens to UI-specific commands via dedicated router.
+    /// </summary>
     [Routes]
     public partial class SampleUISystem
     {
@@ -32,7 +37,9 @@ namespace CycloneGames.Cheat.Sample
         }
     }
 
-    // --- A system that ONLY listens to the Gameplay Router ---
+    /// <summary>
+    /// Gameplay system that only listens to gameplay-specific commands via dedicated router.
+    /// </summary>
     [Routes]
     public partial class SampleGameplaySystem
     {
@@ -49,25 +56,44 @@ namespace CycloneGames.Cheat.Sample
         }
     }
 
-    // --- The main MonoBehaviour that runs the entire sample ---
+    /// <summary>
+    /// Main sample runner demonstrating multi-router cheat command system.
+    /// Demonstrates flexible routing, cancellation, and different command types.
+    /// </summary>
     [Routes]
     public partial class MultiRouterSampleRunner : MonoBehaviour
     {
-        [SerializeField] CheatSampleBenchmark benchmarker;
-        [SerializeField] Button Btn_Benchmark;
+        [SerializeField] private CheatSampleBenchmark benchmarker;
+        [SerializeField] private Button Btn_Benchmark;
+        
         private MultiRouterContext routerContext;
         private SampleUISystem uiSystem;
         private SampleGameplaySystem gameplaySystem;
 
+        // Cache command IDs to avoid string allocations
+        private static readonly string CMD_PROTOCOL_SIMPLE = "Protocol_Simple";
+        private static readonly string CMD_PROTOCOL_LONG_RUNNING = "Protocol_LongRunningTask";
+        private static readonly string CMD_UI_SHOW_POPUP = "UI_ShowPopup";
+        private static readonly string CMD_UI_HIDE_POPUP = "UI_HidePopup";
+        private static readonly string CMD_PLAYER_JUMP = "Player_Jump";
+        private static readonly string CMD_ENEMY_SPAWN = "Enemy_Spawn";
+        private static readonly string CMD_LOG_MESSAGE = "Log_Message";
+        private static readonly string CMD_GLOBAL_GAMEDATA = "Global_GameData";
+
         void Awake()
         {
             Debug.Log("<color=lime><b>[MultiRouterSampleRunner]</b> Initializing multi-router sample...</color>");
+            
             routerContext = new MultiRouterContext();
             uiSystem = new SampleUISystem(routerContext.UIRouter);
             gameplaySystem = new SampleGameplaySystem(routerContext.GameplayRouter);
-            Btn_Benchmark.onClick.AddListener(() => benchmarker.RunBenchmark().Forget());
+            
+            if (Btn_Benchmark != null)
+            {
+                Btn_Benchmark.onClick.AddListener(() => benchmarker.RunBenchmark().Forget());
+            }
 
-            // Default is GlobalRouter            
+            // Map to global router for default command handling
             MapTo(Router.Default);
         }
 
@@ -76,70 +102,67 @@ namespace CycloneGames.Cheat.Sample
             UnmapRoutes();
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void Update()
         {
-            // --- F1-F3: Publish to the GLOBAL Router (Router.Default) ---
+            // F1-F3: Global Router commands
             if (Input.GetKeyDown(KeyCode.F1))
             {
                 Debug.Log("<b>[Input]</b> Publishing 'Protocol_Simple' to <b>Router.Default</b>");
-                CheatCommandUtility.PublishCheatCommand("Protocol_Simple").Forget();
+                CheatCommandUtility.PublishCheatCommand(CMD_PROTOCOL_SIMPLE).Forget();
             }
-            if (Input.GetKeyDown(KeyCode.F2))
+            else if (Input.GetKeyDown(KeyCode.F2))
             {
                 Debug.Log("<b>[Input]</b> Publishing 'Protocol_LongRunningTask' to <b>Router.Default</b>");
-                CheatCommandUtility.PublishCheatCommand("Protocol_LongRunningTask").Forget();
+                CheatCommandUtility.PublishCheatCommand(CMD_PROTOCOL_LONG_RUNNING).Forget();
             }
-            if (Input.GetKeyDown(KeyCode.F3))
+            else if (Input.GetKeyDown(KeyCode.F3))
             {
                 Debug.Log("<b>[Input]</b> Cancelling 'Protocol_LongRunningTask' on <b>Router.Default</b>");
-                CheatCommandUtility.CancelCheatCommand("Protocol_LongRunningTask");
+                CheatCommandUtility.CancelCheatCommand(CMD_PROTOCOL_LONG_RUNNING);
             }
-
-            // --- F5-F6: Publish to the UI Router ---
-            if (Input.GetKeyDown(KeyCode.F5))
+            // F5-F6: UI Router commands
+            else if (Input.GetKeyDown(KeyCode.F5))
             {
                 Debug.Log("<b>[Input]</b> Publishing 'UI_ShowPopup' to <b>UIRouter</b>");
-                CheatCommandUtility.PublishCheatCommand("UI_ShowPopup", routerContext.UIRouter).Forget();
+                CheatCommandUtility.PublishCheatCommand(CMD_UI_SHOW_POPUP, routerContext.UIRouter).Forget();
             }
-            if (Input.GetKeyDown(KeyCode.F6))
+            else if (Input.GetKeyDown(KeyCode.F6))
             {
                 Debug.Log("<b>[Input]</b> Publishing 'UI_HidePopup' to <b>UIRouter</b>");
-                CheatCommandUtility.PublishCheatCommand("UI_HidePopup", routerContext.UIRouter).Forget();
+                CheatCommandUtility.PublishCheatCommand(CMD_UI_HIDE_POPUP, routerContext.UIRouter).Forget();
             }
-
-            // --- F7-F8: Publish to the Gameplay Router ---
-            if (Input.GetKeyDown(KeyCode.F7))
+            // F7-F8: Gameplay Router commands
+            else if (Input.GetKeyDown(KeyCode.F7))
             {
                 Debug.Log("<b>[Input]</b> Publishing 'Player_Jump' to <b>GameplayRouter</b>");
                 var jumpData = new GameData(Vector3.up * 5, Vector3.zero);
-                CheatCommandUtility.PublishCheatCommand("Player_Jump", jumpData, routerContext.GameplayRouter).Forget();
+                CheatCommandUtility.PublishCheatCommand(CMD_PLAYER_JUMP, jumpData, routerContext.GameplayRouter).Forget();
             }
-            if (Input.GetKeyDown(KeyCode.F8))
+            else if (Input.GetKeyDown(KeyCode.F8))
             {
                 Debug.Log("<b>[Input]</b> Publishing 'Enemy_Spawn' to <b>GameplayRouter</b>");
                 var spawnData = new GameData(new Vector3(10, 0, 10), Vector3.forward);
-                CheatCommandUtility.PublishCheatCommand("Enemy_Spawn", spawnData, routerContext.GameplayRouter).Forget();
+                CheatCommandUtility.PublishCheatCommand(CMD_ENEMY_SPAWN, spawnData, routerContext.GameplayRouter).Forget();
             }
-
-            // --- F9: Publish a class type command ---
-            if (Input.GetKeyDown(KeyCode.F9))
+            // F9-F10: Additional examples
+            else if (Input.GetKeyDown(KeyCode.F9))
             {
                 Debug.Log("<b>[Input]</b> Publishing class-type command 'Log_Message' to <b>Router.Default</b>");
-                CheatCommandUtility.PublishCheatCommandWithClass("Log_Message", "Hello from a class-type command!").Forget();
-            }          
-            if (Input.GetKeyDown(KeyCode.F10))
+                CheatCommandUtility.PublishCheatCommandWithClass(CMD_LOG_MESSAGE, "Hello from a class-type command!").Forget();
+            }
+            else if (Input.GetKeyDown(KeyCode.F10))
             {
                 Debug.Log("<b>[Input]</b> Publishing 'Global_GameData' to <b>Router.Default</b>");
                 var data = new GameData(Vector3.one, Vector3.forward);
-                CheatCommandUtility.PublishCheatCommand("Global_GameData", data).Forget();
+                CheatCommandUtility.PublishCheatCommand(CMD_GLOBAL_GAMEDATA, data).Forget();
             }
         }
-
-        // --- Routes that were previously in CheatSampleGameLogic ---
 
         [Route]
         async UniTask OnGlobalCommand(CheatCommand cmd, CancellationToken ct)
         {
+            // Use switch for better performance than if-else chain
             switch (cmd.CommandID)
             {
                 case "Protocol_Simple":
@@ -163,9 +186,10 @@ namespace CycloneGames.Cheat.Sample
         [Route]
         void OnGlobalDataCommand(CheatCommand<GameData> cmd)
         {
-            if (cmd.CommandID == CheatSampleBenchmark.BENCHMARK_COMMAND)
+            // Skip logging for benchmark commands to avoid GC allocation
+            if (cmd.CommandID == CheatSampleBenchmark.BENCHMARK_COMMAND ||
+                cmd.CommandID == CheatSampleBenchmark.WARMUP_COMMAND)
             {
-                //  No logging to avoid GC allocation during benchmark
                 return;
             }
             Debug.Log($"<color=green>[MultiRouterSampleRunner:Global] Received GameData command '{cmd.CommandID}'.</color>");
