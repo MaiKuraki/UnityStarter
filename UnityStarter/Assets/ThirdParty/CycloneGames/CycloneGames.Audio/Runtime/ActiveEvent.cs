@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using System.Collections;
@@ -59,6 +59,7 @@ namespace CycloneGames.Audio.Runtime
         
         // Cached reference to the main camera to avoid repeated calls to Camera.main, which can impact performance.
         private static Camera mainCamera;
+        private static int mainCameraCacheFrame = -1;
 
         /// <summary>
         /// The name of the audio event to be played
@@ -249,7 +250,9 @@ namespace CycloneGames.Audio.Runtime
             if (this.emitterTransform != null)
             {
                 Vector3 newPos = this.emitterTransform.position;
-                if ((newPos - this.lastEmitterPos).sqrMagnitude > 0.000001f)
+                // Use sqrMagnitude comparison to avoid sqrt calculation
+                Vector3 delta = newPos - this.lastEmitterPos;
+                if (delta.sqrMagnitude > 0.000001f) // 0.001mm threshold
                 {
                     SetAllSourcePositions(newPos);
                     this.lastEmitterPos = newPos;
@@ -337,9 +340,11 @@ namespace CycloneGames.Audio.Runtime
         public void SetLocalParameter(AudioParameter localParameter, float newValue)
         {
             bool hasParameter = false;
-            for (int i = 0; i < this.activeParameters.Length; i++)
+            ActiveParameter tempParameter;
+            int paramCount = this.activeParameters.Length;
+            for (int i = 0; i < paramCount; i++)
             {
-                ActiveParameter tempParameter = this.activeParameters[i];
+                tempParameter = this.activeParameters[i];
                 if (tempParameter.rootParameter.parameter == localParameter)
                 {
                     hasParameter = true;
@@ -484,12 +489,12 @@ namespace CycloneGames.Audio.Runtime
             this.useGaze = HasGazeProperty();
             if (this.useGaze)
             {
-                if (mainCamera == null)
+                UpdateMainCameraCache();
+                if (mainCamera != null)
                 {
-                    mainCamera = Camera.main;
+                    this.gazeReference = mainCamera.transform;
+                    UpdateGaze();
                 }
-                this.gazeReference = mainCamera.transform;
-                UpdateGaze();
             }
 
             ApplyParameters();
@@ -503,28 +508,47 @@ namespace CycloneGames.Audio.Runtime
 
         private void SetallSourceVolumes(float newVolume)
         {
-            for (int i = 0; i < this.sources.Count; i++)
+            int count = this.sources.Count;
+            EventSource eventSource;
+            for (int i = 0; i < count; i++)
             {
-                this.sources[i].source.volume = newVolume;
+                eventSource = this.sources[i];
+                if (eventSource != null && eventSource.source != null)
+                {
+                    eventSource.source.volume = newVolume;
+                }
             }
         }
 
         private void SetAllSourcePitches(float newPitch)
         {
-            for (int i = 0; i < this.sources.Count; i++)
+            int count = this.sources.Count;
+            EventSource eventSource;
+            for (int i = 0; i < count; i++)
             {
-                this.sources[i].source.pitch = newPitch;
+                eventSource = this.sources[i];
+                if (eventSource != null && eventSource.source != null)
+                {
+                    eventSource.source.pitch = newPitch;
+                }
             }
         }
 
         private void PlayAllSources()
         {
-            for (int i = 0; i < this.sources.Count; i++)
+            int count = this.sources.Count;
+            bool useScheduled = this.scheduledDspTime > 0;
+            EventSource eventSource;
+            
+            for (int i = 0; i < count; i++)
             {
-                EventSource eventSource = this.sources[i];
-                if (this.scheduledDspTime > 0)
+                eventSource = this.sources[i];
+                if (eventSource == null || eventSource.source == null) continue;
+                
+                if (useScheduled)
                 {
-                    eventSource.source.PlayScheduled(this.scheduledDspTime + eventSource.startTime);
+                    double playTime = this.scheduledDspTime + eventSource.startTime;
+                    eventSource.source.PlayScheduled(playTime);
                 }
                 else
                 {
@@ -540,9 +564,11 @@ namespace CycloneGames.Audio.Runtime
 
         private void StopAllSources()
         {
-            for (int i = 0; i < this.sources.Count; i++)
+            int count = this.sources.Count;
+            EventSource tempSource;
+            for (int i = 0; i < count; i++)
             {
-                EventSource tempSource = this.sources[i];
+                tempSource = this.sources[i];
                 if (tempSource != null && tempSource.source != null)
                 {
                     tempSource.source.Stop();
@@ -554,17 +580,27 @@ namespace CycloneGames.Audio.Runtime
 
         public void SetAllSourcePositions(Vector3 position)
         {
-            for (int i = 0; i < this.sources.Count; i++)
+            int count = this.sources.Count;
+            EventSource eventSource;
+            for (int i = 0; i < count; i++)
             {
-                this.sources[i].source.transform.position = position;
+                eventSource = this.sources[i];
+                if (eventSource != null && eventSource.source != null && eventSource.source.transform != null)
+                {
+                    eventSource.source.transform.position = position;
+                }
             }
         }
 
         private bool IsAnySourcePlaying()
         {
-            for (int i = 0; i < this.sources.Count; i++)
+            // Early exit optimization: check sources in reverse order for better cache locality
+            int count = this.sources.Count;
+            EventSource eventSource;
+            for (int i = count - 1; i >= 0; i--)
             {
-                if (this.sources[i].source.isPlaying)
+                eventSource = this.sources[i];
+                if (eventSource != null && eventSource.source != null && eventSource.source.isPlaying)
                 {
                     return true;
                 }
@@ -594,9 +630,15 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         private void UpdateParameters()
         {
-            for (int i = 0; i < this.activeParameters.Length; i++)
+            int paramCount = this.activeParameters.Length;
+            AudioEventParameter tempParam;
+            ActiveParameter activeParam;
+            for (int i = 0; i < paramCount; i++)
             {
-                AudioEventParameter tempParam = this.activeParameters[i].rootParameter;
+                activeParam = this.activeParameters[i];
+                if (activeParam == null) continue;
+                
+                tempParam = activeParam.rootParameter;
                 if (tempParam == null || tempParam.parameter == null)
                 {
                     continue;
@@ -614,11 +656,40 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         private void ApplyParameters()
         {
+            if (this.activeParameters == null || this.activeParameters.Length == 0)
+            {
+                // No parameters, apply base values directly
+                int sourceCount = this.sources.Count;
+                EventSource tempSource;
+                for (int i = 0; i < sourceCount; i++)
+                {
+                    tempSource = this.sources[i];
+                    if (tempSource != null && tempSource.source != null)
+                    {
+                        if (tempSource.parameter != null && tempSource.responseCurve != null)
+                        {
+                            float volumeScale = tempSource.responseCurve.Evaluate(tempSource.parameter.CurrentValue);
+                            tempSource.source.volume = this.eventVolume * volumeScale;
+                        }
+                        else
+                        {
+                            tempSource.source.volume = this.eventVolume;
+                        }
+                        tempSource.source.pitch = this.eventPitch;
+                    }
+                }
+                return;
+            }
+
             float tempVolume = this.eventVolume;
             float tempPitch = this.eventPitch;
-            for (int i = 0; i < this.activeParameters.Length; i++)
+            int paramCount = this.activeParameters.Length;
+            ActiveParameter tempParameter;
+            for (int i = 0; i < paramCount; i++)
             {
-                ActiveParameter tempParameter = this.activeParameters[i];
+                tempParameter = this.activeParameters[i];
+                if (tempParameter?.rootParameter == null) continue;
+                
                 switch (tempParameter.rootParameter.paramType)
                 {
                     case ParameterType.Volume:
@@ -630,15 +701,19 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
 
-            for (int i = 0; i < this.sources.Count; i++)
+            int sourceCount2 = this.sources.Count;
+            EventSource tempSource2;
+            for (int i = 0; i < sourceCount2; i++)
             {
-                EventSource tempSource = this.sources[i];
-                tempSource.source.volume = tempVolume;
-                tempSource.source.pitch = tempPitch;
-                if (tempSource.parameter != null)
+                tempSource2 = this.sources[i];
+                if (tempSource2 == null || tempSource2.source == null) continue;
+                
+                tempSource2.source.volume = tempVolume;
+                tempSource2.source.pitch = tempPitch;
+                if (tempSource2.parameter != null && tempSource2.responseCurve != null)
                 {
-                    float volumeScale = tempSource.responseCurve.Evaluate(tempSource.parameter.CurrentValue);
-                    tempSource.source.volume = this.eventVolume * volumeScale;
+                    float volumeScale = tempSource2.responseCurve.Evaluate(tempSource2.parameter.CurrentValue);
+                    tempSource2.source.volume = this.eventVolume * volumeScale;
                 }
             }
         }
@@ -648,27 +723,37 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         private void UpdateFade(float dt)
         {
-            float percentageFaded = (this.currentFadeTime / this.targetFadeTime);
-
-            if (this.targetVolume > this.fadeOriginVolume)
-            {
-                this.eventVolume = this.fadeOriginVolume + ((this.targetVolume - this.fadeOriginVolume) * percentageFaded);
-            }
-            else
-            {
-                this.eventVolume = this.fadeOriginVolume - ((this.fadeOriginVolume - this.targetVolume) * percentageFaded);
-            }
-
-            this.currentFadeTime += dt;
-
-            if (this.currentFadeTime >= this.targetFadeTime)
+            // Avoid division by zero
+            if (this.targetFadeTime <= 0.0001f)
             {
                 this.eventVolume = this.targetVolume;
-
+                SetallSourceVolumes(this.eventVolume);
                 if (this.fadeStopQueued)
                 {
                     StopImmediate();
                 }
+                return;
+            }
+
+            this.currentFadeTime += dt;
+            float percentageFaded = this.currentFadeTime / this.targetFadeTime;
+
+            if (percentageFaded >= 1.0f)
+            {
+                this.eventVolume = this.targetVolume;
+                this.currentFadeTime = this.targetFadeTime;
+
+                if (this.fadeStopQueued)
+                {
+                    StopImmediate();
+                    return;
+                }
+            }
+            else
+            {
+                // Linear interpolation optimized for performance
+                float volumeDelta = this.targetVolume - this.fadeOriginVolume;
+                this.eventVolume = this.fadeOriginVolume + (volumeDelta * percentageFaded);
             }
 
             SetallSourceVolumes(this.eventVolume);
@@ -731,8 +816,21 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
+            if (this.sources.Count == 0)
+            {
+                return;
+            }
+
             AudioSource mainSource = this.sources[0].source;
-            if (mainSource == null || mainSource.clip == null || mainSource.clip.length <= 0)
+            if (mainSource == null || mainSource.clip == null)
+            {
+                StopImmediate();
+                return;
+            }
+
+            // Cache clip length to avoid repeated property access
+            float clipLength = mainSource.clip.length;
+            if (clipLength <= 0)
             {
                 StopImmediate();
                 return;
@@ -744,12 +842,23 @@ namespace CycloneGames.Audio.Runtime
             }
             else
             {
-                this.EstimatedRemainingTime = (mainSource.clip.length - mainSource.time) / mainSource.pitch;
+                float currentTime = mainSource.time;
+                float pitch = mainSource.pitch;
+                // Avoid division by zero
+                if (pitch > 0.001f)
+                {
+                    this.EstimatedRemainingTime = (clipLength - currentTime) / pitch;
+                }
+                else
+                {
+                    this.EstimatedRemainingTime = clipLength;
+                }
             }
 
             if (this.hasTimeAdvanced && mainSource.time == 0)
             {
                 StopImmediate();
+                return;
             }
 
             if (this.EstimatedRemainingTime <= this.rootEvent.FadeOut)
@@ -795,10 +904,7 @@ namespace CycloneGames.Audio.Runtime
 
             if (this.gazeReference == null)
             {
-                if (mainCamera == null)
-                {
-                    mainCamera = Camera.main;
-                }
+                UpdateMainCameraCache();
                 if (mainCamera != null)
                 {
                     this.gazeReference = mainCamera.transform;
@@ -814,13 +920,25 @@ namespace CycloneGames.Audio.Runtime
             Vector3 posDelta = this.gazeReference.position - mainSource.transform.position;
             float gazeAngle = Mathf.Abs(180 - Vector3.Angle(this.gazeReference.forward, posDelta));
 
-            for (int i = 0; i < this.activeParameters.Length; i++)
+            int paramCount = this.activeParameters.Length;
+            ActiveParameter tempParameter;
+            for (int i = 0; i < paramCount; i++)
             {
-                ActiveParameter tempParameter = this.activeParameters[i];
+                tempParameter = this.activeParameters[i];
                 if (tempParameter.rootParameter.parameter.UseGaze)
                 {
                     tempParameter.CurrentValue = gazeAngle;
                 }
+            }
+        }
+
+        private static void UpdateMainCameraCache()
+        {
+            int currentFrame = Time.frameCount;
+            if (mainCamera == null || mainCamera.gameObject == null || mainCameraCacheFrame != currentFrame)
+            {
+                mainCamera = Camera.main;
+                mainCameraCacheFrame = currentFrame;
             }
         }
 
@@ -839,14 +957,16 @@ namespace CycloneGames.Audio.Runtime
 
             if (!toggle)
             {
-                for (int i = 0; i < this.activeParameters.Length; i++)
+            int paramCount = this.activeParameters.Length;
+            ActiveParameter tempParameter;
+            for (int i = 0; i < paramCount; i++)
+            {
+                tempParameter = this.activeParameters[i];
+                if (tempParameter.rootParameter.parameter == gazeParameter)
                 {
-                    ActiveParameter tempParameter = this.activeParameters[i];
-                    if (tempParameter.rootParameter.parameter == gazeParameter)
-                    {
-                        tempParameter.Reset();
-                    }
+                    tempParameter.Reset();
                 }
+            }
             }
         }
 
@@ -865,9 +985,15 @@ namespace CycloneGames.Audio.Runtime
         public void SetMute(bool toggle)
         {
             this.Muted = toggle;
-            for (int i = 0; i < this.sources.Count; i++)
+            int count = this.sources.Count;
+            EventSource eventSource;
+            for (int i = 0; i < count; i++)
             {
-                this.sources[i].source.mute = toggle;
+                eventSource = this.sources[i];
+                if (eventSource != null && eventSource.source != null)
+                {
+                    eventSource.source.mute = toggle;
+                }
             }
         }
 
@@ -943,7 +1069,7 @@ namespace CycloneGames.Audio.Runtime
     }
     public class EventSource
     {
-        public AudioSource source = new AudioSource();
+        public AudioSource source = null;
         public AudioParameter parameter = null;
         public AnimationCurve responseCurve = null;
         public float startTime = 0;

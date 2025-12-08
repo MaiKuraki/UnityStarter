@@ -4,10 +4,8 @@
     "references": [
         "UniTask",
         "VYaml.Core",
-        "Unity.Addressables",
-        "Unity.ResourceManager",
-        "Unity.RenderPipelines.Universal.Runtime",
-        "CycloneGames.Logger"
+        "CycloneGames.Logger",
+        "Unity.RenderPipelines.Universal.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
