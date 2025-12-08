@@ -40,6 +40,16 @@ namespace CycloneGames.Audio.Editor
         /// The rectangle defining the space where the parameters are drawn
         /// </summary>
         private Rect parameterListRect = new Rect(0, 20, 300, 400);
+        
+        /// <summary>
+        /// Number of columns for parameter grid layout
+        /// </summary>
+        private int parameterGridColumns = 2;
+        
+        /// <summary>
+        /// Number of columns for switch grid layout
+        /// </summary>
+        private int switchGridColumns = 2;
         /// <summary>
         /// Current position of the scroll box for the list of AudioEvents
         /// </summary>
@@ -285,6 +295,17 @@ namespace CycloneGames.Audio.Editor
                 return;
             }
 
+            // Check for duplicate names and show warning
+            if (this.audioBank.EditorEvents != null)
+            {
+                var duplicates = AudioManager.ValidateBankForDuplicateNames(this.audioBank);
+                if (duplicates.Count > 0)
+                {
+                    EditorGUILayout.HelpBox($"⚠ {duplicates.Count} duplicate event name(s) detected. Only the first event of each name will be accessible via PlayEvent(string).", 
+                        MessageType.Warning);
+                }
+            }
+
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Add Event"))
             {
@@ -301,9 +322,26 @@ namespace CycloneGames.Audio.Editor
 
             if (this.audioBank.EditorEvents != null)
             {
-                for (int i = 0; i < this.audioBank.EditorEvents.Count; i++)
+                // Build duplicate name set for fast lookup
+                Dictionary<string, int> nameCounts = new Dictionary<string, int>();
+                AudioEvent tempEvent;
+                int eventCount = this.audioBank.EditorEvents.Count;
+                for (int i = 0; i < eventCount; i++)
                 {
-                    AudioEvent tempEvent = this.audioBank.EditorEvents[i];
+                    tempEvent = this.audioBank.EditorEvents[i];
+                    if (tempEvent != null && !string.IsNullOrEmpty(tempEvent.name))
+                    {
+                        if (!nameCounts.ContainsKey(tempEvent.name))
+                        {
+                            nameCounts[tempEvent.name] = 0;
+                        }
+                        nameCounts[tempEvent.name]++;
+                    }
+                }
+
+                for (int i = 0; i < eventCount; i++)
+                {
+                    tempEvent = this.audioBank.EditorEvents[i];
                     if (tempEvent == null)
                     {
                         continue;
@@ -318,11 +356,28 @@ namespace CycloneGames.Audio.Editor
                         GUI.color = this.unselectedButton;
                     }
 
-                    if (GUILayout.Button(tempEvent.name))
+                    // Show warning icon for duplicate names
+                    string displayName = tempEvent.name;
+                    bool isDuplicate = !string.IsNullOrEmpty(tempEvent.name) && 
+                                       nameCounts.TryGetValue(tempEvent.name, out int count) && 
+                                       count > 1;
+                    
+                    EditorGUILayout.BeginHorizontal();
+                    if (isDuplicate)
+                    {
+                        EditorGUILayout.LabelField("⚠", GUILayout.Width(20));
+                    }
+                    else
+                    {
+                        EditorGUILayout.LabelField("", GUILayout.Width(20));
+                    }
+                    
+                    if (GUILayout.Button(displayName, GUILayout.ExpandWidth(true)))
                     {
                         GUI.FocusControl(null);
                         SelectEvent(tempEvent);
                     }
+                    EditorGUILayout.EndHorizontal();
 
                     GUI.color = Color.white;
                 }
@@ -336,90 +391,293 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private void DrawParameterList()
         {
-            this.parameterListRect.height = this.position.height / 2;
-            GUILayout.BeginArea(this.parameterListRect);
-            this.parameterListScrollPosition = EditorGUILayout.BeginScrollView(this.parameterListScrollPosition);
-
             if (this.audioBank == null)
             {
-                EditorGUILayout.EndScrollView();
-                GUILayout.EndArea();
+                EditorGUILayout.HelpBox("No AudioBank selected.", MessageType.Info);
                 return;
             }
 
-            if (GUILayout.Button("Add Parameter"))
+            // Header with controls
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            if (GUILayout.Button("Add Parameter", EditorStyles.toolbarButton))
             {
                 this.audioBank.AddParameter();
             }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.LabelField("Columns:", GUILayout.Width(60));
+            this.parameterGridColumns = EditorGUILayout.IntSlider(this.parameterGridColumns, 1, 4, GUILayout.Width(150));
+            EditorGUILayout.EndHorizontal();
 
-            if (this.audioBank.EditorParameters != null)
+            EditorGUILayout.Space();
+
+            // Scrollable parameter list
+            this.parameterListScrollPosition = EditorGUILayout.BeginScrollView(this.parameterListScrollPosition, GUILayout.ExpandHeight(true));
+
+            if (this.audioBank.EditorParameters == null || this.audioBank.EditorParameters.Count == 0)
             {
-                for (int i = 0; i < this.audioBank.EditorParameters.Count; i++)
-                {
-                    AudioParameter tempParameter = this.audioBank.EditorParameters[i];
-                    if (tempParameter == null)
-                    {
-                        continue;
-                    }
+                EditorGUILayout.HelpBox("No parameters. Click 'Add Parameter' to create one.", MessageType.Info);
+                EditorGUILayout.EndScrollView();
+                return;
+            }
 
-                    if (tempParameter.DrawParameterEditor())
+            // Grid layout for parameters
+            if (this.parameterGridColumns > 1)
+            {
+                DrawParameterGrid();
+            }
+            else
+            {
+                DrawParameterSingleColumn();
+            }
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        /// <summary>
+        /// Draw parameters in a single column list layout
+        /// </summary>
+        private void DrawParameterSingleColumn()
+        {
+            AudioParameter tempParameter;
+            int paramCount = this.audioBank.EditorParameters.Count;
+            for (int i = 0; i < paramCount; i++)
+            {
+                tempParameter = this.audioBank.EditorParameters[i];
+                if (tempParameter == null)
+                {
+                    continue;
+                }
+
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                if (tempParameter.DrawParameterEditor())
+                {
+                    EditorUtility.SetDirty(this.audioBank);
+                    AssetDatabase.SaveAssets();
+                }
+                if (GUILayout.Button("Delete Parameter"))
+                {
+                    this.audioBank.DeleteParameter(tempParameter);
+                    EditorGUILayout.EndVertical();
+                    break; // Exit loop as collection was modified
+                }
+                EditorGUILayout.EndVertical();
+                EditorGUILayout.Space(5);
+            }
+        }
+
+        /// <summary>
+        /// Draw parameters in a grid layout
+        /// </summary>
+        private void DrawParameterGrid()
+        {
+            AudioParameter tempParameter;
+            int paramCount = this.audioBank.EditorParameters.Count;
+            int currentColumn = 0;
+            
+            // Calculate column width based on window width and number of columns
+            // Account for scrollbar (20px) and padding (20px total)
+            float availableWidth = this.position.width - 40;
+            float columnWidth = (availableWidth / this.parameterGridColumns) - 10; // 10px spacing between columns
+            columnWidth = Mathf.Max(columnWidth, 200f); // Minimum width of 200px per column
+
+            for (int i = 0; i < paramCount; i++)
+            {
+                tempParameter = this.audioBank.EditorParameters[i];
+                if (tempParameter == null)
+                {
+                    continue;
+                }
+
+                // Start new row
+                if (currentColumn == 0)
+                {
+                    EditorGUILayout.BeginHorizontal();
+                }
+
+                // Draw parameter in a fixed-width box
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(columnWidth));
+                if (tempParameter.DrawParameterEditor())
+                {
+                    EditorUtility.SetDirty(this.audioBank);
+                    AssetDatabase.SaveAssets();
+                }
+                if (GUILayout.Button("Delete Parameter"))
+                {
+                    this.audioBank.DeleteParameter(tempParameter);
+                    EditorGUILayout.EndVertical();
+                    if (currentColumn > 0)
                     {
-                        EditorUtility.SetDirty(this.audioBank);
-                        AssetDatabase.SaveAssets();
+                        EditorGUILayout.EndHorizontal();
                     }
-                    if (GUILayout.Button("Delete Parameter"))
-                    {
-                        this.audioBank.DeleteParameter(tempParameter);
-                    }
-                    EditorGUILayout.Separator();
+                    break; // Exit loop as collection was modified
+                }
+                EditorGUILayout.EndVertical();
+
+                currentColumn++;
+                if (currentColumn >= this.parameterGridColumns)
+                {
+                    EditorGUILayout.EndHorizontal();
+                    EditorGUILayout.Space(5);
+                    currentColumn = 0;
                 }
             }
-            EditorGUILayout.EndScrollView();
-            GUILayout.EndArea();
+
+            // Close remaining row if not complete
+            if (currentColumn > 0)
+            {
+                // Fill remaining columns with empty space to maintain grid alignment
+                while (currentColumn < this.parameterGridColumns)
+                {
+                    GUILayout.Space(columnWidth);
+                    currentColumn++;
+                }
+                EditorGUILayout.EndHorizontal();
+            }
         }
 
         private void DrawSwitchList()
         {
-            this.parameterListRect.height = this.position.height / 2;
-            GUILayout.BeginArea(this.parameterListRect);
-            this.parameterListScrollPosition = EditorGUILayout.BeginScrollView(this.parameterListScrollPosition);
-
             if (this.audioBank == null)
             {
-                EditorGUILayout.EndScrollView();
-                GUILayout.EndArea();
+                EditorGUILayout.HelpBox("No AudioBank selected.", MessageType.Info);
                 return;
             }
 
-            if (GUILayout.Button("Add Switch"))
+            // Header with controls
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            if (GUILayout.Button("Add Switch", EditorStyles.toolbarButton))
             {
                 this.audioBank.AddSwitch();
             }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.LabelField("Columns:", GUILayout.Width(60));
+            this.switchGridColumns = EditorGUILayout.IntSlider(this.switchGridColumns, 1, 4, GUILayout.Width(150));
+            EditorGUILayout.EndHorizontal();
 
-            if (this.audioBank.EditorSwitches != null)
+            EditorGUILayout.Space();
+
+            // Scrollable switch list
+            this.parameterListScrollPosition = EditorGUILayout.BeginScrollView(this.parameterListScrollPosition, GUILayout.ExpandHeight(true));
+
+            if (this.audioBank.EditorSwitches == null || this.audioBank.EditorSwitches.Count == 0)
             {
-                for (int i = 0; i < this.audioBank.EditorSwitches.Count; i++)
-                {
-                    AudioSwitch tempSwitch = this.audioBank.EditorSwitches[i];
-                    if (tempSwitch == null)
-                    {
-                        continue;
-                    }
+                EditorGUILayout.HelpBox("No switches. Click 'Add Switch' to create one.", MessageType.Info);
+                EditorGUILayout.EndScrollView();
+                return;
+            }
 
-                    if (tempSwitch.DrawSwitchEditor())
+            // Grid layout for switches
+            if (this.switchGridColumns > 1)
+            {
+                DrawSwitchGrid();
+            }
+            else
+            {
+                DrawSwitchSingleColumn();
+            }
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        /// <summary>
+        /// Draw switches in a single column list layout
+        /// </summary>
+        private void DrawSwitchSingleColumn()
+        {
+            AudioSwitch tempSwitch;
+            int switchCount = this.audioBank.EditorSwitches.Count;
+            for (int i = 0; i < switchCount; i++)
+            {
+                tempSwitch = this.audioBank.EditorSwitches[i];
+                if (tempSwitch == null)
+                {
+                    continue;
+                }
+
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                if (tempSwitch.DrawSwitchEditor())
+                {
+                    EditorUtility.SetDirty(this.audioBank);
+                    AssetDatabase.SaveAssets();
+                }
+                if (GUILayout.Button("Delete Switch"))
+                {
+                    this.audioBank.DeleteSwitch(tempSwitch);
+                    EditorGUILayout.EndVertical();
+                    break; // Exit loop as collection was modified
+                }
+                EditorGUILayout.EndVertical();
+                EditorGUILayout.Space(5);
+            }
+        }
+
+        /// <summary>
+        /// Draw switches in a grid layout
+        /// </summary>
+        private void DrawSwitchGrid()
+        {
+            AudioSwitch tempSwitch;
+            int switchCount = this.audioBank.EditorSwitches.Count;
+            int currentColumn = 0;
+            
+            // Calculate column width based on window width and number of columns
+            float availableWidth = this.position.width - 40;
+            float columnWidth = (availableWidth / this.switchGridColumns) - 10; // 10px spacing between columns
+            columnWidth = Mathf.Max(columnWidth, 200f); // Minimum width of 200px per column
+
+            for (int i = 0; i < switchCount; i++)
+            {
+                tempSwitch = this.audioBank.EditorSwitches[i];
+                if (tempSwitch == null)
+                {
+                    continue;
+                }
+
+                // Start new row
+                if (currentColumn == 0)
+                {
+                    EditorGUILayout.BeginHorizontal();
+                }
+
+                // Draw switch in a fixed-width box
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(columnWidth));
+                if (tempSwitch.DrawSwitchEditor())
+                {
+                    EditorUtility.SetDirty(this.audioBank);
+                    AssetDatabase.SaveAssets();
+                }
+                if (GUILayout.Button("Delete Switch"))
+                {
+                    this.audioBank.DeleteSwitch(tempSwitch);
+                    EditorGUILayout.EndVertical();
+                    if (currentColumn > 0)
                     {
-                        EditorUtility.SetDirty(this.audioBank);
-                        AssetDatabase.SaveAssets();
+                        EditorGUILayout.EndHorizontal();
                     }
-                    if (GUILayout.Button("Delete Switch"))
-                    {
-                        this.audioBank.DeleteSwitch(tempSwitch);
-                    }
-                    EditorGUILayout.Separator();
+                    break; // Exit loop as collection was modified
+                }
+                EditorGUILayout.EndVertical();
+
+                currentColumn++;
+                if (currentColumn >= this.switchGridColumns)
+                {
+                    EditorGUILayout.EndHorizontal();
+                    EditorGUILayout.Space(5);
+                    currentColumn = 0;
                 }
             }
-            EditorGUILayout.EndScrollView();
-            GUILayout.EndArea();
+
+            // Close remaining row if not complete
+            if (currentColumn > 0)
+            {
+                // Fill remaining columns with empty space to maintain grid alignment
+                while (currentColumn < this.switchGridColumns)
+                {
+                    GUILayout.Space(columnWidth);
+                    currentColumn++;
+                }
+                EditorGUILayout.EndHorizontal();
+            }
         }
 
         /// <summary>
@@ -521,6 +779,29 @@ namespace CycloneGames.Audio.Editor
             EditorGUI.BeginChangeCheck();
 
             string newName = EditorGUILayout.TextField("Event Name", audioEvent.name);
+            
+            // Check for duplicate names within the same bank
+            if (!string.IsNullOrEmpty(newName) && this.audioBank != null && this.audioBank.EditorEvents != null)
+            {
+                int duplicateCount = 0;
+                AudioEvent duplicateEvent;
+                int eventCount = this.audioBank.EditorEvents.Count;
+                for (int i = 0; i < eventCount; i++)
+                {
+                    duplicateEvent = this.audioBank.EditorEvents[i];
+                    if (duplicateEvent != null && duplicateEvent != audioEvent && duplicateEvent.name == newName)
+                    {
+                        duplicateCount++;
+                    }
+                }
+
+                if (duplicateCount > 0)
+                {
+                    EditorGUILayout.HelpBox($"⚠ Warning: {duplicateCount} other event(s) in this bank have the same name. " +
+                        $"Only the first one will be accessible via PlayEvent(string).", MessageType.Warning);
+                }
+            }
+
             int newInstanceLimit = EditorGUILayout.IntField("Instance limit", audioEvent.InstanceLimit);
             float newFadeIn = EditorGUILayout.FloatField("Fade In", audioEvent.FadeIn);
             float newFadeOut = EditorGUILayout.FloatField("Fade Out", audioEvent.FadeOut);
@@ -720,6 +1001,38 @@ namespace CycloneGames.Audio.Editor
         private void AddEvent()
         {
             AudioEvent newEvent = this.audioBank.AddEvent(new Vector2((CANVAS_SIZE - 200) / 2, (CANVAS_SIZE - 180) / 2));
+            
+            // Generate unique name to avoid duplicates
+            string baseName = "New Audio Event";
+            string uniqueName = baseName;
+            int counter = 1;
+            
+            if (this.audioBank.EditorEvents != null)
+            {
+                HashSet<string> existingNames = new HashSet<string>();
+                AudioEvent existingEvent;
+                int eventCount = this.audioBank.EditorEvents.Count;
+                for (int i = 0; i < eventCount; i++)
+                {
+                    existingEvent = this.audioBank.EditorEvents[i];
+                    if (existingEvent != null && existingEvent != newEvent && !string.IsNullOrEmpty(existingEvent.name))
+                    {
+                        existingNames.Add(existingEvent.name);
+                    }
+                }
+                
+                while (existingNames.Contains(uniqueName))
+                {
+                    uniqueName = $"{baseName} {counter}";
+                    counter++;
+                }
+            }
+            
+            newEvent.name = uniqueName;
+            EditorUtility.SetDirty(newEvent);
+            EditorUtility.SetDirty(this.audioBank);
+            AssetDatabase.SaveAssets();
+            
             SelectEvent(newEvent);
         }
 
@@ -1317,6 +1630,23 @@ namespace CycloneGames.Audio.Editor
         /// <param name="clips">The list of AudioClips to add</param>
         private void AddEvents(List<AudioClip> clips)
         {
+            // Build set of existing names to avoid duplicates
+            HashSet<string> existingNames = new HashSet<string>();
+            if (this.audioBank.EditorEvents != null)
+            {
+                AudioEvent existingEvent;
+                int eventCount = this.audioBank.EditorEvents.Count;
+                for (int i = 0; i < eventCount; i++)
+                {
+                    existingEvent = this.audioBank.EditorEvents[i];
+                    if (existingEvent != null && !string.IsNullOrEmpty(existingEvent.name))
+                    {
+                        existingNames.Add(existingEvent.name);
+                    }
+                }
+            }
+
+            int duplicateCount = 0;
             for (int i = 0; i < clips.Count; i++)
             {
                 AudioEvent newEvent = this.audioBank.AddEvent(new Vector2(CANVAS_SIZE / 2, CANVAS_SIZE / 2));
@@ -1327,11 +1657,31 @@ namespace CycloneGames.Audio.Editor
                 tempNode.InitializeNode(position);
                 tempNode.File = clips[i];
                 newEvent.AddNode(tempNode);
-                newEvent.name = clips[i].name;
+                
+                // Generate unique name if clip name already exists
+                string baseName = clips[i].name;
+                string uniqueName = baseName;
+                int counter = 1;
+                
+                while (existingNames.Contains(uniqueName))
+                {
+                    uniqueName = $"{baseName} {counter}";
+                    counter++;
+                    duplicateCount++;
+                }
+                
+                newEvent.name = uniqueName;
+                existingNames.Add(uniqueName);
                 newEvent.Output.Input.AddConnection(tempNode.Output);
             }
 
+            if (duplicateCount > 0)
+            {
+                Debug.LogWarning($"AudioGraph: {duplicateCount} event(s) were renamed to avoid duplicate names when adding clips.");
+            }
+
             EditorUtility.SetDirty(this.audioBank);
+            AssetDatabase.SaveAssets();
         }
 
         /// <summary>
