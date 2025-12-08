@@ -1,21 +1,22 @@
 # CycloneGames.Cheat
+
 <div align="left"><a href="./README.md">English</a> | 简体中文</div>
 
-一个基于 VitalRouter 的轻量级、类型安全的运行时 Cheat 系统。用于在 Unity 中进行调试、GM 指令或开发期便捷控制，支持结构体/类参数与异步执行，并内置同一命令的并发去重与取消能力。
+一个基于 VitalRouter 的轻量级、类型安全的运行时 Cheat 系统。针对GC，跨平台和性能进行了优化。用于在 Unity 中进行调试、GM 指令或开发期便捷控制，支持结构体/类参数与异步执行，并内置同一命令的并发去重与取消能力。
 
 ## 特性
 
 - **类型安全的指令载体**：提供 `CheatCommand` 系列类型（无参、结构体泛型、类泛型以及多参数结构体泛型）。
 - **解耦的消息路由**：借助 VitalRouter 的 `[Route]` 特性进行分发，无需显式耦合发布方与订阅方。
-- **线程安全与可取消**：使用 `ConcurrentDictionary` 管理命令执行状态与 `CancellationTokenSource`；同一 `CommandID` 在执行中会被去重；支持取消。
 - **异步执行**：基于 Cysharp UniTask，避免阻塞主线程。
+- **灵活集成**：可选的日志接口，支持自定义日志集成。
 
 ## 安装与依赖
 
 - Unity：`2022.3`+
 - 依赖包：
   - `com.cysharp.unitask` ≥ `2.0.0`
-  - `jp.hadashikick.vitalrouter` ≥ `1.6.0`
+  - `jp.hadashikick.vitalrouter` ≥ `2.0.0`
 
 可通过 UPM 或将本包放入 `Packages`/`Assets` 进行引用。包信息参考本目录下 `package.json`。
 
@@ -24,18 +25,21 @@
 ### 1) 发布指令（Publish）
 
 ```csharp
-using CycloneGames.Cheat;
+using CycloneGames.Cheat.Runtime;
 using Cysharp.Threading.Tasks;
 
-// 无参指令
+// 无参指令（零分配）
 CheatCommandUtility.PublishCheatCommand("Protocol_CheatMessage_A").Forget();
 
-// 结构体参数（示例：自定义结构体 GameData）
+// 结构体参数（值类型零分配）
 var data = new GameData(/* ... */);
 CheatCommandUtility.PublishCheatCommand("Protocol_GameDataMessage", data).Forget();
 
-// 引用类型参数（示例：string）
-CheatCommandUtility.PublishCheatCommand("Protocol_CustomStringMessage", "Hello").Forget();
+// 引用类型参数（堆分配）
+CheatCommandUtility.PublishCheatCommandWithClass("Protocol_CustomStringMessage", "Hello").Forget();
+
+// 自定义路由（用于领域特定路由）
+CheatCommandUtility.PublishCheatCommand("UI_ShowPopup", customRouter).Forget();
 ```
 
 ### 2) 处理指令（Handle）
@@ -43,7 +47,7 @@ CheatCommandUtility.PublishCheatCommand("Protocol_CustomStringMessage", "Hello")
 使用 VitalRouter 的 `[Route]` 属性在任意类/方法中声明订阅。方法参数类型即为要处理的命令类型。
 
 ```csharp
-using CycloneGames.Cheat;
+using CycloneGames.Cheat.Runtime;
 using UnityEngine;
 using VitalRouter;
 
@@ -61,10 +65,32 @@ public class CheatHandlers
     {
         Debug.Log($"GameData received, id={cmd.CommandID}");
     }
+
+    // 异步支持取消
+    [Route]
+    async UniTask OnLongRunningCommand(CheatCommand cmd, CancellationToken ct)
+    {
+        await UniTask.Delay(TimeSpan.FromSeconds(5), cancellationToken: ct);
+        Debug.Log("Long task completed");
+    }
 }
 ```
 
 > 提示：确保 VitalRouter 在工程中已正确初始化/可用，使路由系统可以扫描到 `[Route]` 标记的方法。
+
+### 3) 可选日志集成
+
+```csharp
+// 实现自定义日志器
+public class CustomCheatLogger : ICheatLogger
+{
+    public void LogError(string message) { /* 自定义日志 */ }
+    public void LogException(Exception exception) { /* 自定义日志 */ }
+}
+
+// 设置日志器（或设为 null 以禁用日志）
+CheatCommandUtility.Logger = new CustomCheatLogger();
+```
 
 ## API 参考
 
@@ -74,47 +100,64 @@ public class CheatHandlers
   - `string CommandID { get; }`：命令标识，用户自定义并与处理逻辑对应。
 
 - `readonly struct CheatCommand`
-  - 无参数命令，构造：`CheatCommand(string commandId)`。
+  - 无参数命令，零分配。构造：`CheatCommand(string commandId)`。
 
 - `readonly struct CheatCommand<T> where T : struct`
-  - 携带结构体参数，字段：`T Arg`；构造：`CheatCommand(string commandId, in T arg)`。
+  - 携带结构体参数，零分配。字段：`T Arg`；构造：`CheatCommand(string commandId, in T arg)`。
 
 - `sealed class CheatCommandClass<T> where T : class`
-  - 携带引用类型参数，字段：`T Arg`（非空校验）；构造：`CheatCommandClass(string commandId, T arg)`。
+  - 携带引用类型参数，堆分配。字段：`T Arg`（非空校验）；构造：`CheatCommandClass(string commandId, T arg)`。
 
 - `readonly struct CheatCommand<T1, T2> where T1 : struct where T2 : struct`
-  - 双结构体参数，字段：`T1 Arg1`、`T2 Arg2`。
+  - 双结构体参数，零分配。字段：`T1 Arg1`、`T2 Arg2`。
 
 - `readonly struct CheatCommand<T1, T2, T3> where T1 : struct where T2 : struct where T3 : struct`
-  - 三结构体参数，字段：`T1 Arg1`、`T2 Arg2`、`T3 Arg3`。
+  - 三结构体参数，零分配。字段：`T1 Arg1`、`T2 Arg2`、`T3 Arg3`。
 
 ### 发布工具类 `CheatCommandUtility`
 
-- `UniTask PublishCheatCommand(string commandId)`
-  - 发布无参命令。
+- `UniTask PublishCheatCommand(string commandId, Router router = null)`
+  - 发布无参命令。结构体命令零分配。
 
-- `UniTask PublishCheatCommand<T>(string commandId, T inArg) where T : struct`
-  - 发布结构体参数命令。
+- `UniTask PublishCheatCommand<T>(string commandId, T inArg, Router router = null) where T : struct`
+  - 发布结构体参数命令，零分配。
 
-- `UniTask PublishCheatCommand<T>(string commandId, T inArg, bool isClass = true) where T : class`
-  - 发布引用类型参数命令（`inArg` 不能为空）。`isClass` 仅用于区分重载，无需关心其值。
+- `UniTask PublishCheatCommandWithClass<T>(string commandId, T inArg, Router router = null) where T : class`
+  - 发布引用类型参数命令（`inArg` 不能为空），堆分配。
 
 - `void CancelCheatCommand(string commandId)`
-  - 取消正在执行的该 `commandId` 命令（如果存在）。
+  - 取消正在执行的该 `commandId` 命令（如果存在），线程安全。
 
-### 执行与并发控制
+- `void ClearAll()`
+  - 清除所有正在运行的命令并重置内部状态，谨慎使用。
 
-- 同一 `commandId` 在执行期间会记录为“正在执行”，再次调用将被忽略（去重）。
-- 每次发布会创建独立的 `CancellationTokenSource`，在完成/异常/取消后统一清理。
-- 实际分发通过 `VitalRouter.Router.Default.PublishAsync(...)` 完成。
+- `ICheatLogger Logger { get; set; }`
+  - 可选的日志接口，用于自定义日志集成。设为 null 以禁用日志。
+
+### 日志接口 `ICheatLogger`
+
+- `void LogError(string message)`
+  - 记录错误消息。
+
+- `void LogException(Exception exception)`
+  - 记录异常。
+
+## 执行与并发控制
+
+- 同一 `commandId` 在执行期间会记录为"正在执行"，再次调用将被忽略。
+- 实际分发通过 `VitalRouter.Router.Default.PublishAsync(...)` 完成（或使用提供的自定义路由）。
 
 ## 实战建议（Best Practices）
 
+- **优先使用结构体命令**：对值类型使用 `CheatCommand<T>` 以实现零分配。
+- **尽可能避免类命令**：`CheatCommandClass<T>` 会分配堆内存 - 谨慎使用。
+- **缓存命令 ID**：将命令 ID 字符串存储为静态只读字段，避免重复分配。
 - **命令命名**：统一约定前缀与语义，例如 `Protocol_XXX`，便于检索与管理。
 - **轻量处理**：订阅方法应尽量快速返回。耗时逻辑可继续使用 UniTask/Task 切分，以免阻塞。
 - **显式错误处理**：发布侧对异常采用吞并策略（除取消外）。建议在订阅方法内自行捕获并记录异常，避免静默失败。
 - **可取消性**：长时间运行或可中断的作弊指令，应在订阅逻辑内部尊重 `CancellationToken`（由 VitalRouter 传入）。
 - **类型匹配**：订阅方法参数类型需与发布的命令类型完全一致（包括泛型参数），否则不会触发。
+- **自定义路由**：使用领域特定路由（UI、Gameplay 等）以获得更好的代码组织和性能。
 
 ## 常见问题（FAQ）
 
