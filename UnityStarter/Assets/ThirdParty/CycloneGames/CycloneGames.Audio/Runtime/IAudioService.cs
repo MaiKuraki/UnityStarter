@@ -15,14 +15,34 @@ namespace CycloneGames.Audio.Runtime
         ActiveEvent PlayEvent(AudioEvent eventToPlay, Vector3 position);
 
         /// <summary>
+        /// Start playing an AudioEvent by name (string key)
+        /// </summary>
+        ActiveEvent PlayEvent(string eventName, GameObject emitterObject);
+
+        /// <summary>
+        /// Start playing an AudioEvent by name at a specific position
+        /// </summary>
+        ActiveEvent PlayEvent(string eventName, Vector3 position);
+
+        /// <summary>
         /// Start playing an AudioEvent at a specific DSP time
         /// </summary>
         ActiveEvent PlayEventScheduled(AudioEvent eventToPlay, GameObject emitterObject, double dspTime);
 
         /// <summary>
+        /// Start playing an AudioEvent by name at a specific DSP time
+        /// </summary>
+        ActiveEvent PlayEventScheduled(string eventName, GameObject emitterObject, double dspTime);
+
+        /// <summary>
         /// Stop all active instances of an audio event
         /// </summary>
         void StopAll(AudioEvent eventsToStop);
+
+        /// <summary>
+        /// Stop all active instances of an audio event by name
+        /// </summary>
+        void StopAll(string eventName);
 
         /// <summary>
         /// Stop all active instances of a group
