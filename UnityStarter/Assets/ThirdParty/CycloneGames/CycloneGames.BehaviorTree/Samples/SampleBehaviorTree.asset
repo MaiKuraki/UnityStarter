@@ -105,7 +105,7 @@ MonoBehaviour:
   GUID: 1f6b729e-c6da-45e5-b181-d771ba82b890
   _tree: {fileID: 11400000}
   _position: {x: 960, y: 640}
-  _message: "\u563B\u563B"
+  _message: End Sequence !!!!
 --- !u!114 &-2986190274804409597
 MonoBehaviour:
   m_ObjectHideFlags: 0
