@@ -78,7 +78,11 @@ public class CheatHandlers
 
 > 提示：确保 VitalRouter 在工程中已正确初始化/可用，使路由系统可以扫描到 `[Route]` 标记的方法。
 
-### 3) 可选日志集成
+### 3) 日志集成
+
+默认情况下，`CheatCommandUtility` 使用 `UnityDebugCheatLogger`，它会将日志输出到 Unity 的 Debug API（`Debug.LogError` 和 `Debug.LogException`）。无需额外设置。
+
+如需使用自定义日志器：
 
 ```csharp
 // 实现自定义日志器
@@ -88,8 +92,11 @@ public class CustomCheatLogger : ICheatLogger
     public void LogException(Exception exception) { /* 自定义日志 */ }
 }
 
-// 设置日志器（或设为 null 以禁用日志）
+// 设置自定义日志器
 CheatCommandUtility.Logger = new CustomCheatLogger();
+
+// 或完全禁用日志
+CheatCommandUtility.Logger = null;
 ```
 
 ## API 参考
@@ -132,7 +139,7 @@ CheatCommandUtility.Logger = new CustomCheatLogger();
   - 清除所有正在运行的命令并重置内部状态，谨慎使用。
 
 - `ICheatLogger Logger { get; set; }`
-  - 可选的日志接口，用于自定义日志集成。设为 null 以禁用日志。
+  - 日志接口，用于自定义日志集成。默认为 `UnityDebugCheatLogger`（Unity Debug API）。设为 null 以禁用日志。
 
 ### 日志接口 `ICheatLogger`
 

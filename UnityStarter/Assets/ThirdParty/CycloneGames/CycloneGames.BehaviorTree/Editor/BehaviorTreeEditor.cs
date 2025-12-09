@@ -28,13 +28,10 @@ namespace CycloneGames.BehaviorTree.Editor
             }
             return false;
         }
-        //add select from hierarchy event
+        
         public void CreateGUI()
         {
-            // Each editor window contains a root VisualElement object
             VisualElement root = rootVisualElement;
-
-            // Instantiate UXML
             var visualTree = Resources.Load<VisualTreeAsset>("BT_Editor_Layout");
             visualTree.CloneTree(root);
 
@@ -52,13 +49,13 @@ namespace CycloneGames.BehaviorTree.Editor
             _behaviorTreeView.OnNodeSelectionChanged += OnNodeSelectionChange;
             OnSelectionChange();
         }
+        
         private void Save()
         {
             StringBuilder log = new StringBuilder();
             log.AppendLine("Save Behavior Tree : " + _behaviorTreeView.Tree.name);
             log.AppendLine("Path : " + AssetDatabase.GetAssetPath(_behaviorTreeView.Tree));
             Debug.Log(log.ToString());
-            //save project
             AssetDatabase.SaveAssets();
         }
 
@@ -66,10 +63,13 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+            EditorApplication.update += OnEditorUpdate;
         }
+        
         private void OnDisable()
         {
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            EditorApplication.update -= OnEditorUpdate;
         }
         private void OnPlayModeStateChanged(PlayModeStateChange modeState)
         {
@@ -86,6 +86,11 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
         private Runtime.BehaviorTree _lastTree;
+        
+        /// <summary>
+        /// Handles selection changes to update the behavior tree view.
+        /// Supports both asset selection and BTRunnerComponent selection in play mode.
+        /// </summary>
         private void OnSelectionChange()
         {
             if (!Application.isPlaying && _lastTree != null)
@@ -118,6 +123,8 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
             }
 
+            if (_behaviorTreeView == null) return;
+            
             if (Application.isPlaying)
             {
                 if (_lastTree)
@@ -137,25 +144,50 @@ namespace CycloneGames.BehaviorTree.Editor
         }
         private void OnDestroy()
         {
-            _behaviorTreeView.OnNodeSelectionChanged -= OnNodeSelectionChange;
-            _behaviorTreeView = null;
-            _inspectorView = null;
-            if (Application.isPlaying)
+            EditorApplication.update -= OnEditorUpdate;
+            
+            if (_behaviorTreeView != null)
             {
-                _lastTree = null;
-                return;
+                _behaviorTreeView.OnNodeSelectionChanged -= OnNodeSelectionChange;
+                _behaviorTreeView.ClearView();
+                _behaviorTreeView = null;
             }
-            _lastTree?.SetEditorOwner(null);
+            
+            if (_inspectorView != null)
+            {
+                _inspectorView.Clear();
+                _inspectorView = null;
+            }
+            
+            if (!Application.isPlaying && _lastTree != null)
+            {
+                _lastTree.SetEditorOwner(null);
+            }
             _lastTree = null;
         }
         private void OnNodeSelectionChange(BTNodeView nodeView)
         {
             _inspectorView.UpdateSelection(nodeView);
         }
-
+        
+        /// <summary>
+        /// Updates node states every frame in play mode to capture final states
+        /// before BehaviorTree.Stop() resets them.
+        /// </summary>
+        private void OnEditorUpdate()
+        {
+            if (Application.isPlaying && _behaviorTreeView != null)
+            {
+                _behaviorTreeView.UpdateNodeStates();
+            }
+        }
+        
         private void OnInspectorUpdate()
         {
-            _behaviorTreeView?.UpdateNodeStates();
+            if (Application.isPlaying && _behaviorTreeView != null)
+            {
+                Repaint();
+            }
         }
     }
 }

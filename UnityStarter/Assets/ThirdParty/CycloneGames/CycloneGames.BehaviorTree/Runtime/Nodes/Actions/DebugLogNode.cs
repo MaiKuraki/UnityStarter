@@ -1,3 +1,4 @@
+using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
@@ -11,6 +12,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
 #if UNITY_EDITOR
             if (!string.IsNullOrEmpty(_message)) Debug.Log("BT Log : " + _message);
 #endif
+        }
+        
+        protected override BTState OnRun(IBlackBoard blackBoard)
+        {
+            return BTState.SUCCESS;
         }
 
         public override BTNode Clone()

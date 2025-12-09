@@ -59,7 +59,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
 
             if (Application.isPlaying)
             {
-                // Manual loop instead of ConvertAll to avoid Lambda allocation
                 clone.Children = new List<BTNode>(Children.Count);
                 for (int i = 0; i < Children.Count; i++)
                 {
@@ -74,9 +73,29 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return clone;
         }
 
+        /// <summary>
+        /// Resets all children nodes to NOT_ENTERED state when the composite node restarts.
+        /// Ensures clean state for nodes like RepeatNode that restart their parent.
+        /// </summary>
+        /// <param name="blackBoard">The blackboard instance</param>
+        protected override void OnStart(IBlackBoard blackBoard)
+        {
+            for (int i = 0; i < Children.Count; i++)
+            {
+                var child = Children[i];
+                if (child != null)
+                {
+                    if (child.IsStarted)
+                    {
+                        child.BTStop(blackBoard);
+                    }
+                    child.State = BTState.NOT_ENTERED;
+                }
+            }
+        }
+
         protected override BTState OnRun(IBlackBoard blackBoard)
         {
-            // Self abort
             if (AbortType is ConditionalAbortType.BOTH or ConditionalAbortType.SELF)
             {
                 var evaluate = Evaluate(blackBoard);
@@ -95,10 +114,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
         }
 
         /// <summary>
-        /// Evaluate the node when it is not active
+        /// Evaluates the node when it is not active.
         /// </summary>
-        /// <param name="blackBoard"> BlackBoard </param>
-        /// <returns> BTState </returns>
         protected virtual BTState OnDeActiveEvaluate(IBlackBoard blackBoard)
         {
             for (int i = 0; i < Children.Count; i++)
@@ -114,19 +131,23 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return BTState.SUCCESS;
         }
 
+        /// <summary>
+        /// Evaluates the node when it is active (currently running).
+        /// </summary>
+        /// <param name="blackBoard">The blackboard instance</param>
+        /// <returns>Evaluation result state</returns>
         protected abstract BTState OnActiveEvaluate(IBlackBoard blackBoard);
 
         /// <summary>
-        /// Handle the low priority abort
+        /// Handles lower priority abort evaluation for conditional abort types.
         /// </summary>
-        /// <param name="blackBoard"> BlackBoard </param>
+        /// <param name="blackBoard">The blackboard instance</param>
+        /// <returns>Evaluation result state</returns>
         protected virtual BTState OnLowerPriorityEvaluate(IBlackBoard blackBoard) => BTState.SUCCESS;
 
         /// <summary>
-        /// Handle the children nodes
+        /// Executes child nodes and returns the result state.
         /// </summary>
-        /// <param name="blackBoard"> BlackBoard </param>
-        /// <returns> BTState </returns>
         protected abstract BTState RunChildren(IBlackBoard blackBoard);
 
 
@@ -140,7 +161,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
 
         protected override void CheckIntegrity()
         {
-            // Manual loop instead of RemoveAll to avoid Lambda allocation
             for (int i = Children.Count - 1; i >= 0; i--)
             {
                 if (Children[i] == null)
@@ -149,11 +169,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
                 }
             }
 
-            // Use cached IComparer instead of Lambda
             Children.Sort(_positionComparer);
         }
 
-        // Reusable comparer to avoid Lambda allocation
         private class NodePositionComparer : IComparer<BTNode>
         {
             public int Compare(BTNode a, BTNode b)
