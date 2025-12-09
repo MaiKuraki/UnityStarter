@@ -31,9 +31,10 @@ namespace CycloneGames.Cheat.Runtime
         private const int POOL_CAPACITY = 32;
 
         /// <summary>
-        /// Optional logger interface for flexible integration. Set to null to disable logging.
+        /// Optional logger interface for flexible integration. 
+        /// Defaults to UnityDebugCheatLogger (Unity Debug API). Set to null to disable logging.
         /// </summary>
-        public static ICheatLogger Logger { get; set; }
+        public static ICheatLogger Logger { get; set; } = new UnityDebugCheatLogger();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static CancellationTokenSource GetCts()

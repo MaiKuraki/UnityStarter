@@ -1,3 +1,4 @@
+using UnityEngine;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using UnityEditor;
 
@@ -9,16 +10,23 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors.NodeEditors
         public override void OnInspectorGUI()
         {
             var waitNode = (WaitNode)target;
-            //show script field
             serializedObject.Update();
-            EditorGUILayout.PropertyField(serializedObject.FindProperty("_useRandomBetweenTwoConstants"));
+            
+            var useRandomProp = serializedObject.FindProperty("_useRandomBetweenTwoConstants");
+            var rangeProp = serializedObject.FindProperty("_range");
+            var durationProp = serializedObject.FindProperty("_duration");
+            
+            EditorGUILayout.PropertyField(useRandomProp, new GUIContent("Use Random Between Two", "Enable random duration between two values"));
+            
             if (waitNode.UseRandomBetweenTwoConstants)
             {
-                EditorGUILayout.PropertyField(serializedObject.FindProperty("_range"));
-                serializedObject.ApplyModifiedProperties();
-                return;
+                EditorGUILayout.PropertyField(rangeProp, new GUIContent("Range", "Min and max duration values"));
             }
-            EditorGUILayout.PropertyField(serializedObject.FindProperty("_duration"));
+            else
+            {
+                EditorGUILayout.PropertyField(durationProp, new GUIContent("Duration", "Wait duration in seconds"));
+            }
+            
             serializedObject.ApplyModifiedProperties();
         }
     }

@@ -44,10 +44,12 @@ namespace CycloneGames.BehaviorTree.Runtime
         private IBlackBoard _lastBlackBoard = new BlackBoard();
         private bool _isCloned = false;
 
-        // Cached collections to eliminate per-call allocations
         private readonly List<BTNode> _childrenCache = new List<BTNode>(8);
         private readonly Stack<BTNode> _traverseStack = new Stack<BTNode>(16);
 
+        /// <summary>
+        /// Updates the behavior tree execution. Called every frame by BTRunnerComponent.
+        /// </summary>
         public BTState BTUpdate(IBlackBoard blackBoard)
         {
             if (Root == null)
@@ -73,7 +75,7 @@ namespace CycloneGames.BehaviorTree.Runtime
         }
 
         /// <summary>
-        /// Get all children of a node. Uses cached list - do not store reference.
+        /// Gets all children of a node. Returns a cached list - do not store the reference.
         /// </summary>
         public List<BTNode> GetChildren(BTNode parent)
         {
@@ -102,11 +104,17 @@ namespace CycloneGames.BehaviorTree.Runtime
             return _childrenCache;
         }
 
+        /// <summary>
+        /// Clones the behavior tree for runtime execution.
+        /// </summary>
         public IBehaviorTree Clone(GameObject owner)
         {
             return CloneTree(owner);
         }
 
+        /// <summary>
+        /// Creates a deep copy of the behavior tree for runtime use.
+        /// </summary>
         public BehaviorTree CloneTree(GameObject owner)
         {
             if (Root == null)
@@ -132,9 +140,11 @@ namespace CycloneGames.BehaviorTree.Runtime
             return tree;
         }
 
+        /// <summary>
+        /// Validates the behavior tree structure and removes null nodes.
+        /// </summary>
         public void OnValidate()
         {
-            // Manual loop instead of RemoveAll to avoid Lambda allocation
             for (int i = Nodes.Count - 1; i >= 0; i--)
             {
                 if (Nodes[i] == null)
@@ -149,6 +159,12 @@ namespace CycloneGames.BehaviorTree.Runtime
             }
         }
 
+        /// <summary>
+        /// Traverses the tree using an iterative stack-based approach to avoid recursion.
+        /// Collects all nodes and sets their tree reference during cloning.
+        /// </summary>
+        /// <param name="node">Root node to start traversal from</param>
+        /// <param name="tree">Target tree instance for cloned nodes</param>
         private void Traverse(BTNode node, BehaviorTree tree)
         {
             if (node == null) return;
@@ -177,6 +193,9 @@ namespace CycloneGames.BehaviorTree.Runtime
             }
         }
 
+        /// <summary>
+        /// Calls OnAwake on all nodes when the behavior tree is initialized.
+        /// </summary>
         public void OnAwake()
         {
             for (int i = 0; i < Nodes.Count; i++)
@@ -185,6 +204,9 @@ namespace CycloneGames.BehaviorTree.Runtime
             }
         }
 
+        /// <summary>
+        /// Stops the behavior tree execution and resets all node states to NOT_ENTERED.
+        /// </summary>
         public void Stop()
         {
             if (Root != null)
@@ -200,6 +222,9 @@ namespace CycloneGames.BehaviorTree.Runtime
             }
         }
 
+        /// <summary>
+        /// Calls OnDrawGizmos on all nodes for scene view visualization.
+        /// </summary>
         public void OnDrawGizmos()
         {
             for (int i = 0; i < Nodes.Count; i++)
