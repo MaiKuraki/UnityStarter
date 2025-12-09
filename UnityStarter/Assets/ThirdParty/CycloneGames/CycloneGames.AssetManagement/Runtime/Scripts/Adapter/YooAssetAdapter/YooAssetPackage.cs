@@ -12,7 +12,7 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         private readonly ResourcePackage _rawPackage;
         public string Name => _rawPackage.PackageName;
-        private int nextId = 1;
+        private int _nextId = 1;
 
         public YooAssetPackage(ResourcePackage rawPackage)
         {
@@ -76,7 +76,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 default:
                     throw new ArgumentOutOfRangeException(nameof(clearMode), clearMode, null);
             }
-            
+
             await op.WithCancellation(cancellationToken);
             return op.Status == EOperationStatus.Succeed;
         }
@@ -98,13 +98,31 @@ namespace CycloneGames.AssetManagement.Runtime
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"AssetAsync {typeof(TAsset).Name} : {location}");
             return wrapped;
         }
-        
+
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
             var handle = _rawPackage.LoadAllAssetsAsync<TAsset>(location);
             var id = RegisterHandle();
             var wrapped = YooAllAssetsHandle<TAsset>.Create(id, handle, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"AllAssets {typeof(TAsset).Name} : {location}");
+            return wrapped;
+        }
+
+        public IRawFileHandle LoadRawFileSync(string location)
+        {
+            var handle = _rawPackage.LoadRawFileSync(location);
+            var id = RegisterHandle();
+            var wrapped = YooRawFileHandle.Create(id, handle, CancellationToken.None);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"RawFileSync : {location}");
+            return wrapped;
+        }
+
+        public IRawFileHandle LoadRawFileAsync(string location, CancellationToken cancellationToken = default)
+        {
+            var handle = _rawPackage.LoadRawFileAsync(location);
+            var id = RegisterHandle();
+            var wrapped = YooRawFileHandle.Create(id, handle, cancellationToken);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"RawFileAsync : {location}");
             return wrapped;
         }
 
@@ -133,7 +151,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 await yooHandle.Raw.UnloadAsync();
             }
         }
-        
+
         public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain)
         {
             var op = _rawPackage.CreateResourceDownloader(downloadingMaxNumber, failedTryAgain);
@@ -149,7 +167,7 @@ namespace CycloneGames.AssetManagement.Runtime
             var op = _rawPackage.CreateBundleDownloader(locations, recursiveDownload, downloadingMaxNumber, failedTryAgain);
             return YooDownloader.Create(op);
         }
-        
+
         private async UniTask<IDownloader> CreatePreDownloaderInternal(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken, string[] tags = null)
         {
             var updateOp = _rawPackage.UpdatePackageManifestAsync(packageVersion, 30);
@@ -164,7 +182,7 @@ namespace CycloneGames.AssetManagement.Runtime
             var downloaderOp = tags == null
                 ? _rawPackage.CreateResourceDownloader(downloadingMaxNumber, failedTryAgain)
                 : _rawPackage.CreateResourceDownloader(tags, downloadingMaxNumber, failedTryAgain);
-            
+
             return YooDownloader.Create(downloaderOp);
         }
 
@@ -182,7 +200,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             return UniTask.FromException<IDownloader>(new NotImplementedException("Pre-downloading by locations is not supported by the YooAsset provider."));
         }
-        
+
         public GameObject InstantiateSync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false)
         {
             if (handle is YooAssetHandle<GameObject> yooHandle && yooHandle.Raw.IsDone)
@@ -199,7 +217,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 Debug.LogError("[YooAssetPackage] Invalid handle type passed to InstantiateAsync.");
                 return null;
             }
-            
+
             var op = yooHandle.Raw.InstantiateAsync(parent, worldPositionStays);
             var id = RegisterHandle();
             var wrapped = YooInstantiateHandle.Create(id, op);
@@ -210,10 +228,10 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             await _rawPackage.UnloadUnusedAssetsAsync();
         }
-        
+
         private int RegisterHandle()
         {
-            return Interlocked.Increment(ref nextId);
+            return Interlocked.Increment(ref _nextId);
         }
     }
 }
