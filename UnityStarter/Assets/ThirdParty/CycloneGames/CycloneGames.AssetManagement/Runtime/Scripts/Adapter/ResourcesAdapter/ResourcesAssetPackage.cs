@@ -100,6 +100,16 @@ namespace CycloneGames.AssetManagement.Runtime
             return handle;
         }
 
+        public IRawFileHandle LoadRawFileSync(string location)
+        {
+            throw new NotSupportedException("Resources does not support RawFile loading. Use LoadAssetAsync<TextAsset> for text files.");
+        }
+
+        public IRawFileHandle LoadRawFileAsync(string location, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException("Resources does not support RawFile loading. Use LoadAssetAsync<TextAsset> for text files.");
+        }
+
         public GameObject InstantiateSync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false)
         {
             if (handle?.Asset != null)

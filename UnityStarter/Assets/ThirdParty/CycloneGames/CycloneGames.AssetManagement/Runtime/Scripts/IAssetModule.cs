@@ -94,6 +94,18 @@ namespace CycloneGames.AssetManagement.Runtime
 		IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object;
 
 		/// <summary>
+		/// Loads a raw file synchronously. Returns null on error.
+		/// Raw files are not compressed and suitable for JSON, text files, binary data, etc.
+		/// </summary>
+		IRawFileHandle LoadRawFileSync(string location);
+
+		/// <summary>
+		/// Loads a raw file asynchronously.
+		/// Raw files are not compressed and suitable for JSON, text files, binary data, etc.
+		/// </summary>
+		IRawFileHandle LoadRawFileAsync(string location, CancellationToken cancellationToken = default);
+
+		/// <summary>
 		/// Instantiates a prefab synchronously using a previously loaded handle. Returns null on error.
 		/// </summary>
 		GameObject InstantiateSync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false);
@@ -160,6 +172,30 @@ namespace CycloneGames.AssetManagement.Runtime
 	{
 		string ScenePath { get; }
 		Scene Scene { get; }
+	}
+
+	/// <summary>
+	/// Handle for raw file operations. Raw files are non-compressed files suitable for JSON, text, binary data, etc.
+	/// Thread-safe for read operations after loading completes. Dispose must be called on the main thread.
+	/// </summary>
+	public interface IRawFileHandle : IOperation, IDisposable
+	{
+		/// <summary>
+		/// Gets the file path. Returns empty string if not available.
+		/// </summary>
+		string FilePath { get; }
+
+		/// <summary>
+		/// Reads the file contents as text. Returns empty string if not loaded or error occurred.
+		/// Thread-safe: Can be called from any thread after IsDone is true.
+		/// </summary>
+		string ReadText();
+
+		/// <summary>
+		/// Reads the file contents as bytes. Returns null if not loaded or error occurred.
+		/// Thread-safe: Can be called from any thread after IsDone is true.
+		/// </summary>
+		byte[] ReadBytes();
 	}
 
 	/// <summary>

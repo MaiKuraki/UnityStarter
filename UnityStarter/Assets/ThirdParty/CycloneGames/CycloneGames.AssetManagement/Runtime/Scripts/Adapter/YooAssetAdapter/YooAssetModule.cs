@@ -11,8 +11,9 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         private const string DEBUG_FLAG = "[YooAssetModule]";
         private readonly Dictionary<string, IAssetPackage> _packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
-        private bool _initialized;
-        private List<string> _packageNamesCache;
+        private readonly object _packagesLock = new object();
+        private volatile bool _initialized;
+        private volatile List<string> _packageNamesCache;
 
         public bool Initialized => _initialized;
 
@@ -33,8 +34,14 @@ namespace CycloneGames.AssetManagement.Runtime
         public void Destroy()
         {
             if (!_initialized) return;
+
+            lock (_packagesLock)
+            {
+                _packages.Clear();
+                _packageNamesCache = null;
+            }
+
             YooAssets.Destroy();
-            _packages.Clear();
             _initialized = false;
         }
 
@@ -42,45 +49,72 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (string.IsNullOrEmpty(packageName)) throw new ArgumentException($"{DEBUG_FLAG} Package name is null or empty", nameof(packageName));
             if (!_initialized) throw new InvalidOperationException($"{DEBUG_FLAG} Asset module not initialized");
-            if (_packages.ContainsKey(packageName)) throw new InvalidOperationException($"{DEBUG_FLAG} Package already exists: {packageName}");
 
-            var yooPackage = YooAssets.CreatePackage(packageName);
-            var wrapped = new YooAssetPackage(yooPackage);
-            _packages.Add(packageName, wrapped);
-            _packageNamesCache = null; // Invalidate cache
-            return wrapped;
+            lock (_packagesLock)
+            {
+                if (_packages.ContainsKey(packageName))
+                {
+                    throw new InvalidOperationException($"{DEBUG_FLAG} Package already exists: {packageName}");
+                }
+
+                var yooPackage = YooAssets.CreatePackage(packageName);
+                var wrapped = new YooAssetPackage(yooPackage);
+                _packages.Add(packageName, wrapped);
+                _packageNamesCache = null;
+                return wrapped;
+            }
         }
 
         public IAssetPackage GetPackage(string packageName)
         {
             if (string.IsNullOrEmpty(packageName)) return null;
-            _packages.TryGetValue(packageName, out var pkg);
-            return pkg;
+            lock (_packagesLock)
+            {
+                _packages.TryGetValue(packageName, out var pkg);
+                return pkg;
+            }
         }
 
         public async UniTask<bool> RemovePackageAsync(string packageName)
         {
             if (string.IsNullOrEmpty(packageName)) return false;
-            if (!_packages.TryGetValue(packageName, out var pkg)) return false;
+
+            IAssetPackage pkg;
+            lock (_packagesLock)
+            {
+                if (!_packages.TryGetValue(packageName, out pkg))
+                {
+                    return false;
+                }
+            }
 
             // Ensure resources are released before removing the package.
-            // We await the destruction to ensure all async cleanup (if any) completes.
             await pkg.DestroyAsync();
 
-            _packages.Remove(packageName);
-            // Since YooAssetPackage.DestroyAsync already calls YooAssets.RemovePackage(packageName),
-
-            _packageNamesCache = null; // Invalidate cache
+            lock (_packagesLock)
+            {
+                _packages.Remove(packageName);
+                _packageNamesCache = null;
+            }
             return true;
         }
 
         public IReadOnlyList<string> GetAllPackageNames()
         {
-            if (_packageNamesCache == null)
+            var cache = _packageNamesCache;
+            if (cache == null)
             {
-                _packageNamesCache = _packages.Keys.ToList();
+                lock (_packagesLock)
+                {
+                    cache = _packageNamesCache;
+                    if (cache == null)
+                    {
+                        cache = _packages.Keys.ToList();
+                        _packageNamesCache = cache;
+                    }
+                }
             }
-            return _packageNamesCache;
+            return cache;
         }
 
         public IPatchService CreatePatchService(string packageName)
