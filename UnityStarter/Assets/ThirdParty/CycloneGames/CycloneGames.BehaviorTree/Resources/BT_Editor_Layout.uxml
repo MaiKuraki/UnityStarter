@@ -1,9 +1,9 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../../../UIElementsSchema/UIElements.xsd" editor-extension-mode="True">
     <Style src="project://database/Assets/Plugins/BehaviorTree/Editor/BehaviorTreeEditor.uss?fileID=7433441132597879392&amp;guid=bf8be869980123747aa53e13b8e51d5b&amp;type=3#BehaviorTreeEditor" />
-    <CycloneGames.BehaviorTree.Editor.BTSplitView fixed-pane-initial-dimension="350" fixed-pane-index="0">
-        <ui:VisualElement name="inspector-holder" style="flex-grow: 1; background-color: rgb(47, 47, 47);">
+    <CycloneGames.BehaviorTree.Editor.BTSplitView fixed-pane-initial-dimension="400" fixed-pane-index="0">
+        <ui:VisualElement name="inspector-holder" style="flex-grow: 1; background-color: rgb(47, 47, 47); flex-direction: column;">
             <ui:Label tabindex="-1" text="Inspector" parse-escape-sequences="true" display-tooltip-when-elided="true" style="font-size: 12px; background-color: rgb(32, 32, 32); margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0; padding-top: 4px; padding-right: 4px; padding-bottom: 4px; padding-left: 4px; color: rgb(192, 192, 192); height: 30px; justify-content: flex-start; -unity-text-align: middle-left;" />
-            <CycloneGames.BehaviorTree.Editor.BTInspectorView style="flex-grow: 1; padding-top: 5px; padding-right: 5px; padding-bottom: 5px; padding-left: 5px;" />
+            <CycloneGames.BehaviorTree.Editor.BTInspectorView style="flex-grow: 1; padding-top: 5px; padding-right: 5px; padding-bottom: 5px; padding-left: 5px; overflow: hidden;" />
         </ui:VisualElement>
         <ui:VisualElement name="graph-holder" style="flex-grow: 1; background-color: rgb(47, 47, 47);">
             <CycloneGames.BehaviorTree.Editor.BehaviorTreeView focusable="true" style="flex-grow: 1;" />

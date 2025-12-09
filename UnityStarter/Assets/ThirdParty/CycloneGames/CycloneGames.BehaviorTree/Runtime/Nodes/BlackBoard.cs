@@ -64,7 +64,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         {
             if (string.IsNullOrEmpty(key)) return default;
 
-            // Check specific types first to avoid boxing if T is value type
             Type type = typeof(T);
             if (type == typeof(int))
             {
@@ -99,7 +98,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         {
             if (string.IsNullOrEmpty(key)) return;
 
-            // Route to typed dictionaries if possible to keep them in sync
             if (value is int i) _intData[key] = i;
             else if (value is float f) _floatData[key] = f;
             else if (value is bool b) _boolData[key] = b;
