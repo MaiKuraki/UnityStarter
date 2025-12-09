@@ -22,6 +22,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
 
         protected override void OnStart(IBlackBoard blackBoard)
         {
+            base.OnStart(blackBoard);
             for (int i = 0; i < Children.Count; i++)
             {
                 Children[i].IsStarted = false;

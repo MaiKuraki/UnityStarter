@@ -14,8 +14,28 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   GUID: 9d9645fe-560c-4429-bc49-bc4761f4c3bd
   _tree: {fileID: 11400000}
-  _position: {x: 250, y: 0}
+  _position: {x: 480, y: 0}
   Child: {fileID: -4473983968243724602}
+--- !u!114 &-9019593117555742625
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: d121f96c0ab6bc741aabff45fcf2b62d, type: 3}
+  m_Name: RepeatNode
+  m_EditorClassIdentifier: 
+  GUID: 3cfc1ed3-adef-4162-ae54-7edd8a298cd6
+  _tree: {fileID: 11400000}
+  _position: {x: 800, y: 320}
+  Child: {fileID: 4225789004679498484}
+  _repeatForever: 0
+  _useRandomRepeatCount: 0
+  _repeatCount: 3
+  _randomRepeatCountRange: {x: 1, y: 3}
 --- !u!114 &-6262890890442483493
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -30,7 +50,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   GUID: 3f9a1bee-6850-4de9-bd3b-4080469e0c61
   _tree: {fileID: 11400000}
-  _position: {x: 0, y: 435}
+  _position: {x: 0, y: 480}
   _key: Alert
   _message: PlayerDetected
 --- !u!114 &-5332435437831666453
@@ -47,7 +67,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   GUID: ea03160f-217e-41bb-a38f-c93e7f4d59c7
   _tree: {fileID: 11400000}
-  _position: {x: 200, y: 435}
+  _position: {x: 320, y: 480}
   _useRandomBetweenTwoConstants: 0
   _range: {x: 1, y: 2}
   _duration: 2
@@ -65,11 +85,27 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   GUID: 4a260875-9dd5-4601-8ff9-c151c18b51a9
   _tree: {fileID: 11400000}
-  _position: {x: 250, y: 145}
+  _position: {x: 480, y: 160}
   Children:
   - {fileID: 4301061029222006239}
-  - {fileID: 4225789004679498484}
+  - {fileID: -9019593117555742625}
   AbortType: 0
+--- !u!114 &-3454068882373007653
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 81a5f8bf6bf345bfb5c4ccd2b7affed6, type: 3}
+  m_Name: DebugLogNode
+  m_EditorClassIdentifier: 
+  GUID: 1f6b729e-c6da-45e5-b181-d771ba82b890
+  _tree: {fileID: 11400000}
+  _position: {x: 960, y: 640}
+  _message: End Sequence !!!!
 --- !u!114 &-2986190274804409597
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -84,7 +120,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   GUID: 676e4331-8944-4b43-a9d1-d7f7f9764ff2
   _tree: {fileID: 11400000}
-  _position: {x: 100, y: 435}
+  _position: {x: 160, y: 480}
   _message: Alert! Player Detected!
 --- !u!114 &11400000
 MonoBehaviour:
@@ -110,6 +146,8 @@ MonoBehaviour:
   - {fileID: 7929903953820063242}
   - {fileID: 3418588277904223441}
   - {fileID: 3532661954946918791}
+  - {fileID: -3454068882373007653}
+  - {fileID: -9019593117555742625}
 --- !u!114 &3418588277904223441
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -124,7 +162,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   GUID: b6f1fd98-6826-485e-84b7-d45be535c552
   _tree: {fileID: 11400000}
-  _position: {x: 400, y: 435}
+  _position: {x: 640, y: 640}
   _message: Patrolling...
 --- !u!114 &3532661954946918791
 MonoBehaviour:
@@ -140,7 +178,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   GUID: 17d1b3a5-0aea-4bb0-ab9b-ebad9ebfeb8f
   _tree: {fileID: 11400000}
-  _position: {x: 500, y: 435}
+  _position: {x: 800, y: 640}
   _useRandomBetweenTwoConstants: 0
   _range: {x: 1, y: 2}
   _duration: 3
@@ -158,10 +196,11 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   GUID: e3ae11ec-c06a-451d-8733-e08435d7ae51
   _tree: {fileID: 11400000}
-  _position: {x: 450, y: 290}
+  _position: {x: 800, y: 480}
   Children:
   - {fileID: 3418588277904223441}
   - {fileID: 3532661954946918791}
+  - {fileID: -3454068882373007653}
   AbortType: 0
 --- !u!114 &4301061029222006239
 MonoBehaviour:
@@ -177,7 +216,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   GUID: 703c0595-4b93-43f0-8ead-c5931dee8a21
   _tree: {fileID: 11400000}
-  _position: {x: 150, y: 290}
+  _position: {x: 240, y: 320}
   Children:
   - {fileID: -6262890890442483493}
   - {fileID: -2986190274804409597}
@@ -198,5 +237,5 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   GUID: 0bfcc4c7-5cab-4355-ae4d-5460d9091097
   _tree: {fileID: 11400000}
-  _position: {x: 300, y: 435}
+  _position: {x: 480, y: 480}
   _key: Alert

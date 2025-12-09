@@ -35,7 +35,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             set => _isStarted = value;
         }
         /// <summary>
-        /// This property is used to check if the node can be re-evaluated.
+        /// Indicates whether the node can be re-evaluated during execution.
         /// </summary>
         public virtual bool CanReEvaluate => false;
         public virtual bool EnableHijack => false;
@@ -49,21 +49,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         private void Awake() { }
 
         /// <summary>
-        /// This method is called when the behavior tree runner is awake.
+        /// Called when the behavior tree runner is initialized.
         /// </summary>
         public virtual void OnAwake() { }
 
         /// <summary>
-        /// Inject dependencies into the node.
+        /// Injects dependencies into the node for DI framework integration.
         /// </summary>
-        /// <param name="container">Dependency container</param>
         public virtual void Inject(object container) { }
 
         /// <summary>
-        /// This method is called when the node is run.
+        /// Executes the node and returns its state.
         /// </summary>
-        /// <param name="blackBoard"> The blackboard of the behavior tree. </param>
-        /// <returns> The state of the node. </returns>
         public BTState Run(IBlackBoard blackBoard)
         {
             if (!_isStarted)
@@ -78,17 +75,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             }
             return State;
         }
-        /// <summary>
-        /// This method is called when the node is started.
-        /// </summary>
         private void BTStart(IBlackBoard blackBoard)
         {
             Initialize(blackBoard);
             OnStart(blackBoard);
             _isStarted = true;
         }
+        
         /// <summary>
-        /// This method is called when the node is stopped.
+        /// Stops the node execution and calls OnStop.
         /// </summary>
         public void BTStop(IBlackBoard blackBoard)
         {
@@ -96,9 +91,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             OnStop(blackBoard);
             _isStarted = false;
         }
-        /// <summary>
-        /// This method is called once when the behavior tree is initialized.
-        /// </summary>
+        
         private void Initialize(IBlackBoard blackBoard)
         {
             if (_isInitialized) return;
@@ -107,31 +100,30 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         }
 
         /// <summary>
-        /// This method is called when the node is started.
+        /// Called when the node starts execution.
         /// </summary>
         protected virtual void OnStart(IBlackBoard blackBoard) { }
 
         /// <summary>
-        /// This method is called every frame while the node is running.
-        /// And it should return the state of the node.
+        /// Called every frame while the node is running. Must return the current node state.
         /// </summary>
-        /// <param name="blackBoard"> The blackboard of the behavior tree. </param>
-        /// <returns> The state of the node. </returns>
         protected virtual BTState OnRun(IBlackBoard blackBoard) { return BTState.SUCCESS; }
 
         /// <summary>
-        /// This method is called when the node is stopped.
+        /// Called when the node stops execution.
         /// </summary>
         protected virtual void OnStop(IBlackBoard blackBoard) { }
+        
         /// <summary>
-        /// This method is called when the behavior tree is initialized.
+        /// Called once when the behavior tree is initialized.
         /// </summary>
         protected virtual void OnInitialize(IBlackBoard blackBoard) { }
         /// <summary>
-        /// This method is called when the node is evaluated.
+        /// Evaluates the node's condition or logic without executing it.
+        /// Used for conditional abort and re-evaluation checks.
         /// </summary>
-        /// <param name="blackBoard"> The blackboard of the behavior tree. </param>
-        /// <returns> The state of the node. </returns>
+        /// <param name="blackBoard">The blackboard instance</param>
+        /// <returns>The evaluation result state</returns>
         public abstract BTState Evaluate(IBlackBoard blackBoard);
         public void OnValidate()
         {

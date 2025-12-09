@@ -78,7 +78,11 @@ public class CheatHandlers
 
 > Tip: Ensure VitalRouter is correctly initialized/available so that it can discover methods marked with `[Route]`.
 
-### 3) Optional Logger Integration
+### 3) Logger Integration
+
+By default, `CheatCommandUtility` uses `UnityDebugCheatLogger` which logs to Unity's Debug API (`Debug.LogError` and `Debug.LogException`). No setup required.
+
+To use a custom logger:
 
 ```csharp
 // Implement custom logger
@@ -88,8 +92,11 @@ public class CustomCheatLogger : ICheatLogger
     public void LogException(Exception exception) { /* custom logging */ }
 }
 
-// Set logger (or leave null to disable logging)
+// Set custom logger
 CheatCommandUtility.Logger = new CustomCheatLogger();
+
+// Or disable logging entirely
+CheatCommandUtility.Logger = null;
 ```
 
 ## API Reference
@@ -132,7 +139,7 @@ CheatCommandUtility.Logger = new CustomCheatLogger();
   - Clears all running commands and resets internal state. Use with caution.
 
 - `ICheatLogger Logger { get; set; }`
-  - Optional logger interface for custom logging integration. Set to null to disable.
+  - Logger interface for custom logging integration. Defaults to `UnityDebugCheatLogger` (Unity Debug API). Set to null to disable logging.
 
 ### Logger Interface `ICheatLogger`
 

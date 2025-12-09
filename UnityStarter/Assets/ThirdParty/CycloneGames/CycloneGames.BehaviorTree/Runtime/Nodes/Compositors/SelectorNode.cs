@@ -70,6 +70,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
 
         protected override void OnStart(IBlackBoard blackBoard)
         {
+            base.OnStart(blackBoard);
             _current = 0;
         }
 

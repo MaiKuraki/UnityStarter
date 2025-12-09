@@ -8,3 +8,24 @@ GridBackground{
     margin-left: 0;
     padding-left:10px;
 }
+
+/* Edge (Connection Line) Styles - Make easier to click */
+Edge {
+    min-width: 8px;
+    min-height: 8px;
+}
+
+Edge > VisualElement {
+    min-width: 8px;
+    min-height: 8px;
+}
+
+/* Make edge lines thicker and more visible for easier clicking */
+Edge .edge-line {
+    stroke-width: 3px;
+}
+
+Edge:hover .edge-line {
+    stroke-width: 4px;
+    stroke: rgb(100, 200, 255);
+}
