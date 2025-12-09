@@ -243,6 +243,35 @@ await patchService.RunAsync(autoDownloadOnFoundNewVersion: false);
   await package.ClearCacheFilesAsync(ClearCacheMode.Unused);
   ```
 
+## 原生文件加载
+
+原生文件支持允许您加载非压缩文件，如 JSON、文本文件或二进制数据。这对于配置文件、游戏数据或任何非 Unity 资产内容特别有用。
+
+```csharp
+// 异步加载（推荐）
+using (var rawFileHandle = package.LoadRawFileAsync("Config/game_settings.json"))
+{
+    await rawFileHandle.Task;
+    
+    if (rawFileHandle.IsDone && string.IsNullOrEmpty(rawFileHandle.Error))
+    {
+        string jsonText = rawFileHandle.ReadText();
+        // 解析 JSON、使用文本等
+    }
+}
+
+// 同步加载（仅在句柄保证准备就绪时使用）
+var rawFileHandle = package.LoadRawFileSync("Data/level.bin");
+if (rawFileHandle.IsDone)
+{
+    byte[] binaryData = rawFileHandle.ReadBytes();
+    // 处理二进制数据
+}
+rawFileHandle.Dispose();
+```
+> [!NOTE]
+> 原生文件支持目前在 YooAsset 提供器中可用。Addressables 和 Resources 提供器不支持原生文件加载 - 在这些情况下使用 `LoadAssetAsync<TextAsset>` 来加载文本文件。
+
 ## 场景管理
 
 ```csharp
@@ -253,8 +282,6 @@ await sceneHandle.Task;
 // 异步卸载
 await package.UnloadSceneAsync(sceneHandle);
 ```
-> [!WARNING]
-> 同步场景加载 (`LoadSceneSync`) 已被弃用，因为它可能导致严重的性能问题。请始终优先使用异步版本。
 
 ## 脚本定义符号
 

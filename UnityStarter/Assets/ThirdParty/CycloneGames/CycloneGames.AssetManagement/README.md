@@ -253,6 +253,35 @@ For more granular control, you can use the low-level `IAssetPackage` API.
   await package.ClearCacheFilesAsync(ClearCacheMode.Unused);
   ```
 
+## RawFile Loading
+
+RawFile support allows you to load non-compressed files like JSON, text files, or binary data. This is particularly useful for configuration files, game data, or any non-Unity asset content.
+
+```csharp
+// Asynchronous loading (recommended)
+using (var rawFileHandle = package.LoadRawFileAsync("Config/game_settings.json"))
+{
+    await rawFileHandle.Task;
+    
+    if (rawFileHandle.IsDone && string.IsNullOrEmpty(rawFileHandle.Error))
+    {
+        string jsonText = rawFileHandle.ReadText();
+        // Parse JSON, use text, etc.
+    }
+}
+
+// Synchronous loading (only if handle is guaranteed to be ready)
+var rawFileHandle = package.LoadRawFileSync("Data/level.bin");
+if (rawFileHandle.IsDone)
+{
+    byte[] binaryData = rawFileHandle.ReadBytes();
+    // Process binary data
+}
+rawFileHandle.Dispose();
+```
+> [!NOTE]
+> RawFile support is currently available in the YooAsset provider. The Addressables and Resources providers do not support RawFile loading - use `LoadAssetAsync<TextAsset>` for text files in those cases.
+
 ## Scene Management
 
 ```csharp
@@ -263,8 +292,6 @@ await sceneHandle.Task;
 // Asynchronous unload
 await package.UnloadSceneAsync(sceneHandle);
 ```
-> [!WARNING]
-> Synchronous scene loading (`LoadSceneSync`) is not recommended as it can cause significant performance issues by blocking the main thread. Always prefer the asynchronous version.
 
 ## Scripting Define Symbols
 
