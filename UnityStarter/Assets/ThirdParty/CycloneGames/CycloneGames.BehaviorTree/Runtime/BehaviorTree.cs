@@ -36,13 +36,13 @@ namespace CycloneGames.BehaviorTree.Runtime
         #endregion
 
         public bool IsCloned => _isCloned;
-        public GameObject Owner { get; internal set; } = null;
+        public GameObject Owner { get; private set; } = null;
         public BTNode Root;
         public BTState TreeState { get; private set; } = BTState.RUNNING;
         public List<BTNode> Nodes = new List<BTNode>();
 
         private IBlackBoard _lastBlackBoard = new BlackBoard();
-        internal bool _isCloned = false;
+        private bool _isCloned = false;
 
         private readonly List<BTNode> _childrenCache = new List<BTNode>(8);
         private readonly Stack<BTNode> _traverseStack = new Stack<BTNode>(16);
