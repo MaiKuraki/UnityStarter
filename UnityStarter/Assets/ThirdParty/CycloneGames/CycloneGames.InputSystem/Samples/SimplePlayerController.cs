@@ -3,8 +3,7 @@ using UnityEngine;
 namespace CycloneGames.InputSystem.Sample
 {
     /// <summary>
-    /// A simple example component to be placed on a player prefab.
-    /// It demonstrates how to receive input events from the commands.
+    /// Example component demonstrating input event handling via commands.
     /// </summary>
     public class SimplePlayerController : MonoBehaviour
     {
@@ -32,21 +31,18 @@ namespace CycloneGames.InputSystem.Sample
 
         public void OnMove(Vector2 direction)
         {
-            // Simple movement logic
             transform.Translate(new Vector3(direction.x, 0, direction.y) * (MoveSpeed * Time.deltaTime));
         }
 
         public void OnConfirm()
         {
-            Debug.Log($"Player {_playerId}: Confirm action triggered!");
-            // Example: Make the player jump or interact
+            Debug.Log($"Player {_playerId}: Confirm triggered!");
             transform.position += Vector3.up;
         }
-        
+
         public void OnConfirmLongPress()
         {
-            Debug.Log($"Player {_playerId}: Confirm action LONG-PRESSED!");
-            // Example: Make the player do a special move
+            Debug.Log($"Player {_playerId}: Confirm LONG-PRESSED!");
             transform.localScale *= 1.1f;
         }
     }
