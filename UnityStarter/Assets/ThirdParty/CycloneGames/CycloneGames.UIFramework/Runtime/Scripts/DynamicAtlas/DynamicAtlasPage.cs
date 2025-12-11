@@ -6,26 +6,29 @@ using Unity.Collections.LowLevel.Unsafe;
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
     /// <summary>
-    /// Represents a single Texture2D atlas page.
-    /// Handles insertion of textures onto its surface.
+    /// Represents a single Texture2D atlas page that handles texture insertion using shelf packing algorithm.
     /// </summary>
     public class DynamicAtlasPage : IDisposable
     {
         private const int Padding = 2;
+        private static int _pageIdCounter = 0;
 
         public Texture2D Texture { get; private set; }
         public int Width => _width;
         public int Height => _height;
         public bool IsFull { get; private set; }
 
-        // Track how many active sprites are on this page
-        public int ActiveSpriteCount { get; private set; }
+        private int _activeSpriteCount;
+        public int ActiveSpriteCount => _activeSpriteCount;
 
         private readonly int _width;
         private readonly int _height;
         private readonly CopyTextureSupport _copySupport;
+        private readonly int _pageId;
+        private bool _needsApply;
 
-        // Shelf Packing Cursor
+        public int PageId => _pageId;
+
         private int _currentX;
         private int _currentY;
         private int _maxYInRow;
@@ -35,6 +38,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _width = size;
             _height = size;
             _copySupport = SystemInfo.copyTextureSupport;
+            _pageId = System.Threading.Interlocked.Increment(ref _pageIdCounter);
 
             InitializeTexture();
         }
@@ -44,15 +48,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             Texture = new Texture2D(_width, _height, TextureFormat.RGBA32, false);
             Texture.filterMode = FilterMode.Bilinear;
             Texture.wrapMode = TextureWrapMode.Clamp;
-            Texture.name = $"DynamicAtlasPage_{Guid.NewGuid().ToString().Substring(0, 4)}";
+            Texture.name = "DynamicAtlasPage_" + _pageId;
 
-            // Clear texture
             var rawData = Texture.GetRawTextureData<Color32>();
             unsafe
             {
                 UnsafeUtility.MemClear(NativeArrayUnsafeUtility.GetUnsafePtr(rawData), rawData.Length * UnsafeUtility.SizeOf<Color32>());
             }
             Texture.Apply();
+            _needsApply = false;
         }
 
         public bool TryInsert(Texture2D source, out Rect uvRect)
@@ -62,6 +66,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             int w = source.width;
             int h = source.height;
+
+            int maxWidth = _width - Padding;
+            int maxHeight = _height - Padding;
+
+            if (w > maxWidth || h > maxHeight)
+            {
+                Debug.LogError($"[DynamicAtlasPage] Texture ({w}x{h}) is too large for page ({_width}x{_height}, max available: {maxWidth}x{maxHeight} with padding). Cannot insert.");
+                return false;
+            }
 
             if (_currentX + w + Padding > _width)
             {
@@ -84,16 +97,30 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 _currentX += w + Padding;
                 if (h > _maxYInRow) _maxYInRow = h;
 
-                uvRect.x = (float)xPos / _width;
-                uvRect.y = (float)yPos / _height;
-                uvRect.width = (float)w / _width;
-                uvRect.height = (float)h / _height;
+                float invWidth = 1.0f / _width;
+                float invHeight = 1.0f / _height;
+                uvRect.x = xPos * invWidth;
+                uvRect.y = yPos * invHeight;
+                uvRect.width = w * invWidth;
+                uvRect.height = h * invHeight;
 
-                ActiveSpriteCount++;
+                System.Threading.Interlocked.Increment(ref _activeSpriteCount);
                 return true;
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Applies pending texture changes. Call after batch insertions for better performance.
+        /// </summary>
+        public void ApplyIfNeeded()
+        {
+            if (_needsApply)
+            {
+                Texture.Apply();
+                _needsApply = false;
+            }
         }
 
         private bool CopyPixels(Texture2D source, int x, int y, int w, int h)
@@ -101,8 +128,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             bool useCopyTexture = (_copySupport & CopyTextureSupport.Basic) != 0;
             bool gpuCopySuccess = false;
 
-            // Attempt GPU Copy (Fastest, 0GC)
-            // Requires: System support + Format match
+            // Attempt GPU copy (fastest, zero GC allocation)
             if (useCopyTexture && source.format == Texture.format)
             {
                 try
@@ -112,22 +138,19 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 }
                 catch
                 {
-                    // Fallback to CPU if runtime error occurs (e.g. protection, driver bug)
                     gpuCopySuccess = false;
                 }
             }
 
             if (gpuCopySuccess) return true;
 
-            // Fallback to CPU (Slower, higher memory usage if source is readable)
-            // Requires: Source to be Readable
+            // Fallback to CPU copy
             if (!source.isReadable)
             {
                 Debug.LogError($"[DynamicAtlasPage] Insert failed. GPU CopyTexture failed (Supported: {useCopyTexture}, Format Match: {source.format == Texture.format}) and Source is NOT Readable.");
                 return false;
             }
 
-            // CPU Copy Implementation
             if (source.format == TextureFormat.RGBA32)
             {
                 var srcData = source.GetRawTextureData<Color32>();
@@ -140,38 +163,40 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
                     int srcWidth = source.width;
                     int dstWidth = _width;
+                    int rowSize = w * UnsafeUtility.SizeOf<Color32>();
 
                     for (int row = 0; row < h; row++)
                     {
                         Color32* srcRowPtr = srcPtr + (row * srcWidth);
                         Color32* dstRowPtr = dstPtr + ((y + row) * dstWidth + x);
 
-                        UnsafeUtility.MemCpy(dstRowPtr, srcRowPtr, w * UnsafeUtility.SizeOf<Color32>());
+                        UnsafeUtility.MemCpy(dstRowPtr, srcRowPtr, rowSize);
                     }
                 }
+
+                _needsApply = true;
             }
             else
             {
-                // Slowest path: GetPixels32 (Format conversion)
-                // Handles TextureFormat mismatch (e.g. DXT5 -> RGBA32)
+                // Format conversion path (slower, higher GC allocation)
                 var pixels = source.GetPixels32();
                 Texture.SetPixels32(x, y, w, h, pixels);
+                _needsApply = true;
             }
 
-            Texture.Apply(); // Upload CPU changes to GPU
             return true;
         }
 
         public void DecrementActiveCount()
         {
-            ActiveSpriteCount--;
-            if (ActiveSpriteCount < 0) ActiveSpriteCount = 0;
+            int newCount = System.Threading.Interlocked.Decrement(ref _activeSpriteCount);
+            if (newCount < 0)
+            {
+                System.Threading.Interlocked.CompareExchange(ref _activeSpriteCount, 0, newCount);
+            }
         }
-        
-        /// <summary>
-        /// Checks if this page is completely empty (no active sprites).
-        /// </summary>
-        public bool IsEmpty => ActiveSpriteCount == 0;
+
+        public bool IsEmpty => _activeSpriteCount == 0;
 
         public void Dispose()
         {
