@@ -3,10 +3,13 @@ using UnityEngine;
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement
 {
+    /// <summary>
+    /// Context struct passed between movement states. 
+    /// </summary>
     public struct MovementContext
     {
         public CharacterController CharacterController;
-        public Animator Animator;
+        public IAnimationController AnimationController;
         public Transform Transform;
         public MovementConfig Config;
 

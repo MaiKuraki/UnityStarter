@@ -1,10 +1,10 @@
-using System;
 using UnityEngine;
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement
 {
     /// <summary>
     /// Base configuration shared between 2D and 3D movement configs.
+    /// Animation parameter names are stored as strings for flexibility with different animation systems.
     /// </summary>
     public abstract class MovementConfigBase : ScriptableObject
     {
@@ -19,16 +19,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         public int maxJumpCount = 1;
 
         [Header("Animation Parameters")]
+        [Tooltip("Parameter name for movement speed (Float)")]
         public string movementSpeedParameter = "MovementSpeed";
+
+        [Tooltip("Parameter name for grounded state (Bool)")]
         public string isGroundedParameter = "IsGrounded";
+
+        [Tooltip("Parameter name for jump trigger (Trigger)")]
         public string jumpTrigger = "Jump";
-
-        [NonSerialized] private int _animIDMovementSpeed = -1;
-        [NonSerialized] private int _animIDIsGrounded = -1;
-        [NonSerialized] private int _animIDJump = -1;
-
-        public int AnimIDMovementSpeed => _animIDMovementSpeed != -1 ? _animIDMovementSpeed : (_animIDMovementSpeed = Animator.StringToHash(movementSpeedParameter));
-        public int AnimIDIsGrounded => _animIDIsGrounded != -1 ? _animIDIsGrounded : (_animIDIsGrounded = Animator.StringToHash(isGroundedParameter));
-        public int AnimIDJump => _animIDJump != -1 ? _animIDJump : (_animIDJump = Animator.StringToHash(jumpTrigger));
     }
 }
