@@ -15,9 +15,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, context.Config.jumpForce);
             _jumpCount++;
 
-            if (context.Animator != null)
+            if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                context.Animator.SetTrigger(context.Config.AnimIDJump);
+                int hash = AnimationParameterCache.GetHash(context.Config.jumpTrigger);
+                context.AnimationController.SetTrigger(hash);
             }
         }
 
@@ -30,10 +31,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             context.CurrentSpeed = math.abs(horizontalVelocity);
             context.CurrentVelocity = velocity;
 
-            if (context.Animator != null)
+            if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                context.Animator.SetFloat(context.Config.AnimIDMovementSpeed, context.CurrentSpeed);
-                context.Animator.SetFloat(context.Config.AnimIDVerticalSpeed, velocity.y);
+                int speedHash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                int verticalHash = AnimationParameterCache.GetHash(context.Config.verticalSpeedParameter);
+                context.AnimationController.SetFloat(speedHash, context.CurrentSpeed);
+                context.AnimationController.SetFloat(verticalHash, velocity.y);
             }
         }
 

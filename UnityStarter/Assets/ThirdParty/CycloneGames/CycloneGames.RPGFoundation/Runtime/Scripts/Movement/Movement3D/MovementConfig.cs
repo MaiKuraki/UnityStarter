@@ -1,4 +1,3 @@
-using System;
 using UnityEngine;
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement
@@ -24,10 +23,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         public float rotationSpeed = 20f;
 
         [Header("3D Animation (Additional)")]
+        [Tooltip("Parameter name for roll trigger (Trigger)")]
         public string rollTrigger = "Roll";
-
-        [NonSerialized] private int _animIDRoll = -1;
-
-        public int AnimIDRoll => _animIDRoll != -1 ? _animIDRoll : (_animIDRoll = Animator.StringToHash(rollTrigger));
     }
 }

@@ -14,6 +14,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         [Header("Dependencies")]
         [SerializeField] private Animator characterAnimator;
+        [SerializeField] private UnityEngine.Object animancerComponent;
 
         [Header("Ground Detection")]
         [SerializeField] private Transform groundCheck;
@@ -54,9 +55,56 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         void Awake()
         {
             _rigidbody = GetComponent<Rigidbody2D>();
-            if (characterAnimator == null)
+            
+            IAnimationController animationController = null;
+            
+            // Priority: Animancer > Manually assigned Animator > Auto-found Animator
+            if (animancerComponent != null)
             {
-                characterAnimator = GetComponent<Animator>();
+                // Validate Animancer's internal Animator if manual Animator is also assigned
+                if (characterAnimator != null)
+                {
+                    // Try to extract Animator from Animancer to verify consistency
+                    var animancerType = animancerComponent.GetType();
+                    var animatorProperty = animancerType.GetProperty("Animator",
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    
+                    if (animatorProperty != null)
+                    {
+                        var animancerAnimator = animatorProperty.GetValue(animancerComponent) as Animator;
+                        
+                        if (animancerAnimator != null && animancerAnimator != characterAnimator)
+                        {
+                            Debug.LogWarning(
+                                $"[MovementComponent2D] AnimancerComponent and manually assigned Animator reference different components on {gameObject.name}. " +
+                                $"Animancer's Animator: {animancerAnimator.name}, Manual Animator: {characterAnimator.name}. " +
+                                "Animancer will use its internal Animator. Consider removing the manual Animator assignment.",
+                                this);
+                        }
+                        else if (animancerAnimator == null)
+                        {
+                            Debug.LogWarning(
+                                $"[MovementComponent2D] AnimancerComponent on {gameObject.name} does not have an internal Animator. " +
+                                "It will use Parameters mode instead of Animator mode.",
+                                this);
+                        }
+                    }
+                }
+
+                // Create parameter name mapping for Animancer Parameters mode
+                var parameterMap = CreateParameterNameMap();
+                animationController = new AnimancerAnimationController(animancerComponent, parameterMap);
+            }
+            else
+            {
+                if (characterAnimator == null)
+                {
+                    characterAnimator = GetComponent<Animator>();
+                }
+                if (characterAnimator != null)
+                {
+                    animationController = new AnimatorAnimationController(characterAnimator);
+                }
             }
 
             if (config == null)
@@ -73,9 +121,81 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 groundCheck = groundCheckObj.transform;
             }
 
+            PreWarmAnimationParameters();
             InitializePhysics();
-            InitializeContext();
+            InitializeContext(animationController);
             _currentState = StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+        }
+
+        private System.Collections.Generic.Dictionary<int, string> CreateParameterNameMap()
+        {
+            if (config == null) return new System.Collections.Generic.Dictionary<int, string>();
+
+            var map = new System.Collections.Generic.Dictionary<int, string>();
+            
+            // Map parameter hashes to names for Animancer Parameters mode
+            if (!string.IsNullOrEmpty(config.movementSpeedParameter))
+            {
+                int hash = AnimationParameterCache.GetHash(config.movementSpeedParameter);
+                map[hash] = config.movementSpeedParameter;
+            }
+            
+            if (!string.IsNullOrEmpty(config.isGroundedParameter))
+            {
+                int hash = AnimationParameterCache.GetHash(config.isGroundedParameter);
+                map[hash] = config.isGroundedParameter;
+            }
+            
+            if (!string.IsNullOrEmpty(config.jumpTrigger))
+            {
+                int hash = AnimationParameterCache.GetHash(config.jumpTrigger);
+                map[hash] = config.jumpTrigger;
+            }
+            
+            if (!string.IsNullOrEmpty(config.verticalSpeedParameter))
+            {
+                int hash = AnimationParameterCache.GetHash(config.verticalSpeedParameter);
+                map[hash] = config.verticalSpeedParameter;
+            }
+            
+            if (!string.IsNullOrEmpty(config.inputXParameter))
+            {
+                int hash = AnimationParameterCache.GetHash(config.inputXParameter);
+                map[hash] = config.inputXParameter;
+            }
+            
+            if (!string.IsNullOrEmpty(config.inputYParameter))
+            {
+                int hash = AnimationParameterCache.GetHash(config.inputYParameter);
+                map[hash] = config.inputYParameter;
+            }
+            
+            if (!string.IsNullOrEmpty(config.rollTrigger))
+            {
+                int hash = AnimationParameterCache.GetHash(config.rollTrigger);
+                map[hash] = config.rollTrigger;
+            }
+            
+            return map;
+        }
+
+        private void PreWarmAnimationParameters()
+        {
+            if (config == null) return;
+            
+            AnimationParameterCache.PreWarm(
+                config.movementSpeedParameter,
+                config.isGroundedParameter,
+                config.jumpTrigger,
+                config.verticalSpeedParameter,
+                config.inputXParameter,
+                config.inputYParameter
+            );
+            
+            if (!string.IsNullOrEmpty(config.rollTrigger))
+            {
+                AnimationParameterCache.PreWarm(config.rollTrigger);
+            }
         }
 
         private void InitializePhysics()
@@ -98,12 +218,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             }
         }
 
-        private void InitializeContext()
+        private void InitializeContext(IAnimationController animationController)
         {
             _context = new MovementContext2D
             {
                 Rigidbody = _rigidbody,
-                Animator = characterAnimator,
+                AnimationController = animationController,
                 Transform = transform,
                 Config = config,
                 IsGrounded = false
@@ -165,14 +285,17 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             _context.DeltaTime = DeltaTime;
             _context.FixedDeltaTime = FixedDeltaTime;
 
-            if (characterAnimator != null)
+            if (_context.AnimationController != null && _context.AnimationController.IsValid)
             {
-                characterAnimator.SetBool(config.AnimIDIsGrounded, _context.IsGrounded);
-                characterAnimator.SetFloat(config.AnimIDVerticalSpeed, _rigidbody.velocity.y);
-
-                // Update InputX/InputY for Blend Trees (especially for TopDown)
-                characterAnimator.SetFloat(config.AnimIDInputX, _context.InputDirection.x);
-                characterAnimator.SetFloat(config.AnimIDInputY, _context.InputDirection.y);
+                int groundedHash = AnimationParameterCache.GetHash(config.isGroundedParameter);
+                int verticalHash = AnimationParameterCache.GetHash(config.verticalSpeedParameter);
+                int inputXHash = AnimationParameterCache.GetHash(config.inputXParameter);
+                int inputYHash = AnimationParameterCache.GetHash(config.inputYParameter);
+                
+                _context.AnimationController.SetBool(groundedHash, _context.IsGrounded);
+                _context.AnimationController.SetFloat(verticalHash, _rigidbody.velocity.y);
+                _context.AnimationController.SetFloat(inputXHash, _context.InputDirection.x);
+                _context.AnimationController.SetFloat(inputYHash, _context.InputDirection.y);
             }
         }
 
