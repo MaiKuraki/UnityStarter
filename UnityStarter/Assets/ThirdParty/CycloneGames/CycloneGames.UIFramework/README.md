@@ -54,20 +54,80 @@ The framework includes a production-grade **Dynamic Atlas System** (`DynamicAtla
 -   **Runtime Packing**: Combines individual textures into a single large texture at runtime.
 -   **Multi-Page Support**: Automatically creates new atlas pages when the current one is full.
 -   **Reference Counting**: Automatically frees space in the atlas when sprites are no longer in use.
+-   **Auto-Scaling**: Automatically scales large textures to fit within atlas pages.
 -   **Zero-Config**: Works out of the box with reasonable defaults, or can be customized.
 
 ### Usage
+
+#### Option 1: Using Factory (Recommended for DI)
 ```csharp
-// Inject or get the service
-IDynamicAtlas dynamicAtlas = ...; 
+using CycloneGames.UIFramework.DynamicAtlas;
+
+// Create factory
+var factory = new DynamicAtlasFactory();
+
+// Create instance with custom config
+var config = new DynamicAtlasConfig(
+    pageSize: 2048,
+    autoScaleLargeTextures: true
+);
+IDynamicAtlas atlas = factory.Create(config);
+
+// Or use shared singleton
+IDynamicAtlas atlas = factory.GetSharedInstance(config);
+```
+
+#### Option 2: Using DynamicAtlasManager (Singleton Pattern)
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+
+// Get singleton instance
+var manager = DynamicAtlasManager.Instance;
+
+// Configure (optional, uses defaults if not called)
+manager.Configure(
+    load: path => Resources.Load<Texture2D>(path),
+    unload: (path, tex) => Resources.UnloadAsset(tex),
+    size: 2048,
+    autoScaleLargeTextures: true
+);
 
 // Get a sprite (automatically loaded and packed)
-Sprite sprite = dynamicAtlas.GetSprite("Icons/SkillIcon_01");
+Sprite sprite = manager.GetSprite("Icons/SkillIcon_01");
 myImage.sprite = sprite;
 
 // Release when done (decrements ref count, frees space if 0)
-dynamicAtlas.ReleaseSprite("Icons/SkillIcon_01");
+manager.ReleaseSprite("Icons/SkillIcon_01");
 ```
+
+#### Option 3: Direct Service Usage
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+
+// Create service directly
+IDynamicAtlas atlas = new DynamicAtlasService(
+    forceSize: 2048,
+    loadFunc: path => Resources.Load<Texture2D>(path),
+    unloadFunc: (path, tex) => Resources.UnloadAsset(tex),
+    autoScaleLargeTextures: true
+);
+
+// Get a sprite
+Sprite sprite = atlas.GetSprite("Icons/SkillIcon_01");
+myImage.sprite = sprite;
+
+// Release when done
+atlas.ReleaseSprite("Icons/SkillIcon_01");
+
+// Cleanup
+atlas.Dispose();
+```
+
+### Best Practices
+- Always call `ReleaseSprite()` when a sprite is no longer needed (e.g., in `OnDisable` or `OnDestroy`).
+- Use the factory pattern for dependency injection frameworks.
+- Configure custom load/unload functions to integrate with your asset management system.
+- The system automatically handles texture scaling, but ensure source textures are readable for best performance.
 
 ## Advanced Features
 
