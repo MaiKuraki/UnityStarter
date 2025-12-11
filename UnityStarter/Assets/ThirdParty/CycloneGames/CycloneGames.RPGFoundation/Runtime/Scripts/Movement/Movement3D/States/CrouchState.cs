@@ -18,9 +18,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
             context.CurrentSpeed = speed;
             context.CurrentVelocity = movement;
 
-            if (context.Animator != null)
+            if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                context.Animator.SetFloat(context.Config.AnimIDMovementSpeed, math.length(movement));
+                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                context.AnimationController.SetFloat(hash, math.length(movement));
             }
         }
 
