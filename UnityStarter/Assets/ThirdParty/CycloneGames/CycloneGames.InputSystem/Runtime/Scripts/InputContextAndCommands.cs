@@ -8,8 +8,7 @@ namespace CycloneGames.InputSystem.Runtime
     #region Context
 
     /// <summary>
-    /// A runtime object holding the bindings for a specific context.
-    /// It links a context name to concrete command instances.
+    /// Runtime object holding bindings for a specific context. Links context name to command instances.
     /// </summary>
     public class InputContext
     {
@@ -48,29 +47,11 @@ namespace CycloneGames.InputSystem.Runtime
 
     #region Commands
 
-    /// <summary>
-    /// Base interface for all command types.
-    /// </summary>
     public interface ICommand { }
-
-    /// <summary>
-    /// Interface for commands that perform an action without parameters.
-    /// </summary>
     public interface IActionCommand : ICommand { void Execute(); }
-
-    /// <summary>
-    /// Interface for commands that process a Vector2 input.
-    /// </summary>
     public interface IMoveCommand : ICommand { void Execute(Vector2 direction); }
-
-    /// <summary>
-    /// Interface for commands that process a float input.
-    /// </summary>
     public interface IScalarCommand : ICommand { void Execute(float value); }
 
-    /// <summary>
-    /// A command that invokes a System.Action.
-    /// </summary>
     public class ActionCommand : IActionCommand
     {
         private readonly Action _action;
@@ -78,9 +59,6 @@ namespace CycloneGames.InputSystem.Runtime
         public void Execute() => _action?.Invoke();
     }
 
-    /// <summary>
-    /// A command that relays directional input to a System.Action<Vector2>.
-    /// </summary>
     public class MoveCommand : IMoveCommand
     {
         private readonly Action<Vector2> _action;
@@ -88,9 +66,6 @@ namespace CycloneGames.InputSystem.Runtime
         public void Execute(Vector2 direction) => _action?.Invoke(direction);
     }
 
-    /// <summary>
-    /// A command that relays scalar input to a System.Action<float>.
-    /// </summary>
     public class ScalarCommand : IScalarCommand
     {
         private readonly System.Action<float> _action;
@@ -99,8 +74,7 @@ namespace CycloneGames.InputSystem.Runtime
     }
 
     /// <summary>
-    /// A Null Object pattern implementation for commands. Does nothing when executed.
-    /// This is useful for preventing null reference exceptions for unassigned actions.
+    /// Null Object pattern implementation. Prevents null reference exceptions for unassigned actions.
     /// </summary>
     public class NullCommand : IActionCommand, IMoveCommand
     {
