@@ -1,4 +1,3 @@
-using System;
 using UnityEngine;
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement2D
@@ -34,19 +33,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         public float wallJumpForceY = 10f;
 
         [Header("2D Animation (Additional)")]
+        [Tooltip("Parameter name for vertical speed (Float)")]
         public string verticalSpeedParameter = "VerticalSpeed";
+
+        [Tooltip("Parameter name for roll trigger (Trigger)")]
         public string rollTrigger = "Roll";
+
+        [Tooltip("Parameter name for input X axis (Float)")]
         public string inputXParameter = "InputX";
+
+        [Tooltip("Parameter name for input Y axis (Float)")]
         public string inputYParameter = "InputY";
-
-        [NonSerialized] private int _animIDVerticalSpeed = -1;
-        [NonSerialized] private int _animIDRoll = -1;
-        [NonSerialized] private int _animIDInputX = -1;
-        [NonSerialized] private int _animIDInputY = -1;
-
-        public int AnimIDVerticalSpeed => _animIDVerticalSpeed != -1 ? _animIDVerticalSpeed : (_animIDVerticalSpeed = Animator.StringToHash(verticalSpeedParameter));
-        public int AnimIDRoll => _animIDRoll != -1 ? _animIDRoll : (_animIDRoll = Animator.StringToHash(rollTrigger));
-        public int AnimIDInputX => _animIDInputX != -1 ? _animIDInputX : (_animIDInputX = Animator.StringToHash(inputXParameter));
-        public int AnimIDInputY => _animIDInputY != -1 ? _animIDInputY : (_animIDInputY = Animator.StringToHash(inputYParameter));
     }
 }

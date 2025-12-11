@@ -13,9 +13,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
             context.VerticalVelocity = context.Config.jumpForce;
             _jumpCount++;
 
-            if (context.Animator != null)
+            if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                context.Animator.SetTrigger(context.Config.AnimIDJump);
+                int hash = AnimationParameterCache.GetHash(context.Config.jumpTrigger);
+                context.AnimationController.SetTrigger(hash);
             }
         }
 
@@ -30,9 +31,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
             context.CurrentSpeed = math.length(movement);
             context.CurrentVelocity = movement;
 
-            if (context.Animator != null)
+            if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                context.Animator.SetFloat(context.Config.AnimIDMovementSpeed, context.CurrentSpeed);
+                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                context.AnimationController.SetFloat(hash, context.CurrentSpeed);
             }
 
             if (context.VerticalVelocity < 0)

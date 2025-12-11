@@ -14,6 +14,7 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         [Header("Dependencies")]
         [SerializeField] private Animator characterAnimator;
+        [SerializeField] private UnityEngine.Object animancerComponent;
 
         [Header("Gravity & Alignment")]
         [SerializeField] private Transform worldUpSource;
@@ -52,9 +53,56 @@ namespace CycloneGames.RPGFoundation.Runtime
         void Awake()
         {
             _characterController = GetComponent<CharacterController>();
-            if (characterAnimator == null)
+
+            IAnimationController animationController = null;
+            
+            // Priority: Animancer > Manually assigned Animator > Auto-found Animator
+            if (animancerComponent != null)
             {
-                characterAnimator = GetComponent<Animator>();
+                // Validate Animancer's internal Animator if manual Animator is also assigned
+                if (characterAnimator != null)
+                {
+                    // Try to extract Animator from Animancer to verify consistency
+                    var animancerType = animancerComponent.GetType();
+                    var animatorProperty = animancerType.GetProperty("Animator",
+                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    
+                    if (animatorProperty != null)
+                    {
+                        var animancerAnimator = animatorProperty.GetValue(animancerComponent) as Animator;
+                        
+                        if (animancerAnimator != null && animancerAnimator != characterAnimator)
+                        {
+                            Debug.LogWarning(
+                                $"[MovementComponent] AnimancerComponent and manually assigned Animator reference different components on {gameObject.name}. " +
+                                $"Animancer's Animator: {animancerAnimator.name}, Manual Animator: {characterAnimator.name}. " +
+                                "Animancer will use its internal Animator. Consider removing the manual Animator assignment.",
+                                this);
+                        }
+                        else if (animancerAnimator == null)
+                        {
+                            Debug.LogWarning(
+                                $"[MovementComponent] AnimancerComponent on {gameObject.name} does not have an internal Animator. " +
+                                "It will use Parameters mode instead of Animator mode.",
+                                this);
+                        }
+                    }
+                }
+
+                // Create parameter name mapping for Animancer Parameters mode
+                var parameterMap = CreateParameterNameMap();
+                animationController = new AnimancerAnimationController(animancerComponent, parameterMap);
+            }
+            else
+            {
+                if (characterAnimator == null)
+                {
+                    characterAnimator = GetComponent<Animator>();
+                }
+                if (characterAnimator != null)
+                {
+                    animationController = new AnimatorAnimationController(characterAnimator);
+                }
             }
 
             if (config == null)
@@ -63,9 +111,60 @@ namespace CycloneGames.RPGFoundation.Runtime
                 config = ScriptableObject.CreateInstance<MovementConfig>();
             }
 
-            InitializeContext();
+            PreWarmAnimationParameters();
+            InitializeContext(animationController);
             _currentState = StatePool<MovementStateBase>.GetState<IdleState>();
             _currentRotation = transform.rotation;
+        }
+
+        private System.Collections.Generic.Dictionary<int, string> CreateParameterNameMap()
+        {
+            if (config == null) return new System.Collections.Generic.Dictionary<int, string>();
+
+            var map = new System.Collections.Generic.Dictionary<int, string>();
+
+            // Map parameter hashes to names for Animancer Parameters mode
+            if (!string.IsNullOrEmpty(config.movementSpeedParameter))
+            {
+                int hash = AnimationParameterCache.GetHash(config.movementSpeedParameter);
+                map[hash] = config.movementSpeedParameter;
+            }
+
+            if (!string.IsNullOrEmpty(config.isGroundedParameter))
+            {
+                int hash = AnimationParameterCache.GetHash(config.isGroundedParameter);
+                map[hash] = config.isGroundedParameter;
+            }
+
+            if (!string.IsNullOrEmpty(config.jumpTrigger))
+            {
+                int hash = AnimationParameterCache.GetHash(config.jumpTrigger);
+                map[hash] = config.jumpTrigger;
+            }
+
+            if (config is MovementConfig config3D && !string.IsNullOrEmpty(config3D.rollTrigger))
+            {
+                int hash = AnimationParameterCache.GetHash(config3D.rollTrigger);
+                map[hash] = config3D.rollTrigger;
+            }
+
+            return map;
+        }
+
+        private void PreWarmAnimationParameters()
+        {
+            if (config == null) return;
+
+            AnimationParameterCache.PreWarm(
+                config.movementSpeedParameter,
+                config.isGroundedParameter,
+                config.jumpTrigger
+            );
+
+            if (config is MovementConfig config3D && !string.IsNullOrEmpty(config3D.rollTrigger))
+            {
+                AnimationParameterCache.PreWarm(config3D.rollTrigger);
+            }
         }
 
         void Start()
@@ -84,12 +183,12 @@ namespace CycloneGames.RPGFoundation.Runtime
             ExecuteStateMachine();
         }
 
-        private void InitializeContext()
+        private void InitializeContext(IAnimationController animationController)
         {
             _context = new MovementContext
             {
                 CharacterController = _characterController,
-                Animator = characterAnimator,
+                AnimationController = animationController,
                 Transform = transform,
                 Config = config,
                 WorldUp = WorldUp,
@@ -108,9 +207,10 @@ namespace CycloneGames.RPGFoundation.Runtime
                 _context.VerticalVelocity = _groundedVerticalVelocity;
             }
 
-            if (characterAnimator != null)
+            if (_context.AnimationController != null && _context.AnimationController.IsValid)
             {
-                characterAnimator.SetBool(config.AnimIDIsGrounded, _context.IsGrounded);
+                int hash = AnimationParameterCache.GetHash(config.isGroundedParameter);
+                _context.AnimationController.SetBool(hash, _context.IsGrounded);
             }
         }
 
@@ -262,7 +362,11 @@ namespace CycloneGames.RPGFoundation.Runtime
             {
                 characterAnimator.applyRootMotion = true;
                 float speed = worldVelocity.magnitude;
-                characterAnimator.SetFloat(config.AnimIDMovementSpeed, speed);
+                if (_context.AnimationController != null && _context.AnimationController.IsValid)
+                {
+                    int hash = AnimationParameterCache.GetHash(config.movementSpeedParameter);
+                    _context.AnimationController.SetFloat(hash, speed);
+                }
             }
         }
 

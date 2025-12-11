@@ -1,12 +1,16 @@
 using Unity.Mathematics;
 using UnityEngine;
+using CycloneGames.RPGFoundation.Runtime.Movement;
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 {
+    /// <summary>
+    /// Context struct passed between 2D movement states. 
+    /// </summary>
     public struct MovementContext2D
     {
         public Rigidbody2D Rigidbody;
-        public Animator Animator;
+        public IAnimationController AnimationController;
         public Transform Transform;
         public MovementConfig2D Config;
 
