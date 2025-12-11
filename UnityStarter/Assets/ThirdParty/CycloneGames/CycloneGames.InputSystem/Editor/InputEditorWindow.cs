@@ -12,23 +12,18 @@ namespace CycloneGames.InputSystem.Editor
 {
     public class InputEditorWindow : EditorWindow
     {
-        // --- Private Fields ---
         private InputConfigurationSO _configSO;
         private SerializedObject _serializedConfig;
         private Vector2 _scrollPosition;
         private GUIStyle _overflowLabelStyle;
-
         private string _defaultConfigPath;
         private string _userConfigPath;
         private string _statusMessage;
         private MessageType _statusMessageType = MessageType.Info;
-
-        // --- Code Generation Settings ---
         private string _codegenPath;
         private string _codegenNamespace;
         private DefaultAsset _codegenFolder;
 
-        // --- Constants ---
         private const string DefaultConfigFileName = "input_config.yaml";
         private const string UserConfigFileName = "user_input_settings.yaml";
 
@@ -42,15 +37,13 @@ namespace CycloneGames.InputSystem.Editor
         {
             _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(DefaultConfigFileName, UnityPathSource.StreamingAssets);
             _userConfigPath = FilePathUtility.GetUnityWebRequestUri(UserConfigFileName, UnityPathSource.PersistentData);
-            
-            // Load codegen settings
             _codegenPath = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenPath", "Assets");
             _codegenNamespace = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenNamespace", "YourGame.Input.Generated");
             if (!string.IsNullOrEmpty(_codegenPath))
             {
                 _codegenFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_codegenPath);
             }
-            
+
             LoadUserConfig();
         }
 
@@ -67,7 +60,7 @@ namespace CycloneGames.InputSystem.Editor
             }
             DrawToolbar();
             DrawStatusBar();
-            
+
             DrawCodegenSettings();
 
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
@@ -92,8 +85,6 @@ namespace CycloneGames.InputSystem.Editor
                     for (int i = 0; i < slotsProp.arraySize; i++)
                     {
                         var slotProp = slotsProp.GetArrayElementAtIndex(i);
-                        
-                        // Player header with remove button
                         EditorGUILayout.BeginHorizontal();
                         EditorGUILayout.LabelField($"Player {i}", EditorStyles.boldLabel);
                         if (GUILayout.Button("Remove", GUILayout.Width(60)))
@@ -102,24 +93,20 @@ namespace CycloneGames.InputSystem.Editor
                             break;
                         }
                         EditorGUILayout.EndHorizontal();
-                        
+
                         EditorGUI.indentLevel++;
-                        
-                        // Player ID
                         EditorGUILayout.PropertyField(slotProp.FindPropertyRelative("PlayerId"));
-                        
-                        // Join Action for this player (always visible)
                         EditorGUILayout.LabelField("Join Action", EditorStyles.boldLabel);
                         EditorGUI.indentLevel++;
                         var joinTypeProp = slotProp.FindPropertyRelative("JoinAction.Type");
                         var joinActionProp = slotProp.FindPropertyRelative("JoinAction.ActionName");
                         var joinBindingsProp = slotProp.FindPropertyRelative("JoinAction.DeviceBindings");
                         var joinLongPressProp = slotProp.FindPropertyRelative("JoinAction.LongPressMs");
-                        
+
                         EditorGUILayout.PropertyField(joinTypeProp);
                         EditorGUILayout.PropertyField(joinActionProp);
                         EditorGUILayout.PropertyField(joinBindingsProp, true);
-                        
+
                         var joinType = (CycloneGames.InputSystem.Runtime.ActionValueType)joinTypeProp.enumValueIndex;
                         if (joinType == CycloneGames.InputSystem.Runtime.ActionValueType.Button)
                         {
@@ -141,13 +128,11 @@ namespace CycloneGames.InputSystem.Editor
                             EditorGUILayout.EndHorizontal();
                         }
                         EditorGUI.indentLevel--;
-                        
-                        // Contexts (collapsible)
+
                         var contextsProp = slotProp.FindPropertyRelative("Contexts");
                         EditorGUILayout.PropertyField(contextsProp, new GUIContent("Contexts"), true);
                         EditorGUI.indentLevel--;
-                        
-                        // Add separator between players
+
                         if (i < slotsProp.arraySize - 1)
                         {
                             EditorGUILayout.Space();
@@ -183,7 +168,7 @@ namespace CycloneGames.InputSystem.Editor
             if (GUILayout.Button("Save to User Config", EditorStyles.toolbarButton)) SaveChangesToUserConfig();
             if (GUILayout.Button("Save and Generate Constants", EditorStyles.toolbarButton))
             {
-                SaveChangesToUserConfig(true); // Pass true to trigger generation
+                SaveChangesToUserConfig(true);
             }
             GUI.enabled = true;
             GUILayout.FlexibleSpace();
@@ -229,7 +214,7 @@ namespace CycloneGames.InputSystem.Editor
                     EditorPrefs.SetString("CycloneGames.InputSystem.CodegenNamespace", _codegenNamespace);
                 }
             }
-            
+
             EditorGUI.indentLevel--;
             EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
         }
@@ -334,9 +319,6 @@ namespace CycloneGames.InputSystem.Editor
             }
         }
 
-        /// <summary>
-        /// Generates a new default configuration file with a standard template.
-        /// </summary>
         private void GenerateDefaultConfigFile()
         {
             string localPath = new System.Uri(_defaultConfigPath).LocalPath;
@@ -373,7 +355,7 @@ namespace CycloneGames.InputSystem.Editor
                 SetStatus($"Error generating default config: {e.Message}", MessageType.Error);
             }
         }
-        
+
         private void GenerateConstantsFile(InputConfiguration config)
         {
             var actionMaps = new HashSet<string>();
@@ -411,7 +393,7 @@ namespace CycloneGames.InputSystem.Editor
                     }
                 }
             }
-            
+
             if (config.JoinAction != null && !string.IsNullOrEmpty(config.JoinAction.ActionName))
             {
                 actions.Add(config.JoinAction.ActionName);
@@ -422,22 +404,21 @@ namespace CycloneGames.InputSystem.Editor
             sb.AppendLine("// This file is generated by the CycloneGames.InputSystem Editor window.");
             sb.AppendLine("// Do not modify this file manually.");
             sb.AppendLine();
+            sb.AppendLine("using CycloneGames.InputSystem.Runtime;");
+            sb.AppendLine();
             sb.AppendLine($"namespace {_codegenNamespace}");
             sb.AppendLine("{");
             sb.AppendLine("    public static class InputActions");
             sb.AppendLine("    {");
-
-            // --- ActionMaps Class ---
             sb.AppendLine("        public static class ActionMaps");
             sb.AppendLine("        {");
             foreach (var map in actionMaps.OrderBy(a => a))
             {
-                sb.AppendLine($"            public static readonly int {SanitizeIdentifier(map)} = \"{map}\".GetHashCode();");
+                sb.AppendLine($"            /// <summary>ActionMap: \"{map}\"</summary>");
+                sb.AppendLine($"            public static readonly int {SanitizeIdentifier(map)} = InputHashUtility.GetDeterministicHashCode(\"{map}\");");
             }
             sb.AppendLine("        }");
             sb.AppendLine();
-
-            // --- Actions Class (now with context) ---
             sb.AppendLine("        public static class Actions");
             sb.AppendLine("        {");
             if (config.PlayerSlots != null)
@@ -452,26 +433,21 @@ namespace CycloneGames.InputSystem.Editor
                 foreach (var binding in allBindings.OrderBy(b => b.Context).ThenBy(b => b.Action))
                 {
                     if (string.IsNullOrEmpty(binding.Action)) continue;
-                    
-                    // The constant name is Context_Action for intuitive use in code.
+
                     string constantName = $"{binding.Context}_{binding.Action}";
-                    // The ID is based on Map/Action, as the runtime InputActionAsset is structured by maps.
-                    string uniqueId = $"{binding.Map}/{binding.Action}";
-                    sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = \"{uniqueId}\".GetHashCode();");
+                    sb.AppendLine($"            /// <summary>Action: \"{binding.Map}/{binding.Action}\" (Context: {binding.Context})</summary>");
+                    sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = InputHashUtility.GetActionId(\"{binding.Map}\", \"{binding.Action}\");");
                 }
             }
-            // Also handle player-specific join actions
             if (config.PlayerSlots != null)
             {
                 foreach (var slot in config.PlayerSlots.Where(s => s.JoinAction != null && !string.IsNullOrEmpty(s.JoinAction.ActionName)))
                 {
-                    // We'll invent a context name for these for clarity
                     const string joinContext = "PlayerJoin";
-                    // And a map name
                     const string joinMap = "GlobalActions";
                     string constantName = $"{joinContext}_P{slot.PlayerId}_{slot.JoinAction.ActionName}";
-                    string uniqueId = $"{joinMap}/{slot.JoinAction.ActionName}";
-                     sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = \"{uniqueId}\".GetHashCode();");
+                    sb.AppendLine($"            /// <summary>Join Action for Player {slot.PlayerId}: \"{joinMap}/{slot.JoinAction.ActionName}\"</summary>");
+                    sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = InputHashUtility.GetActionId(\"{joinMap}\", \"{slot.JoinAction.ActionName}\");");
                 }
             }
             sb.AppendLine("        }");
@@ -494,10 +470,10 @@ namespace CycloneGames.InputSystem.Editor
 
                 string filePath = Path.Combine(_codegenPath, "InputActions.cs");
                 File.WriteAllText(filePath, sb.ToString());
-                
+
                 SetStatus("Successfully saved and generated constants file.", MessageType.Info);
                 EditorUtility.DisplayDialog("Save & Generate Successful", "User input configuration has been saved and InputActions.cs has been generated.", "OK");
-                
+
                 AssetDatabase.Refresh();
             }
             catch (System.Exception e)
@@ -512,7 +488,7 @@ namespace CycloneGames.InputSystem.Editor
 
             var sb = new StringBuilder();
             char firstChar = name[0];
-            
+
             // Handle first character
             if (char.IsLetter(firstChar) || firstChar == '_')
             {
@@ -544,9 +520,6 @@ namespace CycloneGames.InputSystem.Editor
             return sb.ToString();
         }
 
-        /// <summary>
-        /// Creates a hardcoded template for a new default configuration.
-        /// </summary>
         private InputConfiguration CreateDefaultConfigTemplate()
         {
             return new InputConfiguration
@@ -648,11 +621,9 @@ namespace CycloneGames.InputSystem.Editor
             int newIndex = slotsProp.arraySize;
             slotsProp.arraySize++;
             var newSlot = slotsProp.GetArrayElementAtIndex(newIndex);
-            
-            // Set default values for new player
+
             newSlot.FindPropertyRelative("PlayerId").intValue = newIndex;
-            
-            // Add default join action
+
             var joinAction = newSlot.FindPropertyRelative("JoinAction");
             joinAction.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Button;
             joinAction.FindPropertyRelative("ActionName").stringValue = "JoinGame";
@@ -661,19 +632,16 @@ namespace CycloneGames.InputSystem.Editor
             joinBindings.GetArrayElementAtIndex(0).stringValue = "<Keyboard>/enter";
             joinBindings.GetArrayElementAtIndex(1).stringValue = "<Gamepad>/start";
             joinAction.FindPropertyRelative("LongPressMs").intValue = 0;
-            
-            // Add default context
+
             var contexts = newSlot.FindPropertyRelative("Contexts");
             contexts.arraySize = 1;
             var context = contexts.GetArrayElementAtIndex(0);
             context.FindPropertyRelative("Name").stringValue = "Gameplay";
             context.FindPropertyRelative("ActionMap").stringValue = "PlayerActions";
-            
-            // Add default bindings
+
             var bindings = context.FindPropertyRelative("Bindings");
             bindings.arraySize = 2;
-            
-            // Move binding
+
             var moveBinding = bindings.GetArrayElementAtIndex(0);
             moveBinding.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Vector2;
             moveBinding.FindPropertyRelative("ActionName").stringValue = "Move";
@@ -684,8 +652,7 @@ namespace CycloneGames.InputSystem.Editor
             moveDeviceBindings.GetArrayElementAtIndex(2).stringValue = "<Mouse>/delta";
             moveBinding.FindPropertyRelative("LongPressMs").intValue = 0;
             moveBinding.FindPropertyRelative("LongPressValueThreshold").floatValue = 0f;
-            
-            // Confirm binding
+
             var confirmBinding = bindings.GetArrayElementAtIndex(1);
             confirmBinding.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Button;
             confirmBinding.FindPropertyRelative("ActionName").stringValue = "Confirm";
@@ -695,7 +662,7 @@ namespace CycloneGames.InputSystem.Editor
             confirmDeviceBindings.GetArrayElementAtIndex(1).stringValue = "<Keyboard>/space";
             confirmBinding.FindPropertyRelative("LongPressMs").intValue = 500;
             confirmBinding.FindPropertyRelative("LongPressValueThreshold").floatValue = 0f;
-            
+
             _serializedConfig.ApplyModifiedProperties();
         }
 
@@ -704,8 +671,7 @@ namespace CycloneGames.InputSystem.Editor
             int newIndex = bindingsProp.arraySize;
             bindingsProp.arraySize++;
             var newBinding = bindingsProp.GetArrayElementAtIndex(newIndex);
-            
-            // Set default values for new binding
+
             newBinding.FindPropertyRelative("Type").enumValueIndex = (int)CycloneGames.InputSystem.Runtime.ActionValueType.Button;
             newBinding.FindPropertyRelative("ActionName").stringValue = "NewAction";
             var deviceBindings = newBinding.FindPropertyRelative("DeviceBindings");
@@ -713,7 +679,7 @@ namespace CycloneGames.InputSystem.Editor
             deviceBindings.GetArrayElementAtIndex(0).stringValue = "<Keyboard>/space";
             newBinding.FindPropertyRelative("LongPressMs").intValue = 0;
             newBinding.FindPropertyRelative("LongPressValueThreshold").floatValue = 0.5f;
-            
+
             _serializedConfig.ApplyModifiedProperties();
         }
     }

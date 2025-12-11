@@ -11,13 +11,13 @@ namespace CycloneGames.InputSystem.Editor
     {
         public ActionValueType Type;
         public string ActionName;
-        [StringAsConstSelector(typeof(InputBindingConstants), UseMenu = true)] // Custom drawer for this list!
+        [StringAsConstSelector(typeof(InputBindingConstants), UseMenu = true)]
         public List<string> DeviceBindings = new List<string>();
         [Tooltip("Long-press duration in milliseconds (Button or Float)")]
         [Min(0)]
         public int LongPressMs = 0;
         [Range(0f, 1f)]
-        [Tooltip("For Float actions (e.g., Trigger): actuation threshold for long-press timing")] 
+        [Tooltip("For Float actions (e.g., Trigger): actuation threshold for long-press timing")]
         public float LongPressValueThreshold = 0.5f;
 
         public void FromData(ActionBindingConfig data)
@@ -54,7 +54,7 @@ namespace CycloneGames.InputSystem.Editor
         [Min(0)]
         public int LongPressMs = 0;
         [Range(0f, 1f)]
-        [Tooltip("For Float actions (e.g., Trigger): actuation threshold for long-press timing")] 
+        [Tooltip("For Float actions (e.g., Trigger): actuation threshold for long-press timing")]
         public float LongPressValueThreshold = 0.5f;
 
         public void FromData(ActionBindingConfig data)
@@ -211,7 +211,6 @@ namespace CycloneGames.InputSystem.Editor
 
         public void FromData(InputConfiguration data)
         {
-            // Now correctly creates simple class instances, NOT ScriptableObjects.
             _playerSlots = data.PlayerSlots.Select(p =>
             {
                 var drawerData = new PlayerSlotDrawerData();
