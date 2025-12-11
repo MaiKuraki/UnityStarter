@@ -54,20 +54,80 @@
 -   **运行时打包**: 在运行时将单独的纹理合并为单个大纹理。
 -   **多页面支持**: 当当前图集页面已满时，自动创建新页面。
 -   **引用计数**: 当精灵不再使用时，自动释放图集空间。
+-   **自动缩放**: 自动将过大的纹理缩放到适合图集页面的大小。
 -   **零配置**: 开箱即用，提供合理的默认值，也可自定义。
 
 ### 用法
+
+#### 方式一：使用工厂模式（推荐用于依赖注入）
 ```csharp
-// 注入或获取服务
-IDynamicAtlas dynamicAtlas = ...; 
+using CycloneGames.UIFramework.DynamicAtlas;
+
+// 创建工厂
+var factory = new DynamicAtlasFactory();
+
+// 使用自定义配置创建实例
+var config = new DynamicAtlasConfig(
+    pageSize: 2048,
+    autoScaleLargeTextures: true
+);
+IDynamicAtlas atlas = factory.Create(config);
+
+// 或使用共享单例
+IDynamicAtlas atlas = factory.GetSharedInstance(config);
+```
+
+#### 方式二：使用 DynamicAtlasManager（单例模式）
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+
+// 获取单例实例
+var manager = DynamicAtlasManager.Instance;
+
+// 配置（可选，不调用则使用默认值）
+manager.Configure(
+    load: path => Resources.Load<Texture2D>(path),
+    unload: (path, tex) => Resources.UnloadAsset(tex),
+    size: 2048,
+    autoScaleLargeTextures: true
+);
 
 // 获取精灵（自动加载并打包）
-Sprite sprite = dynamicAtlas.GetSprite("Icons/SkillIcon_01");
+Sprite sprite = manager.GetSprite("Icons/SkillIcon_01");
 myImage.sprite = sprite;
 
 // 完成时释放（减少引用计数，如果为0则释放空间）
-dynamicAtlas.ReleaseSprite("Icons/SkillIcon_01");
+manager.ReleaseSprite("Icons/SkillIcon_01");
 ```
+
+#### 方式三：直接使用服务
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+
+// 直接创建服务
+IDynamicAtlas atlas = new DynamicAtlasService(
+    forceSize: 2048,
+    loadFunc: path => Resources.Load<Texture2D>(path),
+    unloadFunc: (path, tex) => Resources.UnloadAsset(tex),
+    autoScaleLargeTextures: true
+);
+
+// 获取精灵
+Sprite sprite = atlas.GetSprite("Icons/SkillIcon_01");
+myImage.sprite = sprite;
+
+// 完成时释放
+atlas.ReleaseSprite("Icons/SkillIcon_01");
+
+// 清理
+atlas.Dispose();
+```
+
+### 最佳实践
+- 当精灵不再需要时（例如在 `OnDisable` 或 `OnDestroy` 中）始终调用 `ReleaseSprite()`。
+- 对于依赖注入框架，使用工厂模式。
+- 配置自定义加载/卸载函数以与您的资源管理系统集成。
+- 系统会自动处理纹理缩放，但为了获得最佳性能，请确保源纹理是可读的。
 
 ## 高级特性 (Advanced Features)
 
