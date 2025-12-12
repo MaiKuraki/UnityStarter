@@ -12,6 +12,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
         public static T GetState<T>() where T : TState, new()
         {
+            if (StateInstanceCache<T>.Instance == null)
+            {
+                StateInstanceCache<T>.CreateInstance();
+            }
             return StateInstanceCache<T>.Instance;
         }
 
@@ -21,12 +25,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             {
                 action?.Invoke();
             }
-            _clearActions.Clear();
         }
 
         private static class StateInstanceCache<T> where T : TState, new()
         {
             public static T Instance;
+            private static bool _clearActionRegistered = false;
 
             static StateInstanceCache()
             {
@@ -36,7 +40,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             public static void CreateInstance()
             {
                 Instance = new T();
-                StatePool<TState>.RegisterClearAction(() => Instance = default(T));
+                if (!_clearActionRegistered)
+                {
+                    StatePool<TState>.RegisterClearAction(() => Instance = default(T));
+                    _clearActionRegistered = true;
+                }
             }
         }
 
