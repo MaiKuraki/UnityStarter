@@ -8,17 +8,17 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
     /// </summary>
     public abstract class MovementConfigBase : ScriptableObject
     {
-        [Header("Ground Movement")]
+        // Ground Movement - displayed in Custom Editor
         public float walkSpeed = 3f;
         public float runSpeed = 5f;
         public float sprintSpeed = 8f;
         public float crouchSpeed = 1.5f;
 
-        [Header("Jump")]
+        // Jump - displayed in Custom Editor
         public float jumpForce = 10f;
         public int maxJumpCount = 1;
 
-        [Header("Animation Parameters")]
+        // Animation Parameters - displayed in Custom Editor
         [Tooltip("Parameter name for movement speed (Float)")]
         public string movementSpeedParameter = "MovementSpeed";
 

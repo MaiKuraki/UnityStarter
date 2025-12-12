@@ -29,5 +29,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
         public float3 CurrentVelocity;
         public float CurrentSpeed;
+
+        /// <summary>
+        /// Whether to use root motion for the current state.
+        /// Can be set by states to enable/disable root motion dynamically.
+        /// </summary>
+        public bool UseRootMotion;
     }
 }
