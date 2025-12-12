@@ -7,13 +7,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
     {
         public override Movement.MovementStateType StateType => Movement.MovementStateType.Jump;
 
-        private int _jumpCount;
-
         public override void OnEnter(ref MovementContext2D context)
         {
             float horizontalVelocity = context.Rigidbody.velocity.x;
             context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, context.Config.jumpForce);
-            _jumpCount++;
+            context.JumpCount++;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
@@ -44,7 +42,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
         {
             if (context.IsGrounded && context.Rigidbody.velocity.y <= 0)
             {
-                _jumpCount = 0;
+                context.JumpCount = 0;
                 return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
             }
 
@@ -53,11 +51,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
                 return StatePool<MovementStateBase2D>.GetState<FallState2D>();
             }
 
-            if (context.JumpPressed && _jumpCount < context.Config.maxJumpCount)
+            if (context.JumpPressed && context.JumpCount < context.Config.maxJumpCount)
             {
                 float horizontalVelocity = context.Rigidbody.velocity.x;
                 context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, context.Config.jumpForce);
-                _jumpCount++;
+                context.JumpCount++;
             }
 
             return null;
@@ -65,7 +63,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
         public override void OnExit(ref MovementContext2D context)
         {
-            _jumpCount = 0;
+            context.JumpCount = 0;
         }
     }
 }
