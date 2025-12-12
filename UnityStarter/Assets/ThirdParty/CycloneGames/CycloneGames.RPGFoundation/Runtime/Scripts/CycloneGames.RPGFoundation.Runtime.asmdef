@@ -2,7 +2,9 @@
     "name": "CycloneGames.RPGFoundation.Runtime",
     "rootNamespace": "",
     "references": [
-        "Unity.Mathematics"
+        "Unity.Mathematics",
+        "CycloneGames.Logger",
+        "Kybernetik.Animancer"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -11,6 +13,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.kybernetik.animancer",
+            "expression": "",
+            "define": "ANIMANCER_PRESENT"
+        }
+    ],
     "noEngineReferences": false
 }

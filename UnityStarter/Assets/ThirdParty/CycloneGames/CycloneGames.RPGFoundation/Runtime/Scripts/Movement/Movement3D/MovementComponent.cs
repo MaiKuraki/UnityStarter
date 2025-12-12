@@ -3,6 +3,10 @@ using Unity.Mathematics;
 using UnityEngine;
 using CycloneGames.RPGFoundation.Runtime.Movement;
 using CycloneGames.RPGFoundation.Runtime.Movement.States;
+using CycloneGames.Logger;
+#if ANIMANCER_PRESENT
+using Animancer;
+#endif
 
 namespace CycloneGames.RPGFoundation.Runtime
 {
@@ -72,12 +76,14 @@ namespace CycloneGames.RPGFoundation.Runtime
         private const float _minSqrMagnitudeForMovement = 0.0001f;
         private const float _groundedVerticalVelocity = -2f;
 
-        // Cache whether we're using Animancer (which doesn't support root motion via OnAnimatorMove)
         private bool _isUsingAnimancer = false;
-        // Cache whether we're using HybridAnimancerComponent (which DOES support root motion)
         private bool _isUsingHybridAnimancer = false;
         // Cache the Animator from HybridAnimancerComponent for root motion support
         private Animator _hybridAnimancerAnimator = null;
+        private Animator _cachedTargetAnimator = null;
+        private System.Collections.Generic.Dictionary<int, string> _cachedParameterMap = null;
+        private bool _worldUpChanged = true;
+        private static readonly float3 UnityUpVector = new float3(0, 1, 0);
 
         private float DeltaTime => (ignoreTimeScale ? Time.unscaledDeltaTime : Time.deltaTime) * LocalTimeScale;
 
@@ -100,20 +106,76 @@ namespace CycloneGames.RPGFoundation.Runtime
             {
                 _isUsingAnimancer = true;
 
-                // Check if this is a HybridAnimancerComponent (which supports root motion)
+#if ANIMANCER_PRESENT
+                // Use direct type checking with zero overhead (compile-time optimization)
+                // This supports inheritance: if user inherits HybridAnimancerComponent, 'is' check will work
+                if (animancerComponent is HybridAnimancerComponent hybridAnimancer)
+                {
+                    _isUsingHybridAnimancer = true;
+                    _hybridAnimancerAnimator = hybridAnimancer.Animator;
+
+                    if (_hybridAnimancerAnimator != null)
+                    {
+                        // Use HybridAnimancerComponent's Animator as the characterAnimator for root motion
+                        if (characterAnimator == null)
+                        {
+                            characterAnimator = _hybridAnimancerAnimator;
+                        }
+                        else if (characterAnimator != _hybridAnimancerAnimator)
+                        {
+                            CLogger.LogWarning(
+                                "[MovementComponent] HybridAnimancerComponent and manually assigned Animator reference different components. " +
+                                "HybridAnimancerComponent's Animator will be used for root motion. Consider removing the manual Animator assignment.");
+                            characterAnimator = _hybridAnimancerAnimator;
+                        }
+                    }
+                    else
+                    {
+                        CLogger.LogWarning(
+                            "[MovementComponent] HybridAnimancerComponent does not have an internal Animator. " +
+                            "Root motion will not work. Make sure the HybridAnimancerComponent has an Animator component assigned.");
+                    }
+                }
+                else if (animancerComponent is AnimancerComponent regularAnimancer)
+                {
+                    // Regular AnimancerComponent (Parameters mode) - doesn't support root motion
+                    // Validate Animancer's internal Animator if manual Animator is also assigned
+                    if (characterAnimator != null)
+                    {
+                        // Check if regular AnimancerComponent has an Animator (some configurations might)
+                        var animancerAnimator = regularAnimancer.Animator;
+
+                        if (animancerAnimator != null && animancerAnimator != characterAnimator)
+                        {
+                            CLogger.LogWarning(
+                                "[MovementComponent] AnimancerComponent and manually assigned Animator reference different components. " +
+                                "Animancer will use its internal Animator. Consider removing the manual Animator assignment.");
+                        }
+                        else if (animancerAnimator == null)
+                        {
+                            CLogger.LogWarning(
+                                "[MovementComponent] AnimancerComponent does not have an internal Animator. " +
+                                "It will use Parameters mode instead of Animator mode. Root motion is not supported in Parameters mode.");
+                        }
+                    }
+                }
+#else
+                // Fallback to reflection if Animancer is not available (backward compatibility)
+                // This path is only used if ANIMANCER_PRESENT is not defined
                 try
                 {
                     var animancerType = animancerComponent.GetType();
                     var isHybridAnimancer = animancerType.Name == "HybridAnimancerComponent" ||
-                                           animancerType.FullName == "Animancer.HybridAnimancerComponent";
+                                           animancerType.FullName == "Animancer.HybridAnimancerComponent" ||
+                                           animancerType.BaseType?.Name == "HybridAnimancerComponent";
 
                     if (isHybridAnimancer)
                     {
                         _isUsingHybridAnimancer = true;
 
-                        // Extract Animator from HybridAnimancerComponent
+                        // Extract Animator from HybridAnimancerComponent using reflection
                         var animatorProperty = animancerType.GetProperty("Animator",
-                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy);
 
                         if (animatorProperty != null)
                         {
@@ -121,83 +183,40 @@ namespace CycloneGames.RPGFoundation.Runtime
 
                             if (_hybridAnimancerAnimator != null)
                             {
-                                // Use HybridAnimancerComponent's Animator as the characterAnimator for root motion
                                 if (characterAnimator == null)
                                 {
                                     characterAnimator = _hybridAnimancerAnimator;
                                 }
                                 else if (characterAnimator != _hybridAnimancerAnimator)
                                 {
-                                    Debug.LogWarning(
-                                        $"[MovementComponent] HybridAnimancerComponent and manually assigned Animator reference different components on {gameObject.name}. " +
-                                        $"HybridAnimancerComponent's Animator: {_hybridAnimancerAnimator.name}, Manual Animator: {characterAnimator.name}. " +
-                                        "HybridAnimancerComponent's Animator will be used for root motion. Consider removing the manual Animator assignment.",
-                                        this);
+                                    CLogger.LogWarning(
+                                        "[MovementComponent] HybridAnimancerComponent and manually assigned Animator reference different components. " +
+                                        "HybridAnimancerComponent's Animator will be used for root motion. Consider removing the manual Animator assignment.");
                                     characterAnimator = _hybridAnimancerAnimator;
                                 }
                             }
-                            else
-                            {
-                                Debug.LogWarning(
-                                    $"[MovementComponent] HybridAnimancerComponent on {gameObject.name} does not have an internal Animator. " +
-                                    "Root motion will not work. Make sure the HybridAnimancerComponent has an Animator component assigned.",
-                                    this);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        // Regular AnimancerComponent (Parameters mode) - doesn't support root motion
-                        // Validate Animancer's internal Animator if manual Animator is also assigned
-                        if (characterAnimator != null)
-                        {
-                            // Try to extract Animator from Animancer to verify consistency
-                            var animatorProperty = animancerType.GetProperty("Animator",
-                                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-
-                            if (animatorProperty != null)
-                            {
-                                var animancerAnimator = animatorProperty.GetValue(animancerComponent) as Animator;
-
-                                if (animancerAnimator != null && animancerAnimator != characterAnimator)
-                                {
-                                    Debug.LogWarning(
-                                        $"[MovementComponent] AnimancerComponent and manually assigned Animator reference different components on {gameObject.name}. " +
-                                        $"Animancer's Animator: {animancerAnimator.name}, Manual Animator: {characterAnimator.name}. " +
-                                        "Animancer will use its internal Animator. Consider removing the manual Animator assignment.",
-                                        this);
-                                }
-                                else if (animancerAnimator == null)
-                                {
-                                    Debug.LogWarning(
-                                        $"[MovementComponent] AnimancerComponent on {gameObject.name} does not have an internal Animator. " +
-                                        "It will use Parameters mode instead of Animator mode. Root motion is not supported in Parameters mode.",
-                                        this);
-                                }
-                            }
                         }
                     }
                 }
-                catch (System.Exception ex)
+                catch (System.Exception)
                 {
-                    Debug.LogError(
-                        $"[MovementComponent] Failed to extract Animator from AnimancerComponent on {gameObject.name}: {ex.Message}. " +
-                        "Root motion may not work correctly.",
-                        this);
+                    CLogger.LogError(
+                        "[MovementComponent] Failed to extract Animator from AnimancerComponent. " +
+                        "Root motion may not work correctly.");
                 }
+#endif
 
                 // Create parameter name mapping for Animancer Parameters mode
-                var parameterMap = CreateParameterNameMap();
-                animationController = new AnimancerAnimationController(animancerComponent, parameterMap);
+                _cachedParameterMap = CreateParameterNameMap();
+                animationController = new AnimancerAnimationController(animancerComponent, _cachedParameterMap);
 
                 // Warn if root motion is enabled with regular AnimancerComponent (not HybridAnimancerComponent)
                 if (useRootMotion && !_isUsingHybridAnimancer)
                 {
-                    Debug.LogWarning(
-                        $"[MovementComponent] Root motion is enabled but regular AnimancerComponent is being used on {gameObject.name}. " +
+                    CLogger.LogWarning(
+                        "[MovementComponent] Root motion is enabled but regular AnimancerComponent is being used. " +
                         "Root motion via OnAnimatorMove only works with Unity Animator or HybridAnimancerComponent, not AnimancerComponent Parameters mode. " +
-                        "Consider using HybridAnimancerComponent with an Animator for root motion support, or disable root motion.",
-                        this);
+                        "Consider using HybridAnimancerComponent with an Animator for root motion support, or disable root motion.");
                 }
             }
             else
@@ -214,7 +233,7 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             if (config == null)
             {
-                Debug.LogError($"[MovementComponent] MovementConfig is not assigned on {gameObject.name}. Creating default config.", this);
+                CLogger.LogError("[MovementComponent] MovementConfig is not assigned. Creating default config.");
                 config = ScriptableObject.CreateInstance<MovementConfig>();
             }
 
@@ -222,6 +241,28 @@ namespace CycloneGames.RPGFoundation.Runtime
             InitializeContext(animationController);
             _currentState = StatePool<MovementStateBase>.GetState<IdleState>();
             _currentRotation = transform.rotation;
+
+            // Cache target animator once during initialization
+            CacheTargetAnimator();
+        }
+
+        /// <summary>
+        /// Caches the target animator to avoid repeated checks every frame.
+        /// </summary>
+        private void CacheTargetAnimator()
+        {
+            if (_isUsingHybridAnimancer && _hybridAnimancerAnimator != null)
+            {
+                _cachedTargetAnimator = _hybridAnimancerAnimator;
+            }
+            else if (characterAnimator != null && !_isUsingAnimancer)
+            {
+                _cachedTargetAnimator = characterAnimator;
+            }
+            else
+            {
+                _cachedTargetAnimator = null;
+            }
         }
 
         private System.Collections.Generic.Dictionary<int, string> CreateParameterNameMap()
@@ -318,14 +359,18 @@ namespace CycloneGames.RPGFoundation.Runtime
         private void UpdateContext()
         {
             // Update WorldUp from worldUpSource if assigned (supports dynamic changes)
+            Vector3 previousWorldUp = WorldUp;
             if (worldUpSource != null)
             {
                 WorldUp = worldUpSource.up;
             }
 
+            // Mark world up as changed if it actually changed
+            _worldUpChanged = previousWorldUp != WorldUp;
+
             if (config == null)
             {
-                Debug.LogError($"[MovementComponent] MovementConfig is null on {gameObject.name}. Movement may not work correctly.", this);
+                CLogger.LogError("[MovementComponent] MovementConfig is null. Movement may not work correctly.");
                 return;
             }
 
@@ -385,25 +430,13 @@ namespace CycloneGames.RPGFoundation.Runtime
             // Update Animator root motion setting
             // Both component setting and context setting must be true for root motion to work
             // Works with Unity Animator and HybridAnimancerComponent, but not AnimancerComponent Parameters mode
-            Animator targetAnimator = null;
-
-            if (_isUsingHybridAnimancer && _hybridAnimancerAnimator != null)
-            {
-                // Use HybridAnimancerComponent's Animator
-                targetAnimator = _hybridAnimancerAnimator;
-            }
-            else if (characterAnimator != null && !_isUsingAnimancer)
-            {
-                // Use regular Unity Animator
-                targetAnimator = characterAnimator;
-            }
-
-            if (targetAnimator != null)
+            // Use cached animator to avoid repeated checks
+            if (_cachedTargetAnimator != null)
             {
                 bool shouldUseRootMotion = _context.UseRootMotion && useRootMotion;
-                if (targetAnimator.applyRootMotion != shouldUseRootMotion)
+                if (_cachedTargetAnimator.applyRootMotion != shouldUseRootMotion)
                 {
-                    targetAnimator.applyRootMotion = shouldUseRootMotion;
+                    _cachedTargetAnimator.applyRootMotion = shouldUseRootMotion;
                 }
             }
         }
@@ -415,18 +448,9 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             // Apply root motion if enabled (handled in OnAnimatorMove)
             // Otherwise apply calculated displacement
-            Animator targetAnimator = null;
-            if (_isUsingHybridAnimancer && _hybridAnimancerAnimator != null)
-            {
-                targetAnimator = _hybridAnimancerAnimator;
-            }
-            else if (characterAnimator != null && !_isUsingAnimancer)
-            {
-                targetAnimator = characterAnimator;
-            }
-
+            // Use cached animator to avoid repeated checks
             bool shouldUseRootMotion = _context.UseRootMotion && useRootMotion &&
-                                      targetAnimator != null && targetAnimator.applyRootMotion;
+                                      _cachedTargetAnimator != null && _cachedTargetAnimator.applyRootMotion;
 
             if (!shouldUseRootMotion)
             {
@@ -459,33 +483,20 @@ namespace CycloneGames.RPGFoundation.Runtime
         /// </summary>
         void OnAnimatorMove()
         {
-            // Determine which Animator to use for root motion
-            Animator targetAnimator = null;
-
-            if (_isUsingHybridAnimancer && _hybridAnimancerAnimator != null)
-            {
-                // Use HybridAnimancerComponent's Animator
-                targetAnimator = _hybridAnimancerAnimator;
-            }
-            else if (characterAnimator != null && !_isUsingAnimancer)
-            {
-                // Use regular Unity Animator
-                targetAnimator = characterAnimator;
-            }
-
+            // Use cached animator to avoid repeated checks
             // Only apply root motion if:
             // 1. Root motion is enabled
             // 2. We have a valid Animator (Unity Animator or HybridAnimancerComponent)
             // 3. Animator has root motion applied
-            if (!useRootMotion || !_context.UseRootMotion || targetAnimator == null)
+            if (!useRootMotion || !_context.UseRootMotion || _cachedTargetAnimator == null)
                 return;
 
-            if (!targetAnimator.applyRootMotion)
+            if (!_cachedTargetAnimator.applyRootMotion)
                 return;
 
             // Get root motion delta from Animator
-            Vector3 rootMotionDelta = targetAnimator.deltaPosition;
-            Quaternion rootRotationDelta = targetAnimator.deltaRotation;
+            Vector3 rootMotionDelta = _cachedTargetAnimator.deltaPosition;
+            Quaternion rootRotationDelta = _cachedTargetAnimator.deltaRotation;
 
             // Apply root motion movement
             // Note: deltaPosition already accounts for deltaTime, so we don't multiply again
@@ -514,38 +525,57 @@ namespace CycloneGames.RPGFoundation.Runtime
         {
             if (config == null) return false;
 
+            // If CharacterController says we're grounded, trust it but do additional verification
+            // This helps catch edge cases where CharacterController might give false positives
+            if (_characterController.isGrounded)
+            {
+                // Do a quick verification to ensure we're really on the ground
+                // If verification fails, still trust CharacterController (it's usually reliable)
+                // But log a warning for debugging
+                if (!VerifyGroundedWithRaycast())
+                {
+                    // CharacterController says grounded but raycast doesn't confirm
+                    // This can happen if:
+                    // 1. Character is on a slope that's within CharacterController's tolerance
+                    // 2. LayerMask is not configured correctly
+                    // 3. Character is very close to ground (raycast starts inside collider)
+                    // In these cases, we trust CharacterController since it's generally reliable
+                    return true;
+                }
+                return true;
+            }
+
+            // If CharacterController says we're not grounded, do a custom check
+            // This helps catch cases where CharacterController might miss the ground
+            // (e.g., when character is moving very slowly or just landed)
+            return VerifyGroundedWithRaycast();
+        }
+
+        /// <summary>
+        /// Verifies ground contact using SphereCast.
+        /// Returns true if ground is detected within the configured distance and slope limit.
+        /// </summary>
+        private bool VerifyGroundedWithRaycast()
+        {
+            if (config == null) return false;
+
+            // Calculate the bottom of the CharacterController relative to WorldUp
+            // Always recalculate since transform.position changes every frame
+            // (WorldUp changes are tracked separately, but position always changes)
             Vector3 controllerCenter = transform.position + _characterController.center;
             Vector3 controllerBottom = controllerCenter - WorldUp * (_characterController.height * 0.5f);
 
-            if (_characterController.isGrounded)
+            float sphereRadius = _characterController.radius * 0.9f;
+            float startOffset = sphereRadius + _characterController.skinWidth;
+            Vector3 rayOrigin = controllerBottom + WorldUp * startOffset;
+            Vector3 rayDirection = -WorldUp;
+
+            float checkDistance = config.groundedCheckDistance + startOffset;
+
+            if (Physics.SphereCast(rayOrigin, sphereRadius, rayDirection, out RaycastHit hit, checkDistance, config.groundLayer))
             {
-                // Additional verification: use raycast to ensure we're really on the ground
-                // This prevents false positives when character is floating
-                float checkDistance = config.groundedCheckDistance + _characterController.skinWidth;
-                Vector3 rayOrigin = controllerBottom;
-                Vector3 rayDirection = -WorldUp;
-
-                // Use sphere cast for more forgiving detection (accounts for character radius)
-                float sphereRadius = _characterController.radius * 0.9f;
-
-                if (Physics.SphereCast(rayOrigin, sphereRadius, rayDirection, out RaycastHit hit, checkDistance, config.groundLayer))
-                {
-                    float angle = Vector3.Angle(hit.normal, WorldUp);
-                    if (angle <= config.slopeLimit)
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            float additionalCheckDistance = config.groundedCheckDistance;
-            Vector3 additionalRayOrigin = controllerBottom;
-            Vector3 additionalRayDirection = -WorldUp;
-            float additionalSphereRadius = _characterController.radius * 0.9f;
-
-            if (Physics.SphereCast(additionalRayOrigin, additionalSphereRadius, additionalRayDirection, out RaycastHit additionalHit, additionalCheckDistance, config.groundLayer))
-            {
-                float angle = Vector3.Angle(additionalHit.normal, WorldUp);
+                // Check if the hit surface is roughly aligned with WorldUp (within slope limit)
+                float angle = Vector3.Angle(hit.normal, WorldUp);
                 if (angle <= config.slopeLimit)
                 {
                     return true;
@@ -567,7 +597,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             }
             else
             {
-                float3 currentUp = math.mul(_currentRotation, new float3(0, 1, 0));
+                float3 currentUp = math.mul(_currentRotation, UnityUpVector);
                 float3 worldUp = _context.WorldUp;
 
                 if (math.lengthsq(currentUp - worldUp) > 0.001f)
@@ -620,7 +650,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             MovementStateBase targetState = GetStateByType(targetStateType);
             if (targetState == null)
             {
-                Debug.LogWarning($"[MovementComponent] State {targetStateType} not found.");
+                CLogger.LogWarning($"[MovementComponent] State {targetStateType} not found.");
                 return false;
             }
 
@@ -668,7 +698,7 @@ namespace CycloneGames.RPGFoundation.Runtime
                 case MovementStateType.Jump: return StatePool<MovementStateBase>.GetState<JumpState>();
                 case MovementStateType.Fall: return StatePool<MovementStateBase>.GetState<FallState>();
                 default:
-                    Debug.LogWarning($"[MovementComponent] State {stateType} not implemented yet.");
+                    CLogger.LogWarning($"[MovementComponent] State {stateType} not implemented yet.");
                     return null;
             }
         }
@@ -734,10 +764,9 @@ namespace CycloneGames.RPGFoundation.Runtime
             }
             else if (enable && _isUsingAnimancer && !_isUsingHybridAnimancer)
             {
-                Debug.LogWarning(
-                    $"[MovementComponent] Cannot enable root motion on {gameObject.name} when using AnimancerComponent Parameters mode. " +
-                    "Root motion requires Unity Animator or HybridAnimancerComponent. Consider using HybridAnimancerComponent with an Animator.",
-                    this);
+                CLogger.LogWarning(
+                    "[MovementComponent] Cannot enable root motion when using AnimancerComponent Parameters mode. " +
+                    "Root motion requires Unity Animator or HybridAnimancerComponent. Consider using HybridAnimancerComponent with an Animator.");
             }
         }
 
