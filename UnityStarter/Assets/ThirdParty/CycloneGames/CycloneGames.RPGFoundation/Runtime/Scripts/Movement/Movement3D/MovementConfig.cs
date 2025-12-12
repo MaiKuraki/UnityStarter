@@ -16,6 +16,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         public float gravity = -25f;
         public float airControlMultiplier = 0.5f;
         public float groundedCheckDistance = 0.2f;
+        public LayerMask groundLayer = 1;
         public float slopeLimit = 45f;
         public float stepHeight = 0.3f;
 
