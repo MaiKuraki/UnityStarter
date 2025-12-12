@@ -41,13 +41,21 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         {
             if (component == null) return null;
 
-            var type = component.GetType();
-            var animatorProperty = type.GetProperty("Animator",
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-
-            if (animatorProperty != null)
+            try
             {
-                return animatorProperty.GetValue(component) as Animator;
+                var type = component.GetType();
+                var animatorProperty = type.GetProperty("Animator",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+                if (animatorProperty != null)
+                {
+                    return animatorProperty.GetValue(component) as Animator;
+                }
+            }
+            catch (System.Exception)
+            {
+                // Silently fail - component may not have Animator property
+                // This is expected for AnimancerComponent (Parameters mode)
             }
 
             return null;
@@ -65,11 +73,19 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         {
             if (_animancerComponent == null) return null;
 
-            var type = _animancerComponent.GetType();
-            var parametersProperty = type.GetProperty("Parameters",
-                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            try
+            {
+                var type = _animancerComponent.GetType();
+                var parametersProperty = type.GetProperty("Parameters",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
 
-            return parametersProperty?.GetValue(_animancerComponent);
+                return parametersProperty?.GetValue(_animancerComponent);
+            }
+            catch (System.Exception)
+            {
+                // Silently fail - component may not have Parameters property
+                return null;
+            }
         }
 
         private void SetParameterValue<T>(int parameterHash, T value)
@@ -85,12 +101,20 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             var parameters = GetParametersProperty();
             if (parameters == null) return;
 
-            var setValueMethod = parameters.GetType().GetMethod("SetValue",
-                new[] { typeof(string), typeof(T) });
-
-            if (setValueMethod != null)
+            try
             {
-                setValueMethod.Invoke(parameters, new object[] { parameterName, value });
+                var setValueMethod = parameters.GetType().GetMethod("SetValue",
+                    new[] { typeof(string), typeof(T) });
+
+                if (setValueMethod != null)
+                {
+                    setValueMethod.Invoke(parameters, new object[] { parameterName, value });
+                }
+            }
+            catch (System.Exception)
+            {
+                // Silently fail - parameter may not exist or type mismatch
+                // This prevents crashes in production
             }
         }
 
