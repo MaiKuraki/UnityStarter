@@ -28,6 +28,18 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private bool _showTimeScaleHelp = false;
         private bool _showWorldUpHelp = false;
 
+        /// <summary>
+        /// Gets a color for emphasis text that is visible in both light and dark Unity editor themes.
+        /// </summary>
+        private Color GetEmphasisColor()
+        {
+            // For dark theme (Pro): use light gray/white for visibility
+            // For light theme: use dark gray for emphasis
+            return EditorGUIUtility.isProSkin
+                ? new Color(0.85f, 0.85f, 0.85f)  // Light gray for dark theme
+                : new Color(0.25f, 0.25f, 0.25f); // Dark gray for light theme
+        }
+
         private void OnEnable()
         {
             _config = serializedObject.FindProperty("config");
@@ -155,6 +167,43 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                 "Enable root motion support for animations.\n" +
                 "When enabled, animations with root motion will drive character movement."));
 
+            // Check Animancer type for Root Motion compatibility
+            bool isUsingAnimancer = _animancerComponent.objectReferenceValue != null;
+            bool isHybridAnimancer = false;
+            bool isRegularAnimancer = false;
+
+            if (isUsingAnimancer)
+            {
+                var animancerObj = _animancerComponent.objectReferenceValue;
+                var animancerType = animancerObj.GetType();
+                isHybridAnimancer = animancerType.Name == "HybridAnimancerComponent" ||
+                                   animancerType.FullName == "Animancer.HybridAnimancerComponent";
+                isRegularAnimancer = animancerType.Name == "AnimancerComponent" ||
+                                    animancerType.FullName == "Animancer.AnimancerComponent";
+            }
+
+            // Show Root Motion compatibility warning if using regular AnimancerComponent
+            if (_useRootMotion.boolValue && isUsingAnimancer && isRegularAnimancer)
+            {
+                EditorGUILayout.Space(2);
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+                // Compact visual emphasis with theme-aware color and larger font
+                var statusStyle = new GUIStyle(EditorStyles.boldLabel);
+                statusStyle.normal.textColor = GetEmphasisColor();
+                statusStyle.fontSize = 13;
+
+                EditorGUILayout.LabelField("ROOT MOTION NOT SUPPORTED", statusStyle);
+                EditorGUILayout.Space(2);
+
+                EditorGUILayout.HelpBox(
+                    "AnimancerComponent does NOT support Root Motion.\n" +
+                    "Root Motion will be automatically disabled at runtime.\n" +
+                    "To use Root Motion, switch to HybridAnimancerComponent (requires Pro license).",
+                    MessageType.Info);
+                EditorGUILayout.EndVertical();
+            }
+
             // Collapsible help section - inside helpBox with proper indentation
             EditorGUILayout.Space(3);
             EditorGUI.indentLevel++;
@@ -165,26 +214,107 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                 EditorGUI.indentLevel++;
                 if (_useRootMotion.boolValue)
                 {
-                    EditorGUILayout.HelpBox(
-                        "Root Motion Enabled:\n" +
-                        "• Animations with root motion will control character position\n" +
-                        "• Use for: Attack lunges, dodge rolls, special movement animations\n" +
-                        "• States can override this setting via MovementContext.UseRootMotion\n" +
-                        "• Requires Animator component and animations with root motion enabled\n" +
-                        "• Root motion is applied in OnAnimatorMove callback",
-                        MessageType.Info);
+                    if (isHybridAnimancer)
+                    {
+                        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-                    var animator = _characterAnimator.objectReferenceValue as Animator;
-                    if (animator == null)
+                        // Compact visual emphasis for Root Motion supported
+                        var statusStyle = new GUIStyle(EditorStyles.boldLabel);
+                        statusStyle.normal.textColor = new Color(0.2f, 0.8f, 0.2f); // Green for supported
+                        statusStyle.fontSize = 13;
+
+                        EditorGUILayout.LabelField("Root Motion: FULLY SUPPORTED (HybridAnimancerComponent)", statusStyle);
+                        EditorGUILayout.Space(2);
+
+                        EditorGUILayout.HelpBox(
+                            "Fully supported via Animator API\n" +
+                            "• Animations with root motion will control character position\n" +
+                            "• Use for: Attack lunges, dodge rolls, special movement animations\n" +
+                            "• States can override this setting via MovementContext.UseRootMotion\n" +
+                            "• Requires Animator component with RuntimeAnimatorController\n" +
+                            "• Root motion is applied in OnAnimatorMove callback",
+                            MessageType.Info);
+                        EditorGUILayout.EndVertical();
+                    }
+                    else if (isRegularAnimancer)
+                    {
+                        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+                        // Compact visual emphasis with theme-aware color
+                        var statusStyle = new GUIStyle(EditorStyles.boldLabel);
+                        statusStyle.normal.textColor = GetEmphasisColor();
+                        statusStyle.fontSize = 13;
+
+                        EditorGUILayout.LabelField("Root Motion: NOT SUPPORTED (AnimancerComponent)", statusStyle);
+                        EditorGUILayout.Space(2);
+
+                        EditorGUILayout.HelpBox(
+                            "Will be disabled at runtime\n" +
+                            "• AnimancerComponent uses Parameters mode (no Animator API)\n" +
+                            "• Root Motion requires Animator.applyRootMotion and OnAnimatorMove\n" +
+                            "• Switch to HybridAnimancerComponent to use Root Motion",
+                            MessageType.Info);
+                        EditorGUILayout.EndVertical();
+                    }
+                    else if (isUsingAnimancer)
                     {
                         EditorGUILayout.HelpBox(
-                            "⚠️ Warning: No Animator assigned. Root motion requires an Animator component.",
+                            "Root Motion Enabled (Unknown Animancer Type):\n" +
+                            "• Root Motion support depends on component type\n" +
+                            "• HybridAnimancerComponent: SUPPORTED\n" +
+                            "• AnimancerComponent: NOT SUPPORTED",
                             MessageType.Warning);
                     }
-                    else if (!animator.applyRootMotion)
+                    else
                     {
                         EditorGUILayout.HelpBox(
-                            "ℹ️ Info: Animator's 'Apply Root Motion' is currently disabled.\n" +
+                            "Root Motion Enabled:\n" +
+                            "• Animations with root motion will control character position\n" +
+                            "• Use for: Attack lunges, dodge rolls, special movement animations\n" +
+                            "• States can override this setting via MovementContext.UseRootMotion\n" +
+                            "• Requires Animator component and animations with root motion enabled\n" +
+                            "• Root motion is applied in OnAnimatorMove callback",
+                            MessageType.Info);
+                    }
+
+                    // Check for Animator
+                    Animator targetAnimator = null;
+                    if (isHybridAnimancer && _animancerComponent.objectReferenceValue != null)
+                    {
+                        var animancerObj = _animancerComponent.objectReferenceValue;
+                        var animancerType = animancerObj.GetType();
+                        var animatorProperty = animancerType.GetProperty("Animator",
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                        if (animatorProperty != null)
+                        {
+                            targetAnimator = animatorProperty.GetValue(animancerObj) as Animator;
+                        }
+                    }
+                    else
+                    {
+                        targetAnimator = _characterAnimator.objectReferenceValue as Animator;
+                    }
+
+                    if (targetAnimator == null)
+                    {
+                        if (isHybridAnimancer)
+                        {
+                            EditorGUILayout.HelpBox(
+                                "[WARNING] HybridAnimancerComponent has no Animator assigned.\n" +
+                                "Root Motion requires an Animator component.",
+                                MessageType.Warning);
+                        }
+                        else if (!isUsingAnimancer)
+                        {
+                            EditorGUILayout.HelpBox(
+                                "[WARNING] No Animator assigned. Root motion requires an Animator component.",
+                                MessageType.Warning);
+                        }
+                    }
+                    else if (!targetAnimator.applyRootMotion)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "[INFO] Animator's 'Apply Root Motion' is currently disabled.\n" +
                             "It will be automatically enabled at runtime when root motion is used.",
                             MessageType.Info);
                     }
@@ -364,15 +494,80 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
 
             if (_animancerComponent.objectReferenceValue != null)
             {
-                EditorGUILayout.Space(3);
-                EditorGUILayout.HelpBox(
-                    "Note: Animancer requires an Animator component on the same GameObject.\n" +
-                    "The Animator's Controller field should typically be empty.",
-                    MessageType.Info);
-
-                // Check if Animancer has an Animator
+                // Detect Animancer component type
                 var animancerObj = _animancerComponent.objectReferenceValue;
                 var animancerType = animancerObj.GetType();
+                bool isHybridAnimancer = animancerType.Name == "HybridAnimancerComponent" ||
+                                        animancerType.FullName == "Animancer.HybridAnimancerComponent";
+                bool isRegularAnimancer = animancerType.Name == "AnimancerComponent" ||
+                                         animancerType.FullName == "Animancer.AnimancerComponent";
+
+                EditorGUILayout.Space(3);
+
+                // Display component type and Root Motion support info
+                if (isHybridAnimancer)
+                {
+                    // Create a custom style for the status label
+                    var statusStyle = new GUIStyle(EditorStyles.boldLabel);
+                    statusStyle.normal.textColor = new Color(0.2f, 0.8f, 0.2f); // Green
+
+                    EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                    EditorGUILayout.LabelField("Component Type: HybridAnimancerComponent", statusStyle);
+
+                    // Compact Root Motion notice with visual emphasis (theme-aware)
+                    var rootMotionStyle = new GUIStyle(EditorStyles.boldLabel);
+                    rootMotionStyle.normal.textColor = new Color(0.2f, 0.8f, 0.2f); // Green for supported
+                    rootMotionStyle.fontSize = 12;
+
+                    EditorGUILayout.Space(2);
+                    EditorGUILayout.LabelField("ROOT MOTION: FULLY SUPPORTED", rootMotionStyle);
+                    EditorGUILayout.Space(2);
+
+                    EditorGUILayout.HelpBox(
+                        "• Supports Root Motion via Animator API\n" +
+                        "• Can use RuntimeAnimatorController\n" +
+                        "• Can also play individual AnimationClips\n" +
+                        "• Requires Animancer Pro license",
+                        MessageType.Info);
+                    EditorGUILayout.EndVertical();
+                }
+                else if (isRegularAnimancer)
+                {
+                    // Create a custom style for the status label
+                    var statusStyle = new GUIStyle(EditorStyles.boldLabel);
+                    statusStyle.normal.textColor = EditorGUIUtility.isProSkin
+                        ? new Color(0.7f, 0.7f, 0.7f)  // Light gray for dark theme
+                        : new Color(0.5f, 0.5f, 0.5f); // Medium gray for light theme
+
+                    EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                    EditorGUILayout.LabelField("Component Type: AnimancerComponent", statusStyle);
+
+                    // Compact Root Motion notice with visual emphasis (theme-aware)
+                    var rootMotionStyle = new GUIStyle(EditorStyles.boldLabel);
+                    rootMotionStyle.normal.textColor = GetEmphasisColor();
+                    rootMotionStyle.fontSize = 12;
+
+                    EditorGUILayout.Space(2);
+                    EditorGUILayout.LabelField("ROOT MOTION: NOT SUPPORTED", rootMotionStyle);
+                    EditorGUILayout.Space(2);
+
+                    EditorGUILayout.HelpBox(
+                        "• Uses Parameters mode (string-based parameters)\n" +
+                        "• Pure code-driven animation control\n" +
+                        "• No RuntimeAnimatorController needed",
+                        MessageType.Info);
+                    EditorGUILayout.EndVertical();
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox(
+                        "WARNING: Unknown Animancer Component Type\n" +
+                        $"Type: {animancerType.Name}\n" +
+                        "Root Motion support depends on component type.",
+                        MessageType.Warning);
+                }
+
+                // Check if Animancer has an Animator
                 var animatorProperty = animancerType.GetProperty("Animator",
                     System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
 
@@ -381,11 +576,22 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                     var animancerAnimator = animatorProperty.GetValue(animancerObj) as Animator;
                     if (animancerAnimator == null)
                     {
-                        EditorGUILayout.HelpBox(
-                            "Warning: AnimancerComponent does not have an Animator assigned.\n" +
-                            "It will use Parameters mode instead of Animator mode.\n" +
-                            "Assign an Animator to the AnimancerComponent for better performance.",
-                            MessageType.Warning);
+                        if (isHybridAnimancer)
+                        {
+                            EditorGUILayout.HelpBox(
+                                "[WARNING] HybridAnimancerComponent does not have an Animator assigned.\n" +
+                                "Root Motion will not work without an Animator.\n" +
+                                "Assign an Animator to the HybridAnimancerComponent to enable Root Motion support.",
+                                MessageType.Warning);
+                        }
+                        else
+                        {
+                            EditorGUILayout.HelpBox(
+                                "[INFO] AnimancerComponent does not have an Animator assigned.\n" +
+                                "It will use Parameters mode instead of Animator mode.\n" +
+                                "This is expected for AnimancerComponent (not HybridAnimancerComponent).",
+                                MessageType.Info);
+                        }
                     }
                     else
                     {
@@ -396,13 +602,79 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                         EditorGUI.EndDisabledGroup();
                         EditorGUILayout.EndHorizontal();
 
-                        if (animancerAnimator.runtimeAnimatorController != null)
+                        if (isHybridAnimancer)
                         {
-                            EditorGUILayout.HelpBox(
-                                $"Note: Animator has Controller '{animancerAnimator.runtimeAnimatorController.name}' assigned.\n" +
-                                "For Animancer, the Controller should typically be empty.",
-                                MessageType.Warning);
+                            if (animancerAnimator.runtimeAnimatorController != null)
+                            {
+                                EditorGUILayout.HelpBox(
+                                    $"[OK] Animator Controller: {animancerAnimator.runtimeAnimatorController.name}\n" +
+                                    "This is correct for HybridAnimancerComponent.\n" +
+                                    "Root Motion is supported when enabled.",
+                                    MessageType.Info);
+                            }
+                            else
+                            {
+                                EditorGUILayout.HelpBox(
+                                    "[INFO] Animator has no Controller assigned.\n" +
+                                    "For HybridAnimancerComponent, you can assign a simple Controller\n" +
+                                    "(even just a default state) to enable Root Motion support.",
+                                    MessageType.Info);
+                            }
                         }
+                        else
+                        {
+                            if (animancerAnimator.runtimeAnimatorController != null)
+                            {
+                                EditorGUILayout.HelpBox(
+                                    $"[NOTE] Animator has Controller '{animancerAnimator.runtimeAnimatorController.name}' assigned.\n" +
+                                    "For AnimancerComponent, the Controller should typically be empty.\n" +
+                                    "Consider using HybridAnimancerComponent if you need Controller support.",
+                                    MessageType.Warning);
+                            }
+                        }
+                    }
+                }
+
+                // Root Motion compatibility warning
+                if (_useRootMotion.boolValue)
+                {
+                    EditorGUILayout.Space(3);
+                    if (isHybridAnimancer)
+                    {
+                        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+                        // Compact visual emphasis for Root Motion supported (theme-aware)
+                        var rootMotionStyle = new GUIStyle(EditorStyles.boldLabel);
+                        rootMotionStyle.normal.textColor = new Color(0.2f, 0.8f, 0.2f); // Green for supported
+                        rootMotionStyle.fontSize = 13;
+
+                        EditorGUILayout.LabelField("ROOT MOTION: ENABLED AND SUPPORTED", rootMotionStyle);
+                        EditorGUILayout.Space(2);
+
+                        EditorGUILayout.HelpBox(
+                            "HybridAnimancerComponent fully supports Root Motion.\n" +
+                            "States can control Root Motion via MovementContext.UseRootMotion.",
+                            MessageType.Info);
+                        EditorGUILayout.EndVertical();
+                    }
+                    else if (isRegularAnimancer)
+                    {
+                        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+                        // Compact visual emphasis for Root Motion not supported (theme-aware)
+                        var rootMotionStyle = new GUIStyle(EditorStyles.boldLabel);
+                        rootMotionStyle.normal.textColor = GetEmphasisColor();
+                        rootMotionStyle.fontSize = 13;
+
+                        EditorGUILayout.LabelField("ROOT MOTION: ENABLED BUT NOT SUPPORTED", rootMotionStyle);
+                        EditorGUILayout.Space(2);
+
+                        EditorGUILayout.HelpBox(
+                            "AnimancerComponent does NOT support Root Motion.\n" +
+                            "Root Motion will be automatically disabled at runtime.\n" +
+                            "To use Root Motion, switch to HybridAnimancerComponent.",
+                            MessageType.Info);
+                        EditorGUILayout.EndVertical();
                     }
                 }
             }
@@ -411,7 +683,8 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                 EditorGUILayout.Space(3);
                 EditorGUILayout.HelpBox(
                     "Assign an AnimancerComponent to use Animancer for animation control.\n" +
-                    "Animancer provides better performance and code-driven animation management.",
+                    "• AnimancerComponent: Pure code control, no Root Motion\n" +
+                    "• HybridAnimancerComponent: Supports Root Motion, requires Pro license",
                     MessageType.Info);
             }
 
