@@ -295,12 +295,23 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 AnimationController = animationController,
                 Transform = transform,
                 Config = config,
-                IsGrounded = false
+                IsGrounded = false,
+                JumpCount = 0
             };
         }
 
         void Update()
         {
+            // Ensure _currentState is initialized (may be null if StatePool was cleared during scene transition)
+            if (_currentState == null)
+            {
+                _currentState = StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                if (_currentState != null)
+                {
+                    _currentState.OnEnter(ref _context);
+                }
+            }
+
             HandleJumpBuffer();
             UpdateContext();
             ExecuteStateMachine();
@@ -336,6 +347,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             if (!wasGrounded && _context.IsGrounded)
             {
                 OnLanded?.Invoke();
+                // Reset jump count when landing to allow fresh jumps
+                _context.JumpCount = 0;
             }
             _wasGrounded = _context.IsGrounded;
         }
@@ -395,6 +408,21 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         private void ExecuteStateMachine()
         {
+            // Safety check: reinitialize state if it was cleared (e.g., during scene transition)
+            if (_currentState == null)
+            {
+                _currentState = StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                if (_currentState != null)
+                {
+                    _currentState.OnEnter(ref _context);
+                }
+                else
+                {
+                    CLogger.LogError("[MovementComponent2D] Failed to initialize state. Movement will not work.");
+                    return;
+                }
+            }
+
             float2 displacement;
             _currentState.OnUpdate(ref _context, out displacement);
 
@@ -588,6 +616,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         void OnDestroy()
         {
+            // Note: Clearing StatePool affects all instances, which can cause issues during scene transitions.
+            // Only clear if this is the last instance, or use a reference counting mechanism.
+            // For now, we'll clear it but the Update/ExecuteStateMachine methods will handle null states gracefully.
             StatePool<MovementStateBase2D>.Clear();
         }
 
