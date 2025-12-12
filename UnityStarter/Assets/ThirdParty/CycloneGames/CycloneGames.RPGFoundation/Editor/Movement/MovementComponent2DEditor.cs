@@ -11,10 +11,7 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private SerializedProperty _config;
         private SerializedProperty _characterAnimator;
         private SerializedProperty _animancerComponent;
-        private SerializedProperty _groundCheck;
-        private SerializedProperty _groundCheckSize;
         private SerializedProperty _ignoreTimeScale;
-        private SerializedProperty _facingRight;
 
         private enum AnimationSystemType
         {
@@ -24,15 +21,15 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
 
         private AnimationSystemType _selectedSystem = AnimationSystemType.UnityAnimator;
 
+        // Foldout states for collapsible help boxes
+        private bool _showTimeScaleHelp = false;
+
         private void OnEnable()
         {
             _config = serializedObject.FindProperty("config");
             _characterAnimator = serializedObject.FindProperty("characterAnimator");
             _animancerComponent = serializedObject.FindProperty("animancerComponent");
-            _groundCheck = serializedObject.FindProperty("groundCheck");
-            _groundCheckSize = serializedObject.FindProperty("groundCheckSize");
             _ignoreTimeScale = serializedObject.FindProperty("ignoreTimeScale");
-            _facingRight = serializedObject.FindProperty("facingRight");
 
             // Determine current system based on assigned references
             if (_animancerComponent.objectReferenceValue != null)
@@ -54,7 +51,6 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             EditorGUILayout.PropertyField(_config);
 
             EditorGUILayout.Space(10);
-            EditorGUILayout.LabelField("Animation System", EditorStyles.boldLabel);
 
             // Animation system selection
             EditorGUI.BeginChangeCheck();
@@ -88,14 +84,49 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             }
 
             EditorGUILayout.Space(10);
-            EditorGUILayout.LabelField("Ground Detection", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_groundCheck);
-            EditorGUILayout.PropertyField(_groundCheckSize);
 
-            EditorGUILayout.Space(5);
-            EditorGUILayout.LabelField("Other Settings", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_ignoreTimeScale);
-            EditorGUILayout.PropertyField(_facingRight);
+            // Time Scale Section
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            EditorGUILayout.PropertyField(_ignoreTimeScale, new GUIContent(
+                "Ignore Time Scale",
+                "Ignore global Time.timeScale for this character.\n" +
+                "When enabled, uses Time.unscaledDeltaTime instead of Time.deltaTime.\n" +
+                "Can be changed at runtime via IgnoreTimeScale property for dynamic switching."));
+
+            // Collapsible help section - inside helpBox with proper indentation
+            EditorGUILayout.Space(3);
+            EditorGUI.indentLevel++;
+            _showTimeScaleHelp = EditorGUILayout.Foldout(_showTimeScaleHelp, "Help & Details", EditorStyles.foldout);
+            EditorGUI.indentLevel--;
+            if (_showTimeScaleHelp)
+            {
+                EditorGUI.indentLevel++;
+                if (_ignoreTimeScale.boolValue)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Time Scale Ignored:\n" +
+                        "• Character will move at normal speed even if Time.timeScale is changed\n" +
+                        "• Use for: UI characters, cutscene characters, pause-resistant movement\n" +
+                        "• Can be changed at runtime: movementComponent.IgnoreTimeScale = true/false\n" +
+                        "• LocalTimeScale still applies for per-character speed control",
+                        MessageType.Info);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox(
+                        "Time Scale Affected:\n" +
+                        "• Character movement respects global Time.timeScale\n" +
+                        "• Use for: Normal gameplay characters\n" +
+                        "• Slow motion effects will affect this character\n" +
+                        "• Can be changed at runtime: movementComponent.IgnoreTimeScale = true/false\n" +
+                        "• LocalTimeScale can still be used for per-character speed control",
+                        MessageType.None);
+                }
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.EndVertical();
 
             serializedObject.ApplyModifiedProperties();
         }
