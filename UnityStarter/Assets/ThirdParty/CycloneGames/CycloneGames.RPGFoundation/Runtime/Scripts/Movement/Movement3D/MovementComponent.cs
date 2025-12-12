@@ -349,6 +349,16 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         void Update()
         {
+            // Ensure _currentState is initialized (may be null if StatePool was cleared during scene transition)
+            if (_currentState == null)
+            {
+                _currentState = StatePool<MovementStateBase>.GetState<IdleState>();
+                if (_currentState != null)
+                {
+                    _currentState.OnEnter(ref _context);
+                }
+            }
+
             UpdateContext();
             ExecuteStateMachine();
         }
@@ -363,7 +373,8 @@ namespace CycloneGames.RPGFoundation.Runtime
                 Config = config,
                 WorldUp = WorldUp,
                 VerticalVelocity = _groundedVerticalVelocity,
-                UseRootMotion = useRootMotion
+                UseRootMotion = useRootMotion,
+                JumpCount = 0
             };
         }
 
@@ -430,6 +441,8 @@ namespace CycloneGames.RPGFoundation.Runtime
             if (_context.IsGrounded && _context.VerticalVelocity < 0)
             {
                 _context.VerticalVelocity = _groundedVerticalVelocity;
+                // Reset jump count when grounded to allow fresh jumps
+                _context.JumpCount = 0;
             }
 
             if (_context.AnimationController != null && _context.AnimationController.IsValid)
@@ -454,6 +467,21 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         private void ExecuteStateMachine()
         {
+            // Safety check: reinitialize state if it was cleared (e.g., during scene transition)
+            if (_currentState == null)
+            {
+                _currentState = StatePool<MovementStateBase>.GetState<IdleState>();
+                if (_currentState != null)
+                {
+                    _currentState.OnEnter(ref _context);
+                }
+                else
+                {
+                    CLogger.LogError("[MovementComponent] Failed to initialize state. Movement will not work.");
+                    return;
+                }
+            }
+
             float3 displacement;
             _currentState.OnUpdate(ref _context, out displacement);
 
