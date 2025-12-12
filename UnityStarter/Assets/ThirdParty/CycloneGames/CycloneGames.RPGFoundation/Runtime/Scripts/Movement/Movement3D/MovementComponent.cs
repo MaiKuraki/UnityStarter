@@ -9,19 +9,51 @@ namespace CycloneGames.RPGFoundation.Runtime
     [RequireComponent(typeof(CharacterController))]
     public class MovementComponent : MonoBehaviour, IMovementStateQuery3D
     {
-        [Header("Configuration")]
         [SerializeField] private MovementConfig config;
-
-        [Header("Dependencies")]
         [SerializeField] private Animator characterAnimator;
         [SerializeField] private UnityEngine.Object animancerComponent;
-
-        [Header("Gravity & Alignment")]
+        // World Up Source - displayed in Editor, no Header needed (single field)
+        [Tooltip("Optional Transform to use as world up direction reference.\n" +
+                 "If assigned, character will use this Transform's UP direction (Transform.up) as the world up.\n" +
+                 "If null, uses Vector3.up (standard Unity world up).\n" +
+                 "Use cases:\n" +
+                 "- Characters on rotating/moving platforms: Assign the platform's Transform\n" +
+                 "- Wall-walking: Create a Transform on the wall, rotate it so its UP points along the wall's normal (outward)\n" +
+                 "- Ceiling-walking: Create a Transform on the ceiling, rotate it so its UP points downward\n" +
+                 "- Space games with rotating space stations: Assign the station's Transform\n" +
+                 "Important for wall-walking:\n" +
+                 "  The Transform's UP direction must point along the wall's normal (perpendicular to wall surface).\n" +
+                 "  You may need to rotate the Transform manually or use a helper script to align it with the wall normal.\n" +
+                 "Note: WorldUp is updated every frame, so dynamic changes to worldUpSource are supported.")]
         [SerializeField] private Transform worldUpSource;
 
-        [Header("Settings")]
+        [Tooltip("Enable root motion support. When enabled, animations with root motion will drive character movement.\n" +
+                 "Note: This is a global setting. Individual states can override this via MovementContext.UseRootMotion.\n" +
+                 "Use cases:\n" +
+                 "- Attack animations with forward lunge\n" +
+                 "- Dodge/roll animations\n" +
+                 "- Special movement animations\n" +
+                 "⚠️ Requires Animator component and animations with root motion enabled.")]
         [SerializeField] private bool useRootMotion = false;
+
+        [Tooltip("Ignore global Time.timeScale. When enabled, this character will use Time.unscaledDeltaTime instead.\n" +
+                 "Use cases:\n" +
+                 "- UI characters that should animate during pause\n" +
+                 "- Characters that need to move during slow-motion effects\n" +
+                 "- Cutscene characters\n" +
+                 "- Dynamic switching: Can be changed at runtime to toggle between affected/ignored time scale\n" +
+                 "Note: LocalTimeScale still applies even when this is enabled.")]
         [SerializeField] private bool ignoreTimeScale = false;
+
+        /// <summary>
+        /// Whether this character ignores global Time.timeScale.
+        /// Can be set at runtime to dynamically switch between affected/ignored time scale.
+        /// </summary>
+        public bool IgnoreTimeScale
+        {
+            get => ignoreTimeScale;
+            set => ignoreTimeScale = value;
+        }
 
         public float LocalTimeScale { get; set; } = 1f;
         public Vector3 WorldUp { get; set; } = Vector3.up;
@@ -40,6 +72,9 @@ namespace CycloneGames.RPGFoundation.Runtime
         private const float _minSqrMagnitudeForMovement = 0.0001f;
         private const float _groundedVerticalVelocity = -2f;
 
+        // Cache whether we're using Animancer (which doesn't support root motion via OnAnimatorMove)
+        private bool _isUsingAnimancer = false;
+
         private float DeltaTime => (ignoreTimeScale ? Time.unscaledDeltaTime : Time.deltaTime) * LocalTimeScale;
 
         #region IMovementStateQuery Implementation
@@ -55,43 +90,65 @@ namespace CycloneGames.RPGFoundation.Runtime
             _characterController = GetComponent<CharacterController>();
 
             IAnimationController animationController = null;
-            
+
             // Priority: Animancer > Manually assigned Animator > Auto-found Animator
             if (animancerComponent != null)
             {
+                _isUsingAnimancer = true;
+
                 // Validate Animancer's internal Animator if manual Animator is also assigned
                 if (characterAnimator != null)
                 {
                     // Try to extract Animator from Animancer to verify consistency
-                    var animancerType = animancerComponent.GetType();
-                    var animatorProperty = animancerType.GetProperty("Animator",
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    
-                    if (animatorProperty != null)
+                    try
                     {
-                        var animancerAnimator = animatorProperty.GetValue(animancerComponent) as Animator;
-                        
-                        if (animancerAnimator != null && animancerAnimator != characterAnimator)
+                        var animancerType = animancerComponent.GetType();
+                        var animatorProperty = animancerType.GetProperty("Animator",
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+                        if (animatorProperty != null)
                         {
-                            Debug.LogWarning(
-                                $"[MovementComponent] AnimancerComponent and manually assigned Animator reference different components on {gameObject.name}. " +
-                                $"Animancer's Animator: {animancerAnimator.name}, Manual Animator: {characterAnimator.name}. " +
-                                "Animancer will use its internal Animator. Consider removing the manual Animator assignment.",
-                                this);
+                            var animancerAnimator = animatorProperty.GetValue(animancerComponent) as Animator;
+
+                            if (animancerAnimator != null && animancerAnimator != characterAnimator)
+                            {
+                                Debug.LogWarning(
+                                    $"[MovementComponent] AnimancerComponent and manually assigned Animator reference different components on {gameObject.name}. " +
+                                    $"Animancer's Animator: {animancerAnimator.name}, Manual Animator: {characterAnimator.name}. " +
+                                    "Animancer will use its internal Animator. Consider removing the manual Animator assignment.",
+                                    this);
+                            }
+                            else if (animancerAnimator == null)
+                            {
+                                Debug.LogWarning(
+                                    $"[MovementComponent] AnimancerComponent on {gameObject.name} does not have an internal Animator. " +
+                                    "It will use Parameters mode instead of Animator mode. Root motion is not supported in Parameters mode.",
+                                    this);
+                            }
                         }
-                        else if (animancerAnimator == null)
-                        {
-                            Debug.LogWarning(
-                                $"[MovementComponent] AnimancerComponent on {gameObject.name} does not have an internal Animator. " +
-                                "It will use Parameters mode instead of Animator mode.",
-                                this);
-                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Debug.LogError(
+                            $"[MovementComponent] Failed to extract Animator from AnimancerComponent on {gameObject.name}: {ex.Message}. " +
+                            "Root motion may not work correctly.",
+                            this);
                     }
                 }
 
                 // Create parameter name mapping for Animancer Parameters mode
                 var parameterMap = CreateParameterNameMap();
                 animationController = new AnimancerAnimationController(animancerComponent, parameterMap);
+
+                // Warn if root motion is enabled with Animancer (not fully supported)
+                if (useRootMotion)
+                {
+                    Debug.LogWarning(
+                        $"[MovementComponent] Root motion is enabled but Animancer is being used on {gameObject.name}. " +
+                        "Root motion via OnAnimatorMove only works with Unity Animator, not Animancer Parameters mode. " +
+                        "Consider using HybridAnimancerComponent with an Animator for root motion support, or disable root motion.",
+                        this);
+                }
             }
             else
             {
@@ -171,6 +228,17 @@ namespace CycloneGames.RPGFoundation.Runtime
         {
             _characterController.minMoveDistance = 0f;
 
+            // Initialize WorldUp from worldUpSource if available
+            UpdateWorldUp();
+        }
+
+        /// <summary>
+        /// Updates WorldUp from worldUpSource if assigned.
+        /// Called in Start() and UpdateContext() to support dynamic world up changes.
+        /// </summary>
+        private void UpdateWorldUp()
+        {
+            // Only update if worldUpSource is assigned (cached check for performance)
             if (worldUpSource != null)
             {
                 WorldUp = worldUpSource.up;
@@ -192,15 +260,53 @@ namespace CycloneGames.RPGFoundation.Runtime
                 Transform = transform,
                 Config = config,
                 WorldUp = WorldUp,
-                VerticalVelocity = _groundedVerticalVelocity
+                VerticalVelocity = _groundedVerticalVelocity,
+                UseRootMotion = useRootMotion
             };
         }
 
         private void UpdateContext()
         {
+            // Update WorldUp from worldUpSource if assigned (supports dynamic changes)
+            if (worldUpSource != null)
+            {
+                WorldUp = worldUpSource.up;
+            }
+
+            if (config == null)
+            {
+                Debug.LogError($"[MovementComponent] MovementConfig is null on {gameObject.name}. Movement may not work correctly.", this);
+                return;
+            }
+
             _context.DeltaTime = DeltaTime;
             _context.WorldUp = WorldUp;
             _context.IsGrounded = _characterController.isGrounded;
+
+            // Update root motion setting
+            // States can override UseRootMotion in OnEnter/OnUpdate, but if not set, use component default
+            // This allows per-state control while maintaining a global default
+            // Note: Root motion only works with Unity Animator, not Animancer Parameters mode
+            if (!_context.UseRootMotion && !useRootMotion)
+            {
+                // If both are false, keep it false (state explicitly disabled it)
+            }
+            else if (useRootMotion && !_isUsingAnimancer)
+            {
+                // If component has root motion enabled and we're using Animator (not Animancer), use context value
+                // If state hasn't set it, it defaults to true when component enables it
+                if (!_context.UseRootMotion && _currentState != null)
+                {
+                    // State hasn't explicitly set it, so use component default
+                    _context.UseRootMotion = useRootMotion;
+                }
+            }
+            else if (useRootMotion && _isUsingAnimancer)
+            {
+                // Root motion is not supported with Animancer Parameters mode
+                // Disable it to prevent issues
+                _context.UseRootMotion = false;
+            }
 
             if (_context.IsGrounded && _context.VerticalVelocity < 0)
             {
@@ -212,6 +318,18 @@ namespace CycloneGames.RPGFoundation.Runtime
                 int hash = AnimationParameterCache.GetHash(config.isGroundedParameter);
                 _context.AnimationController.SetBool(hash, _context.IsGrounded);
             }
+
+            // Update Animator root motion setting
+            // Both component setting and context setting must be true for root motion to work
+            // Only works with Unity Animator, not Animancer Parameters mode
+            if (characterAnimator != null && !_isUsingAnimancer)
+            {
+                bool shouldUseRootMotion = _context.UseRootMotion && useRootMotion;
+                if (characterAnimator.applyRootMotion != shouldUseRootMotion)
+                {
+                    characterAnimator.applyRootMotion = shouldUseRootMotion;
+                }
+            }
         }
 
         private void ExecuteStateMachine()
@@ -219,10 +337,16 @@ namespace CycloneGames.RPGFoundation.Runtime
             float3 displacement;
             _currentState.OnUpdate(ref _context, out displacement);
 
-            if (math.lengthsq(displacement) > _minSqrMagnitudeForMovement)
+            // Apply root motion if enabled (handled in OnAnimatorMove)
+            // Otherwise apply calculated displacement
+            if (!_context.UseRootMotion || !useRootMotion || characterAnimator == null || !characterAnimator.applyRootMotion)
             {
-                _characterController.Move(displacement);
+                if (math.lengthsq(displacement) > _minSqrMagnitudeForMovement)
+                {
+                    _characterController.Move(displacement);
+                }
             }
+            // Note: When root motion is active, movement is handled in OnAnimatorMove
 
             MovementStateBase nextState = _currentState.EvaluateTransition(ref _context);
             if (nextState != null && nextState != _currentState)
@@ -238,8 +362,50 @@ namespace CycloneGames.RPGFoundation.Runtime
             UpdateRotation();
         }
 
+        /// <summary>
+        /// Called by Unity when root motion is enabled and the Animator has processed an animation frame.
+        /// This applies the root motion delta to the CharacterController.
+        /// Only called when Animator.applyRootMotion is true.
+        /// Note: This only works with Unity Animator, not with Animancer Parameters mode.
+        /// </summary>
+        void OnAnimatorMove()
+        {
+            // Only apply root motion if:
+            // 1. Root motion is enabled
+            // 2. We're using Unity Animator (not Animancer Parameters mode)
+            // 3. Animator is available and root motion is applied
+            if (!useRootMotion || !_context.UseRootMotion || characterAnimator == null || _isUsingAnimancer)
+                return;
+
+            if (!characterAnimator.applyRootMotion)
+                return;
+
+            // Get root motion delta from Animator
+            Vector3 rootMotionDelta = characterAnimator.deltaPosition;
+            Quaternion rootRotationDelta = characterAnimator.deltaRotation;
+
+            // Apply root motion movement
+            // Note: deltaPosition already accounts for deltaTime, so we don't multiply again
+            if (rootMotionDelta.sqrMagnitude > _minSqrMagnitudeForMovement)
+            {
+                // Combine root motion with vertical velocity (gravity/falling)
+                // Root motion typically only affects horizontal movement, so we add vertical separately
+                Vector3 verticalMovement = WorldUp * _context.VerticalVelocity * DeltaTime;
+                _characterController.Move(rootMotionDelta + verticalMovement);
+            }
+
+            // Apply root motion rotation (optional - you may want to control this differently)
+            // Uncomment if you want root motion to control rotation:
+            // transform.rotation *= rootRotationDelta;
+
+            // Note: If you want root motion to only affect position but not rotation,
+            // keep the rotation line commented out. The default UpdateRotation() will handle rotation.
+        }
+
         private void UpdateRotation()
         {
+            if (config == null) return;
+
             quaternion targetRotation;
 
             if (math.lengthsq(_lookDirection) > _minSqrMagnitudeForMovement)
@@ -354,19 +520,52 @@ namespace CycloneGames.RPGFoundation.Runtime
             }
         }
 
+        /// <summary>
+        /// Move the character with a specific velocity. Useful for external control (e.g., cutscenes, AI).
+        /// When root motion is enabled, this will also set the animation speed parameter.
+        /// Note: Root motion only works with Unity Animator, not Animancer Parameters mode.
+        /// </summary>
         public void MoveWithVelocity(Vector3 worldVelocity)
         {
+            if (config == null) return;
+
             SetInputDirection(worldVelocity.normalized);
 
-            if (useRootMotion && characterAnimator != null)
+            if (useRootMotion && characterAnimator != null && !_isUsingAnimancer)
             {
+                // Enable root motion for this movement (only with Unity Animator)
+                _context.UseRootMotion = true;
                 characterAnimator.applyRootMotion = true;
+
                 float speed = worldVelocity.magnitude;
                 if (_context.AnimationController != null && _context.AnimationController.IsValid)
                 {
                     int hash = AnimationParameterCache.GetHash(config.movementSpeedParameter);
                     _context.AnimationController.SetFloat(hash, speed);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Enable or disable root motion at runtime. Useful for switching between root motion and scripted movement.
+        /// Note: Root motion only works with Unity Animator, not Animancer Parameters mode.
+        /// </summary>
+        public void SetUseRootMotion(bool enable)
+        {
+            useRootMotion = enable;
+            _context.UseRootMotion = enable;
+
+            // Only apply to Animator if we're not using Animancer
+            if (characterAnimator != null && !_isUsingAnimancer)
+            {
+                characterAnimator.applyRootMotion = enable;
+            }
+            else if (enable && _isUsingAnimancer)
+            {
+                Debug.LogWarning(
+                    $"[MovementComponent] Cannot enable root motion on {gameObject.name} when using Animancer Parameters mode. " +
+                    "Root motion requires Unity Animator. Consider using HybridAnimancerComponent with an Animator.",
+                    this);
             }
         }
 

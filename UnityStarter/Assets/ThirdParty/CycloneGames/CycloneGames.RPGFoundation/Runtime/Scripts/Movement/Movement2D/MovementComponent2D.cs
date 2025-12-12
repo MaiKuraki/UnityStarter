@@ -9,20 +9,31 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
     [RequireComponent(typeof(Rigidbody2D))]
     public class MovementComponent2D : MonoBehaviour, IMovementStateQuery2D
     {
-        [Header("Configuration")]
         [SerializeField] private MovementConfig2D config;
-
-        [Header("Dependencies")]
         [SerializeField] private Animator characterAnimator;
         [SerializeField] private UnityEngine.Object animancerComponent;
 
-        [Header("Ground Detection")]
-        [SerializeField] private Transform groundCheck;
-        [SerializeField] private Vector2 groundCheckSize = new Vector2(0.8f, 0.1f);
+        // Ground check is now managed automatically using config settings
+        // No need to expose in Inspector - it's created/managed internally
 
-        [Header("Settings")]
+        [Tooltip("Ignore global Time.timeScale. When enabled, this character will use Time.unscaledDeltaTime instead.\n" +
+                 "Use cases:\n" +
+                 "- UI characters that should animate during pause\n" +
+                 "- Characters that need to move during slow-motion effects\n" +
+                 "- Cutscene characters\n" +
+                 "- Dynamic switching: Can be changed at runtime to toggle between affected/ignored time scale\n" +
+                 "Note: LocalTimeScale still applies even when this is enabled.")]
         [SerializeField] private bool ignoreTimeScale = false;
-        [SerializeField] private bool facingRight = true;
+
+        /// <summary>
+        /// Whether this character ignores global Time.timeScale.
+        /// Can be set at runtime to dynamically switch between affected/ignored time scale.
+        /// </summary>
+        public bool IgnoreTimeScale
+        {
+            get => ignoreTimeScale;
+            set => ignoreTimeScale = value;
+        }
 
         public float LocalTimeScale { get; set; } = 1f;
         public IMovementAuthority MovementAuthority { get; set; }
@@ -38,6 +49,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         private float _coyoteTimeCounter;
         private float _jumpBufferCounter;
         private bool _wasGrounded;
+        private bool _facingRight; // Current facing direction (initialized from config)
+        private Transform _groundCheck; // Auto-created ground check point (internal use only)
 
         private const float _minSqrMagnitudeForMovement = 0.0001f;
 
@@ -55,9 +68,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         void Awake()
         {
             _rigidbody = GetComponent<Rigidbody2D>();
-            
+
             IAnimationController animationController = null;
-            
+
             // Priority: Animancer > Manually assigned Animator > Auto-found Animator
             if (animancerComponent != null)
             {
@@ -65,29 +78,38 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 if (characterAnimator != null)
                 {
                     // Try to extract Animator from Animancer to verify consistency
-                    var animancerType = animancerComponent.GetType();
-                    var animatorProperty = animancerType.GetProperty("Animator",
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    
-                    if (animatorProperty != null)
+                    try
                     {
-                        var animancerAnimator = animatorProperty.GetValue(animancerComponent) as Animator;
-                        
-                        if (animancerAnimator != null && animancerAnimator != characterAnimator)
+                        var animancerType = animancerComponent.GetType();
+                        var animatorProperty = animancerType.GetProperty("Animator",
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+
+                        if (animatorProperty != null)
                         {
-                            Debug.LogWarning(
-                                $"[MovementComponent2D] AnimancerComponent and manually assigned Animator reference different components on {gameObject.name}. " +
-                                $"Animancer's Animator: {animancerAnimator.name}, Manual Animator: {characterAnimator.name}. " +
-                                "Animancer will use its internal Animator. Consider removing the manual Animator assignment.",
-                                this);
+                            var animancerAnimator = animatorProperty.GetValue(animancerComponent) as Animator;
+
+                            if (animancerAnimator != null && animancerAnimator != characterAnimator)
+                            {
+                                Debug.LogWarning(
+                                    $"[MovementComponent2D] AnimancerComponent and manually assigned Animator reference different components on {gameObject.name}. " +
+                                    $"Animancer's Animator: {animancerAnimator.name}, Manual Animator: {characterAnimator.name}. " +
+                                    "Animancer will use its internal Animator. Consider removing the manual Animator assignment.",
+                                    this);
+                            }
+                            else if (animancerAnimator == null)
+                            {
+                                Debug.LogWarning(
+                                    $"[MovementComponent2D] AnimancerComponent on {gameObject.name} does not have an internal Animator. " +
+                                    "It will use Parameters mode instead of Animator mode.",
+                                    this);
+                            }
                         }
-                        else if (animancerAnimator == null)
-                        {
-                            Debug.LogWarning(
-                                $"[MovementComponent2D] AnimancerComponent on {gameObject.name} does not have an internal Animator. " +
-                                "It will use Parameters mode instead of Animator mode.",
-                                this);
-                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        Debug.LogError(
+                            $"[MovementComponent2D] Failed to extract Animator from AnimancerComponent on {gameObject.name}: {ex.Message}.",
+                            this);
                     }
                 }
 
@@ -113,18 +135,25 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 config = ScriptableObject.CreateInstance<MovementConfig2D>();
             }
 
-            if (groundCheck == null)
+            // Create ground check point if needed (only for Platformer and BeltScroll modes)
+            if (config.movementType != MovementType2D.TopDown)
             {
-                GameObject groundCheckObj = new GameObject("GroundCheck");
-                groundCheckObj.transform.SetParent(transform);
-                groundCheckObj.transform.localPosition = Vector3.zero;
-                groundCheck = groundCheckObj.transform;
+                if (_groundCheck == null)
+                {
+                    GameObject groundCheckObj = new GameObject("GroundCheck");
+                    groundCheckObj.transform.SetParent(transform);
+                    groundCheckObj.transform.localPosition = config.groundCheckOffset;
+                    _groundCheck = groundCheckObj.transform;
+                }
             }
 
             PreWarmAnimationParameters();
             InitializePhysics();
             InitializeContext(animationController);
             _currentState = StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+
+            // Initialize facing direction from config
+            _facingRight = config.facingRight;
         }
 
         private System.Collections.Generic.Dictionary<int, string> CreateParameterNameMap()
@@ -132,57 +161,57 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             if (config == null) return new System.Collections.Generic.Dictionary<int, string>();
 
             var map = new System.Collections.Generic.Dictionary<int, string>();
-            
+
             // Map parameter hashes to names for Animancer Parameters mode
             if (!string.IsNullOrEmpty(config.movementSpeedParameter))
             {
                 int hash = AnimationParameterCache.GetHash(config.movementSpeedParameter);
                 map[hash] = config.movementSpeedParameter;
             }
-            
+
             if (!string.IsNullOrEmpty(config.isGroundedParameter))
             {
                 int hash = AnimationParameterCache.GetHash(config.isGroundedParameter);
                 map[hash] = config.isGroundedParameter;
             }
-            
+
             if (!string.IsNullOrEmpty(config.jumpTrigger))
             {
                 int hash = AnimationParameterCache.GetHash(config.jumpTrigger);
                 map[hash] = config.jumpTrigger;
             }
-            
+
             if (!string.IsNullOrEmpty(config.verticalSpeedParameter))
             {
                 int hash = AnimationParameterCache.GetHash(config.verticalSpeedParameter);
                 map[hash] = config.verticalSpeedParameter;
             }
-            
+
             if (!string.IsNullOrEmpty(config.inputXParameter))
             {
                 int hash = AnimationParameterCache.GetHash(config.inputXParameter);
                 map[hash] = config.inputXParameter;
             }
-            
+
             if (!string.IsNullOrEmpty(config.inputYParameter))
             {
                 int hash = AnimationParameterCache.GetHash(config.inputYParameter);
                 map[hash] = config.inputYParameter;
             }
-            
+
             if (!string.IsNullOrEmpty(config.rollTrigger))
             {
                 int hash = AnimationParameterCache.GetHash(config.rollTrigger);
                 map[hash] = config.rollTrigger;
             }
-            
+
             return map;
         }
 
         private void PreWarmAnimationParameters()
         {
             if (config == null) return;
-            
+
             AnimationParameterCache.PreWarm(
                 config.movementSpeedParameter,
                 config.isGroundedParameter,
@@ -191,7 +220,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 config.inputXParameter,
                 config.inputYParameter
             );
-            
+
             if (!string.IsNullOrEmpty(config.rollTrigger))
             {
                 AnimationParameterCache.PreWarm(config.rollTrigger);
@@ -246,8 +275,23 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         private void CheckGround()
         {
+            if (config == null) return;
+
+            // Ground check only needed for Platformer and BeltScroll modes
+            if (config.movementType == MovementType2D.TopDown)
+            {
+                _context.IsGrounded = true; // TopDown doesn't need ground detection
+                return;
+            }
+
             bool wasGrounded = _context.IsGrounded;
-            _context.IsGrounded = Physics2D.OverlapBox(groundCheck.position, groundCheckSize, 0, config.groundLayer);
+
+            // Use ground check point if available, otherwise use transform position + offset
+            Vector2 checkPosition = _groundCheck != null
+                ? _groundCheck.position
+                : (Vector2)transform.position + config.groundCheckOffset;
+
+            _context.IsGrounded = Physics2D.OverlapBox(checkPosition, config.groundCheckSize, 0, config.groundLayer);
 
             if (!wasGrounded && _context.IsGrounded)
             {
@@ -258,6 +302,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         private void HandleCoyoteTime()
         {
+            if (config == null) return;
+
             if (_context.IsGrounded)
             {
                 _coyoteTimeCounter = config.coyoteTime;
@@ -270,6 +316,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         private void HandleJumpBuffer()
         {
+            if (config == null) return;
+
             if (_context.JumpPressed)
             {
                 _jumpBufferCounter = config.jumpBufferTime;
@@ -282,6 +330,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         private void UpdateContext()
         {
+            if (config == null)
+            {
+                Debug.LogError($"[MovementComponent2D] MovementConfig2D is null on {gameObject.name}. Movement may not work correctly.", this);
+                return;
+            }
+
             _context.DeltaTime = DeltaTime;
             _context.FixedDeltaTime = FixedDeltaTime;
 
@@ -291,15 +345,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 int verticalHash = AnimationParameterCache.GetHash(config.verticalSpeedParameter);
                 int inputXHash = AnimationParameterCache.GetHash(config.inputXParameter);
                 int inputYHash = AnimationParameterCache.GetHash(config.inputYParameter);
-                
+
                 _context.AnimationController.SetBool(groundedHash, _context.IsGrounded);
                 _context.AnimationController.SetFloat(verticalHash, _rigidbody.velocity.y);
                 _context.AnimationController.SetFloat(inputXHash, _context.InputDirection.x);
                 _context.AnimationController.SetFloat(inputYHash, _context.InputDirection.y);
             }
         }
-
-        // ...
 
         private void ExecuteStateMachine()
         {
@@ -372,28 +424,25 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         private void UpdateFacing()
         {
-            // In TopDown mode, we might not want simple left/right flipping if we have 4-direction sprites.
-            // But if we do want flipping for left/right, we keep it.
-            // Usually TopDown uses BlendTrees for facing, so flipping Transform.scale might be undesirable if sprites are asymmetrical.
-            // Let's make it optional or just disable it for TopDown if InputDirection.x is small.
+            if (config == null) return;
 
+            // TopDown mode uses Animator BlendTree for 4-direction sprites, so we don't flip transform
             if (config.movementType == MovementType2D.TopDown)
             {
                 // For TopDown, we rely on Animator (InputX/InputY) to show facing.
-                // We DO NOT flip the transform because that would flip the Y-axis sprite too (upside down? no, just X scale).
-                // Flipping X scale is fine for Left/Right, but if we have dedicated Up/Down sprites, flipping might be weird.
-                // Let's keep it simple: If user wants 4-direction, they use BlendTree. 
-                // If they use side-view sprites for TopDown (like Don't Starve), they might want flip.
-                // For "Classic RPG" (FF), we usually don't flip scale, we change sprite.
+                // We DO NOT flip the transform because that would interfere with Up/Down sprites.
+                // TopDown typically uses different sprites for each direction (4-direction).
                 return;
             }
 
+            // Platformer and BeltScroll modes both support automatic sprite flipping based on movement direction
+            // Both are side-scrolling games where left/right facing is important
             if (math.abs(_context.InputDirection.x) > 0.01f)
             {
                 bool shouldFaceRight = _context.InputDirection.x > 0;
-                if (shouldFaceRight != facingRight)
+                if (shouldFaceRight != _facingRight)
                 {
-                    facingRight = shouldFaceRight;
+                    _facingRight = shouldFaceRight;
                     Vector3 scale = transform.localScale;
                     scale.x *= -1;
                     transform.localScale = scale;
@@ -504,10 +553,14 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         void OnDrawGizmosSelected()
         {
-            if (groundCheck != null && config != null)
+            if (config != null && config.movementType != MovementType2D.TopDown)
             {
-                Gizmos.color = _context.IsGrounded ? Color.green : Color.red;
-                Gizmos.DrawWireCube(groundCheck.position, groundCheckSize);
+                Vector2 checkPosition = _groundCheck != null
+                    ? _groundCheck.position
+                    : (Vector2)transform.position + config.groundCheckOffset;
+
+                Gizmos.color = Application.isPlaying && _context.IsGrounded ? Color.green : Color.red;
+                Gizmos.DrawWireCube(checkPosition, config.groundCheckSize);
             }
         }
     }
