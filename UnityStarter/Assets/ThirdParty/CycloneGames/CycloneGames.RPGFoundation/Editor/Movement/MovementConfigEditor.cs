@@ -25,6 +25,8 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private SerializedProperty _slopeLimit;
         private SerializedProperty _stepHeight;
         private SerializedProperty _rotationSpeed;
+        private SerializedProperty _animationSystem;
+        private SerializedProperty _animancerParameterMode;
         private SerializedProperty _movementSpeedParameter;
         private SerializedProperty _isGroundedParameter;
         private SerializedProperty _jumpTrigger;
@@ -34,6 +36,7 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private bool _showSpecialMovementHelp = false;
         private bool _showPhysicsHelp = false;
         private bool _showRotationHelp = false;
+        private bool _showAnimationSystemHelp = false;
 
         private void OnEnable()
         {
@@ -54,6 +57,8 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             _slopeLimit = serializedObject.FindProperty("slopeLimit");
             _stepHeight = serializedObject.FindProperty("stepHeight");
             _rotationSpeed = serializedObject.FindProperty("rotationSpeed");
+            _animationSystem = serializedObject.FindProperty("animationSystem");
+            _animancerParameterMode = serializedObject.FindProperty("animancerParameterMode");
             _movementSpeedParameter = serializedObject.FindProperty("movementSpeedParameter");
             _isGroundedParameter = serializedObject.FindProperty("isGroundedParameter");
             _jumpTrigger = serializedObject.FindProperty("jumpTrigger");
@@ -217,9 +222,87 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
 
             EditorGUILayout.Space(10);
 
+            // Animation System Configuration
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Animation System", EditorStyles.miniLabel);
+            EditorGUILayout.PropertyField(_animationSystem, new GUIContent(
+                "Animation System",
+                "Choose the animation system to use:\n" +
+                "• Unity Animator: Standard Unity Animator Controller\n" +
+                "• Animancer: Animancer animation system"));
+
+            // Show Animancer parameter mode option only when Animancer is selected
+            AnimationSystemType currentSystem = (AnimationSystemType)_animationSystem.enumValueIndex;
+            if (currentSystem == AnimationSystemType.Animancer)
+            {
+                EditorGUILayout.Space(3);
+                EditorGUILayout.PropertyField(_animancerParameterMode, new GUIContent(
+                    "Animancer Parameter Mode",
+                    "How to handle animation parameters when using Animancer:\n" +
+                    "• Animator Hash: Use Animator hash values (for HybridAnimancerComponent with Animator Controller)\n" +
+                    "• String Parameter: Use direct string parameters (for AnimancerComponent Parameters mode)"));
+
+                EditorGUILayout.Space(3);
+                EditorGUI.indentLevel++;
+                _showAnimationSystemHelp = EditorGUILayout.Foldout(_showAnimationSystemHelp, "Help & Details", EditorStyles.foldout);
+                EditorGUI.indentLevel--;
+                if (_showAnimationSystemHelp)
+                {
+                    EditorGUI.indentLevel++;
+                    EditorGUILayout.HelpBox(
+                        "Animancer Parameter Mode Guide:\n" +
+                        "• Animator Hash Mode:\n" +
+                        "  - Use with HybridAnimancerComponent\n" +
+                        "  - Requires Animator Controller with parameters defined\n" +
+                        "  - Parameters are accessed via Animator hash values\n" +
+                        "  - Supports Root Motion (via HybridAnimancerComponent's Animator)\n" +
+                        "• String Parameter Mode:\n" +
+                        "  - Can use with HybridAnimancerComponent OR AnimancerComponent\n" +
+                        "  - With HybridAnimancerComponent: Supports Root Motion (has Animator)\n" +
+                        "  - With AnimancerComponent: Does NOT support Root Motion (no Animator)\n" +
+                        "  - Parameters are accessed directly by string name\n" +
+                        "  - Parameters are created automatically when first used (if using AnimancerComponent)\n" +
+                        "  - If Animator Controller has parameters, will use Animator API\n" +
+                        "  - If Animator Controller lacks parameters, will fallback to Parameters mode\n" +
+                        "• Root Motion Support:\n" +
+                        "  - HybridAnimancerComponent: ALWAYS supports Root Motion (has Animator)\n" +
+                        "  - AnimancerComponent: NEVER supports Root Motion (no Animator)\n" +
+                        "  - Root Motion support depends on component type, NOT parameter mode\n" +
+                        "• Recommendation:\n" +
+                        "  - Need Root Motion: Use HybridAnimancerComponent (any parameter mode works)\n" +
+                        "  - Don't need Root Motion: Use AnimancerComponent + String Parameter",
+                        MessageType.Info);
+                    EditorGUI.indentLevel--;
+                }
+            }
+
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(5);
+
             // Animation Parameters
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("Animation Parameters", EditorStyles.miniLabel);
+
+            // Show help text based on selected system
+            if (currentSystem == AnimationSystemType.Animancer)
+            {
+                AnimancerParameterMode paramMode = (AnimancerParameterMode)_animancerParameterMode.enumValueIndex;
+                if (paramMode == AnimancerParameterMode.AnimatorHash)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Animator Hash Mode: Ensure these parameter names match your Animator Controller parameters.",
+                        MessageType.Info);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox(
+                        "String Parameter Mode: These parameters will be automatically created in Animancer when first used.",
+                        MessageType.Info);
+                }
+                EditorGUILayout.Space(3);
+            }
+
             EditorGUILayout.PropertyField(_movementSpeedParameter);
             EditorGUILayout.PropertyField(_isGroundedParameter);
             EditorGUILayout.PropertyField(_jumpTrigger);

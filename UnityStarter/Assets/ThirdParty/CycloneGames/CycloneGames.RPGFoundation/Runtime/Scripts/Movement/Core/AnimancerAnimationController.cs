@@ -16,6 +16,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         private readonly Dictionary<int, string> _hashToNameMap;
         private readonly bool _useAnimatorMode;
         private readonly bool _isValid;
+        private readonly HashSet<int> _validParameterHashes;
 
         public bool IsValid => _isValid;
 
@@ -33,6 +34,23 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
             // Prefer Animator mode if available (HybridAnimancerComponent)
             _useAnimatorMode = _animator != null && _animator.isActiveAndEnabled;
+
+            // Cache valid parameter hashes from Animator Controller if using Animator mode
+            // Note: We can only cache parameters in Editor mode, in Runtime we'll use try-catch
+            _validParameterHashes = new HashSet<int>();
+#if UNITY_EDITOR
+            if (_useAnimatorMode && _animator != null && _animator.runtimeAnimatorController != null)
+            {
+                var controller = _animator.runtimeAnimatorController as UnityEditor.Animations.AnimatorController;
+                if (controller != null)
+                {
+                    foreach (var param in controller.parameters)
+                    {
+                        _validParameterHashes.Add(param.nameHash);
+                    }
+                }
+            }
+#endif
 
             _isValid = _useAnimatorMode || (_animancerComponent != null && IsAnimancerComponentValid());
         }
@@ -118,13 +136,48 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             }
         }
 
+        /// <summary>
+        /// Checks if a parameter exists in the Animator Controller.
+        /// If using Parameters mode, checks if the parameter name exists in the hash map.
+        /// </summary>
+        private bool IsParameterValid(int parameterHash)
+        {
+            if (_useAnimatorMode)
+            {
+                // If we have cached valid hashes (Editor mode), check against them
+                if (_validParameterHashes.Count > 0)
+                {
+                    return _validParameterHashes.Contains(parameterHash);
+                }
+                // In Runtime mode, if we don't have cached parameters, check if we have the name in our map
+                // If we have the name, it means the parameter should exist in Parameters mode
+                // We'll try Parameters mode as fallback if Animator Controller doesn't have it
+                // This prevents warnings when Animator Controller doesn't have the parameter
+                return false; // Return false to trigger fallback to Parameters mode
+            }
+            else
+            {
+                // In Parameters mode, check if we have the parameter name in our map
+                return _hashToNameMap.ContainsKey(parameterHash);
+            }
+        }
+
         public void SetFloat(int parameterHash, float value)
         {
             if (!_isValid) return;
 
             if (_useAnimatorMode)
             {
-                _animator.SetFloat(parameterHash, value);
+                // Check if parameter exists before setting to avoid warnings
+                if (IsParameterValid(parameterHash))
+                {
+                    _animator.SetFloat(parameterHash, value);
+                }
+                // If parameter doesn't exist in Animator Controller, try Parameters mode as fallback
+                else if (_hashToNameMap.ContainsKey(parameterHash))
+                {
+                    SetParameterValue(parameterHash, value);
+                }
             }
             else
             {
@@ -138,7 +191,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
             if (_useAnimatorMode)
             {
-                _animator.SetBool(parameterHash, value);
+                // Check if parameter exists before setting to avoid warnings
+                if (IsParameterValid(parameterHash))
+                {
+                    _animator.SetBool(parameterHash, value);
+                }
+                // If parameter doesn't exist in Animator Controller, try Parameters mode as fallback
+                else if (_hashToNameMap.ContainsKey(parameterHash))
+                {
+                    SetParameterValue(parameterHash, value);
+                }
             }
             else
             {
@@ -152,7 +214,18 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
             if (_useAnimatorMode)
             {
-                _animator.SetTrigger(parameterHash);
+                // Check if parameter exists before setting to avoid warnings
+                if (IsParameterValid(parameterHash))
+                {
+                    _animator.SetTrigger(parameterHash);
+                }
+                // If parameter doesn't exist in Animator Controller, try Parameters mode as fallback
+                else if (_hashToNameMap.ContainsKey(parameterHash))
+                {
+                    // For triggers in Parameters mode, we set a bool to true
+                    // Note: Animancer Parameters don't have native trigger support
+                    SetParameterValue(parameterHash, true);
+                }
             }
             else
             {
