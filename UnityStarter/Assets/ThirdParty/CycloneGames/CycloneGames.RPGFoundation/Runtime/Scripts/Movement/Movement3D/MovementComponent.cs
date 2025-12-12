@@ -331,7 +331,7 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             _context.DeltaTime = DeltaTime;
             _context.WorldUp = WorldUp;
-            _context.IsGrounded = _characterController.isGrounded;
+            _context.IsGrounded = CheckGrounded();
 
             // Update root motion setting
             // States can override UseRootMotion in OnEnter/OnUpdate, but if not set, use component default
@@ -503,6 +503,56 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             // Note: If you want root motion to only affect position but not rotation,
             // keep the rotation line commented out. The default UpdateRotation() will handle rotation.
+        }
+
+        /// <summary>
+        /// Checks if the character is grounded using a combination of CharacterController.isGrounded
+        /// and a custom raycast check for more accurate ground detection.
+        /// Supports WorldUpSource for wall-walking and ceiling-walking scenarios.
+        /// </summary>
+        private bool CheckGrounded()
+        {
+            if (config == null) return false;
+
+            Vector3 controllerCenter = transform.position + _characterController.center;
+            Vector3 controllerBottom = controllerCenter - WorldUp * (_characterController.height * 0.5f);
+
+            if (_characterController.isGrounded)
+            {
+                // Additional verification: use raycast to ensure we're really on the ground
+                // This prevents false positives when character is floating
+                float checkDistance = config.groundedCheckDistance + _characterController.skinWidth;
+                Vector3 rayOrigin = controllerBottom;
+                Vector3 rayDirection = -WorldUp;
+
+                // Use sphere cast for more forgiving detection (accounts for character radius)
+                float sphereRadius = _characterController.radius * 0.9f;
+
+                if (Physics.SphereCast(rayOrigin, sphereRadius, rayDirection, out RaycastHit hit, checkDistance, config.groundLayer))
+                {
+                    float angle = Vector3.Angle(hit.normal, WorldUp);
+                    if (angle <= config.slopeLimit)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            float additionalCheckDistance = config.groundedCheckDistance;
+            Vector3 additionalRayOrigin = controllerBottom;
+            Vector3 additionalRayDirection = -WorldUp;
+            float additionalSphereRadius = _characterController.radius * 0.9f;
+
+            if (Physics.SphereCast(additionalRayOrigin, additionalSphereRadius, additionalRayDirection, out RaycastHit additionalHit, additionalCheckDistance, config.groundLayer))
+            {
+                float angle = Vector3.Angle(additionalHit.normal, WorldUp);
+                if (angle <= config.slopeLimit)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void UpdateRotation()
