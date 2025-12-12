@@ -153,8 +153,12 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                 "1.0 = full control, 0.5 = half control, 0.0 = no control"));
             EditorGUILayout.PropertyField(_groundedCheckDistance, new GUIContent(
                 "Grounded Check Distance",
-                "Distance for ground detection.\n" +
-                "Larger = more forgiving, smaller = more precise"));
+                "Maximum allowed distance from character bottom to ground.\n" +
+                "If detected ground is within this distance, character is considered grounded.\n" +
+                "NOT the detection ray distance, but a threshold for judging if grounded.\n" +
+                "• 0.01-0.03: Precise (recommended, default 0.03)\n" +
+                "• 0.05-0.1: More forgiving, for fast movement or uneven terrain\n" +
+                "• Larger values may cause visible floating"));
             EditorGUILayout.PropertyField(_groundLayer, new GUIContent(
                 "Ground Layer",
                 "LayerMask for what counts as 'ground'.\n" +
@@ -181,10 +185,16 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                     "  - Typical: -20 to -30 (realistic)\n" +
                     "  - More negative = stronger gravity\n" +
                     "• Air Control: Lower values (0.3-0.5) make air movement feel more realistic\n" +
-                    "• Grounded Check Distance: How far to check for ground\n" +
-                    "  - Too small: May miss ground when moving fast\n" +
-                    "  - Too large: May detect ground when in air\n" +
-                    "  - Typical: 0.1-0.3\n" +
+                    "• Grounded Check Distance: Maximum distance from character bottom to ground\n" +
+                    "  - This is a THRESHOLD, not the detection ray distance\n" +
+                    "  - If ground is detected within this distance, character is grounded\n" +
+                    "  - Too small (0.01): Very precise, may miss ground when moving fast\n" +
+                    "  - Recommended (0.03): Good balance, default value\n" +
+                    "  - Too large (0.1+): May cause visible floating above ground\n" +
+                    "  - ⚠️ IMPORTANT: Should be >= CharacterController's skinWidth\n" +
+                    "    If smaller than skinWidth, ground detection may fail\n" +
+                    "    Check MovementComponent Inspector for validation warning\n" +
+                    "  - Typical: skinWidth = 0.01-0.02, groundedCheckDistance = 0.03-0.05\n" +
                     "• Ground Layer: LayerMask for ground detection\n" +
                     "  - Set to your ground/platform layers\n" +
                     "  - Prevents false ground detection from walls/obstacles\n" +
