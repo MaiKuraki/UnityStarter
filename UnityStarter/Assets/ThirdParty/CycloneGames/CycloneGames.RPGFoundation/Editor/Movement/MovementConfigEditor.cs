@@ -22,6 +22,7 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private SerializedProperty _gravity;
         private SerializedProperty _airControlMultiplier;
         private SerializedProperty _groundedCheckDistance;
+        private SerializedProperty _groundLayer;
         private SerializedProperty _slopeLimit;
         private SerializedProperty _stepHeight;
         private SerializedProperty _rotationSpeed;
@@ -54,6 +55,7 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             _gravity = serializedObject.FindProperty("gravity");
             _airControlMultiplier = serializedObject.FindProperty("airControlMultiplier");
             _groundedCheckDistance = serializedObject.FindProperty("groundedCheckDistance");
+            _groundLayer = serializedObject.FindProperty("groundLayer");
             _slopeLimit = serializedObject.FindProperty("slopeLimit");
             _stepHeight = serializedObject.FindProperty("stepHeight");
             _rotationSpeed = serializedObject.FindProperty("rotationSpeed");
@@ -153,6 +155,10 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                 "Grounded Check Distance",
                 "Distance for ground detection.\n" +
                 "Larger = more forgiving, smaller = more precise"));
+            EditorGUILayout.PropertyField(_groundLayer, new GUIContent(
+                "Ground Layer",
+                "LayerMask for what counts as 'ground'.\n" +
+                "Set this to your ground/platform layers to avoid false ground detection."));
             EditorGUILayout.PropertyField(_slopeLimit, new GUIContent(
                 "Slope Limit",
                 "Maximum angle (in degrees) the character can walk up.\n" +
@@ -179,6 +185,10 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                     "  - Too small: May miss ground when moving fast\n" +
                     "  - Too large: May detect ground when in air\n" +
                     "  - Typical: 0.1-0.3\n" +
+                    "• Ground Layer: LayerMask for ground detection\n" +
+                    "  - Set to your ground/platform layers\n" +
+                    "  - Prevents false ground detection from walls/obstacles\n" +
+                    "  - Important: Configure this to match your scene setup\n" +
                     "• Slope Limit: Maximum walkable slope angle\n" +
                     "  - Prevents walking up walls\n" +
                     "  - Typical: 30-45 degrees\n" +
