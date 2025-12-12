@@ -49,6 +49,17 @@ namespace CycloneGames.RPGFoundation.Runtime
                  "Note: LocalTimeScale still applies even when this is enabled.")]
         [SerializeField] private bool ignoreTimeScale = false;
 
+#if UNITY_EDITOR
+        [Tooltip("Show ground detection debug visualization in Scene view.\n" +
+                 "When enabled, displays the SphereCast used for ground detection:\n" +
+                 "- Green sphere: Ground detected within range\n" +
+                 "- Red sphere: No ground detected or out of range\n" +
+                 "- Yellow line: Ray direction\n" +
+                 "- Blue sphere: Character bottom position\n" +
+                 "Editor only - this field is automatically removed in builds.")]
+        [SerializeField] private bool showGroundDetectionDebug = false;
+#endif
+
         /// <summary>
         /// Whether this character ignores global Time.timeScale.
         /// Can be set at runtime to dynamically switch between affected/ignored time scale.
@@ -461,6 +472,12 @@ namespace CycloneGames.RPGFoundation.Runtime
             }
             // Note: When root motion is active, movement is handled in OnAnimatorMove
 
+            // Snap to ground if grounded to prevent floating
+            if (_context.IsGrounded)
+            {
+                SnapToGround();
+            }
+
             MovementStateBase nextState = _currentState.EvaluateTransition(ref _context);
             if (nextState != null && nextState != _currentState)
             {
@@ -554,6 +571,13 @@ namespace CycloneGames.RPGFoundation.Runtime
         /// <summary>
         /// Verifies ground contact using SphereCast.
         /// Returns true if ground is detected within the configured distance and slope limit.
+        /// 
+        /// Note: groundedCheckDistance represents the maximum allowed distance from the character's
+        /// bottom to the ground. The raycast starts slightly above the bottom (to avoid starting
+        /// inside colliders) and checks downward for ground within this distance.
+        /// 
+        /// Important: If groundedCheckDistance is smaller than CharacterController's skinWidth,
+        /// the effective threshold is adjusted to skinWidth to prevent detection failures.
         /// </summary>
         private bool VerifyGroundedWithRaycast()
         {
@@ -566,23 +590,98 @@ namespace CycloneGames.RPGFoundation.Runtime
             Vector3 controllerBottom = controllerCenter - WorldUp * (_characterController.height * 0.5f);
 
             float sphereRadius = _characterController.radius * 0.9f;
+            // Start the raycast slightly above the bottom to avoid starting inside colliders
+            // This offset ensures the sphere cast doesn't start embedded in the ground
             float startOffset = sphereRadius + _characterController.skinWidth;
             Vector3 rayOrigin = controllerBottom + WorldUp * startOffset;
             Vector3 rayDirection = -WorldUp;
 
-            float checkDistance = config.groundedCheckDistance + startOffset;
+            // Use the larger of groundedCheckDistance or skinWidth as the effective threshold
+            // This prevents detection failures when groundedCheckDistance < skinWidth
+            // CharacterController maintains at least skinWidth distance from ground,
+            // so we need to account for that in our detection threshold
+            float effectiveGroundedCheckDistance = Mathf.Max(config.groundedCheckDistance, _characterController.skinWidth);
+
+            // groundedCheckDistance represents the max distance from character bottom to ground
+            // Since rayOrigin is startOffset above the bottom, we need to check:
+            // - From rayOrigin down to (controllerBottom - groundedCheckDistance)
+            // - Total distance = startOffset + groundedCheckDistance
+            // However, we want to ensure the hit point is within groundedCheckDistance of the bottom
+            // So we check a bit more to account for the sphere radius, but validate the actual distance
+            float checkDistance = startOffset + effectiveGroundedCheckDistance + sphereRadius * 0.1f; // Small buffer for sphere cast
 
             if (Physics.SphereCast(rayOrigin, sphereRadius, rayDirection, out RaycastHit hit, checkDistance, config.groundLayer))
             {
-                // Check if the hit surface is roughly aligned with WorldUp (within slope limit)
-                float angle = Vector3.Angle(hit.normal, WorldUp);
-                if (angle <= config.slopeLimit)
+                // Calculate the actual distance from character bottom to hit point
+                float distanceFromBottom = Vector3.Dot(hit.point - controllerBottom, -WorldUp);
+
+                // Only consider grounded if the hit point is within the effective distance from bottom
+                // and the surface is within the slope limit
+                // Use effectiveGroundedCheckDistance to handle cases where config value < skinWidth
+                if (distanceFromBottom >= 0 && distanceFromBottom <= effectiveGroundedCheckDistance)
                 {
-                    return true;
+                    // Check if the hit surface is roughly aligned with WorldUp (within slope limit)
+                    float angle = Vector3.Angle(hit.normal, WorldUp);
+                    if (angle <= config.slopeLimit)
+                    {
+                        return true;
+                    }
                 }
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Snaps the character to the ground surface when grounded to prevent floating.
+        /// This ensures the character stays close to the ground even if there's a small gap.
+        /// Uses a simple Raycast from the character bottom to find the ground and snap to it.
+        /// 
+        /// Important: Uses effective threshold (max of groundedCheckDistance and skinWidth) to handle
+        /// cases where groundedCheckDistance < skinWidth.
+        /// </summary>
+        private void SnapToGround()
+        {
+            if (config == null) return;
+
+            Vector3 controllerCenter = transform.position + _characterController.center;
+            Vector3 controllerBottom = controllerCenter - WorldUp * (_characterController.height * 0.5f);
+
+            // Use a simple Raycast from the bottom to find ground
+            // Start slightly above the bottom to avoid starting inside colliders
+            float rayStartOffset = _characterController.skinWidth + 0.01f;
+            Vector3 rayOrigin = controllerBottom + WorldUp * rayStartOffset;
+            Vector3 rayDirection = -WorldUp;
+
+            // Use effective threshold to handle cases where groundedCheckDistance < skinWidth
+            float effectiveGroundedCheckDistance = Mathf.Max(config.groundedCheckDistance, _characterController.skinWidth);
+
+            // Check distance should be slightly more than effectiveGroundedCheckDistance to account for the start offset
+            float checkDistance = rayStartOffset + effectiveGroundedCheckDistance + 0.1f;
+
+            if (Physics.Raycast(rayOrigin, rayDirection, out RaycastHit hit, checkDistance, config.groundLayer))
+            {
+                // Calculate the actual distance from character bottom to hit point
+                float distanceFromBottom = Vector3.Dot(hit.point - controllerBottom, -WorldUp);
+
+                // Only snap if the hit point is within the effective distance and valid slope
+                if (distanceFromBottom >= 0 && distanceFromBottom <= effectiveGroundedCheckDistance)
+                {
+                    float angle = Vector3.Angle(hit.normal, WorldUp);
+                    if (angle <= config.slopeLimit)
+                    {
+                        // If there's a gap, snap the character down to the ground
+                        // Only snap if the distance is significant enough to avoid micro-movements
+                        if (distanceFromBottom > 0.001f)
+                        {
+                            // Move the character down by the distance to ground
+                            // CharacterController.Move will handle collision properly
+                            Vector3 snapMovement = -WorldUp * distanceFromBottom;
+                            _characterController.Move(snapMovement);
+                        }
+                    }
+                }
+            }
         }
 
         private void UpdateRotation()
@@ -774,5 +873,115 @@ namespace CycloneGames.RPGFoundation.Runtime
         {
             StatePool<MovementStateBase>.Clear();
         }
+
+#if UNITY_EDITOR
+        /// <summary>
+        /// Draws debug visualization for ground detection in Scene view.
+        /// Shows the SphereCast used for ground detection with color coding:
+        /// - Green: Ground detected within range
+        /// - Red: No ground detected or out of range
+        /// </summary>
+        void OnDrawGizmos()
+        {
+            if (!showGroundDetectionDebug || config == null) return;
+            if (_characterController == null) _characterController = GetComponent<CharacterController>();
+            if (_characterController == null) return;
+
+            // Get WorldUp - use worldUpSource if available, otherwise use current WorldUp or default
+            Vector3 currentWorldUp = WorldUp;
+            if (worldUpSource != null)
+            {
+                currentWorldUp = worldUpSource.up;
+            }
+            else if (currentWorldUp == Vector3.zero)
+            {
+                currentWorldUp = Vector3.up;
+            }
+
+            // Calculate the same values used in VerifyGroundedWithRaycast
+            Vector3 controllerCenter = transform.position + _characterController.center;
+            Vector3 controllerBottom = controllerCenter - currentWorldUp * (_characterController.height * 0.5f);
+
+            float sphereRadius = _characterController.radius * 0.9f;
+            float startOffset = sphereRadius + _characterController.skinWidth;
+            Vector3 rayOrigin = controllerBottom + currentWorldUp * startOffset;
+            Vector3 rayDirection = -currentWorldUp;
+
+            float checkDistance = startOffset + config.groundedCheckDistance + sphereRadius * 0.1f;
+
+            // Draw character bottom position (blue sphere)
+            Gizmos.color = Color.blue;
+            Gizmos.DrawWireSphere(controllerBottom, 0.05f);
+
+            // Draw ray origin (small yellow sphere)
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawWireSphere(rayOrigin, 0.03f);
+
+            // Draw ray direction line
+            Gizmos.color = Color.yellow;
+            Gizmos.DrawLine(rayOrigin, rayOrigin + rayDirection * checkDistance);
+
+            // Perform the actual SphereCast to determine if ground is detected
+            bool isGrounded = false;
+            float distanceFromBottom = float.MaxValue;
+            float hitDistance = 0f;
+            RaycastHit debugHit = default;
+            if (Physics.SphereCast(rayOrigin, sphereRadius, rayDirection, out RaycastHit hit, checkDistance, config.groundLayer))
+            {
+                debugHit = hit;
+                hitDistance = hit.distance;
+                distanceFromBottom = Vector3.Dot(hit.point - controllerBottom, -currentWorldUp);
+                if (distanceFromBottom >= 0 && distanceFromBottom <= config.groundedCheckDistance)
+                {
+                    float angle = Vector3.Angle(hit.normal, currentWorldUp);
+                    if (angle <= config.slopeLimit)
+                    {
+                        isGrounded = true;
+                    }
+                }
+            }
+
+            // Draw sphere cast visualization
+            // Color: Green if grounded, Red if not
+            Gizmos.color = isGrounded ? Color.green : Color.red;
+
+            // Draw the sphere at the start position
+            Gizmos.DrawWireSphere(rayOrigin, sphereRadius);
+
+            // Draw the sphere at the end position (or hit position if grounded)
+            if (isGrounded && distanceFromBottom < float.MaxValue && hitDistance > 0)
+            {
+                // hitDistance is the distance from rayOrigin to where the sphere center touches the surface
+                Vector3 hitSphereCenter = rayOrigin + rayDirection * hitDistance;
+                Gizmos.DrawWireSphere(hitSphereCenter, sphereRadius);
+
+                // Draw line connecting start and end spheres
+                Gizmos.DrawLine(rayOrigin, hitSphereCenter);
+
+                // Draw hit point on ground surface
+                Gizmos.color = Color.cyan;
+                Gizmos.DrawWireSphere(debugHit.point, 0.05f);
+
+                // Draw normal at hit point
+                Gizmos.color = Color.magenta;
+                Gizmos.DrawLine(debugHit.point, debugHit.point + debugHit.normal * 0.2f);
+            }
+            else
+            {
+                // Draw sphere at max check distance
+                Vector3 endPosition = rayOrigin + rayDirection * checkDistance;
+                Gizmos.DrawWireSphere(endPosition, sphereRadius);
+                Gizmos.DrawLine(rayOrigin, endPosition);
+            }
+
+            // Draw the grounded check distance range
+            Gizmos.color = new Color(0f, 1f, 1f, 0.3f); // Cyan with transparency
+            Vector3 rangeStart = controllerBottom;
+            Vector3 rangeEnd = controllerBottom - currentWorldUp * config.groundedCheckDistance;
+            Gizmos.DrawLine(rangeStart, rangeEnd);
+            Gizmos.DrawWireSphere(rangeStart, 0.02f);
+            Gizmos.DrawWireSphere(rangeEnd, 0.02f);
+        }
+#endif
     }
 }
