@@ -3,6 +3,11 @@ using Unity.Mathematics;
 using UnityEngine;
 using CycloneGames.RPGFoundation.Runtime.Movement;
 using CycloneGames.RPGFoundation.Runtime.Movement2D.States;
+using CycloneGames.Logger;
+
+#if ANIMANCER_PRESENT
+using Animancer;
+#endif
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 {
@@ -74,15 +79,54 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             // Priority: Animancer > Manually assigned Animator > Auto-found Animator
             if (animancerComponent != null)
             {
-                // Validate Animancer's internal Animator if manual Animator is also assigned
+#if ANIMANCER_PRESENT
+                // Use direct type checking with zero overhead (compile-time optimization)
+                // This supports inheritance: if user inherits AnimancerComponent, 'is' check will work
+                if (animancerComponent is HybridAnimancerComponent hybridAnimancer)
+                {
+                    // HybridAnimancerComponent has an Animator
+                    var animancerAnimator = hybridAnimancer.Animator;
+
+                    if (characterAnimator != null)
+                    {
+                        if (animancerAnimator != null && animancerAnimator != characterAnimator)
+                        {
+                            CLogger.LogWarning(
+                                "[MovementComponent2D] HybridAnimancerComponent and manually assigned Animator reference different components. " +
+                                "HybridAnimancerComponent's Animator will be used. Consider removing the manual Animator assignment.");
+                        }
+                    }
+                }
+                else if (animancerComponent is AnimancerComponent regularAnimancer)
+                {
+                    // Regular AnimancerComponent (Parameters mode) - may or may not have Animator
+                    var animancerAnimator = regularAnimancer.Animator;
+
+                    if (characterAnimator != null)
+                    {
+                        if (animancerAnimator != null && animancerAnimator != characterAnimator)
+                        {
+                            CLogger.LogWarning(
+                                "[MovementComponent2D] AnimancerComponent and manually assigned Animator reference different components. " +
+                                "Animancer will use its internal Animator. Consider removing the manual Animator assignment.");
+                        }
+                        else if (animancerAnimator == null)
+                        {
+                            CLogger.LogWarning(
+                                "[MovementComponent2D] AnimancerComponent does not have an internal Animator. " +
+                                "It will use Parameters mode instead of Animator mode.");
+                        }
+                    }
+                }
+#else
+                // Fallback to reflection if Animancer is not available (backward compatibility)
                 if (characterAnimator != null)
                 {
-                    // Try to extract Animator from Animancer to verify consistency
                     try
                     {
                         var animancerType = animancerComponent.GetType();
                         var animatorProperty = animancerType.GetProperty("Animator",
-                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                            System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy);
 
                         if (animatorProperty != null)
                         {
@@ -90,28 +134,24 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
                             if (animancerAnimator != null && animancerAnimator != characterAnimator)
                             {
-                                Debug.LogWarning(
-                                    $"[MovementComponent2D] AnimancerComponent and manually assigned Animator reference different components on {gameObject.name}. " +
-                                    $"Animancer's Animator: {animancerAnimator.name}, Manual Animator: {characterAnimator.name}. " +
-                                    "Animancer will use its internal Animator. Consider removing the manual Animator assignment.",
-                                    this);
+                                CLogger.LogWarning(
+                                    "[MovementComponent2D] AnimancerComponent and manually assigned Animator reference different components. " +
+                                    "Animancer will use its internal Animator. Consider removing the manual Animator assignment.");
                             }
                             else if (animancerAnimator == null)
                             {
-                                Debug.LogWarning(
-                                    $"[MovementComponent2D] AnimancerComponent on {gameObject.name} does not have an internal Animator. " +
-                                    "It will use Parameters mode instead of Animator mode.",
-                                    this);
+                                CLogger.LogWarning(
+                                    "[MovementComponent2D] AnimancerComponent does not have an internal Animator. " +
+                                    "It will use Parameters mode instead of Animator mode.");
                             }
                         }
                     }
-                    catch (System.Exception ex)
+                    catch (System.Exception)
                     {
-                        Debug.LogError(
-                            $"[MovementComponent2D] Failed to extract Animator from AnimancerComponent on {gameObject.name}: {ex.Message}.",
-                            this);
+                        Debug.LogError("[MovementComponent2D] Failed to extract Animator from AnimancerComponent.");
                     }
                 }
+#endif
 
                 // Create parameter name mapping for Animancer Parameters mode
                 var parameterMap = CreateParameterNameMap();
@@ -131,7 +171,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
             if (config == null)
             {
-                Debug.LogError($"[MovementComponent2D] MovementConfig2D is not assigned on {gameObject.name}. Creating default config.", this);
+                CLogger.LogError("[MovementComponent2D] MovementConfig2D is not assigned. Creating default config.");
                 config = ScriptableObject.CreateInstance<MovementConfig2D>();
             }
 
@@ -332,7 +372,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         {
             if (config == null)
             {
-                Debug.LogError($"[MovementComponent2D] MovementConfig2D is null on {gameObject.name}. Movement may not work correctly.", this);
+                CLogger.LogError("[MovementComponent2D] MovementConfig2D is null. Movement may not work correctly.");
                 return;
             }
 
@@ -496,7 +536,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             MovementStateBase2D targetState = GetStateByType(targetStateType);
             if (targetState == null)
             {
-                Debug.LogWarning($"[MovementComponent2D] State {targetStateType} not found.");
+                CLogger.LogWarning($"[MovementComponent2D] State {targetStateType} not found.");
                 return false;
             }
 
@@ -541,7 +581,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 case MovementStateType.Jump: return StatePool<MovementStateBase2D>.GetState<JumpState2D>();
                 case MovementStateType.Fall: return StatePool<MovementStateBase2D>.GetState<FallState2D>();
                 default:
-                    Debug.LogWarning($"[MovementComponent2D] State {stateType} not implemented yet.");
+                    CLogger.LogWarning($"[MovementComponent2D] State {stateType} not implemented yet.");
                     return null;
             }
         }
