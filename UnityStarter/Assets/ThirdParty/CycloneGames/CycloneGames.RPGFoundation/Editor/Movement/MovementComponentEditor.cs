@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEditor;
 using CycloneGames.RPGFoundation.Runtime;
+using CycloneGames.RPGFoundation.Runtime.Movement;
 
 namespace CycloneGames.RPGFoundation.Editor.Movement
 {
@@ -14,6 +15,9 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private SerializedProperty _worldUpSource;
         private SerializedProperty _useRootMotion;
         private SerializedProperty _ignoreTimeScale;
+#if UNITY_EDITOR
+        private SerializedProperty _showGroundDetectionDebug;
+#endif
 
         private enum AnimationSystemType
         {
@@ -48,6 +52,9 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             _worldUpSource = serializedObject.FindProperty("worldUpSource");
             _useRootMotion = serializedObject.FindProperty("useRootMotion");
             _ignoreTimeScale = serializedObject.FindProperty("ignoreTimeScale");
+#if UNITY_EDITOR
+            _showGroundDetectionDebug = serializedObject.FindProperty("showGroundDetectionDebug");
+#endif
 
             // Determine current system based on assigned references
             if (_animancerComponent.objectReferenceValue != null)
@@ -378,7 +385,183 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
 
             EditorGUILayout.EndVertical();
 
+#if UNITY_EDITOR
+            EditorGUILayout.Space(5);
+
+            // Debug Visualization Section
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Debug Visualization", EditorStyles.miniLabel);
+
+            EditorGUILayout.PropertyField(_showGroundDetectionDebug, new GUIContent(
+                "Show Ground Detection Debug",
+                "Show ground detection debug visualization in Scene view.\n" +
+                "When enabled, displays the SphereCast used for ground detection:\n" +
+                "• Green sphere: Ground detected within range\n" +
+                "• Red sphere: No ground detected or out of range\n" +
+                "• Yellow line: Ray direction\n" +
+                "• Blue sphere: Character bottom position\n" +
+                "• Cyan sphere: Ground hit point\n" +
+                "• Magenta line: Ground normal\n" +
+                "• Cyan line: Grounded check distance range\n" +
+                "Editor only - this field is automatically removed in builds."));
+
+            if (_showGroundDetectionDebug.boolValue)
+            {
+                EditorGUILayout.Space(3);
+                EditorGUI.indentLevel++;
+                EditorGUILayout.HelpBox(
+                    "Debug visualization is active in Scene view.\n" +
+                    "• Select this GameObject to see the visualization\n" +
+                    "• Green = Ground detected and within range\n" +
+                    "• Red = No ground or out of range\n" +
+                    "• Use this to debug ground detection issues",
+                    MessageType.Info);
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.EndVertical();
+#endif
+
+            // Validate groundedCheckDistance against CharacterController's skinWidth
+            ValidateGroundedCheckDistance();
+
+            // Draw any additional fields from derived classes
+            // This allows inheritance without modifying this editor
+            DrawAdditionalProperties();
+
             serializedObject.ApplyModifiedProperties();
+        }
+
+        /// <summary>
+        /// Validates that groundedCheckDistance is not smaller than CharacterController's skinWidth.
+        /// Shows a warning if the configuration might cause ground detection issues.
+        /// </summary>
+        private void ValidateGroundedCheckDistance()
+        {
+            var component = target as MovementComponent;
+            if (component == null) return;
+
+            var characterController = component.GetComponent<CharacterController>();
+            if (characterController == null) return;
+
+            var config = _config.objectReferenceValue as MovementConfig;
+            if (config == null) return;
+
+            float skinWidth = characterController.skinWidth;
+            float groundedCheckDistance = config.groundedCheckDistance;
+
+            // Check if groundedCheckDistance is smaller than skinWidth
+            if (groundedCheckDistance < skinWidth)
+            {
+                EditorGUILayout.Space(5);
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+                var warningStyle = new GUIStyle(EditorStyles.boldLabel);
+                warningStyle.normal.textColor = new Color(1f, 0.6f, 0f); // Orange
+
+                EditorGUILayout.LabelField("⚠️ Ground Detection Configuration Warning", warningStyle);
+                EditorGUILayout.Space(3);
+
+                EditorGUILayout.HelpBox(
+                    $"Grounded Check Distance ({groundedCheckDistance:F3}) is smaller than CharacterController's Skin Width ({skinWidth:F3}).\n\n" +
+                    "This may cause ground detection issues:\n" +
+                    "• CharacterController maintains at least skinWidth distance from ground\n" +
+                    "• If groundedCheckDistance < skinWidth, custom detection may never succeed\n" +
+                    "• Character may appear grounded (via CharacterController) but custom detection fails\n\n" +
+                    "Recommendation:\n" +
+                    $"• Set Grounded Check Distance to at least {skinWidth:F3} (or larger)\n" +
+                    "• Or reduce CharacterController's Skin Width to match your needs\n" +
+                    "• Typical: skinWidth = 0.01-0.02, groundedCheckDistance = 0.03-0.05",
+                    MessageType.Warning);
+
+                EditorGUILayout.Space(3);
+
+                // Show current values for reference
+                EditorGUI.BeginDisabledGroup(true);
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("CharacterController Skin Width:", GUILayout.Width(200));
+                EditorGUILayout.FloatField(skinWidth);
+                EditorGUILayout.EndHorizontal();
+
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("Config Grounded Check Distance:", GUILayout.Width(200));
+                EditorGUILayout.FloatField(groundedCheckDistance);
+                EditorGUILayout.EndHorizontal();
+
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("Difference:", GUILayout.Width(200));
+                EditorGUILayout.FloatField(skinWidth - groundedCheckDistance);
+                EditorGUILayout.EndHorizontal();
+                EditorGUI.EndDisabledGroup();
+
+                EditorGUILayout.EndVertical();
+            }
+        }
+
+        /// <summary>
+        /// Draws any additional properties from derived classes.
+        /// Excludes already-drawn properties to avoid duplication.
+        /// This method allows derived classes to add new fields without modifying this editor.
+        /// </summary>
+        private void DrawAdditionalProperties()
+        {
+            // List of properties that are already manually drawn above
+            string[] excludedProperties = new string[]
+            {
+                "config",
+                "characterAnimator",
+                "animancerComponent",
+                "worldUpSource",
+                "useRootMotion",
+                "ignoreTimeScale",
+#if UNITY_EDITOR
+                "showGroundDetectionDebug",
+#endif
+                // Script reference is always excluded by default
+                "m_Script"
+            };
+
+            // Get all serialized properties
+            SerializedProperty property = serializedObject.GetIterator();
+            bool enterChildren = true;
+            bool hasAdditionalProperties = false;
+
+            while (property.NextVisible(enterChildren))
+            {
+                enterChildren = false;
+
+                // Skip script field (always drawn by default)
+                if (property.propertyPath == "m_Script")
+                    continue;
+
+                // Check if this property is not in the excluded list
+                bool isExcluded = false;
+                foreach (string excludedName in excludedProperties)
+                {
+                    if (property.propertyPath == excludedName)
+                    {
+                        isExcluded = true;
+                        break;
+                    }
+                }
+
+                if (!isExcluded)
+                {
+                    if (!hasAdditionalProperties)
+                    {
+                        // Only add space and label if there are additional properties
+                        EditorGUILayout.Space(10);
+                        EditorGUILayout.LabelField("Additional Properties", EditorStyles.boldLabel);
+                        EditorGUILayout.HelpBox(
+                            "Properties from derived class. These fields are automatically displayed here.",
+                            MessageType.Info);
+                        EditorGUILayout.Space(5);
+                        hasAdditionalProperties = true;
+                    }
+
+                    EditorGUILayout.PropertyField(property, true);
+                }
+            }
         }
 
         private void DrawUnityAnimatorFields()
