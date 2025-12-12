@@ -6,12 +6,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
     {
         public override MovementStateType StateType => MovementStateType.Jump;
 
-        private int _jumpCount;
-
         public override void OnEnter(ref MovementContext context)
         {
             context.VerticalVelocity = context.Config.jumpForce;
-            _jumpCount++;
+            context.JumpCount++;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
@@ -47,7 +45,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
         {
             if (context.IsGrounded && context.VerticalVelocity <= 0)
             {
-                _jumpCount = 0;
+                context.JumpCount = 0;
                 return StatePool<MovementStateBase>.GetState<IdleState>();
             }
 
@@ -56,10 +54,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
                 return StatePool<MovementStateBase>.GetState<FallState>();
             }
 
-            if (context.JumpPressed && _jumpCount < context.Config.maxJumpCount)
+            if (context.JumpPressed && context.JumpCount < context.Config.maxJumpCount)
             {
                 context.VerticalVelocity = context.Config.jumpForce;
-                _jumpCount++;
+                context.JumpCount++;
             }
 
             return null;
@@ -67,7 +65,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnExit(ref MovementContext context)
         {
-            _jumpCount = 0;
+            context.JumpCount = 0;
         }
     }
 }

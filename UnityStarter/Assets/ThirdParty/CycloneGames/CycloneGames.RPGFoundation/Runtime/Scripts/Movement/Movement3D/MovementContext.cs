@@ -26,6 +26,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         public bool SprintHeld;
         public bool CrouchHeld;
         public bool RollPressed;
+        
+        public int JumpCount;
 
         public float3 CurrentVelocity;
         public float CurrentSpeed;
