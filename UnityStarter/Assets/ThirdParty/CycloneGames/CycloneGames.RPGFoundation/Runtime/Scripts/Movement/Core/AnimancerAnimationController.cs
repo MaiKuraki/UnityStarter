@@ -1,5 +1,8 @@
 using System.Collections.Generic;
 using UnityEngine;
+#if ANIMANCER_PRESENT
+using Animancer;
+#endif
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement
 {
@@ -59,11 +62,22 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         {
             if (component == null) return null;
 
+#if ANIMANCER_PRESENT
+            if (component is HybridAnimancerComponent hybrid)
+            {
+                return hybrid.Animator;
+            }
+            else if (component is AnimancerComponent regular)
+            {
+                return regular.Animator;
+            }
+            return null;
+#else
             try
             {
                 var type = component.GetType();
                 var animatorProperty = type.GetProperty("Animator",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy);
 
                 if (animatorProperty != null)
                 {
@@ -77,6 +91,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             }
 
             return null;
+#endif
         }
 
         private bool IsAnimancerComponentValid()
@@ -91,34 +106,44 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         {
             if (_animancerComponent == null) return null;
 
+#if ANIMANCER_PRESENT
+            if (_animancerComponent is AnimancerComponent animancer)
+            {
+                return animancer.Parameters;
+            }
+            return null;
+#else
             try
             {
                 var type = _animancerComponent.GetType();
                 var parametersProperty = type.GetProperty("Parameters",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy);
 
                 return parametersProperty?.GetValue(_animancerComponent);
             }
             catch (System.Exception)
             {
-                // Silently fail - component may not have Parameters property
                 return null;
             }
+#endif
         }
 
         private void SetParameterValue<T>(int parameterHash, T value)
         {
             if (!_hashToNameMap.TryGetValue(parameterHash, out string parameterName))
             {
-                // Fallback: Try to get name from AnimationParameterCache if available
-                // This requires storing reverse mapping, which we don't have
-                // So we'll just skip if name not found
                 return;
             }
 
             var parameters = GetParametersProperty();
             if (parameters == null) return;
 
+#if ANIMANCER_PRESENT
+            if (parameters is ParameterDictionary paramDict)
+            {
+                paramDict.SetValue(parameterName, value);
+            }
+#else
             try
             {
                 var setValueMethod = parameters.GetType().GetMethod("SetValue",
@@ -131,9 +156,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             }
             catch (System.Exception)
             {
-                // Silently fail - parameter may not exist or type mismatch
-                // This prevents crashes in production
+
             }
+#endif
         }
 
         /// <summary>
@@ -191,12 +216,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
             if (_useAnimatorMode)
             {
-                // Check if parameter exists before setting to avoid warnings
                 if (IsParameterValid(parameterHash))
                 {
                     _animator.SetBool(parameterHash, value);
                 }
-                // If parameter doesn't exist in Animator Controller, try Parameters mode as fallback
                 else if (_hashToNameMap.ContainsKey(parameterHash))
                 {
                     SetParameterValue(parameterHash, value);
@@ -214,16 +237,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
             if (_useAnimatorMode)
             {
-                // Check if parameter exists before setting to avoid warnings
                 if (IsParameterValid(parameterHash))
                 {
                     _animator.SetTrigger(parameterHash);
                 }
-                // If parameter doesn't exist in Animator Controller, try Parameters mode as fallback
                 else if (_hashToNameMap.ContainsKey(parameterHash))
                 {
-                    // For triggers in Parameters mode, we set a bool to true
-                    // Note: Animancer Parameters don't have native trigger support
                     SetParameterValue(parameterHash, true);
                 }
             }
