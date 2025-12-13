@@ -297,6 +297,55 @@ event Action OnLanded;
 - **状态池化** - 状态实例通过对象池复用
 - **优化的旋转** - 使用 `math.slerp` 而非 `Quaternion.Slerp`
 
+## 🔗 GameplayFramework 集成
+
+### 自动旋转同步
+
+当 `MovementComponent` 与 `CycloneGames.GameplayFramework` 一起使用时，组件会在 Pawn 生成时自动同步其旋转。这是通过 `IInitialRotationSettable` 接口实现的。
+
+#### Package Manager 安装（推荐）
+
+如果 `RPGFoundation` 和 `GameplayFramework` 都通过 Package Manager 安装：
+- ✅ **自动**：`GAMEPLAY_FRAMEWORK_PRESENT` 定义符号会通过 asmdef 中的 `versionDefines` 自动设置
+- ✅ **无需配置**：旋转同步自动工作
+
+#### 直接放在 Assets 文件夹
+
+如果 `RPGFoundation` 直接放在 `Assets` 文件夹中（非 Package 形式）：
+- ⚠️ **需要手动设置**：必须在 `PlayerSettings > Scripting Define Symbols` 中手动设置 `GAMEPLAY_FRAMEWORK_PRESENT` 定义符号
+- ⚠️ **否则**：自动旋转同步将不会工作，您必须在生成后手动设置 Pawn 的旋转
+
+#### 手动设置旋转（当定义符号未设置时）
+
+如果 `GAMEPLAY_FRAMEWORK_PRESENT` 未定义，您需要在生成后手动设置旋转：
+
+```csharp
+// 在您的 GameMode 或生成逻辑中
+Pawn pawn = SpawnDefaultPawnAtTransform(playerController, spawnTransform);
+
+// 为 MovementComponent 手动设置旋转
+var movement = pawn.GetComponent<MovementComponent>();
+if (movement != null)
+{
+    movement.SetRotation(spawnTransform.rotation, immediate: true);
+}
+```
+
+### 控制旋转
+
+`MovementComponent` 会自动将角色旋转到面向移动方向。要手动控制旋转：
+
+```csharp
+// 设置朝向方向（平滑旋转）
+movement.SetLookDirection(targetDirection);
+
+// 立即设置旋转
+movement.SetRotation(targetRotation, immediate: true);
+
+// 从方向设置旋转
+movement.SetRotation(targetDirection, immediate: true);
+```
+
 ## 🎨 扩展系统
 
 ### 添加新状态

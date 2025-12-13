@@ -8,11 +8,17 @@ using CycloneGames.Logger;
 #if ANIMANCER_PRESENT
 using Animancer;
 #endif
+#if GAMEPLAY_FRAMEWORK_PRESENT
+using CycloneGames.GameplayFramework.Runtime;
+#endif
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 {
     [RequireComponent(typeof(Rigidbody2D))]
     public class MovementComponent2D : MonoBehaviour, IMovementStateQuery2D
+#if GAMEPLAY_FRAMEWORK_PRESENT
+        , IInitialRotationSettable
+#endif
     {
         [SerializeField] private MovementConfig2D config;
         [SerializeField] private Animator characterAnimator;
@@ -553,6 +559,61 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         {
             _context.CrouchHeld = held;
         }
+
+        /// <summary>
+        /// Sets the character's rotation. For 2D characters, this primarily affects Z-axis rotation.
+        /// For Platformer/BeltScroll modes, the facing direction is controlled by scale flipping,
+        /// but initial rotation may still be important for sprite orientation.
+        /// </summary>
+        /// <param name="rotation">The target rotation</param>
+        /// <param name="immediate">If true, sets rotation immediately. If false, has no effect in 2D (2D uses scale flipping for facing).</param>
+        public void SetRotation(Quaternion rotation, bool immediate = false)
+        {
+            if (immediate)
+            {
+                transform.rotation = rotation;
+
+                // For Platformer/BeltScroll modes, also update facing direction based on rotation
+                if (config != null && config.movementType != MovementType2D.TopDown)
+                {
+                    Vector3 forward = rotation * Vector3.right; // In 2D, right is typically forward
+                    bool shouldFaceRight = forward.x > 0;
+
+                    if (shouldFaceRight != _facingRight)
+                    {
+                        _facingRight = shouldFaceRight;
+                        Vector3 scale = transform.localScale;
+                        if (scale.x > 0 && !shouldFaceRight)
+                        {
+                            scale.x = -scale.x;
+                        }
+                        else if (scale.x < 0 && shouldFaceRight)
+                        {
+                            scale.x = -scale.x;
+                        }
+                        transform.localScale = scale;
+                    }
+                }
+            }
+        }
+
+#if GAMEPLAY_FRAMEWORK_PRESENT
+        /// <summary>
+        /// Implementation of IInitialRotationSettable interface.
+        /// Called by GameplayFramework when a Pawn is spawned to synchronize initial rotation.
+        /// 
+        /// IMPORTANT: This implementation is only available when GAMEPLAY_FRAMEWORK_PRESENT is defined.
+        /// - If RPGFoundation is installed via Package Manager and GameplayFramework is present, 
+        ///   the define symbol is automatically set via versionDefines in asmdef.
+        /// - If RPGFoundation is placed directly in Assets folder (not as Package), 
+        ///   you must manually set GAMEPLAY_FRAMEWORK_PRESENT in PlayerSettings > Scripting Define Symbols,
+        ///   otherwise you will need to manually set the Pawn's rotation after spawning.
+        /// </summary>
+        void IInitialRotationSettable.SetInitialRotation(Quaternion rotation, bool immediate)
+        {
+            SetRotation(rotation, immediate);
+        }
+#endif
 
         public bool RequestStateChange(MovementStateType targetStateType, object context = null)
         {
