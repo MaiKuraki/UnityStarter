@@ -4,7 +4,8 @@
     "references": [
         "Unity.Mathematics",
         "CycloneGames.Logger",
-        "Kybernetik.Animancer"
+        "Kybernetik.Animancer",
+        "CycloneGames.GameplayFramework.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -18,6 +19,11 @@
             "name": "com.kybernetik.animancer",
             "expression": "",
             "define": "ANIMANCER_PRESENT"
+        },
+        {
+            "name": "com.cyclone-games.gameplay-framework",
+            "expression": "",
+            "define": "GAMEPLAY_FRAMEWORK_PRESENT"
         }
     ],
     "noEngineReferences": false

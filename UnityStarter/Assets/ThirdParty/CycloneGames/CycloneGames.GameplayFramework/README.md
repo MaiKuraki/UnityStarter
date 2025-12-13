@@ -117,3 +117,14 @@ public class GameBoot : MonoBehaviour
   - Add a `PlayerStart` to the scene, or verify its name if you use a portal name.
 - KillZ not firing
   - `KillZVolume` needs a trigger collider; falling actors need `Collider` + `Rigidbody`.
+- Pawn rotation not synchronized after spawn
+  - If using `MovementComponent` from `RPGFoundation` and GameplayFramework is not installed via Package Manager, you must manually set the `GAMEPLAY_FRAMEWORK_PRESENT` define symbol in `PlayerSettings > Scripting Define Symbols`.
+  - Alternatively, manually set the rotation after spawning:
+    ```csharp
+    Pawn pawn = SpawnDefaultPawnAtTransform(...);
+    var movement = pawn.GetComponent<MovementComponent>();
+    if (movement != null)
+    {
+        movement.SetRotation(spawnTransform.rotation, immediate: true);
+    }
+    ```
