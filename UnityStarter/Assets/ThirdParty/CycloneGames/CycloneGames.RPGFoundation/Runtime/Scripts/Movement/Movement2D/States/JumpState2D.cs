@@ -12,6 +12,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             float horizontalVelocity = context.Rigidbody.velocity.x;
             context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, context.Config.jumpForce);
             context.JumpCount++;
+            context.JumpPressed = false;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
@@ -51,11 +52,19 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
                 return StatePool<MovementStateBase2D>.GetState<FallState2D>();
             }
 
-            if (context.JumpPressed && context.JumpCount < context.Config.maxJumpCount)
+            // Multi-jump: Allow additional jumps while rising if within jump count limit
+            if (context.JumpPressed && context.Config != null && context.JumpCount < context.Config.maxJumpCount)
             {
                 float horizontalVelocity = context.Rigidbody.velocity.x;
                 context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, context.Config.jumpForce);
                 context.JumpCount++;
+                context.JumpPressed = false;
+                
+                if (context.AnimationController != null && context.AnimationController.IsValid)
+                {
+                    int hash = AnimationParameterCache.GetHash(context.Config.jumpTrigger);
+                    context.AnimationController.SetTrigger(hash);
+                }
             }
 
             return null;
@@ -63,7 +72,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
         public override void OnExit(ref MovementContext2D context)
         {
-            context.JumpCount = 0;
         }
     }
 }

@@ -8,7 +8,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
-            float3 movement = context.InputDirection * context.Config.runSpeed * context.Config.airControlMultiplier;
+            float3 worldInputDirection = context.GetWorldInputDirection();
+            float3 movement = worldInputDirection * context.Config.runSpeed * context.Config.airControlMultiplier;
 
             context.VerticalVelocity += context.Config.gravity * context.DeltaTime;
 
@@ -34,6 +35,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
                     return StatePool<MovementStateBase>.GetState<WalkState>();
                 else
                     return StatePool<MovementStateBase>.GetState<IdleState>();
+            }
+
+            // Multi-jump: Check JumpCount < maxJumpCount before transitioning (JumpCount increments in JumpState.OnEnter)
+            if (context.JumpPressed && context.Config != null && context.JumpCount < context.Config.maxJumpCount)
+            {
+                context.JumpPressed = false;
+                return StatePool<MovementStateBase>.GetState<JumpState>();
             }
 
             return null;
