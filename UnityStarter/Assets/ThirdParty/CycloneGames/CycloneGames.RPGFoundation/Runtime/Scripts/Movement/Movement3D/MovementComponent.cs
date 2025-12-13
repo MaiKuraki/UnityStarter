@@ -22,7 +22,6 @@ namespace CycloneGames.RPGFoundation.Runtime
         [SerializeField] private MovementConfig config;
         [SerializeField] private Animator characterAnimator;
         [SerializeField] private UnityEngine.Object animancerComponent;
-        // World Up Source - displayed in Editor, no Header needed (single field)
         [Tooltip("Optional Transform to use as world up direction reference.\n" +
                  "If assigned, character will use this Transform's UP direction (Transform.up) as the world up.\n" +
                  "If null, uses Vector3.up (standard Unity world up).\n" +
@@ -92,10 +91,10 @@ namespace CycloneGames.RPGFoundation.Runtime
         private quaternion _currentRotation;
         private const float _minSqrMagnitudeForMovement = 0.0001f;
         private const float _groundedVerticalVelocity = -2f;
+        private Vector3 _previousWorldUp;
 
         private bool _isUsingAnimancer = false;
         private bool _isUsingHybridAnimancer = false;
-        // Cache the Animator from HybridAnimancerComponent for root motion support
         private Animator _hybridAnimancerAnimator = null;
         private Animator _cachedTargetAnimator = null;
         private System.Collections.Generic.Dictionary<int, string> _cachedParameterMap = null;
@@ -118,14 +117,11 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             IAnimationController animationController = null;
 
-            // Priority: Animancer > Manually assigned Animator > Auto-found Animator
             if (animancerComponent != null)
             {
                 _isUsingAnimancer = true;
 
 #if ANIMANCER_PRESENT
-                // Use direct type checking with zero overhead (compile-time optimization)
-                // This supports inheritance: if user inherits HybridAnimancerComponent, 'is' check will work
                 if (animancerComponent is HybridAnimancerComponent hybridAnimancer)
                 {
                     _isUsingHybridAnimancer = true;
@@ -133,7 +129,6 @@ namespace CycloneGames.RPGFoundation.Runtime
 
                     if (_hybridAnimancerAnimator != null)
                     {
-                        // Use HybridAnimancerComponent's Animator as the characterAnimator for root motion
                         if (characterAnimator == null)
                         {
                             characterAnimator = _hybridAnimancerAnimator;
@@ -155,11 +150,8 @@ namespace CycloneGames.RPGFoundation.Runtime
                 }
                 else if (animancerComponent is AnimancerComponent regularAnimancer)
                 {
-                    // Regular AnimancerComponent (Parameters mode) - doesn't support root motion
-                    // Validate Animancer's internal Animator if manual Animator is also assigned
                     if (characterAnimator != null)
                     {
-                        // Check if regular AnimancerComponent has an Animator (some configurations might)
                         var animancerAnimator = regularAnimancer.Animator;
 
                         if (animancerAnimator != null && animancerAnimator != characterAnimator)
@@ -177,8 +169,6 @@ namespace CycloneGames.RPGFoundation.Runtime
                     }
                 }
 #else
-                // Fallback to reflection if Animancer is not available (backward compatibility)
-                // This path is only used if ANIMANCER_PRESENT is not defined
                 try
                 {
                     var animancerType = animancerComponent.GetType();
@@ -190,7 +180,6 @@ namespace CycloneGames.RPGFoundation.Runtime
                     {
                         _isUsingHybridAnimancer = true;
 
-                        // Extract Animator from HybridAnimancerComponent using reflection
                         var animatorProperty = animancerType.GetProperty("Animator",
                             System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy);
 
@@ -227,7 +216,6 @@ namespace CycloneGames.RPGFoundation.Runtime
                 _cachedParameterMap = CreateParameterNameMap();
                 animationController = new AnimancerAnimationController(animancerComponent, _cachedParameterMap);
 
-                // Warn if root motion is enabled with regular AnimancerComponent (not HybridAnimancerComponent)
                 if (useRootMotion && !_isUsingHybridAnimancer)
                 {
                     CLogger.LogWarning(
@@ -259,12 +247,10 @@ namespace CycloneGames.RPGFoundation.Runtime
             _currentState = StatePool<MovementStateBase>.GetState<IdleState>();
             _currentRotation = transform.rotation;
 
-            // Cache target animator once during initialization
             CacheTargetAnimator();
         }
 
         /// <summary>
-        /// Caches the target animator to avoid repeated checks every frame.
         /// </summary>
         private void CacheTargetAnimator()
         {
@@ -288,7 +274,6 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             var map = new System.Collections.Generic.Dictionary<int, string>();
 
-            // Map parameter hashes to names for Animancer Parameters mode
             if (!string.IsNullOrEmpty(config.movementSpeedParameter))
             {
                 int hash = AnimationParameterCache.GetHash(config.movementSpeedParameter);
@@ -336,8 +321,10 @@ namespace CycloneGames.RPGFoundation.Runtime
         {
             _characterController.minMoveDistance = 0f;
 
-            // Initialize WorldUp from worldUpSource if available
             UpdateWorldUp();
+            
+            // Initialize previous WorldUp for change detection
+            _previousWorldUp = WorldUp;
         }
 
         /// <summary>
@@ -346,7 +333,6 @@ namespace CycloneGames.RPGFoundation.Runtime
         /// </summary>
         private void UpdateWorldUp()
         {
-            // Only update if worldUpSource is assigned (cached check for performance)
             if (worldUpSource != null)
             {
                 WorldUp = worldUpSource.up;
@@ -355,7 +341,6 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         void Update()
         {
-            // Ensure _currentState is initialized (may be null if StatePool was cleared during scene transition)
             if (_currentState == null)
             {
                 _currentState = StatePool<MovementStateBase>.GetState<IdleState>();
@@ -382,6 +367,9 @@ namespace CycloneGames.RPGFoundation.Runtime
                 UseRootMotion = useRootMotion,
                 JumpCount = 0
             };
+            
+            // Initialize previous WorldUp for change detection
+            _previousWorldUp = WorldUp;
         }
 
         private void UpdateContext()
@@ -393,7 +381,6 @@ namespace CycloneGames.RPGFoundation.Runtime
                 WorldUp = worldUpSource.up;
             }
 
-            // Mark world up as changed if it actually changed
             _worldUpChanged = previousWorldUp != WorldUp;
 
             if (config == null)
@@ -406,31 +393,20 @@ namespace CycloneGames.RPGFoundation.Runtime
             _context.WorldUp = WorldUp;
             _context.IsGrounded = CheckGrounded();
 
-            // Update root motion setting
-            // States can override UseRootMotion in OnEnter/OnUpdate, but if not set, use component default
-            // This allows per-state control while maintaining a global default
-            // Note: Root motion works with Unity Animator and HybridAnimancerComponent, but not AnimancerComponent Parameters mode
             if (!_context.UseRootMotion && !useRootMotion)
             {
-                // If both are false, keep it false (state explicitly disabled it)
             }
             else if (useRootMotion && !_isUsingAnimancer)
             {
-                // If component has root motion enabled and we're using Animator (not Animancer), use context value
-                // If state hasn't set it, it defaults to true when component enables it
                 if (!_context.UseRootMotion && _currentState != null)
                 {
-                    // State hasn't explicitly set it, so use component default
                     _context.UseRootMotion = useRootMotion;
                 }
             }
             else if (useRootMotion && _isUsingAnimancer)
             {
-                // Check if we're using HybridAnimancerComponent (supports root motion)
                 if (_isUsingHybridAnimancer)
                 {
-                    // HybridAnimancerComponent supports root motion
-                    // If state hasn't set it, use component default
                     if (!_context.UseRootMotion && _currentState != null)
                     {
                         _context.UseRootMotion = useRootMotion;
@@ -438,18 +414,26 @@ namespace CycloneGames.RPGFoundation.Runtime
                 }
                 else
                 {
-                    // Regular AnimancerComponent (Parameters mode) doesn't support root motion
-                    // Disable it to prevent issues
                     _context.UseRootMotion = false;
                 }
             }
 
+            // Project previous vertical velocity onto new WorldUp when it changes in air
+            if (_worldUpChanged && !_context.IsGrounded)
+            {
+                Vector3 previousVerticalDirection = _previousWorldUp * _context.VerticalVelocity;
+                float projectedVelocity = Vector3.Dot(previousVerticalDirection, WorldUp);
+                _context.VerticalVelocity = projectedVelocity;
+            }
+            
             if (_context.IsGrounded && _context.VerticalVelocity < 0)
             {
                 _context.VerticalVelocity = _groundedVerticalVelocity;
-                // Reset jump count when grounded to allow fresh jumps
                 _context.JumpCount = 0;
+                _context.JumpPressed = false;
             }
+            
+            _previousWorldUp = WorldUp;
 
             if (_context.AnimationController != null && _context.AnimationController.IsValid)
             {
@@ -457,10 +441,6 @@ namespace CycloneGames.RPGFoundation.Runtime
                 _context.AnimationController.SetBool(hash, _context.IsGrounded);
             }
 
-            // Update Animator root motion setting
-            // Both component setting and context setting must be true for root motion to work
-            // Works with Unity Animator and HybridAnimancerComponent, but not AnimancerComponent Parameters mode
-            // Use cached animator to avoid repeated checks
             if (_cachedTargetAnimator != null)
             {
                 bool shouldUseRootMotion = _context.UseRootMotion && useRootMotion;
@@ -473,7 +453,6 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         private void ExecuteStateMachine()
         {
-            // Safety check: reinitialize state if it was cleared (e.g., during scene transition)
             if (_currentState == null)
             {
                 _currentState = StatePool<MovementStateBase>.GetState<IdleState>();
@@ -491,9 +470,6 @@ namespace CycloneGames.RPGFoundation.Runtime
             float3 displacement;
             _currentState.OnUpdate(ref _context, out displacement);
 
-            // Apply root motion if enabled (handled in OnAnimatorMove)
-            // Otherwise apply calculated displacement
-            // Use cached animator to avoid repeated checks
             bool shouldUseRootMotion = _context.UseRootMotion && useRootMotion &&
                                       _cachedTargetAnimator != null && _cachedTargetAnimator.applyRootMotion;
 
@@ -504,7 +480,6 @@ namespace CycloneGames.RPGFoundation.Runtime
                     _characterController.Move(displacement);
                 }
             }
-            // Note: When root motion is active, movement is handled in OnAnimatorMove
 
             // Snap to ground if grounded to prevent floating
             if (_context.IsGrounded)
@@ -518,12 +493,14 @@ namespace CycloneGames.RPGFoundation.Runtime
                 RequestStateChangeInternal(nextState);
             }
 
-            if (math.lengthsq(_context.CurrentVelocity) > _minSqrMagnitudeForMovement)
+            if (math.lengthsq(_lookDirection) > _minSqrMagnitudeForMovement)
             {
-                _lookDirection = math.normalize(_context.CurrentVelocity);
+                UpdateRotation();
             }
-
-            UpdateRotation();
+            else
+            {
+                UpdateRotationForWorldUp();
+            }
         }
 
         /// <summary>
@@ -534,37 +511,19 @@ namespace CycloneGames.RPGFoundation.Runtime
         /// </summary>
         void OnAnimatorMove()
         {
-            // Use cached animator to avoid repeated checks
-            // Only apply root motion if:
-            // 1. Root motion is enabled
-            // 2. We have a valid Animator (Unity Animator or HybridAnimancerComponent)
-            // 3. Animator has root motion applied
             if (!useRootMotion || !_context.UseRootMotion || _cachedTargetAnimator == null)
                 return;
 
             if (!_cachedTargetAnimator.applyRootMotion)
                 return;
 
-            // Get root motion delta from Animator
             Vector3 rootMotionDelta = _cachedTargetAnimator.deltaPosition;
-            Quaternion rootRotationDelta = _cachedTargetAnimator.deltaRotation;
 
-            // Apply root motion movement
-            // Note: deltaPosition already accounts for deltaTime, so we don't multiply again
             if (rootMotionDelta.sqrMagnitude > _minSqrMagnitudeForMovement)
             {
-                // Combine root motion with vertical velocity (gravity/falling)
-                // Root motion typically only affects horizontal movement, so we add vertical separately
                 Vector3 verticalMovement = WorldUp * _context.VerticalVelocity * DeltaTime;
                 _characterController.Move(rootMotionDelta + verticalMovement);
             }
-
-            // Apply root motion rotation (optional - you may want to control this differently)
-            // Uncomment if you want root motion to control rotation:
-            // transform.rotation *= rootRotationDelta;
-
-            // Note: If you want root motion to only affect position but not rotation,
-            // keep the rotation line commented out. The default UpdateRotation() will handle rotation.
         }
 
         /// <summary>
@@ -576,29 +535,11 @@ namespace CycloneGames.RPGFoundation.Runtime
         {
             if (config == null) return false;
 
-            // If CharacterController says we're grounded, trust it but do additional verification
-            // This helps catch edge cases where CharacterController might give false positives
             if (_characterController.isGrounded)
             {
-                // Do a quick verification to ensure we're really on the ground
-                // If verification fails, still trust CharacterController (it's usually reliable)
-                // But log a warning for debugging
-                if (!VerifyGroundedWithRaycast())
-                {
-                    // CharacterController says grounded but raycast doesn't confirm
-                    // This can happen if:
-                    // 1. Character is on a slope that's within CharacterController's tolerance
-                    // 2. LayerMask is not configured correctly
-                    // 3. Character is very close to ground (raycast starts inside collider)
-                    // In these cases, we trust CharacterController since it's generally reliable
-                    return true;
-                }
                 return true;
             }
 
-            // If CharacterController says we're not grounded, do a custom check
-            // This helps catch cases where CharacterController might miss the ground
-            // (e.g., when character is moving very slowly or just landed)
             return VerifyGroundedWithRaycast();
         }
 
@@ -617,44 +558,23 @@ namespace CycloneGames.RPGFoundation.Runtime
         {
             if (config == null) return false;
 
-            // Calculate the bottom of the CharacterController relative to WorldUp
-            // Always recalculate since transform.position changes every frame
-            // (WorldUp changes are tracked separately, but position always changes)
             Vector3 controllerCenter = transform.position + _characterController.center;
             Vector3 controllerBottom = controllerCenter - WorldUp * (_characterController.height * 0.5f);
 
             float sphereRadius = _characterController.radius * 0.9f;
-            // Start the raycast slightly above the bottom to avoid starting inside colliders
-            // This offset ensures the sphere cast doesn't start embedded in the ground
             float startOffset = sphereRadius + _characterController.skinWidth;
             Vector3 rayOrigin = controllerBottom + WorldUp * startOffset;
             Vector3 rayDirection = -WorldUp;
 
-            // Use the larger of groundedCheckDistance or skinWidth as the effective threshold
-            // This prevents detection failures when groundedCheckDistance < skinWidth
-            // CharacterController maintains at least skinWidth distance from ground,
-            // so we need to account for that in our detection threshold
             float effectiveGroundedCheckDistance = Mathf.Max(config.groundedCheckDistance, _characterController.skinWidth);
-
-            // groundedCheckDistance represents the max distance from character bottom to ground
-            // Since rayOrigin is startOffset above the bottom, we need to check:
-            // - From rayOrigin down to (controllerBottom - groundedCheckDistance)
-            // - Total distance = startOffset + groundedCheckDistance
-            // However, we want to ensure the hit point is within groundedCheckDistance of the bottom
-            // So we check a bit more to account for the sphere radius, but validate the actual distance
-            float checkDistance = startOffset + effectiveGroundedCheckDistance + sphereRadius * 0.1f; // Small buffer for sphere cast
+            float checkDistance = startOffset + effectiveGroundedCheckDistance + sphereRadius * 0.1f;
 
             if (Physics.SphereCast(rayOrigin, sphereRadius, rayDirection, out RaycastHit hit, checkDistance, config.groundLayer))
             {
-                // Calculate the actual distance from character bottom to hit point
                 float distanceFromBottom = Vector3.Dot(hit.point - controllerBottom, -WorldUp);
 
-                // Only consider grounded if the hit point is within the effective distance from bottom
-                // and the surface is within the slope limit
-                // Use effectiveGroundedCheckDistance to handle cases where config value < skinWidth
                 if (distanceFromBottom >= 0 && distanceFromBottom <= effectiveGroundedCheckDistance)
                 {
-                    // Check if the hit surface is roughly aligned with WorldUp (within slope limit)
                     float angle = Vector3.Angle(hit.normal, WorldUp);
                     if (angle <= config.slopeLimit)
                     {
@@ -681,38 +601,24 @@ namespace CycloneGames.RPGFoundation.Runtime
             Vector3 controllerCenter = transform.position + _characterController.center;
             Vector3 controllerBottom = controllerCenter - WorldUp * (_characterController.height * 0.5f);
 
-            // Use a simple Raycast from the bottom to find ground
-            // Start slightly above the bottom to avoid starting inside colliders
             float rayStartOffset = _characterController.skinWidth + 0.01f;
             Vector3 rayOrigin = controllerBottom + WorldUp * rayStartOffset;
             Vector3 rayDirection = -WorldUp;
 
-            // Use effective threshold to handle cases where groundedCheckDistance < skinWidth
             float effectiveGroundedCheckDistance = Mathf.Max(config.groundedCheckDistance, _characterController.skinWidth);
-
-            // Check distance should be slightly more than effectiveGroundedCheckDistance to account for the start offset
             float checkDistance = rayStartOffset + effectiveGroundedCheckDistance + 0.1f;
 
             if (Physics.Raycast(rayOrigin, rayDirection, out RaycastHit hit, checkDistance, config.groundLayer))
             {
-                // Calculate the actual distance from character bottom to hit point
                 float distanceFromBottom = Vector3.Dot(hit.point - controllerBottom, -WorldUp);
 
-                // Only snap if the hit point is within the effective distance and valid slope
                 if (distanceFromBottom >= 0 && distanceFromBottom <= effectiveGroundedCheckDistance)
                 {
                     float angle = Vector3.Angle(hit.normal, WorldUp);
-                    if (angle <= config.slopeLimit)
+                    if (angle <= config.slopeLimit && distanceFromBottom > 0.001f)
                     {
-                        // If there's a gap, snap the character down to the ground
-                        // Only snap if the distance is significant enough to avoid micro-movements
-                        if (distanceFromBottom > 0.001f)
-                        {
-                            // Move the character down by the distance to ground
-                            // CharacterController.Move will handle collision properly
-                            Vector3 snapMovement = -WorldUp * distanceFromBottom;
-                            _characterController.Move(snapMovement);
-                        }
+                        Vector3 snapMovement = -WorldUp * distanceFromBottom;
+                        _characterController.Move(snapMovement);
                     }
                 }
             }
@@ -722,45 +628,79 @@ namespace CycloneGames.RPGFoundation.Runtime
         {
             if (config == null) return;
 
-            quaternion targetRotation;
-
-            if (math.lengthsq(_lookDirection) > _minSqrMagnitudeForMovement)
+            quaternion targetRotation = quaternion.LookRotation(_lookDirection, _context.WorldUp);
+            
+            float dot = math.dot(_currentRotation.value, targetRotation.value);
+            float angleRad = math.acos(math.clamp(math.abs(dot), 0f, 1f)) * 2f;
+            float angleDeg = math.degrees(angleRad);
+            
+            if (angleDeg < 0.5f)
             {
-                targetRotation = quaternion.LookRotation(_lookDirection, _context.WorldUp);
+                _currentRotation = targetRotation;
+                transform.rotation = _currentRotation;
+                return;
             }
-            else
+            
+            float t = config.rotationSpeed * DeltaTime;
+            
+            // Reduce rotation speed for large angles (>135°) to prevent instant flip during 180° turns
+            if (angleDeg > 135f)
             {
-                float3 currentUp = math.mul(_currentRotation, UnityUpVector);
-                float3 worldUp = _context.WorldUp;
-
-                if (math.lengthsq(currentUp - worldUp) > 0.001f)
-                {
-                    UnityEngine.Quaternion unityToUp = UnityEngine.Quaternion.FromToRotation(currentUp, worldUp);
-                    quaternion toUp = unityToUp;
-                    targetRotation = math.mul(toUp, _currentRotation);
-                }
-                else
-                {
-                    targetRotation = _currentRotation;
-                }
+                t = t * 0.7f;
             }
-
-            _currentRotation = math.slerp(_currentRotation, targetRotation, config.rotationSpeed * DeltaTime);
+            
+            _currentRotation = math.slerp(_currentRotation, targetRotation, t);
             transform.rotation = _currentRotation;
         }
 
-        public void SetInputDirection(Vector3 worldDirection)
+        /// <summary>
+        /// Updates rotation only to align with WorldUp (for wall/ceiling walking).
+        /// Preserves forward direction while adjusting up direction to match WorldUp.
+        /// This ensures smooth transitions when WorldUp changes dynamically.
+        /// </summary>
+        private void UpdateRotationForWorldUp()
         {
-            _context.InputDirection = worldDirection;
+            if (config == null) return;
+
+            float3 currentUp = math.mul(_currentRotation, UnityUpVector);
+            float3 worldUp = _context.WorldUp;
+
+            if (math.lengthsq(currentUp - worldUp) > 0.001f)
+            {
+                UnityEngine.Quaternion unityToUp = UnityEngine.Quaternion.FromToRotation(currentUp, worldUp);
+                quaternion toUp = unityToUp;
+                quaternion targetRotation = math.mul(toUp, _currentRotation);
+                _currentRotation = math.slerp(_currentRotation, targetRotation, config.rotationSpeed * DeltaTime);
+                transform.rotation = _currentRotation;
+            }
+        }
+
+        /// <summary>
+        /// Sets the input direction in local space (relative to character's forward/right).
+        /// The direction will be automatically converted to world space in movement states,
+        /// ensuring movement is relative to the character's orientation, not world axes.
+        /// This supports WorldUp changes (e.g., standing on walls/ceilings).
+        /// </summary>
+        /// <param name="localDirection">Input direction in local space (x = right, z = forward, y = up/down)</param>
+        public void SetInputDirection(Vector3 localDirection)
+        {
+            _context.InputDirection = localDirection;
         }
 
         public void SetJumpPressed(bool pressed)
         {
-            if (pressed && !_context.JumpPressed && _context.IsGrounded)
-            {
-                RequestStateChange(MovementStateType.Jump);
-            }
+            bool wasPressed = _context.JumpPressed;
             _context.JumpPressed = pressed;
+            
+            // Trigger jump on rising edge when grounded, if within jump count limit
+            if (pressed && !wasPressed && _context.IsGrounded)
+            {
+                if (_context.Config != null && _context.JumpCount < _context.Config.maxJumpCount)
+                {
+                    RequestStateChange(MovementStateType.Jump);
+                }
+            }
+            // Multi-jump is handled in JumpState.EvaluateTransition and FallState.EvaluateTransition
         }
 
         public void SetSprintHeld(bool held)
@@ -775,7 +715,7 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         /// <summary>
         /// Sets the look direction for the character. The character will rotate to face this direction.
-        /// This overrides the automatic rotation based on movement velocity.
+        /// Movement and rotation are decoupled - this controls only rotation, not movement direction.
         /// </summary>
         /// <param name="worldDirection">The world space direction to look at (will be normalized)</param>
         public void SetLookDirection(Vector3 worldDirection)
@@ -784,6 +724,19 @@ namespace CycloneGames.RPGFoundation.Runtime
             {
                 _lookDirection = math.normalize(worldDirection);
             }
+            else
+            {
+                _lookDirection = float3.zero;
+            }
+        }
+
+        /// <summary>
+        /// Clears the look direction, stopping automatic rotation.
+        /// Character will only rotate to align with WorldUp if needed (e.g., wall/ceiling walking).
+        /// </summary>
+        public void ClearLookDirection()
+        {
+            _lookDirection = float3.zero;
         }
 
         /// <summary>
@@ -890,6 +843,9 @@ namespace CycloneGames.RPGFoundation.Runtime
             if (newStateType == MovementStateType.Jump)
             {
                 OnJumpStart?.Invoke();
+                // Note: We do NOT reset JumpPressed here to allow multi-jump (air jump)
+                // JumpPressed is consumed in JumpState.EvaluateTransition when performing multi-jump
+                // It will be reset when landing (in UpdateContext when grounded)
             }
             else if (oldStateType == MovementStateType.Fall && _context.IsGrounded)
             {

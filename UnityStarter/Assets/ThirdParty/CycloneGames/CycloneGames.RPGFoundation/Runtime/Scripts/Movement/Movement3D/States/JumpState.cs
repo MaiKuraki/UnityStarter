@@ -8,8 +8,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnEnter(ref MovementContext context)
         {
+            // Vertical velocity uses WorldUp for wall/ceiling walking support
             context.VerticalVelocity = context.Config.jumpForce;
             context.JumpCount++;
+            context.JumpPressed = false;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
@@ -20,7 +22,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
-            float3 movement = context.InputDirection * context.Config.runSpeed * context.Config.airControlMultiplier;
+            float3 worldInputDirection = context.GetWorldInputDirection();
+            float3 movement = worldInputDirection * context.Config.runSpeed * context.Config.airControlMultiplier;
+
+            context.VerticalVelocity += context.Config.gravity * context.DeltaTime;
 
             float3 horizontal = movement * context.DeltaTime;
             float3 vertical = context.WorldUp * context.VerticalVelocity * context.DeltaTime;
@@ -33,11 +38,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
             {
                 int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
                 context.AnimationController.SetFloat(hash, context.CurrentSpeed);
-            }
-
-            if (context.VerticalVelocity < 0)
-            {
-                context.VerticalVelocity += context.Config.gravity * context.DeltaTime;
             }
         }
 
@@ -54,10 +54,18 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
                 return StatePool<MovementStateBase>.GetState<FallState>();
             }
 
-            if (context.JumpPressed && context.JumpCount < context.Config.maxJumpCount)
+            // Multi-jump: Allow additional jumps while rising if within jump count limit
+            if (context.JumpPressed && context.Config != null && context.JumpCount < context.Config.maxJumpCount)
             {
                 context.VerticalVelocity = context.Config.jumpForce;
                 context.JumpCount++;
+                context.JumpPressed = false;
+                
+                if (context.AnimationController != null && context.AnimationController.IsValid)
+                {
+                    int hash = AnimationParameterCache.GetHash(context.Config.jumpTrigger);
+                    context.AnimationController.SetTrigger(hash);
+                }
             }
 
             return null;
@@ -65,7 +73,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnExit(ref MovementContext context)
         {
-            context.JumpCount = 0;
         }
     }
 }

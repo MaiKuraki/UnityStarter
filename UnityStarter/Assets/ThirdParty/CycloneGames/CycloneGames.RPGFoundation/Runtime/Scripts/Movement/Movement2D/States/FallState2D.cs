@@ -38,6 +38,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
                     return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
             }
 
+            // Multi-jump: Check JumpCount < maxJumpCount before transitioning (JumpCount increments in JumpState2D.OnEnter)
+            if (context.JumpPressed && context.Config != null && context.JumpCount < context.Config.maxJumpCount)
+            {
+                context.JumpPressed = false;
+                return StatePool<MovementStateBase2D>.GetState<JumpState2D>();
+            }
+
             return null;
         }
     }
