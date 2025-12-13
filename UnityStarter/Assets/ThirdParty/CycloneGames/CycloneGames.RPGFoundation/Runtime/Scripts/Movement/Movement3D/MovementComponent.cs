@@ -767,6 +767,66 @@ namespace CycloneGames.RPGFoundation.Runtime
             _context.CrouchHeld = held;
         }
 
+        /// <summary>
+        /// Sets the look direction for the character. The character will rotate to face this direction.
+        /// This overrides the automatic rotation based on movement velocity.
+        /// </summary>
+        /// <param name="worldDirection">The world space direction to look at (will be normalized)</param>
+        public void SetLookDirection(Vector3 worldDirection)
+        {
+            if (math.lengthsq(worldDirection) > _minSqrMagnitudeForMovement)
+            {
+                _lookDirection = math.normalize(worldDirection);
+            }
+        }
+
+        /// <summary>
+        /// Sets the character's rotation immediately or as a target rotation.
+        /// </summary>
+        /// <param name="rotation">The target rotation</param>
+        /// <param name="immediate">If true, sets rotation immediately. If false, sets as target for smooth rotation.</param>
+        public void SetRotation(Quaternion rotation, bool immediate = false)
+        {
+            if (immediate)
+            {
+                _currentRotation = rotation;
+                transform.rotation = rotation;
+            }
+            else
+            {
+                Vector3 forward = rotation * Vector3.forward;
+                SetLookDirection(forward);
+            }
+        }
+
+        /// <summary>
+        /// Sets the character's rotation to match a world space direction immediately or as a target.
+        /// </summary>
+        /// <param name="worldDirection">The world space direction to face (will be normalized)</param>
+        /// <param name="immediate">If true, sets rotation immediately. If false, sets as target for smooth rotation.</param>
+        public void SetRotation(Vector3 worldDirection, bool immediate = false)
+        {
+            if (math.lengthsq(worldDirection) <= _minSqrMagnitudeForMovement)
+            {
+                CLogger.LogWarning("[MovementComponent] Cannot set rotation with zero direction vector.");
+                return;
+            }
+
+            Vector3 normalizedDirection = worldDirection.normalized;
+            Vector3 up = WorldUp;
+            Quaternion targetRotation = Quaternion.LookRotation(normalizedDirection, up);
+
+            if (immediate)
+            {
+                _currentRotation = targetRotation;
+                transform.rotation = targetRotation;
+            }
+            else
+            {
+                SetLookDirection(normalizedDirection);
+            }
+        }
+
         public bool RequestStateChange(MovementStateType targetStateType, object context = null)
         {
             if (MovementAuthority != null && !MovementAuthority.CanEnterState(targetStateType, context))
@@ -926,7 +986,6 @@ namespace CycloneGames.RPGFoundation.Runtime
                 currentWorldUp = Vector3.up;
             }
 
-            // Calculate the same values used in VerifyGroundedWithRaycast
             Vector3 controllerCenter = transform.position + _characterController.center;
             Vector3 controllerBottom = controllerCenter - currentWorldUp * (_characterController.height * 0.5f);
 
