@@ -297,6 +297,55 @@ event Action OnLanded;
 - **State Pooling** - State instances are reused via object pool
 - **Optimized Rotation** - Uses `math.slerp` instead of `Quaternion.Slerp`
 
+## 🔗 GameplayFramework Integration
+
+### Automatic Rotation Synchronization
+
+When using `MovementComponent` with `CycloneGames.GameplayFramework`, the component automatically synchronizes its rotation when a Pawn is spawned. This is handled via the `IInitialRotationSettable` interface.
+
+#### Package Manager Installation (Recommended)
+
+If both `RPGFoundation` and `GameplayFramework` are installed via Package Manager:
+- ✅ **Automatic**: The `GAMEPLAY_FRAMEWORK_PRESENT` define symbol is automatically set via `versionDefines` in asmdef
+- ✅ **No configuration needed**: Rotation synchronization works automatically
+
+#### Direct Assets Installation
+
+If `RPGFoundation` is placed directly in the `Assets` folder (not as a Package):
+- ⚠️ **Manual setup required**: You must manually set the `GAMEPLAY_FRAMEWORK_PRESENT` define symbol in `PlayerSettings > Scripting Define Symbols`
+- ⚠️ **Otherwise**: Automatic rotation synchronization will not work, and you must manually set the Pawn's rotation after spawning
+
+#### Manual Rotation Setup (When Define Symbol is Not Set)
+
+If `GAMEPLAY_FRAMEWORK_PRESENT` is not defined, you need to manually set the rotation after spawning:
+
+```csharp
+// In your GameMode or spawn logic
+Pawn pawn = SpawnDefaultPawnAtTransform(playerController, spawnTransform);
+
+// Manually set rotation for MovementComponent
+var movement = pawn.GetComponent<MovementComponent>();
+if (movement != null)
+{
+    movement.SetRotation(spawnTransform.rotation, immediate: true);
+}
+```
+
+### Controlling Rotation
+
+The `MovementComponent` automatically rotates the character to face the movement direction. To manually control rotation:
+
+```csharp
+// Set look direction (smooth rotation)
+movement.SetLookDirection(targetDirection);
+
+// Set rotation immediately
+movement.SetRotation(targetRotation, immediate: true);
+
+// Set rotation from direction
+movement.SetRotation(targetDirection, immediate: true);
+```
+
 ## 🎨 Extending the System
 
 ### Adding New States
