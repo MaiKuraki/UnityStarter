@@ -24,8 +24,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         [SerializeField] private Animator characterAnimator;
         [SerializeField] private UnityEngine.Object animancerComponent;
 
-        // Ground check is now managed automatically using config settings
-        // No need to expose in Inspector - it's created/managed internally
 
         [Tooltip("Ignore global Time.timeScale. When enabled, this character will use Time.unscaledDeltaTime instead.\n" +
                  "Use cases:\n" +
@@ -82,15 +80,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
             IAnimationController animationController = null;
 
-            // Priority: Animancer > Manually assigned Animator > Auto-found Animator
             if (animancerComponent != null)
             {
 #if ANIMANCER_PRESENT
-                // Use direct type checking with zero overhead (compile-time optimization)
-                // This supports inheritance: if user inherits AnimancerComponent, 'is' check will work
                 if (animancerComponent is HybridAnimancerComponent hybridAnimancer)
                 {
-                    // HybridAnimancerComponent has an Animator
                     var animancerAnimator = hybridAnimancer.Animator;
 
                     if (characterAnimator != null)
@@ -125,7 +119,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                     }
                 }
 #else
-                // Fallback to reflection if Animancer is not available (backward compatibility)
                 if (characterAnimator != null)
                 {
                     try
@@ -181,7 +174,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 config = ScriptableObject.CreateInstance<MovementConfig2D>();
             }
 
-            // Create ground check point if needed (only for Platformer and BeltScroll modes)
             if (config.movementType != MovementType2D.TopDown)
             {
                 if (_groundCheck == null)
@@ -308,7 +300,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         void Update()
         {
-            // Ensure _currentState is initialized (may be null if StatePool was cleared during scene transition)
             if (_currentState == null)
             {
                 _currentState = StatePool<MovementStateBase2D>.GetState<IdleState2D>();
@@ -334,7 +325,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         {
             if (config == null) return;
 
-            // Ground check only needed for Platformer and BeltScroll modes
             if (config.movementType == MovementType2D.TopDown)
             {
                 _context.IsGrounded = true; // TopDown doesn't need ground detection
@@ -353,8 +343,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             if (!wasGrounded && _context.IsGrounded)
             {
                 OnLanded?.Invoke();
-                // Reset jump count when landing to allow fresh jumps
                 _context.JumpCount = 0;
+                _context.JumpPressed = false;
             }
             _wasGrounded = _context.IsGrounded;
         }
@@ -414,7 +404,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         private void ExecuteStateMachine()
         {
-            // Safety check: reinitialize state if it was cleared (e.g., during scene transition)
             if (_currentState == null)
             {
                 _currentState = StatePool<MovementStateBase2D>.GetState<IdleState2D>();
@@ -432,42 +421,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             float2 displacement;
             _currentState.OnUpdate(ref _context, out displacement);
 
-            // Calculate velocity from displacement
             float dt = DeltaTime > 0 ? DeltaTime : 1f;
             Vector2 targetVelocity = new Vector2(displacement.x / dt, _rigidbody.velocity.y);
 
             if (config.movementType == MovementType2D.TopDown)
             {
-                // TopDown Mode:
-                // Input X -> Velocity X
-                // Input Y -> Velocity Y (No Gravity)
-
-                // In TopDown, the state (Walk/Run) calculates displacement based on InputDirection.
-                // Since we map Input Y to InputDirection.y in SetInputDirection,
-                // displacement.y ALREADY contains the vertical movement we want.
-
-                // So we just apply displacement.x and displacement.y to velocity.
-                // And we ignore gravity (already set to 0 in InitializePhysics).
-
-                // Note: displacement.y comes from state.OnUpdate -> context.InputDirection * speed * dt
-                // So targetVelocity.y = displacement.y / dt = InputDirection.y * speed
-
                 _rigidbody.velocity = new Vector2(displacement.x / dt, displacement.y / dt);
             }
             else if (config.movementType == MovementType2D.BeltScroll)
             {
-                // In BeltScroll (DNF) mode, Y input (from state displacement.y) maps to Z velocity
-                // But wait, the states (Walk/Run) calculate displacement based on InputDirection.
-                // If we mapped Input Y to Z in SetInputDirection, then InputDirection.y is actually Z movement.
-                // But standard 2D states calculate displacement = Input * Speed.
-                // So displacement.y is the vertical movement.
-
-                // For DNF:
-                // displacement.x -> Rigidbody.velocity.x
-                // displacement.y -> Rigidbody.velocity.y (This is WRONG, Y is gravity/jump)
-                // We need to map displacement.y to Z position change.
-
-                // Since Rigidbody2D doesn't handle Z, we must move Transform.Z manually.
+                // BeltScroll (DNF): displacement.y maps to Z position (Rigidbody2D doesn't handle Z)
                 float zMove = displacement.y;
                 transform.position += new Vector3(0, 0, zMove);
 
@@ -483,9 +446,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             }
             else
             {
-                // Platformer Mode
-                // X velocity = displacement.x / dt
-                // Y velocity = _rigidbody.velocity.y (Physics)
                 _rigidbody.velocity = new Vector2(targetVelocity.x, _rigidbody.velocity.y);
             }
 
@@ -503,14 +463,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             // TopDown mode uses Animator BlendTree for 4-direction sprites, so we don't flip transform
             if (config.movementType == MovementType2D.TopDown)
             {
-                // For TopDown, we rely on Animator (InputX/InputY) to show facing.
-                // We DO NOT flip the transform because that would interfere with Up/Down sprites.
-                // TopDown typically uses different sprites for each direction (4-direction).
                 return;
             }
 
-            // Platformer and BeltScroll modes both support automatic sprite flipping based on movement direction
-            // Both are side-scrolling games where left/right facing is important
+            // Platformer and BeltScroll modes support automatic sprite flipping based on movement direction
             if (math.abs(_context.InputDirection.x) > 0.01f)
             {
                 bool shouldFaceRight = _context.InputDirection.x > 0;
@@ -528,9 +484,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         {
             if (config.movementType == MovementType2D.BeltScroll || config.movementType == MovementType2D.TopDown)
             {
-                // Map Input Y to InputDirection.y
-                // BeltScroll: Interpreted as Z movement
-                // TopDown: Interpreted as Y movement
+                // Map Input Y to InputDirection.y (BeltScroll: Z movement, TopDown: Y movement)
                 _context.InputDirection = new float2(direction.x, direction.y);
             }
             else
@@ -543,11 +497,18 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         public void SetJumpPressed(bool pressed)
         {
+            bool wasPressed = _context.JumpPressed;
             _context.JumpPressed = pressed;
-            if (pressed && (_coyoteTimeCounter > 0 || _context.IsGrounded))
+            
+            // Trigger jump on rising edge when grounded or in coyote time, if within jump count limit
+            if (pressed && !wasPressed && (_coyoteTimeCounter > 0 || _context.IsGrounded))
             {
-                RequestStateChange(MovementStateType.Jump);
+                if (_context.Config != null && _context.JumpCount < _context.Config.maxJumpCount)
+                {
+                    RequestStateChange(MovementStateType.Jump);
+                }
             }
+            // Multi-jump is handled in JumpState2D.EvaluateTransition and FallState2D.EvaluateTransition
         }
 
         public void SetSprintHeld(bool held)
@@ -655,6 +616,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             {
                 OnJumpStart?.Invoke();
                 _coyoteTimeCounter = 0;
+                // Note: We do NOT reset JumpPressed here to allow multi-jump (air jump)
+                // JumpPressed is consumed in JumpState2D.EvaluateTransition when performing multi-jump
+                // It will be reset when landing (in CheckGround when grounded)
             }
         }
 
