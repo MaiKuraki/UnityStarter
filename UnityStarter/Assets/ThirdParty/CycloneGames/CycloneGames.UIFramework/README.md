@@ -178,17 +178,21 @@ Use `window.SetVisible(bool)` instead of `gameObject.SetActive(bool)`.
 3.  Assign these `UILayer` assets to the `UIRoot`'s `Layer Configurations` list in the Inspector.
 
 ### 3. Create a `UIWindow`
-1.  **Create the Script**: Create a new C# script that inherits from `UIWindow`. For example, `MainMenuWindow.cs`.
-    ```csharp
-    using CycloneGames.UIFramework.Runtime;
+-   Quick creation pipeline
+    -   <img src="./Documents~/UIWindowCreator_1.png" alt="UIWindow Creator 1" style="width: 100%; height: auto; max-width: 800px;" />
+    -   <img src="./Documents~/UIWindowCreator_2.png" alt="UIWindow Creator 2" style="width: 100%; height: auto; max-width: 800px;" />
+-   Custom creation
+    -   **Create the Script**: Create a new C# script that inherits from `UIWindow`. For example, `MainMenuWindow.cs`.
+        ```csharp
+        using CycloneGames.UIFramework.Runtime;
 
-    public class MainMenuWindow : UIWindow
-    {
-        // Add references to your UI elements (buttons, text, etc.) here
-    }
-    ```
-2.  **Create the Prefab**: Create a new UI `Canvas` or `Panel` in your scene. Add your `MainMenuWindow` component to its root `GameObject`. Design your UI, then save it as a prefab.
-3.  **Create the Configuration**: Right-click in the Project window and select **Create > CycloneGames > UIFramework > UIWindow Configuration**.
+        public class MainMenuWindow : UIWindow
+        {
+            // Add references to your UI elements (buttons, text, etc.) here
+        }
+        ```
+    -   **Create the Prefab**: Create a new UI `Canvas` or `Panel` in your scene. Add your `MainMenuWindow` component to its root `GameObject`. Design your UI, then save it as a prefab.
+    -   **Create the Configuration**: Right-click in the Project window and select **Create > CycloneGames > UIFramework > UIWindow Configuration**.
     - Name it something descriptive, like `UIWindow_MainMenu`.
     - Assign your `MainMenuWindow` prefab to the `Window Prefab` field.
     - Assign the appropriate `UILayer` (e.g., `UILayer_Menu`) to the `Layer` field.

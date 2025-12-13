@@ -1,8 +1,9 @@
 using UnityEditor;
 using UnityEngine;
+using CycloneGames.UIFramework.Runtime;
 using CycloneGames.AssetManagement.Runtime;
 
-namespace CycloneGames.UIFramework.Runtime
+namespace CycloneGames.UIFramework.Editor
 {
     [CustomEditor(typeof(UIWindowConfiguration))]
     public sealed class UIWindowConfigurationEditor : UnityEditor.Editor
