@@ -117,3 +117,14 @@ public class GameBoot : MonoBehaviour
   - 在场景中放置 `PlayerStart`，或校验使用了正确的名称/Portal。
 - KillZ 无效
   - `KillZVolume` 需要触发器碰撞体；下落对象需要 `Collider` + `Rigidbody`。
+- Pawn 生成后旋转未同步
+  - 如果使用 `RPGFoundation` 的 `MovementComponent`，且 GameplayFramework 不是通过 Package Manager 安装的，必须在 `PlayerSettings > Scripting Define Symbols` 中手动设置 `GAMEPLAY_FRAMEWORK_PRESENT` 定义符号。
+  - 或者，在生成后手动设置旋转：
+    ```csharp
+    Pawn pawn = SpawnDefaultPawnAtTransform(...);
+    var movement = pawn.GetComponent<MovementComponent>();
+    if (movement != null)
+    {
+        movement.SetRotation(spawnTransform.rotation, immediate: true);
+    }
+    ```

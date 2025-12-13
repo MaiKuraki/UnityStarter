@@ -85,7 +85,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             return null;
         }
-        public void RestartPlayer(PlayerController NewPlayer, string Portal = "")
+        public virtual void RestartPlayer(PlayerController NewPlayer, string Portal = "")
         {
             if (NewPlayer == null)
             {
@@ -256,7 +256,8 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 characterController.enabled = true;
             }
-            
+
+            p.NotifyInitialRotation(SpawnTransform.rotation);
             return p;
         }
 
@@ -272,6 +273,8 @@ namespace CycloneGames.GameplayFramework.Runtime
             p.transform.position = NewLocation;
             p.transform.localScale = Vector3.one;
             p.transform.rotation = Quaternion.identity;
+            p.NotifyInitialRotation(Quaternion.identity);
+
             return p;
         }
 

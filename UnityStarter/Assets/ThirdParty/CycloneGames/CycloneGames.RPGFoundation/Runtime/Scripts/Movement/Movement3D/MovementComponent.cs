@@ -7,11 +7,17 @@ using CycloneGames.Logger;
 #if ANIMANCER_PRESENT
 using Animancer;
 #endif
+#if GAMEPLAY_FRAMEWORK_PRESENT
+using CycloneGames.GameplayFramework.Runtime;
+#endif
 
 namespace CycloneGames.RPGFoundation.Runtime
 {
     [RequireComponent(typeof(CharacterController))]
     public class MovementComponent : MonoBehaviour, IMovementStateQuery3D
+#if GAMEPLAY_FRAMEWORK_PRESENT
+        , IInitialRotationSettable
+#endif
     {
         [SerializeField] private MovementConfig config;
         [SerializeField] private Animator characterAnimator;
@@ -826,6 +832,24 @@ namespace CycloneGames.RPGFoundation.Runtime
                 SetLookDirection(normalizedDirection);
             }
         }
+
+#if GAMEPLAY_FRAMEWORK_PRESENT
+        /// <summary>
+        /// Implementation of IInitialRotationSettable interface.
+        /// Called by GameplayFramework when a Pawn is spawned to synchronize initial rotation.
+        /// 
+        /// IMPORTANT: This implementation is only available when GAMEPLAY_FRAMEWORK_PRESENT is defined.
+        /// - If RPGFoundation is installed via Package Manager and GameplayFramework is present, 
+        ///   the define symbol is automatically set via versionDefines in asmdef.
+        /// - If RPGFoundation is placed directly in Assets folder (not as Package), 
+        ///   you must manually set GAMEPLAY_FRAMEWORK_PRESENT in PlayerSettings > Scripting Define Symbols,
+        ///   otherwise you will need to manually set the Pawn's rotation after spawning.
+        /// </summary>
+        void IInitialRotationSettable.SetInitialRotation(Quaternion rotation, bool immediate)
+        {
+            SetRotation(rotation, immediate);
+        }
+#endif
 
         public bool RequestStateChange(MovementStateType targetStateType, object context = null)
         {
