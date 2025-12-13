@@ -3,13 +3,13 @@ using UnityEditor;
 using UnityEngine;
 using CycloneGames.UIFramework.Runtime;
 
-namespace CycloneGames.UIFramework.Runtime.Editor
+namespace CycloneGames.UIFramework.Editor
 {
     [CustomEditor(typeof(UILayer))]
     public class UILayerEditor : UnityEditor.Editor
     {
         private const string InValidPageName = "InvalidPageName";
-        
+
         private GUIStyle _statusStyleGreen;
         private GUIStyle _statusStyleRed;
         private GUIStyle _labelStyleDefault; // For the check/cross mark icons
@@ -19,7 +19,7 @@ namespace CycloneGames.UIFramework.Runtime.Editor
             // Cache GUIStyles to avoid creating them every OnInspectorGUI call (GC and performance)
             _statusStyleGreen = new GUIStyle(EditorStyles.label) { normal = { textColor = Color.green } };
             _statusStyleRed = new GUIStyle(EditorStyles.label) { normal = { textColor = Color.red } };
-            _labelStyleDefault = new GUIStyle(EditorStyles.label); 
+            _labelStyleDefault = new GUIStyle(EditorStyles.label);
         }
 
         public override void OnInspectorGUI()
@@ -83,10 +83,10 @@ namespace CycloneGames.UIFramework.Runtime.Editor
                     // but for editor GUI, current interpolation is often acceptable.
                     string pageInfo = $"Index: {i.ToString().PadLeft(3, ' ')} | Name: {(page?.WindowName ?? InValidPageName).PadRight(30, ' ')} | Priority: {(page != null ? page.Priority.ToString() : "N/A").PadLeft(3, ' ')}";
                     EditorGUILayout.LabelField(pageInfo);
-                    
+
                     string statusIcon = pageIsChild ? (pageIsActive ? "✅" : "☑️ (Inactive)") : "❌ (Not Child)";
                     EditorGUILayout.LabelField(statusIcon, _labelStyleDefault, GUILayout.Width(100)); // Increased width for text
-                    
+
                     // Allow to ping the object in hierarchy
                     if (page != null && GUILayout.Button("Select", GUILayout.Width(60)))
                     {
