@@ -79,6 +79,13 @@ namespace CycloneGames.RPGFoundation.Runtime
         public Vector3 WorldUp { get; set; } = Vector3.up;
         public IMovementAuthority MovementAuthority { get; set; }
 
+        /// <summary>
+        /// Read-only access to movement configuration. Prevents external modification of shared ScriptableObject assets.
+        /// </summary>
+        public IMovementConfig3DReadOnly Config => _configReadOnly ??= new MovementConfig3DReadOnlyWrapper(config);
+
+        private IMovementConfig3DReadOnly _configReadOnly;
+
         public event Action<MovementStateType, MovementStateType> OnStateChanged;
         public event Action OnLanded;
         public event Action OnJumpStart;
@@ -322,7 +329,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             _characterController.minMoveDistance = 0f;
 
             UpdateWorldUp();
-            
+
             // Initialize previous WorldUp for change detection
             _previousWorldUp = WorldUp;
         }
@@ -365,10 +372,10 @@ namespace CycloneGames.RPGFoundation.Runtime
                 WorldUp = WorldUp,
                 VerticalVelocity = _groundedVerticalVelocity,
                 UseRootMotion = useRootMotion,
-                JumpCount = 0
+                JumpCount = 0,
+                MovementAuthority = null
             };
-            
-            // Initialize previous WorldUp for change detection
+
             _previousWorldUp = WorldUp;
         }
 
@@ -425,14 +432,21 @@ namespace CycloneGames.RPGFoundation.Runtime
                 float projectedVelocity = Vector3.Dot(previousVerticalDirection, WorldUp);
                 _context.VerticalVelocity = projectedVelocity;
             }
-            
-            if (_context.IsGrounded && _context.VerticalVelocity < 0)
+
+            // Only reset JumpCount when truly landed (not in Jump/Fall state)
+            // This prevents false positives from CheckGrounded() during jump apex
+            // State machine handles landing transitions in JumpState/FallState.EvaluateTransition
+            bool isInAirState = _currentState != null &&
+                                (_currentState.StateType == MovementStateType.Jump ||
+                                 _currentState.StateType == MovementStateType.Fall);
+
+            if (_context.IsGrounded && _context.VerticalVelocity < 0 && !isInAirState)
             {
                 _context.VerticalVelocity = _groundedVerticalVelocity;
                 _context.JumpCount = 0;
                 _context.JumpPressed = false;
             }
-            
+
             _previousWorldUp = WorldUp;
 
             if (_context.AnimationController != null && _context.AnimationController.IsValid)
@@ -449,6 +463,8 @@ namespace CycloneGames.RPGFoundation.Runtime
                     _cachedTargetAnimator.applyRootMotion = shouldUseRootMotion;
                 }
             }
+
+            _context.MovementAuthority = MovementAuthority;
         }
 
         private void ExecuteStateMachine()
@@ -629,26 +645,27 @@ namespace CycloneGames.RPGFoundation.Runtime
             if (config == null) return;
 
             quaternion targetRotation = quaternion.LookRotation(_lookDirection, _context.WorldUp);
-            
+
             float dot = math.dot(_currentRotation.value, targetRotation.value);
             float angleRad = math.acos(math.clamp(math.abs(dot), 0f, 1f)) * 2f;
             float angleDeg = math.degrees(angleRad);
-            
+
             if (angleDeg < 0.5f)
             {
                 _currentRotation = targetRotation;
                 transform.rotation = _currentRotation;
                 return;
             }
-            
-            float t = config.rotationSpeed * DeltaTime;
-            
+
+            float rotationSpeed = _context.GetAttributeValue(MovementAttribute.RotationSpeed, config.rotationSpeed);
+            float t = rotationSpeed * DeltaTime;
+
             // Reduce rotation speed for large angles (>135°) to prevent instant flip during 180° turns
             if (angleDeg > 135f)
             {
-                t = t * 0.7f;
+                t = t * 0.25f;
             }
-            
+
             _currentRotation = math.slerp(_currentRotation, targetRotation, t);
             transform.rotation = _currentRotation;
         }
@@ -670,7 +687,8 @@ namespace CycloneGames.RPGFoundation.Runtime
                 UnityEngine.Quaternion unityToUp = UnityEngine.Quaternion.FromToRotation(currentUp, worldUp);
                 quaternion toUp = unityToUp;
                 quaternion targetRotation = math.mul(toUp, _currentRotation);
-                _currentRotation = math.slerp(_currentRotation, targetRotation, config.rotationSpeed * DeltaTime);
+                float rotationSpeed = _context.GetAttributeValue(MovementAttribute.RotationSpeed, config.rotationSpeed);
+                _currentRotation = math.slerp(_currentRotation, targetRotation, rotationSpeed * DeltaTime);
                 transform.rotation = _currentRotation;
             }
         }
@@ -691,14 +709,12 @@ namespace CycloneGames.RPGFoundation.Runtime
         {
             bool wasPressed = _context.JumpPressed;
             _context.JumpPressed = pressed;
-            
-            // Trigger jump on rising edge when grounded, if within jump count limit
+
+            // Trigger jump on rising edge when grounded
+            // JumpCount check is handled in JumpState.OnEnter to ensure consistent counting
             if (pressed && !wasPressed && _context.IsGrounded)
             {
-                if (_context.Config != null && _context.JumpCount < _context.Config.maxJumpCount)
-                {
-                    RequestStateChange(MovementStateType.Jump);
-                }
+                RequestStateChange(MovementStateType.Jump);
             }
             // Multi-jump is handled in JumpState.EvaluateTransition and FallState.EvaluateTransition
         }

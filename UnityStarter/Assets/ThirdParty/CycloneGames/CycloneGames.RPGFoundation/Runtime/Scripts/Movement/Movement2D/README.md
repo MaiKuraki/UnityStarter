@@ -32,6 +32,7 @@ Right-click in Project window → `Create > CycloneGames > RPG Foundation > Move
 Add `MovementComponent2D` to your 2D character GameObject.
 
 Assign:
+
 - `MovementConfig2D` asset
 - `Rigidbody2D` (auto-added if missing)
 - `Animator` (optional)
@@ -56,10 +57,10 @@ public class Player2DController : MonoBehaviour
         // Horizontal input only
         float horizontal = Input.GetAxis("Horizontal");
         _movement.SetInputDirection(new Vector2(horizontal, 0));
-        
+
         // Jump
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
-        
+
         // Sprint
         _movement.SetSprintHeld(Input.GetButton("Sprint"));
     }
@@ -69,19 +70,25 @@ public class Player2DController : MonoBehaviour
 ## 🎮 2D-Specific Features
 
 ### Coyote Time
+
 Players can jump for a short time after leaving a platform:
+
 ```csharp
 config.coyoteTime = 0.1f; // 100ms grace period
 ```
 
 ### Jump Buffering
+
 Pressing jump before landing will execute on land:
+
 ```csharp
 config.jumpBufferTime = 0.1f; // 100ms buffer window
 ```
 
 ### Automatic Facing
+
 Character automatically flips to face movement direction:
+
 ```csharp
 // Controlled by input direction
 _movement.SetInputDirection(new Vector2(1, 0)); // Faces right
@@ -89,7 +96,9 @@ _movement.SetInputDirection(new Vector2(-1, 0)); // Faces left
 ```
 
 ### Air Control
+
 Adjust horizontal movement while in air:
+
 ```csharp
 config.airControlMultiplier = 0.5f; // 50% control in air
 ```
@@ -120,8 +129,8 @@ config.airControlMultiplier = 0.5f; // 50% control in air
 | **Gravity**      | Manual calculation             | Physics2D.gravity        |
 | **Ground Check** | CharacterController.isGrounded | Physics2D.OverlapBox     |
 | **Rotation**     | Slerp CurrentMovement Dir      | X Flip(Platformer)       |
-| **Coyote Time**  | ❌                              | ✅                        |
-| **Jump Buffer**  | ❌                              | ✅                        |
+| **Coyote Time**  | ❌                             | ✅                       |
+| **Jump Buffer**  | ❌                             | ✅                       |
 
 ## 🎬 Slow Motion Support
 
@@ -143,7 +152,7 @@ movementComponent.ignoreTimeScale = true;
 Identical interface to 3D version:
 
 ```csharp
-public class GASMovementAuthority2D : MonoBehaviour, IMovementAuthority2D
+public class GASMovementAuthority2D : MonoBehaviour, IMovementAuthority
 {
     public bool CanEnterState(MovementStateType stateType, object context)
     {
@@ -153,11 +162,88 @@ public class GASMovementAuthority2D : MonoBehaviour, IMovementAuthority2D
         }
         return true;
     }
+
+    public void OnStateEntered(MovementStateType stateType) { }
+    public void OnStateExited(MovementStateType stateType) { }
+
+    public MovementAttributeModifier GetAttributeModifier(MovementAttribute attribute)
+    {
+        return new MovementAttributeModifier(null, 1f);
+    }
+
+    public float? GetBaseValue(MovementAttribute attribute) { return null; }
+    public float GetMultiplier(MovementAttribute attribute) { return 1f; }
+    public float GetFinalValue(MovementAttribute attribute, float configValue) { return configValue; }
 }
 
 // Inject
 movement.MovementAuthority = GetComponent<GASMovementAuthority2D>();
 ```
+
+## 🎛️ Attribute Modification System
+
+The Movement system supports runtime modification of all movement attributes.
+
+### Simple Usage (No GAS)
+
+```csharp
+using CycloneGames.RPGFoundation.Runtime.Movement;
+using UnityEngine;
+
+public class SimpleAttributeController2D : MonoBehaviour
+{
+    void Start()
+    {
+        var movement = GetComponent<MovementComponent2D>();
+        var authority = GetComponent<MovementAttributeAuthority>();
+
+        if (authority == null)
+        {
+            authority = gameObject.AddComponent<MovementAttributeAuthority>();
+        }
+
+        movement.MovementAuthority = authority;
+
+        // Override base values
+        authority.SetBaseValueOverride(MovementAttribute.RunSpeed, 7f);
+        authority.SetMultiplier(MovementAttribute.JumpForce, 1.2f);
+    }
+}
+```
+
+### GAS Integration
+
+```csharp
+#if GAMEPLAY_ABILITIES_PRESENT
+using CycloneGames.RPGFoundation.Runtime.Movement;
+using UnityEngine;
+
+public class GASAttributeController2D : MonoBehaviour
+{
+    void Start()
+    {
+        var movement = GetComponent<MovementComponent2D>();
+        var gasAuthority = GetComponent<GASMovementAttributeAuthority>();
+
+        if (gasAuthority == null)
+        {
+            gasAuthority = gameObject.AddComponent<GASMovementAttributeAuthority>();
+        }
+
+        movement.MovementAuthority = gasAuthority;
+
+        // Map GAS attributes
+        gasAuthority.AddAttributeMapping(
+            MovementAttribute.RunSpeed,
+            "Attribute.Secondary.Speed",
+            baseValue: 100f
+        );
+    }
+}
+#endif
+```
+
+**Supported Attributes**: WalkSpeed, RunSpeed, SprintSpeed, CrouchSpeed, JumpForce, Gravity, AirControlMultiplier
 
 ## 📊 API Reference
 
@@ -167,9 +253,10 @@ movement.MovementAuthority = GetComponent<GASMovementAuthority2D>();
 // Properties
 MovementStateType CurrentState { get; }
 bool IsGrounded { get; }
-float CurrentSpeed { get; }
-Vector2 Velocity { get; }
+float CurrentSpeed { get; }        // Target speed (resets to 0 in Idle)
+Vector2 Velocity { get; }         // Actual velocity vector (recommended for BlendTree)
 bool IsMoving { get; }
+IMovementAuthority MovementAuthority { get; set; }
 
 // Methods
 void SetInputDirection(Vector2 direction);
@@ -184,6 +271,23 @@ event Action OnJumpStart;
 event Action OnLanded;
 ```
 
+### Animation BlendTree
+
+For BlendTree animations, use `Velocity.magnitude` for smooth interpolation:
+
+```csharp
+void Update()
+{
+    var movement = GetComponent<MovementComponent2D>();
+
+    // Recommended: Use Velocity.magnitude for BlendTree
+    animator.SetFloat("Speed", movement.Velocity.magnitude);
+
+    // Also works: CurrentSpeed (resets to 0 in Idle state)
+    // animator.SetFloat("Speed", movement.CurrentSpeed);
+}
+```
+
 ## 🎯 Best Practices
 
 ### ✅ Do
@@ -192,9 +296,12 @@ event Action OnLanded;
 - Use `coyoteTime` and `jumpBufferTime` for better feel
 - Configure `groundLayer` to avoid false ground detection
 - Use `maxFallSpeed` to prevent crazy fall speeds
+- Use `Velocity.magnitude` for BlendTree animations (smoother transitions)
+- Use `MovementAttributeAuthority` for runtime attribute modification
 
 ### ❌ Don't
 
 - Mix 2D and 3D physics components
 - Forget to set Rigidbody2D to Continuous collision detection
 - Use on non-2D games (use MovementComponent instead)
+- Use `CurrentSpeed` for BlendTree if you need smooth interpolation (use `Velocity.magnitude` instead)

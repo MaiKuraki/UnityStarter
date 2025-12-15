@@ -10,6 +10,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
         public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
         {
             velocity = new float2(0, context.Rigidbody.velocity.y);
+
+            context.CurrentSpeed = 0f;
+            context.CurrentVelocity = new float2(0, context.Rigidbody.velocity.y);
+
+            // Update animation parameter
+            if (context.AnimationController != null && context.AnimationController.IsValid)
+            {
+                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                context.AnimationController.SetFloat(hash, 0f);
+            }
         }
 
         public override MovementStateBase2D EvaluateTransition(ref MovementContext2D context)

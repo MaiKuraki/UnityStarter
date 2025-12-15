@@ -8,10 +8,14 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
+            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.runSpeed);
+            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.airControlMultiplier);
+            float speed = runSpeed * airControl;
             float3 worldInputDirection = context.GetWorldInputDirection();
-            float3 movement = worldInputDirection * context.Config.runSpeed * context.Config.airControlMultiplier;
+            float3 movement = worldInputDirection * speed;
 
-            context.VerticalVelocity += context.Config.gravity * context.DeltaTime;
+            float gravity = context.GetAttributeValue(MovementAttribute.Gravity, context.Config.gravity);
+            context.VerticalVelocity += gravity * context.DeltaTime;
 
             float3 horizontal = movement * context.DeltaTime;
             float3 vertical = context.WorldUp * context.VerticalVelocity * context.DeltaTime;
@@ -32,16 +36,27 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
             if (context.IsGrounded)
             {
                 if (math.lengthsq(context.InputDirection) > 0.0001f)
-                    return StatePool<MovementStateBase>.GetState<WalkState>();
+                {
+                    if (context.SprintHeld)
+                        return StatePool<MovementStateBase>.GetState<SprintState>();
+                    else
+                        return StatePool<MovementStateBase>.GetState<RunState>();
+                }
                 else
+                {
                     return StatePool<MovementStateBase>.GetState<IdleState>();
+                }
             }
 
             // Multi-jump: Check JumpCount < maxJumpCount before transitioning (JumpCount increments in JumpState.OnEnter)
-            if (context.JumpPressed && context.Config != null && context.JumpCount < context.Config.maxJumpCount)
+            // Consume JumpPressed immediately to prevent it from persisting if jump cannot be performed
+            if (context.JumpPressed)
             {
                 context.JumpPressed = false;
-                return StatePool<MovementStateBase>.GetState<JumpState>();
+                if (context.Config != null && context.JumpCount < context.Config.maxJumpCount)
+                {
+                    return StatePool<MovementStateBase>.GetState<JumpState>();
+                }
             }
 
             return null;

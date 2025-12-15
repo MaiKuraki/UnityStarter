@@ -31,5 +31,31 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         public float2 CurrentVelocity;
         public float CurrentSpeed;
+
+        public IMovementAuthority MovementAuthority;
+
+        /// <summary>
+        /// Gets final value for an attribute after applying modifiers.
+        /// </summary>
+        public float GetAttributeValue(MovementAttribute attribute, float configValue)
+        {
+            return MovementAttributeHelper.GetFinalValue(attribute, configValue, MovementAuthority);
+        }
+
+        /// <summary>
+        /// Gets final speed for a movement state. Kept for backward compatibility.
+        /// </summary>
+        public float GetFinalSpeed(float baseSpeed, Movement.MovementStateType stateType)
+        {
+            MovementAttribute attr = stateType switch
+            {
+                Movement.MovementStateType.Walk => MovementAttribute.WalkSpeed,
+                Movement.MovementStateType.Run => MovementAttribute.RunSpeed,
+                Movement.MovementStateType.Sprint => MovementAttribute.SprintSpeed,
+                Movement.MovementStateType.Crouch => MovementAttribute.CrouchSpeed,
+                _ => MovementAttribute.RunSpeed
+            };
+            return GetAttributeValue(attr, baseSpeed);
+        }
     }
 }
