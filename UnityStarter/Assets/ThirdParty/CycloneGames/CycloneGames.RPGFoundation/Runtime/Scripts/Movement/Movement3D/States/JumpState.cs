@@ -8,8 +8,14 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnEnter(ref MovementContext context)
         {
-            // Vertical velocity uses WorldUp for wall/ceiling walking support
-            context.VerticalVelocity = context.Config.jumpForce;
+            // Check jump count limit before allowing jump
+            if (context.Config != null && context.JumpCount >= context.Config.maxJumpCount)
+            {
+                return;
+            }
+
+            float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.jumpForce);
+            context.VerticalVelocity = jumpForce;
             context.JumpCount++;
             context.JumpPressed = false;
 
@@ -22,10 +28,14 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
+            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.runSpeed);
+            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.airControlMultiplier);
+            float speed = runSpeed * airControl;
             float3 worldInputDirection = context.GetWorldInputDirection();
-            float3 movement = worldInputDirection * context.Config.runSpeed * context.Config.airControlMultiplier;
+            float3 movement = worldInputDirection * speed;
 
-            context.VerticalVelocity += context.Config.gravity * context.DeltaTime;
+            float gravity = context.GetAttributeValue(MovementAttribute.Gravity, context.Config.gravity);
+            context.VerticalVelocity += gravity * context.DeltaTime;
 
             float3 horizontal = movement * context.DeltaTime;
             float3 vertical = context.WorldUp * context.VerticalVelocity * context.DeltaTime;
@@ -46,21 +56,34 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
             if (context.IsGrounded && context.VerticalVelocity <= 0)
             {
                 context.JumpCount = 0;
-                return StatePool<MovementStateBase>.GetState<IdleState>();
+                if (math.lengthsq(context.InputDirection) > 0.0001f)
+                {
+                    if (context.SprintHeld)
+                        return StatePool<MovementStateBase>.GetState<SprintState>();
+                    else
+                        return StatePool<MovementStateBase>.GetState<RunState>();
+                }
+                else
+                {
+                    return StatePool<MovementStateBase>.GetState<IdleState>();
+                }
             }
 
-            if (context.VerticalVelocity < 0)
+            // Transition to FallState when reaching apex or descending
+            // This must be checked BEFORE multi-jump to prevent extra jumps at apex
+            if (context.VerticalVelocity <= 0)
             {
                 return StatePool<MovementStateBase>.GetState<FallState>();
             }
 
-            // Multi-jump: Allow additional jumps while rising if within jump count limit
+            // Multi-jump: Allow additional jumps while rising (VerticalVelocity > 0) if within jump count limit
             if (context.JumpPressed && context.Config != null && context.JumpCount < context.Config.maxJumpCount)
             {
-                context.VerticalVelocity = context.Config.jumpForce;
+                float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.jumpForce);
+                context.VerticalVelocity = jumpForce;
                 context.JumpCount++;
                 context.JumpPressed = false;
-                
+
                 if (context.AnimationController != null && context.AnimationController.IsValid)
                 {
                     int hash = AnimationParameterCache.GetHash(context.Config.jumpTrigger);

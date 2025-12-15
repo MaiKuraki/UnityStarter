@@ -28,8 +28,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
     {
         // Ground Movement - displayed in Custom Editor
         public float walkSpeed = 3f;
-        public float runSpeed = 5f;
-        public float sprintSpeed = 8f;
+        public float runSpeed = 6f;
+        public float sprintSpeed = 12f;
         public float crouchSpeed = 1.5f;
 
         // Jump - displayed in Custom Editor
