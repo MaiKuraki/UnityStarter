@@ -26,7 +26,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         public bool SprintHeld;
         public bool CrouchHeld;
         public bool RollPressed;
-        
+
         public int JumpCount;
 
         public float3 CurrentVelocity;
@@ -36,6 +36,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         /// Whether to use root motion for the current state.
         /// </summary>
         public bool UseRootMotion;
+
+        public IMovementAuthority MovementAuthority;
 
         /// <summary>
         /// Converts InputDirection from local space to world space, projecting onto plane perpendicular to WorldUp.
@@ -48,12 +50,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
             Vector3 localInput = new Vector3(InputDirection.x, 0, InputDirection.z);
             Vector3 worldDirection = Transform.TransformDirection(localInput);
-            
-            // Project onto plane perpendicular to WorldUp: projected = direction - dot(direction, normal) * normal
+
             float3 projected = (float3)worldDirection - math.dot((float3)worldDirection, WorldUp) * WorldUp;
             float originalMagnitude = math.length(InputDirection);
             float projectedSqrLen = math.lengthsq(projected);
-            
+
             if (projectedSqrLen > 0.0001f)
             {
                 return math.normalize(projected) * originalMagnitude;
@@ -62,6 +63,30 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             {
                 return float3.zero;
             }
+        }
+
+        /// <summary>
+        /// Gets final value for an attribute after applying modifiers.
+        /// </summary>
+        public float GetAttributeValue(MovementAttribute attribute, float configValue)
+        {
+            return MovementAttributeHelper.GetFinalValue(attribute, configValue, MovementAuthority);
+        }
+
+        /// <summary>
+        /// Gets final speed for a movement state. Kept for backward compatibility.
+        /// </summary>
+        public float GetFinalSpeed(float baseSpeed, MovementStateType stateType)
+        {
+            MovementAttribute attr = stateType switch
+            {
+                MovementStateType.Walk => MovementAttribute.WalkSpeed,
+                MovementStateType.Run => MovementAttribute.RunSpeed,
+                MovementStateType.Sprint => MovementAttribute.SprintSpeed,
+                MovementStateType.Crouch => MovementAttribute.CrouchSpeed,
+                _ => MovementAttribute.RunSpeed
+            };
+            return GetAttributeValue(attr, baseSpeed);
         }
     }
 }

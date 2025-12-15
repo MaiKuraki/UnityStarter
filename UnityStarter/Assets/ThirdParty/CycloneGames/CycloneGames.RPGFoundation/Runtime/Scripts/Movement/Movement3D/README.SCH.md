@@ -48,7 +48,7 @@ public class PlayerController : MonoBehaviour
         // 获取输入（本地空间 - 相对于角色的前后左右）
         Vector2 input = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
         Vector3 localInput = new Vector3(input.x, 0, input.y);
-        
+
         // 发送到移动组件（InputDirection 是本地空间）
         // 移动系统会根据角色的朝向自动将其转换为世界空间
         _movement.SetInputDirection(localInput);
@@ -159,31 +159,27 @@ public class GASMovementAuthority : MonoBehaviour, IMovementAuthority
         switch (stateType)
         {
             case MovementStateType.Sprint:
-                // 检查玩家是否有足够的耐力
                 return _asc.GetAttribute("Stamina")?.CurrentValue > 10f;
-            
+
             case MovementStateType.Jump:
-                // 检查跳跃是否在冷却中
                 return !_asc.HasMatchingTag(GameplayTag.FromString("State.Cooldown.Jump"));
-            
+
             default:
                 return true;
         }
     }
 
-    public void OnStateEntered(MovementStateType stateType)
+    public void OnStateEntered(MovementStateType stateType) { }
+    public void OnStateExited(MovementStateType stateType) { }
+
+    public MovementAttributeModifier GetAttributeModifier(MovementAttribute attribute)
     {
-        // 进入状态时应用效果
-        if (stateType == MovementStateType.Sprint)
-        {
-            // 应用耐力消耗效果
-        }
+        return new MovementAttributeModifier(null, 1f);
     }
 
-    public void OnStateExited(MovementStateType stateType)
-    {
-        // 退出状态时清理
-    }
+    public float? GetBaseValue(MovementAttribute attribute) { return null; }
+    public float GetMultiplier(MovementAttribute attribute) { return 1f; }
+    public float GetFinalValue(MovementAttribute attribute, float configValue) { return configValue; }
 }
 ```
 
@@ -206,11 +202,10 @@ public class RollAbility : GameplayAbility
     public override void ActivateAbility()
     {
         var movement = GetComponent<MovementComponent>();
-        
-        // 请求状态变更（会先询问权限控制器）
+
         if (movement.RequestStateChange(MovementStateType.Roll))
         {
-            CommitAbility(); // 应用消耗和冷却
+            CommitAbility();
         }
         else
         {
@@ -219,6 +214,74 @@ public class RollAbility : GameplayAbility
     }
 }
 ```
+
+## 🎛️ 属性修改系统
+
+移动系统支持通过权限系统在运行时修改所有移动属性。
+
+### 简单使用（无需 GAS）
+
+```csharp
+using CycloneGames.RPGFoundation.Runtime.Movement;
+using UnityEngine;
+
+public class SimpleAttributeController : MonoBehaviour
+{
+    void Start()
+    {
+        var movement = GetComponent<MovementComponent>();
+        var authority = GetComponent<MovementAttributeAuthority>();
+
+        if (authority == null)
+        {
+            authority = gameObject.AddComponent<MovementAttributeAuthority>();
+        }
+
+        movement.MovementAuthority = authority;
+
+        // 覆盖基础值
+        authority.SetBaseValueOverride(MovementAttribute.RunSpeed, 7f);
+        authority.SetBaseValueOverride(MovementAttribute.JumpForce, 15f);
+
+        // 应用修改器
+        authority.SetMultiplier(MovementAttribute.RunSpeed, 1.5f);
+    }
+}
+```
+
+### GAS 集成
+
+```csharp
+#if GAMEPLAY_ABILITIES_PRESENT
+using CycloneGames.RPGFoundation.Runtime.Movement;
+using UnityEngine;
+
+public class GASAttributeController : MonoBehaviour
+{
+    void Start()
+    {
+        var movement = GetComponent<MovementComponent>();
+        var gasAuthority = GetComponent<GASMovementAttributeAuthority>();
+
+        if (gasAuthority == null)
+        {
+            gasAuthority = gameObject.AddComponent<GASMovementAttributeAuthority>();
+        }
+
+        movement.MovementAuthority = gasAuthority;
+
+        // 映射 GAS 属性
+        gasAuthority.AddAttributeMapping(
+            MovementAttribute.RunSpeed,
+            "Attribute.Secondary.Speed",
+            baseValue: 100f
+        );
+    }
+}
+#endif
+```
+
+**支持的属性**：WalkSpeed, RunSpeed, SprintSpeed, CrouchSpeed, JumpForce, Gravity, AirControlMultiplier, RotationSpeed
 
 ## ⚙️ 配置
 
@@ -243,6 +306,16 @@ public class RollAbility : GameplayAbility
 - `IsGrounded` (Bool) - 角色是否在地面上
 - `Jump` (Trigger) - 跳跃动作触发器
 
+**注意**：对于 BlendTree 动画，建议使用 `Velocity.magnitude` 而不是 `CurrentSpeed`，以获得更平滑的过渡：
+
+```csharp
+// 推荐用于 BlendTree
+animator.SetFloat("Speed", movement.Velocity.magnitude);
+
+// 也可以使用（CurrentSpeed 在 Idle 状态下会重置为 0）
+animator.SetFloat("Speed", movement.CurrentSpeed);
+```
+
 ## 🎯 最佳实践
 
 ### ✅ 应该
@@ -251,12 +324,15 @@ public class RollAbility : GameplayAbility
 - 使用 `IMovementStateQuery` 读取移动状态
 - 订阅事件以获得视觉反馈（粒子、声音）
 - 使用 `RequestStateChange()` 进行显式状态转换
+- 使用 `Velocity.magnitude` 做 BlendTree 动画（更平滑的过渡）
+- 使用 `MovementAttributeAuthority` 进行运行时属性修改
 
 ### ❌ 不应该
 
 - 直接修改 `_currentState` 或内部状态
 - 在使用基于状态的输入时调用 `MoveWithVelocity()`
 - 混合使用输入方法（使用 `SetInput*` 方法或 `MoveWithVelocity`，二选一）
+- 如果需要平滑插值，在 BlendTree 中使用 `CurrentSpeed`（应使用 `Velocity.magnitude`）
 
 ## 🔍 API 参考
 
@@ -267,10 +343,10 @@ public class RollAbility : GameplayAbility
 ```csharp
 MovementStateType CurrentState { get; }          // 当前移动状态
 bool IsGrounded { get; }                         // 角色是否在地面
-float CurrentSpeed { get; }                      // 当前移动速度
-Vector3 Velocity { get; }                        // 当前速度
+float CurrentSpeed { get; }                      // 目标速度（在 Idle 状态下重置为 0）
+Vector3 Velocity { get; }                        // 实际速度向量（推荐用于 BlendTree）
 bool IsMoving { get; }                           // 角色是否在移动
-IMovementAuthority MovementAuthority { get; set; } // 可选的 GAS 权限控制器
+IMovementAuthority MovementAuthority { get; set; } // 属性修改权限控制器
 ```
 
 #### 方法
@@ -301,6 +377,7 @@ event Action OnLanded;
 - **SIMD 加速** - Unity.Mathematics 利用 CPU 向量指令
 - **状态池化** - 状态实例通过对象池复用
 - **优化的旋转** - 使用 `math.slerp` 而非 `Quaternion.Slerp`
+- **属性修改** - 运行时属性修改无 GC 分配
 
 ## 🔗 GameplayFramework 集成
 
@@ -311,12 +388,14 @@ event Action OnLanded;
 #### Package Manager 安装（推荐）
 
 如果 `RPGFoundation` 和 `GameplayFramework` 都通过 Package Manager 安装：
+
 - ✅ **自动**：`GAMEPLAY_FRAMEWORK_PRESENT` 定义符号会通过 asmdef 中的 `versionDefines` 自动设置
 - ✅ **无需配置**：旋转同步自动工作
 
 #### 直接放在 Assets 文件夹
 
 如果 `RPGFoundation` 直接放在 `Assets` 文件夹中（非 Package 形式）：
+
 - ⚠️ **需要手动设置**：必须在 `PlayerSettings > Scripting Define Symbols` 中手动设置 `GAMEPLAY_FRAMEWORK_PRESENT` 定义符号
 - ⚠️ **否则**：自动旋转同步将不会工作，您必须在生成后手动设置 Pawn 的旋转
 
@@ -368,12 +447,12 @@ public class PlayerController : MonoBehaviour
 {
     private MovementComponent _movement;
     private Camera _camera;
-    
+
     [Header("旋转设置")]
     [SerializeField] private float mouseSensitivity = 2f;
     [SerializeField] private float minVerticalAngle = -80f;
     [SerializeField] private float maxVerticalAngle = 80f;
-    
+
     private float _verticalRotation = 0f;
     private float _horizontalRotation = 0f;
 
@@ -389,7 +468,7 @@ public class PlayerController : MonoBehaviour
         Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
         Vector3 localInput = new Vector3(moveInput.x, 0, moveInput.y);
         _movement.SetInputDirection(localInput);
-        
+
         // 旋转输入（鼠标视角）
         Vector2 lookInput = new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
         Vector3 targetLookDirection = CalculateLookDirection(lookInput);
@@ -402,17 +481,17 @@ public class PlayerController : MonoBehaviour
         _horizontalRotation += lookInput.x * mouseSensitivity;
         _verticalRotation -= lookInput.y * mouseSensitivity;
         _verticalRotation = Mathf.Clamp(_verticalRotation, minVerticalAngle, maxVerticalAngle);
-        
+
         // 转换为方向向量
         float horizontalRad = _horizontalRotation * Mathf.Deg2Rad;
         float verticalRad = _verticalRotation * Mathf.Deg2Rad;
-        
+
         Vector3 direction = new Vector3(
             Mathf.Sin(horizontalRad) * Mathf.Cos(verticalRad),
             Mathf.Sin(verticalRad),
             Mathf.Cos(horizontalRad) * Mathf.Cos(verticalRad)
         );
-        
+
         return direction.normalized;
     }
 }
@@ -424,16 +503,16 @@ public class PlayerController : MonoBehaviour
 private Vector3 CalculateLookDirection(Vector2 lookInput)
 {
     if (_camera == null) return transform.forward;
-    
+
     // 获取相机的向前方向（投影到水平面）
     Vector3 cameraForward = _camera.transform.forward;
     cameraForward.y = 0f; // 移除垂直分量
     cameraForward.Normalize();
-    
+
     // 根据鼠标输入旋转
     float horizontalRotation = lookInput.x * mouseSensitivity;
     Quaternion rotation = Quaternion.Euler(0, horizontalRotation, 0);
-    
+
     return rotation * cameraForward;
 }
 ```
@@ -448,7 +527,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
     {
         Ray ray = _camera.ScreenPointToRay(Input.mousePosition);
         RaycastHit hit;
-        
+
         if (Physics.Raycast(ray, out hit))
         {
             Vector3 direction = (hit.point - transform.position);
@@ -456,7 +535,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
             return direction.normalized;
         }
     }
-    
+
     // 回退：使用当前向前方向
     return transform.forward;
 }
@@ -470,7 +549,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
     // 用于手柄右摇杆输入
     if (lookInput.magnitude < 0.1f)
         return transform.forward; // 无输入，保持当前方向
-    
+
     // 获取相机的右和向前向量（仅水平）
     Vector3 cameraRight = _camera.transform.right;
     Vector3 cameraForward = _camera.transform.forward;
@@ -478,7 +557,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
     cameraForward.y = 0f;
     cameraRight.Normalize();
     cameraForward.Normalize();
-    
+
     // 根据摇杆输入组合
     Vector3 direction = (cameraForward * lookInput.y + cameraRight * lookInput.x).normalized;
     return direction;
@@ -488,6 +567,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
 **选项 5：第三人称动作游戏（基于相机的移动）**
 
 适用于第三人称动作游戏，其中：
+
 - 相机跟随角色
 - 移动输入相对于相机方向（而非角色方向）
 - 角色自动面向移动方向
@@ -500,7 +580,7 @@ public class ThirdPersonPlayerController : MonoBehaviour
 {
     private MovementComponent _movement;
     private Camera _camera;
-    
+
     [Header("移动设置")]
     [SerializeField] private bool autoFaceMovementDirection = true;
     [SerializeField] private float rotationSmoothing = 10f;
@@ -515,15 +595,15 @@ public class ThirdPersonPlayerController : MonoBehaviour
     {
         // 获取相机空间的输入（相对于相机的向前/右方向）
         Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
-        
+
         // 将基于相机的输入转换为世界空间方向
         Vector3 worldMoveDirection = GetCameraRelativeMovementDirection(moveInput);
-        
+
         // 将世界方向转换为本地空间供 MovementComponent 使用
         // MovementComponent 期望本地空间输入（相对于角色的向前/右方向）
         Vector3 localInput = transform.InverseTransformDirection(worldMoveDirection);
         _movement.SetInputDirection(localInput);
-        
+
         // 可选：让角色面向移动方向
         if (autoFaceMovementDirection && moveInput.magnitude > 0.1f)
         {
@@ -534,7 +614,7 @@ public class ThirdPersonPlayerController : MonoBehaviour
                 _movement.SetLookDirection(lookDirection.normalized);
             }
         }
-        
+
         // 其他输入
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
         _movement.SetSprintHeld(Input.GetButton("Sprint"));
@@ -549,21 +629,21 @@ public class ThirdPersonPlayerController : MonoBehaviour
     {
         if (_camera == null || input.magnitude < 0.1f)
             return Vector3.zero;
-        
+
         // 获取相机的向前和右向量（投影到水平面）
         Vector3 cameraForward = _camera.transform.forward;
         Vector3 cameraRight = _camera.transform.right;
-        
+
         // 移除垂直分量以保持移动在水平面上
         cameraForward.y = 0f;
         cameraRight.y = 0f;
         cameraForward.Normalize();
         cameraRight.Normalize();
-        
+
         // 根据输入组合相机方向
         // input.y 是前后（W/S），input.x 是左右（A/D）
         Vector3 direction = (cameraForward * input.y + cameraRight * input.x).normalized;
-        
+
         return direction;
     }
 }
@@ -578,14 +658,14 @@ void Update()
 {
     // 获取相机空间的输入
     Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
-    
+
     // 转换为相对于相机的世界空间方向
     Vector3 worldMoveDirection = GetCameraRelativeMovementDirection(moveInput);
-    
+
     // 将世界方向转换为角色的本地空间
     Vector3 localInput = transform.InverseTransformDirection(worldMoveDirection);
     _movement.SetInputDirection(localInput);
-    
+
     // 旋转单独控制（例如，通过相机或鼠标视角）
     // 您可以使用选项 1 或选项 2 进行旋转控制
 }

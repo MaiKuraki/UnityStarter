@@ -9,7 +9,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
         public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
         {
-            float speed = context.Config.walkSpeed;
+            float speed = context.GetFinalSpeed(context.Config.walkSpeed, StateType);
             float horizontalVelocity = context.InputDirection.x * speed;
 
             velocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);

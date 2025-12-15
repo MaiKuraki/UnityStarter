@@ -8,7 +8,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
-            float speed = context.Config.runSpeed;
+            float speed = context.GetFinalSpeed(context.Config.runSpeed, StateType);
             float3 worldInputDirection = context.GetWorldInputDirection();
             float3 movement = worldInputDirection * speed;
 

@@ -21,7 +21,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         public float stepHeight = 0.3f;
 
         // Rotation - displayed in Custom Editor
-        public float rotationSpeed = 20f;
+        public float rotationSpeed = 10f;
 
         // Animation Parameters (Additional) - displayed in Custom Editor
         [Tooltip("Parameter name for roll trigger (Trigger)")]

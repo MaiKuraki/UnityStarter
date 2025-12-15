@@ -47,6 +47,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         public float LocalTimeScale { get; set; } = 1f;
         public IMovementAuthority MovementAuthority { get; set; }
 
+        /// <summary>
+        /// Read-only access to movement configuration. Prevents external modification of shared ScriptableObject assets.
+        /// </summary>
+        public IMovementConfig2DReadOnly Config => _configReadOnly ??= new MovementConfig2DReadOnlyWrapper(config);
+
+        private IMovementConfig2DReadOnly _configReadOnly;
+
         public event Action<MovementStateType, MovementStateType> OnStateChanged;
         public event Action OnLanded;
         public event Action OnJumpStart;
@@ -294,7 +301,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 Transform = transform,
                 Config = config,
                 IsGrounded = false,
-                JumpCount = 0
+                JumpCount = 0,
+                MovementAuthority = null
             };
         }
 
@@ -340,7 +348,14 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
             _context.IsGrounded = Physics2D.OverlapBox(checkPosition, config.groundCheckSize, 0, config.groundLayer);
 
-            if (!wasGrounded && _context.IsGrounded)
+            // Only reset JumpCount when truly landed (not in Jump/Fall state)
+            // This prevents false positives from ground detection during jump apex
+            // State machine handles landing transitions in JumpState2D/FallState2D.EvaluateTransition
+            bool isInAirState = _currentState != null &&
+                                (_currentState.StateType == MovementStateType.Jump ||
+                                 _currentState.StateType == MovementStateType.Fall);
+
+            if (!wasGrounded && _context.IsGrounded && !isInAirState)
             {
                 OnLanded?.Invoke();
                 _context.JumpCount = 0;
@@ -400,6 +415,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 _context.AnimationController.SetFloat(inputXHash, _context.InputDirection.x);
                 _context.AnimationController.SetFloat(inputYHash, _context.InputDirection.y);
             }
+
+            _context.MovementAuthority = MovementAuthority;
         }
 
         private void ExecuteStateMachine()
@@ -499,14 +516,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         {
             bool wasPressed = _context.JumpPressed;
             _context.JumpPressed = pressed;
-            
-            // Trigger jump on rising edge when grounded or in coyote time, if within jump count limit
+
+            // Trigger jump on rising edge when grounded or in coyote time
+            // JumpCount check is handled in JumpState2D.OnEnter to ensure consistent counting
             if (pressed && !wasPressed && (_coyoteTimeCounter > 0 || _context.IsGrounded))
             {
-                if (_context.Config != null && _context.JumpCount < _context.Config.maxJumpCount)
-                {
-                    RequestStateChange(MovementStateType.Jump);
-                }
+                RequestStateChange(MovementStateType.Jump);
             }
             // Multi-jump is handled in JumpState2D.EvaluateTransition and FallState2D.EvaluateTransition
         }

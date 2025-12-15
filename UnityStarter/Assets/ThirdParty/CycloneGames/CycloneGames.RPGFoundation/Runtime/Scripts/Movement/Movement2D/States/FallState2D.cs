@@ -9,8 +9,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
         public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
         {
-            float airControl = context.Config.runSpeed * context.Config.airControlMultiplier;
-            float horizontalVelocity = context.InputDirection.x * airControl;
+            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.runSpeed);
+            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.airControlMultiplier);
+            float airControlSpeed = runSpeed * airControl;
+            float horizontalVelocity = context.InputDirection.x * airControlSpeed;
 
             float verticalVelocity = context.Rigidbody.velocity.y;
             verticalVelocity = math.max(verticalVelocity, -context.Config.maxFallSpeed);
@@ -33,16 +35,27 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             if (context.IsGrounded)
             {
                 if (math.lengthsq(context.InputDirection) > 0.0001f)
-                    return StatePool<MovementStateBase2D>.GetState<RunState2D>();
+                {
+                    if (context.SprintHeld)
+                        return StatePool<MovementStateBase2D>.GetState<SprintState2D>();
+                    else
+                        return StatePool<MovementStateBase2D>.GetState<RunState2D>();
+                }
                 else
+                {
                     return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
+                }
             }
 
             // Multi-jump: Check JumpCount < maxJumpCount before transitioning (JumpCount increments in JumpState2D.OnEnter)
-            if (context.JumpPressed && context.Config != null && context.JumpCount < context.Config.maxJumpCount)
+            // Consume JumpPressed immediately to prevent it from persisting if jump cannot be performed
+            if (context.JumpPressed)
             {
                 context.JumpPressed = false;
-                return StatePool<MovementStateBase2D>.GetState<JumpState2D>();
+                if (context.Config != null && context.JumpCount < context.Config.maxJumpCount)
+                {
+                    return StatePool<MovementStateBase2D>.GetState<JumpState2D>();
+                }
             }
 
             return null;

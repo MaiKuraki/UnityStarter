@@ -32,6 +32,7 @@
 在 2D 角色 GameObject 上添加 `MovementComponent2D`。
 
 分配：
+
 - `MovementConfig2D` 资产
 - `Rigidbody2D`（如果缺失会自动添加）
 - `Animator`（可选）
@@ -56,10 +57,10 @@ public class Player2DController : MonoBehaviour
         // 仅水平输入
         float horizontal = Input.GetAxis("Horizontal");
         _movement.SetInputDirection(new Vector2(horizontal, 0));
-        
+
         // 跳跃
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
-        
+
         // 冲刺
         _movement.SetSprintHeld(Input.GetButton("Sprint"));
     }
@@ -69,19 +70,25 @@ public class Player2DController : MonoBehaviour
 ## 🎮 2D 专属特性
 
 ### 土狼时间（Coyote Time）
+
 玩家离开平台后短时间内仍可跳跃：
+
 ```csharp
 config.coyoteTime = 0.1f; // 100ms 宽限期
 ```
 
 ### 跳跃缓冲（Jump Buffer）
+
 落地前按下跳跃会在落地时立即执行：
+
 ```csharp
 config.jumpBufferTime = 0.1f; // 100ms 缓冲窗口
 ```
 
 ### 自动转向
+
 角色自动翻转朝向移动方向：
+
 ```csharp
 // 由输入方向控制
 _movement.SetInputDirection(new Vector2(1, 0)); // 朝右
@@ -89,7 +96,9 @@ _movement.SetInputDirection(new Vector2(-1, 0)); // 朝左
 ```
 
 ### 空中控制
+
 在空中可调整水平移动：
+
 ```csharp
 config.airControlMultiplier = 0.5f; // 空中 50% 控制力
 ```
@@ -119,9 +128,9 @@ config.airControlMultiplier = 0.5f; // 空中 50% 控制力
 | **移动**     | float3 (XYZ)                   | float2 (XY)              |
 | **重力**     | 手动计算                       | Physics2D.gravity        |
 | **地面检测** | CharacterController.isGrounded | Physics2D.OverlapBox     |
-| **旋转**     | Slerp向移动方向                | X轴翻转(横板卷轴)        |
-| **土狼时间** | ❌                              | ✅                        |
-| **跳跃缓冲** | ❌                              | ✅                        |
+| **旋转**     | Slerp 向移动方向               | X 轴翻转(横板卷轴)       |
+| **土狼时间** | ❌                             | ✅                       |
+| **跳跃缓冲** | ❌                             | ✅                       |
 
 ## 🎬 慢动作支持
 
@@ -143,7 +152,7 @@ movementComponent.ignoreTimeScale = true;
 与 3D 版本接口相同：
 
 ```csharp
-public class GASMovementAuthority2D : MonoBehaviour, IMovementAuthority2D
+public class GASMovementAuthority2D : MonoBehaviour, IMovementAuthority
 {
     public bool CanEnterState(MovementStateType stateType, object context)
     {
@@ -153,11 +162,88 @@ public class GASMovementAuthority2D : MonoBehaviour, IMovementAuthority2D
         }
         return true;
     }
+
+    public void OnStateEntered(MovementStateType stateType) { }
+    public void OnStateExited(MovementStateType stateType) { }
+
+    public MovementAttributeModifier GetAttributeModifier(MovementAttribute attribute)
+    {
+        return new MovementAttributeModifier(null, 1f);
+    }
+
+    public float? GetBaseValue(MovementAttribute attribute) { return null; }
+    public float GetMultiplier(MovementAttribute attribute) { return 1f; }
+    public float GetFinalValue(MovementAttribute attribute, float configValue) { return configValue; }
 }
 
 // 注入
 movement.MovementAuthority = GetComponent<GASMovementAuthority2D>();
 ```
+
+## 🎛️ 属性修改系统
+
+移动系统支持在运行时修改所有移动属性。
+
+### 简单使用（无需 GAS）
+
+```csharp
+using CycloneGames.RPGFoundation.Runtime.Movement;
+using UnityEngine;
+
+public class SimpleAttributeController2D : MonoBehaviour
+{
+    void Start()
+    {
+        var movement = GetComponent<MovementComponent2D>();
+        var authority = GetComponent<MovementAttributeAuthority>();
+
+        if (authority == null)
+        {
+            authority = gameObject.AddComponent<MovementAttributeAuthority>();
+        }
+
+        movement.MovementAuthority = authority;
+
+        // 覆盖基础值
+        authority.SetBaseValueOverride(MovementAttribute.RunSpeed, 7f);
+        authority.SetMultiplier(MovementAttribute.JumpForce, 1.2f);
+    }
+}
+```
+
+### GAS 集成
+
+```csharp
+#if GAMEPLAY_ABILITIES_PRESENT
+using CycloneGames.RPGFoundation.Runtime.Movement;
+using UnityEngine;
+
+public class GASAttributeController2D : MonoBehaviour
+{
+    void Start()
+    {
+        var movement = GetComponent<MovementComponent2D>();
+        var gasAuthority = GetComponent<GASMovementAttributeAuthority>();
+
+        if (gasAuthority == null)
+        {
+            gasAuthority = gameObject.AddComponent<GASMovementAttributeAuthority>();
+        }
+
+        movement.MovementAuthority = gasAuthority;
+
+        // 映射 GAS 属性
+        gasAuthority.AddAttributeMapping(
+            MovementAttribute.RunSpeed,
+            "Attribute.Secondary.Speed",
+            baseValue: 100f
+        );
+    }
+}
+#endif
+```
+
+**支持的属性**：WalkSpeed, RunSpeed, SprintSpeed, CrouchSpeed, JumpForce, Gravity, AirControlMultiplier
 
 ## 📊 API 参考
 
@@ -167,9 +253,10 @@ movement.MovementAuthority = GetComponent<GASMovementAuthority2D>();
 // 属性
 MovementStateType CurrentState { get; }
 bool IsGrounded { get; }
-float CurrentSpeed { get; }
-Vector2 Velocity { get; }
+float CurrentSpeed { get; }        // 目标速度（在 Idle 状态下重置为 0）
+Vector2 Velocity { get; }         // 实际速度向量（推荐用于 BlendTree）
 bool IsMoving { get; }
+IMovementAuthority MovementAuthority { get; set; }
 
 // 方法
 void SetInputDirection(Vector2 direction);
@@ -184,6 +271,23 @@ event Action OnJumpStart;
 event Action OnLanded;
 ```
 
+### 动画 BlendTree
+
+对于 BlendTree 动画，使用 `Velocity.magnitude` 以获得平滑插值：
+
+```csharp
+void Update()
+{
+    var movement = GetComponent<MovementComponent2D>();
+
+    // 推荐：使用 Velocity.magnitude 做 BlendTree
+    animator.SetFloat("Speed", movement.Velocity.magnitude);
+
+    // 也可以使用：CurrentSpeed（在 Idle 状态下会重置为 0）
+    // animator.SetFloat("Speed", movement.CurrentSpeed);
+}
+```
+
 ## 🎯 最佳实践
 
 ### ✅ 应该
@@ -192,9 +296,12 @@ event Action OnLanded;
 - 使用 `coyoteTime` 和 `jumpBufferTime` 获得更好手感
 - 配置 `groundLayer` 避免错误的地面检测
 - 使用 `maxFallSpeed` 防止过快的下落速度
+- 使用 `Velocity.magnitude` 做 BlendTree 动画（更平滑的过渡）
+- 使用 `MovementAttributeAuthority` 进行运行时属性修改
 
 ### ❌ 不应该
 
 - 混合使用 2D 和 3D 物理组件
 - 忘记将 Rigidbody2D 设置为 Continuous 碰撞检测
 - 在非 2D 游戏中使用（请使用 MovementComponent）
+- 如果需要平滑插值，在 BlendTree 中使用 `CurrentSpeed`（应使用 `Velocity.magnitude`）
