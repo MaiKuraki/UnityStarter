@@ -10,9 +10,20 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
         {
             displacement = float3.zero;
 
+            // Reset speed and velocity when idle
+            context.CurrentSpeed = 0f;
+            context.CurrentVelocity = float3.zero;
+
             if (!context.IsGrounded && context.VerticalVelocity < 0)
             {
                 displacement = context.WorldUp * context.VerticalVelocity * context.DeltaTime;
+            }
+
+            // Update animation parameter
+            if (context.AnimationController != null && context.AnimationController.IsValid)
+            {
+                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                context.AnimationController.SetFloat(hash, 0f);
             }
         }
 

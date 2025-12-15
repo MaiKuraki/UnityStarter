@@ -48,7 +48,7 @@ public class PlayerController : MonoBehaviour
         // Get input (in local space - relative to character's forward/right)
         Vector2 input = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
         Vector3 localInput = new Vector3(input.x, 0, input.y);
-        
+
         // Send to movement component (InputDirection is in local space)
         // The movement system will automatically convert it to world space based on character's orientation
         _movement.SetInputDirection(localInput);
@@ -161,31 +161,27 @@ public class GASMovementAuthority : MonoBehaviour, IMovementAuthority
         switch (stateType)
         {
             case MovementStateType.Sprint:
-                // Check if player has enough stamina
                 return _asc.GetAttribute("Stamina")?.CurrentValue > 10f;
-            
+
             case MovementStateType.Jump:
-                // Check if jump is not on cooldown
                 return !_asc.HasMatchingTag(GameplayTag.FromString("State.Cooldown.Jump"));
-            
+
             default:
                 return true;
         }
     }
 
-    public void OnStateEntered(MovementStateType stateType)
+    public void OnStateEntered(MovementStateType stateType) { }
+    public void OnStateExited(MovementStateType stateType) { }
+
+    public MovementAttributeModifier GetAttributeModifier(MovementAttribute attribute)
     {
-        // Apply effects when entering states
-        if (stateType == MovementStateType.Sprint)
-        {
-            // Apply stamina drain effect
-        }
+        return new MovementAttributeModifier(null, 1f);
     }
 
-    public void OnStateExited(MovementStateType stateType)
-    {
-        // Cleanup when exiting states
-    }
+    public float? GetBaseValue(MovementAttribute attribute) { return null; }
+    public float GetMultiplier(MovementAttribute attribute) { return 1f; }
+    public float GetFinalValue(MovementAttribute attribute, float configValue) { return configValue; }
 }
 ```
 
@@ -208,11 +204,10 @@ public class RollAbility : GameplayAbility
     public override void ActivateAbility()
     {
         var movement = GetComponent<MovementComponent>();
-        
-        // Request state change (will ask authority first)
+
         if (movement.RequestStateChange(MovementStateType.Roll))
         {
-            CommitAbility(); // Apply cost and cooldown
+            CommitAbility();
         }
         else
         {
@@ -221,6 +216,74 @@ public class RollAbility : GameplayAbility
     }
 }
 ```
+
+## 🎛️ Attribute Modification System
+
+The Movement system supports runtime modification of all movement attributes through the authority system.
+
+### Simple Usage (No GAS)
+
+```csharp
+using CycloneGames.RPGFoundation.Runtime.Movement;
+using UnityEngine;
+
+public class SimpleAttributeController : MonoBehaviour
+{
+    void Start()
+    {
+        var movement = GetComponent<MovementComponent>();
+        var authority = GetComponent<MovementAttributeAuthority>();
+
+        if (authority == null)
+        {
+            authority = gameObject.AddComponent<MovementAttributeAuthority>();
+        }
+
+        movement.MovementAuthority = authority;
+
+        // Override base values
+        authority.SetBaseValueOverride(MovementAttribute.RunSpeed, 7f);
+        authority.SetBaseValueOverride(MovementAttribute.JumpForce, 15f);
+
+        // Apply multipliers
+        authority.SetMultiplier(MovementAttribute.RunSpeed, 1.5f);
+    }
+}
+```
+
+### GAS Integration
+
+```csharp
+#if GAMEPLAY_ABILITIES_PRESENT
+using CycloneGames.RPGFoundation.Runtime.Movement;
+using UnityEngine;
+
+public class GASAttributeController : MonoBehaviour
+{
+    void Start()
+    {
+        var movement = GetComponent<MovementComponent>();
+        var gasAuthority = GetComponent<GASMovementAttributeAuthority>();
+
+        if (gasAuthority == null)
+        {
+            gasAuthority = gameObject.AddComponent<GASMovementAttributeAuthority>();
+        }
+
+        movement.MovementAuthority = gasAuthority;
+
+        // Map GAS attributes
+        gasAuthority.AddAttributeMapping(
+            MovementAttribute.RunSpeed,
+            "Attribute.Secondary.Speed",
+            baseValue: 100f
+        );
+    }
+}
+#endif
+```
+
+**Supported Attributes**: WalkSpeed, RunSpeed, SprintSpeed, CrouchSpeed, JumpForce, Gravity, AirControlMultiplier, RotationSpeed
 
 ## ⚙️ Configuration
 
@@ -245,6 +308,16 @@ The component automatically sets these Animator parameters:
 - `IsGrounded` (Bool) - Whether character is on ground
 - `Jump` (Trigger) - Jump action trigger
 
+**Note**: For BlendTree animations, use `Velocity.magnitude` instead of `CurrentSpeed` for smoother transitions:
+
+```csharp
+// Recommended for BlendTree
+animator.SetFloat("Speed", movement.Velocity.magnitude);
+
+// Also works (CurrentSpeed resets to 0 in Idle state)
+animator.SetFloat("Speed", movement.CurrentSpeed);
+```
+
 ## 🎯 Best Practices
 
 ### ✅ Do
@@ -253,12 +326,15 @@ The component automatically sets these Animator parameters:
 - Use `IMovementStateQuery` to read movement state
 - Subscribe to events for visual feedback (particles, sounds)
 - Use `RequestStateChange()` for explicit state transitions
+- Use `Velocity.magnitude` for BlendTree animations (smoother transitions)
+- Use `MovementAttributeAuthority` for runtime attribute modification
 
 ### ❌ Don't
 
 - Directly modify `_currentState` or internal state
 - Call `MoveWithVelocity()` when using state-based input
 - Mix input methods (use either `SetInput*` methods OR `MoveWithVelocity`)
+- Use `CurrentSpeed` for BlendTree if you need smooth interpolation (use `Velocity.magnitude` instead)
 
 ## 🔍 API Reference
 
@@ -269,10 +345,10 @@ The component automatically sets these Animator parameters:
 ```csharp
 MovementStateType CurrentState { get; }          // Current movement state
 bool IsGrounded { get; }                         // Is character on ground
-float CurrentSpeed { get; }                      // Current movement speed
-Vector3 Velocity { get; }                        // Current velocity
+float CurrentSpeed { get; }                      // Target speed (resets to 0 in Idle)
+Vector3 Velocity { get; }                        // Actual velocity vector (recommended for BlendTree)
 bool IsMoving { get; }                           // Is character moving
-IMovementAuthority MovementAuthority { get; set; } // Optional GAS authority
+IMovementAuthority MovementAuthority { get; set; } // Attribute modification authority
 ```
 
 #### Methods
@@ -303,6 +379,7 @@ event Action OnLanded;
 - **SIMD Acceleration** - Unity.Mathematics leverages CPU vector instructions
 - **State Pooling** - State instances are reused via object pool
 - **Optimized Rotation** - Uses `math.slerp` instead of `Quaternion.Slerp`
+- **Attribute Modification** - Runtime attribute changes without GC allocation
 
 ## 🔗 GameplayFramework Integration
 
@@ -313,12 +390,14 @@ When using `MovementComponent` with `CycloneGames.GameplayFramework`, the compon
 #### Package Manager Installation (Recommended)
 
 If both `RPGFoundation` and `GameplayFramework` are installed via Package Manager:
+
 - ✅ **Automatic**: The `GAMEPLAY_FRAMEWORK_PRESENT` define symbol is automatically set via `versionDefines` in asmdef
 - ✅ **No configuration needed**: Rotation synchronization works automatically
 
 #### Direct Assets Installation
 
 If `RPGFoundation` is placed directly in the `Assets` folder (not as a Package):
+
 - ⚠️ **Manual setup required**: You must manually set the `GAMEPLAY_FRAMEWORK_PRESENT` define symbol in `PlayerSettings > Scripting Define Symbols`
 - ⚠️ **Otherwise**: Automatic rotation synchronization will not work, and you must manually set the Pawn's rotation after spawning
 
@@ -370,12 +449,12 @@ public class PlayerController : MonoBehaviour
 {
     private MovementComponent _movement;
     private Camera _camera;
-    
+
     [Header("Rotation Settings")]
     [SerializeField] private float mouseSensitivity = 2f;
     [SerializeField] private float minVerticalAngle = -80f;
     [SerializeField] private float maxVerticalAngle = 80f;
-    
+
     private float _verticalRotation = 0f;
     private float _horizontalRotation = 0f;
 
@@ -391,7 +470,7 @@ public class PlayerController : MonoBehaviour
         Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
         Vector3 localInput = new Vector3(moveInput.x, 0, moveInput.y);
         _movement.SetInputDirection(localInput);
-        
+
         // Rotation input (mouse look)
         Vector2 lookInput = new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
         Vector3 targetLookDirection = CalculateLookDirection(lookInput);
@@ -404,17 +483,17 @@ public class PlayerController : MonoBehaviour
         _horizontalRotation += lookInput.x * mouseSensitivity;
         _verticalRotation -= lookInput.y * mouseSensitivity;
         _verticalRotation = Mathf.Clamp(_verticalRotation, minVerticalAngle, maxVerticalAngle);
-        
+
         // Convert to direction vector
         float horizontalRad = _horizontalRotation * Mathf.Deg2Rad;
         float verticalRad = _verticalRotation * Mathf.Deg2Rad;
-        
+
         Vector3 direction = new Vector3(
             Mathf.Sin(horizontalRad) * Mathf.Cos(verticalRad),
             Mathf.Sin(verticalRad),
             Mathf.Cos(horizontalRad) * Mathf.Cos(verticalRad)
         );
-        
+
         return direction.normalized;
     }
 }
@@ -426,16 +505,16 @@ public class PlayerController : MonoBehaviour
 private Vector3 CalculateLookDirection(Vector2 lookInput)
 {
     if (_camera == null) return transform.forward;
-    
+
     // Get camera's forward direction (projected onto horizontal plane)
     Vector3 cameraForward = _camera.transform.forward;
     cameraForward.y = 0f; // Remove vertical component
     cameraForward.Normalize();
-    
+
     // Rotate based on mouse input
     float horizontalRotation = lookInput.x * mouseSensitivity;
     Quaternion rotation = Quaternion.Euler(0, horizontalRotation, 0);
-    
+
     return rotation * cameraForward;
 }
 ```
@@ -450,7 +529,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
     {
         Ray ray = _camera.ScreenPointToRay(Input.mousePosition);
         RaycastHit hit;
-        
+
         if (Physics.Raycast(ray, out hit))
         {
             Vector3 direction = (hit.point - transform.position);
@@ -458,7 +537,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
             return direction.normalized;
         }
     }
-    
+
     // Fallback: use current forward direction
     return transform.forward;
 }
@@ -472,7 +551,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
     // For gamepad right stick input
     if (lookInput.magnitude < 0.1f)
         return transform.forward; // No input, maintain current direction
-    
+
     // Get camera's right and forward vectors (horizontal only)
     Vector3 cameraRight = _camera.transform.right;
     Vector3 cameraForward = _camera.transform.forward;
@@ -480,7 +559,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
     cameraForward.y = 0f;
     cameraRight.Normalize();
     cameraForward.Normalize();
-    
+
     // Combine based on stick input
     Vector3 direction = (cameraForward * lookInput.y + cameraRight * lookInput.x).normalized;
     return direction;
@@ -490,6 +569,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
 **Option 5: Third-Person Action Game (Camera-Relative Movement)**
 
 For third-person action games where:
+
 - Camera follows the character
 - Movement input is relative to camera direction (not character direction)
 - Character automatically faces movement direction
@@ -502,7 +582,7 @@ public class ThirdPersonPlayerController : MonoBehaviour
 {
     private MovementComponent _movement;
     private Camera _camera;
-    
+
     [Header("Movement Settings")]
     [SerializeField] private bool autoFaceMovementDirection = true;
     [SerializeField] private float rotationSmoothing = 10f;
@@ -517,15 +597,15 @@ public class ThirdPersonPlayerController : MonoBehaviour
     {
         // Get input in camera space (relative to camera's forward/right)
         Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
-        
+
         // Convert camera-relative input to world space direction
         Vector3 worldMoveDirection = GetCameraRelativeMovementDirection(moveInput);
-        
+
         // Convert world direction to local space for MovementComponent
         // MovementComponent expects local space input (relative to character's forward/right)
         Vector3 localInput = transform.InverseTransformDirection(worldMoveDirection);
         _movement.SetInputDirection(localInput);
-        
+
         // Optionally: Make character face movement direction
         if (autoFaceMovementDirection && moveInput.magnitude > 0.1f)
         {
@@ -536,7 +616,7 @@ public class ThirdPersonPlayerController : MonoBehaviour
                 _movement.SetLookDirection(lookDirection.normalized);
             }
         }
-        
+
         // Other inputs
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
         _movement.SetSprintHeld(Input.GetButton("Sprint"));
@@ -551,21 +631,21 @@ public class ThirdPersonPlayerController : MonoBehaviour
     {
         if (_camera == null || input.magnitude < 0.1f)
             return Vector3.zero;
-        
+
         // Get camera's forward and right vectors (projected onto horizontal plane)
         Vector3 cameraForward = _camera.transform.forward;
         Vector3 cameraRight = _camera.transform.right;
-        
+
         // Remove vertical component to keep movement on horizontal plane
         cameraForward.y = 0f;
         cameraRight.y = 0f;
         cameraForward.Normalize();
         cameraRight.Normalize();
-        
+
         // Combine camera directions based on input
         // input.y is forward/back (W/S), input.x is left/right (A/D)
         Vector3 direction = (cameraForward * input.y + cameraRight * input.x).normalized;
-        
+
         return direction;
     }
 }
@@ -580,14 +660,14 @@ void Update()
 {
     // Get input in camera space
     Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
-    
+
     // Convert to world space direction relative to camera
     Vector3 worldMoveDirection = GetCameraRelativeMovementDirection(moveInput);
-    
+
     // Convert world direction to character's local space
     Vector3 localInput = transform.InverseTransformDirection(worldMoveDirection);
     _movement.SetInputDirection(localInput);
-    
+
     // Rotation is controlled separately (e.g., by camera or mouse look)
     // You can use Option 1 or Option 2 for rotation control
 }
