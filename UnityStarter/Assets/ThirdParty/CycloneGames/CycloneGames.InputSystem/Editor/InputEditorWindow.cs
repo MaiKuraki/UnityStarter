@@ -2,9 +2,11 @@ using UnityEngine;
 using UnityEditor;
 using System.IO;
 using VYaml.Serialization;
+using VYaml.Emitter;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Buffers;
 using CycloneGames.Utility.Runtime;
 using CycloneGames.InputSystem.Runtime;
 
@@ -16,6 +18,11 @@ namespace CycloneGames.InputSystem.Editor
         private SerializedObject _serializedConfig;
         private Vector2 _scrollPosition;
         private GUIStyle _overflowLabelStyle;
+        private GUIStyle _toolbarSectionLabelStyle;
+        private bool _isProSkin;
+        private Dictionary<string, Color> _sectionColors;
+        private Dictionary<string, GUIStyle> _sectionButtonStyles;
+        private Dictionary<string, Texture2D> _sectionButtonTextures;
         private string _defaultConfigPath;
         private string _userConfigPath;
         private string _statusMessage;
@@ -23,9 +30,17 @@ namespace CycloneGames.InputSystem.Editor
         private string _codegenPath;
         private string _codegenNamespace;
         private DefaultAsset _codegenFolder;
+        private string _defaultConfigFolderPath;
+        private DefaultAsset _defaultConfigFolder;
+        private string _previousDefaultConfigFolderPath;
+        private string _userConfigSubPath; // Subdirectory path relative to PersistentData (e.g., "/Config")
+        private string _userConfigFullPathDisplay;
+        private string _defaultConfigFullPathDisplay;
 
         private const string DefaultConfigFileName = "input_config.yaml";
         private const string UserConfigFileName = "user_input_settings.yaml";
+
+        private List<(string label, System.Action drawButtons, float estimatedWidth)> _toolbarSections;
 
         [MenuItem("Tools/CycloneGames/Input System Editor")]
         public static void ShowWindow()
@@ -35,8 +50,10 @@ namespace CycloneGames.InputSystem.Editor
 
         private void OnEnable()
         {
-            _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(DefaultConfigFileName, UnityPathSource.StreamingAssets);
-            _userConfigPath = FilePathUtility.GetUnityWebRequestUri(UserConfigFileName, UnityPathSource.PersistentData);
+            // Load UserConfig subdirectory path from EditorPrefs
+            _userConfigSubPath = EditorPrefs.GetString("CycloneGames.InputSystem.UserConfigSubPath", "");
+            UpdateUserConfigPath();
+
             _codegenPath = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenPath", "Assets");
             _codegenNamespace = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenNamespace", "YourGame.Input.Generated");
             if (!string.IsNullOrEmpty(_codegenPath))
@@ -44,11 +61,275 @@ namespace CycloneGames.InputSystem.Editor
                 _codegenFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_codegenPath);
             }
 
+            _defaultConfigFolderPath = EditorPrefs.GetString("CycloneGames.InputSystem.DefaultConfigFolder", "Assets/StreamingAssets");
+            _previousDefaultConfigFolderPath = EditorPrefs.GetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", "");
+            if (!string.IsNullOrEmpty(_defaultConfigFolderPath))
+            {
+                _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_defaultConfigFolderPath);
+            }
+            if (_defaultConfigFolder == null)
+            {
+                _defaultConfigFolderPath = "Assets/StreamingAssets";
+                _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_defaultConfigFolderPath);
+            }
+
+            UpdateDefaultConfigPath();
+
+            InitializeToolbarSections();
+
             LoadUserConfig();
+        }
+
+        private void UpdateUserConfigPath()
+        {
+            // Build the full path: PersistentData + SubPath + FileName
+            string fullPath = UserConfigFileName;
+            if (!string.IsNullOrEmpty(_userConfigSubPath))
+            {
+                string normalizedSubPath = _userConfigSubPath.Trim('/', '\\');
+                if (!string.IsNullOrEmpty(normalizedSubPath))
+                {
+                    fullPath = normalizedSubPath + "/" + UserConfigFileName;
+                }
+            }
+
+            _userConfigPath = FilePathUtility.GetUnityWebRequestUri(fullPath, UnityPathSource.PersistentData);
+
+            string localPath = new System.Uri(_userConfigPath).LocalPath;
+            _userConfigFullPathDisplay = localPath.Replace('\\', '/');
+        }
+
+        private void UpdateDefaultConfigPath()
+        {
+            if (string.IsNullOrEmpty(_defaultConfigFolderPath) || _defaultConfigFolder == null)
+            {
+                _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(DefaultConfigFileName, UnityPathSource.StreamingAssets);
+                string localPath = new System.Uri(_defaultConfigPath).LocalPath;
+                _defaultConfigFullPathDisplay = localPath.Replace('\\', '/');
+                return;
+            }
+
+            string folderPath = _defaultConfigFolderPath.TrimEnd('/', '\\');
+            if (folderPath.StartsWith("Assets/", System.StringComparison.OrdinalIgnoreCase) ||
+                folderPath.StartsWith("Assets\\", System.StringComparison.OrdinalIgnoreCase))
+            {
+                folderPath = folderPath.Substring(7);
+            }
+            else if (folderPath.Equals("Assets", System.StringComparison.OrdinalIgnoreCase))
+            {
+                folderPath = "";
+            }
+
+            string fullSystemPath = Path.Combine(Application.dataPath, folderPath, DefaultConfigFileName);
+            _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(fullSystemPath, UnityPathSource.AbsoluteOrFullUri);
+
+            _defaultConfigFullPathDisplay = fullSystemPath.Replace('\\', '/');
+        }
+
+        private void HandleConfigFolderChange(string oldFolderPath, string newFolderPath)
+        {
+            if (string.IsNullOrEmpty(oldFolderPath) || oldFolderPath.Equals(newFolderPath, System.StringComparison.OrdinalIgnoreCase))
+            {
+                EditorPrefs.SetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", newFolderPath);
+                return;
+            }
+
+            string oldAssetPath = GetConfigAssetPath(oldFolderPath);
+            string newAssetPath = GetConfigAssetPath(newFolderPath);
+
+            if (!AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(oldAssetPath))
+            {
+                EditorPrefs.SetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", newFolderPath);
+                return;
+            }
+
+            if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(newAssetPath))
+            {
+                int choice = EditorUtility.DisplayDialogComplex(
+                    "Default Config File Exists",
+                    $"A default config file already exists in the new location:\n{newAssetPath}\n\n" +
+                    $"The old file is at:\n{oldAssetPath}\n\n" +
+                    "How would you like to proceed?",
+                    "Move (Replace)", "Delete Old", "Cancel");
+
+                if (choice == 0)
+                {
+                    if (!AssetDatabase.DeleteAsset(newAssetPath))
+                    {
+                        EditorUtility.DisplayDialog("Error", "Failed to delete existing file.", "OK");
+                        return;
+                    }
+                    AssetDatabase.Refresh();
+
+                    string moveError = AssetDatabase.MoveAsset(oldAssetPath, newAssetPath);
+                    if (!string.IsNullOrEmpty(moveError))
+                    {
+                        EditorUtility.DisplayDialog("Error", $"Failed to move file: {moveError}", "OK");
+                        return;
+                    }
+                    AssetDatabase.Refresh();
+                    SetStatus($"Moved default config from {oldFolderPath} to {newFolderPath}", MessageType.Info);
+                }
+                else if (choice == 1)
+                {
+                    if (!AssetDatabase.DeleteAsset(oldAssetPath))
+                    {
+                        EditorUtility.DisplayDialog("Error", "Failed to delete old file.", "OK");
+                        return;
+                    }
+                    AssetDatabase.Refresh();
+                    SetStatus($"Deleted old default config from {oldFolderPath}", MessageType.Info);
+                }
+                else
+                {
+                    _defaultConfigFolderPath = oldFolderPath;
+                    _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(oldFolderPath);
+                    UpdateDefaultConfigPath();
+                    return;
+                }
+            }
+            else
+            {
+                int choice = EditorUtility.DisplayDialogComplex(
+                    "Move Default Config File?",
+                    $"The default config file will be moved from:\n{oldAssetPath}\n\n" +
+                    $"To:\n{newAssetPath}\n\n" +
+                    "How would you like to proceed?",
+                    "Move", "Delete Old", "Cancel");
+
+                if (choice == 0)
+                {
+                    string moveError = AssetDatabase.MoveAsset(oldAssetPath, newAssetPath);
+                    if (!string.IsNullOrEmpty(moveError))
+                    {
+                        EditorUtility.DisplayDialog("Error", $"Failed to move file: {moveError}", "OK");
+                        return;
+                    }
+                    AssetDatabase.Refresh();
+                    SetStatus($"Moved default config from {oldFolderPath} to {newFolderPath}", MessageType.Info);
+                }
+                else if (choice == 1)
+                {
+                    if (!AssetDatabase.DeleteAsset(oldAssetPath))
+                    {
+                        EditorUtility.DisplayDialog("Error", "Failed to delete old file.", "OK");
+                        return;
+                    }
+                    AssetDatabase.Refresh();
+                    SetStatus($"Deleted old default config from {oldFolderPath}", MessageType.Info);
+                }
+                else
+                {
+                    _defaultConfigFolderPath = oldFolderPath;
+                    _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(oldFolderPath);
+                    UpdateDefaultConfigPath();
+                    return;
+                }
+            }
+
+            EditorPrefs.SetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", newFolderPath);
+        }
+
+        private string GetConfigAssetPath(string folderPath)
+        {
+            if (string.IsNullOrEmpty(folderPath))
+            {
+                return Path.Combine("Assets", "StreamingAssets", DefaultConfigFileName).Replace('\\', '/');
+            }
+
+            string cleanPath = folderPath.TrimEnd('/', '\\');
+            if (!cleanPath.StartsWith("Assets/", System.StringComparison.OrdinalIgnoreCase) &&
+                !cleanPath.StartsWith("Assets\\", System.StringComparison.OrdinalIgnoreCase) &&
+                !cleanPath.Equals("Assets", System.StringComparison.OrdinalIgnoreCase))
+            {
+                cleanPath = "Assets/" + cleanPath;
+            }
+
+            return Path.Combine(cleanPath, DefaultConfigFileName).Replace('\\', '/');
+        }
+
+        private byte[] SerializeConfigWithoutNullJoinAction(InputConfiguration config)
+        {
+            var bufferWriter = new ArrayBufferWriter<byte>();
+            var emitter = new Utf8YamlEmitter(bufferWriter);
+
+            if (config.JoinAction == null)
+            {
+                var configWithoutJoinAction = new InputConfiguration
+                {
+                    PlayerSlots = config.PlayerSlots
+                };
+                YamlSerializer.Serialize(ref emitter, configWithoutJoinAction);
+            }
+            else
+            {
+                YamlSerializer.Serialize(ref emitter, config);
+            }
+
+            return bufferWriter.WrittenSpan.ToArray();
+        }
+
+        private void OnDisable()
+        {
+            if (_sectionButtonTextures != null)
+            {
+                foreach (var texture in _sectionButtonTextures.Values)
+                {
+                    if (texture != null) DestroyImmediate(texture);
+                }
+                _sectionButtonTextures.Clear();
+            }
+        }
+
+        private void InitializeToolbarSections()
+        {
+            _toolbarSections = new List<(string label, System.Action drawButtons, float estimatedWidth)>
+            {
+                ("Load", () =>
+                {
+                    if (GUILayout.Button("User Config", _sectionButtonStyles["Load"])) LoadUserConfig();
+                    if (GUILayout.Button("Default Config", _sectionButtonStyles["Load"])) LoadDefaultConfig();
+                }, 250f),
+                ("Generate", () =>
+                {
+                    if (GUILayout.Button("Default Config", _sectionButtonStyles["Generate"])) GenerateDefaultConfigFile();
+                    GUI.enabled = _configSO != null;
+                    if (GUILayout.Button("Override Default", _sectionButtonStyles["Generate"])) OverrideDefaultConfig();
+                    GUI.enabled = true;
+                }, 280f),
+                ("Save", () =>
+                {
+                    GUI.enabled = _configSO != null;
+                    if (GUILayout.Button("User Config", _sectionButtonStyles["Save"])) SaveChangesToUserConfig();
+                    if (GUILayout.Button("User + Generate", _sectionButtonStyles["Save"]))
+                    {
+                        SaveChangesToUserConfig(true);
+                    }
+                    GUI.enabled = true;
+                }, 270f),
+                ("Reset", () =>
+                {
+                    if (GUILayout.Button("User to Default", _sectionButtonStyles["Reset"]))
+                    {
+                        if (EditorUtility.DisplayDialog("Reset User Configuration?", "This will overwrite your user settings with the default configuration. This cannot be undone.", "Reset", "Cancel"))
+                        {
+                            ResetToDefault();
+                        }
+                    }
+                }, 200f)
+            };
         }
 
         private void OnGUI()
         {
+            bool isProSkin = EditorGUIUtility.isProSkin;
+            bool themeChanged = _isProSkin != isProSkin;
+
+            if (_sectionColors == null || _sectionColors.Count == 0 || themeChanged)
+            {
+                InitializeSectionColors(isProSkin);
+            }
+
             if (_overflowLabelStyle == null)
             {
                 _overflowLabelStyle = new GUIStyle(EditorStyles.label)
@@ -58,6 +339,26 @@ namespace CycloneGames.InputSystem.Editor
                     alignment = TextAnchor.MiddleLeft
                 };
             }
+            if (_toolbarSectionLabelStyle == null)
+            {
+                _toolbarSectionLabelStyle = new GUIStyle(EditorStyles.label)
+                {
+                    fontStyle = FontStyle.Bold,
+                    alignment = TextAnchor.MiddleCenter,
+                    padding = new RectOffset(0, 0, 0, 0),
+                    margin = new RectOffset(0, 0, 0, 0),
+                    border = new RectOffset(0, 0, 0, 0)
+                };
+                _toolbarSectionLabelStyle.normal.textColor = isProSkin ? new Color(0.9f, 0.9f, 0.95f, 1f) : new Color(0.15f, 0.15f, 0.2f, 1f);
+            }
+
+            if (themeChanged)
+            {
+                _toolbarSectionLabelStyle.normal.textColor = isProSkin ? new Color(0.9f, 0.9f, 0.95f, 1f) : new Color(0.15f, 0.15f, 0.2f, 1f);
+            }
+
+            UpdateSectionButtonStyles(isProSkin);
+
             DrawToolbar();
             DrawStatusBar();
 
@@ -69,7 +370,6 @@ namespace CycloneGames.InputSystem.Editor
             {
                 _serializedConfig.Update();
 
-                // Draw player slots with dynamic add/remove support
                 var slotsProp = _serializedConfig.FindProperty("_playerSlots");
                 EditorGUILayout.BeginHorizontal();
                 EditorGUILayout.LabelField("Player Slots", EditorStyles.boldLabel);
@@ -79,7 +379,6 @@ namespace CycloneGames.InputSystem.Editor
                 }
                 EditorGUILayout.EndHorizontal();
 
-                // Draw player slots with conditional UI for long-press fields
                 if (slotsProp.arraySize > 0)
                 {
                     for (int i = 0; i < slotsProp.arraySize; i++)
@@ -158,28 +457,159 @@ namespace CycloneGames.InputSystem.Editor
 
         private void DrawToolbar()
         {
+            if (_toolbarSections == null)
+            {
+                InitializeToolbarSections();
+            }
+
+            float availableWidth = position.width;
+
+            float currentRowWidth = 0f;
+            bool isFirstInRow = true;
+
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            if (GUILayout.Button("Load User Config", EditorStyles.toolbarButton)) LoadUserConfig();
-            if (GUILayout.Button("Load Default Config", EditorStyles.toolbarButton)) LoadDefaultConfig();
-            GUILayout.Space(10);
-            if (GUILayout.Button("Generate Default Config", EditorStyles.toolbarButton)) GenerateDefaultConfigFile();
-            GUILayout.Space(20);
-            GUI.enabled = _configSO != null;
-            if (GUILayout.Button("Save to User Config", EditorStyles.toolbarButton)) SaveChangesToUserConfig();
-            if (GUILayout.Button("Save and Generate Constants", EditorStyles.toolbarButton))
+
+            foreach (var section in _toolbarSections)
             {
-                SaveChangesToUserConfig(true);
-            }
-            GUI.enabled = true;
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Reset User to Default", EditorStyles.toolbarButton))
-            {
-                if (EditorUtility.DisplayDialog("Reset User Configuration?", "This will overwrite your user settings with the default configuration. This cannot be undone.", "Reset", "Cancel"))
+                if (!isFirstInRow && currentRowWidth + section.estimatedWidth > availableWidth - 30f)
                 {
-                    ResetToDefault();
+                    EditorGUILayout.EndHorizontal();
+                    EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+                    currentRowWidth = 0f;
+                    isFirstInRow = true;
                 }
+
+                DrawToolbarSection(section.label, section.drawButtons, _sectionColors[section.label]);
+
+                currentRowWidth += section.estimatedWidth;
+                isFirstInRow = false;
             }
+
+            GUILayout.FlexibleSpace();
             EditorGUILayout.EndHorizontal();
+        }
+
+        private void InitializeSectionColors(bool isProSkin)
+        {
+            if (_sectionColors == null)
+            {
+                _sectionColors = new Dictionary<string, Color>();
+            }
+
+            _sectionColors["Load"] = isProSkin ? new Color(0.4f, 0.6f, 0.9f, 1f) : new Color(0.2f, 0.4f, 0.8f, 1f);
+            _sectionColors["Generate"] = isProSkin ? new Color(0.4f, 0.8f, 0.5f, 1f) : new Color(0.2f, 0.6f, 0.3f, 1f);
+            _sectionColors["Save"] = isProSkin ? new Color(0.9f, 0.7f, 0.3f, 1f) : new Color(0.8f, 0.5f, 0.1f, 1f);
+            _sectionColors["Reset"] = isProSkin ? new Color(0.9f, 0.4f, 0.4f, 1f) : new Color(0.8f, 0.2f, 0.2f, 1f);
+        }
+
+        private void UpdateSectionButtonStyles(bool isProSkin)
+        {
+            if (_sectionButtonStyles == null)
+            {
+                _sectionButtonStyles = new Dictionary<string, GUIStyle>();
+            }
+            if (_sectionButtonTextures == null)
+            {
+                _sectionButtonTextures = new Dictionary<string, Texture2D>();
+            }
+
+            bool needRecreateTextures = (_isProSkin != isProSkin || _sectionButtonTextures.Count == 0);
+
+            if (needRecreateTextures)
+            {
+                foreach (var texture in _sectionButtonTextures.Values)
+                {
+                    if (texture != null) UnityEngine.Object.DestroyImmediate(texture);
+                }
+                _sectionButtonTextures.Clear();
+                _isProSkin = isProSkin;
+            }
+            else
+            {
+                if (_sectionButtonStyles.Count == _sectionColors.Count) return;
+            }
+
+            foreach (var kvp in _sectionColors)
+            {
+                string sectionName = kvp.Key;
+                Color sectionColor = kvp.Value;
+
+                if (!_sectionButtonStyles.ContainsKey(sectionName))
+                {
+                    _sectionButtonStyles[sectionName] = new GUIStyle(EditorStyles.toolbarButton);
+                }
+
+                GUIStyle style = _sectionButtonStyles[sectionName];
+
+                // Update text colors to match section color
+                style.normal.textColor = sectionColor;
+                style.hover.textColor = Color.Lerp(sectionColor, Color.white, 0.3f);
+                style.active.textColor = Color.Lerp(sectionColor, Color.black, 0.2f);
+                style.focused.textColor = sectionColor;
+                style.onNormal.textColor = sectionColor;
+                style.onHover.textColor = Color.Lerp(sectionColor, Color.white, 0.3f);
+                style.onActive.textColor = Color.Lerp(sectionColor, Color.black, 0.2f);
+                style.onFocused.textColor = sectionColor;
+
+                // Create or reuse background textures with section color
+                string normalKey = sectionName + "_normal";
+                string hoverKey = sectionName + "_hover";
+                string activeKey = sectionName + "_active";
+
+                if (needRecreateTextures || !_sectionButtonTextures.ContainsKey(normalKey))
+                {
+                    _sectionButtonTextures[normalKey] = CreateColorTexture(sectionColor * (isProSkin ? 0.3f : 0.15f));
+                    _sectionButtonTextures[hoverKey] = CreateColorTexture(sectionColor * (isProSkin ? 0.5f : 0.3f));
+                    _sectionButtonTextures[activeKey] = CreateColorTexture(sectionColor * (isProSkin ? 0.4f : 0.25f));
+                }
+
+                // Set background textures
+                style.normal.background = _sectionButtonTextures[normalKey];
+                style.hover.background = _sectionButtonTextures[hoverKey];
+                style.active.background = _sectionButtonTextures[activeKey];
+                style.focused.background = _sectionButtonTextures[normalKey];
+                style.onNormal.background = _sectionButtonTextures[normalKey];
+                style.onHover.background = _sectionButtonTextures[hoverKey];
+                style.onActive.background = _sectionButtonTextures[activeKey];
+                style.onFocused.background = _sectionButtonTextures[normalKey];
+            }
+        }
+
+        private Texture2D CreateColorTexture(Color color)
+        {
+            Texture2D texture = new Texture2D(1, 1, TextureFormat.RGBA32, false);
+            texture.SetPixel(0, 0, color);
+            texture.Apply();
+            texture.hideFlags = HideFlags.HideAndDontSave;
+            return texture;
+        }
+
+        private void DrawToolbarSection(string label, System.Action drawButtons, Color sectionColor)
+        {
+            float toolbarHeight = EditorStyles.toolbar.fixedHeight > 0 ? EditorStyles.toolbar.fixedHeight : EditorGUIUtility.singleLineHeight;
+
+            Rect labelRect = GUILayoutUtility.GetRect(75, toolbarHeight, GUILayout.Width(75));
+
+            GUI.Label(labelRect, label, _toolbarSectionLabelStyle);
+
+            EditorGUI.DrawRect(new Rect(labelRect.x, labelRect.yMax - 2, labelRect.width, 2), sectionColor);
+
+            GUILayout.Space(8);
+
+            drawButtons();
+
+            GUILayout.Space(12);
+
+            DrawToolbarSeparator();
+            GUILayout.Space(4);
+        }
+
+        private void DrawToolbarSeparator()
+        {
+            bool isProSkin = EditorGUIUtility.isProSkin;
+            Rect rect = GUILayoutUtility.GetRect(1, EditorGUIUtility.singleLineHeight, GUILayout.Width(1));
+            Color separatorColor = isProSkin ? new Color(0.3f, 0.3f, 0.3f, 0.8f) : new Color(0.6f, 0.6f, 0.6f, 0.8f);
+            EditorGUI.DrawRect(rect, separatorColor);
         }
 
         private void DrawStatusBar()
@@ -192,6 +622,95 @@ namespace CycloneGames.InputSystem.Editor
 
         private void DrawCodegenSettings()
         {
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Configuration Settings", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            EditorGUI.BeginChangeCheck();
+            var newDefaultConfigFolder = (DefaultAsset)EditorGUILayout.ObjectField("Default Config Folder", _defaultConfigFolder, typeof(DefaultAsset), false);
+            if (EditorGUI.EndChangeCheck())
+            {
+                if (newDefaultConfigFolder != _defaultConfigFolder)
+                {
+                    string oldFolderPath = _defaultConfigFolderPath;
+                    _defaultConfigFolder = newDefaultConfigFolder;
+                    if (_defaultConfigFolder != null)
+                    {
+                        _defaultConfigFolderPath = AssetDatabase.GetAssetPath(_defaultConfigFolder);
+                        HandleConfigFolderChange(oldFolderPath, _defaultConfigFolderPath);
+                        EditorPrefs.SetString("CycloneGames.InputSystem.DefaultConfigFolder", _defaultConfigFolderPath);
+                        UpdateDefaultConfigPath();
+                    }
+                    else
+                    {
+                        _defaultConfigFolderPath = "Assets/StreamingAssets";
+                        HandleConfigFolderChange(oldFolderPath, _defaultConfigFolderPath);
+                        EditorPrefs.SetString("CycloneGames.InputSystem.DefaultConfigFolder", _defaultConfigFolderPath);
+                        _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_defaultConfigFolderPath);
+                        UpdateDefaultConfigPath();
+                    }
+                }
+            }
+
+            // Display full path for Default Config (or prompt if not loaded)
+            EditorGUI.BeginDisabledGroup(true);
+            string defaultConfigDisplayText;
+            string localPath = new System.Uri(_defaultConfigPath).LocalPath;
+            bool fileExists = File.Exists(localPath);
+            bool configLoaded = _configSO != null;
+
+            if (fileExists || configLoaded)
+            {
+                // File exists or config is loaded, show full path
+                defaultConfigDisplayText = _defaultConfigFullPathDisplay;
+            }
+            else
+            {
+                // File doesn't exist and config not loaded, show prompt
+                defaultConfigDisplayText = "Please Load or Generate Default Config first";
+            }
+
+            EditorGUILayout.TextField(
+                new GUIContent("Full Path", "Complete path where default config is located (updates in real-time). If file doesn't exist, please Load or Generate first."),
+                defaultConfigDisplayText
+            );
+            EditorGUI.EndDisabledGroup();
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("User Config Settings", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            // User Config Subdirectory Path Input
+            EditorGUI.BeginChangeCheck();
+            string newUserConfigSubPath = EditorGUILayout.TextField(
+                new GUIContent("Subdirectory Path", "Subdirectory path relative to PersistentData (e.g., \"/Config\" or \"Config\"). Leave empty to save directly in PersistentData."),
+                _userConfigSubPath
+            );
+            if (EditorGUI.EndChangeCheck())
+            {
+                _userConfigSubPath = newUserConfigSubPath;
+                UpdateUserConfigPath();
+                EditorPrefs.SetString("CycloneGames.InputSystem.UserConfigSubPath", _userConfigSubPath);
+            }
+
+            // Display full path (real-time update when subdirectory changes)
+            EditorGUI.BeginDisabledGroup(true);
+            EditorGUILayout.TextField(
+                new GUIContent("Full Path", "Complete path where user config will be saved (updates in real-time)"),
+                _userConfigFullPathDisplay
+            );
+            EditorGUI.EndDisabledGroup();
+
+            // Show PersistentData base path for reference
+            EditorGUI.BeginDisabledGroup(true);
+            EditorGUILayout.TextField(
+                new GUIContent("PersistentData Base", "Base PersistentData directory"),
+                Application.persistentDataPath
+            );
+            EditorGUI.EndDisabledGroup();
+
+            EditorGUI.indentLevel--;
+
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Code Generation Settings", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
@@ -215,6 +734,7 @@ namespace CycloneGames.InputSystem.Editor
                 }
             }
 
+            EditorGUI.indentLevel--;
             EditorGUI.indentLevel--;
             EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
         }
@@ -278,7 +798,7 @@ namespace CycloneGames.InputSystem.Editor
             try
             {
                 InputConfiguration configModel = _configSO.ToData();
-                byte[] yamlBytes = YamlSerializer.Serialize(configModel).ToArray();
+                byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(configModel);
                 string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
 
                 string localPath = new System.Uri(_userConfigPath).LocalPath;
@@ -335,7 +855,7 @@ namespace CycloneGames.InputSystem.Editor
 
             try
             {
-                byte[] yamlBytes = YamlSerializer.Serialize(defaultConfig).ToArray();
+                byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(defaultConfig);
                 string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
 
                 string directory = Path.GetDirectoryName(localPath);
@@ -353,6 +873,51 @@ namespace CycloneGames.InputSystem.Editor
             catch (System.Exception e)
             {
                 SetStatus($"Error generating default config: {e.Message}", MessageType.Error);
+            }
+        }
+
+        private void OverrideDefaultConfig()
+        {
+            if (_configSO == null)
+            {
+                SetStatus("No configuration loaded to override with.", MessageType.Error);
+                return;
+            }
+
+            string localPath = new System.Uri(_defaultConfigPath).LocalPath;
+
+            string folderName = !string.IsNullOrEmpty(_defaultConfigFolderPath) ? _defaultConfigFolderPath : "StreamingAssets";
+            if (!EditorUtility.DisplayDialog("Override Default Config?",
+                $"This will overwrite the default configuration file in {folderName} with your current editor state.\n\n" +
+                $"Path: {localPath}\n\n" +
+                $"This action cannot be undone. Continue?",
+                "Override", "Cancel"))
+            {
+                return;
+            }
+
+            try
+            {
+                InputConfiguration configModel = _configSO.ToData();
+                byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(configModel);
+                string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
+
+                string directory = Path.GetDirectoryName(localPath);
+                if (directory != null && !Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                File.WriteAllText(localPath, yamlContent);
+                SetStatus($"Successfully overridden default config at: {localPath}", MessageType.Info);
+                AssetDatabase.Refresh();
+
+                // Reload to show the updated default config
+                LoadDefaultConfig();
+            }
+            catch (System.Exception e)
+            {
+                SetStatus($"Failed to override default config: {e.Message}", MessageType.Error);
             }
         }
 
