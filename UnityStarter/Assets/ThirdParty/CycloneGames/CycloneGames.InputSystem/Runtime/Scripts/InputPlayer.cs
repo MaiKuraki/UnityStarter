@@ -12,9 +12,9 @@ using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.InputSystem.Runtime
 {
-    public sealed class InputService : IInputService, IDisposable
+    public sealed class InputPlayer : IInputPlayer, IDisposable
     {
-        private const string DEBUG_FLAG = "[InputService]";
+        private const string DEBUG_FLAG = "[InputPlayer]";
         public ReadOnlyReactiveProperty<string> ActiveContextName { get; private set; }
         public event Action<string> OnContextChanged;
         public int PlayerId { get; }
@@ -41,7 +41,7 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly InputActionAsset _inputActionAsset;
         private bool _isInputBlocked;
 
-        public InputService(int playerId, InputUser user, PlayerSlotConfig config, InputDevice initialDevice = null)
+        public InputPlayer(int playerId, InputUser user, PlayerSlotConfig config, InputDevice initialDevice = null)
         {
             PlayerId = playerId;
             User = user;
@@ -126,7 +126,7 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (!_registeredContexts.TryGetValue(contextName, out var newContext))
             {
-                CLogger.LogError($"[InputService] Context '{contextName}' is not registered for Player {PlayerId}.");
+                CLogger.LogError($"[InputPlayer] Context '{contextName}' is not registered for Player {PlayerId}.");
                 return;
             }
             DeactivateTopContext();
@@ -262,7 +262,7 @@ namespace CycloneGames.InputSystem.Runtime
         private InputAction FindAction(int actionId)
         {
             if (_actionLookup.TryGetValue(actionId, out var action)) return action;
-            CLogger.LogWarning($"[InputService] Action ID '{actionId}' not found. Regenerate constants after config changes.");
+            CLogger.LogWarning($"[InputPlayer] Action ID '{actionId}' not found. Regenerate constants after config changes.");
             return null;
         }
         #endregion
