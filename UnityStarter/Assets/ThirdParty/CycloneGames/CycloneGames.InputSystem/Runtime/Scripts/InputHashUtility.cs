@@ -1,12 +1,15 @@
 namespace CycloneGames.InputSystem.Runtime
 {
     /// <summary>
-    /// Generates deterministic hash codes using FNV-1a algorithm for cross-platform consistency.
+    /// Provides high-performance deterministic hashing (FNV-1a).
     /// </summary>
     public static class InputHashUtility
     {
+        private const uint FnvOffsetBasis = 2166136261u;
+        private const uint FnvPrime = 16777619u;
+
         /// <summary>
-        /// FNV-1a hash algorithm for cross-platform deterministic hashing.
+        /// Computes a deterministic 32-bit FNV-1a hash for a string.
         /// </summary>
         public static int GetDeterministicHashCode(string str)
         {
@@ -14,29 +17,52 @@ namespace CycloneGames.InputSystem.Runtime
 
             unchecked
             {
-                const uint fnvOffsetBasis = 2166136261u;
-                const uint fnvPrime = 16777619u;
-                uint hash = fnvOffsetBasis;
-
-                for (int i = 0; i < str.Length; i++)
+                uint hash = FnvOffsetBasis;
+                int len = str.Length;
+                for (int i = 0; i < len; i++)
                 {
                     hash ^= str[i];
-                    hash *= fnvPrime;
+                    hash *= FnvPrime;
                 }
-
                 return (int)hash;
             }
         }
 
         /// <summary>
-        /// Generates action ID from map and action names. Format: "mapName/actionName"
+        /// Generates a composite Action ID from map and action names without string concatenation.
+        /// Logically equivalent to hashing "mapName/actionName".
         /// </summary>
         public static int GetActionId(string mapName, string actionName)
         {
             if (string.IsNullOrEmpty(mapName) || string.IsNullOrEmpty(actionName))
                 return 0;
 
-            return GetDeterministicHashCode($"{mapName}/{actionName}");
+            unchecked
+            {
+                uint hash = FnvOffsetBasis;
+
+                // Hash mapName
+                int mapLen = mapName.Length;
+                for (int i = 0; i < mapLen; i++)
+                {
+                    hash ^= mapName[i];
+                    hash *= FnvPrime;
+                }
+
+                // Hash separator '/'
+                hash ^= '/';
+                hash *= FnvPrime;
+
+                // Hash actionName
+                int actionLen = actionName.Length;
+                for (int i = 0; i < actionLen; i++)
+                {
+                    hash ^= actionName[i];
+                    hash *= FnvPrime;
+                }
+
+                return (int)hash;
+            }
         }
     }
 }
