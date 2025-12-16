@@ -24,7 +24,7 @@ namespace CycloneGames.InputSystem.Runtime
         public event Action<IInputPlayer> OnPlayerJoined;
         public event Action OnConfigurationReloaded;
 
-        private readonly Dictionary<int, IInputPlayer> _playerServices = new();
+        private readonly Dictionary<int, IInputPlayer> _registerPlayers = new();
         private InputConfiguration _configuration;
         private InputAction _joinAction;
         private string _userConfigUri;
@@ -170,14 +170,14 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 byte[] yamlBytes = YamlSerializer.Serialize(_configuration).ToArray();
                 string filePath = new Uri(_userConfigUri).LocalPath;
-                
+
                 // Ensure directory exists before writing file
                 string directory = System.IO.Path.GetDirectoryName(filePath);
                 if (!string.IsNullOrEmpty(directory) && !System.IO.Directory.Exists(directory))
                 {
                     System.IO.Directory.CreateDirectory(directory);
                 }
-                
+
                 await UniTask.RunOnThreadPool(() => File.WriteAllBytes(filePath, yamlBytes));
                 CLogger.LogInfo($"{DEBUG_FLAG} User configuration saved to: {filePath}");
             }
@@ -225,10 +225,17 @@ namespace CycloneGames.InputSystem.Runtime
 
         /// <summary>
         /// Joins a player with all currently available required devices. Treats Keyboard and Mouse as a unit.
+        /// If the player is already joined, returns the existing service without triggering OnPlayerJoined event.
         /// </summary>
         public IInputPlayer JoinSinglePlayer(int playerIdToJoin = 0)
         {
-            var playerConfig = GetPlayerConfig(playerIdToJoin);
+            if (_registerPlayers.TryGetValue(playerIdToJoin, out var existingService))
+            {
+                CLogger.LogInfo($"{DEBUG_FLAG} Player {playerIdToJoin} already joined. Returning existing service.");
+                return existingService;
+            }
+
+            var playerConfig = GetPlayerConfig(playerIdToJoin, checkIfAlreadyJoined: false);
             if (playerConfig == null) return null;
 
             var requiredDeviceLayouts = GetRequiredLayoutsForConfig(playerConfig);
@@ -360,10 +367,10 @@ namespace CycloneGames.InputSystem.Runtime
             var playerConfig = GetPlayerConfig(playerIdToJoin, false);
             if (playerConfig == null) return null;
 
-            if (_playerServices.ContainsKey(playerIdToJoin))
+            if (_registerPlayers.ContainsKey(playerIdToJoin))
             {
                 CLogger.LogWarning($"{DEBUG_FLAG} Player {playerIdToJoin} already joined.");
-                return _playerServices[playerIdToJoin];
+                return _registerPlayers[playerIdToJoin];
             }
 
             var allUsers = InputUser.all;
@@ -398,7 +405,7 @@ namespace CycloneGames.InputSystem.Runtime
 
             if (_isDeviceLockingOnJoinEnabled)
             {
-                if (_playerServices.TryGetValue(0, out var existingService))
+                if (_registerPlayers.TryGetValue(0, out var existingService))
                 {
                     if (existingService is InputPlayer inputPlayer)
                     {
@@ -423,7 +430,7 @@ namespace CycloneGames.InputSystem.Runtime
                 int playerIdToJoin = -1;
                 for (int i = 0; i < _configuration.PlayerSlots.Count; i++)
                 {
-                    if (!_playerServices.ContainsKey(i))
+                    if (!_registerPlayers.ContainsKey(i))
                     {
                         var slotConfig = _configuration.PlayerSlots[i];
                         if (slotConfig.JoinAction != null &&
@@ -442,7 +449,7 @@ namespace CycloneGames.InputSystem.Runtime
                 {
                     for (int i = 0; i < _configuration.PlayerSlots.Count; i++)
                     {
-                        if (!_playerServices.ContainsKey(i))
+                        if (!_registerPlayers.ContainsKey(i))
                         {
                             playerIdToJoin = i;
                             break;
@@ -470,7 +477,7 @@ namespace CycloneGames.InputSystem.Runtime
         private PlayerSlotConfig GetPlayerConfig(int playerId, bool checkIfAlreadyJoined = true)
         {
             if (!_isInitialized) return null;
-            if (checkIfAlreadyJoined && _playerServices.ContainsKey(playerId)) return null;
+            if (checkIfAlreadyJoined && _registerPlayers.ContainsKey(playerId)) return null;
             return _configuration.PlayerSlots.FirstOrDefault(p => p.PlayerId == playerId);
         }
 
@@ -502,7 +509,7 @@ namespace CycloneGames.InputSystem.Runtime
             using (InputPerformanceProfiler.BeginScope("CreatePlayerService"))
             {
                 var inputPlayer = new InputPlayer(playerId, user, config, initialDevice);
-                _playerServices[playerId] = inputPlayer;
+                _registerPlayers[playerId] = inputPlayer;
                 string devices = user.pairedDevices.Count > 0 ? string.Join(", ", user.pairedDevices.Select(d => d.displayName)) : "All (Shared)";
                 CLogger.LogInfo($"{DEBUG_FLAG} Player {playerId} created with devices: [{devices}].");
                 OnPlayerJoined?.Invoke(inputPlayer);
@@ -558,21 +565,39 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
-        /// Gets an existing input service for a player, or null if not joined.
+        /// Gets an existing input player for the specified player ID, or null if not joined.
         /// </summary>
-        public IInputPlayer GetPlayerService(int playerId)
+        public IInputPlayer GetInputPlayer(int playerId)
         {
-            return _playerServices.TryGetValue(playerId, out var service) ? service : null;
+            return _registerPlayers.TryGetValue(playerId, out var service) ? service : null;
+        }
+
+        /// <summary>
+        /// Refreshes player input by triggering OnPlayerJoined event for an already joined player.
+        /// Useful when you dynamically bind input contexts after the player has already joined (e.g., in a different scene).
+        /// This allows the InputSystem to recognize and manage newly bound input contexts.
+        /// Returns true if the player exists and event was triggered, false otherwise.
+        /// </summary>
+        public bool RefreshPlayerInput(int playerId)
+        {
+            if (_registerPlayers.TryGetValue(playerId, out var service))
+            {
+                OnPlayerJoined?.Invoke(service);
+                CLogger.LogInfo($"{DEBUG_FLAG} Refreshed input for Player {playerId}.");
+                return true;
+            }
+            CLogger.LogWarning($"{DEBUG_FLAG} Cannot refresh input for Player {playerId}: player not found.");
+            return false;
         }
 
         public void Dispose()
         {
             StopListeningForPlayers();
-            foreach (var service in _playerServices.Values)
+            foreach (var service in _registerPlayers.Values)
             {
                 (service as IDisposable)?.Dispose();
             }
-            _playerServices.Clear();
+            _registerPlayers.Clear();
             _isInitialized = false;
         }
     }
