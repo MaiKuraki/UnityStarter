@@ -2,14 +2,14 @@
 <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
   <metadata>
     <id>VitalRouter</id>
-    <version>2.0.3</version>
+    <version>2.0.4</version>
     <authors>hadashiA</authors>
     <license type="expression">MIT</license>
     <licenseUrl>https://licenses.nuget.org/MIT</licenseUrl>
     <projectUrl>https://github.com/hadashiA/VitalRouter</projectUrl>
     <description>The fast in-memory message passing tool with zero-allocation for Unity and .NET. And the very thin layer that organize application datal-flow.</description>
     <tags>mvp eventbus pubsub</tags>
-    <repository type="git" url="https://github.com/hadashiA/VitalRouter" commit="37d5a58fe2a1ea47772f5ab5cf311124b474e667" />
+    <repository type="git" url="https://github.com/hadashiA/VitalRouter" commit="937f6c5a603be42c4eb90848bf8a4a7ca22a4e62" />
     <dependencies>
       <group targetFramework="net6.0">
         <dependency id="System.Threading.Tasks.Extensions" version="4.5.4" exclude="Build,Analyzers" />

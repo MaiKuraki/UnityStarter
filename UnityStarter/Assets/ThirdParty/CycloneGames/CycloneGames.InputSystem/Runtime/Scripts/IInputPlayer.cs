@@ -5,9 +5,9 @@ using UnityEngine;
 namespace CycloneGames.InputSystem.Runtime
 {
     /// <summary>
-    /// Public contract for a single player's input service. Provides reactive streams and context management.
+    /// Public contract for a single player's input. Provides reactive streams and context management.
     /// </summary>
-    public interface IInputService
+    public interface IInputPlayer
     {
         ReadOnlyReactiveProperty<string> ActiveContextName { get; }
         ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind { get; }
