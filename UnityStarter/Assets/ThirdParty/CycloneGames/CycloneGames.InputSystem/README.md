@@ -224,7 +224,13 @@ _input.PushContext("Inspect"); // later: _input.PushContext("Charge")
 ```csharp
 // Automatically join player 0 and lock all required devices to that player
 var svc = InputManager.Instance.JoinSinglePlayer(0);
+
+// If player is already joined, JoinSinglePlayer returns the existing service
+// This allows you to call it multiple times safely
+var svc2 = InputManager.Instance.JoinSinglePlayer(0); // Returns same service, no event triggered
 ```
+
+**Note**: If the player is already joined, `JoinSinglePlayer` returns the existing service without triggering `OnPlayerJoined` event. This is useful when you need to get the service multiple times, but if you need to rebind input contexts after the player has already joined, use `RefreshPlayerInput` instead.
 
 #### Lobby Mode (Device Locking)
 
@@ -319,6 +325,16 @@ InputManager.Instance.OnConfigurationReloaded += () =>
 {
     Debug.Log("Configuration reloaded");
 };
+
+// Refresh player input by triggering OnPlayerJoined event for an already joined player
+// Useful when you dynamically bind input contexts after the player has already joined (e.g., in a different scene)
+// Example: LaunchScene initializes input system, GameplayScene binds input contexts
+InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
+// ... later, in GameplayScene after binding contexts ...
+if (InputManager.Instance.GetInputPlayer(0) != null)
+{
+    InputManager.Instance.RefreshPlayerInput(0); // Triggers OnPlayerJoined event to activate newly bound contexts
+}
 
 // Listen for context change events
 inputService.OnContextChanged += (string contextName) =>
@@ -567,12 +583,14 @@ Singleton manager for the input system.
 
 #### Player Join Methods
 
-- `IInputPlayer JoinSinglePlayer(int playerIdToJoin = 0)` - Synchronously join a single player (auto-lock devices)
+- `IInputPlayer JoinSinglePlayer(int playerIdToJoin = 0)` - Synchronously join a single player (auto-lock devices). If player is already joined, returns existing service without triggering `OnPlayerJoined` event.
 - `UniTask<IInputPlayer> JoinSinglePlayerAsync(int playerIdToJoin = 0, int timeoutInSeconds = 5)` - Asynchronously join a single player (wait for device connection)
 - `List<IInputPlayer> JoinPlayersBatch(List<int> playerIds)` - Batch synchronously join players
 - `UniTask<List<IInputPlayer>> JoinPlayersBatchAsync(List<int> playerIds, int timeoutPerPlayerInSeconds = 5)` - Batch asynchronously join players
 - `IInputPlayer JoinPlayerOnSharedDevice(int playerIdToJoin)` - Join player on shared device
 - `IInputPlayer JoinPlayerAndLockDevice(int playerIdToJoin, InputDevice deviceToLock)` - Lock specific device to player
+- `IInputPlayer GetInputPlayer(int playerId)` - Get existing input player for the specified player ID, or null if not joined
+- `bool RefreshPlayerInput(int playerId)` - Refreshes player input by triggering `OnPlayerJoined` event for an already joined player. Useful when you dynamically bind input contexts after the player has already joined (e.g., in a different scene). This allows the InputSystem to recognize and manage newly bound input contexts. Returns true if player exists and event was triggered, false otherwise.
 
 #### Lobby Mode
 
