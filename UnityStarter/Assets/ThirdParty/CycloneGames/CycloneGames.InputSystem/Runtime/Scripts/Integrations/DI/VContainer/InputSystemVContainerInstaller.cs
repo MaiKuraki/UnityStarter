@@ -393,7 +393,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 return false;
             }
 
-            inputPlayer = _inputManager.GetPlayerService(playerId);
+            inputPlayer = _inputManager.GetInputPlayer(playerId);
             if (inputPlayer != null)
             {
                 return true;
