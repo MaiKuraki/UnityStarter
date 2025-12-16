@@ -129,7 +129,7 @@ using CycloneGames.InputSystem.Runtime;
 
 public class SimplePlayer : MonoBehaviour
 {
-  private IInputService _input;
+  private IInputPlayer _input;
 
   private void Start()
   {
@@ -163,7 +163,7 @@ public class SimplePlayer : MonoBehaviour
 
   private void OnDestroy()
   {
-    // Cleanup: InputService will be automatically cleaned up when InputManager.Dispose() is called
+    // Cleanup: InputPlayer will be automatically cleaned up when InputManager.Dispose() is called
     // If you need to clean up earlier when the component is destroyed, you can call:
     // (_input as IDisposable)?.Dispose();
   }
@@ -308,9 +308,9 @@ await InputManager.Instance.SaveUserConfigurationAsync();
 
 ```csharp
 // Listen for player join events
-InputManager.Instance.OnPlayerJoined += (IInputService playerInput) =>
+InputManager.Instance.OnPlayerJoined += (IInputPlayer playerInput) =>
 {
-    Debug.Log($"Player {((InputService)playerInput).PlayerId} joined");
+    Debug.Log($"Player {((InputPlayer)playerInput)?.PlayerId ?? -1} joined");
     // Set up player input context, etc.
 };
 
@@ -501,17 +501,17 @@ press.Subscribe(p =>
 
 ## API Overview
 
-### IInputService
+### IInputPlayer
 
-Input service interface for a single player.
+Input interface for a single player.
 
 #### Properties
 
 - `ReadOnlyReactiveProperty<string> ActiveContextName` - Name of the currently active context
 - `ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind` - Current active device type (keyboard/mouse/gamepad/other)
 - `event Action<string> OnContextChanged` - Context change event
-- `int PlayerId` - Player ID (InputService implementation only)
-- `InputUser User` - Unity Input System user object (InputService implementation only)
+- `int PlayerId` - Player ID (InputPlayer implementation only)
+- `InputUser User` - Unity Input System user object (InputPlayer implementation only)
 
 #### Constant Param based API (Recommended)
 
@@ -558,7 +558,7 @@ Singleton manager for the input system.
 
 #### Events
 
-- `event Action<IInputService> OnPlayerJoined` - Player join event
+- `event Action<IInputPlayer> OnPlayerJoined` - Player join event
 - `event Action OnConfigurationReloaded` - Configuration reload event
 
 #### Initialization
@@ -567,12 +567,12 @@ Singleton manager for the input system.
 
 #### Player Join Methods
 
-- `IInputService JoinSinglePlayer(int playerIdToJoin = 0)` - Synchronously join a single player (auto-lock devices)
-- `UniTask<IInputService> JoinSinglePlayerAsync(int playerIdToJoin = 0, int timeoutInSeconds = 5)` - Asynchronously join a single player (wait for device connection)
-- `List<IInputService> JoinPlayersBatch(List<int> playerIds)` - Batch synchronously join players
-- `UniTask<List<IInputService>> JoinPlayersBatchAsync(List<int> playerIds, int timeoutPerPlayerInSeconds = 5)` - Batch asynchronously join players
-- `IInputService JoinPlayerOnSharedDevice(int playerIdToJoin)` - Join player on shared device
-- `IInputService JoinPlayerAndLockDevice(int playerIdToJoin, InputDevice deviceToLock)` - Lock specific device to player
+- `IInputPlayer JoinSinglePlayer(int playerIdToJoin = 0)` - Synchronously join a single player (auto-lock devices)
+- `UniTask<IInputPlayer> JoinSinglePlayerAsync(int playerIdToJoin = 0, int timeoutInSeconds = 5)` - Asynchronously join a single player (wait for device connection)
+- `List<IInputPlayer> JoinPlayersBatch(List<int> playerIds)` - Batch synchronously join players
+- `UniTask<List<IInputPlayer>> JoinPlayersBatchAsync(List<int> playerIds, int timeoutPerPlayerInSeconds = 5)` - Batch asynchronously join players
+- `IInputPlayer JoinPlayerOnSharedDevice(int playerIdToJoin)` - Join player on shared device
+- `IInputPlayer JoinPlayerAndLockDevice(int playerIdToJoin, InputDevice deviceToLock)` - Lock specific device to player
 
 #### Lobby Mode
 
@@ -588,7 +588,7 @@ Singleton manager for the input system.
 
 #### Cleanup
 
-- `void Dispose()` - Release all resources (including all players' InputService)
+- `void Dispose()` - Release all resources (including all players' `InputPlayer` instances)
 
 ### InputContext
 
@@ -658,4 +658,447 @@ using YourGame.Input.Generated;
 
 // Use constants to get Observable
 var moveStream = inputService.GetVector2Observable(InputActions.Actions.Gameplay_Move);
+```
+
+## Dependency Injection (VContainer) Integration
+
+### Installation
+
+The package includes a VContainer installer. Register it in your DI container setup:
+
+#### Option 1: URI-based Loading (StreamingAssets/PersistentData)
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+
+public class GameLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // Install InputSystem with URI-based config loading
+        var inputSystemInstaller = new InputSystemVContainerInstaller(
+            defaultConfigFileName: "input_config.yaml",
+            userConfigFileName: "user_input_settings.yaml",
+            postInitCallback: async resolver =>
+            {
+                // Optional: Setup initial player after initialization
+                var inputResolver = resolver.Resolve<IInputPlayerResolver>();
+                var player0Input = inputResolver.GetInputPlayer(0);
+                // Setup contexts, etc.
+            }
+        );
+        inputSystemInstaller.Install(builder);
+
+        // Register your game systems that depend on input
+        builder.Register<PlayerController>(Lifetime.Scoped);
+    }
+}
+```
+
+#### Option 2: AssetManagement Loading (YooAsset/Addressables)
+
+If you're using `CycloneGames.AssetManagement` with YooAsset or Addressables:
+
+**Important**: User config is **always** loaded from `PersistentData` path automatically. You only need to provide a loader for the default config.
+
+> **Note on Config Loading Methods:**
+>
+> - **TextAsset** (recommended for Addressables/Resources): Loads YAML as a Unity TextAsset. Works with all providers (YooAsset, Addressables, Resources). Your YAML file should be imported as a TextAsset in Unity.
+> - **RawFile** (YooAsset only): Loads YAML as a raw file. Only works with YooAsset provider. More efficient for YooAsset but not supported by Addressables/Resources.
+>
+> By default, the helper tries RawFile first (for YooAsset), then falls back to TextAsset (for Addressables/Resources). You can also explicitly specify `useTextAsset: true` to force TextAsset loading.
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+using CycloneGames.AssetManagement.Runtime.Integrations.VContainer;
+
+public class GameLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // Install AssetManagement first
+        var assetManagementInstaller = new AssetManagementVContainerInstaller();
+        assetManagementInstaller.Install(builder);
+
+        // Create default config loader from AssetManagement
+        // Get package directly (not from resolver) and create loader
+        // The package should be obtained from your AssetManagement setup
+        var package = assetModule.GetPackage("DefaultPackage"); // Get package from your setup
+        var defaultLoader = InputSystemAssetManagementHelper.CreateDefaultConfigLoader(
+            package: package,
+            defaultConfigLocation: "input_config.yaml",
+            useTextAsset: false  // false = try RawFile first, fallback to TextAsset
+        );
+
+        // Install InputSystem
+        // User config will be automatically loaded from PersistentData/user_input_settings.yaml
+        var inputSystemInstaller = new InputSystemVContainerInstaller(
+            defaultLoader,
+            userConfigFileName: "user_input_settings.yaml", // Optional: specify user config filename
+            postInitCallback: async resolver =>
+            {
+                var inputResolver = resolver.Resolve<IInputPlayerResolver>();
+                var player0Input = inputResolver.GetInputPlayer(0);
+                // Setup contexts, etc.
+            }
+        );
+        inputSystemInstaller.Install(builder);
+
+        builder.Register<PlayerController>(Lifetime.Scoped);
+    }
+}
+```
+
+**How it works:**
+
+1. First, tries to load user config from `PersistentData/user_input_settings.yaml` (or subdirectory path if specified, e.g., `ConfigFolder/user_input_settings.yaml`)
+2. If not found, loads default config from AssetManagement (or StreamingAssets if using Option 1)
+3. If default config was loaded, automatically saves it to `PersistentData/user_input_settings.yaml` (or subdirectory) for future use
+4. All subsequent saves/loads of user config go to `PersistentData` path
+
+**Path Support:**
+
+- **User Config**: Supports subdirectories (e.g., `ConfigFolder/user_input_settings.yaml` will be saved to `PersistentData/ConfigFolder/user_input_settings.yaml`). Directory will be created automatically if it doesn't exist.
+- **Default Config (StreamingAssets)**: Supports subdirectories (e.g., `Config/input_config.yaml` will load from `StreamingAssets/Config/input_config.yaml`).
+- **Default Config (AssetManagement)**: Use the location as defined in your AssetManagement package (e.g., `Assets/Config/input_config.yaml` or just `input_config.yaml`).
+
+#### Option 3: Custom Default Config Loader
+
+For complete control over default config loading (e.g., from database, network, etc.):
+
+```csharp
+var inputSystemInstaller = new InputSystemVContainerInstaller(
+    defaultLoader: async resolver =>
+    {
+        // Your custom loading logic
+        // e.g., load from database, network, etc.
+        return await LoadConfigFromCustomSource();
+    },
+    userConfigFileName: "user_input_settings.yaml" // User config always from PersistentData
+);
+inputSystemInstaller.Install(builder);
+```
+
+**Note**: User config is always managed in `PersistentData` path because:
+
+- It needs to be writable for saving user customizations
+- It persists across app updates
+- It's separate from the default config which may be in read-only locations (AssetManagement, StreamingAssets)
+
+#### Option 4: Delayed Initialization (Hot-Update Scenarios)
+
+For hot-update games where AssetManagement packages may not be ready at registration time:
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.AssetManagement.Runtime.Integrations.VContainer;
+
+public class GameLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // Install AssetManagement first
+        var assetManagementInstaller = new AssetManagementVContainerInstaller();
+        assetManagementInstaller.Install(builder);
+
+        // Install InputSystem with delayed initialization
+        // Set autoInitialize: false to delay initialization until package is ready
+        // Get package from your AssetManagement setup (not from resolver)
+        var package = assetModule.GetPackage("DefaultPackage"); // Get from your setup
+        var defaultLoader = InputSystemAssetManagementHelper.CreateDefaultConfigLoader(
+            package: package,
+            defaultConfigLocation: "Assets/Config/input_config.yaml"
+        );
+
+        var inputSystemInstaller = new InputSystemVContainerInstaller(
+            defaultConfigLoader: defaultLoader,
+            userConfigFileName: "user_input_settings.yaml",
+            autoInitialize: false // Delay initialization
+        );
+        inputSystemInstaller.Install(builder);
+
+        builder.Register<PlayerController>(Lifetime.Scoped);
+    }
+
+    protected override async UniTaskVoid Start()
+    {
+        // Wait for AssetManagement package to be ready
+        var assetModule = Container.Resolve<IAssetModule>();
+        await assetModule.InitializeAsync();
+
+        var defaultPackage = assetModule.CreatePackage("DefaultPackage");
+        await defaultPackage.InitializeAsync(/* ... */);
+
+        // Now initialize InputSystem manually
+        var initializer = Container.Resolve<IInputSystemInitializer>();
+        await initializer.InitializeAsync(Container);
+
+        // Setup players, etc.
+    }
+}
+```
+
+**Updating Configuration After Hot-Update:**
+
+```csharp
+public class HotUpdateHandler
+{
+    private readonly IInputSystemInitializer _inputInitializer;
+    private readonly IAssetPackage _package;  // Inject package directly, not IAssetModule
+
+    [Inject]
+    public HotUpdateHandler(IInputSystemInitializer inputInitializer, IAssetPackage package)
+    {
+        _inputInitializer = inputInitializer;
+        _package = package;  // Package should be registered in DI container
+    }
+
+    public async UniTask OnHotUpdateComplete()
+    {
+        // After hot-update, reload config from updated AssetManagement package
+        // Option 1: Use ReinitializeFromPackageAsync (recommended)
+        await _inputInitializer.ReinitializeFromPackageAsync(
+            _package,
+            "Assets/Config/input_config.yaml",
+            saveToUserConfig: true
+        );
+
+        // Option 2: Manual load and update
+        // var loader = InputSystemAssetManagementHelper.CreateConfigLoader(
+        //     package,
+        //     "Assets/Config/input_config.yaml"
+        // );
+        // string newConfig = await loader();
+        // if (!string.IsNullOrEmpty(newConfig))
+        // {
+        //     await _inputInitializer.UpdateConfigurationAsync(newConfig, saveToUserConfig: true);
+        // }
+    }
+}
+```
+
+**Reloading User Configuration (Player Key Rebinding):**
+
+```csharp
+public class SettingsMenu
+{
+    private readonly IInputSystemInitializer _inputInitializer;
+
+    [Inject]
+    public SettingsMenu(IInputSystemInitializer inputInitializer)
+    {
+        _inputInitializer = inputInitializer;
+    }
+
+    public async UniTask OnPlayerSavedKeyBindings()
+    {
+        // Player has modified and saved key bindings
+        // Reload the updated user configuration
+        await _inputInitializer.ReloadUserConfigurationAsync();
+    }
+}
+```
+
+**Cross-Scene/Cross-Resolver Usage:**
+
+You can resolve `IInputSystemInitializer` from any resolver (parent or child scope) to reload configuration:
+
+```csharp
+// In any scene or LifetimeScope
+public class SomeOtherScene : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // ... other registrations
+    }
+
+    protected override async UniTaskVoid Start()
+    {
+        // Resolve initializer from parent scope
+        var initializer = Parent.Container.Resolve<IInputSystemInitializer>();
+
+        // Get package from your setup (should be registered in DI or obtained from your AssetManagement setup)
+        var package = Parent.Container.Resolve<IAssetPackage>(); // Or get from your AssetManagement setup
+        await initializer.ReinitializeFromPackageAsync(package, "Assets/Config/input_config.yaml");
+    }
+}
+```
+
+### Usage Patterns
+
+#### Pattern 1: Inject IInputPlayerResolver (Recommended)
+
+Use the resolver to get input services when needed:
+
+```csharp
+using CycloneGames.InputSystem.Runtime;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+using VContainer;
+
+public class PlayerController
+{
+    private readonly IInputPlayerResolver _inputResolver;
+    private IInputPlayer _input;
+
+    [Inject]
+    public PlayerController(IInputPlayerResolver inputResolver)
+    {
+        _inputResolver = inputResolver;
+    }
+
+    public void Initialize(int playerId)
+    {
+        _input = _inputResolver.GetInputPlayer(playerId);
+
+        var ctx = new InputContext("Gameplay", "PlayerActions")
+            .AddBinding(_input.GetVector2Observable("Move"), new MoveCommand(OnMove))
+            .AddBinding(_input.GetButtonObservable("Confirm"), new ActionCommand(OnConfirm));
+
+        _input.RegisterContext(ctx);
+        _input.PushContext("Gameplay");
+    }
+
+    private void OnMove(Vector2 dir) { /* ... */ }
+    private void OnConfirm() { /* ... */ }
+}
+```
+
+#### Pattern 2: Inject InputManager Directly
+
+For advanced scenarios where you need full control:
+
+```csharp
+using CycloneGames.InputSystem.Runtime;
+using VContainer;
+
+public class GameSession
+{
+    private readonly InputManager _inputManager;
+
+    [Inject]
+    public GameSession(InputManager inputManager)
+    {
+        _inputManager = inputManager;
+    }
+
+    public async UniTask StartMultiplayerLobby()
+    {
+        _inputManager.OnPlayerJoined += OnPlayerJoined;
+        _inputManager.StartListeningForPlayers(false); // Shared devices mode
+    }
+
+    private void OnPlayerJoined(IInputPlayer service)
+    {
+        // Setup player-specific input contexts
+        var ctx = new InputContext("Gameplay", "PlayerActions")
+            .AddBinding(service.GetVector2Observable("Move"), new MoveCommand(OnMove));
+        service.RegisterContext(ctx);
+        service.PushContext("Gameplay");
+    }
+}
+```
+
+#### Pattern 3: Factory Method with Player ID
+
+Create a factory that resolves input services by player ID:
+
+```csharp
+using CycloneGames.InputSystem.Runtime;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+using VContainer;
+
+public class PlayerFactory
+{
+    private readonly IInputPlayerResolver _inputResolver;
+    private readonly IObjectResolver _resolver;
+
+    [Inject]
+    public PlayerFactory(IInputPlayerResolver inputResolver, IObjectResolver resolver)
+    {
+        _inputResolver = inputResolver;
+        _resolver = resolver;
+    }
+
+    public PlayerController CreatePlayer(int playerId)
+    {
+        var inputService = _inputResolver.GetInputPlayer(playerId);
+        var controller = _resolver.Resolve<PlayerController>();
+        controller.Initialize(inputService, playerId);
+        return controller;
+    }
+}
+```
+
+### Complete Example: VContainer Integration
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.InputSystem.Runtime;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+using YourGame.Input.Generated;
+
+public class GameLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // Install InputSystem
+        builder.Install(new InputSystemVContainerInstaller());
+
+        // Register game systems
+        builder.Register<PlayerController>(Lifetime.Scoped);
+        builder.Register<GameSession>(Lifetime.Singleton);
+    }
+
+    protected override async UniTaskVoid Start()
+    {
+        // InputSystem is automatically initialized by the installer
+        // Now you can use it
+        var resolver = Container.Resolve<IInputPlayerResolver>();
+        var inputService = resolver.GetInputPlayer(0);
+
+        // Setup input context
+        var ctx = new InputContext("Gameplay", "PlayerActions")
+            .AddBinding(
+                inputService.GetVector2Observable(InputActions.Actions.Gameplay_Move),
+                new MoveCommand(OnMove)
+            )
+            .AddBinding(
+                inputService.GetButtonObservable(InputActions.Actions.Gameplay_Confirm),
+                new ActionCommand(OnConfirm)
+            );
+
+        inputService.RegisterContext(ctx);
+        inputService.PushContext("Gameplay");
+    }
+
+    private void OnMove(Vector2 dir) { /* ... */ }
+    private void OnConfirm() { /* ... */ }
+}
+
+// Example: PlayerController with injected input
+public class PlayerController
+{
+    private readonly IInputPlayerResolver _inputResolver;
+    private IInputPlayer _input;
+
+    [Inject]
+    public PlayerController(IInputPlayerResolver inputResolver)
+    {
+        _inputResolver = inputResolver;
+    }
+
+    public void Initialize(int playerId)
+    {
+        _input = _inputResolver.GetInputPlayer(playerId);
+        // Setup contexts...
+    }
+}
 ```

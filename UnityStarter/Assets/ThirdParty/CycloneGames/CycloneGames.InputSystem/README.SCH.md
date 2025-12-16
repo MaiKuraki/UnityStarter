@@ -129,7 +129,7 @@ using CycloneGames.InputSystem.Runtime;
 
 public class SimplePlayer : MonoBehaviour
 {
-  private IInputService _input;
+  private IInputPlayer _input;
 
   private void Start()
   {
@@ -163,7 +163,7 @@ public class SimplePlayer : MonoBehaviour
 
   private void OnDestroy()
   {
-    // 清理：InputService 会在 InputManager.Dispose() 时自动清理
+    // 清理：InputPlayer 会在 InputManager.Dispose() 时自动清理
     // 如果需要在组件销毁时提前清理，可以调用：
     // (_input as IDisposable)?.Dispose();
   }
@@ -308,9 +308,9 @@ await InputManager.Instance.SaveUserConfigurationAsync();
 
 ```csharp
 // 监听玩家加入事件
-InputManager.Instance.OnPlayerJoined += (IInputService playerInput) =>
+InputManager.Instance.OnPlayerJoined += (IInputPlayer playerInput) =>
 {
-    Debug.Log($"玩家 {((InputService)playerInput).PlayerId} 已加入");
+    Debug.Log($"玩家 {((InputPlayer)playerInput).PlayerId} 已加入");
     // 设置玩家输入上下文等
 };
 
@@ -504,7 +504,7 @@ press.Subscribe(p =>
 
 ## API 概览
 
-### IInputService
+### IInputPlayer
 
 单个玩家的输入服务接口。
 
@@ -513,8 +513,8 @@ press.Subscribe(p =>
 - `ReadOnlyReactiveProperty<string> ActiveContextName` - 当前活动上下文的名称
 - `ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind` - 当前活动设备类型（键盘鼠标/手柄/其他）
 - `event Action<string> OnContextChanged` - 上下文切换事件
-- `int PlayerId` - 玩家 ID（仅 `InputService` 实现）
-- `InputUser User` - Unity Input System 的用户对象（仅 `InputService` 实现）
+- `int PlayerId` - 玩家 ID（仅 `InputPlayer` 实现）
+- `InputUser User` - Unity Input System 的用户对象（仅 `InputPlayer` 实现）
 
 #### 基于常量 API（推荐）
 
@@ -561,7 +561,7 @@ press.Subscribe(p =>
 
 #### 事件
 
-- `event Action<IInputService> OnPlayerJoined` - 玩家加入事件
+- `event Action<IInputPlayer> OnPlayerJoined` - 玩家加入事件
 - `event Action OnConfigurationReloaded` - 配置重载事件
 
 #### 初始化
@@ -570,12 +570,12 @@ press.Subscribe(p =>
 
 #### 玩家加入方法
 
-- `IInputService JoinSinglePlayer(int playerIdToJoin = 0)` - 同步加入单个玩家（自动锁定设备）
-- `UniTask<IInputService> JoinSinglePlayerAsync(int playerIdToJoin = 0, int timeoutInSeconds = 5)` - 异步加入单个玩家（等待设备连接）
-- `List<IInputService> JoinPlayersBatch(List<int> playerIds)` - 批量同步加入玩家
-- `UniTask<List<IInputService>> JoinPlayersBatchAsync(List<int> playerIds, int timeoutPerPlayerInSeconds = 5)` - 批量异步加入玩家
-- `IInputService JoinPlayerOnSharedDevice(int playerIdToJoin)` - 在共享设备上加入玩家
-- `IInputService JoinPlayerAndLockDevice(int playerIdToJoin, InputDevice deviceToLock)` - 锁定特定设备给玩家
+- `IInputPlayer JoinSinglePlayer(int playerIdToJoin = 0)` - 同步加入单个玩家（自动锁定设备）
+- `UniTask<IInputPlayer> JoinSinglePlayerAsync(int playerIdToJoin = 0, int timeoutInSeconds = 5)` - 异步加入单个玩家（等待设备连接）
+- `List<IInputPlayer> JoinPlayersBatch(List<int> playerIds)` - 批量同步加入玩家
+- `UniTask<List<IInputPlayer>> JoinPlayersBatchAsync(List<int> playerIds, int timeoutPerPlayerInSeconds = 5)` - 批量异步加入玩家
+- `IInputPlayer JoinPlayerOnSharedDevice(int playerIdToJoin)` - 在共享设备上加入玩家
+- `IInputPlayer JoinPlayerAndLockDevice(int playerIdToJoin, InputDevice deviceToLock)` - 锁定特定设备给玩家
 
 #### 大厅模式
 
@@ -591,7 +591,7 @@ press.Subscribe(p =>
 
 #### 清理
 
-- `void Dispose()` - 释放所有资源（包括所有玩家的 InputService）
+- `void Dispose()` - 释放所有资源（包括所有玩家的 InputPlayer）
 
 ### InputContext
 
@@ -661,4 +661,445 @@ using YourGame.Input.Generated;
 
 // 使用常量获取 Observable
 var moveStream = inputService.GetVector2Observable(InputActions.Actions.Gameplay_Move);
+```
+
+## 依赖注入 (VContainer) 集成
+
+### 安装
+
+包中包含 VContainer 安装器。在您的 DI 容器设置中注册它：
+
+#### 选项 1：基于 URI 的加载（StreamingAssets/PersistentData）
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+
+public class GameLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // 使用 URI 方式加载配置
+        var inputSystemInstaller = new InputSystemVContainerInstaller(
+            defaultConfigFileName: "input_config.yaml",
+            userConfigFileName: "user_input_settings.yaml",
+            postInitCallback: async resolver =>
+            {
+                //  ...
+                var inputResolver = resolver.Resolve<IInputPlayerResolver>();
+                var player0Input = inputResolver.GetInputPlayer(0);
+            }
+        );
+        inputSystemInstaller.Install(builder);
+
+        // 注册依赖输入的 game systems
+        builder.Register<PlayerController>(Lifetime.Scoped);
+    }
+}
+```
+
+#### 选项 2：AssetManagement 加载（YooAsset/Addressables）
+
+如果您使用 `CycloneGames.AssetManagement` 配合 YooAsset 或 Addressables：
+
+**重要**：用户配置**始终**从 `PersistentData` 路径自动加载。您只需要提供默认配置的加载器。
+
+> **关于配置加载方式的说明：**
+>
+> - **TextAsset**（推荐用于 Addressables/Resources）：将 YAML 作为 Unity TextAsset 加载。适用于所有 provider（YooAsset、Addressables、Resources）。您的 YAML 文件应在 Unity 中作为 TextAsset 导入。
+> - **RawFile**（仅 YooAsset）：将 YAML 作为原始文件加载。仅适用于 YooAsset provider。对 YooAsset 更高效，但 Addressables/Resources 不支持。
+>
+> 默认情况下，helper 会先尝试 RawFile（针对 YooAsset），然后回退到 TextAsset（针对 Addressables/Resources）。您也可以显式指定 `useTextAsset: true` 来强制使用 TextAsset 加载。
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+using CycloneGames.AssetManagement.Runtime.Integrations.VContainer;
+
+public class GameLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // 先安装 AssetManagement
+        var assetManagementInstaller = new AssetManagementVContainerInstaller();
+        assetManagementInstaller.Install(builder);
+
+        // 从 AssetManagement 创建默认配置加载器
+        // 直接从您的 AssetManagement 设置获取 package（不从 resolver 获取）
+        var package = assetModule.GetPackage("DefaultPackage"); // 从您的设置中获取
+        var defaultLoader = InputSystemAssetManagementHelper.CreateDefaultConfigLoader(
+            package: package,
+            defaultConfigLocation: "input_config.yaml",
+            useTextAsset: false  // false = 先尝试 RawFile，失败则回退到 TextAsset
+        );
+
+        // 安装 InputSystem
+        // 用户配置将自动从 PersistentData/user_input_settings.yaml 加载
+        var inputSystemInstaller = new InputSystemVContainerInstaller(
+            defaultLoader,
+            userConfigFileName: "user_input_settings.yaml", // 可选：指定用户配置文件名
+            postInitCallback: async resolver =>
+            {
+                var inputResolver = resolver.Resolve<IInputPlayerResolver>();
+                var player0Input = inputResolver.GetInputPlayer(0);
+                // 设置上下文等
+            }
+        );
+        inputSystemInstaller.Install(builder);
+
+        builder.Register<PlayerController>(Lifetime.Scoped);
+    }
+}
+```
+
+**工作原理：**
+
+1. 首先尝试从 `PersistentData/user_input_settings.yaml` 加载用户配置（如果指定了子目录路径，例如 `ConfigFolder/user_input_settings.yaml`，也会正确加载）
+2. 如果未找到，从 AssetManagement（或使用选项 1 时从 StreamingAssets）加载默认配置
+3. 如果加载了默认配置，自动将其保存到 `PersistentData/user_input_settings.yaml`（或子目录）供以后使用
+4. 所有后续的用户配置保存/加载都使用 `PersistentData` 路径
+
+**路径支持：**
+
+- **用户配置**：支持子目录（例如 `ConfigFolder/user_input_settings.yaml` 将保存到 `PersistentData/ConfigFolder/user_input_settings.yaml`）。如果目录不存在，会自动创建。
+- **默认配置（StreamingAssets）**：支持子目录（例如 `Config/input_config.yaml` 将从 `StreamingAssets/Config/input_config.yaml` 加载）。
+- **默认配置（AssetManagement）**：使用 AssetManagement 包中定义的位置（例如 `Assets/Config/input_config.yaml` 或仅 `input_config.yaml`）。
+
+#### 选项 3：自定义默认配置加载器
+
+完全控制默认配置的加载（例如，从数据库、网络等）：
+
+```csharp
+var inputSystemInstaller = new InputSystemVContainerInstaller(
+    defaultLoader: async resolver =>
+    {
+        // 您的自定义加载逻辑
+        // 例如：从数据库、网络等加载
+        return await LoadConfigFromCustomSource();
+    },
+    userConfigFileName: "user_input_settings.yaml" // 用户配置始终从 PersistentData
+);
+inputSystemInstaller.Install(builder);
+```
+
+**注意**：用户配置始终在 `PersistentData` 路径中管理，因为：
+
+- 需要可写权限以保存用户自定义设置
+- 在应用更新后仍然持久化
+- 与默认配置分离，默认配置可能在只读位置（AssetManagement、StreamingAssets）
+
+#### 选项 4：延迟初始化（热更新场景）
+
+适用于热更新游戏，AssetManagement 包在注册时可能尚未准备好：
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.AssetManagement.Runtime.Integrations.VContainer;
+
+public class GameLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // 先安装 AssetManagement
+        var assetManagementInstaller = new AssetManagementVContainerInstaller();
+        assetManagementInstaller.Install(builder);
+
+        // 安装 InputSystem，延迟初始化
+        // 设置 autoInitialize: false 以延迟初始化，直到包准备好
+        // 从您的 AssetManagement 设置获取 package（不从 resolver 获取）
+        var package = assetModule.GetPackage("DefaultPackage"); // 从您的设置中获取
+        var defaultLoader = InputSystemAssetManagementHelper.CreateDefaultConfigLoader(
+            package: package,
+            defaultConfigLocation: "Assets/Config/input_config.yaml"
+        );
+
+        var inputSystemInstaller = new InputSystemVContainerInstaller(
+            defaultConfigLoader: defaultLoader,
+            userConfigFileName: "user_input_settings.yaml",
+            autoInitialize: false // 延迟初始化
+        );
+        inputSystemInstaller.Install(builder);
+
+        builder.Register<PlayerController>(Lifetime.Scoped);
+    }
+
+    protected override async UniTaskVoid Start()
+    {
+        // 等待 AssetManagement 包准备好
+        var assetModule = Container.Resolve<IAssetModule>();
+        await assetModule.InitializeAsync();
+
+        var defaultPackage = assetModule.CreatePackage("DefaultPackage");
+        await defaultPackage.InitializeAsync(/* ... */);
+
+        // 现在手动初始化 InputSystem
+        var initializer = Container.Resolve<IInputSystemInitializer>();
+        await initializer.InitializeAsync(Container);
+
+        // 设置玩家等
+    }
+}
+```
+
+**热更新后更新配置：**
+
+```csharp
+public class HotUpdateHandler
+{
+    private readonly IInputSystemInitializer _inputInitializer;
+    private readonly IAssetPackage _package;  // 直接注入 package，而不是 IAssetModule
+
+    [Inject]
+    public HotUpdateHandler(IInputSystemInitializer inputInitializer, IAssetPackage package)
+    {
+        _inputInitializer = inputInitializer;
+        _package = package;  // Package 应该在 DI 容器中注册
+    }
+
+    public async UniTask OnHotUpdateComplete()
+    {
+        // 热更新后，从更新的 AssetManagement 包重新加载配置
+        // 选项 1：使用 ReinitializeFromPackageAsync（推荐）
+        await _inputInitializer.ReinitializeFromPackageAsync(
+            _package,
+            "Assets/Config/input_config.yaml",
+            saveToUserConfig: true
+        );
+
+        // 选项 2：手动加载并更新
+        // var loader = InputSystemAssetManagementHelper.CreateConfigLoader(
+        //     package,
+        //     "Assets/Config/input_config.yaml"
+        // );
+        // string newConfig = await loader();
+        // if (!string.IsNullOrEmpty(newConfig))
+        // {
+        //     await _inputInitializer.UpdateConfigurationAsync(newConfig, saveToUserConfig: true);
+        // }
+    }
+}
+```
+
+**重新加载用户配置（玩家改键）：**
+
+```csharp
+public class SettingsMenu
+{
+    private readonly IInputSystemInitializer _inputInitializer;
+
+    [Inject]
+    public SettingsMenu(IInputSystemInitializer inputInitializer)
+    {
+        _inputInitializer = inputInitializer;
+    }
+
+    public async UniTask OnPlayerSavedKeyBindings()
+    {
+        // 玩家已修改并保存按键绑定
+        // 重新加载更新后的用户配置
+        await _inputInitializer.ReloadUserConfigurationAsync();
+    }
+}
+```
+
+**跨场景/跨 Resolver 使用：**
+
+您可以从任何 resolver（父作用域或子作用域）解析 `IInputSystemInitializer` 来重新加载配置：
+
+```csharp
+// 在任何场景或 LifetimeScope 中
+public class SomeOtherScene : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // ... 其他注册
+    }
+
+    protected override async UniTaskVoid Start()
+    {
+        // 从父作用域解析 initializer
+        var initializer = Parent.Container.Resolve<IInputSystemInitializer>();
+
+        // 从您的设置获取 package（应该在 DI 中注册或从您的 AssetManagement 设置获取）
+        var package = Parent.Container.Resolve<IAssetPackage>(); // 或从您的 AssetManagement 设置获取
+        await initializer.ReinitializeFromPackageAsync(package, "Assets/Config/input_config.yaml");
+    }
+}
+```
+
+### 使用模式
+
+#### 模式 1：注入 IInputPlayerResolver（推荐）
+
+需要时使用解析器获取输入服务：
+
+```csharp
+using CycloneGames.InputSystem.Runtime;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+using VContainer;
+
+public class PlayerController
+{
+    private readonly IInputPlayerResolver _inputResolver;
+    private IInputPlayer _input;
+
+    [Inject]
+    public PlayerController(IInputPlayerResolver inputResolver)
+    {
+        _inputResolver = inputResolver;
+    }
+
+    public void Initialize(int playerId)
+    {
+        _input = _inputResolver.GetInputPlayer(playerId);
+
+        var ctx = new InputContext("Gameplay", "PlayerActions")
+            .AddBinding(_input.GetVector2Observable("Move"), new MoveCommand(OnMove))
+            .AddBinding(_input.GetButtonObservable("Confirm"), new ActionCommand(OnConfirm));
+
+        _input.RegisterContext(ctx);
+        _input.PushContext("Gameplay");
+    }
+
+    private void OnMove(Vector2 dir) { /* ... */ }
+    private void OnConfirm() { /* ... */ }
+}
+```
+
+#### 模式 2：直接注入 InputManager
+
+需要完全控制的场景：
+
+```csharp
+using CycloneGames.InputSystem.Runtime;
+using VContainer;
+
+public class GameSession
+{
+    private readonly InputManager _inputManager;
+
+    [Inject]
+    public GameSession(InputManager inputManager)
+    {
+        _inputManager = inputManager;
+    }
+
+    public async UniTask StartMultiplayerLobby()
+    {
+        _inputManager.OnPlayerJoined += OnPlayerJoined;
+        _inputManager.StartListeningForPlayers(false); // 设备共享模式
+    }
+
+    private void OnPlayerJoined(IInputPlayer service)
+    {
+        // 设置玩家特定的输入上下文
+        var ctx = new InputContext("Gameplay", "PlayerActions")
+            .AddBinding(service.GetVector2Observable("Move"), new MoveCommand(OnMove));
+        service.RegisterContext(ctx);
+        service.PushContext("Gameplay");
+    }
+}
+```
+
+#### 模式 3：带玩家 ID 的工厂方法
+
+创建按玩家 ID 解析输入服务的工厂：
+
+```csharp
+using CycloneGames.InputSystem.Runtime;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+using VContainer;
+
+public class PlayerFactory
+{
+    private readonly IInputPlayerResolver _inputResolver;
+    private readonly IObjectResolver _resolver;
+
+    [Inject]
+    public PlayerFactory(IInputPlayerResolver inputResolver, IObjectResolver resolver)
+    {
+        _inputResolver = inputResolver;
+        _resolver = resolver;
+    }
+
+    public PlayerController CreatePlayer(int playerId)
+    {
+        var inputService = _inputResolver.GetInputPlayer(playerId);
+        var controller = _resolver.Resolve<PlayerController>();
+        controller.Initialize(inputService, playerId);
+        return controller;
+    }
+}
+```
+
+### 完整示例：VContainer 集成
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.InputSystem.Runtime;
+using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
+using YourGame.Input.Generated;
+
+public class GameLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // 安装 InputSystem
+        builder.Install(new InputSystemVContainerInstaller());
+
+        // 注册游戏系统
+        builder.Register<PlayerController>(Lifetime.Scoped);
+        builder.Register<GameSession>(Lifetime.Singleton);
+    }
+
+    protected override async UniTaskVoid Start()
+    {
+        // InputSystem 由安装器自动初始化
+        // 现在可以使用了
+        var resolver = Container.Resolve<IInputPlayerResolver>();
+        var inputService = resolver.GetInputPlayer(0);
+
+        // 设置输入上下文
+        var ctx = new InputContext("Gameplay", "PlayerActions")
+            .AddBinding(
+                inputService.GetVector2Observable(InputActions.Actions.Gameplay_Move),
+                new MoveCommand(OnMove)
+            )
+            .AddBinding(
+                inputService.GetButtonObservable(InputActions.Actions.Gameplay_Confirm),
+                new ActionCommand(OnConfirm)
+            );
+
+        inputService.RegisterContext(ctx);
+        inputService.PushContext("Gameplay");
+    }
+
+    private void OnMove(Vector2 dir) { /* ... */ }
+    private void OnConfirm() { /* ... */ }
+}
+
+// 示例：注入输入的 PlayerController
+public class PlayerController
+{
+    private readonly IInputPlayerResolver _inputResolver;
+    private IInputPlayer _input;
+
+    [Inject]
+    public PlayerController(IInputPlayerResolver inputResolver)
+    {
+        _inputResolver = inputResolver;
+    }
+
+    public void Initialize(int playerId)
+    {
+        _input = _inputResolver.GetInputPlayer(playerId);
+        // 设置上下文...
+    }
+}
 ```

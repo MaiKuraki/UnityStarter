@@ -84,9 +84,9 @@ namespace CycloneGames.InputSystem.Sample
             }
         }
 
-        private void HandlePlayerJoined(IInputService playerInput)
+        private void HandlePlayerJoined(IInputPlayer inputPlayer)
         {
-            int playerId = (playerInput as InputService).PlayerId;
+            int playerId = (inputPlayer as InputPlayer).PlayerId;
 
             if (_playerPrefab == null)
             {
@@ -113,14 +113,14 @@ namespace CycloneGames.InputSystem.Sample
                 var confirmLongPressCommand = new ActionCommand(controller.OnConfirmLongPress);
 
                 var gameplayContext = new InputContext("Gameplay", "PlayerActions")
-                    .AddBinding(playerInput.GetVector2Observable(InputActions.Actions.Gameplay_Move), moveCommand)
-                    .AddBinding(playerInput.GetButtonObservable(InputActions.Actions.Gameplay_Confirm), confirmCommand)
-                    .AddBinding(playerInput.GetLongPressObservable(InputActions.Actions.Gameplay_Confirm), confirmLongPressCommand);
+                    .AddBinding(inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move), moveCommand)
+                    .AddBinding(inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Confirm), confirmCommand)
+                    .AddBinding(inputPlayer.GetLongPressObservable(InputActions.Actions.Gameplay_Confirm), confirmLongPressCommand);
 
-                playerInput.RegisterContext(gameplayContext);
-                playerInput.PushContext("Gameplay");
+                inputPlayer.RegisterContext(gameplayContext);
+                inputPlayer.PushContext("Gameplay");
 
-                playerInput.ActiveDeviceKind.Subscribe(kind =>
+                inputPlayer.ActiveDeviceKind.Subscribe(kind =>
                 {
                     Debug.Log($"Player {playerId} active device changed to: {kind}");
                 }).AddTo(controller.destroyCancellationToken);

@@ -2,9 +2,11 @@ using UnityEngine;
 using UnityEditor;
 using System.IO;
 using VYaml.Serialization;
+using VYaml.Emitter;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Buffers;
 using CycloneGames.Utility.Runtime;
 using CycloneGames.InputSystem.Runtime;
 
@@ -28,6 +30,12 @@ namespace CycloneGames.InputSystem.Editor
         private string _codegenPath;
         private string _codegenNamespace;
         private DefaultAsset _codegenFolder;
+        private string _defaultConfigFolderPath;
+        private DefaultAsset _defaultConfigFolder;
+        private string _previousDefaultConfigFolderPath;
+        private string _userConfigSubPath; // Subdirectory path relative to PersistentData (e.g., "/Config")
+        private string _userConfigFullPathDisplay;
+        private string _defaultConfigFullPathDisplay;
 
         private const string DefaultConfigFileName = "input_config.yaml";
         private const string UserConfigFileName = "user_input_settings.yaml";
@@ -42,8 +50,10 @@ namespace CycloneGames.InputSystem.Editor
 
         private void OnEnable()
         {
-            _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(DefaultConfigFileName, UnityPathSource.StreamingAssets);
-            _userConfigPath = FilePathUtility.GetUnityWebRequestUri(UserConfigFileName, UnityPathSource.PersistentData);
+            // Load UserConfig subdirectory path from EditorPrefs
+            _userConfigSubPath = EditorPrefs.GetString("CycloneGames.InputSystem.UserConfigSubPath", "");
+            UpdateUserConfigPath();
+
             _codegenPath = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenPath", "Assets");
             _codegenNamespace = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenNamespace", "YourGame.Input.Generated");
             if (!string.IsNullOrEmpty(_codegenPath))
@@ -51,9 +61,212 @@ namespace CycloneGames.InputSystem.Editor
                 _codegenFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_codegenPath);
             }
 
+            _defaultConfigFolderPath = EditorPrefs.GetString("CycloneGames.InputSystem.DefaultConfigFolder", "Assets/StreamingAssets");
+            _previousDefaultConfigFolderPath = EditorPrefs.GetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", "");
+            if (!string.IsNullOrEmpty(_defaultConfigFolderPath))
+            {
+                _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_defaultConfigFolderPath);
+            }
+            if (_defaultConfigFolder == null)
+            {
+                _defaultConfigFolderPath = "Assets/StreamingAssets";
+                _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_defaultConfigFolderPath);
+            }
+
+            UpdateDefaultConfigPath();
+
             InitializeToolbarSections();
 
             LoadUserConfig();
+        }
+
+        private void UpdateUserConfigPath()
+        {
+            // Build the full path: PersistentData + SubPath + FileName
+            string fullPath = UserConfigFileName;
+            if (!string.IsNullOrEmpty(_userConfigSubPath))
+            {
+                string normalizedSubPath = _userConfigSubPath.Trim('/', '\\');
+                if (!string.IsNullOrEmpty(normalizedSubPath))
+                {
+                    fullPath = normalizedSubPath + "/" + UserConfigFileName;
+                }
+            }
+
+            _userConfigPath = FilePathUtility.GetUnityWebRequestUri(fullPath, UnityPathSource.PersistentData);
+
+            string localPath = new System.Uri(_userConfigPath).LocalPath;
+            _userConfigFullPathDisplay = localPath.Replace('\\', '/');
+        }
+
+        private void UpdateDefaultConfigPath()
+        {
+            if (string.IsNullOrEmpty(_defaultConfigFolderPath) || _defaultConfigFolder == null)
+            {
+                _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(DefaultConfigFileName, UnityPathSource.StreamingAssets);
+                string localPath = new System.Uri(_defaultConfigPath).LocalPath;
+                _defaultConfigFullPathDisplay = localPath.Replace('\\', '/');
+                return;
+            }
+
+            string folderPath = _defaultConfigFolderPath.TrimEnd('/', '\\');
+            if (folderPath.StartsWith("Assets/", System.StringComparison.OrdinalIgnoreCase) ||
+                folderPath.StartsWith("Assets\\", System.StringComparison.OrdinalIgnoreCase))
+            {
+                folderPath = folderPath.Substring(7);
+            }
+            else if (folderPath.Equals("Assets", System.StringComparison.OrdinalIgnoreCase))
+            {
+                folderPath = "";
+            }
+
+            string fullSystemPath = Path.Combine(Application.dataPath, folderPath, DefaultConfigFileName);
+            _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(fullSystemPath, UnityPathSource.AbsoluteOrFullUri);
+
+            _defaultConfigFullPathDisplay = fullSystemPath.Replace('\\', '/');
+        }
+
+        private void HandleConfigFolderChange(string oldFolderPath, string newFolderPath)
+        {
+            if (string.IsNullOrEmpty(oldFolderPath) || oldFolderPath.Equals(newFolderPath, System.StringComparison.OrdinalIgnoreCase))
+            {
+                EditorPrefs.SetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", newFolderPath);
+                return;
+            }
+
+            string oldAssetPath = GetConfigAssetPath(oldFolderPath);
+            string newAssetPath = GetConfigAssetPath(newFolderPath);
+
+            if (!AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(oldAssetPath))
+            {
+                EditorPrefs.SetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", newFolderPath);
+                return;
+            }
+
+            if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(newAssetPath))
+            {
+                int choice = EditorUtility.DisplayDialogComplex(
+                    "Default Config File Exists",
+                    $"A default config file already exists in the new location:\n{newAssetPath}\n\n" +
+                    $"The old file is at:\n{oldAssetPath}\n\n" +
+                    "How would you like to proceed?",
+                    "Move (Replace)", "Delete Old", "Cancel");
+
+                if (choice == 0)
+                {
+                    if (!AssetDatabase.DeleteAsset(newAssetPath))
+                    {
+                        EditorUtility.DisplayDialog("Error", "Failed to delete existing file.", "OK");
+                        return;
+                    }
+                    AssetDatabase.Refresh();
+
+                    string moveError = AssetDatabase.MoveAsset(oldAssetPath, newAssetPath);
+                    if (!string.IsNullOrEmpty(moveError))
+                    {
+                        EditorUtility.DisplayDialog("Error", $"Failed to move file: {moveError}", "OK");
+                        return;
+                    }
+                    AssetDatabase.Refresh();
+                    SetStatus($"Moved default config from {oldFolderPath} to {newFolderPath}", MessageType.Info);
+                }
+                else if (choice == 1)
+                {
+                    if (!AssetDatabase.DeleteAsset(oldAssetPath))
+                    {
+                        EditorUtility.DisplayDialog("Error", "Failed to delete old file.", "OK");
+                        return;
+                    }
+                    AssetDatabase.Refresh();
+                    SetStatus($"Deleted old default config from {oldFolderPath}", MessageType.Info);
+                }
+                else
+                {
+                    _defaultConfigFolderPath = oldFolderPath;
+                    _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(oldFolderPath);
+                    UpdateDefaultConfigPath();
+                    return;
+                }
+            }
+            else
+            {
+                int choice = EditorUtility.DisplayDialogComplex(
+                    "Move Default Config File?",
+                    $"The default config file will be moved from:\n{oldAssetPath}\n\n" +
+                    $"To:\n{newAssetPath}\n\n" +
+                    "How would you like to proceed?",
+                    "Move", "Delete Old", "Cancel");
+
+                if (choice == 0)
+                {
+                    string moveError = AssetDatabase.MoveAsset(oldAssetPath, newAssetPath);
+                    if (!string.IsNullOrEmpty(moveError))
+                    {
+                        EditorUtility.DisplayDialog("Error", $"Failed to move file: {moveError}", "OK");
+                        return;
+                    }
+                    AssetDatabase.Refresh();
+                    SetStatus($"Moved default config from {oldFolderPath} to {newFolderPath}", MessageType.Info);
+                }
+                else if (choice == 1)
+                {
+                    if (!AssetDatabase.DeleteAsset(oldAssetPath))
+                    {
+                        EditorUtility.DisplayDialog("Error", "Failed to delete old file.", "OK");
+                        return;
+                    }
+                    AssetDatabase.Refresh();
+                    SetStatus($"Deleted old default config from {oldFolderPath}", MessageType.Info);
+                }
+                else
+                {
+                    _defaultConfigFolderPath = oldFolderPath;
+                    _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(oldFolderPath);
+                    UpdateDefaultConfigPath();
+                    return;
+                }
+            }
+
+            EditorPrefs.SetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", newFolderPath);
+        }
+
+        private string GetConfigAssetPath(string folderPath)
+        {
+            if (string.IsNullOrEmpty(folderPath))
+            {
+                return Path.Combine("Assets", "StreamingAssets", DefaultConfigFileName).Replace('\\', '/');
+            }
+
+            string cleanPath = folderPath.TrimEnd('/', '\\');
+            if (!cleanPath.StartsWith("Assets/", System.StringComparison.OrdinalIgnoreCase) &&
+                !cleanPath.StartsWith("Assets\\", System.StringComparison.OrdinalIgnoreCase) &&
+                !cleanPath.Equals("Assets", System.StringComparison.OrdinalIgnoreCase))
+            {
+                cleanPath = "Assets/" + cleanPath;
+            }
+
+            return Path.Combine(cleanPath, DefaultConfigFileName).Replace('\\', '/');
+        }
+
+        private byte[] SerializeConfigWithoutNullJoinAction(InputConfiguration config)
+        {
+            var bufferWriter = new ArrayBufferWriter<byte>();
+            var emitter = new Utf8YamlEmitter(bufferWriter);
+
+            if (config.JoinAction == null)
+            {
+                var configWithoutJoinAction = new InputConfiguration
+                {
+                    PlayerSlots = config.PlayerSlots
+                };
+                YamlSerializer.Serialize(ref emitter, configWithoutJoinAction);
+            }
+            else
+            {
+                YamlSerializer.Serialize(ref emitter, config);
+            }
+
+            return bufferWriter.WrittenSpan.ToArray();
         }
 
         private void OnDisable()
@@ -410,6 +623,95 @@ namespace CycloneGames.InputSystem.Editor
         private void DrawCodegenSettings()
         {
             EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Configuration Settings", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            EditorGUI.BeginChangeCheck();
+            var newDefaultConfigFolder = (DefaultAsset)EditorGUILayout.ObjectField("Default Config Folder", _defaultConfigFolder, typeof(DefaultAsset), false);
+            if (EditorGUI.EndChangeCheck())
+            {
+                if (newDefaultConfigFolder != _defaultConfigFolder)
+                {
+                    string oldFolderPath = _defaultConfigFolderPath;
+                    _defaultConfigFolder = newDefaultConfigFolder;
+                    if (_defaultConfigFolder != null)
+                    {
+                        _defaultConfigFolderPath = AssetDatabase.GetAssetPath(_defaultConfigFolder);
+                        HandleConfigFolderChange(oldFolderPath, _defaultConfigFolderPath);
+                        EditorPrefs.SetString("CycloneGames.InputSystem.DefaultConfigFolder", _defaultConfigFolderPath);
+                        UpdateDefaultConfigPath();
+                    }
+                    else
+                    {
+                        _defaultConfigFolderPath = "Assets/StreamingAssets";
+                        HandleConfigFolderChange(oldFolderPath, _defaultConfigFolderPath);
+                        EditorPrefs.SetString("CycloneGames.InputSystem.DefaultConfigFolder", _defaultConfigFolderPath);
+                        _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_defaultConfigFolderPath);
+                        UpdateDefaultConfigPath();
+                    }
+                }
+            }
+
+            // Display full path for Default Config (or prompt if not loaded)
+            EditorGUI.BeginDisabledGroup(true);
+            string defaultConfigDisplayText;
+            string localPath = new System.Uri(_defaultConfigPath).LocalPath;
+            bool fileExists = File.Exists(localPath);
+            bool configLoaded = _configSO != null;
+
+            if (fileExists || configLoaded)
+            {
+                // File exists or config is loaded, show full path
+                defaultConfigDisplayText = _defaultConfigFullPathDisplay;
+            }
+            else
+            {
+                // File doesn't exist and config not loaded, show prompt
+                defaultConfigDisplayText = "Please Load or Generate Default Config first";
+            }
+
+            EditorGUILayout.TextField(
+                new GUIContent("Full Path", "Complete path where default config is located (updates in real-time). If file doesn't exist, please Load or Generate first."),
+                defaultConfigDisplayText
+            );
+            EditorGUI.EndDisabledGroup();
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("User Config Settings", EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            // User Config Subdirectory Path Input
+            EditorGUI.BeginChangeCheck();
+            string newUserConfigSubPath = EditorGUILayout.TextField(
+                new GUIContent("Subdirectory Path", "Subdirectory path relative to PersistentData (e.g., \"/Config\" or \"Config\"). Leave empty to save directly in PersistentData."),
+                _userConfigSubPath
+            );
+            if (EditorGUI.EndChangeCheck())
+            {
+                _userConfigSubPath = newUserConfigSubPath;
+                UpdateUserConfigPath();
+                EditorPrefs.SetString("CycloneGames.InputSystem.UserConfigSubPath", _userConfigSubPath);
+            }
+
+            // Display full path (real-time update when subdirectory changes)
+            EditorGUI.BeginDisabledGroup(true);
+            EditorGUILayout.TextField(
+                new GUIContent("Full Path", "Complete path where user config will be saved (updates in real-time)"),
+                _userConfigFullPathDisplay
+            );
+            EditorGUI.EndDisabledGroup();
+
+            // Show PersistentData base path for reference
+            EditorGUI.BeginDisabledGroup(true);
+            EditorGUILayout.TextField(
+                new GUIContent("PersistentData Base", "Base PersistentData directory"),
+                Application.persistentDataPath
+            );
+            EditorGUI.EndDisabledGroup();
+
+            EditorGUI.indentLevel--;
+
+            EditorGUILayout.Space();
             EditorGUILayout.LabelField("Code Generation Settings", EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
 
@@ -432,6 +734,7 @@ namespace CycloneGames.InputSystem.Editor
                 }
             }
 
+            EditorGUI.indentLevel--;
             EditorGUI.indentLevel--;
             EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
         }
@@ -495,7 +798,7 @@ namespace CycloneGames.InputSystem.Editor
             try
             {
                 InputConfiguration configModel = _configSO.ToData();
-                byte[] yamlBytes = YamlSerializer.Serialize(configModel).ToArray();
+                byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(configModel);
                 string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
 
                 string localPath = new System.Uri(_userConfigPath).LocalPath;
@@ -552,7 +855,7 @@ namespace CycloneGames.InputSystem.Editor
 
             try
             {
-                byte[] yamlBytes = YamlSerializer.Serialize(defaultConfig).ToArray();
+                byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(defaultConfig);
                 string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
 
                 string directory = Path.GetDirectoryName(localPath);
@@ -583,8 +886,9 @@ namespace CycloneGames.InputSystem.Editor
 
             string localPath = new System.Uri(_defaultConfigPath).LocalPath;
 
+            string folderName = !string.IsNullOrEmpty(_defaultConfigFolderPath) ? _defaultConfigFolderPath : "StreamingAssets";
             if (!EditorUtility.DisplayDialog("Override Default Config?",
-                $"This will overwrite the default configuration file in StreamingAssets with your current editor state.\n\n" +
+                $"This will overwrite the default configuration file in {folderName} with your current editor state.\n\n" +
                 $"Path: {localPath}\n\n" +
                 $"This action cannot be undone. Continue?",
                 "Override", "Cancel"))
@@ -595,7 +899,7 @@ namespace CycloneGames.InputSystem.Editor
             try
             {
                 InputConfiguration configModel = _configSO.ToData();
-                byte[] yamlBytes = YamlSerializer.Serialize(configModel).ToArray();
+                byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(configModel);
                 string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
 
                 string directory = Path.GetDirectoryName(localPath);
