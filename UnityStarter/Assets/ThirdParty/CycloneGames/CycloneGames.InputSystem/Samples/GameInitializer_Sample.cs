@@ -47,7 +47,7 @@ namespace CycloneGames.InputSystem.Sample
             string userConfigUri = FilePathUtility.GetUnityWebRequestUri(_userConfigName, UnityPathSource.PersistentData);
             await InputSystemLoader.InitializeAsync(defaultConfigUri, userConfigUri);
 
-            InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
+            InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
 
             switch (startupMode)
             {
@@ -79,12 +79,12 @@ namespace CycloneGames.InputSystem.Sample
         {
             if (isInitialized && InputManager.Instance != null)
             {
-                InputManager.Instance.OnPlayerJoined -= HandlePlayerJoined;
+                InputManager.Instance.OnPlayerInputReady -= HandlePlayerInputReady;
                 InputManager.Instance.Dispose();
             }
         }
 
-        private void HandlePlayerJoined(IInputPlayer inputPlayer)
+        private void HandlePlayerInputReady(IInputPlayer inputPlayer)
         {
             int playerId = (inputPlayer as InputPlayer).PlayerId;
 
