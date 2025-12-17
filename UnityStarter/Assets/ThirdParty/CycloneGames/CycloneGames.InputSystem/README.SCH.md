@@ -230,14 +230,14 @@ var svc = InputManager.Instance.JoinSinglePlayer(0);
 var svc2 = InputManager.Instance.JoinSinglePlayer(0); // 返回相同的服务，不会触发事件
 ```
 
-**注意**：如果玩家已经加入，`JoinSinglePlayer` 会返回现有服务而不会触发 `OnPlayerJoined` 事件。这在需要多次获取服务时很有用，但如果您需要在玩家已经加入后重新绑定输入上下文，请使用 `RefreshPlayerInput`。
+**注意**：如果玩家已经加入，`JoinSinglePlayer` 会返回现有服务而不会触发 `OnPlayerInputReady` 事件。这在需要多次获取服务时很有用，但如果您需要在玩家已经加入后重新绑定输入上下文，请使用 `RefreshPlayerInput`。
 
 #### 大厅模式（设备锁定）
 
 第一个设备加入成为玩家 0，后续设备自动配对给该玩家，适合单人玩家在键鼠和手柄间切换：
 
 ```csharp
-InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
+InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
 InputManager.Instance.StartListeningForPlayers(true); // true = 设备锁定模式
 ```
 
@@ -246,7 +246,7 @@ InputManager.Instance.StartListeningForPlayers(true); // true = 设备锁定模�
 每个新设备加入都会创建一个新玩家，适合本地多人合作：
 
 ```csharp
-InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
+InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
 InputManager.Instance.StartListeningForPlayers(false); // false = 设备共享模式
 ```
 
@@ -313,10 +313,10 @@ await InputManager.Instance.SaveUserConfigurationAsync();
 ### 事件回调
 
 ```csharp
-// 监听玩家加入事件
-InputManager.Instance.OnPlayerJoined += (IInputPlayer playerInput) =>
+// 监听玩家输入就绪事件
+InputManager.Instance.OnPlayerInputReady += (IInputPlayer playerInput) =>
 {
-    Debug.Log($"玩家 {((InputPlayer)playerInput).PlayerId} 已加入");
+    Debug.Log($"玩家 {((InputPlayer)playerInput).PlayerId} 输入已就绪");
     // 设置玩家输入上下文等
 };
 
@@ -326,14 +326,14 @@ InputManager.Instance.OnConfigurationReloaded += () =>
     Debug.Log("配置已重新加载");
 };
 
-// 通过触发已加入玩家的 OnPlayerJoined 事件来刷新玩家输入
+// 通过触发已加入玩家的 OnPlayerInputReady 事件来刷新玩家输入
 // 当您在玩家已经加入后动态绑定输入上下文时很有用（例如，在不同场景中）
 // 示例：LaunchScene 初始化输入系统，GameplayScene 绑定输入上下文
-InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
+InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
 // ... 稍后，在 GameplayScene 中绑定上下文后 ...
 if (InputManager.Instance.GetInputPlayer(0) != null)
 {
-    InputManager.Instance.RefreshPlayerInput(0); // 触发 OnPlayerJoined 事件以激活新绑定的上下文
+    InputManager.Instance.RefreshPlayerInput(0); // 触发 OnPlayerInputReady 事件以激活新绑定的上下文
 }
 
 // 监听上下文切换事件
@@ -577,7 +577,7 @@ press.Subscribe(p =>
 
 #### 事件
 
-- `event Action<IInputPlayer> OnPlayerJoined` - 玩家加入事件
+- `event Action<IInputPlayer> OnPlayerInputReady` - 玩家输入就绪事件（在玩家加入或输入刷新时触发）
 - `event Action OnConfigurationReloaded` - 配置重载事件
 
 #### 初始化
@@ -586,14 +586,14 @@ press.Subscribe(p =>
 
 #### 玩家加入方法
 
-- `IInputPlayer JoinSinglePlayer(int playerIdToJoin = 0)` - 同步加入单个玩家（自动锁定设备）。如果玩家已经加入，返回现有服务而不会触发 `OnPlayerJoined` 事件。
+- `IInputPlayer JoinSinglePlayer(int playerIdToJoin = 0)` - 同步加入单个玩家（自动锁定设备）。如果玩家已经加入，返回现有服务而不会触发 `OnPlayerInputReady` 事件。
 - `UniTask<IInputPlayer> JoinSinglePlayerAsync(int playerIdToJoin = 0, int timeoutInSeconds = 5)` - 异步加入单个玩家（等待设备连接）
 - `List<IInputPlayer> JoinPlayersBatch(List<int> playerIds)` - 批量同步加入玩家
 - `UniTask<List<IInputPlayer>> JoinPlayersBatchAsync(List<int> playerIds, int timeoutPerPlayerInSeconds = 5)` - 批量异步加入玩家
 - `IInputPlayer JoinPlayerOnSharedDevice(int playerIdToJoin)` - 在共享设备上加入玩家
 - `IInputPlayer JoinPlayerAndLockDevice(int playerIdToJoin, InputDevice deviceToLock)` - 锁定特定设备给玩家
 - `IInputPlayer GetInputPlayer(int playerId)` - 获取指定玩家 ID 的输入玩家，如果未加入则返回 null
-- `bool RefreshPlayerInput(int playerId)` - 通过触发已加入玩家的 `OnPlayerJoined` 事件来刷新玩家输入。当您在玩家已经加入后动态绑定输入上下文时很有用（例如，在不同场景中）。这允许 InputSystem 识别和管理新绑定的输入上下文。如果玩家存在且事件已触发则返回 true，否则返回 false。
+- `bool RefreshPlayerInput(int playerId)` - 通过触发已加入玩家的 `OnPlayerInputReady` 事件来刷新玩家输入。当您在玩家已经加入后动态绑定输入上下文时很有用（例如，在不同场景中）。这允许 InputSystem 识别和管理新绑定的输入上下文。如果玩家存在且事件已触发则返回 true，否则返回 false。
 
 #### 大厅模式
 
@@ -1009,11 +1009,11 @@ public class GameSession
 
     public async UniTask StartMultiplayerLobby()
     {
-        _inputManager.OnPlayerJoined += OnPlayerJoined;
+        _inputManager.OnPlayerInputReady += OnPlayerInputReady;
         _inputManager.StartListeningForPlayers(false); // 设备共享模式
     }
 
-    private void OnPlayerJoined(IInputPlayer service)
+    private void OnPlayerInputReady(IInputPlayer service)
     {
         // 设置玩家特定的输入上下文
         var ctx = new InputContext("Gameplay", "PlayerActions")

@@ -230,14 +230,14 @@ var svc = InputManager.Instance.JoinSinglePlayer(0);
 var svc2 = InputManager.Instance.JoinSinglePlayer(0); // Returns same service, no event triggered
 ```
 
-**Note**: If the player is already joined, `JoinSinglePlayer` returns the existing service without triggering `OnPlayerJoined` event. This is useful when you need to get the service multiple times, but if you need to rebind input contexts after the player has already joined, use `RefreshPlayerInput` instead.
+**Note**: If the player is already joined, `JoinSinglePlayer` returns the existing service without triggering `OnPlayerInputReady` event. This is useful when you need to get the service multiple times, but if you need to rebind input contexts after the player has already joined, use `RefreshPlayerInput` instead.
 
 #### Lobby Mode (Device Locking)
 
 The first device joins as Player 0, and subsequent devices are automatically paired to that player. Ideal for single players switching between keyboard and gamepad:
 
 ```csharp
-InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
+InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
 InputManager.Instance.StartListeningForPlayers(true); // true = device locking mode
 ```
 
@@ -246,7 +246,7 @@ InputManager.Instance.StartListeningForPlayers(true); // true = device locking m
 Each new device creates a new player, perfect for local co-op:
 
 ```csharp
-InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
+InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
 InputManager.Instance.StartListeningForPlayers(false); // false = shared devices mode
 ```
 
@@ -313,10 +313,10 @@ await InputManager.Instance.SaveUserConfigurationAsync();
 ### Event Callbacks
 
 ```csharp
-// Listen for player join events
-InputManager.Instance.OnPlayerJoined += (IInputPlayer playerInput) =>
+// Listen for player input ready events
+InputManager.Instance.OnPlayerInputReady += (IInputPlayer playerInput) =>
 {
-    Debug.Log($"Player {((InputPlayer)playerInput)?.PlayerId ?? -1} joined");
+    Debug.Log($"Player {((InputPlayer)playerInput)?.PlayerId ?? -1} input ready");
     // Set up player input context, etc.
 };
 
@@ -326,14 +326,14 @@ InputManager.Instance.OnConfigurationReloaded += () =>
     Debug.Log("Configuration reloaded");
 };
 
-// Refresh player input by triggering OnPlayerJoined event for an already joined player
+// Refresh player input by triggering OnPlayerInputReady event for an already joined player
 // Useful when you dynamically bind input contexts after the player has already joined (e.g., in a different scene)
 // Example: LaunchScene initializes input system, GameplayScene binds input contexts
-InputManager.Instance.OnPlayerJoined += HandlePlayerJoined;
+InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
 // ... later, in GameplayScene after binding contexts ...
 if (InputManager.Instance.GetInputPlayer(0) != null)
 {
-    InputManager.Instance.RefreshPlayerInput(0); // Triggers OnPlayerJoined event to activate newly bound contexts
+    InputManager.Instance.RefreshPlayerInput(0); // Triggers OnPlayerInputReady event to activate newly bound contexts
 }
 
 // Listen for context change events
@@ -574,7 +574,7 @@ Singleton manager for the input system.
 
 #### Events
 
-- `event Action<IInputPlayer> OnPlayerJoined` - Player join event
+- `event Action<IInputPlayer> OnPlayerInputReady` - Player input ready event (triggered when player joins or input is refreshed)
 - `event Action OnConfigurationReloaded` - Configuration reload event
 
 #### Initialization
@@ -583,14 +583,14 @@ Singleton manager for the input system.
 
 #### Player Join Methods
 
-- `IInputPlayer JoinSinglePlayer(int playerIdToJoin = 0)` - Synchronously join a single player (auto-lock devices). If player is already joined, returns existing service without triggering `OnPlayerJoined` event.
+- `IInputPlayer JoinSinglePlayer(int playerIdToJoin = 0)` - Synchronously join a single player (auto-lock devices). If player is already joined, returns existing service without triggering `OnPlayerInputReady` event.
 - `UniTask<IInputPlayer> JoinSinglePlayerAsync(int playerIdToJoin = 0, int timeoutInSeconds = 5)` - Asynchronously join a single player (wait for device connection)
 - `List<IInputPlayer> JoinPlayersBatch(List<int> playerIds)` - Batch synchronously join players
 - `UniTask<List<IInputPlayer>> JoinPlayersBatchAsync(List<int> playerIds, int timeoutPerPlayerInSeconds = 5)` - Batch asynchronously join players
 - `IInputPlayer JoinPlayerOnSharedDevice(int playerIdToJoin)` - Join player on shared device
 - `IInputPlayer JoinPlayerAndLockDevice(int playerIdToJoin, InputDevice deviceToLock)` - Lock specific device to player
 - `IInputPlayer GetInputPlayer(int playerId)` - Get existing input player for the specified player ID, or null if not joined
-- `bool RefreshPlayerInput(int playerId)` - Refreshes player input by triggering `OnPlayerJoined` event for an already joined player. Useful when you dynamically bind input contexts after the player has already joined (e.g., in a different scene). This allows the InputSystem to recognize and manage newly bound input contexts. Returns true if player exists and event was triggered, false otherwise.
+- `bool RefreshPlayerInput(int playerId)` - Refreshes player input by triggering `OnPlayerInputReady` event for an already joined player. Useful when you dynamically bind input contexts after the player has already joined (e.g., in a different scene). This allows the InputSystem to recognize and manage newly bound input contexts. Returns true if player exists and event was triggered, false otherwise.
 
 #### Lobby Mode
 
@@ -1008,11 +1008,11 @@ public class GameSession
 
     public async UniTask StartMultiplayerLobby()
     {
-        _inputManager.OnPlayerJoined += OnPlayerJoined;
+        _inputManager.OnPlayerInputReady += OnPlayerInputReady;
         _inputManager.StartListeningForPlayers(false); // Shared devices mode
     }
 
-    private void OnPlayerJoined(IInputPlayer service)
+    private void OnPlayerInputReady(IInputPlayer service)
     {
         // Setup player-specific input contexts
         var ctx = new InputContext("Gameplay", "PlayerActions")
