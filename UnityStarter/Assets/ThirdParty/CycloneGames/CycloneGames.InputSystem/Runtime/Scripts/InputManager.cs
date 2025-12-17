@@ -11,9 +11,6 @@ using VYaml.Serialization;
 
 namespace CycloneGames.InputSystem.Runtime
 {
-    /// <summary>
-    /// Central singleton for managing all player input. Supports dynamic joining with device locking.
-    /// </summary>
     public sealed class InputManager : IDisposable
     {
         private const string DEBUG_FLAG = "[InputManager]";
@@ -21,7 +18,7 @@ namespace CycloneGames.InputSystem.Runtime
         private InputManager() { }
 
         public static bool IsListeningForPlayers { get; private set; }
-        public event Action<IInputPlayer> OnPlayerJoined;
+        public event Action<IInputPlayer> OnPlayerInputReady;
         public event Action OnConfigurationReloaded;
 
         private readonly Dictionary<int, IInputPlayer> _registerPlayers = new();
@@ -171,7 +168,6 @@ namespace CycloneGames.InputSystem.Runtime
                 byte[] yamlBytes = YamlSerializer.Serialize(_configuration).ToArray();
                 string filePath = new Uri(_userConfigUri).LocalPath;
 
-                // Ensure directory exists before writing file
                 string directory = System.IO.Path.GetDirectoryName(filePath);
                 if (!string.IsNullOrEmpty(directory) && !System.IO.Directory.Exists(directory))
                 {
@@ -225,7 +221,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         /// <summary>
         /// Joins a player with all currently available required devices. Treats Keyboard and Mouse as a unit.
-        /// If the player is already joined, returns the existing service without triggering OnPlayerJoined event.
+        /// If the player is already joined, returns the existing service without triggering OnPlayerInputReady event.
         /// </summary>
         public IInputPlayer JoinSinglePlayer(int playerIdToJoin = 0)
         {
@@ -512,7 +508,7 @@ namespace CycloneGames.InputSystem.Runtime
                 _registerPlayers[playerId] = inputPlayer;
                 string devices = user.pairedDevices.Count > 0 ? string.Join(", ", user.pairedDevices.Select(d => d.displayName)) : "All (Shared)";
                 CLogger.LogInfo($"{DEBUG_FLAG} Player {playerId} created with devices: [{devices}].");
-                OnPlayerJoined?.Invoke(inputPlayer);
+                OnPlayerInputReady?.Invoke(inputPlayer);
                 return inputPlayer;
             }
         }
@@ -573,7 +569,7 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
-        /// Refreshes player input by triggering OnPlayerJoined event for an already joined player.
+        /// Refreshes player input by triggering OnPlayerInputReady event for an already joined player.
         /// Useful when you dynamically bind input contexts after the player has already joined (e.g., in a different scene).
         /// This allows the InputSystem to recognize and manage newly bound input contexts.
         /// Returns true if the player exists and event was triggered, false otherwise.
@@ -582,7 +578,7 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (_registerPlayers.TryGetValue(playerId, out var service))
             {
-                OnPlayerJoined?.Invoke(service);
+                OnPlayerInputReady?.Invoke(service);
                 CLogger.LogInfo($"{DEBUG_FLAG} Refreshed input for Player {playerId}.");
                 return true;
             }
