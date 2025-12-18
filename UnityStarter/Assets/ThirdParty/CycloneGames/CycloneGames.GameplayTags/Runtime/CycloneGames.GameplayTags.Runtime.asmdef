@@ -1,7 +1,9 @@
 {
     "name": "CycloneGames.GameplayTags.Runtime",
     "rootNamespace": "",
-    "references": [],
+    "references": [
+        "Unio"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

@@ -8,6 +8,8 @@ using Cysharp.Threading.Tasks;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Users;
 using VYaml.Serialization;
+using Unio;
+using Unity.Collections;
 
 namespace CycloneGames.InputSystem.Runtime
 {
@@ -90,7 +92,8 @@ namespace CycloneGames.InputSystem.Runtime
                         return false;
                     }
 
-                    byte[] yamlBytes = await UniTask.RunOnThreadPool(() => File.ReadAllBytes(filePath));
+                    using var nativeBytes = await NativeFile.ReadAllBytesAsync(filePath, SynchronizationStrategy.BlockOnThreadPool);
+                    byte[] yamlBytes = nativeBytes.ToArray();
                     string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
                     var newConfig = YamlSerializer.Deserialize<InputConfiguration>(yamlBytes);
 
@@ -174,7 +177,8 @@ namespace CycloneGames.InputSystem.Runtime
                     System.IO.Directory.CreateDirectory(directory);
                 }
 
-                await UniTask.RunOnThreadPool(() => File.WriteAllBytes(filePath, yamlBytes));
+                using var nativeBytes = new NativeArray<byte>(yamlBytes, Allocator.Temp);
+                await NativeFile.WriteAllBytesAsync(filePath, nativeBytes);
                 CLogger.LogInfo($"{DEBUG_FLAG} User configuration saved to: {filePath}");
             }
             catch (Exception e)

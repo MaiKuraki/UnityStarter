@@ -1,8 +1,11 @@
 using System;
 using System.IO;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
 using CycloneGames.UIFramework.Runtime;
+using Unio;
+using Unity.Collections;
 
 namespace CycloneGames.UIFramework.Editor
 {
@@ -86,7 +89,7 @@ namespace CycloneGames.UIFramework.Editor
             {
                 try
                 {
-                    string json = File.ReadAllText(settingsPath);
+                    string json = NativeFile.ReadAllText(settingsPath);
                     UIWindowCreatorSettings settings = JsonUtility.FromJson<UIWindowCreatorSettings>(json);
 
                     if (settings != null)
@@ -127,7 +130,9 @@ namespace CycloneGames.UIFramework.Editor
                 };
 
                 string json = JsonUtility.ToJson(settings, true);
-                File.WriteAllText(settingsPath, json);
+                byte[] bytes = Encoding.UTF8.GetBytes(json);
+                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+                NativeFile.WriteAllBytes(settingsPath, nativeBytes);
             }
             catch (Exception e)
             {
@@ -599,7 +604,9 @@ namespace {namespaceName}
             }
 
             // Write script file (Unity will automatically generate .meta file on import)
-            File.WriteAllText(scriptPath, scriptContent);
+            byte[] bytes = Encoding.UTF8.GetBytes(scriptContent);
+            using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+            NativeFile.WriteAllBytes(scriptPath, nativeBytes);
 
             // Import the asset to ensure meta file is generated
             // Note: This may not trigger compilation if auto-refresh is disabled
