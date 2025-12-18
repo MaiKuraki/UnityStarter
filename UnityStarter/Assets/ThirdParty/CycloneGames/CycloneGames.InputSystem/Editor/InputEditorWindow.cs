@@ -9,6 +9,8 @@ using System.Text;
 using System.Buffers;
 using CycloneGames.Utility.Runtime;
 using CycloneGames.InputSystem.Runtime;
+using Unio;
+using Unity.Collections;
 
 namespace CycloneGames.InputSystem.Editor
 {
@@ -876,7 +878,7 @@ namespace CycloneGames.InputSystem.Editor
         {
             try
             {
-                string yamlContent = File.ReadAllText(path);
+                string yamlContent = NativeFile.ReadAllText(path);
                 var configModel = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(yamlContent));
 
                 _configSO = CreateInstance<InputConfigurationSO>();
@@ -932,7 +934,9 @@ namespace CycloneGames.InputSystem.Editor
                     Directory.CreateDirectory(directory);
                 }
 
-                File.WriteAllText(localPath, yamlContent);
+                byte[] bytes = Encoding.UTF8.GetBytes(yamlContent);
+                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+                NativeFile.WriteAllBytes(localPath, nativeBytes);
                 SetStatus($"Successfully saved user configuration to: {localPath}", MessageType.Info);
 
                 if (generateConstants)
@@ -988,7 +992,9 @@ namespace CycloneGames.InputSystem.Editor
                     Directory.CreateDirectory(directory);
                 }
 
-                File.WriteAllText(localPath, yamlContent);
+                byte[] bytes = Encoding.UTF8.GetBytes(yamlContent);
+                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+                NativeFile.WriteAllBytes(localPath, nativeBytes);
                 SetStatus($"Generated new default config at: {localPath}", MessageType.Info);
                 AssetDatabase.Refresh();
 
@@ -1032,7 +1038,9 @@ namespace CycloneGames.InputSystem.Editor
                     Directory.CreateDirectory(directory);
                 }
 
-                File.WriteAllText(localPath, yamlContent);
+                byte[] bytes = Encoding.UTF8.GetBytes(yamlContent);
+                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+                NativeFile.WriteAllBytes(localPath, nativeBytes);
                 SetStatus($"Successfully overridden default config at: {localPath}", MessageType.Info);
                 AssetDatabase.Refresh();
 
@@ -1188,7 +1196,9 @@ namespace CycloneGames.InputSystem.Editor
                 }
 
                 string filePath = Path.Combine(_codegenPath, "InputActions.cs");
-                File.WriteAllText(filePath, sb.ToString());
+                byte[] bytes = Encoding.UTF8.GetBytes(sb.ToString());
+                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+                NativeFile.WriteAllBytes(filePath, nativeBytes);
 
                 SetStatus("Successfully saved and generated constants file.", MessageType.Info);
                 EditorUtility.DisplayDialog("Save & Generate Successful", "User input configuration has been saved and InputActions.cs has been generated.", "OK");

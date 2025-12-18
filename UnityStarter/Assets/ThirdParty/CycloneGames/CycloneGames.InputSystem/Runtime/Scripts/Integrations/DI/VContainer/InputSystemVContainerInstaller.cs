@@ -4,6 +4,8 @@ using VContainer;
 using VContainer.Unity;
 using CycloneGames.Utility.Runtime;
 using Cysharp.Threading.Tasks;
+using Unio;
+using Unity.Collections;
 
 namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 {
@@ -282,7 +284,8 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                         {
                             System.IO.Directory.CreateDirectory(directory);
                         }
-                        await Cysharp.Threading.Tasks.UniTask.RunOnThreadPool(() => System.IO.File.WriteAllBytes(filePath, yamlBytes));
+                        using var nativeBytes = new Unity.Collections.NativeArray<byte>(yamlBytes, Unity.Collections.Allocator.Temp);
+                        await Unio.NativeFile.WriteAllBytesAsync(filePath, nativeBytes);
                     }
 
                     // Reinitialize with new configuration

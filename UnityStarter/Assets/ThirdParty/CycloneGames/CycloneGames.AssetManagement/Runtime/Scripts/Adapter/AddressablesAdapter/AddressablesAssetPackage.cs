@@ -2,11 +2,14 @@
 using Cysharp.Threading.Tasks;
 using System;
 using System.IO;
+using System.Text;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
+using Unio;
+using Unity.Collections;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -176,7 +179,9 @@ namespace CycloneGames.AssetManagement.Runtime
                 var versionData = new VersionDataJson { contentVersion = version };
                 string jsonContent = JsonUtility.ToJson(versionData, true);
 
-                await System.Threading.Tasks.Task.Run(() => File.WriteAllText(versionFilePath, jsonContent), cancellationToken);
+                byte[] bytes = Encoding.UTF8.GetBytes(jsonContent);
+                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+                await NativeFile.WriteAllBytesAsync(versionFilePath, nativeBytes);
                 Debug.Log($"[AddressablesAssetPackage] Saved version to persistent data: {version}");
             }
             catch (Exception ex)
@@ -274,7 +279,8 @@ namespace CycloneGames.AssetManagement.Runtime
             // On other platforms, use direct file I/O
             if (File.Exists(filePath))
             {
-                return await System.Threading.Tasks.Task.Run(() => File.ReadAllText(filePath), cancellationToken);
+                using var nativeBytes = await NativeFile.ReadAllBytesAsync(filePath, SynchronizationStrategy.BlockOnThreadPool, cancellationToken);
+                return Encoding.UTF8.GetString(nativeBytes.AsSpan());
             }
             return string.Empty;
 #endif
