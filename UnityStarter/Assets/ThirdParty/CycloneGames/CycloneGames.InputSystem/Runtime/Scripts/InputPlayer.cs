@@ -615,17 +615,67 @@ namespace CycloneGames.InputSystem.Runtime
                         if (inferredType == ActionValueType.Vector2)
                         {
                             var subject = new Subject<Vector2>();
-                            action.PerformedAsObservable(token)
-                                .Select(ctx =>
-                                {
-                                    var v = ctx.ReadValue<Vector2>();
-                                    if (v.sqrMagnitude > 1f) v = v.normalized;
-                                    return v;
-                                })
-                                .Subscribe(subject.AsObserver())
-                                .AddTo(_actionWiringSubscriptions);
+                            
+                            // Auto-detect update mode: Polling for delta inputs, EventDriven for others
+                            var updateMode = bindingConfig.UpdateMode;
+                            if (updateMode == InputUpdateMode.EventDriven)
+                            {
+                                // Auto-detect: if bindings contain "/delta", use polling
+                                bool hasDeltaInput = bindingConfig.DeviceBindings.Any(b => 
+                                    b.Contains("/delta", StringComparison.OrdinalIgnoreCase));
+                                if (hasDeltaInput) updateMode = InputUpdateMode.Polling;
+                            }
+
+                            if (updateMode == InputUpdateMode.Polling)
+                            {
+                                // Poll every frame for smooth, responsive input (mouse delta, analog sticks)
+                                Observable.EveryUpdate(token)
+                                    .Subscribe(_ =>
+                                    {
+                                        if (!action.enabled) return;
+                                        
+                                        var v = action.ReadValue<Vector2>();
+                                        
+                                        // Anti-jitter: Ignore small mouse movements when using Gamepad
+                                        if (_activeDeviceKind.Value == InputDeviceKind.Gamepad)
+                                        {
+                                            var device = action.activeControl?.device;
+                                            if (device is UnityEngine.InputSystem.Mouse && v.magnitude < 1.0f) return;
+                                        }
+
+                                        if (v.sqrMagnitude > 1f) v = v.normalized;
+                                        subject.OnNext(v);
+                                    })
+                                    .AddTo(_actionWiringSubscriptions);
+                            }
+                            else
+                            {
+                                // Event-driven: only trigger on value change (efficient for discrete inputs)
+                                action.PerformedAsObservable(token)
+                                    .Subscribe(ctx =>
+                                    {
+                                        var v = ctx.ReadValue<Vector2>();
+                                        var device = ctx.control.device;
+
+                                        // Anti-jitter: Ignore small mouse movements when using Gamepad
+                                        if (device is UnityEngine.InputSystem.Mouse && _activeDeviceKind.Value == InputDeviceKind.Gamepad)
+                                        {
+                                            if (v.magnitude < 1.0f) return;
+                                        }
+
+                                        if (v.sqrMagnitude > 1f) v = v.normalized;
+                                        subject.OnNext(v);
+                                    })
+                                    .AddTo(_actionWiringSubscriptions);
+                                
+                                // Send zero on cancel for event-driven inputs
+                                action.CanceledAsObservable(token)
+                                    .Select(_ => Vector2.zero)
+                                    .Subscribe(subject.AsObserver())
+                                    .AddTo(_actionWiringSubscriptions);
+                            }
+                            
                             action.PerformedAsObservable(token).Subscribe(ctx => UpdateActiveDeviceKind(ctx.control?.device)).AddTo(_actionWiringSubscriptions);
-                            action.CanceledAsObservable(token).Select(_ => Vector2.zero).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
                             _vector2Subjects[key] = subject;
                         }
                         else if (inferredType == ActionValueType.Float)
