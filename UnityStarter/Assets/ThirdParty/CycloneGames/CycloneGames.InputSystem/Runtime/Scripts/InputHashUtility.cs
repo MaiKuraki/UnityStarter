@@ -64,5 +64,55 @@ namespace CycloneGames.InputSystem.Runtime
                 return (int)hash;
             }
         }
+
+        /// <summary>
+        /// Generates a composite Action ID from context, map and action names without string concatenation.
+        /// Logically equivalent to hashing "contextName/mapName/actionName".
+        /// This ensures different contexts with the same action map and action name produce different IDs.
+        /// </summary>
+        public static int GetActionId(string contextName, string mapName, string actionName)
+        {
+            if (string.IsNullOrEmpty(contextName) || string.IsNullOrEmpty(mapName) || string.IsNullOrEmpty(actionName))
+                return 0;
+
+            unchecked
+            {
+                uint hash = FnvOffsetBasis;
+
+                // Hash contextName
+                int contextLen = contextName.Length;
+                for (int i = 0; i < contextLen; i++)
+                {
+                    hash ^= contextName[i];
+                    hash *= FnvPrime;
+                }
+
+                // Hash separator '/'
+                hash ^= '/';
+                hash *= FnvPrime;
+
+                // Hash mapName
+                int mapLen = mapName.Length;
+                for (int i = 0; i < mapLen; i++)
+                {
+                    hash ^= mapName[i];
+                    hash *= FnvPrime;
+                }
+
+                // Hash separator '/'
+                hash ^= '/';
+                hash *= FnvPrime;
+
+                // Hash actionName
+                int actionLen = actionName.Length;
+                for (int i = 0; i < actionLen; i++)
+                {
+                    hash ^= actionName[i];
+                    hash *= FnvPrime;
+                }
+
+                return (int)hash;
+            }
+        }
     }
 }

@@ -112,13 +112,17 @@ namespace CycloneGames.InputSystem.Sample
                 var confirmCommand = new ActionCommand(controller.OnConfirm);
                 var confirmLongPressCommand = new ActionCommand(controller.OnConfirmLongPress);
 
-                var gameplayContext = new InputContext("Gameplay", "PlayerActions")
+                // Create context (name parameter is optional, defaults to actionMapName)
+                var gameplayContext = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
                     .AddBinding(inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move), moveCommand)
                     .AddBinding(inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Confirm), confirmCommand)
                     .AddBinding(inputPlayer.GetLongPressObservable(InputActions.Actions.Gameplay_Confirm), confirmLongPressCommand);
+                
+                // Bind lifecycle to the controller
+                gameplayContext.AddTo(controller.destroyCancellationToken);
 
-                inputPlayer.RegisterContext(gameplayContext);
-                inputPlayer.PushContext("Gameplay");
+                // Push the context object directly
+                inputPlayer.PushContext(gameplayContext);
 
                 inputPlayer.ActiveDeviceKind.Subscribe(kind =>
                 {

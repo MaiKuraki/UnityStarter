@@ -39,6 +39,13 @@ In the editor window:
 1. Set the **Output Directory** (e.g., `Assets/Scripts/Generated`) and **Namespace** (e.g., `YourGame.Input.Generated`).
 2. Click **Save and Generate Constants** to save the configuration and generate the `InputActions.cs` file.
 
+The generated file will contain:
+- `InputActions.Contexts.*` - String constants for context names (e.g., `InputActions.Contexts.Gameplay`)
+- `InputActions.ActionMaps.*` - String constants for action map names (e.g., `InputActions.ActionMaps.PlayerActions`)
+- `InputActions.Actions.*` - Integer hash IDs for actions (e.g., `InputActions.Actions.Gameplay_Move`)
+
+These constants enable type-safe, zero-GC input access at runtime.
+
 ### Step 3: Initialize at Boot
 
 Load the configuration at game startup (e.g., in `MonoBehaviour.Start()` or an initialization script):
@@ -61,27 +68,45 @@ await InputSystemLoader.InitializeAsync(defaultUri, userUri);
 **Using generated constants (recommended):**
 
 ```csharp
+// Make sure to import R3 namespace
+using R3;
 // Make sure to import your custom namespace
 using YourGame.Input.Generated;
 using CycloneGames.InputSystem.Runtime;
 
 var svc = InputManager.Instance.JoinSinglePlayer(0);
-var ctx = new InputContext("Gameplay", "PlayerActions")
+
+// Create Context (name parameter is optional, defaults to actionMapName)
+// Option 1: Only ActionMap (name will be "PlayerActions")
+var ctx = new InputContext(InputActions.ActionMaps.PlayerActions)
   .AddBinding(svc.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(dir => {/*...*/}))
   .AddBinding(svc.GetButtonObservable(InputActions.Actions.Gameplay_Confirm), new ActionCommand(() => {/*...*/}));
-svc.RegisterContext(ctx);
-svc.PushContext("Gameplay");
+
+// Option 2: ActionMap + custom name for debugging
+// var ctx = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
+//   .AddBinding(...);
+
+// Bind lifecycle to current component (this) - automatically removes Context from stack when component is destroyed
+// Note: AddTo returns a CancellationTokenRegistration, so call it separately, do not assign back to ctx
+ctx.AddTo(this);
+
+// Push the context object directly to the stack
+svc.PushContext(ctx);
 ```
 
 **Using string-based API (compatibility mode):**
 
 ```csharp
 var svc = InputManager.Instance.JoinSinglePlayer(0);
-var ctx = new InputContext("Gameplay", "PlayerActions")
+// Only ActionMap required (name defaults to "PlayerActions")
+var ctx = new InputContext("PlayerActions")
   .AddBinding(svc.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(dir => {/*...*/}))
   .AddBinding(svc.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(() => {/*...*/}));
-svc.RegisterContext(ctx);
-svc.PushContext("Gameplay");
+
+// Or with custom name for debugging:
+// var ctx = new InputContext("PlayerActions", "Gameplay")...
+
+svc.PushContext(ctx);
 ```
 
 ## YAML Schema
@@ -130,19 +155,24 @@ using CycloneGames.InputSystem.Runtime;
 public class SimplePlayer : MonoBehaviour
 {
   private IInputPlayer _input;
+  private InputContext _context;
 
   private void Start()
   {
     // Join player 0 and create a gameplay context.
     _input = InputManager.Instance.JoinSinglePlayer(0);
-    var ctx = new InputContext("Gameplay", "PlayerActions")
+    // Only ActionMap required (name defaults to "PlayerActions")
+    _context = new InputContext("PlayerActions")
       .AddBinding(_input.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(OnMove))
       .AddBinding(_input.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(OnConfirm))
       // Optional long-press (requires YAML: longPressMs on "Confirm")
       .AddBinding(_input.GetLongPressObservable("PlayerActions", "Confirm"), new ActionCommand(OnConfirmLongPress));
 
-    _input.RegisterContext(ctx);
-    _input.PushContext("Gameplay");
+    // Bind lifecycle to this MonoBehaviour (requires R3 namespace)
+    // using R3;
+    _context.AddTo(this);
+
+    _input.PushContext(_context);
   }
 
   private void OnMove(Vector2 dir)
@@ -161,14 +191,146 @@ public class SimplePlayer : MonoBehaviour
     Debug.Log("Confirm long-pressed");
   }
 
+  // OnDestroy is no longer needed for context cleanup if AddTo(this) is used!
+  /*
   private void OnDestroy()
   {
-    // Cleanup: InputPlayer will be automatically cleaned up when InputManager.Dispose() is called
-    // If you need to clean up earlier when the component is destroyed, you can call:
-    // (_input as IDisposable)?.Dispose();
+    if (_input != null && _context != null)
+    {
+        _input.RemoveContext(_context);
+    }
   }
+  */
 }
 ```
+
+## Context Management Mechanism (Object Reference)
+
+`InputSystem` uses **Context object references** to manage the input stack as unique identifiers.
+
+### Core Features
+
+1.  **Independent Instances**: Every `new InputContext(...)` creates an independent object. Even if they share the same name (e.g., "Gameplay"), they are distinct instances.
+2.  **Stack Management**: `PushContext(ctx)` pushes the object onto the stack. The top context is active.
+3.  **Auto-Focus**: If you `PushContext` an object that is already in the stack, it automatically moves to the top (focus behavior).
+4.  **Precise Removal**: `RemoveContext(ctx)` removes only the specified object instance, preventing accidental removal of other contexts with the same name.
+
+### Example: UI Overlay Scenario
+
+When UI B overlays UI A, use the Context Stack to manage input priority:
+
+```csharp
+using R3; // Required for AddTo extension
+
+// UI A
+public class UIPageA : MonoBehaviour
+{
+    private InputContext _context;
+
+    private void OnEnable()
+    {
+        var input = InputManager.Instance.GetInputPlayer(0);
+        // ActionMap required, name optional (defaults to "UIActions")
+        _context = new InputContext("UIActions", "UI")
+            .AddBinding(..., new ActionCommand(OnConfirmA));
+        
+        // Bind lifecycle to this component - automatically removes when disabled/destroyed
+        _context.AddTo(this);
+        
+        input.PushContext(_context); // Stack: [A]
+    }
+
+    // OnDisable is no longer needed - AddTo(this) handles cleanup automatically!
+}
+
+// UI B (Overlays A)
+public class UIPageB : MonoBehaviour
+{
+    private InputContext _context;
+
+    private void OnEnable()
+    {
+        var input = InputManager.Instance.GetInputPlayer(0);
+        // Same name is fine, different instance
+        _context = new InputContext("UIActions", "UI")
+            .AddBinding(..., new ActionCommand(OnConfirmB));
+        
+        // Bind lifecycle to this component
+        _context.AddTo(this);
+        
+        input.PushContext(_context); // Stack: [A, B]. B is top, A is paused.
+    }
+
+    // OnDisable is no longer needed - AddTo(this) handles cleanup automatically!
+    // When B is destroyed, it's automatically removed from stack, and A resumes.
+}
+```
+
+## Multiple Contexts Sharing the Same ActionMap
+
+```
+Can different Contexts use the same ActionMap name (e.g., both use "PlayerActions")?
+Yes, this is safe and fully supported!
+```
+
+Each Context's bindings are stored independently in the Context object. When switching between contexts that share the same ActionMap name:
+
+1. The ActionMap is enabled/disabled correctly (Unity Input System handles this safely)
+2. Only the **top context's bindings** are subscribed and active
+3. Other contexts' bindings are automatically paused (their subscriptions are disposed)
+
+### Example: Gameplay and Pause Menu
+
+Both contexts use "PlayerActions", but bind different commands:
+
+```csharp
+using R3;
+
+// Gameplay Context - binds movement and combat
+public class GameplayController : MonoBehaviour
+{
+    private InputContext _gameplayContext;
+
+    private void Start()
+    {
+        var input = InputManager.Instance.GetInputPlayer(0);
+        _gameplayContext = new InputContext("PlayerActions", "Gameplay")
+            .AddBinding(input.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(OnMove))
+            .AddBinding(input.GetButtonObservable("PlayerActions", "Jump"), new ActionCommand(OnJump))
+            .AddBinding(input.GetButtonObservable("PlayerActions", "Attack"), new ActionCommand(OnAttack));
+        
+        _gameplayContext.AddTo(this);
+        input.PushContext(_gameplayContext); // Stack: [Gameplay]
+    }
+}
+
+// Pause Menu Context - also uses "PlayerActions", but only binds menu navigation
+public class PauseMenu : MonoBehaviour
+{
+    private InputContext _pauseContext;
+
+    private void OnEnable()
+    {
+        var input = InputManager.Instance.GetInputPlayer(0);
+        // Same ActionMap name "PlayerActions", but different bindings
+        _pauseContext = new InputContext("PlayerActions", "PauseMenu")
+            .AddBinding(input.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(OnMenuNavigate)) // Menu navigation
+            .AddBinding(input.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(OnMenuConfirm))
+            .AddBinding(input.GetButtonObservable("PlayerActions", "Cancel"), new ActionCommand(OnMenuCancel));
+        
+        _pauseContext.AddTo(this);
+        input.PushContext(_pauseContext); // Stack: [Gameplay, PauseMenu]. Only PauseMenu bindings are active.
+    }
+    
+    // When PauseMenu is destroyed, Gameplay context automatically resumes
+}
+```
+
+**Key Points**:
+- ✅ Multiple contexts can safely share the same ActionMap name
+- ✅ Each context's bindings are independent and stored in the context object
+- ✅ Switching contexts correctly activates only the top context's bindings
+- ✅ No conflicts or interference between contexts
 
 ## Context-specific Short vs Long Press
 
@@ -204,15 +366,17 @@ Runtime usage:
 
 ```csharp
 // In Inspect context: bind short press only
+var ctxInspect = new InputContext("PlayerActions", "Inspect");
 ctxInspect.AddBinding(_input.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(OnInspectConfirm));
 
 // In Charge context: bind long press only
+var ctxCharge = new InputContext("PlayerActions", "Charge");
 ctxCharge.AddBinding(_input.GetLongPressObservable("PlayerActions", "Confirm"), new ActionCommand(OnChargeConfirm));
 
 // Switch contexts as needed
-_input.RegisterContext(ctxInspect);
-_input.RegisterContext(ctxCharge);
-_input.PushContext("Inspect"); // later: _input.PushContext("Charge")
+_input.PushContext(ctxInspect); // Switch to Inspect
+// later:
+_input.PushContext(ctxCharge); // Switch to Charge
 ```
 
 ## Advanced Usage
@@ -358,11 +522,24 @@ inputService.UnblockInput();
 ### Context Stack Management
 
 ```csharp
-// Push new context (e.g., open menu)
-inputService.PushContext("Menu");
+using R3; // Required for AddTo extension
 
-// Pop context (return to previous context)
-inputService.PopContext();
+// Only ActionMap required (name defaults to "UIActions")
+var menuContext = new InputContext("UIActions", "Menu");
+
+// Push new context (e.g., open menu)
+inputService.PushContext(menuContext);
+
+// ⚠️ WARNING: Do not use PopContext() if you use AddTo(this) for lifecycle binding.
+// PopContext blindly removes the top element. If the stack order has changed (e.g. dynamic UI),
+// you might pop the wrong context. Use RemoveContext(context) or AddTo(this) instead.
+// inputService.PopContext(); // Not recommended when using lifecycle binding
+
+// Recommended: Remove specific context by object reference
+inputService.RemoveContext(menuContext);
+
+// Or bind lifecycle to a component (automatically removes when component is destroyed)
+// menuContext.AddTo(this);
 
 // View current active context
 string currentContext = inputService.ActiveContextName.CurrentValue;
@@ -374,146 +551,161 @@ inputService.ActiveContextName.Subscribe(ctxName =>
 });
 ```
 
-### Active Device Detection
+### Create-First-Bind-Later Pattern (Recommended for Game Initialization)
 
-Track the device type the player last used in real-time:
+During game initialization, you can create Contexts first, then dynamically add bindings and Push when needed. This pattern is suitable for scenarios requiring delayed binding or dynamic management:
 
 ```csharp
-// Subscribe to device type changes
-_input.ActiveDeviceKind.Subscribe(kind =>
+// During game initialization - create Contexts
+// Only ActionMap required (name defaults to ActionMapName)
+var gameplayContext = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay);
+var uiContext = new InputContext(InputActions.ActionMaps.UIActions, InputActions.Contexts.UI);
+var inputPlayer = inputManager.GetInputPlayer(0);
+
+// No Register needed, Context is an independent object
+
+// Later, dynamically add bindings when needed
+gameplayContext.AddBinding(
+    inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move),
+    new MoveCommand(OnMove)
+);
+gameplayContext.AddBinding(
+    inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Jump),
+    new ActionCommand(OnJump)
+);
+
+// If this is in a MonoBehaviour, bind lifecycle
+// gameplayContext.AddTo(this);
+
+// Activate Context (bindings are already added, will take effect immediately)
+inputPlayer.PushContext(gameplayContext);
+
+// Or, if Context is already active, refresh after adding bindings
+if (inputPlayer.ActiveContextName.Value == InputActions.Contexts.Gameplay)
 {
-    switch (kind)
+    // ... add more bindings ...
+    inputPlayer.RefreshActiveContext(); // Make new bindings take effect
+}
+```
+
+**Important Notes:**
+- ✅ Context is an independent object, no pre-registration needed
+- ✅ If Context is not yet active (not Push), add bindings then Push, bindings will take effect immediately
+- ⚠️ If Context is already active (already Push), after adding bindings you need to call `RefreshActiveContext()` to make new bindings take effect
+
+### Fine-Grained Binding Management
+
+When you dynamically add bindings to contexts in gameplay scenes, you can remove specific bindings without affecting the entire context.
+
+```csharp
+using R3; // Required for AddTo extension
+
+// In gameplay scene
+var gameplayContext = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
+    .AddBinding(inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(OnMove));
+
+// Bind lifecycle to this component (automatically removes context when component is destroyed)
+gameplayContext.AddTo(this);
+
+inputPlayer.PushContext(gameplayContext);
+
+// Later, add a dynamic binding
+var jumpObservable = inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Jump);
+var jumpCommand = new ActionCommand(OnJump);
+gameplayContext.AddBinding(jumpObservable, jumpCommand);
+
+// Important: After adding bindings, if the context is currently active, refresh it to make new bindings take effect
+inputPlayer.RefreshActiveContext();
+
+// When leaving gameplay scene - no OnDestroy needed if using AddTo(this)!
+// The context will be automatically removed when this component is destroyed.
+
+// However, if you need to remove specific bindings before component destruction:
+// inputPlayer.RemoveBindingFromContext(gameplayContext, jumpObservable);
+```
+
+**Important Notes:**
+- `RemoveBindingFromContext` allows you to remove specific bindings from a context without affecting other bindings
+- `RemoveContext` removes the entire context and all its bindings, **and automatically removes it from the stack** (if it's in the stack)
+
+### InputContext Lifecycle Management
+
+`InputContext` is a regular C# class and **can be created multiple times**. You can choose different usage patterns based on your project needs:
+
+#### Pattern 1: Shared Context Instance (Recommended for Static Bindings)
+
+If multiple scenes use the same binding configuration, you can create a shared Context instance:
+
+```csharp
+using R3; // Required for AddTo extension
+
+// Create in a global manager or singleton
+public class InputContextManager
+{
+    private static InputContext _sharedGameplayContext;
+    
+    public static InputContext GetGameplayContext(IInputPlayer inputPlayer)
     {
-        case InputDeviceKind.KeyboardMouse:
-            UpdateHUDIcons(KeyboardMouseIcons);
-            break;
-        case InputDeviceKind.Gamepad:
-            UpdateHUDIcons(GamepadIcons);
-            break;
+        if (_sharedGameplayContext == null)
+        {
+            _sharedGameplayContext = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
+                .AddBinding(inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(OnMove))
+                .AddBinding(inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Confirm), new ActionCommand(OnConfirm));
+        }
+        return _sharedGameplayContext;
     }
-});
-```
+}
 
-## Tutorial: Hold-to-Fill Progress (Press-and-Hold)
-
-Goal: while the button is held, increase a progress bar; stop (or reset) on release.
-
-### Step 1: Subscribe to Press State
-
-```csharp
-var isPressing = _input.GetPressStateObservable("PlayerActions", "Confirm");
-```
-
-### Step 2: Increment While Pressed
-
-```csharp
-float progress = 0f;
-float speed = 0.4f; // 40% per second
-
-isPressing.Subscribe(pressed =>
+// Use in Scene A
+public class SceneA : MonoBehaviour
 {
-  if (pressed)
-  {
-    UniTask.Void(async () =>
+    private void Start()
     {
-      while (pressed && progress < 1f)
-      {
-        await UniTask.Yield();
-        progress = Mathf.Min(1f, progress + Time.deltaTime * speed);
-        // Update UI
-        UpdateProgressBar(progress);
-      }
-    });
-  }
-  else
-  {
-    // On release: stop. Optionally reset:
-    // progress = 0f;
-    // UpdateProgressBar(progress);
-  }
-});
+        var inputPlayer = InputManager.Instance.GetInputPlayer(0);
+        var ctx = InputContextManager.GetGameplayContext(inputPlayer);
+        
+        // For shared contexts, you may want to manually manage removal
+        // Or bind to a persistent GameObject that outlives scene changes
+        inputPlayer.PushContext(ctx);
+    }
+    
+    private void OnDestroy()
+    {
+        // For shared contexts, manually remove when scene unloads
+        var inputPlayer = InputManager.Instance.GetInputPlayer(0);
+        inputPlayer.RemoveContext(InputContextManager.GetGameplayContext(inputPlayer));
+    }
+}
 ```
 
-### Step 3: Optional - Require Long Press Before Starting
+#### Pattern 2: Per-Scene Context Instance (Recommended for Dynamic Bindings)
 
-Set long press time in YAML:
-
-```yaml
-- type: Button
-  action: Confirm
-  longPressMs: 500
-  deviceBindings:
-    - "<Keyboard>/space"
-    - "<Gamepad>/buttonSouth"
-```
-
-Then use long press to start and release to stop:
+If each scene needs different binding configurations, each scene creates its own Context instance:
 
 ```csharp
-_input.GetLongPressObservable("PlayerActions", "Confirm").Subscribe(_ => StartFilling());
-_input.GetPressStateObservable("PlayerActions", "Confirm").Where(p => !p).Subscribe(_ => StopFilling());
-```
+using R3; // Required for AddTo extension
 
-## Other Advanced Features
-
-### Float/Trigger Long-Press
-
-For analog inputs (like gamepad triggers), you can use a threshold to define "pressed" state:
-
-YAML configuration:
-
-```yaml
-- type: Float
-  action: FireTrigger
-  longPressMs: 600
-  longPressValueThreshold: 0.6 # Threshold (0-1) considered as pressed
-  deviceBindings:
-    - "<Gamepad>/leftTrigger"
-```
-
-Code usage:
-
-```csharp
-_input.GetLongPressObservable("PlayerActions", "FireTrigger").Subscribe(_ => StartCharge());
-_input.GetPressStateObservable("PlayerActions", "FireTrigger").Where(p => !p).Subscribe(_ => CancelCharge());
-```
-
-### Mutual Exclusivity in the Same Context
-
-If you must decide short vs long press within a single context (no context switch), use press-state + long-press streams to ensure only one fires:
-
-```csharp
-var press = _input.GetPressStateObservable("PlayerActions", "Confirm");
-var longPress = _input.GetLongPressObservable("PlayerActions", "Confirm").Share();
-float thresholdSec = 0.5f; // keep in sync with YAML
-
-bool isPressed = false;
-float startTime = 0f;
-bool longFired = false;
-
-longPress.Subscribe(_ => longFired = true);
-press.Subscribe(p =>
+// Scene A - creates its own Context
+public class SceneA : MonoBehaviour
 {
-  if (p)
-  {
-    isPressed = true; startTime = Time.realtimeSinceStartup; longFired = false;
-  }
-  else if (isPressed)
-  {
-    var dur = Time.realtimeSinceStartup - startTime;
-    if (!longFired && dur < thresholdSec) OnShortClick();
-    if (longFired) OnLongPress();
-    isPressed = false;
-  }
-});
+    private InputContext _gameplayContext;
+    
+    private void Start()
+    {
+        var inputPlayer = InputManager.Instance.GetInputPlayer(0);
+        _gameplayContext = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
+            .AddBinding(inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(OnMoveA))
+            .AddBinding(inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Jump), new ActionCommand(OnJumpA));
+        
+        // Bind lifecycle to this component - automatically removes when scene unloads
+        _gameplayContext.AddTo(this);
+        
+        inputPlayer.PushContext(_gameplayContext);
+    }
+    
+    // OnDestroy is no longer needed - AddTo(this) handles cleanup automatically!
+}
 ```
-
-### Editor Tips
-
-- **Code Generation**: The editor window provides settings to customize the output directory and namespace for the generated `InputActions.cs` file. These settings are saved per-project in `EditorPrefs`.
-- **Long Press**: The "Long Press (ms)" field is only respected for `Button` and `Float` action types. For `Float` types, you can also set a "Long Press Threshold (0-1)" to define what analog value counts as "pressed".
-- **Vector2 Sources**: The `InputBindingConstants.Vector2Sources` class provides convenient constants for common Vector2 bindings like `Gamepad_LeftStick` and `Composite_WASD`.
-- **Reset Configuration**: The editor window provides a "Reset User to Default" button to reset user configuration to default.
 
 ## API Overview
 
@@ -539,24 +731,18 @@ Use generated constants to completely avoid runtime string operations:
 - `Observable<bool> GetPressStateObservable(int actionId)` - Press state stream (true=pressed, false=released)
 - `Observable<float> GetScalarObservable(int actionId)` - Scalar value stream (for Float type actions)
 
-#### String-Based API (Compatibility Mode)
-
-- `Observable<Vector2> GetVector2Observable(string actionName)` - Uses current context's ActionMap
-- `Observable<Vector2> GetVector2Observable(string actionMapName, string actionName)` - Specify ActionMap
-- `Observable<Unit> GetButtonObservable(string actionName)`
-- `Observable<Unit> GetButtonObservable(string actionMapName, string actionName)`
-- `Observable<Unit> GetLongPressObservable(string actionName)`
-- `Observable<Unit> GetLongPressObservable(string actionMapName, string actionName)`
-- `Observable<bool> GetPressStateObservable(string actionName)`
-- `Observable<bool> GetPressStateObservable(string actionMapName, string actionName)`
-- `Observable<float> GetScalarObservable(string actionName)`
-- `Observable<float> GetScalarObservable(string actionMapName, string actionName)`
-
 #### Context Management
 
-- `void RegisterContext(InputContext context)` - Register context (must be called before PushContext)
-- `void PushContext(string contextName)` - Push new context to the top of the stack
-- `void PopContext()` - Pop the top context, restore the previous context
+- `void PushContext(InputContext context)` - Push context to stack (if already in stack, moves to top)
+- `void PopContext()` - ⚠️ **Not recommended when using lifecycle binding (`AddTo`)**. PopContext blindly removes the top element. If the stack order has changed (e.g. dynamic UI), you might pop the wrong context. Use `RemoveContext(context)` or `AddTo(this)` instead.
+- `bool RemoveContext(InputContext context)` - Remove specific context from stack by object reference
+- `void RefreshActiveContext()` - Refresh the currently active context, re-subscribe to all bindings
+
+#### Binding Management
+
+- `bool RemoveBindingFromContext(InputContext context, Observable<Unit> source)` - Remove binding
+- `bool RemoveBindingFromContext(InputContext context, Observable<Vector2> source)`
+- `bool RemoveBindingFromContext(InputContext context, Observable<float> source)`
 
 #### Input Control
 
@@ -610,73 +796,28 @@ Singleton manager for the input system.
 
 ### InputContext
 
-Input context containing action bindings and commands.
+Input context containing action bindings and commands. Implements `IDisposable` for automatic lifecycle management.
 
 #### Constructor
 
-- `InputContext(string name, string actionMapName)` - Create context
+- `InputContext(string actionMapName, string name = null)` - Create context
+  - `actionMapName` (required): The Unity Input System ActionMap name (functionally required)
+  - `name` (optional): Display name for debugging. If null, defaults to `actionMapName`
+  - **Recommended**: Use generated constants: `new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)`
+  - **Simplified**: `new InputContext(InputActions.ActionMaps.PlayerActions)` - name will be "PlayerActions"
 
 #### Methods
 
 - `InputContext AddBinding(Observable<Unit> source, IActionCommand command)` - Add button action binding
 - `InputContext AddBinding(Observable<Vector2> source, IMoveCommand command)` - Add Vector2 action binding
 - `InputContext AddBinding(Observable<float> source, IScalarCommand command)` - Add scalar action binding
+- `bool RemoveBinding(Observable<Unit> source)` - Remove button action binding
+- `bool RemoveBinding(Observable<Vector2> source)` - Remove Vector2 action binding
+- `bool RemoveBinding(Observable<float> source)` - Remove scalar action binding
 
-### Command Interfaces
+#### Lifecycle Management
 
-- `IActionCommand` - No-parameter command interface
-- `IMoveCommand` - Vector2 parameter command interface
-- `IScalarCommand` - float parameter command interface
-
-### Predefined Command Classes
-
-- `ActionCommand(Action action)` - No-parameter command
-- `MoveCommand(Action<Vector2> action)` - Vector2 command
-- `ScalarCommand(Action<float> action)` - float command
-
-### InputSystemLoader
-
-Configuration loader that handles loading default and user configurations.
-
-#### Static Methods
-
-- `static async Task InitializeAsync(string defaultConfigUri, string userConfigUri)` - Initialize input system
-  - Prioritizes loading user configuration, falls back to default if not found
-  - Automatically copies default configuration to user configuration directory on first run
-
-### Generated InputActions Class
-
-After code generation, you will get:
-
-```csharp
-namespace YourGame.Input.Generated
-{
-    public static class InputActions
-    {
-        public static class ActionMaps
-        {
-            public static readonly int PlayerActions = ...;
-            // Other ActionMap constants
-        }
-
-        public static class Actions
-        {
-            public static readonly int Gameplay_Move = ...;
-            public static readonly int Gameplay_Confirm = ...;
-            // Other action constants (format: ContextName_ActionName)
-        }
-    }
-}
-```
-
-Usage:
-
-```csharp
-using YourGame.Input.Generated;
-
-// Use constants to get Observable
-var moveStream = inputService.GetVector2Observable(InputActions.Actions.Gameplay_Move);
-```
+- `void Dispose()` - Automatically removes this context from all active InputPlayers. Designed to be called via R3's `AddTo(this)` extension method.
 
 ## Dependency Injection (VContainer) Integration
 
@@ -701,250 +842,15 @@ public class GameLifetimeScope : LifetimeScope
             userConfigFileName: "user_input_settings.yaml",
             postInitCallback: async resolver =>
             {
-                // Optional: Setup initial player after initialization
+                //  ...
                 var inputResolver = resolver.Resolve<IInputPlayerResolver>();
                 var player0Input = inputResolver.GetInputPlayer(0);
-                // Setup contexts, etc.
             }
         );
         inputSystemInstaller.Install(builder);
 
         // Register your game systems that depend on input
         builder.Register<PlayerController>(Lifetime.Scoped);
-    }
-}
-```
-
-#### Option 2: AssetManagement Loading (YooAsset/Addressables)
-
-If you're using `CycloneGames.AssetManagement` with YooAsset or Addressables:
-
-**Important**: User config is **always** loaded from `PersistentData` path automatically. You only need to provide a loader for the default config.
-
-> **Note on Config Loading Methods:**
->
-> - **TextAsset** (recommended for Addressables/Resources): Loads YAML as a Unity TextAsset. Works with all providers (YooAsset, Addressables, Resources). Your YAML file should be imported as a TextAsset in Unity.
-> - **RawFile** (YooAsset only): Loads YAML as a raw file. Only works with YooAsset provider. More efficient for YooAsset but not supported by Addressables/Resources.
->
-> By default, the helper tries RawFile first (for YooAsset), then falls back to TextAsset (for Addressables/Resources). You can also explicitly specify `useTextAsset: true` to force TextAsset loading.
-
-```csharp
-using VContainer;
-using VContainer.Unity;
-using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
-using CycloneGames.AssetManagement.Runtime.Integrations.VContainer;
-
-public class GameLifetimeScope : LifetimeScope
-{
-    protected override void Configure(IContainerBuilder builder)
-    {
-        // Install AssetManagement first
-        var assetManagementInstaller = new AssetManagementVContainerInstaller();
-        assetManagementInstaller.Install(builder);
-
-        // Create default config loader from AssetManagement
-        // Get package directly (not from resolver) and create loader
-        // The package should be obtained from your AssetManagement setup
-        var package = assetModule.GetPackage("DefaultPackage"); // Get package from your setup
-        var defaultLoader = InputSystemAssetManagementHelper.CreateDefaultConfigLoader(
-            package: package,
-            defaultConfigLocation: "input_config.yaml",
-            useTextAsset: false  // false = try RawFile first, fallback to TextAsset
-        );
-
-        // Install InputSystem
-        // User config will be automatically loaded from PersistentData/user_input_settings.yaml
-        var inputSystemInstaller = new InputSystemVContainerInstaller(
-            defaultLoader,
-            userConfigFileName: "user_input_settings.yaml", // Optional: specify user config filename
-            postInitCallback: async resolver =>
-            {
-                var inputResolver = resolver.Resolve<IInputPlayerResolver>();
-                var player0Input = inputResolver.GetInputPlayer(0);
-                // Setup contexts, etc.
-            }
-        );
-        inputSystemInstaller.Install(builder);
-
-        builder.Register<PlayerController>(Lifetime.Scoped);
-    }
-}
-```
-
-**How it works:**
-
-1. First, tries to load user config from `PersistentData/user_input_settings.yaml` (or subdirectory path if specified, e.g., `ConfigFolder/user_input_settings.yaml`)
-2. If not found, loads default config from AssetManagement (or StreamingAssets if using Option 1)
-3. If default config was loaded, automatically saves it to `PersistentData/user_input_settings.yaml` (or subdirectory) for future use
-4. All subsequent saves/loads of user config go to `PersistentData` path
-
-**Path Support:**
-
-- **User Config**: Supports subdirectories (e.g., `ConfigFolder/user_input_settings.yaml` will be saved to `PersistentData/ConfigFolder/user_input_settings.yaml`). Directory will be created automatically if it doesn't exist.
-- **Default Config (StreamingAssets)**: Supports subdirectories (e.g., `Config/input_config.yaml` will load from `StreamingAssets/Config/input_config.yaml`).
-- **Default Config (AssetManagement)**: Use the location as defined in your AssetManagement package (e.g., `Assets/Config/input_config.yaml` or just `input_config.yaml`).
-
-#### Option 3: Custom Default Config Loader
-
-For complete control over default config loading (e.g., from database, network, etc.):
-
-```csharp
-var inputSystemInstaller = new InputSystemVContainerInstaller(
-    defaultLoader: async resolver =>
-    {
-        // Your custom loading logic
-        // e.g., load from database, network, etc.
-        return await LoadConfigFromCustomSource();
-    },
-    userConfigFileName: "user_input_settings.yaml" // User config always from PersistentData
-);
-inputSystemInstaller.Install(builder);
-```
-
-**Note**: User config is always managed in `PersistentData` path because:
-
-- It needs to be writable for saving user customizations
-- It persists across app updates
-- It's separate from the default config which may be in read-only locations (AssetManagement, StreamingAssets)
-
-#### Option 4: Delayed Initialization (Hot-Update Scenarios)
-
-For hot-update games where AssetManagement packages may not be ready at registration time:
-
-```csharp
-using VContainer;
-using VContainer.Unity;
-using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
-using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.AssetManagement.Runtime.Integrations.VContainer;
-
-public class GameLifetimeScope : LifetimeScope
-{
-    protected override void Configure(IContainerBuilder builder)
-    {
-        // Install AssetManagement first
-        var assetManagementInstaller = new AssetManagementVContainerInstaller();
-        assetManagementInstaller.Install(builder);
-
-        // Install InputSystem with delayed initialization
-        // Set autoInitialize: false to delay initialization until package is ready
-        // Get package from your AssetManagement setup (not from resolver)
-        var package = assetModule.GetPackage("DefaultPackage"); // Get from your setup
-        var defaultLoader = InputSystemAssetManagementHelper.CreateDefaultConfigLoader(
-            package: package,
-            defaultConfigLocation: "Assets/Config/input_config.yaml"
-        );
-
-        var inputSystemInstaller = new InputSystemVContainerInstaller(
-            defaultConfigLoader: defaultLoader,
-            userConfigFileName: "user_input_settings.yaml",
-            autoInitialize: false // Delay initialization
-        );
-        inputSystemInstaller.Install(builder);
-
-        builder.Register<PlayerController>(Lifetime.Scoped);
-    }
-
-    protected override async UniTaskVoid Start()
-    {
-        // Wait for AssetManagement package to be ready
-        var assetModule = Container.Resolve<IAssetModule>();
-        await assetModule.InitializeAsync();
-
-        var defaultPackage = assetModule.CreatePackage("DefaultPackage");
-        await defaultPackage.InitializeAsync(/* ... */);
-
-        // Now initialize InputSystem manually
-        var initializer = Container.Resolve<IInputSystemInitializer>();
-        await initializer.InitializeAsync(Container);
-
-        // Setup players, etc.
-    }
-}
-```
-
-**Updating Configuration After Hot-Update:**
-
-```csharp
-public class HotUpdateHandler
-{
-    private readonly IInputSystemInitializer _inputInitializer;
-    private readonly IAssetPackage _package;  // Inject package directly, not IAssetModule
-
-    [Inject]
-    public HotUpdateHandler(IInputSystemInitializer inputInitializer, IAssetPackage package)
-    {
-        _inputInitializer = inputInitializer;
-        _package = package;  // Package should be registered in DI container
-    }
-
-    public async UniTask OnHotUpdateComplete()
-    {
-        // After hot-update, reload config from updated AssetManagement package
-        // Option 1: Use ReinitializeFromPackageAsync (recommended)
-        await _inputInitializer.ReinitializeFromPackageAsync(
-            _package,
-            "Assets/Config/input_config.yaml",
-            saveToUserConfig: true
-        );
-
-        // Option 2: Manual load and update
-        // var loader = InputSystemAssetManagementHelper.CreateConfigLoader(
-        //     package,
-        //     "Assets/Config/input_config.yaml"
-        // );
-        // string newConfig = await loader();
-        // if (!string.IsNullOrEmpty(newConfig))
-        // {
-        //     await _inputInitializer.UpdateConfigurationAsync(newConfig, saveToUserConfig: true);
-        // }
-    }
-}
-```
-
-**Reloading User Configuration (Player Key Rebinding):**
-
-```csharp
-public class SettingsMenu
-{
-    private readonly IInputSystemInitializer _inputInitializer;
-
-    [Inject]
-    public SettingsMenu(IInputSystemInitializer inputInitializer)
-    {
-        _inputInitializer = inputInitializer;
-    }
-
-    public async UniTask OnPlayerSavedKeyBindings()
-    {
-        // Player has modified and saved key bindings
-        // Reload the updated user configuration
-        await _inputInitializer.ReloadUserConfigurationAsync();
-    }
-}
-```
-
-**Cross-Scene/Cross-Resolver Usage:**
-
-You can resolve `IInputSystemInitializer` from any resolver (parent or child scope) to reload configuration:
-
-```csharp
-// In any scene or LifetimeScope
-public class SomeOtherScene : LifetimeScope
-{
-    protected override void Configure(IContainerBuilder builder)
-    {
-        // ... other registrations
-    }
-
-    protected override async UniTaskVoid Start()
-    {
-        // Resolve initializer from parent scope
-        var initializer = Parent.Container.Resolve<IInputSystemInitializer>();
-
-        // Get package from your setup (should be registered in DI or obtained from your AssetManagement setup)
-        var package = Parent.Container.Resolve<IAssetPackage>(); // Or get from your AssetManagement setup
-        await initializer.ReinitializeFromPackageAsync(package, "Assets/Config/input_config.yaml");
     }
 }
 ```
@@ -975,148 +881,15 @@ public class PlayerController
     {
         _input = _inputResolver.GetInputPlayer(playerId);
 
-        var ctx = new InputContext("Gameplay", "PlayerActions")
+        // Only ActionMap required (name defaults to "PlayerActions")
+        var ctx = new InputContext("PlayerActions", "Gameplay")
             .AddBinding(_input.GetVector2Observable("Move"), new MoveCommand(OnMove))
             .AddBinding(_input.GetButtonObservable("Confirm"), new ActionCommand(OnConfirm));
 
-        _input.RegisterContext(ctx);
-        _input.PushContext("Gameplay");
+        _input.PushContext(ctx);
     }
 
     private void OnMove(Vector2 dir) { /* ... */ }
     private void OnConfirm() { /* ... */ }
-}
-```
-
-#### Pattern 2: Inject InputManager Directly
-
-For advanced scenarios where you need full control:
-
-```csharp
-using CycloneGames.InputSystem.Runtime;
-using VContainer;
-
-public class GameSession
-{
-    private readonly InputManager _inputManager;
-
-    [Inject]
-    public GameSession(InputManager inputManager)
-    {
-        _inputManager = inputManager;
-    }
-
-    public async UniTask StartMultiplayerLobby()
-    {
-        _inputManager.OnPlayerInputReady += OnPlayerInputReady;
-        _inputManager.StartListeningForPlayers(false); // Shared devices mode
-    }
-
-    private void OnPlayerInputReady(IInputPlayer service)
-    {
-        // Setup player-specific input contexts
-        var ctx = new InputContext("Gameplay", "PlayerActions")
-            .AddBinding(service.GetVector2Observable("Move"), new MoveCommand(OnMove));
-        service.RegisterContext(ctx);
-        service.PushContext("Gameplay");
-    }
-}
-```
-
-#### Pattern 3: Factory Method with Player ID
-
-Create a factory that resolves input services by player ID:
-
-```csharp
-using CycloneGames.InputSystem.Runtime;
-using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
-using VContainer;
-
-public class PlayerFactory
-{
-    private readonly IInputPlayerResolver _inputResolver;
-    private readonly IObjectResolver _resolver;
-
-    [Inject]
-    public PlayerFactory(IInputPlayerResolver inputResolver, IObjectResolver resolver)
-    {
-        _inputResolver = inputResolver;
-        _resolver = resolver;
-    }
-
-    public PlayerController CreatePlayer(int playerId)
-    {
-        var inputService = _inputResolver.GetInputPlayer(playerId);
-        var controller = _resolver.Resolve<PlayerController>();
-        controller.Initialize(inputService, playerId);
-        return controller;
-    }
-}
-```
-
-### Complete Example: VContainer Integration
-
-```csharp
-using VContainer;
-using VContainer.Unity;
-using CycloneGames.InputSystem.Runtime;
-using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
-using YourGame.Input.Generated;
-
-public class GameLifetimeScope : LifetimeScope
-{
-    protected override void Configure(IContainerBuilder builder)
-    {
-        // Install InputSystem
-        builder.Install(new InputSystemVContainerInstaller());
-
-        // Register game systems
-        builder.Register<PlayerController>(Lifetime.Scoped);
-        builder.Register<GameSession>(Lifetime.Singleton);
-    }
-
-    protected override async UniTaskVoid Start()
-    {
-        // InputSystem is automatically initialized by the installer
-        // Now you can use it
-        var resolver = Container.Resolve<IInputPlayerResolver>();
-        var inputService = resolver.GetInputPlayer(0);
-
-        // Setup input context
-        var ctx = new InputContext("Gameplay", "PlayerActions")
-            .AddBinding(
-                inputService.GetVector2Observable(InputActions.Actions.Gameplay_Move),
-                new MoveCommand(OnMove)
-            )
-            .AddBinding(
-                inputService.GetButtonObservable(InputActions.Actions.Gameplay_Confirm),
-                new ActionCommand(OnConfirm)
-            );
-
-        inputService.RegisterContext(ctx);
-        inputService.PushContext("Gameplay");
-    }
-
-    private void OnMove(Vector2 dir) { /* ... */ }
-    private void OnConfirm() { /* ... */ }
-}
-
-// Example: PlayerController with injected input
-public class PlayerController
-{
-    private readonly IInputPlayerResolver _inputResolver;
-    private IInputPlayer _input;
-
-    [Inject]
-    public PlayerController(IInputPlayerResolver inputResolver)
-    {
-        _inputResolver = inputResolver;
-    }
-
-    public void Initialize(int playerId)
-    {
-        _input = _inputResolver.GetInputPlayer(playerId);
-        // Setup contexts...
-    }
 }
 ```

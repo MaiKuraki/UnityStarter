@@ -39,6 +39,14 @@
 1. 设置**输出目录**（例如 `Assets/Scripts/Generated`）和**命名空间**（例如 `YourGame.Input.Generated`）。
 2. 点击 **Save and Generate Constants** 保存配置并生成 `InputActions.cs` 文件。
 
+生成的文件将包含：
+
+- `InputActions.Contexts.*` - 上下文名称的字符串常量（例如 `InputActions.Contexts.Gameplay`）
+- `InputActions.ActionMaps.*` - 动作映射名称的字符串常量（例如 `InputActions.ActionMaps.PlayerActions`）
+- `InputActions.Actions.*` - 动作的整型哈希 ID（例如 `InputActions.Actions.Gameplay_Move`）
+
+这些常量支持类型安全、零 GC 的运行时输入访问。
+
 ### 步骤 3：启动时初始化
 
 在游戏启动时（例如在 `MonoBehaviour.Start()` 或初始化脚本中）加载配置：
@@ -61,27 +69,45 @@ await InputSystemLoader.InitializeAsync(defaultUri, userUri);
 **使用生成的常量（推荐）：**
 
 ```csharp
+// 确保引入了 R3 命名空间
+using R3;
 // 确保引入了您自定义的命名空间
 using YourGame.Input.Generated;
 using CycloneGames.InputSystem.Runtime;
 
 var svc = InputManager.Instance.JoinSinglePlayer(0);
-var ctx = new InputContext("Gameplay", "PlayerActions")
+
+// 创建 Context（name 参数可选，默认为 actionMapName）
+// 方式 1：仅传入 ActionMap（name 将自动使用 "PlayerActions"）
+var ctx = new InputContext(InputActions.ActionMaps.PlayerActions)
   .AddBinding(svc.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(dir => {/*...*/}))
   .AddBinding(svc.GetButtonObservable(InputActions.Actions.Gameplay_Confirm), new ActionCommand(() => {/*...*/}));
-svc.RegisterContext(ctx);
-svc.PushContext("Gameplay");
+
+// 方式 2：ActionMap + 自定义名称（用于调试）
+// var ctx = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
+//   .AddBinding(...);
+
+// 绑定生命周期到当前组件 (this) - 当组件销毁时自动从输入栈中移除 Context
+// 注意：AddTo 返回的是 CancellationTokenRegistration，所以要单独调用，不要赋回给 ctx
+ctx.AddTo(this);
+
+// 直接将 Context 对象推入栈
+svc.PushContext(ctx);
 ```
 
 **使用字符串 API（兼容模式）：**
 
 ```csharp
 var svc = InputManager.Instance.JoinSinglePlayer(0);
-var ctx = new InputContext("Gameplay", "PlayerActions")
+// 仅需传入 ActionMap（name 默认为 "PlayerActions"）
+var ctx = new InputContext("PlayerActions")
   .AddBinding(svc.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(dir => {/*...*/}))
   .AddBinding(svc.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(() => {/*...*/}));
-svc.RegisterContext(ctx);
-svc.PushContext("Gameplay");
+
+// 或使用自定义名称用于调试：
+// var ctx = new InputContext("PlayerActions", "Gameplay")...
+
+svc.PushContext(ctx);
 ```
 
 ## YAML 配置示例
@@ -130,19 +156,24 @@ using CycloneGames.InputSystem.Runtime;
 public class SimplePlayer : MonoBehaviour
 {
   private IInputPlayer _input;
+  private InputContext _context;
 
   private void Start()
   {
     // 加入玩家0并创建游戏上下文
     _input = InputManager.Instance.JoinSinglePlayer(0);
-    var ctx = new InputContext("Gameplay", "PlayerActions")
+    // 仅需传入 ActionMap（name 默认为 "PlayerActions"）
+    _context = new InputContext("PlayerActions")
       .AddBinding(_input.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(OnMove))
       .AddBinding(_input.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(OnConfirm))
       // 可选：长按（需要在 YAML 中为 "Confirm" 设置 longPressMs）
       .AddBinding(_input.GetLongPressObservable("PlayerActions", "Confirm"), new ActionCommand(OnConfirmLongPress));
 
-    _input.RegisterContext(ctx);
-    _input.PushContext("Gameplay");
+    // 绑定生命周期到当前组件（需要引入 R3 命名空间）
+    // using R3;
+    _context.AddTo(this);
+
+    _input.PushContext(_context);
   }
 
   private void OnMove(Vector2 dir)
@@ -161,14 +192,147 @@ public class SimplePlayer : MonoBehaviour
     Debug.Log("Confirm 长按");
   }
 
+  // 如果使用了 AddTo(this)，就不再需要 OnDestroy 手动清理了！
+  /*
   private void OnDestroy()
   {
-    // 清理：InputPlayer 会在 InputManager.Dispose() 时自动清理
-    // 如果需要在组件销毁时提前清理，可以调用：
-    // (_input as IDisposable)?.Dispose();
+    if (_input != null && _context != null)
+    {
+        _input.RemoveContext(_context);
+    }
   }
+  */
 }
 ```
+
+## Context 管理机制（对象引用）
+
+`InputSystem` 使用 **Context 对象引用** 来管理输入栈作为唯一标识。
+
+### 核心特性
+
+1.  **独立实例**：每次 `new InputContext(...)` 都会创建一个独立的对象。即使它们的名称相同（如 "Gameplay"），它们也是不同的实例。
+2.  **栈管理**：`PushContext(ctx)` 将对象推入栈。栈顶的 Context 为活动状态。
+3.  **自动置顶**：如果 `PushContext` 一个已经在栈中的 Context 对象，它会自动移动到栈顶（聚焦行为）。
+4.  **精确移除**：`RemoveContext(ctx)` 只移除指定的对象实例，不会误删其他同名的 Context。
+
+### 示例：UI 叠加场景
+
+当 UI B 叠加在 UI A 上时，通过 Context Stack 管理输入优先级：
+
+```csharp
+using R3; // 需要引入 R3 命名空间以使用 AddTo 扩展
+
+// UI A
+public class UIPageA : MonoBehaviour
+{
+    private InputContext _context;
+
+    private void OnEnable()
+    {
+        var input = InputManager.Instance.GetInputPlayer(0);
+        // ActionMap 必需，name 可选（默认为 "UIActions"）
+        _context = new InputContext("UIActions", "UI")
+            .AddBinding(..., new ActionCommand(OnConfirmA));
+
+        // 将生命周期绑定到此组件 - 当组件禁用/销毁时自动移除
+        _context.AddTo(this);
+
+        input.PushContext(_context); // 栈：[A]
+    }
+
+    // OnDisable 不再需要 - AddTo(this) 会自动处理清理！
+}
+
+// UI B (叠加在 A 上)
+public class UIPageB : MonoBehaviour
+{
+    private InputContext _context;
+
+    private void OnEnable()
+    {
+        var input = InputManager.Instance.GetInputPlayer(0);
+        // 名称相同也没关系，是不同实例
+        _context = new InputContext("UIActions", "UI")
+            .AddBinding(..., new ActionCommand(OnConfirmB));
+
+        // 将生命周期绑定到此组件
+        _context.AddTo(this);
+
+        input.PushContext(_context); // 栈：[A, B]。B 在栈顶，A 被暂停。
+    }
+
+    // OnDisable 不再需要 - AddTo(this) 会自动处理清理！
+    // 当 B 被销毁时，它会自动从栈中移除，A 自动恢复。
+}
+```
+
+## 多个 Context 共享相同的 ActionMap 名称
+
+```
+不同的 Context 能否使用相同的 ActionMap 名称（例如，都使用 "PlayerActions"）？
+可以，这是安全且完全支持的！
+```
+
+每个 Context 的绑定都独立存储在 Context 对象中。当在共享相同 ActionMap 名称的 Context 之间切换时：
+
+1. ActionMap 会正确启用/禁用（Unity Input System 安全处理）
+2. 只有**栈顶 Context 的绑定**会被订阅并生效
+3. 其他 Context 的绑定会自动暂停（它们的订阅会被 Dispose）
+
+### 示例：游戏和暂停菜单
+
+两个 Context 都使用 "PlayerActions"，但绑定不同的命令：
+
+```csharp
+using R3;
+
+// 游戏 Context - 绑定移动和战斗
+public class GameplayController : MonoBehaviour
+{
+    private InputContext _gameplayContext;
+
+    private void Start()
+    {
+        var input = InputManager.Instance.GetInputPlayer(0);
+        _gameplayContext = new InputContext("PlayerActions", "Gameplay")
+            .AddBinding(input.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(OnMove))
+            .AddBinding(input.GetButtonObservable("PlayerActions", "Jump"), new ActionCommand(OnJump))
+            .AddBinding(input.GetButtonObservable("PlayerActions", "Attack"), new ActionCommand(OnAttack));
+
+        _gameplayContext.AddTo(this);
+        input.PushContext(_gameplayContext); // 栈：[Gameplay]
+    }
+}
+
+// 暂停菜单 Context - 也使用 "PlayerActions"，但只绑定菜单导航
+public class PauseMenu : MonoBehaviour
+{
+    private InputContext _pauseContext;
+
+    private void OnEnable()
+    {
+        var input = InputManager.Instance.GetInputPlayer(0);
+        // 相同的 ActionMap 名称 "PlayerActions"，但绑定不同
+        _pauseContext = new InputContext("PlayerActions", "PauseMenu")
+            .AddBinding(input.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(OnMenuNavigate)) // 菜单导航
+            .AddBinding(input.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(OnMenuConfirm))
+            .AddBinding(input.GetButtonObservable("PlayerActions", "Cancel"), new ActionCommand(OnMenuCancel));
+
+        _pauseContext.AddTo(this);
+        input.PushContext(_pauseContext); // 栈：[Gameplay, PauseMenu]。只有 PauseMenu 的绑定生效。
+    }
+
+    // 当 PauseMenu 被销毁时，Gameplay Context 会自动恢复
+}
+```
+
+**关键点**：
+
+- ✅ 多个 Context 可以安全地共享相同的 ActionMap 名称
+- ✅ 每个 Context 的绑定是独立的，存储在 Context 对象中
+- ✅ 切换 Context 时，只会激活栈顶 Context 的绑定
+- ✅ Context 之间不会产生冲突或干扰
 
 ## 不同上下文的短按/长按（互斥）
 
@@ -204,15 +368,17 @@ playerSlots:
 
 ```csharp
 // Inspect 上下文：只绑定短按
+var ctxInspect = new InputContext("PlayerActions", "Inspect");
 ctxInspect.AddBinding(_input.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(OnInspectConfirm));
 
 // Charge 上下文：只绑定长按
+var ctxCharge = new InputContext("PlayerActions", "Charge");
 ctxCharge.AddBinding(_input.GetLongPressObservable("PlayerActions", "Confirm"), new ActionCommand(OnChargeConfirm));
 
 // 根据逻辑切换上下文
-_input.RegisterContext(ctxInspect);
-_input.RegisterContext(ctxCharge);
-_input.PushContext("Inspect"); // 需要时切换：_input.PushContext("Charge")
+_input.PushContext(ctxInspect); // 切换到 Inspect
+// 需要时切换：
+_input.PushContext(ctxCharge); // 切换到 Charge
 ```
 
 ## 高级用法
@@ -343,180 +509,207 @@ inputService.OnContextChanged += (string contextName) =>
 };
 ```
 
-## 教程：按住增加进度条（松手停止/可重置）
+### 输入阻塞
 
-目标：按住按钮时持续增加进度条，松手时停止（可选择是否清零）。
-
-### 步骤 1：订阅按下状态
+临时禁用所有输入（例如，显示暂停菜单时）：
 
 ```csharp
-var isPressing = _input.GetPressStateObservable("PlayerActions", "Confirm");
+// 阻塞输入
+inputService.BlockInput();
+
+// 恢复输入
+inputService.UnblockInput();
 ```
 
-### 浮点/Trigger 的长按
-
-YAML（Float 带阈值）：
-
-```yaml
-- type: Float
-  action: FireTrigger
-  longPressMs: 600
-  longPressValueThreshold: 0.6
-  deviceBindings:
-    - "<Gamepad>/leftTrigger"
-```
-
-代码：
+### 上下文栈管理
 
 ```csharp
-_input.GetLongPressObservable("PlayerActions", "FireTrigger").Subscribe(_ => StartCharge());
-_input.GetPressStateObservable("PlayerActions", "FireTrigger").Where(p => !p).Subscribe(_ => CancelCharge());
-```
+using R3; // 需要引入 R3 命名空间以使用 AddTo 扩展
 
-### 同一上下文内短按/长按互斥
+// 仅需传入 ActionMap（name 默认为 "UIActions"）
+var menuContext = new InputContext("UIActions", "Menu");
 
-如果不切换上下文，需要在同一上下文内判定短按或长按且互斥，可结合按下状态与长按流：
+// 推入新上下文（例如，打开菜单）
+inputService.PushContext(menuContext);
 
-```csharp
-var press = _input.GetPressStateObservable("PlayerActions", "Confirm");
-var longPress = _input.GetLongPressObservable("PlayerActions", "Confirm").Share();
-float thresholdSec = 0.5f; // 与 YAML 保持一致
+// ⚠️ 警告：如果您使用了 AddTo(this) 进行生命周期绑定，请不要使用 PopContext。
+// PopContext 会无脑移除栈顶，如果栈顺序发生变化（如动态 UI），可能会移除错误的上下文。
+// 请使用 RemoveContext(context) 或 AddTo(this) 代替。
+// inputService.PopContext(); // 使用生命周期绑定时不推荐
 
-bool isPressed = false;
-float startTime = 0f;
-bool longFired = false;
+// 推荐：通过对象引用移除特定上下文
+inputService.RemoveContext(menuContext);
 
-longPress.Subscribe(_ => longFired = true);
-press.Subscribe(p =>
+// 或者将生命周期绑定到组件（组件销毁时自动移除）
+// menuContext.AddTo(this);
+
+// 查看当前活动上下文
+string currentContext = inputService.ActiveContextName.CurrentValue;
+
+// 订阅上下文变化
+inputService.ActiveContextName.Subscribe(ctxName =>
 {
-  if (p)
-  {
-    isPressed = true; startTime = Time.realtimeSinceStartup; longFired = false;
-  }
-  else if (isPressed)
-  {
-    var dur = Time.realtimeSinceStartup - startTime;
-    if (!longFired && dur < thresholdSec) OnShortClick();
-    if (longFired) OnLongPress();
-    isPressed = false;
-  }
+    Debug.Log($"当前上下文: {ctxName}");
 });
 ```
 
-### 编辑器提示
+### 先创建后绑定模式（推荐用于游戏初始化）
 
-- **代码生成**：编辑器窗口提供了设置选项，可自定义生成的 `InputActions.cs` 文件的输出目录和命名空间。这些设置会保存在项目的 `EditorPrefs` 中。
-- **长按**：“Long Press (ms)” 字段仅对 `Button` 和 `Float` 类型的动作有效。对于 `Float` 类型，您还可以设置 “Long Press Threshold (0-1)” 来定义模拟量的“按下”阈值。
-- **Vector2 来源**：`InputBindingConstants.Vector2Sources` 类为常用的 Vector2 绑定（如 `Gamepad_LeftStick` 和 `Composite_WASD`）提供了方便的常量。
-
-2. 在按住期间逐帧累加：
+在游戏初始化时，可以先创建 Context，然后在需要时动态添加绑定和 Push。这种方式适合需要延迟绑定或动态管理的场景：
 
 ```csharp
-float progress = 0f;
-float speed = 0.4f; // 每秒增长 40%
+// 游戏初始化时 - 创建 Context
+// 仅需传入 ActionMap（name 默认为 ActionMapName）
+var gameplayContext = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay);
+var uiContext = new InputContext(InputActions.ActionMaps.UIActions, InputActions.Contexts.UI);
+var inputPlayer = inputManager.GetInputPlayer(0);
 
-isPressing.Subscribe(pressed =>
+// 此时不需要 Register，Context 是独立对象
+
+// 稍后，在需要时动态添加绑定
+gameplayContext.AddBinding(
+    inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move),
+    new MoveCommand(OnMove)
+);
+gameplayContext.AddBinding(
+    inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Jump),
+    new ActionCommand(OnJump)
+);
+
+// 如果这是在一个 MonoBehaviour 中，可以绑定生命周期
+// gameplayContext.AddTo(this);
+
+// 激活 Context（此时绑定已经添加，会立即生效）
+inputPlayer.PushContext(gameplayContext);
+
+// 或者，如果 Context 已经激活，添加绑定后需要刷新
+if (inputPlayer.ActiveContextName.Value == InputActions.Contexts.Gameplay)
 {
-  if (pressed)
-  {
-    UniTask.Void(async () =>
+    // ... 添加更多绑定 ...
+    inputPlayer.RefreshActiveContext(); // 使新绑定生效
+}
+```
+
+**重要提示：**
+
+- ✅ Context 是独立对象，无需预注册
+- ✅ 如果 Context 还未激活（未 Push），添加绑定后直接 Push 即可
+- ⚠️ 如果 Context 已经激活（已 Push），添加绑定后需要调用 `RefreshActiveContext()` 来使新绑定生效
+
+### 细粒度绑定管理
+
+当您在游戏场景中动态向上下文添加绑定时，可以移除特定绑定而不影响整个上下文。
+
+```csharp
+using R3; // 需要引入 R3 命名空间以使用 AddTo 扩展
+
+// 在游戏场景中
+var gameplayContext = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
+    .AddBinding(inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(OnMove));
+
+// 将生命周期绑定到此组件（组件销毁时自动移除上下文）
+gameplayContext.AddTo(this);
+
+inputPlayer.PushContext(gameplayContext);
+
+// 稍后，添加动态绑定
+var jumpObservable = inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Jump);
+var jumpCommand = new ActionCommand(OnJump);
+gameplayContext.AddBinding(jumpObservable, jumpCommand);
+
+// 重要：添加绑定后，如果该上下文当前是活动的，需要刷新以使其生效
+inputPlayer.RefreshActiveContext();
+
+// 离开游戏场景时 - 如果使用了 AddTo(this)，则不需要 OnDestroy！
+// 上下文会在组件销毁时自动移除。
+
+// 但是，如果您需要在组件销毁前移除特定绑定：
+// inputPlayer.RemoveBindingFromContext(gameplayContext, jumpObservable);
+```
+
+**重要提示：**
+
+- `RemoveBindingFromContext` 允许您从上下文中移除特定绑定，而不影响其他绑定
+- `RemoveContext` 移除整个上下文及其所有绑定，**并自动从栈中移除该上下文**（如果它在栈中）
+
+### InputContext 生命周期管理
+
+`InputContext` 是普通的 C# 类，**可以多次创建**。您可以根据项目需求选择不同的使用模式：
+
+#### 模式 1：共享 Context 实例（推荐用于静态绑定）
+
+如果多个场景使用相同的绑定配置，可以创建一个共享的 Context 实例：
+
+```csharp
+using R3; // 需要引入 R3 命名空间以使用 AddTo 扩展
+
+// 在全局管理器或单例中创建
+public class InputContextManager
+{
+    private static InputContext _sharedGameplayContext;
+
+    public static InputContext GetGameplayContext(IInputPlayer inputPlayer)
     {
-      while (pressed && progress < 1f)
-      {
-        await UniTask.Yield();
-        progress = Mathf.Min(1f, progress + Time.deltaTime * speed);
-        // 更新 UI
-      }
-    });
-  }
-  else
-  {
-    // 松手：停止。可选清零：
-    // progress = 0f;
-  }
-});
-```
+        if (_sharedGameplayContext == null)
+        {
+            _sharedGameplayContext = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
+                .AddBinding(inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(OnMove))
+                .AddBinding(inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Confirm), new ActionCommand(OnConfirm));
+        }
+        return _sharedGameplayContext;
+    }
+}
 
-### 步骤 3：可选 - 要求先长按一段时间再开始
-
-在 YAML 中设置长按时间：
-
-```yaml
-- type: Button
-  action: Confirm
-  longPressMs: 500
-  deviceBindings:
-    - "<Keyboard>/space"
-    - "<Gamepad>/buttonSouth"
-```
-
-然后在代码中使用长按开始，松手停止：
-
-```csharp
-_input.GetLongPressObservable("PlayerActions", "Confirm").Subscribe(_ => StartFilling());
-_input.GetPressStateObservable("PlayerActions", "Confirm").Where(p => !p).Subscribe(_ => StopFilling());
-```
-
-## 其他高级功能
-
-### 浮点/Trigger 的长按
-
-对于模拟量输入（如手柄扳机），可以使用阈值来定义"按下"状态：
-
-YAML 配置：
-
-```yaml
-- type: Float
-  action: FireTrigger
-  longPressMs: 600
-  longPressValueThreshold: 0.6 # 阈值（0-1）达到后视为按下
-  deviceBindings:
-    - "<Gamepad>/leftTrigger"
-```
-
-代码使用：
-
-```csharp
-_input.GetLongPressObservable("PlayerActions", "FireTrigger").Subscribe(_ => StartCharge());
-_input.GetPressStateObservable("PlayerActions", "FireTrigger").Where(p => !p).Subscribe(_ => CancelCharge());
-```
-
-### 同一上下文内短按/长按互斥
-
-如果不切换上下文，需要在同一上下文内判定短按或长按且互斥，可结合按下状态与长按流：
-
-```csharp
-var press = _input.GetPressStateObservable("PlayerActions", "Confirm");
-var longPress = _input.GetLongPressObservable("PlayerActions", "Confirm").Share();
-float thresholdSec = 0.5f; // 与 YAML 保持一致
-
-bool isPressed = false;
-float startTime = 0f;
-bool longFired = false;
-
-longPress.Subscribe(_ => longFired = true);
-press.Subscribe(p =>
+// 在场景 A 中使用
+public class SceneA : MonoBehaviour
 {
-  if (p)
-  {
-    isPressed = true; startTime = Time.realtimeSinceStartup; longFired = false;
-  }
-  else if (isPressed)
-  {
-    var dur = Time.realtimeSinceStartup - startTime;
-    if (!longFired && dur < thresholdSec) OnShortClick();
-    if (longFired) OnLongPress();
-    isPressed = false;
-  }
-});
+    private void Start()
+    {
+        var inputPlayer = InputManager.Instance.GetInputPlayer(0);
+        var ctx = InputContextManager.GetGameplayContext(inputPlayer);
+
+        // 对于共享的 Context，您可能需要手动管理移除
+        // 或者绑定到一个持久存在的 GameObject（生命周期超过场景切换）
+        inputPlayer.PushContext(ctx);
+    }
+
+    private void OnDestroy()
+    {
+        // 对于共享的 Context，在场景卸载时手动移除
+        var inputPlayer = InputManager.Instance.GetInputPlayer(0);
+        inputPlayer.RemoveContext(InputContextManager.GetGameplayContext(inputPlayer));
+    }
+}
 ```
 
-### 编辑器提示
+#### 模式 2：每个场景独立的 Context 实例（推荐用于动态绑定）
 
-- **代码生成**：编辑器窗口提供了设置选项，可自定义生成的 `InputActions.cs` 文件的输出目录和命名空间。这些设置会保存在项目的 `EditorPrefs` 中。
-- **长按**："Long Press (ms)" 字段仅对 `Button` 和 `Float` 类型的动作有效。对于 `Float` 类型，您还可以设置 "Long Press Threshold (0-1)" 来定义模拟量的"按下"阈值。
-- **Vector2 来源**：`InputBindingConstants.Vector2Sources` 类为常用的 Vector2 绑定（如 `Gamepad_LeftStick` 和 `Composite_WASD`）提供了方便的常量。
-- **重置配置**：编辑器窗口提供 "Reset User to Default" 按钮，可以将用户配置重置为默认配置。
+如果每个场景需要不同的绑定配置，每个场景创建自己的 Context 实例：
+
+```csharp
+using R3; // 需要引入 R3 命名空间以使用 AddTo 扩展
+
+// 场景 A - 创建自己的 Context
+public class SceneA : MonoBehaviour
+{
+    private InputContext _gameplayContext;
+
+    private void Start()
+    {
+        var inputPlayer = InputManager.Instance.GetInputPlayer(0);
+        _gameplayContext = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
+            .AddBinding(inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(OnMoveA))
+            .AddBinding(inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Jump), new ActionCommand(OnJumpA));
+
+        // 将生命周期绑定到此组件 - 场景卸载时自动移除
+        _gameplayContext.AddTo(this);
+
+        inputPlayer.PushContext(_gameplayContext);
+    }
+
+    // OnDestroy 不再需要 - AddTo(this) 会自动处理清理！
+}
+```
 
 ## API 概览
 
@@ -542,24 +735,18 @@ press.Subscribe(p =>
 - `Observable<bool> GetPressStateObservable(int actionId)` - 按下状态流（true=按下，false=释放）
 - `Observable<float> GetScalarObservable(int actionId)` - 标量值流（用于 Float 类型动作）
 
-#### 基于字符串的 API（兼容模式）
-
-- `Observable<Vector2> GetVector2Observable(string actionName)` - 使用当前上下文的 ActionMap
-- `Observable<Vector2> GetVector2Observable(string actionMapName, string actionName)` - 指定 ActionMap
-- `Observable<Unit> GetButtonObservable(string actionName)`
-- `Observable<Unit> GetButtonObservable(string actionMapName, string actionName)`
-- `Observable<Unit> GetLongPressObservable(string actionName)`
-- `Observable<Unit> GetLongPressObservable(string actionMapName, string actionName)`
-- `Observable<bool> GetPressStateObservable(string actionName)`
-- `Observable<bool> GetPressStateObservable(string actionMapName, string actionName)`
-- `Observable<float> GetScalarObservable(string actionName)`
-- `Observable<float> GetScalarObservable(string actionMapName, string actionName)`
-
 #### 上下文管理
 
-- `void RegisterContext(InputContext context)` - 注册上下文（必须在 PushContext 之前调用）
-- `void PushContext(string contextName)` - 推入新上下文到栈顶
-- `void PopContext()` - 弹出栈顶上下文，恢复上一个上下文
+- `void PushContext(InputContext context)` - 将上下文推入栈顶（如果已在栈中，则移动到栈顶）
+- `void PopContext()` - ⚠️ **使用生命周期绑定（`AddTo`）时不推荐**。PopContext 会无脑移除栈顶元素。如果栈顺序发生变化（如动态 UI），可能会移除错误的上下文。请使用 `RemoveContext(context)` 或 `AddTo(this)` 代替。
+- `bool RemoveContext(InputContext context)` - 通过对象引用从栈中移除指定上下文
+- `void RefreshActiveContext()` - 刷新当前活动的上下文，重新订阅所有绑定
+
+#### 绑定管理
+
+- `bool RemoveBindingFromContext(InputContext context, Observable<Unit> source)` - 移除绑定
+- `bool RemoveBindingFromContext(InputContext context, Observable<Vector2> source)`
+- `bool RemoveBindingFromContext(InputContext context, Observable<float> source)`
 
 #### 输入控制
 
@@ -593,7 +780,7 @@ press.Subscribe(p =>
 - `IInputPlayer JoinPlayerOnSharedDevice(int playerIdToJoin)` - 在共享设备上加入玩家
 - `IInputPlayer JoinPlayerAndLockDevice(int playerIdToJoin, InputDevice deviceToLock)` - 锁定特定设备给玩家
 - `IInputPlayer GetInputPlayer(int playerId)` - 获取指定玩家 ID 的输入玩家，如果未加入则返回 null
-- `bool RefreshPlayerInput(int playerId)` - 通过触发已加入玩家的 `OnPlayerInputReady` 事件来刷新玩家输入。当您在玩家已经加入后动态绑定输入上下文时很有用（例如，在不同场景中）。这允许 InputSystem 识别和管理新绑定的输入上下文。如果玩家存在且事件已触发则返回 true，否则返回 false。
+- `bool RefreshPlayerInput(int playerId)` - 通过触发已加入玩家的 `OnPlayerInputReady` 事件来刷新玩家输入。
 
 #### 大厅模式
 
@@ -613,73 +800,28 @@ press.Subscribe(p =>
 
 ### InputContext
 
-输入上下文，包含动作绑定和命令。
+输入上下文，包含动作绑定和命令。实现 `IDisposable` 接口以支持自动生命周期管理。
 
 #### 构造函数
 
-- `InputContext(string name, string actionMapName)` - 创建上下文
+- `InputContext(string actionMapName, string name = null)` - 创建上下文
+  - `actionMapName`（必需）：Unity Input System 的 ActionMap 名称（功能必需）
+  - `name`（可选）：用于调试的显示名称。如果为 null，默认使用 `actionMapName`
+  - **推荐**：使用生成的常量：`new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)`
+  - **简化用法**：`new InputContext(InputActions.ActionMaps.PlayerActions)` - name 将自动使用 "PlayerActions"
 
 #### 方法
 
 - `InputContext AddBinding(Observable<Unit> source, IActionCommand command)` - 添加按钮动作绑定
 - `InputContext AddBinding(Observable<Vector2> source, IMoveCommand command)` - 添加 Vector2 动作绑定
 - `InputContext AddBinding(Observable<float> source, IScalarCommand command)` - 添加标量动作绑定
+- `bool RemoveBinding(Observable<Unit> source)` - 移除按钮动作绑定
+- `bool RemoveBinding(Observable<Vector2> source)` - 移除 Vector2 动作绑定
+- `bool RemoveBinding(Observable<float> source)` - 移除标量动作绑定
 
-### 命令接口
+#### 生命周期管理
 
-- `IActionCommand` - 无参数命令接口
-- `IMoveCommand` - Vector2 参数命令接口
-- `IScalarCommand` - float 参数命令接口
-
-### 预定义命令类
-
-- `ActionCommand(Action action)` - 无参数命令
-- `MoveCommand(Action<Vector2> action)` - Vector2 命令
-- `ScalarCommand(Action<float> action)` - float 命令
-
-### InputSystemLoader
-
-配置加载器，处理默认配置和用户配置的加载。
-
-#### 静态方法
-
-- `static async Task InitializeAsync(string defaultConfigUri, string userConfigUri)` - 初始化输入系统
-  - 优先加载用户配置，如果不存在则使用默认配置
-  - 首次运行时自动将默认配置复制到用户配置目录
-
-### 生成的 InputActions 类
-
-代码生成后，您将获得：
-
-```csharp
-namespace YourGame.Input.Generated
-{
-    public static class InputActions
-    {
-        public static class ActionMaps
-        {
-            public static readonly int PlayerActions = ...;
-            // 其他 ActionMap 常量
-        }
-
-        public static class Actions
-        {
-            public static readonly int Gameplay_Move = ...;
-            public static readonly int Gameplay_Confirm = ...;
-            // 其他动作常量（格式：ContextName_ActionName）
-        }
-    }
-}
-```
-
-使用方式：
-
-```csharp
-using YourGame.Input.Generated;
-
-// 使用常量获取 Observable
-var moveStream = inputService.GetVector2Observable(InputActions.Actions.Gameplay_Move);
-```
+- `void Dispose()` - 自动从所有活动的 InputPlayer 中移除此上下文。设计为通过 R3 的 `AddTo(this)` 扩展方法调用。
 
 ## 依赖注入 (VContainer) 集成
 
@@ -717,239 +859,6 @@ public class GameLifetimeScope : LifetimeScope
 }
 ```
 
-#### 选项 2：AssetManagement 加载（YooAsset/Addressables）
-
-如果您使用 `CycloneGames.AssetManagement` 配合 YooAsset 或 Addressables：
-
-**重要**：用户配置**始终**从 `PersistentData` 路径自动加载。您只需要提供默认配置的加载器。
-
-> **关于配置加载方式的说明：**
->
-> - **TextAsset**（推荐用于 Addressables/Resources）：将 YAML 作为 Unity TextAsset 加载。适用于所有 provider（YooAsset、Addressables、Resources）。您的 YAML 文件应在 Unity 中作为 TextAsset 导入。
-> - **RawFile**（仅 YooAsset）：将 YAML 作为原始文件加载。仅适用于 YooAsset provider。对 YooAsset 更高效，但 Addressables/Resources 不支持。
->
-> 默认情况下，helper 会先尝试 RawFile（针对 YooAsset），然后回退到 TextAsset（针对 Addressables/Resources）。您也可以显式指定 `useTextAsset: true` 来强制使用 TextAsset 加载。
-
-```csharp
-using VContainer;
-using VContainer.Unity;
-using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
-using CycloneGames.AssetManagement.Runtime.Integrations.VContainer;
-
-public class GameLifetimeScope : LifetimeScope
-{
-    protected override void Configure(IContainerBuilder builder)
-    {
-        // 先安装 AssetManagement
-        var assetManagementInstaller = new AssetManagementVContainerInstaller();
-        assetManagementInstaller.Install(builder);
-
-        // 从 AssetManagement 创建默认配置加载器
-        // 直接从您的 AssetManagement 设置获取 package（不从 resolver 获取）
-        var package = assetModule.GetPackage("DefaultPackage"); // 从您的设置中获取
-        var defaultLoader = InputSystemAssetManagementHelper.CreateDefaultConfigLoader(
-            package: package,
-            defaultConfigLocation: "input_config.yaml",
-            useTextAsset: false  // false = 先尝试 RawFile，失败则回退到 TextAsset
-        );
-
-        // 安装 InputSystem
-        // 用户配置将自动从 PersistentData/user_input_settings.yaml 加载
-        var inputSystemInstaller = new InputSystemVContainerInstaller(
-            defaultLoader,
-            userConfigFileName: "user_input_settings.yaml", // 可选：指定用户配置文件名
-            postInitCallback: async resolver =>
-            {
-                var inputResolver = resolver.Resolve<IInputPlayerResolver>();
-                var player0Input = inputResolver.GetInputPlayer(0);
-                // 设置上下文等
-            }
-        );
-        inputSystemInstaller.Install(builder);
-
-        builder.Register<PlayerController>(Lifetime.Scoped);
-    }
-}
-```
-
-**工作原理：**
-
-1. 首先尝试从 `PersistentData/user_input_settings.yaml` 加载用户配置（如果指定了子目录路径，例如 `ConfigFolder/user_input_settings.yaml`，也会正确加载）
-2. 如果未找到，从 AssetManagement（或使用选项 1 时从 StreamingAssets）加载默认配置
-3. 如果加载了默认配置，自动将其保存到 `PersistentData/user_input_settings.yaml`（或子目录）供以后使用
-4. 所有后续的用户配置保存/加载都使用 `PersistentData` 路径
-
-**路径支持：**
-
-- **用户配置**：支持子目录（例如 `ConfigFolder/user_input_settings.yaml` 将保存到 `PersistentData/ConfigFolder/user_input_settings.yaml`）。如果目录不存在，会自动创建。
-- **默认配置（StreamingAssets）**：支持子目录（例如 `Config/input_config.yaml` 将从 `StreamingAssets/Config/input_config.yaml` 加载）。
-- **默认配置（AssetManagement）**：使用 AssetManagement 包中定义的位置（例如 `Assets/Config/input_config.yaml` 或仅 `input_config.yaml`）。
-
-#### 选项 3：自定义默认配置加载器
-
-完全控制默认配置的加载（例如，从数据库、网络等）：
-
-```csharp
-var inputSystemInstaller = new InputSystemVContainerInstaller(
-    defaultLoader: async resolver =>
-    {
-        // 您的自定义加载逻辑
-        // 例如：从数据库、网络等加载
-        return await LoadConfigFromCustomSource();
-    },
-    userConfigFileName: "user_input_settings.yaml" // 用户配置始终从 PersistentData
-);
-inputSystemInstaller.Install(builder);
-```
-
-**注意**：用户配置始终在 `PersistentData` 路径中管理，因为：
-
-- 需要可写权限以保存用户自定义设置
-- 在应用更新后仍然持久化
-- 与默认配置分离，默认配置可能在只读位置（AssetManagement、StreamingAssets）
-
-#### 选项 4：延迟初始化（热更新场景）
-
-适用于热更新游戏，AssetManagement 包在注册时可能尚未准备好：
-
-```csharp
-using VContainer;
-using VContainer.Unity;
-using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
-using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.AssetManagement.Runtime.Integrations.VContainer;
-
-public class GameLifetimeScope : LifetimeScope
-{
-    protected override void Configure(IContainerBuilder builder)
-    {
-        // 先安装 AssetManagement
-        var assetManagementInstaller = new AssetManagementVContainerInstaller();
-        assetManagementInstaller.Install(builder);
-
-        // 安装 InputSystem，延迟初始化
-        // 设置 autoInitialize: false 以延迟初始化，直到包准备好
-        // 从您的 AssetManagement 设置获取 package（不从 resolver 获取）
-        var package = assetModule.GetPackage("DefaultPackage"); // 从您的设置中获取
-        var defaultLoader = InputSystemAssetManagementHelper.CreateDefaultConfigLoader(
-            package: package,
-            defaultConfigLocation: "Assets/Config/input_config.yaml"
-        );
-
-        var inputSystemInstaller = new InputSystemVContainerInstaller(
-            defaultConfigLoader: defaultLoader,
-            userConfigFileName: "user_input_settings.yaml",
-            autoInitialize: false // 延迟初始化
-        );
-        inputSystemInstaller.Install(builder);
-
-        builder.Register<PlayerController>(Lifetime.Scoped);
-    }
-
-    protected override async UniTaskVoid Start()
-    {
-        // 等待 AssetManagement 包准备好
-        var assetModule = Container.Resolve<IAssetModule>();
-        await assetModule.InitializeAsync();
-
-        var defaultPackage = assetModule.CreatePackage("DefaultPackage");
-        await defaultPackage.InitializeAsync(/* ... */);
-
-        // 现在手动初始化 InputSystem
-        var initializer = Container.Resolve<IInputSystemInitializer>();
-        await initializer.InitializeAsync(Container);
-
-        // 设置玩家等
-    }
-}
-```
-
-**热更新后更新配置：**
-
-```csharp
-public class HotUpdateHandler
-{
-    private readonly IInputSystemInitializer _inputInitializer;
-    private readonly IAssetPackage _package;  // 直接注入 package，而不是 IAssetModule
-
-    [Inject]
-    public HotUpdateHandler(IInputSystemInitializer inputInitializer, IAssetPackage package)
-    {
-        _inputInitializer = inputInitializer;
-        _package = package;  // Package 应该在 DI 容器中注册
-    }
-
-    public async UniTask OnHotUpdateComplete()
-    {
-        // 热更新后，从更新的 AssetManagement 包重新加载配置
-        // 选项 1：使用 ReinitializeFromPackageAsync（推荐）
-        await _inputInitializer.ReinitializeFromPackageAsync(
-            _package,
-            "Assets/Config/input_config.yaml",
-            saveToUserConfig: true
-        );
-
-        // 选项 2：手动加载并更新
-        // var loader = InputSystemAssetManagementHelper.CreateConfigLoader(
-        //     package,
-        //     "Assets/Config/input_config.yaml"
-        // );
-        // string newConfig = await loader();
-        // if (!string.IsNullOrEmpty(newConfig))
-        // {
-        //     await _inputInitializer.UpdateConfigurationAsync(newConfig, saveToUserConfig: true);
-        // }
-    }
-}
-```
-
-**重新加载用户配置（玩家改键）：**
-
-```csharp
-public class SettingsMenu
-{
-    private readonly IInputSystemInitializer _inputInitializer;
-
-    [Inject]
-    public SettingsMenu(IInputSystemInitializer inputInitializer)
-    {
-        _inputInitializer = inputInitializer;
-    }
-
-    public async UniTask OnPlayerSavedKeyBindings()
-    {
-        // 玩家已修改并保存按键绑定
-        // 重新加载更新后的用户配置
-        await _inputInitializer.ReloadUserConfigurationAsync();
-    }
-}
-```
-
-**跨场景/跨 Resolver 使用：**
-
-您可以从任何 resolver（父作用域或子作用域）解析 `IInputSystemInitializer` 来重新加载配置：
-
-```csharp
-// 在任何场景或 LifetimeScope 中
-public class SomeOtherScene : LifetimeScope
-{
-    protected override void Configure(IContainerBuilder builder)
-    {
-        // ... 其他注册
-    }
-
-    protected override async UniTaskVoid Start()
-    {
-        // 从父作用域解析 initializer
-        var initializer = Parent.Container.Resolve<IInputSystemInitializer>();
-
-        // 从您的设置获取 package（应该在 DI 中注册或从您的 AssetManagement 设置获取）
-        var package = Parent.Container.Resolve<IAssetPackage>(); // 或从您的 AssetManagement 设置获取
-        await initializer.ReinitializeFromPackageAsync(package, "Assets/Config/input_config.yaml");
-    }
-}
-```
-
 ### 使用模式
 
 #### 模式 1：注入 IInputPlayerResolver（推荐）
@@ -976,148 +885,15 @@ public class PlayerController
     {
         _input = _inputResolver.GetInputPlayer(playerId);
 
-        var ctx = new InputContext("Gameplay", "PlayerActions")
+        // 仅需传入 ActionMap（name 默认为 "PlayerActions"）
+        var ctx = new InputContext("PlayerActions", "Gameplay")
             .AddBinding(_input.GetVector2Observable("Move"), new MoveCommand(OnMove))
             .AddBinding(_input.GetButtonObservable("Confirm"), new ActionCommand(OnConfirm));
 
-        _input.RegisterContext(ctx);
-        _input.PushContext("Gameplay");
+        _input.PushContext(ctx);
     }
 
     private void OnMove(Vector2 dir) { /* ... */ }
     private void OnConfirm() { /* ... */ }
-}
-```
-
-#### 模式 2：直接注入 InputManager
-
-需要完全控制的场景：
-
-```csharp
-using CycloneGames.InputSystem.Runtime;
-using VContainer;
-
-public class GameSession
-{
-    private readonly InputManager _inputManager;
-
-    [Inject]
-    public GameSession(InputManager inputManager)
-    {
-        _inputManager = inputManager;
-    }
-
-    public async UniTask StartMultiplayerLobby()
-    {
-        _inputManager.OnPlayerInputReady += OnPlayerInputReady;
-        _inputManager.StartListeningForPlayers(false); // 设备共享模式
-    }
-
-    private void OnPlayerInputReady(IInputPlayer service)
-    {
-        // 设置玩家特定的输入上下文
-        var ctx = new InputContext("Gameplay", "PlayerActions")
-            .AddBinding(service.GetVector2Observable("Move"), new MoveCommand(OnMove));
-        service.RegisterContext(ctx);
-        service.PushContext("Gameplay");
-    }
-}
-```
-
-#### 模式 3：带玩家 ID 的工厂方法
-
-创建按玩家 ID 解析输入服务的工厂：
-
-```csharp
-using CycloneGames.InputSystem.Runtime;
-using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
-using VContainer;
-
-public class PlayerFactory
-{
-    private readonly IInputPlayerResolver _inputResolver;
-    private readonly IObjectResolver _resolver;
-
-    [Inject]
-    public PlayerFactory(IInputPlayerResolver inputResolver, IObjectResolver resolver)
-    {
-        _inputResolver = inputResolver;
-        _resolver = resolver;
-    }
-
-    public PlayerController CreatePlayer(int playerId)
-    {
-        var inputService = _inputResolver.GetInputPlayer(playerId);
-        var controller = _resolver.Resolve<PlayerController>();
-        controller.Initialize(inputService, playerId);
-        return controller;
-    }
-}
-```
-
-### 完整示例：VContainer 集成
-
-```csharp
-using VContainer;
-using VContainer.Unity;
-using CycloneGames.InputSystem.Runtime;
-using CycloneGames.InputSystem.Runtime.Integrations.VContainer;
-using YourGame.Input.Generated;
-
-public class GameLifetimeScope : LifetimeScope
-{
-    protected override void Configure(IContainerBuilder builder)
-    {
-        // 安装 InputSystem
-        builder.Install(new InputSystemVContainerInstaller());
-
-        // 注册游戏系统
-        builder.Register<PlayerController>(Lifetime.Scoped);
-        builder.Register<GameSession>(Lifetime.Singleton);
-    }
-
-    protected override async UniTaskVoid Start()
-    {
-        // InputSystem 由安装器自动初始化
-        // 现在可以使用了
-        var resolver = Container.Resolve<IInputPlayerResolver>();
-        var inputService = resolver.GetInputPlayer(0);
-
-        // 设置输入上下文
-        var ctx = new InputContext("Gameplay", "PlayerActions")
-            .AddBinding(
-                inputService.GetVector2Observable(InputActions.Actions.Gameplay_Move),
-                new MoveCommand(OnMove)
-            )
-            .AddBinding(
-                inputService.GetButtonObservable(InputActions.Actions.Gameplay_Confirm),
-                new ActionCommand(OnConfirm)
-            );
-
-        inputService.RegisterContext(ctx);
-        inputService.PushContext("Gameplay");
-    }
-
-    private void OnMove(Vector2 dir) { /* ... */ }
-    private void OnConfirm() { /* ... */ }
-}
-
-// 示例：注入输入的 PlayerController
-public class PlayerController
-{
-    private readonly IInputPlayerResolver _inputResolver;
-    private IInputPlayer _input;
-
-    [Inject]
-    public PlayerController(IInputPlayerResolver inputResolver)
-    {
-        _inputResolver = inputResolver;
-    }
-
-    public void Initialize(int playerId)
-    {
-        _input = _inputResolver.GetInputPlayer(playerId);
-        // 设置上下文...
-    }
 }
 ```

@@ -12,29 +12,42 @@ using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.InputSystem.Runtime
 {
+    /// <summary>
+    /// Manages input for a single player entity, handling context stacks, action events, and device pairing.
+    /// </summary>
     public sealed class InputPlayer : IInputPlayer, IDisposable
     {
         private const string DEBUG_FLAG = "[InputPlayer]";
+
+        // Reactive Properties
         public ReadOnlyReactiveProperty<string> ActiveContextName { get; private set; }
+        public ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind { get; private set; }
         public event Action<string> OnContextChanged;
+
+        // Player Info
         public int PlayerId { get; }
         public InputUser User { get; }
-        public ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind { get; private set; }
 
+        // State
         private readonly ReactiveProperty<string> _activeContextName = new(null);
         private readonly ReactiveProperty<InputDeviceKind> _activeDeviceKind = new(InputDeviceKind.Unknown);
         private readonly Stack<InputContext> _contextStack = new();
-        private readonly Dictionary<string, InputContext> _registeredContexts = new();
+        private readonly List<InputContext> _tempContextList = new(); // Pooled list for stack operations (Zero-GC)
+
+        // Event Subjects (Keyed by zero-garbage struct InputActionKey)
         private readonly Dictionary<InputActionKey, Subject<Unit>> _buttonSubjects = new();
         private readonly Dictionary<InputActionKey, Subject<Unit>> _longPressSubjects = new();
         private readonly Dictionary<InputActionKey, BehaviorSubject<bool>> _pressStateSubjects = new();
         private readonly Dictionary<InputActionKey, Subject<Vector2>> _vector2Subjects = new();
         private readonly Dictionary<InputActionKey, Subject<float>> _scalarSubjects = new();
+
+        // Caches
         private readonly HashSet<string> _requiredLayouts = new();
         private readonly Dictionary<string, InputActionKey> _actionNameToKey = new();
         private readonly Dictionary<int, InputAction> _actionLookup = new();
         private readonly Dictionary<int, string> _actionIdToName = new();
 
+        // Disposables
         private CompositeDisposable _subscriptions;
         private readonly CompositeDisposable _actionWiringSubscriptions = new();
         private readonly CancellationTokenSource _cancellation;
@@ -68,14 +81,24 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (InputManager.IsListeningForPlayers) return;
             if (change != InputDeviceChange.Added) return;
+
+            // Early guard: Skip if User is already invalid (prevents unnecessary async task)
+            if (User == null || !User.valid) return;
+
             ScheduleDevicePairingAsync(device).Forget();
         }
 
         private async UniTaskVoid ScheduleDevicePairingAsync(InputDevice device)
         {
             await UniTask.Yield(PlayerLoopTiming.Update);
+
+            // Check if User is still valid after async delay (may have been removed/disposed)
+            if (User == null || !User.valid) return;
+
             if (IsDeviceRequiredAndAvailable(device))
             {
+                if (User == null || !User.valid) return;
+
                 CLogger.LogInfo($"{DEBUG_FLAG} [P{PlayerId}] New required device '{device.displayName}' connected. Pairing...");
                 InputUser.PerformPairingWithDevice(device, User);
             }
@@ -86,6 +109,8 @@ namespace CycloneGames.InputSystem.Runtime
         /// </summary>
         private bool IsDeviceRequiredAndAvailable(InputDevice device)
         {
+            if (User == null || !User.valid) return false;
+
             if (User.pairedDevices.Contains(device)) return false;
 
             string deviceLayout = device.layout;
@@ -105,6 +130,9 @@ namespace CycloneGames.InputSystem.Runtime
             int userCount = allUsers.Count;
             for (int i = 0; i < userCount; i++)
             {
+                // Guard: Check if User is still valid before comparing IDs
+                if (User == null || !User.valid) return false;
+
                 if (allUsers[i].id != User.id && allUsers[i].pairedDevices.Contains(device))
                 {
                     return false;
@@ -114,31 +142,155 @@ namespace CycloneGames.InputSystem.Runtime
             return true;
         }
 
-        public void RegisterContext(InputContext context)
+        public bool RemoveBindingFromContext(InputContext context, Observable<Unit> source)
         {
-            if (context != null && !string.IsNullOrEmpty(context.Name))
+            if (context == null || source == null) return false;
+
+            bool removed = context.RemoveBinding(source);
+            if (removed && _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context))
             {
-                _registeredContexts[context.Name] = context;
+                DeactivateTopContext();
+                ActivateTopContext();
             }
+            return removed;
         }
 
-        public void PushContext(string contextName)
+        public bool RemoveBindingFromContext(InputContext context, Observable<Vector2> source)
         {
-            if (!_registeredContexts.TryGetValue(contextName, out var newContext))
+            if (context == null || source == null) return false;
+
+            bool removed = context.RemoveBinding(source);
+            if (removed && _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context))
             {
-                CLogger.LogError($"[InputPlayer] Context '{contextName}' is not registered for Player {PlayerId}.");
-                return;
+                DeactivateTopContext();
+                ActivateTopContext();
             }
+            return removed;
+        }
+
+        public bool RemoveBindingFromContext(InputContext context, Observable<float> source)
+        {
+            if (context == null || source == null) return false;
+
+            bool removed = context.RemoveBinding(source);
+            if (removed && _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context))
+            {
+                DeactivateTopContext();
+                ActivateTopContext();
+            }
+            return removed;
+        }
+
+        /// <summary>
+        /// Removes a specific context instance from the stack, maintaining the relative order of other contexts.
+        /// <para>
+        /// Behavior: If the removed context was active (at the top), the next context becomes active.
+        /// If it was in the middle of the stack, it is simply removed without affecting the active context.
+        /// </para>
+        /// </summary>
+        public bool RemoveContext(InputContext context)
+        {
+            if (context == null) return false;
+
+            bool wasActive = _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context);
+
+            if (wasActive)
+            {
+                DeactivateTopContext();
+            }
+
+            _tempContextList.Clear();
+            bool found = false;
+
+            while (_contextStack.Count > 0)
+            {
+                var ctx = _contextStack.Pop();
+                if (ReferenceEquals(ctx, context))
+                {
+                    found = true;
+                    break;
+                }
+                _tempContextList.Add(ctx);
+            }
+
+            for (int i = _tempContextList.Count - 1; i >= 0; i--)
+            {
+                _contextStack.Push(_tempContextList[i]);
+            }
+            _tempContextList.Clear();
+
+            if (wasActive)
+            {
+                ActivateTopContext();
+            }
+
+            if (found)
+            {
+                context.RemoveOwner(this);
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// Pushes a context to the top of the stack, making it the active context.
+        /// <para>
+        /// Auto-Focus: If the context is already in the stack, it is moved to the top.
+        /// This ensures a context is never duplicated in the stack.
+        /// </para>
+        /// </summary>
+        public void PushContext(InputContext context)
+        {
+            if (context == null) return;
+
+            if (_contextStack.Contains(context))
+            {
+                _tempContextList.Clear();
+
+                while (_contextStack.Count > 0)
+                {
+                    var ctx = _contextStack.Pop();
+                    if (!ReferenceEquals(ctx, context))
+                    {
+                        _tempContextList.Add(ctx);
+                    }
+                }
+
+                for (int i = _tempContextList.Count - 1; i >= 0; i--)
+                {
+                    _contextStack.Push(_tempContextList[i]);
+                }
+                _tempContextList.Clear();
+            }
+
             DeactivateTopContext();
-            _contextStack.Push(newContext);
+            _contextStack.Push(context);
+            context.AddOwner(this);
             ActivateTopContext();
         }
 
+        /// <summary>
+        /// Removes the top context from the stack.
+        /// <para>
+        ///     WARNING: Do not use this if you use ".AddTo(this)" for lifecycle binding. 
+        ///     PopContext blindly removes the top element. If the stack order has changed (e.g. dynamic UI), 
+        ///     you might pop the wrong context. Use "Dispose()" on the context or "RemoveContext()" instead.
+        /// </para>
+        /// </summary>
         public void PopContext()
         {
             if (_contextStack.Count == 0) return;
+            var ctx = _contextStack.Peek();
             DeactivateTopContext();
             _contextStack.Pop();
+            ctx.RemoveOwner(this);
+            ActivateTopContext();
+        }
+
+        public void RefreshActiveContext()
+        {
+            if (_contextStack.Count == 0) return;
+            DeactivateTopContext();
             ActivateTopContext();
         }
 
@@ -303,10 +455,22 @@ namespace CycloneGames.InputSystem.Runtime
             foreach (var s in _vector2Subjects.Values) s.Dispose();
             foreach (var s in _pressStateSubjects.Values) s.Dispose();
 
-            User.UnpairDevicesAndRemoveUser();
+            // Guard: Check if User is still valid before cleanup (may have been removed externally)
+            if (User != null && User.valid)
+            {
+                User.UnpairDevicesAndRemoveUser();
+            }
             UnityEngine.InputSystem.InputSystem.onDeviceChange -= OnDeviceChanged;
         }
 
+        /// <summary>
+        /// Activates the top context in the stack. Enables the ActionMap and subscribes to the context's bindings.
+        /// <para>
+        /// Note: Multiple contexts can safely share the same ActionMap name. Each context's bindings
+        /// are stored independently in the context object, so switching between contexts with the same ActionMap
+        /// will correctly switch which bindings are active without conflicts.
+        /// </para>
+        /// </summary>
         private void ActivateTopContext()
         {
             _subscriptions?.Dispose();
@@ -324,15 +488,32 @@ namespace CycloneGames.InputSystem.Runtime
             _inputActionAsset.Disable();
             _inputActionAsset.FindActionMap(topContext.ActionMapName)?.Enable();
 
-            foreach (var (source, command) in topContext.ActionBindings) source.Subscribe(_ => command.Execute()).AddTo(_subscriptions);
-            foreach (var (source, command) in topContext.MoveBindings) source.Subscribe(command.Execute).AddTo(_subscriptions);
-            foreach (var (source, command) in topContext.ScalarBindings) source.Subscribe(command.Execute).AddTo(_subscriptions);
+            // Subscribe to this specific context's bindings (independent of other contexts, even if they share the same ActionMap)
+            foreach (var (source, command) in topContext.ActionBindings)
+            {
+                source.Subscribe(_ => command.Execute()).AddTo(_subscriptions);
+            }
+            foreach (var (source, command) in topContext.MoveBindings)
+            {
+                source.Subscribe(command.Execute).AddTo(_subscriptions);
+            }
+            foreach (var (source, command) in topContext.ScalarBindings)
+            {
+                source.Subscribe(command.Execute).AddTo(_subscriptions);
+            }
 
             _activeContextName.Value = topContext.Name;
             OnContextChanged?.Invoke(topContext.Name);
         }
 
-        private void DeactivateTopContext() => _subscriptions?.Dispose();
+        private void DeactivateTopContext()
+        {
+            if (_subscriptions != null)
+            {
+                _subscriptions.Dispose();
+                _subscriptions = null;
+            }
+        }
 
         private InputActionAsset BuildAssetFromConfig(PlayerSlotConfig config)
         {
@@ -366,7 +547,9 @@ namespace CycloneGames.InputSystem.Runtime
                     }
 
                     string combinedId = $"{joinMapName}/{joinAction.name}";
-                    var actionId = InputHashUtility.GetActionId(joinMapName, joinAction.name);
+                    // Use context-aware hash for consistency (PlayerJoin is the context for join actions)
+                    const string joinContext = "PlayerJoin";
+                    var actionId = InputHashUtility.GetActionId(joinContext, joinMapName, joinAction.name);
                     _actionLookup[actionId] = joinAction;
                     _actionIdToName[actionId] = combinedId;
 
@@ -423,7 +606,8 @@ namespace CycloneGames.InputSystem.Runtime
                         actionsByMapAndName[key] = action;
 
                         string combinedId = $"{ctxConfig.ActionMap}/{action.name}";
-                        var actionId = InputHashUtility.GetActionId(ctxConfig.ActionMap, action.name);
+                        // Use context-aware hash to ensure different contexts with same action map/name produce different IDs
+                        var actionId = InputHashUtility.GetActionId(ctxConfig.Name, ctxConfig.ActionMap, action.name);
                         _actionLookup[actionId] = action;
                         _actionIdToName[actionId] = combinedId;
                         _actionNameToKey[action.name] = key;
@@ -500,7 +684,7 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
-        /// Wires long-press detection for button actions. Uses async task to handle hold-without-release scenarios.
+        /// Wires long-press detection for button actions. 
         /// </summary>
         private void WireLongPressDetection(InputAction action, int longPressMs, InputActionKey key, CancellationToken token)
         {
