@@ -4,6 +4,7 @@
     "references": [
         "UniTask",
         "VContainer",
+        "Unio",
         "CycloneGames.InputSystem.Runtime",
         "CycloneGames.Utility.Runtime",
         "CycloneGames.Logger",
