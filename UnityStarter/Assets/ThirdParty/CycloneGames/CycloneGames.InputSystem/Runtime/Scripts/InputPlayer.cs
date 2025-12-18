@@ -181,6 +181,19 @@ namespace CycloneGames.InputSystem.Runtime
             return removed;
         }
 
+        public bool RemoveBindingFromContext(InputContext context, Observable<bool> source)
+        {
+            if (context == null || source == null) return false;
+
+            bool removed = context.RemoveBinding(source);
+            if (removed && _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context))
+            {
+                DeactivateTopContext();
+                ActivateTopContext();
+            }
+            return removed;
+        }
+
         /// <summary>
         /// Removes a specific context instance from the stack, maintaining the relative order of other contexts.
         /// <para>
@@ -498,6 +511,10 @@ namespace CycloneGames.InputSystem.Runtime
                 source.Subscribe(command.Execute).AddTo(_subscriptions);
             }
             foreach (var (source, command) in topContext.ScalarBindings)
+            {
+                source.Subscribe(command.Execute).AddTo(_subscriptions);
+            }
+            foreach (var (source, command) in topContext.BoolBindings)
             {
                 source.Subscribe(command.Execute).AddTo(_subscriptions);
             }
