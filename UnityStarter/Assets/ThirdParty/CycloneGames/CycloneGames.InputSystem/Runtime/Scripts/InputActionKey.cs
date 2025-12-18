@@ -2,9 +2,6 @@ using System;
 
 namespace CycloneGames.InputSystem.Runtime
 {
-    /// <summary>
-    /// Zero-GC struct key for action lookups. Eliminates boxing from tuple-based keys.
-    /// </summary>
     internal readonly struct InputActionKey : IEquatable<InputActionKey>
     {
         public readonly string MapName;
@@ -28,16 +25,15 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
-        /// Compound hash: hash = (hash * 31) + componentHash. Uses primes 17 and 31 for optimal distribution.
-        /// 31 = 2^5 - 1 allows compiler bit-shift optimization.
+        /// Compound hash using deterministic FNV-1a for cross-platform consistency.
         /// </summary>
         public override int GetHashCode()
         {
             unchecked
             {
                 int hash = 17;
-                hash = hash * 31 + (MapName?.GetHashCode() ?? 0);
-                hash = hash * 31 + (ActionName?.GetHashCode() ?? 0);
+                hash = hash * 31 + InputHashUtility.GetDeterministicHashCode(MapName ?? string.Empty);
+                hash = hash * 31 + InputHashUtility.GetDeterministicHashCode(ActionName ?? string.Empty);
                 return hash;
             }
         }

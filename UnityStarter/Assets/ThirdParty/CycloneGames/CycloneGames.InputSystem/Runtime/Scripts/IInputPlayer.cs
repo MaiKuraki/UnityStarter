@@ -39,9 +39,17 @@ namespace CycloneGames.InputSystem.Runtime
         Observable<float> GetScalarObservable(string actionMapName, string actionName);
         Observable<float> GetScalarObservable(int actionId);
 
-        void RegisterContext(InputContext context);
-        void PushContext(string contextName);
+        // Context Management - Object Based
+        void PushContext(InputContext context);
+        bool RemoveContext(InputContext context);
         void PopContext();
+        void RefreshActiveContext();
+
+        // Binding Management
+        bool RemoveBindingFromContext(InputContext context, Observable<Unit> source);
+        bool RemoveBindingFromContext(InputContext context, Observable<Vector2> source);
+        bool RemoveBindingFromContext(InputContext context, Observable<float> source);
+
         void BlockInput();
         void UnblockInput();
     }

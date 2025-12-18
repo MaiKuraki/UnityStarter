@@ -26,7 +26,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             if (package == null)
             {
                 CycloneGames.Logger.CLogger.LogError("[InputSystemAssetManagementHelper] Package cannot be null.");
-                return async () => null;
+                return () => UniTask.FromResult<string>(null);
             }
 
             return async () =>
@@ -109,7 +109,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             if (package == null)
             {
                 CycloneGames.Logger.CLogger.LogError("[InputSystemAssetManagementHelper] Package cannot be null.");
-                return async () => null;
+                return () => UniTask.FromResult<string>(null);
             }
 
             return async () =>

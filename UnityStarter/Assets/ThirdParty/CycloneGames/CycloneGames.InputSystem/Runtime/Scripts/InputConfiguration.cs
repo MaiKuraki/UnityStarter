@@ -10,9 +10,7 @@ namespace CycloneGames.InputSystem.Runtime
         Gamepad,
         Other
     }
-    /// <summary>
-    /// Explicit action value type for zero-GC routing and precise action wiring.
-    /// </summary>
+
     public enum ActionValueType
     {
         Button,
@@ -59,7 +57,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         [YamlMember("actionMap")]
         public string ActionMap { get; set; }
-        
+
         [YamlMember("bindings")]
         public List<ActionBindingConfig> Bindings { get; set; }
     }
@@ -72,7 +70,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         [YamlMember("action")]
         public string ActionName { get; set; }
-        
+
         [YamlMember("deviceBindings")]
         public List<string> DeviceBindings { get; set; }
 
