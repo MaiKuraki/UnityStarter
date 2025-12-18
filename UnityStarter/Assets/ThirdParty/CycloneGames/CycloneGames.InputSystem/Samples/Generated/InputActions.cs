@@ -11,25 +11,33 @@ namespace CycloneGames.InputSystem.Runtime.Generated
 {
     public static class InputActions
     {
+        public static class Contexts
+        {
+            /// <summary>Context: "Gameplay"</summary>
+            public const string Gameplay = "Gameplay";
+        }
+
         public static class ActionMaps
         {
             /// <summary>ActionMap: "PlayerActions"</summary>
-            public static readonly int PlayerActions = InputHashUtility.GetDeterministicHashCode("PlayerActions");
+            public const string PlayerActions = "PlayerActions";
+            /// <summary>ActionMap ID for: "PlayerActions"</summary>
+            public static readonly int PlayerActions_Id = InputHashUtility.GetDeterministicHashCode("PlayerActions");
         }
 
         public static class Actions
         {
             /// <summary>Action: "PlayerActions/Confirm" (Context: Gameplay)</summary>
-            public static readonly int Gameplay_Confirm = InputHashUtility.GetActionId("PlayerActions", "Confirm");
+            public static readonly int Gameplay_Confirm = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Confirm");
 
             /// <summary>Action: "PlayerActions/Move" (Context: Gameplay)</summary>
-            public static readonly int Gameplay_Move = InputHashUtility.GetActionId("PlayerActions", "Move");
+            public static readonly int Gameplay_Move = InputHashUtility.GetActionId("Gameplay", "PlayerActions", "Move");
 
             /// <summary>Join Action for Player 0: "GlobalActions/JoinGame"</summary>
-            public static readonly int PlayerJoin_P0_JoinGame = InputHashUtility.GetActionId("GlobalActions", "JoinGame");
+            public static readonly int PlayerJoin_P0_JoinGame = InputHashUtility.GetActionId("PlayerJoin", "GlobalActions", "JoinGame");
 
             /// <summary>Join Action for Player 1: "GlobalActions/JoinGame"</summary>
-            public static readonly int PlayerJoin_P1_JoinGame = InputHashUtility.GetActionId("GlobalActions", "JoinGame");
+            public static readonly int PlayerJoin_P1_JoinGame = InputHashUtility.GetActionId("PlayerJoin", "GlobalActions", "JoinGame");
         }
     }
 }

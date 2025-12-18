@@ -1,6 +1,7 @@
 using R3;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 
 namespace CycloneGames.InputSystem.Runtime
@@ -8,20 +9,36 @@ namespace CycloneGames.InputSystem.Runtime
     #region Context
 
     /// <summary>
-    /// Runtime object holding bindings for a specific context. Links context name to command instances.
+    /// Runtime container for input bindings.
+    /// <para>
+    /// Memory Management: Implements <see cref="IDisposable"/> for automatic lifecycle management.
+    /// Use ".AddTo(this)" (R3 extension) to bind this context to a GameObject/Component, ensuring it is 
+    /// automatically removed from the input stack when the object is destroyed.
+    /// </para>
     /// </summary>
-    public class InputContext
+    public class InputContext : IDisposable
     {
         public string Name { get; }
         public string ActionMapName { get; }
+
+        // Dictionary lookups are O(1).
         internal readonly Dictionary<Observable<Unit>, IActionCommand> ActionBindings = new();
         internal readonly Dictionary<Observable<Vector2>, IMoveCommand> MoveBindings = new();
         internal readonly Dictionary<Observable<float>, IScalarCommand> ScalarBindings = new();
 
-        public InputContext(string name, string actionMapName)
+        // Tracks which players currently have this context in their stack.
+        // Used to auto-remove this context from those players upon disposal.
+        private readonly HashSet<IInputPlayer> _owners = new();
+
+        /// <summary>
+        /// Creates a new input context.
+        /// </summary>
+        /// <param name="actionMapName">The Unity Input System ActionMap name (required for functionality).</param>
+        /// <param name="name">Optional display name for debugging. If null, uses actionMapName.</param>
+        public InputContext(string actionMapName, string name = null)
         {
-            Name = name;
-            ActionMapName = actionMapName;
+            ActionMapName = actionMapName ?? throw new ArgumentNullException(nameof(actionMapName));
+            Name = name ?? actionMapName; // Default to actionMapName if name not provided
         }
 
         public InputContext AddBinding(Observable<Unit> source, IActionCommand command)
@@ -41,12 +58,48 @@ namespace CycloneGames.InputSystem.Runtime
             ScalarBindings[source] = command;
             return this;
         }
+
+        public bool RemoveBinding(Observable<Unit> source) => ActionBindings.Remove(source);
+        public bool RemoveBinding(Observable<Vector2> source) => MoveBindings.Remove(source);
+        public bool RemoveBinding(Observable<float> source) => ScalarBindings.Remove(source);
+
+        internal void AddOwner(IInputPlayer player)
+        {
+            lock (_owners) _owners.Add(player);
+        }
+
+        internal void RemoveOwner(IInputPlayer player)
+        {
+            lock (_owners) _owners.Remove(player);
+        }
+
+        /// <summary>
+        /// Disposes the context and removes it from all active InputPlayers.
+        /// <para>
+        /// This is thread-safe and designed to be called automatically via <c>.AddTo(this)</c>.
+        /// </para>
+        /// </summary>
+        public void Dispose()
+        {
+            IInputPlayer[] ownersCopy;
+            lock (_owners)
+            {
+                if (_owners.Count == 0) return;
+                ownersCopy = _owners.ToArray();
+                _owners.Clear();
+            }
+
+            // Iterate copy to avoid "Collection modified" exception during callbacks
+            foreach (var owner in ownersCopy)
+            {
+                owner.RemoveContext(this);
+            }
+        }
     }
 
     #endregion
 
     #region Commands
-
     public interface ICommand { }
     public interface IActionCommand : ICommand { void Execute(); }
     public interface IMoveCommand : ICommand { void Execute(Vector2 direction); }
@@ -74,9 +127,9 @@ namespace CycloneGames.InputSystem.Runtime
     }
 
     /// <summary>
-    /// Null Object pattern implementation. Prevents null reference exceptions for unassigned actions.
+    /// Null Object pattern to avoid null checks during execution.
     /// </summary>
-    public class NullCommand : IActionCommand, IMoveCommand
+    public class NullCommand : IActionCommand, IMoveCommand, IScalarCommand
     {
         public static readonly NullCommand Instance = new();
         private NullCommand() { }
