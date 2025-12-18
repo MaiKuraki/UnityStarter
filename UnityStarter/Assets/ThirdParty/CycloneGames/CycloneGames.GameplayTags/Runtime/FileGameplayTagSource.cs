@@ -3,7 +3,10 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using UnityEngine;
+using Unio;
+using Unity.Collections;
 
 using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("CycloneGames.GameplayTags.Editor")]
@@ -109,14 +112,16 @@ namespace CycloneGames.GameplayTags.Runtime
 
       private JObject LoadRoot()
       {
-         string fileContent = File.ReadAllText(FilePath);
+         string fileContent = NativeFile.ReadAllText(FilePath);
          return JObject.Parse(fileContent);
       }
 
       private void SaveFile()
       {
          string fileContent = m_Root.ToString();
-         File.WriteAllText(FilePath, fileContent);
+         byte[] bytes = Encoding.UTF8.GetBytes(fileContent);
+         using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+         NativeFile.WriteAllBytes(FilePath, nativeBytes);
       }
 
       public void DeleteTag(string tagName)

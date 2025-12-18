@@ -4,6 +4,8 @@ using UnityEngine.Networking;
 using System;
 using System.IO;
 using UnityEngine;
+using Unio;
+using Unity.Collections;
 
 namespace CycloneGames.GameplayTags.Runtime
 {
@@ -87,7 +89,6 @@ namespace CycloneGames.GameplayTags.Runtime
 
       private byte[] LoadDataFromFile(string path)
       {
-         // Direct file access is faster and has less overhead than UnityWebRequest on supported platforms.
          if (!File.Exists(path))
          {
             return null;
@@ -95,7 +96,8 @@ namespace CycloneGames.GameplayTags.Runtime
 
          try
          {
-            return File.ReadAllBytes(path);
+            using var nativeBytes = NativeFile.ReadAllBytes(path);
+            return nativeBytes.ToArray();
          }
          catch (Exception e)
          {

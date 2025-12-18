@@ -8,6 +8,8 @@ using System.Threading;
 using UnityEngine;
 using UnityEngine.Profiling;
 using Cysharp.Threading.Tasks;
+using Unio;
+using Unity.Collections;
 
 namespace CycloneGames.Factory.Samples.Benchmarks.Unity
 {
@@ -1428,7 +1430,9 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 var filePath = GetReportFilePath(customName);
                 var directory = Path.GetDirectoryName(filePath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                File.WriteAllText(filePath, report, Encoding.UTF8);
+                byte[] bytes = Encoding.UTF8.GetBytes(report);
+                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+                NativeFile.WriteAllBytes(filePath, nativeBytes);
             }
             catch (System.Exception ex)
             {
@@ -1443,7 +1447,9 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 var filePath = GetMarkdownReportFilePath(customName);
                 var directory = Path.GetDirectoryName(filePath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                File.WriteAllText(filePath, report, Encoding.UTF8);
+                byte[] bytes = Encoding.UTF8.GetBytes(report);
+                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+                NativeFile.WriteAllBytes(filePath, nativeBytes);
             }
             catch (System.Exception ex)
             {
@@ -1458,7 +1464,9 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 var filePath = GetMarkdownSchReportFilePath(customName);
                 var directory = Path.GetDirectoryName(filePath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                File.WriteAllText(filePath, report, Encoding.UTF8);
+                byte[] bytes = Encoding.UTF8.GetBytes(report);
+                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
+                NativeFile.WriteAllBytes(filePath, nativeBytes);
             }
             catch (System.Exception ex)
             {

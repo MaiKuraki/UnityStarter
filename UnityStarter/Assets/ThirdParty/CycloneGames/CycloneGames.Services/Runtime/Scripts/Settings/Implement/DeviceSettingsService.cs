@@ -5,6 +5,8 @@ using UnityEngine;
 using VYaml.Parser;
 using VYaml.Emitter;
 using VYaml.Serialization;
+using Unio;
+using Unity.Collections;
 
 namespace CycloneGames.Service.Runtime
 {
@@ -107,7 +109,8 @@ namespace CycloneGames.Service.Runtime
 
             try
             {
-                byte[] fileBytes = File.ReadAllBytes(_filePath);
+                using var nativeBytes = NativeFile.ReadAllBytes(_filePath);
+                byte[] fileBytes = nativeBytes.ToArray();
                 var parser = new YamlParser(new ReadOnlySequence<byte>(fileBytes));
                 _settings = YamlSerializer.Deserialize<T>(ref parser, _serializerOptions);
             }
@@ -141,10 +144,8 @@ namespace CycloneGames.Service.Runtime
 
                 YamlSerializer.Serialize(ref emitter, _settings, _serializerOptions);
 
-                using (var fs = new FileStream(_tempFilePath, FileMode.Create, FileAccess.Write, FileShare.None))
-                {
-                    fs.Write(bufferWriter.WrittenSpan);
-                }
+                using var nativeBytes = new NativeArray<byte>(bufferWriter.WrittenSpan.ToArray(), Allocator.Temp);
+                NativeFile.WriteAllBytes(_tempFilePath, nativeBytes);
 
                 if (File.Exists(_filePath))
                 {
