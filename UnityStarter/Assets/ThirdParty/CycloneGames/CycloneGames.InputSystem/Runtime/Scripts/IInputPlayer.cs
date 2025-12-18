@@ -49,6 +49,7 @@ namespace CycloneGames.InputSystem.Runtime
         bool RemoveBindingFromContext(InputContext context, Observable<Unit> source);
         bool RemoveBindingFromContext(InputContext context, Observable<Vector2> source);
         bool RemoveBindingFromContext(InputContext context, Observable<float> source);
+        bool RemoveBindingFromContext(InputContext context, Observable<bool> source);
 
         void BlockInput();
         void UnblockInput();
