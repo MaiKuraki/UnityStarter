@@ -17,6 +17,8 @@ namespace CycloneGames.InputSystem.Editor
         public const string Keyboard_RightCtrl = "<Keyboard>/rightCtrl";
         public const string Keyboard_LeftAlt = "<Keyboard>/leftAlt";
         public const string Keyboard_RightAlt = "<Keyboard>/rightAlt";
+        public const string Keyboard_LeftShift = "<Keyboard>/leftShift";
+        public const string Keyboard_RightShift = "<Keyboard>/rightShift";
 
         // Character Keys
         public const string Keyboard_Q = "<Keyboard>/q";

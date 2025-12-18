@@ -25,6 +25,7 @@ namespace CycloneGames.InputSystem.Runtime
         internal readonly Dictionary<Observable<Unit>, IActionCommand> ActionBindings = new();
         internal readonly Dictionary<Observable<Vector2>, IMoveCommand> MoveBindings = new();
         internal readonly Dictionary<Observable<float>, IScalarCommand> ScalarBindings = new();
+        internal readonly Dictionary<Observable<bool>, IBoolCommand> BoolBindings = new();
 
         // Tracks which players currently have this context in their stack.
         // Used to auto-remove this context from those players upon disposal.
@@ -59,9 +60,16 @@ namespace CycloneGames.InputSystem.Runtime
             return this;
         }
 
+        public InputContext AddBinding(Observable<bool> source, IBoolCommand command)
+        {
+            BoolBindings[source] = command;
+            return this;
+        }
+
         public bool RemoveBinding(Observable<Unit> source) => ActionBindings.Remove(source);
         public bool RemoveBinding(Observable<Vector2> source) => MoveBindings.Remove(source);
         public bool RemoveBinding(Observable<float> source) => ScalarBindings.Remove(source);
+        public bool RemoveBinding(Observable<bool> source) => BoolBindings.Remove(source);
 
         internal void AddOwner(IInputPlayer player)
         {
@@ -104,6 +112,7 @@ namespace CycloneGames.InputSystem.Runtime
     public interface IActionCommand : ICommand { void Execute(); }
     public interface IMoveCommand : ICommand { void Execute(Vector2 direction); }
     public interface IScalarCommand : ICommand { void Execute(float value); }
+    public interface IBoolCommand : ICommand { void Execute(bool value); }
 
     public class ActionCommand : IActionCommand
     {
@@ -126,16 +135,24 @@ namespace CycloneGames.InputSystem.Runtime
         public void Execute(float value) => _action?.Invoke(value);
     }
 
+    public class BoolCommand : IBoolCommand
+    {
+        private readonly System.Action<bool> _action;
+        public BoolCommand(System.Action<bool> action) => _action = action;
+        public void Execute(bool value) => _action?.Invoke(value);
+    }
+
     /// <summary>
     /// Null Object pattern to avoid null checks during execution.
     /// </summary>
-    public class NullCommand : IActionCommand, IMoveCommand, IScalarCommand
+    public class NullCommand : IActionCommand, IMoveCommand, IScalarCommand, IBoolCommand
     {
         public static readonly NullCommand Instance = new();
         private NullCommand() { }
         public void Execute() { }
         public void Execute(Vector2 direction) { }
         public void Execute(float value) { }
+        public void Execute(bool value) { }
     }
 
     #endregion
