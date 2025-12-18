@@ -72,6 +72,9 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 UpdateActiveDeviceKind(initialDevice);
             }
+
+            // Start independent device detection polling (works even without Context)
+            StartDeviceDetectionPolling();
         }
 
         /// <summary>
@@ -632,13 +635,13 @@ namespace CycloneGames.InputSystem.Runtime
                         if (inferredType == ActionValueType.Vector2)
                         {
                             var subject = new Subject<Vector2>();
-                            
+
                             // Auto-detect update mode: Polling for delta inputs, EventDriven for others
                             var updateMode = bindingConfig.UpdateMode;
                             if (updateMode == InputUpdateMode.EventDriven)
                             {
                                 // Auto-detect: if bindings contain "/delta", use polling
-                                bool hasDeltaInput = bindingConfig.DeviceBindings.Any(b => 
+                                bool hasDeltaInput = bindingConfig.DeviceBindings.Any(b =>
                                     b.Contains("/delta", StringComparison.OrdinalIgnoreCase));
                                 if (hasDeltaInput) updateMode = InputUpdateMode.Polling;
                             }
@@ -650,14 +653,23 @@ namespace CycloneGames.InputSystem.Runtime
                                     .Subscribe(_ =>
                                     {
                                         if (!action.enabled) return;
-                                        
+
                                         var v = action.ReadValue<Vector2>();
-                                        
+                                        var device = action.activeControl?.device;
+
                                         // Anti-jitter: Ignore small mouse movements when using Gamepad
                                         if (_activeDeviceKind.Value == InputDeviceKind.Gamepad)
                                         {
-                                            var device = action.activeControl?.device;
                                             if (device is UnityEngine.InputSystem.Mouse && v.magnitude < 1.0f) return;
+                                        }
+
+                                        // Update device kind when input is detected (only when there's actual input)
+                                        // This ensures device switching works correctly in polling mode
+                                        // Uses action.activeControl which is the most accurate source from Unity InputSystem
+                                        // Threshold 0.25 (sqrMagnitude) = 0.5 magnitude, filters out tiny noise
+                                        if (v.sqrMagnitude > 0.25f && device != null)
+                                        {
+                                            UpdateActiveDeviceKind(device);
                                         }
 
                                         if (v.sqrMagnitude > 1f) v = v.normalized;
@@ -684,14 +696,13 @@ namespace CycloneGames.InputSystem.Runtime
                                         subject.OnNext(v);
                                     })
                                     .AddTo(_actionWiringSubscriptions);
-                                
-                                // Send zero on cancel for event-driven inputs
+
                                 action.CanceledAsObservable(token)
                                     .Select(_ => Vector2.zero)
                                     .Subscribe(subject.AsObserver())
                                     .AddTo(_actionWiringSubscriptions);
                             }
-                            
+
                             action.PerformedAsObservable(token).Subscribe(ctx => UpdateActiveDeviceKind(ctx.control?.device)).AddTo(_actionWiringSubscriptions);
                             _vector2Subjects[key] = subject;
                         }
@@ -748,6 +759,114 @@ namespace CycloneGames.InputSystem.Runtime
                 return;
             }
             _activeDeviceKind.Value = InputDeviceKind.Other;
+        }
+
+        /// <summary>
+        /// Starts independent device detection polling that works even when no Context is active.
+        /// This ensures ActiveDeviceKind updates correctly regardless of Context state.
+        /// </summary>
+        private void StartDeviceDetectionPolling()
+        {
+            var token = _cancellation.Token;
+
+            Observable.EveryUpdate(token)
+                .Subscribe(_ =>
+                {
+                    if (User == null || !User.valid) return;
+
+                    InputDevice activeDevice = null;
+                    double latestTime = 0;
+
+                    foreach (var device in User.pairedDevices)
+                    {
+                        if (device == null) continue;
+
+                        double deviceTime = device.lastUpdateTime;
+                        if (deviceTime > latestTime)
+                        {
+                            if (HasRecentInput(device))
+                            {
+                                latestTime = deviceTime;
+                                activeDevice = device;
+                            }
+                        }
+                    }
+
+                    if (activeDevice != null)
+                    {
+                        InputDeviceKind newKind = GetDeviceKind(activeDevice);
+                        if (_activeDeviceKind.Value != newKind)
+                        {
+                            UpdateActiveDeviceKind(activeDevice);
+                        }
+                    }
+                })
+                .AddTo(_actionWiringSubscriptions);
+        }
+
+        /// <summary>
+        /// Checks if a device has recent input activity.
+        /// </summary>
+        private bool HasRecentInput(InputDevice device)
+        {
+            if (device == null) return false;
+
+            if (device is Keyboard keyboard)
+            {
+                foreach (var key in keyboard.allKeys)
+                {
+                    if (key.wasPressedThisFrame || key.isPressed)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (device is Mouse mouse)
+            {
+                if (mouse.leftButton.wasPressedThisFrame || mouse.leftButton.isPressed ||
+                    mouse.rightButton.wasPressedThisFrame || mouse.rightButton.isPressed ||
+                    mouse.middleButton.wasPressedThisFrame || mouse.middleButton.isPressed)
+                {
+                    return true;
+                }
+                if (mouse.delta.ReadValue().sqrMagnitude > 0.01f)
+                {
+                    return true;
+                }
+            }
+
+            if (device is Gamepad gamepad)
+            {
+                if (gamepad.buttonSouth.wasPressedThisFrame || gamepad.buttonSouth.isPressed ||
+                    gamepad.buttonNorth.wasPressedThisFrame || gamepad.buttonNorth.isPressed ||
+                    gamepad.buttonEast.wasPressedThisFrame || gamepad.buttonEast.isPressed ||
+                    gamepad.buttonWest.wasPressedThisFrame || gamepad.buttonWest.isPressed ||
+                    gamepad.leftShoulder.wasPressedThisFrame || gamepad.leftShoulder.isPressed ||
+                    gamepad.rightShoulder.wasPressedThisFrame || gamepad.rightShoulder.isPressed ||
+                    gamepad.leftTrigger.isPressed || gamepad.rightTrigger.isPressed)
+                {
+                    return true;
+                }
+                if (gamepad.leftStick.ReadValue().sqrMagnitude > 0.01f ||
+                    gamepad.rightStick.ReadValue().sqrMagnitude > 0.01f)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Gets the InputDeviceKind for a given device.
+        /// </summary>
+        private InputDeviceKind GetDeviceKind(InputDevice device)
+        {
+            if (device == null) return InputDeviceKind.Unknown;
+            if (device is Keyboard || device is Mouse) return InputDeviceKind.KeyboardMouse;
+            if (device is Gamepad) return InputDeviceKind.Gamepad;
+            return InputDeviceKind.Other;
         }
 
         /// <summary>
