@@ -19,6 +19,16 @@ namespace CycloneGames.InputSystem.Runtime
     }
 
     /// <summary>
+    /// Input update mode: Event-driven (only on value change) or Polling (every frame).
+    /// Polling is recommended for continuous inputs like mouse delta or analog sticks.
+    /// </summary>
+    public enum InputUpdateMode
+    {
+        EventDriven,  // Only trigger when value changes (default, efficient for buttons/discrete inputs)
+        Polling       // Poll every frame (required for smooth continuous inputs like mouse delta)
+    }
+
+    /// <summary>
     /// Represents the root of the YAML input configuration file.
     /// </summary>
     [YamlObject]
@@ -70,9 +80,17 @@ namespace CycloneGames.InputSystem.Runtime
 
         [YamlMember("action")]
         public string ActionName { get; set; }
-
+        
         [YamlMember("deviceBindings")]
         public List<string> DeviceBindings { get; set; }
+
+        /// <summary>
+        /// Input update mode. Auto-detected if not specified:
+        /// - Polling: if bindings contain "/delta" (mouse delta, etc.)
+        /// - EventDriven: otherwise (buttons, discrete inputs)
+        /// </summary>
+        [YamlMember("updateMode")]
+        public InputUpdateMode UpdateMode { get; set; } = InputUpdateMode.EventDriven;
 
         /// <summary>
         /// Long-press duration in milliseconds. When > 0, emits separate long-press event.
