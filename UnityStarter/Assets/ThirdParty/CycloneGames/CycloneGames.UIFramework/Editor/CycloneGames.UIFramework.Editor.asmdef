@@ -2,6 +2,7 @@
     "name": "CycloneGames.UIFramework.Editor",
     "rootNamespace": "",
     "references": [
+        "Unio",
         "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.UIFramework.Runtime"
     ],

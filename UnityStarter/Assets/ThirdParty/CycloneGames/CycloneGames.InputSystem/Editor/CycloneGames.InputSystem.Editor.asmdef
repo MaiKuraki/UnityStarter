@@ -2,6 +2,7 @@
     "name": "CycloneGames.InputSystem.Editor",
     "rootNamespace": "",
     "references": [
+        "Unio",
         "CycloneGames.InputSystem.Runtime",
         "CycloneGames.Utility.Runtime"
     ],

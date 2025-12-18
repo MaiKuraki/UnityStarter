@@ -4,6 +4,7 @@
     "references": [
         "UniTask",
         "VYaml.Core",
+        "Unio",
         "CycloneGames.Logger",
         "Unity.RenderPipelines.Universal.Runtime"
     ],
