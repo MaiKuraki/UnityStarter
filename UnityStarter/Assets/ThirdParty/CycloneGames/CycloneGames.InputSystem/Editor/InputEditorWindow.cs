@@ -33,9 +33,17 @@ namespace CycloneGames.InputSystem.Editor
         private string _defaultConfigFolderPath;
         private DefaultAsset _defaultConfigFolder;
         private string _previousDefaultConfigFolderPath;
-        private string _userConfigSubPath; // Subdirectory path relative to PersistentData (e.g., "/Config")
+        private string _userConfigSubPath;
         private string _userConfigFullPathDisplay;
         private string _defaultConfigFullPathDisplay;
+        private string _lastValidationHash;
+        
+        private HashSet<string> _cachedContextNames = new HashSet<string>();
+        private HashSet<string> _cachedActionMapNames = new HashSet<string>();
+        private Dictionary<string, string> _contextNameToLocation = new Dictionary<string, string>();
+        private Dictionary<string, string> _actionMapNameToLocation = new Dictionary<string, string>();
+        private bool _validationCacheDirty = true;
+        private Dictionary<int, int> _previousContextCounts = new Dictionary<int, int>();
 
         private const string DefaultConfigFileName = "input_config.yaml";
         private const string UserConfigFileName = "user_input_settings.yaml";
@@ -50,7 +58,6 @@ namespace CycloneGames.InputSystem.Editor
 
         private void OnEnable()
         {
-            // Load UserConfig subdirectory path from EditorPrefs
             _userConfigSubPath = EditorPrefs.GetString("CycloneGames.InputSystem.UserConfigSubPath", "");
             UpdateUserConfigPath();
 
@@ -78,6 +85,24 @@ namespace CycloneGames.InputSystem.Editor
             InitializeToolbarSections();
 
             LoadUserConfig();
+            
+            if (_configSO != null && _serializedConfig != null)
+            {
+                _validationCacheDirty = true;
+                var slotsProp = _serializedConfig.FindProperty("_playerSlots");
+                if (slotsProp != null && slotsProp.isArray)
+                {
+                    for (int i = 0; i < slotsProp.arraySize; i++)
+                    {
+                        var slotProp = slotsProp.GetArrayElementAtIndex(i);
+                        var contextsProp = slotProp.FindPropertyRelative("Contexts");
+                        if (contextsProp != null)
+                        {
+                            _previousContextCounts[i] = contextsProp.arraySize;
+                        }
+                    }
+                }
+            }
         }
 
         private void UpdateUserConfigPath()
@@ -361,7 +386,6 @@ namespace CycloneGames.InputSystem.Editor
 
             DrawToolbar();
             DrawStatusBar();
-
             DrawCodegenSettings();
 
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
@@ -403,7 +427,14 @@ namespace CycloneGames.InputSystem.Editor
                         var joinLongPressProp = slotProp.FindPropertyRelative("JoinAction.LongPressMs");
 
                         EditorGUILayout.PropertyField(joinTypeProp);
+                        
+                        EditorGUI.BeginChangeCheck();
                         EditorGUILayout.PropertyField(joinActionProp);
+                        if (EditorGUI.EndChangeCheck())
+                        {
+                            _validationCacheDirty = true;
+                        }
+                        
                         EditorGUILayout.PropertyField(joinBindingsProp, true);
 
                         var joinType = (CycloneGames.InputSystem.Runtime.ActionValueType)joinTypeProp.enumValueIndex;
@@ -429,7 +460,73 @@ namespace CycloneGames.InputSystem.Editor
                         EditorGUI.indentLevel--;
 
                         var contextsProp = slotProp.FindPropertyRelative("Contexts");
+                        
+                        int previousCount = _previousContextCounts.TryGetValue(i, out var count) ? count : contextsProp.arraySize;
+                        
+                        EditorGUI.BeginChangeCheck();
                         EditorGUILayout.PropertyField(contextsProp, new GUIContent("Contexts"), true);
+                        bool contextsChanged = EditorGUI.EndChangeCheck();
+                        
+                        int currentCount = contextsProp.arraySize;
+                        
+                        if (currentCount > previousCount)
+                        {
+                            _serializedConfig.ApplyModifiedProperties();
+                            _serializedConfig.Update();
+                            
+                            RebuildValidationCache();
+                            
+                            contextsProp = slotProp.FindPropertyRelative("Contexts");
+                            
+                            bool nameChanged = false;
+                            for (int newIdx = previousCount; newIdx < currentCount; newIdx++)
+                            {
+                                var newCtxProp = contextsProp.GetArrayElementAtIndex(newIdx);
+                                var newCtxNameProp = newCtxProp.FindPropertyRelative("Name");
+                                var newCtxActionMapProp = newCtxProp.FindPropertyRelative("ActionMap");
+                                
+                                string currentName = newCtxNameProp != null ? newCtxNameProp.stringValue : "";
+                                string currentActionMap = newCtxActionMapProp != null ? newCtxActionMapProp.stringValue : "";
+                                
+                                if (newCtxNameProp != null)
+                                {
+                                    if (string.IsNullOrEmpty(currentName) || _cachedContextNames.Contains(currentName))
+                                    {
+                                        newCtxNameProp.stringValue = GenerateUniqueContextName(i, string.IsNullOrEmpty(currentName) ? null : currentName);
+                                        nameChanged = true;
+                                    }
+                                }
+                                
+                                if (newCtxActionMapProp != null)
+                                {
+                                    if (string.IsNullOrEmpty(currentActionMap) || _cachedActionMapNames.Contains(currentActionMap) || currentActionMap == "GlobalActions")
+                                    {
+                                        newCtxActionMapProp.stringValue = GenerateUniqueActionMapName(i, string.IsNullOrEmpty(currentActionMap) ? null : currentActionMap);
+                                        nameChanged = true;
+                                    }
+                                }
+                            }
+                            
+                            if (nameChanged)
+                            {
+                                _serializedConfig.ApplyModifiedProperties();
+                                _serializedConfig.Update();
+                                RebuildValidationCache();
+                            }
+                            
+                            _previousContextCounts[i] = currentCount;
+                            _validationCacheDirty = false;
+                        }
+                        else if (contextsChanged)
+                        {
+                            _validationCacheDirty = true;
+                            _previousContextCounts[i] = currentCount;
+                        }
+                        else
+                        {
+                            _previousContextCounts[i] = currentCount;
+                        }
+                        
                         EditorGUI.indentLevel--;
 
                         if (i < slotsProp.arraySize - 1)
@@ -446,6 +543,14 @@ namespace CycloneGames.InputSystem.Editor
                 }
 
                 _serializedConfig.ApplyModifiedProperties();
+                
+                if (_validationCacheDirty)
+                {
+                    RebuildValidationCache();
+                    _validationCacheDirty = false;
+                }
+                
+                ValidateCurrentValues();
             }
             else
             {
@@ -778,6 +883,25 @@ namespace CycloneGames.InputSystem.Editor
                 _configSO.FromData(configModel);
 
                 _serializedConfig = new SerializedObject(_configSO);
+                _validationCacheDirty = true;
+                _previousContextCounts.Clear();
+                
+                var slotsProp = _serializedConfig.FindProperty("_playerSlots");
+                if (slotsProp != null && slotsProp.isArray)
+                {
+                    for (int i = 0; i < slotsProp.arraySize; i++)
+                    {
+                        var slotProp = slotsProp.GetArrayElementAtIndex(i);
+                        var contextsProp = slotProp.FindPropertyRelative("Contexts");
+                        if (contextsProp != null)
+                        {
+                            _previousContextCounts[i] = contextsProp.arraySize;
+                        }
+                    }
+                }
+                
+                RebuildValidationCache();
+                _validationCacheDirty = false;
                 SetStatus(status, MessageType.Info);
             }
             catch (System.Exception e)
@@ -923,45 +1047,48 @@ namespace CycloneGames.InputSystem.Editor
 
         private void GenerateConstantsFile(InputConfiguration config)
         {
+            if (_validationCacheDirty)
+            {
+                RebuildValidationCache();
+                _validationCacheDirty = false;
+            }
+
+            if (_statusMessageType == MessageType.Error)
+            {
+                SetStatus("❌ Cannot generate code: Please fix duplicate names before generating.", MessageType.Error);
+                return;
+            }
+
+            var contexts = new HashSet<string>();
             var actionMaps = new HashSet<string>();
-            var actions = new HashSet<string>();
+            
+            const string globalActionMap = "GlobalActions";
+            actionMaps.Add(globalActionMap);
 
             if (config.PlayerSlots != null)
             {
                 foreach (var slot in config.PlayerSlots)
                 {
-                    if (slot.JoinAction != null && !string.IsNullOrEmpty(slot.JoinAction.ActionName))
-                    {
-                        actions.Add(slot.JoinAction.ActionName);
-                    }
-
                     if (slot.Contexts != null)
                     {
                         foreach (var context in slot.Contexts)
                         {
+                            if (!string.IsNullOrEmpty(context.Name))
+                            {
+                                contexts.Add(context.Name);
+                            }
                             if (!string.IsNullOrEmpty(context.ActionMap))
                             {
-                                actionMaps.Add(context.ActionMap);
-                            }
-
-                            if (context.Bindings != null)
-                            {
-                                foreach (var binding in context.Bindings)
+                                if (context.ActionMap == globalActionMap)
                                 {
-                                    if (!string.IsNullOrEmpty(binding.ActionName))
-                                    {
-                                        actions.Add(binding.ActionName);
-                                    }
+                                    SetStatus($"❌ Cannot generate code: ActionMap \"{globalActionMap}\" is reserved for Join Actions. Please use a different name.", MessageType.Error);
+                                    return;
                                 }
+                                actionMaps.Add(context.ActionMap);
                             }
                         }
                     }
                 }
-            }
-
-            if (config.JoinAction != null && !string.IsNullOrEmpty(config.JoinAction.ActionName))
-            {
-                actions.Add(config.JoinAction.ActionName);
             }
 
             var sb = new StringBuilder();
@@ -975,33 +1102,59 @@ namespace CycloneGames.InputSystem.Editor
             sb.AppendLine("{");
             sb.AppendLine("    public static class InputActions");
             sb.AppendLine("    {");
+            
+            var usedContextIdentifiers = new HashSet<string>();
+            sb.AppendLine("        public static class Contexts");
+            sb.AppendLine("        {");
+            foreach (var context in contexts.OrderBy(c => c))
+            {
+                string sanitized = SanitizeIdentifier(context);
+                string uniqueIdentifier = GetUniqueIdentifier(sanitized, usedContextIdentifiers);
+                sb.AppendLine($"            /// <summary>Context: \"{context}\"</summary>");
+                sb.AppendLine($"            public const string {uniqueIdentifier} = \"{context}\";");
+            }
+            sb.AppendLine("        }");
+            sb.AppendLine();
+            
+            var usedActionMapIdentifiers = new HashSet<string>();
             sb.AppendLine("        public static class ActionMaps");
             sb.AppendLine("        {");
             foreach (var map in actionMaps.OrderBy(a => a))
             {
+                string sanitized = SanitizeIdentifier(map);
+                string uniqueIdentifier = GetUniqueIdentifier(sanitized, usedActionMapIdentifiers);
                 sb.AppendLine($"            /// <summary>ActionMap: \"{map}\"</summary>");
-                sb.AppendLine($"            public static readonly int {SanitizeIdentifier(map)} = InputHashUtility.GetDeterministicHashCode(\"{map}\");");
+                sb.AppendLine($"            public const string {uniqueIdentifier} = \"{map}\";");
+                // Also generate the ID version if needed, but context construction usually uses string.
+                // For completeness, we can add _Id suffix for the int hash.
+                string idIdentifier = GetUniqueIdentifier(sanitized + "_Id", usedActionMapIdentifiers);
+                sb.AppendLine($"            /// <summary>ActionMap ID for: \"{map}\"</summary>");
+                sb.AppendLine($"            public static readonly int {idIdentifier} = InputHashUtility.GetDeterministicHashCode(\"{map}\");");
             }
             sb.AppendLine("        }");
             sb.AppendLine();
+            
             sb.AppendLine("        public static class Actions");
             sb.AppendLine("        {");
+            var usedIdentifiers = new HashSet<string>();
+            
             if (config.PlayerSlots != null)
             {
                 var allBindings = config.PlayerSlots
                     .Where(slot => slot.Contexts != null)
                     .SelectMany(slot => slot.Contexts)
-                    .Where(ctx => ctx.Bindings != null && !string.IsNullOrEmpty(ctx.Name))
-                    .SelectMany(ctx => ctx.Bindings.Select(b => new { Context = ctx.Name, Action = b.ActionName, Map = ctx.ActionMap }))
+                    .Where(ctx => ctx.Bindings != null && !string.IsNullOrEmpty(ctx.Name) && !string.IsNullOrEmpty(ctx.ActionMap))
+                    .SelectMany(ctx => ctx.Bindings
+                        .Where(b => !string.IsNullOrEmpty(b.ActionName))
+                        .Select(b => new { Context = ctx.Name, Action = b.ActionName, Map = ctx.ActionMap }))
                     .Distinct();
 
                 foreach (var binding in allBindings.OrderBy(b => b.Context).ThenBy(b => b.Action))
                 {
-                    if (string.IsNullOrEmpty(binding.Action)) continue;
-
-                    string constantName = $"{binding.Context}_{binding.Action}";
+                    string baseConstantName = string.Concat(binding.Context, "_", binding.Action);
+                    string constantName = GetUniqueIdentifier(baseConstantName, usedIdentifiers);
                     sb.AppendLine($"            /// <summary>Action: \"{binding.Map}/{binding.Action}\" (Context: {binding.Context})</summary>");
-                    sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = InputHashUtility.GetActionId(\"{binding.Map}\", \"{binding.Action}\");");
+                    sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = InputHashUtility.GetActionId(\"{binding.Context}\", \"{binding.Map}\", \"{binding.Action}\");");
                 }
             }
             if (config.PlayerSlots != null)
@@ -1010,9 +1163,10 @@ namespace CycloneGames.InputSystem.Editor
                 {
                     const string joinContext = "PlayerJoin";
                     const string joinMap = "GlobalActions";
-                    string constantName = $"{joinContext}_P{slot.PlayerId}_{slot.JoinAction.ActionName}";
+                    string baseConstantName = string.Concat(joinContext, "_P", slot.PlayerId.ToString(), "_", slot.JoinAction.ActionName);
+                    string constantName = GetUniqueIdentifier(baseConstantName, usedIdentifiers);
                     sb.AppendLine($"            /// <summary>Join Action for Player {slot.PlayerId}: \"{joinMap}/{slot.JoinAction.ActionName}\"</summary>");
-                    sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = InputHashUtility.GetActionId(\"{joinMap}\", \"{slot.JoinAction.ActionName}\");");
+                    sb.AppendLine($"            public static readonly int {SanitizeIdentifier(constantName)} = InputHashUtility.GetActionId(\"{joinContext}\", \"{joinMap}\", \"{slot.JoinAction.ActionName}\");");
                 }
             }
             sb.AppendLine("        }");
@@ -1054,7 +1208,6 @@ namespace CycloneGames.InputSystem.Editor
             var sb = new StringBuilder();
             char firstChar = name[0];
 
-            // Handle first character
             if (char.IsLetter(firstChar) || firstChar == '_')
             {
                 sb.Append(firstChar);
@@ -1068,7 +1221,6 @@ namespace CycloneGames.InputSystem.Editor
                 sb.Append('_');
             }
 
-            // Handle remaining characters
             for (int i = 1; i < name.Length; i++)
             {
                 char c = name[i];
@@ -1082,6 +1234,253 @@ namespace CycloneGames.InputSystem.Editor
                 }
             }
 
+            return sb.ToString();
+        }
+
+        private string GetUniqueIdentifier(string baseIdentifier, HashSet<string> usedIdentifiers)
+        {
+            if (string.IsNullOrEmpty(baseIdentifier))
+            {
+                baseIdentifier = "_";
+            }
+
+            string identifier = baseIdentifier;
+            int suffix = 1;
+
+            while (usedIdentifiers.Contains(identifier))
+            {
+                identifier = string.Concat(baseIdentifier, "_", suffix.ToString());
+                suffix++;
+            }
+
+            usedIdentifiers.Add(identifier);
+            return identifier;
+        }
+
+        private void ValidateFieldInRealTime(string value, string fieldType, string location, HashSet<string> usedNames, Dictionary<string, string> nameToLocation, string oldValue = null)
+        {
+            if (!string.IsNullOrEmpty(oldValue) && oldValue != value)
+            {
+                usedNames.Remove(oldValue);
+                nameToLocation.Remove(oldValue);
+            }
+            
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+            
+            if (fieldType == "ActionMap" && value == "GlobalActions")
+            {
+                SetStatus($"❌ ActionMap name \"GlobalActions\" is reserved for Join Actions. Please use a different name.", MessageType.Error);
+                return;
+            }
+            
+            if (usedNames.Contains(value))
+            {
+                string existingLocation = nameToLocation.TryGetValue(value, out var loc) ? loc : "unknown";
+                SetStatus($"❌ Duplicate {fieldType} name: \"{value}\" at {location} (already used at {existingLocation})", MessageType.Error);
+            }
+            else
+            {
+                usedNames.Add(value);
+                nameToLocation[value] = location;
+                if (_statusMessageType == MessageType.Error && _statusMessage != null && _statusMessage.Contains($"Duplicate {fieldType}"))
+                {
+                    _validationCacheDirty = true;
+                }
+            }
+        }
+
+        private void ValidateCurrentValues()
+        {
+            if (_configSO == null || _serializedConfig == null) return;
+
+            var tempContextNames = new HashSet<string>();
+            var tempActionMapNames = new HashSet<string>();
+            var tempContextLocations = new Dictionary<string, string>();
+            var tempActionMapLocations = new Dictionary<string, string>();
+
+            const string globalActionMap = "GlobalActions";
+            tempActionMapNames.Add(globalActionMap);
+            tempActionMapLocations[globalActionMap] = "Global (Join Actions)";
+
+            var slotsProp = _serializedConfig.FindProperty("_playerSlots");
+            if (slotsProp != null && slotsProp.isArray)
+            {
+                for (int i = 0; i < slotsProp.arraySize; i++)
+                {
+                    var slotProp = slotsProp.GetArrayElementAtIndex(i);
+                    var contextsProp = slotProp.FindPropertyRelative("Contexts");
+                    
+                    if (contextsProp != null && contextsProp.isArray)
+                    {
+                        for (int ctxIdx = 0; ctxIdx < contextsProp.arraySize; ctxIdx++)
+                        {
+                            var ctxProp = contextsProp.GetArrayElementAtIndex(ctxIdx);
+                            var ctxNameProp = ctxProp.FindPropertyRelative("Name");
+                            var ctxActionMapProp = ctxProp.FindPropertyRelative("ActionMap");
+                            
+                            if (ctxNameProp != null && !string.IsNullOrEmpty(ctxNameProp.stringValue))
+                            {
+                                string ctxName = ctxNameProp.stringValue;
+                                string location = $"Player {i}, Context {ctxIdx}";
+                                
+                                if (tempContextNames.Contains(ctxName))
+                                {
+                                    string existingLoc = tempContextLocations.TryGetValue(ctxName, out var loc) ? loc : "unknown";
+                                    SetStatus($"❌ Duplicate Context name: \"{ctxName}\" at {location} (already used at {existingLoc})", MessageType.Error);
+                                    return;
+                                }
+                                else
+                                {
+                                    tempContextNames.Add(ctxName);
+                                    tempContextLocations[ctxName] = location;
+                                }
+                            }
+                            
+                            if (ctxActionMapProp != null && !string.IsNullOrEmpty(ctxActionMapProp.stringValue))
+                            {
+                                string actionMapName = ctxActionMapProp.stringValue;
+                                string location = $"Player {i}, Context {ctxIdx}";
+                                
+                                if (actionMapName == "GlobalActions")
+                                {
+                                    SetStatus($"❌ ActionMap name \"GlobalActions\" is reserved for Join Actions at {location}. Please use a different name.", MessageType.Error);
+                                    return;
+                                }
+                                else if (tempActionMapNames.Contains(actionMapName))
+                                {
+                                    string existingLoc = tempActionMapLocations.TryGetValue(actionMapName, out var loc) ? loc : "unknown";
+                                    SetStatus($"❌ Duplicate ActionMap name: \"{actionMapName}\" at {location} (already used at {existingLoc})", MessageType.Error);
+                                    return;
+                                }
+                                else
+                                {
+                                    tempActionMapNames.Add(actionMapName);
+                                    tempActionMapLocations[actionMapName] = location;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (_statusMessageType == MessageType.Error && _statusMessage != null && 
+                (_statusMessage.Contains("Duplicate") || _statusMessage.Contains("GlobalActions")))
+            {
+                return;
+            }
+            
+            SetStatus("", MessageType.Info);
+        }
+
+        private void RebuildValidationCache()
+        {
+            if (_configSO == null || _serializedConfig == null) return;
+
+            _cachedContextNames.Clear();
+            _cachedActionMapNames.Clear();
+            _contextNameToLocation.Clear();
+            _actionMapNameToLocation.Clear();
+
+            const string globalActionMap = "GlobalActions";
+            _cachedActionMapNames.Add(globalActionMap);
+            _actionMapNameToLocation[globalActionMap] = "Global (Join Actions)";
+
+            bool hasError = false;
+
+            var slotsProp = _serializedConfig.FindProperty("_playerSlots");
+            if (slotsProp != null && slotsProp.isArray)
+            {
+                for (int i = 0; i < slotsProp.arraySize; i++)
+                {
+                    var slotProp = slotsProp.GetArrayElementAtIndex(i);
+                    var contextsProp = slotProp.FindPropertyRelative("Contexts");
+                    
+                    if (contextsProp != null && contextsProp.isArray)
+                    {
+                        for (int ctxIdx = 0; ctxIdx < contextsProp.arraySize; ctxIdx++)
+                        {
+                            var ctxProp = contextsProp.GetArrayElementAtIndex(ctxIdx);
+                            var ctxNameProp = ctxProp.FindPropertyRelative("Name");
+                            var ctxActionMapProp = ctxProp.FindPropertyRelative("ActionMap");
+                            
+                            if (ctxNameProp != null && !string.IsNullOrEmpty(ctxNameProp.stringValue))
+                            {
+                                string ctxName = ctxNameProp.stringValue;
+                                string location = $"Player {i}, Context {ctxIdx}";
+                                
+                                if (_cachedContextNames.Contains(ctxName))
+                                {
+                                    string existingLoc = _contextNameToLocation.TryGetValue(ctxName, out var loc) ? loc : "unknown";
+                                    SetStatus($"❌ Duplicate Context name: \"{ctxName}\" at {location} (already used at {existingLoc})", MessageType.Error);
+                                    hasError = true;
+                                }
+                                else
+                                {
+                                    _cachedContextNames.Add(ctxName);
+                                    _contextNameToLocation[ctxName] = location;
+                                }
+                            }
+                            
+                            if (ctxActionMapProp != null && !string.IsNullOrEmpty(ctxActionMapProp.stringValue))
+                            {
+                                string actionMapName = ctxActionMapProp.stringValue;
+                                string location = $"Player {i}, Context {ctxIdx}";
+                                
+                                if (actionMapName == "GlobalActions")
+                                {
+                                    SetStatus($"❌ ActionMap name \"GlobalActions\" is reserved for Join Actions at {location}. Please use a different name.", MessageType.Error);
+                                    hasError = true;
+                                }
+                                else if (_cachedActionMapNames.Contains(actionMapName))
+                                {
+                                    string existingLoc = _actionMapNameToLocation.TryGetValue(actionMapName, out var loc) ? loc : "unknown";
+                                    SetStatus($"❌ Duplicate ActionMap name: \"{actionMapName}\" at {location} (already used at {existingLoc})", MessageType.Error);
+                                    hasError = true;
+                                }
+                                else
+                                {
+                                    _cachedActionMapNames.Add(actionMapName);
+                                    _actionMapNameToLocation[actionMapName] = location;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (!hasError)
+            {
+                SetStatus("", MessageType.Info);
+            }
+        }
+
+        private string GetConfigHash(InputConfiguration config)
+        {
+            var sb = new StringBuilder();
+            if (config.PlayerSlots != null)
+            {
+                foreach (var slot in config.PlayerSlots)
+                {
+                    sb.Append($"P{slot.PlayerId}:");
+                    if (slot.Contexts != null)
+                    {
+                        foreach (var ctx in slot.Contexts)
+                        {
+                            sb.Append($"C[{ctx.Name}]:M[{ctx.ActionMap}]:");
+                            if (ctx.Bindings != null)
+                            {
+                                foreach (var b in ctx.Bindings)
+                                {
+                                    sb.Append($"A[{b.ActionName}];");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             return sb.ToString();
         }
 
@@ -1173,6 +1572,55 @@ namespace CycloneGames.InputSystem.Editor
         {
             _configSO = null;
             _serializedConfig = null;
+            _validationCacheDirty = true;
+            _cachedContextNames.Clear();
+            _cachedActionMapNames.Clear();
+            _contextNameToLocation.Clear();
+            _actionMapNameToLocation.Clear();
+            _previousContextCounts.Clear();
+        }
+        
+        private string GenerateUniqueContextName(int playerIndex, string baseName = null)
+        {
+            if (string.IsNullOrEmpty(baseName))
+            {
+                baseName = "NewContext";
+            }
+            
+            string candidate = baseName;
+            int suffix = 1;
+            
+            while (_cachedContextNames.Contains(candidate))
+            {
+                candidate = string.Concat(baseName, suffix.ToString());
+                suffix++;
+            }
+            
+            return candidate;
+        }
+        
+        private string GenerateUniqueActionMapName(int playerIndex, string baseName = null)
+        {
+            if (string.IsNullOrEmpty(baseName))
+            {
+                baseName = "NewActionMap";
+            }
+            
+            if (baseName == "GlobalActions")
+            {
+                baseName = "NewActionMap";
+            }
+            
+            string candidate = baseName;
+            int suffix = 1;
+            
+            while (_cachedActionMapNames.Contains(candidate) || candidate == "GlobalActions")
+            {
+                candidate = string.Concat(baseName, suffix.ToString());
+                suffix++;
+            }
+            
+            return candidate;
         }
 
         private void SetStatus(string message, MessageType type)
