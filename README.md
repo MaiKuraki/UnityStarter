@@ -153,7 +153,7 @@ Modules are designed to be:
 | **GameplayFramework** | `CycloneGames.GameplayFramework` | UE-style gameplay architecture (Actor/Pawn/Controller/GameMode). DI-friendly, scalable foundation for game projects.     | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.md) |
 | **GameplayAbilities** | `CycloneGames.GameplayAbilities` | Data-driven ability system (GAS-inspired). ScriptableObject-based abilities, attributes, effects, and status management. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.md) |
 | **GameplayTags**      | `CycloneGames.GameplayTags`      | Hierarchical tag system for decoupled game logic. Runtime registration, auto-generation, and tag-based queries.          | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.md)      |
-| **RPGFoundation**     | `CycloneGames.RPGFoundation`     | RPG-specific extensions (movement, combat, etc.). Foundation components for RPG-type games.                              | [See module directory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags)     |
+| **RPGFoundation**     | `CycloneGames.RPGFoundation`     | RPG-specific extensions (movement, combat, etc.). Foundation components for RPG-type games.                              | [See module directory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)     |
 | **BehaviorTree**      | `CycloneGames.BehaviorTree`      | AI behavior tree system. Visual editor, ScriptableObject-based, optimized for mobile devices.                            | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.md)      |
 
 ### 🏗️ Core Infrastructure
