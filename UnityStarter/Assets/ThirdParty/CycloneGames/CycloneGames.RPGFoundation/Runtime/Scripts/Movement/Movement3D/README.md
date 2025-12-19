@@ -1,18 +1,17 @@
 # RPG Movement Component
 
-A high-performance, state machine-based character movement system for Unity RPG games with zero GC allocation and compatible with Gameplay Ability System (GAS).
+A high-performance, state machine-based character movement system for Unity RPG games and compatible with Gameplay Ability System (GAS).
 
 <p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
 ## ✨ Features
 
 - 🎮 **State Machine Architecture** - Clean separation of movement states (Idle, Walk, Sprint, Crouch, Jump, Fall)
-- ⚡ **Zero Garbage Collection** - Uses Unity.Mathematics for SIMD-accelerated, allocation-free calculations
 - 🔌 **GAS Integration Ready** - Optional integration with Gameplay Ability System via interfaces
 - 🎯 **Beginner Friendly** - Works standalone without any dependencies
 - 📝 **ScriptableObject Config** - Designer-friendly parameter configuration
 - 🌍 **Dynamic Gravity Support** - Supports changing gravity direction for planetary movement
-- 🎨 **Animation Ready** - Built-in Animator parameter support
+- 🎨 **Animation Ready** - Built-in Animator/Animancer parameter support
 
 ## 📦 Quick Start
 
@@ -78,18 +77,6 @@ The system uses a state machine with the following states:
 | **Fall**   | Airborne descent with air control                   |
 
 States automatically transition based on input and physics conditions.
-
-### Zero-GC Design
-
-The system uses `Unity.Mathematics` types (`float3`, `quaternion`) instead of Unity's `Vector3` and `Quaternion` to eliminate garbage collection:
-
-```csharp
-// Traditional (allocates per frame)
-Quaternion rotation = Quaternion.Slerp(a, b, t);
-
-// Our approach (zero allocation)
-quaternion rotation = math.slerp(a, b, t);
-```
 
 ## 🎮 Standalone Usage (Without GAS)
 
@@ -295,10 +282,10 @@ public class GASAttributeController : MonoBehaviour
 | **runSpeed**      | Running speed            | 5.0     |
 | **sprintSpeed**   | Sprinting speed          | 8.0     |
 | **crouchSpeed**   | Crouching speed          | 1.5     |
-| **jumpForce**     | Upward jump velocity     | 10.0    |
+| **jumpForce**     | Upward jump velocity     | 8.0     |
 | **maxJumpCount**  | Number of jumps allowed  | 1       |
 | **gravity**       | Gravity acceleration     | -25.0   |
-| **rotationSpeed** | Character rotation speed | 20.0    |
+| **rotationSpeed** | Character rotation speed | 10.0    |
 
 ### Animation Parameters
 

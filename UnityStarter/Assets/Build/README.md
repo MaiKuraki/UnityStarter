@@ -1,0 +1,617 @@
+[**English**] | [**简体中文**](README.SCH.md)
+
+# Build Module Documentation
+
+The Build module provides a comprehensive, flexible build pipeline for Unity projects. It supports full app builds, hot updates for both code (via HybridCLR) and assets (via YooAsset or Addressables), and seamless CI/CD integration. The system is designed to be modular, allowing you to use only the features you need.
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Prerequisites](#prerequisites)
+3. [Quick Start](#quick-start)
+4. [Core Concepts](#core-concepts)
+5. [Configuration](#configuration)
+6. [Build Workflows](#build-workflows)
+7. [CI/CD Integration](#cicd-integration)
+8. [Troubleshooting](#troubleshooting)
+
+## Overview
+
+The Build module consists of several key components:
+
+- **BuildData**: Central configuration ScriptableObject (required for all builds)
+- **BuildScript**: Full application build pipeline
+- **HotUpdateBuilder**: Unified hot update workflow for code and assets
+- **HybridCLR Integration**: C# code hot-update support (optional)
+- **YooAsset Integration**: Asset management and hot-update (optional)
+- **Addressables Integration**: Unity's official asset management (optional)
+- **Buildalon Integration**: Build automation helpers (optional)
+
+### Key Features
+
+- ✅ **Flexible Package Support**: Works with or without optional packages (HybridCLR, YooAsset, Addressables, Buildalon)
+- ✅ **Automatic Versioning**: Git-based version generation
+- ✅ **Multi-Platform**: Supports Windows, Mac, Android, iOS, WebGL
+- ✅ **Hot Update Ready**: Complete solution for code and asset hot updates
+- ✅ **CI/CD Friendly**: Command-line interface for automated builds
+- ✅ **Configuration-Driven**: All settings via ScriptableObject assets
+
+## Prerequisites
+
+### Required
+
+- **Unity 2022.3+**
+- **Git** (for automatic versioning)
+
+### Optional Packages
+
+The Build system supports the following optional packages. Install only what you need:
+
+- **[HybridCLR](https://github.com/focus-creative-games/hybridclr)** - For C# code hot-updates
+- **[YooAsset](https://github.com/tuyoogame/YooAsset)** - Lightweight asset management system
+- **[Addressables](https://docs.unity3d.com/Packages/com.unity.addressables@latest)** - Unity's official asset management (via Package Manager)
+- **[Buildalon](https://github.com/virtualmaker/Buildalon)** - Build automation helpers
+
+> **Note**: The Build system uses reflection to detect optional packages. If a package is not installed, the related features will be automatically disabled. No compilation errors will occur.
+
+## Quick Start
+
+### Step 1: Create BuildData Asset
+
+**BuildData is required for all builds.** You must create this asset manually for each project.
+
+1. In the Unity Editor, right-click in your Project window
+2. Select **Create > CycloneGames > Build > BuildData**
+3. Name it `BuildData` (or any name you prefer)
+4. Place it in a location that makes sense for your project (e.g., `Assets/Config/BuildData.asset`)
+
+> **⚠️ Important**: Only **one** BuildData asset should exist in your project. The system will automatically find and use it.
+
+### Step 2: Configure BuildData
+
+Select the BuildData asset and configure it in the Inspector:
+
+**Basic Settings:**
+
+- **Launch Scene**: The scene that will be used as the entry point for builds
+- **Application Version**: Version prefix (e.g., `v0.1`). Final version will be `{ApplicationVersion}.{CommitCount}`
+- **Output Base Path**: Base directory for build results (relative to project root, e.g., `Build`)
+
+**Build Pipeline Options:**
+
+- **Use Buildalon**: Enable if you have Buildalon package installed and want to use its helpers
+- **Use HybridCLR**: Enable if you have HybridCLR package installed and want code hot-updates
+
+**Asset Management System:**
+
+- **None**: No asset management (resources built into player)
+- **YooAsset**: Use YooAsset for asset management and hot-updates
+- **Addressables**: Use Unity Addressables for asset management and hot-updates
+
+### Step 3: Create Additional Config Assets (If Needed)
+
+Depending on your selected options, you may need additional config assets:
+
+#### If Using HybridCLR
+
+1. Right-click in Project window
+2. Select **Create > CycloneGames > Build > HybridCLR Build Config**
+3. Configure HybridCLR-specific settings
+
+#### If Using YooAsset
+
+1. Right-click in Project window
+2. Select **Create > CycloneGames > Build > YooAsset Build Config**
+3. Configure YooAsset-specific settings (package version, build output, etc.)
+
+#### If Using Addressables
+
+1. Right-click in Project window
+2. Select **Create > CycloneGames > Build > Addressables Build Config**
+3. Configure Addressables-specific settings (content version, remote catalog, etc.)
+
+> **Note**: These config assets are optional. The system will use default values if they're not found, but it's recommended to create them for proper configuration.
+
+### Step 4: Build Your Project
+
+Once BuildData is configured, you can build using:
+
+**Unity Editor Menu:**
+
+- **Build > Game(Release) > Build Android APK (IL2CPP)**
+- **Build > Game(Release) > Build Windows (IL2CPP)**
+- **Build > Game(Release) > Build Mac (IL2CPP)**
+- **Build > Game(Release) > Build WebGL**
+
+**Or use the Hot Update pipeline:**
+
+- **Build > HotUpdate Pipeline > Full Build (Generate Code + Bundles)**
+- **Build > HotUpdate Pipeline > Fast Build (Compile Code + Bundles)**
+
+## Core Concepts
+
+### BuildData
+
+`BuildData` is the central configuration asset for the entire build system. It contains:
+
+- **Launch Scene**: Entry point scene for builds
+- **Application Version**: Version prefix for automatic versioning
+- **Output Base Path**: Base directory for build outputs
+- **Feature Flags**: Enable/disable optional features (HybridCLR, Buildalon)
+- **Asset Management Selection**: Choose between YooAsset, Addressables, or None
+
+**Key Points:**
+
+- ✅ **Required**: Must exist for any build to work
+- ✅ **Single Instance**: Only one BuildData should exist in the project
+- ✅ **Auto-Discovery**: System automatically finds BuildData using `AssetDatabase.FindAssets`
+- ✅ **Manual Creation**: You must create this asset manually (no auto-generation)
+
+### Version System
+
+The build system uses Git for automatic versioning:
+
+- **Format**: `{ApplicationVersion}.{CommitCount}`
+- **Example**: If `ApplicationVersion = "v0.1"` and there are 123 commits, the final version is `v0.1.123`
+- **Version Info**: Git commit hash, commit count, and build date are saved to `VersionInfoData` ScriptableObject
+- **Runtime Access**: Version information is available at runtime via `VersionInfoData` asset
+
+### Build Scripts
+
+#### BuildScript
+
+The main build script for full application builds. Handles:
+
+- Multi-platform builds (Windows, Mac, Android, WebGL)
+- Automatic versioning
+- Optional HybridCLR code generation
+- Optional asset bundle building (YooAsset/Addressables)
+- Clean build options
+- Debug file management
+
+#### HotUpdateBuilder
+
+Unified pipeline for hot update builds. Provides two modes:
+
+- **Full Build**: Complete code generation + asset bundling
+  - `HybridCLR -> GenerateAllAndCopy` + `Asset Management -> Build Bundles`
+  - Use when C# code structure changes or for clean builds
+- **Fast Build**: Quick DLL compilation + asset bundling
+  - `HybridCLR -> CompileDLLAndCopy` + `Asset Management -> Build Bundles`
+  - Use for rapid iteration when only method implementations change
+
+### Optional Package Integration
+
+The Build system uses reflection to detect and integrate with optional packages:
+
+- **HybridCLR**: Detected via `HybridCLR.Editor.Commands.PrebuildCommand` type
+- **YooAsset**: Detected via `YooAsset.Editor.AssetBundleBuilder` type
+- **Addressables**: Detected via `UnityEditor.AddressableAssets.Build` namespace
+- **Buildalon**: Detected via `VirtualMaker.Buildalon` namespace
+
+If a package is not installed, related features are automatically disabled without compilation errors.
+
+## Configuration
+
+### BuildData Configuration
+
+**Location**: Inspector when selecting BuildData asset
+
+**Fields:**
+
+| Field                 | Type       | Description                                           | Required |
+| --------------------- | ---------- | ----------------------------------------------------- | -------- |
+| Launch Scene          | SceneAsset | Entry point scene for builds                          | ✅ Yes   |
+| Application Version   | string     | Version prefix (e.g., "v0.1")                         | ✅ Yes   |
+| Output Base Path      | string     | Base directory for outputs (relative to project root) | ✅ Yes   |
+| Use Buildalon         | bool       | Enable Buildalon helpers                              | ❌ No    |
+| Use HybridCLR         | bool       | Enable HybridCLR code hot-updates                     | ❌ No    |
+| Asset Management Type | enum       | None / YooAsset / Addressables                        | ❌ No    |
+
+**Validation:**
+
+The BuildData editor provides real-time validation:
+
+- ✅ Checks if Launch Scene is assigned
+- ✅ Validates Application Version format
+- ✅ Checks Output Base Path exists or can be created
+- ✅ Warns if optional configs are missing when features are enabled
+- ✅ Shows helpful messages for each asset management option
+
+### HybridCLR Build Config
+
+**When to Create**: If `Use HybridCLR = true` in BuildData
+
+**Location**: **Create > CycloneGames > Build > HybridCLR Build Config**
+
+**Key Settings:**
+
+- HybridCLR installation path
+- Code generation options
+- DLL compilation settings
+
+> **Note**: Refer to HybridCLR documentation for detailed configuration. The Build system provides a wrapper around HybridCLR's build commands.
+
+### YooAsset Build Config
+
+**When to Create**: If `Asset Management Type = YooAsset` in BuildData
+
+**Location**: **Create > CycloneGames > Build > YooAsset Build Config**
+
+**Key Settings:**
+
+- **Package Version**: Version for asset bundles (should match BuildData ApplicationVersion)
+- **Build Output Directory**: Where to output asset bundles
+- **Copy to StreamingAssets**: Whether to copy bundles to StreamingAssets
+- **Copy to Output Directory**: Whether to copy bundles to build output directory
+
+**Version Alignment:**
+
+The YooAsset config editor provides version alignment warnings:
+
+- ⚠️ Warns if Package Version doesn't match BuildData ApplicationVersion
+- ✅ Suggests matching versions for consistency
+- 💡 Provides quick-fix buttons to align versions
+
+### Addressables Build Config
+
+**When to Create**: If `Asset Management Type = Addressables` in BuildData
+
+**Location**: **Create > CycloneGames > Build > Addressables Build Config**
+
+**Key Settings:**
+
+- **Content Version**: Version for Addressables content (should match BuildData ApplicationVersion)
+- **Build Remote Catalog**: Whether to build remote catalog for CDN hosting
+- **Copy to Output Directory**: Whether to copy content to build output directory
+- **Build Output Directory**: Where to output Addressables content
+
+**Version Alignment:**
+
+Similar to YooAsset, the Addressables config editor provides version alignment warnings and suggestions.
+
+## Build Workflows
+
+### Full Application Build
+
+**Purpose**: Build complete application for distribution
+
+**Workflow:**
+
+1. Load BuildData configuration
+2. Generate version information from Git
+3. (Optional) Run HybridCLR code generation if enabled
+4. (Optional) Build asset bundles if asset management is enabled
+5. Build Unity player
+6. Save version info to `VersionInfoData` asset
+7. (Optional) Copy asset bundles to output directory
+
+**Menu Items:**
+
+- `Build > Game(Release) > Build Android APK (IL2CPP)`
+- `Build > Game(Release) > Build Windows (IL2CPP)`
+- `Build > Game(Release) > Build Mac (IL2CPP)`
+- `Build > Game(Release) > Build WebGL`
+
+**Output:**
+
+- Built application in `{OutputBasePath}/{Platform}/{ApplicationName}.{ext}`
+- Version info in `Assets/Resources/VersionInfoData.asset`
+
+### Hot Update - Full Build
+
+**Purpose**: Complete hot update build (code generation + asset bundling)
+
+**When to Use:**
+
+- C# code structure has changed (new classes, methods, etc.)
+- Need a clean build from scratch
+- First time setting up hot updates
+
+**Workflow:**
+
+1. Load BuildData
+2. **HybridCLR**: Generate all code and metadata (`GenerateAllAndCopy`)
+3. **Asset Management**: Build all asset bundles
+4. Output hot update files
+
+**Menu Item:** `Build > HotUpdate Pipeline > Full Build (Generate Code + Bundles)`
+
+**Output:**
+
+- HybridCLR DLLs in `HybridCLRData/DllOutput/`
+- Asset bundles in configured output directory
+
+### Hot Update - Fast Build
+
+**Purpose**: Quick hot update build (DLL compilation + asset bundling)
+
+**When to Use:**
+
+- Only method implementations changed (no structure changes)
+- Rapid iteration during development
+- Quick bug fixes
+
+**Workflow:**
+
+1. Load BuildData
+2. **HybridCLR**: Compile DLLs only (`CompileDLLAndCopy`)
+3. **Asset Management**: Build asset bundles
+4. Output hot update files
+
+**Menu Item:** `Build > HotUpdate Pipeline > Fast Build (Compile Code + Bundles)`
+
+**Output:**
+
+- Compiled HybridCLR DLLs
+- Updated asset bundles
+
+### Standalone Build Operations
+
+You can also run individual build operations:
+
+**HybridCLR:**
+
+- `Build > HybridCLR > Generate All`
+
+**YooAsset:**
+
+- `Build > YooAsset > Build Bundles (From Config)`
+
+**Addressables:**
+
+- `Build > Addressables > Build Content (From Config)`
+
+## CI/CD Integration
+
+The Build system provides command-line interfaces for CI/CD integration.
+
+### Command-Line Build
+
+**Full Application Build:**
+
+```bash
+# Basic build
+-executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget Android -output Build/Android/MyGame.apk
+
+# With options
+-executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI \
+  -buildTarget Android \
+  -output Build/Android/MyGame.apk \
+  -clean \
+  -buildHybridCLR \
+  -buildYooAsset
+
+# With version override
+-executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI \
+  -buildTarget StandaloneWindows64 \
+  -output Build/Windows/MyGame.exe \
+  -clean \
+  -version v1.0.0
+```
+
+**Parameters:**
+
+| Parameter            | Type        | Description                                          | Required |
+| -------------------- | ----------- | ---------------------------------------------------- | -------- |
+| `-buildTarget`       | BuildTarget | Target platform (Android, StandaloneWindows64, etc.) | ✅ Yes   |
+| `-output`            | string      | Output path (relative to project root)               | ✅ Yes   |
+| `-clean`             | flag        | Clean build (delete previous build)                  | ❌ No    |
+| `-buildHybridCLR`    | flag        | Run HybridCLR generation                             | ❌ No    |
+| `-buildYooAsset`     | flag        | Build YooAsset bundles                               | ❌ No    |
+| `-buildAddressables` | flag        | Build Addressables content                           | ❌ No    |
+| `-version`           | string      | Override version (default: from Git)                 | ❌ No    |
+
+**Hot Update Build:**
+
+```bash
+# Full hot update build
+-executeMethod Build.Pipeline.Editor.HotUpdateBuilder.FullBuild
+
+# Fast hot update build
+-executeMethod Build.Pipeline.Editor.HotUpdateBuilder.FastBuild
+```
+
+### CI/CD Examples
+
+**GitHub Actions:**
+
+```yaml
+name: Build Game
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Unity
+        uses: game-ci/unity-builder@v4
+        with:
+          targetPlatform: Android
+          buildMethod: Build.Pipeline.Editor.BuildScript.PerformBuild_CI
+          buildArgs: -buildTarget Android -output Build/Android/MyGame.apk -clean -buildHybridCLR -buildYooAsset
+```
+
+**Jenkins:**
+
+```groovy
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                sh '''
+                    Unity -batchmode -quit -projectPath . \
+                    -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI \
+                    -buildTarget Android \
+                    -output Build/Android/MyGame.apk \
+                    -clean \
+                    -buildHybridCLR \
+                    -buildYooAsset
+                '''
+            }
+        }
+    }
+}
+```
+
+## Troubleshooting
+
+### BuildData Not Found
+
+**Error**: `BuildData not found. Please create a BuildData asset.`
+
+**Solution:**
+
+1. Create BuildData asset: **Create > CycloneGames > Build > BuildData**
+2. Ensure only one BuildData exists in the project
+3. The system uses `AssetDatabase.FindAssets` to find BuildData - ensure it's in a location that Unity can index
+
+### Config Asset Not Found
+
+**Error**: `YooAssetBuildConfig not found` or similar
+
+**Solution:**
+
+1. Create the required config asset (YooAssetBuildConfig, AddressablesBuildConfig, or HybridCLRBuildConfig)
+2. Or disable the related feature in BuildData if you don't need it
+3. The system will use default values if configs are missing, but some features may not work correctly
+
+### Version Mismatch Warnings
+
+**Warning**: Version mismatch between BuildData and config assets
+
+**Solution:**
+
+1. Align versions: Set config asset version to match BuildData ApplicationVersion
+2. Use the quick-fix buttons in config editors (if available)
+3. Or manually update versions for consistency
+
+### HybridCLR Not Found
+
+**Warning**: `HybridCLR package not found. Skipping generation.`
+
+**Solution:**
+
+1. Install HybridCLR package if you need code hot-updates
+2. Or disable `Use HybridCLR` in BuildData if you don't need it
+3. The build will continue without HybridCLR features
+
+### Asset Management Package Not Found
+
+**Warning**: Asset management package (YooAsset/Addressables) not found
+
+**Solution:**
+
+1. Install the required package (YooAsset or Addressables)
+2. Or set `Asset Management Type = None` in BuildData
+3. Ensure the package is properly imported and accessible
+
+### Build Output Directory Issues
+
+**Error**: Cannot create or access build output directory
+
+**Solution:**
+
+1. Check `Output Base Path` in BuildData
+2. Ensure the path is relative to project root (e.g., `Build`, not `C:/Build`)
+3. Ensure you have write permissions to the project directory
+4. Check for invalid characters in the path
+
+### Git Version Information Missing
+
+**Warning**: Cannot get Git version information
+
+**Solution:**
+
+1. Ensure Git is installed and accessible from command line
+2. Ensure the project is in a Git repository
+3. Check Git is in your system PATH
+4. Version will fall back to a default if Git is unavailable
+
+### Scene Not Found
+
+**Error**: `Invalid scene list, please check BuildData configuration.`
+
+**Solution:**
+
+1. Assign a Launch Scene in BuildData
+2. Ensure the scene exists and is not deleted
+3. Check scene is added to Build Settings (though BuildData takes precedence)
+
+## Best Practices
+
+### 1. Single BuildData Instance
+
+- ✅ Create only **one** BuildData asset per project
+- ✅ Place it in a logical location (e.g., `Assets/Config/BuildData.asset`)
+- ✅ Use descriptive naming if you have multiple projects in one Unity instance
+
+### 2. Version Alignment
+
+- ✅ Keep BuildData ApplicationVersion aligned with config asset versions
+- ✅ Use semantic versioning (e.g., `v1.0`, `v1.1`, `v2.0`)
+- ✅ Let the system append commit count for uniqueness
+
+### 3. Config Asset Organization
+
+- ✅ Create config assets in the same directory as BuildData
+- ✅ Use descriptive names (e.g., `YooAssetBuildConfig_Production.asset`)
+- ✅ Document any project-specific configurations
+
+### 4. CI/CD Setup
+
+- ✅ Use command-line methods for CI/CD
+- ✅ Set up proper build targets and output paths
+- ✅ Test builds locally before setting up CI/CD
+- ✅ Use version overrides only when necessary
+
+### 5. Hot Update Workflow
+
+- ✅ Use **Full Build** for structure changes or clean builds
+- ✅ Use **Fast Build** for rapid iteration
+- ✅ Test hot updates in development before production
+- ✅ Keep hot update files organized and versioned
+
+### 6. Optional Packages
+
+- ✅ Only install packages you actually need
+- ✅ The system gracefully handles missing packages
+- ✅ Test builds with and without optional packages
+- ✅ Document which packages are required for your project
+
+## Additional Resources
+
+- **HybridCLR Documentation**: [HybridCLR GitHub](https://github.com/focus-creative-games/hybridclr)
+- **YooAsset Documentation**: [YooAsset GitHub](https://github.com/tuyoogame/YooAsset)
+- **Addressables Documentation**: [Unity Addressables Manual](https://docs.unity3d.com/Packages/com.unity.addressables@latest)
+- **Buildalon Documentation**: [Buildalon GitHub](https://github.com/virtualmaker/Buildalon)
+
+## Module Structure
+
+```
+Assets/Build/
+├── Editor/
+│   ├── BuildPipeline/
+│   │   ├── BuildData.cs              # Central configuration
+│   │   ├── BuildDataEditor.cs        # BuildData inspector
+│   │   ├── BuildScript.cs            # Full app build
+│   │   ├── HotUpdateBuilder.cs       # Hot update pipeline
+│   │   ├── HybridCLR/                # HybridCLR integration
+│   │   ├── YooAsset/                 # YooAsset integration
+│   │   ├── Addressables/             # Addressables integration
+│   │   ├── Buildalon/                # Buildalon integration
+│   │   └── _Common/                  # Shared utilities
+│   └── VersionControl/               # Version control providers
+└── Runtime/
+    └── Data/
+        └── VersionInfoData.cs        # Runtime version info
+```
+
+---
