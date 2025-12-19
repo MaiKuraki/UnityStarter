@@ -18,143 +18,42 @@
 该框架由几个关键组件构建而成，它们协同工作，提供了一套全面的 UI 管理解决方案。
 
 ### 1. `UIService` (门面)
+
 这是与 UI 系统交互的主要公共 API。游戏逻辑代码应通过 `UIService` 来打开和关闭窗口，从而将底层的复杂性抽象出来。它作为一个清晰的入口点，并负责 `UIManager` 的初始化。
 
 ### 2. `UIManager` (核心)
+
 一个持久化的单例，负责协调整个 UI 的生命周期。其职责包括：
+
 - **异步加载**: 使用 `CycloneGames.AssetManagement` 异步加载 `UIWindowConfiguration` 和 UI 预制体。
 - **生命周期管理**: 管理 `UIWindow` 实例的创建、销毁和状态转换。
 - **资源缓存**: 实现了一个 LRU (最近最少使用) 缓存来存储 UI 预制体，以优化重开常用窗口时的性能。
 - **实例化节流**: 限制每帧实例化的 UI 元素数量，以防止性能峰值。
 
 ### 3. `UIRoot` & `UILayer` (场景层级)
+
 - **`UIRoot`**: 场景中必需的组件，作为所有 UI 元素的根节点。它包含 UI 相机并管理所有的 `UILayer`。
 - **`UILayer`**: 代表一个独立的渲染和输入层级（例如 `Menu`, `Dialogue`, `Notification`）。窗口被添加到特定的层级中，由层级控制其排序顺序和分组。`UILayer` 通过 `ScriptableObject` 资产进行配置。
 
 ### 4. `UIWindow` (UI 单元)
+
 所有 UI 面板、页面或弹窗的基类。每个 `UIWindow` 都是一个自包含的组件，拥有自己的行为和生命周期，由一个健壮的状态机管理：
+
 - **`Opening`**: 窗口正在被创建，其打开过渡动画正在播放。
 - **`Opened`**: 窗口完全可见并可交互。
 - **`Closing`**: 窗口的关闭过渡动画正在播放。
 - **`Closed`**: 窗口已隐藏并准备被销毁。
 
 ### 5. `UIWindowConfiguration` (数据驱动配置)
+
 一个 `ScriptableObject`，用于定义 `UIWindow` 的属性。这种数据驱动的方法将配置与代码解耦，使设计师能够轻松修改 UI 行为而无需接触脚本。关键属性包括：
+
 - 需要实例化的 UI 预制体。
 - 窗口所属的 `UILayer`。
 
 ### 6. `IUIWindowTransitionDriver` (解耦的动画)
+
 一个接口，定义了窗口在打开和关闭时的动画方式。这个强大的抽象允许您使用任何动画系统（如 Unity Animator, LitMotion, DOTween）来实现过渡逻辑，并将其应用于窗口，而无需修改其核心逻辑。
-
-## 动态图集系统 (Dynamic Atlas System)
-
-本框架包含一个生产级的 **动态图集系统** (`DynamicAtlasService`)，通过在运行时批处理 UI 精灵来大幅减少 Draw Call。
-
-### 关键特性
--   **运行时打包**: 在运行时将单独的纹理合并为单个大纹理。
--   **多页面支持**: 当当前图集页面已满时，自动创建新页面。
--   **引用计数**: 当精灵不再使用时，自动释放图集空间。
--   **自动缩放**: 自动将过大的纹理缩放到适合图集页面的大小。
--   **零配置**: 开箱即用，提供合理的默认值，也可自定义。
-
-### 用法
-
-#### 方式一：使用工厂模式（推荐用于依赖注入）
-```csharp
-using CycloneGames.UIFramework.DynamicAtlas;
-
-// 创建工厂
-var factory = new DynamicAtlasFactory();
-
-// 使用自定义配置创建实例
-var config = new DynamicAtlasConfig(
-    pageSize: 2048,
-    autoScaleLargeTextures: true
-);
-IDynamicAtlas atlas = factory.Create(config);
-
-// 或使用共享单例
-IDynamicAtlas atlas = factory.GetSharedInstance(config);
-```
-
-#### 方式二：使用 DynamicAtlasManager（单例模式）
-```csharp
-using CycloneGames.UIFramework.DynamicAtlas;
-
-// 获取单例实例
-var manager = DynamicAtlasManager.Instance;
-
-// 配置（可选，不调用则使用默认值）
-manager.Configure(
-    load: path => Resources.Load<Texture2D>(path),
-    unload: (path, tex) => Resources.UnloadAsset(tex),
-    size: 2048,
-    autoScaleLargeTextures: true
-);
-
-// 获取精灵（自动加载并打包）
-Sprite sprite = manager.GetSprite("Icons/SkillIcon_01");
-myImage.sprite = sprite;
-
-// 完成时释放（减少引用计数，如果为0则释放空间）
-manager.ReleaseSprite("Icons/SkillIcon_01");
-```
-
-#### 方式三：直接使用服务
-```csharp
-using CycloneGames.UIFramework.DynamicAtlas;
-
-// 直接创建服务
-IDynamicAtlas atlas = new DynamicAtlasService(
-    forceSize: 2048,
-    loadFunc: path => Resources.Load<Texture2D>(path),
-    unloadFunc: (path, tex) => Resources.UnloadAsset(tex),
-    autoScaleLargeTextures: true
-);
-
-// 获取精灵
-Sprite sprite = atlas.GetSprite("Icons/SkillIcon_01");
-myImage.sprite = sprite;
-
-// 完成时释放
-atlas.ReleaseSprite("Icons/SkillIcon_01");
-
-// 清理
-atlas.Dispose();
-```
-
-### 最佳实践
-- 当精灵不再需要时（例如在 `OnDisable` 或 `OnDestroy` 中）始终调用 `ReleaseSprite()`。
-- 对于依赖注入框架，使用工厂模式。
-- 配置自定义加载/卸载函数以与您的资源管理系统集成。
-- 系统会自动处理纹理缩放，但为了获得最佳性能，请确保源纹理是可读的。
-
-## 高级特性 (Advanced Features)
-
-### 自定义过渡驱动器 (Custom Transition Drivers)
-你可以使用 `IUIWindowTransitionDriver` 覆盖默认的打开/关闭动画。这允许你使用 **DOTween**, **LitMotion**, 或 Unity 的 **Animator**。
-
-```csharp
-public class MyTransitionDriver : IUIWindowTransitionDriver
-{
-    public async UniTask PlayOpenAsync(UIWindow window, CancellationToken ct) {
-        // 使用 LitMotion 的示例
-        await LMotion.Create(0f, 1f, 0.5f)
-            .BindToAlpha(window.GetComponent<CanvasGroup>())
-            .ToUniTask(ct);
-    }
-    // ... PlayCloseAsync 实现
-}
-```
-
-### 性能优化工具 (Performance Optimization Tools)
-
-#### `OptimizeHierarchy`
-在 Inspector 中右键单击你的 `UIWindow` 组件，选择 **Optimize Hierarchy**。此工具会扫描你的 UI 层级结构，并禁用非交互元素（如装饰性图像或文本）上的 `RaycastTarget`，从而显著降低 Unity 事件系统射线检测的开销。
-
-#### `SetVisible` API
-使用 `window.SetVisible(bool)` 而不是 `gameObject.SetActive(bool)`。
--   **SetVisible**: 切换 `CanvasGroup.alpha`, `interactable`, 和 `blocksRaycasts`。这避免了启用/禁用 GameObject 时发生的昂贵的 UI 布局和网格重建。
 
 ## 依赖项
 
@@ -166,42 +65,161 @@ public class MyTransitionDriver : IUIWindowTransitionDriver
 
 ## 快速上手指南
 
-### 1. 场景设置
-1.  找到模块中的 `UIFramework.prefab` 预制体，将其加载或直接放进场景，其中已包含了基础的 UIRoot，UICamera，以及默认层级
+本指南将逐步引导您设置和使用 UIFramework。跟随步骤创建您的第一个 UI 窗口！
 
-### 2. 创建 `UILayer` 配置
-1.  在项目窗口中，右键单击并选择 **Create > CycloneGames > UIFramework > UILayer Configuration**。
-2.  为您需要的每个层级创建配置，例如：
-    - `UILayer_Menu`
-    - `UILayer_Dialogue`
-    - `UILayer_Notification`
-3.  将这些 `UILayer` 资产分配到 Inspector 中 `UIRoot` 的 `Layer Configurations` 列表中。
+### 步骤 1: 场景设置
 
-### 3. 创建 `UIWindow`
--   快速创建流程(一键创建 Script, Prefab, ConfigSO)
-    -   <img src="./Documents~/UIWindowCreator_1.png" alt="UIWindow Creator 1" style="width: 100%; height: auto; max-width: 800px;" />
-    -   <img src="./Documents~/UIWindowCreator_2.png" alt="UIWindow Creator 2" style="width: 100%; height: auto; max-width: 800px;" />
--   自定义创建
-    -   **创建脚本**: 创建一个新的 C# 脚本，继承自 `UIWindow`。例如，`MainMenuWindow.cs`。
-        ```csharp
-        using CycloneGames.UIFramework.Runtime;
+1. **定位 UIFramework 预制体**: 在包中找到 `UIFramework.prefab`，路径为 `Runtime/Prefabs/UI/UIFramework.prefab`。
+2. **添加到场景**: 您可以：
+   - 直接将预制体拖入场景，或
+   - 使用资源管理系统在运行时加载它
+3. **验证设置**: 预制体包含：
+   - 带有 UI 相机的 `UIRoot` 组件
+   - 默认的 `UILayer` 配置（菜单、对话、通知等）
 
-        public class MainMenuWindow : UIWindow
-        {
-            // 在此处添加对您的 UI 元素（按钮、文本等）的引用
-        }
-        ```
-    -   **创建预制体**: 在场景中创建一个新的 UI `Canvas` 或 `Panel`。将其根 `GameObject` 添加 `MainMenuWindow` 组件。设计您的 UI，然后将其另存为预制体。
-    -   **创建配置**: 在项目窗口中右键单击，选择 **Create > CycloneGames > UIFramework > UIWindow Configuration**。
-        - 为其指定一个描述性的名称，如 `UIWindow_MainMenu`。
-        - 将您的 `MainMenuWindow` 预制体分配给 `Window Prefab` 字段。
-        - 将适当的 `UILayer`（例如 `UILayer_Menu`）分配给 `Layer` 字段。
+`UIFramework.prefab` 已预配置了必要的组件，因此您可以立即开始使用。
 
-### 4. 初始化并使用 `UIService`
-在游戏的启动或初始化逻辑中，创建并初始化 `UIService`。
+### 步骤 2: 创建 `UILayer` 配置
+
+`UILayer` 配置定义了 UI 窗口的渲染和输入层级。框架提供了几个默认层级，但您可以创建自定义的。
+
+1. **创建新的层级配置**:
+
+   - 在项目窗口中，右键单击并选择 **Create > CycloneGames > UIFramework > UILayer Configuration**
+   - 为其指定一个描述性的名称，例如 `UILayer_Menu`、`UILayer_Dialogue`、`UILayer_Notification`
+
+2. **配置层级**:
+
+   - 在 Inspector 中打开 `UILayerConfiguration` 资产
+   - 设置 `Layer Name`（例如 "Menu"、"Dialogue"）
+   - 如果需要，调整 `Sorting Order`（数值越大，渲染越靠前）
+
+3. **分配给 UIRoot**:
+   - 在场景中选择 `UIRoot` GameObject
+   - 在 Inspector 中，找到 `Layer Configurations` 列表
+   - 将您新创建的 `UILayerConfiguration` 资产添加到列表中
+
+**层级设置示例:**
+
+```
+UILayer_Menu (Sorting Order: 100)
+UILayer_Dialogue (Sorting Order: 200)
+UILayer_Notification (Sorting Order: 300)
+```
+
+### 步骤 3: 创建您的第一个 `UIWindow`
+
+有两种创建 `UIWindow` 的方法：使用快速创建工具或手动创建。我们将介绍两种方法。
+
+#### 方法 1: 快速创建（推荐新手使用）
+
+框架提供了一个便捷的编辑器工具，可以一次性创建所有必要的文件。
+
+1. **打开 UIWindow Creator**:
+
+   - 在 Unity 菜单栏中，转到 **Tools > CycloneGames > UIWindow Creator**
+   - 将打开一个包含所有创建选项的窗口
+
+2. **填写所需信息**:
+
+   - **Window Name**: 输入描述性名称（例如 `MainMenuWindow`、`HUDWindow`）
+   - **Namespace**（可选）: 如果您使用命名空间，请在此输入（例如 `MyGame.UI`）
+   - **Script Save Path**: 拖入一个文件夹，C# 脚本将保存在此
+   - **Prefab Save Path**: 拖入一个文件夹，预制体将保存在此
+   - **Configuration Save Path**: 拖入一个文件夹，`UIWindowConfiguration` 资产将保存在此
+   - **UILayer Configuration**: 选择您在步骤 2 中创建的 `UILayerConfiguration` 资产
+   - **Template Prefab**（可选）: 您可以拖入一个模板预制体作为基础
+
+3. **创建 UIWindow**:
+   - 点击 **"Create UIWindow"** 按钮
+   - 工具将自动创建：
+     - 继承自 `UIWindow` 的 C# 脚本
+     - 附加了脚本的预制体
+     - 将所有内容链接在一起的 `UIWindowConfiguration` 资产
+
+**可视化指南:**
+
+- <img src="./Documents~/UIWindowCreator_1.png" alt="UIWindow Creator 1" style="width: 100%; height: auto; max-width: 800px;" />
+- <img src="./Documents~/UIWindowCreator_2.png" alt="UIWindow Creator 2" style="width: 100%; height: auto; max-width: 800px;" />
+
+#### 方法 2: 手动创建
+
+如果您更喜欢手动创建文件或需要更多控制：
+
+1. **创建脚本**:
+
+   ```csharp
+   using CycloneGames.UIFramework.Runtime;
+   using UnityEngine;
+   using UnityEngine.UI;
+
+   public class MainMenuWindow : UIWindow
+   {
+       [SerializeField] private Button playButton;
+       [SerializeField] private Button settingsButton;
+       [SerializeField] private Button quitButton;
+
+       protected override void Awake()
+       {
+           base.Awake();
+
+           // 初始化按钮监听器
+           if (playButton != null)
+               playButton.onClick.AddListener(OnPlayClicked);
+           if (settingsButton != null)
+               settingsButton.onClick.AddListener(OnSettingsClicked);
+           if (quitButton != null)
+               quitButton.onClick.AddListener(OnQuitClicked);
+       }
+
+       private void OnPlayClicked()
+       {
+           Debug.Log("点击了开始按钮！");
+           // 在此处添加您的游戏开始逻辑
+       }
+
+       private void OnSettingsClicked()
+       {
+           Debug.Log("点击了设置按钮！");
+           // 在此处添加您的设置逻辑
+       }
+
+       private void OnQuitClicked()
+       {
+           Debug.Log("点击了退出按钮！");
+           Application.Quit();
+       }
+   }
+   ```
+
+2. **创建预制体**:
+
+   - 在场景中创建一个新的 UI `Canvas` 或 `Panel`
+   - 将您的 `MainMenuWindow` 组件添加到根 `GameObject`
+   - 设计您的 UI（添加按钮、文本、图像等）
+   - 在 Inspector 中将 UI 元素引用分配给序列化字段
+   - 将其保存为预制体（从 Hierarchy 拖到 Project 窗口）
+
+3. **创建配置**:
+   - 在项目窗口中右键单击，选择 **Create > CycloneGames > UIFramework > UIWindow Configuration**
+   - 将其命名为 `UIWindow_MainMenu`（这是您用来打开窗口的名称）
+   - 在 Inspector 中：
+     - 将您的 `MainMenuWindow` 预制体分配给 `Window Prefab` 字段
+     - 将适当的 `UILayer`（例如 `UILayer_Menu`）分配给 `Layer` 字段
+
+### 步骤 4: 初始化并使用 `UIService`
+
+`UIService` 是您打开和关闭 UI 窗口的主要接口。您需要在游戏启动时初始化一次。
+
+#### 基本初始化（使用 Resources）
+
+如果您使用 Unity 内置的 `Resources.Load`：
 
 ```csharp
 using CycloneGames.UIFramework.Runtime;
+using CycloneGames.Factory.Runtime;
+using CycloneGames.Service.Runtime;
+using CycloneGames.AssetManagement.Runtime;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -211,26 +229,39 @@ public class GameInitializer : MonoBehaviour
 
     async void Start()
     {
-        // 假设其他服务（资产管理、工厂等）已经初始化
-        // 并可通过服务定位器或依赖注入获得。
-        var assetPathBuilderFactory = ...; // 从您的 DI 容器获取
-        var objectSpawner = ...;         // 从您的 DI 容器获取
-        var mainCameraService = ...;     // 从您的 DI 容器获取
+        // 初始化资源管理（使用 Resources）
+        IAssetModule module = new ResourcesModule();
+        await module.InitializeAsync(new AssetManagementOptions());
+        var package = module.CreatePackage("DefaultResources");
+        await package.InitializeAsync(default);
+        AssetManagementLocator.DefaultPackage = package;
 
+        // 创建所需的服务
+        var assetPathBuilderFactory = new TemplateAssetPathBuilderFactory();
+        var objectSpawner = new DefaultUnityObjectSpawner();
+        var mainCameraService = new MainCameraService();
+
+        // 初始化 UIService
         uiService = new UIService();
         uiService.Initialize(assetPathBuilderFactory, objectSpawner, mainCameraService);
 
-        // 现在您可以使用该服务了
-        OpenMainMenu();
+        // 现在您可以打开 UI 窗口了！
+        await OpenMainMenu();
     }
 
     public async UniTask OpenMainMenu()
     {
         // "UIWindow_MainMenu" 是您的 UIWindowConfiguration 资产的文件名
         UIWindow window = await uiService.OpenUIAsync("UIWindow_MainMenu");
-        if (window is MainMenuWindow mainMenu)
+
+        if (window != null && window is MainMenuWindow mainMenu)
         {
-            // 与您的特定窗口实例进行交互
+            Debug.Log("主菜单打开成功！");
+            // 您现在可以与窗口实例交互
+        }
+        else
+        {
+            Debug.LogError("打开主菜单窗口失败！");
         }
     }
 
@@ -239,50 +270,752 @@ public class GameInitializer : MonoBehaviour
         uiService.CloseUI("UIWindow_MainMenu");
     }
 }
+```
+
+#### 高级初始化（使用资源包）
+
+如果您使用 Addressables、YooAsset 或其他资源管理系统：
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+using CycloneGames.AssetManagement.Runtime;
+// ... 其他 using 语句
+
+public class GameInitializer : MonoBehaviour
+{
+    private IUIService uiService;
+    private IAssetPackage uiPackage;
+
+    async void Start()
+    {
+        // 初始化您的资源管理系统
+        // 此示例假设您有一个 IAssetPackage 实例
+        uiPackage = await InitializeYourAssetPackageAsync();
+
+        // 创建所需的服务
+        var assetPathBuilderFactory = new YourAssetPathBuilderFactory();
+        var objectSpawner = new DefaultUnityObjectSpawner();
+        var mainCameraService = new MainCameraService();
+
+        // 使用包初始化 UIService
+        uiService = new UIService();
+        uiService.Initialize(assetPathBuilderFactory, objectSpawner, mainCameraService, uiPackage);
+
+        // 打开 UI 窗口
+        await OpenMainMenu();
+    }
+
+    // ... 其余代码
+}
+```
+
+### 步骤 5: 打开和关闭窗口
+
+一旦 `UIService` 初始化完成，打开和关闭窗口就很简单了：
+
+```csharp
+// 异步打开窗口（推荐）
+UIWindow window = await uiService.OpenUIAsync("UIWindow_MainMenu");
+
+// 使用回调打开窗口（即发即弃）
+uiService.OpenUI("UIWindow_MainMenu", (window) => {
+    if (window != null)
+        Debug.Log("窗口已打开！");
+});
+
+// 关闭窗口
+uiService.CloseUI("UIWindow_MainMenu");
+
+// 异步关闭窗口
+await uiService.CloseUIAsync("UIWindow_MainMenu");
+
+// 检查窗口是否打开
+bool isOpen = uiService.IsUIWindowValid("UIWindow_MainMenu");
+
+// 获取打开的窗口引用
+UIWindow window = uiService.GetUIWindow("UIWindow_MainMenu");
+if (window is MainMenuWindow mainMenu)
+{
+    // 与窗口交互
+}
+```
+
+### 步骤 6: 处理窗口生命周期
+
+每个 `UIWindow` 都有一个由状态机管理的生命周期。您可以重写方法来挂钩不同的状态：
+
+```csharp
+public class MyWindow : UIWindow
+{
+    protected override void Awake()
+    {
+        base.Awake();
+        Debug.Log("窗口正在创建");
+    }
+
+    // 窗口开始打开时调用（动画之前）
+    protected override void OnStartOpen()
+    {
+        base.OnStartOpen();
+        Debug.Log("窗口正在打开");
+    }
+
+    // 窗口完成打开时调用（动画之后）
+    protected override void OnFinishedOpen()
+    {
+        base.OnFinishedOpen();
+        Debug.Log("窗口完全打开并可交互");
+    }
+
+    // 窗口开始关闭时调用（动画之前）
+    protected override void OnStartClose()
+    {
+        base.OnStartClose();
+        Debug.Log("窗口正在关闭");
+    }
+
+    // 窗口完成关闭时调用（动画之后，销毁之前）
+    protected override void OnFinishedClose()
+    {
+        base.OnFinishedClose();
+        Debug.Log("窗口已关闭并将被销毁");
+    }
+}
+```
+
+## 动态图集系统教程
+
+在掌握了创建和打开 UI 窗口的基础知识后，您可以使用**动态图集系统**来优化 UI 性能。该系统通过在运行时将多个 UI 纹理合并到单个图集中来减少 Draw Call。
+
+### 什么是动态图集？
+
+在 Unity UI 中，每个精灵纹理通常需要单独的 Draw Call。如果您在屏幕上有 50 个不同的图标，那可能就需要 50 个 Draw Call。动态图集系统将这些纹理打包到单个大纹理（图集）中，允许 Unity 将它们批处理在一起，从而显著减少 Draw Call。
+
+**优势:**
+
+- **减少 Draw Call**: 将多个纹理合并为一个，减少 CPU 开销
+- **更好的性能**: 在移动设备上尤其重要
+- **运行时打包**: 无需预创建图集 - 纹理按需打包
+- **自动管理**: 引用计数确保纹理在不再需要时被释放
+
+### 何时使用动态图集？
+
+在以下情况下使用动态图集：
+
+- 您有许多经常变化的小 UI 图标/精灵
+- 您想减少 Draw Call，但不想预创建静态图集
+- 您的 UI 使用许多不同的纹理，它们并不总是同时可见
+- 您需要运行时灵活性（例如，从服务器加载图标）
+
+在以下情况下不要使用动态图集：
+
+- 您有少量静态 UI 元素（预创建的图集更好）
+- 您的纹理非常大（它们会被缩放，失去质量）
+- 您需要像素完美渲染（图集打包可能会引入轻微偏移）
+
+### 步骤 1: 理解三种使用模式
+
+动态图集系统提供了三种使用方式，每种都适用于不同的场景：
+
+#### 模式 1: DynamicAtlasManager（最简单 - 推荐新手使用）
+
+这是最简单的入门方式。它使用单例模式，开箱即用。
+
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class MyUIWindow : UIWindow
+{
+    [SerializeField] private Image iconImage;
+    private string currentIconPath;
+
+    protected override void Awake()
+    {
+        base.Awake();
+
+        // 配置动态图集（只需要一次，通常在初始化时）
+        // 这是可选的 - 如果不调用，将使用默认值
+        DynamicAtlasManager.Instance.Configure(
+            load: path => Resources.Load<Texture2D>(path),
+            unload: (path, tex) => Resources.UnloadAsset(tex),
+            size: 2048,  // 图集页面大小（像素）
+            autoScaleLargeTextures: true
+        );
+    }
+
+    public void SetIcon(string iconPath)
+    {
+        // 释放之前的图标（如果有）
+        if (!string.IsNullOrEmpty(currentIconPath))
+        {
+            DynamicAtlasManager.Instance.ReleaseSprite(currentIconPath);
+        }
+
+        // 从图集获取精灵（如果需要，会自动加载和打包）
+        Sprite sprite = DynamicAtlasManager.Instance.GetSprite(iconPath);
+
+        if (sprite != null && iconImage != null)
+        {
+            iconImage.sprite = sprite;
+            currentIconPath = iconPath;
+        }
+    }
+
+    protected override void OnDestroy()
+    {
+        // 窗口销毁时始终释放精灵
+        if (!string.IsNullOrEmpty(currentIconPath))
+        {
+            DynamicAtlasManager.Instance.ReleaseSprite(currentIconPath);
+            currentIconPath = null;
+        }
+        base.OnDestroy();
+    }
+}
+```
+
+#### 模式 2: 工厂模式（推荐用于依赖注入）
+
+如果您使用 DI 框架或想要更多控制图集生命周期：
+
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class MyUIWindow : UIWindow
+{
+    [SerializeField] private Image iconImage;
+    private IDynamicAtlas atlas;
+    private string currentIconPath;
+
+    // 通过构造函数或 setter 注入图集
+    public void SetAtlas(IDynamicAtlas atlasService)
+    {
+        atlas = atlasService;
+    }
+
+    public void SetIcon(string iconPath)
+    {
+        if (atlas == null)
+        {
+            Debug.LogError("图集未初始化！");
+            return;
+        }
+
+        // 释放之前的图标
+        if (!string.IsNullOrEmpty(currentIconPath))
+        {
+            atlas.ReleaseSprite(currentIconPath);
+        }
+
+        // 从图集获取精灵
+        Sprite sprite = atlas.GetSprite(iconPath);
+
+        if (sprite != null && iconImage != null)
+        {
+            iconImage.sprite = sprite;
+            currentIconPath = iconPath;
+        }
+    }
+
+    protected override void OnDestroy()
+    {
+        if (atlas != null && !string.IsNullOrEmpty(currentIconPath))
+        {
+            atlas.ReleaseSprite(currentIconPath);
+            currentIconPath = null;
+        }
+        base.OnDestroy();
+    }
+}
+
+// 在您的初始化代码中：
+public class GameInitializer : MonoBehaviour
+{
+    private IDynamicAtlasFactory atlasFactory;
+
+    void Start()
+    {
+        // 创建工厂
+        atlasFactory = new DynamicAtlasFactory();
+
+        // 使用自定义配置创建图集
+        var config = new DynamicAtlasConfig(
+            pageSize: 2048,
+            autoScaleLargeTextures: true
+        );
+        IDynamicAtlas atlas = atlasFactory.Create(config);
+
+        // 注入到您的 UI 窗口中
+        // （这取决于您的 DI 框架）
+    }
+}
+```
+
+#### 模式 3: 直接使用服务（高级）
+
+为了最大控制，直接创建服务：
+
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class MyUIWindow : UIWindow
+{
+    [SerializeField] private Image iconImage;
+    private IDynamicAtlas atlas;
+    private string currentIconPath;
+
+    protected override void Awake()
+    {
+        base.Awake();
+
+        // 直接创建图集服务
+        atlas = new DynamicAtlasService(
+            forceSize: 2048,
+            loadFunc: path => Resources.Load<Texture2D>(path),
+            unloadFunc: (path, tex) => Resources.UnloadAsset(tex),
+            autoScaleLargeTextures: true
+        );
+    }
+
+    public void SetIcon(string iconPath)
+    {
+        if (atlas == null) return;
+
+        // 释放之前的图标
+        if (!string.IsNullOrEmpty(currentIconPath))
+        {
+            atlas.ReleaseSprite(currentIconPath);
+        }
+
+        // 从图集获取精灵
+        Sprite sprite = atlas.GetSprite(iconPath);
+
+        if (sprite != null && iconImage != null)
+        {
+            iconImage.sprite = sprite;
+            currentIconPath = iconPath;
+        }
+    }
+
+    protected override void OnDestroy()
+    {
+        if (atlas != null)
+        {
+            // 释放精灵
+            if (!string.IsNullOrEmpty(currentIconPath))
+            {
+                atlas.ReleaseSprite(currentIconPath);
+            }
+
+            // 释放图集（仅在直接创建时）
+            atlas.Dispose();
+        }
+        base.OnDestroy();
+    }
+}
+```
+
+### 步骤 2: 完整示例 - 使用动态图集的图标列表
+
+这是一个完整的示例，展示如何在实际场景中使用动态图集 - 一个动态加载图标的图标列表：
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+using CycloneGames.UIFramework.DynamicAtlas;
+using UnityEngine;
+using UnityEngine.UI;
+using System.Collections.Generic;
+
+public class IconListWindow : UIWindow
+{
+    [SerializeField] private Transform iconContainer;
+    [SerializeField] private GameObject iconPrefab; // 带有 Image 组件的预制体
+
+    private List<IconItem> iconItems = new List<IconItem>();
+
+    private class IconItem
+    {
+        public GameObject gameObject;
+        public Image image;
+        public string iconPath;
+    }
+
+    protected override void Awake()
+    {
+        base.Awake();
+
+        // 配置动态图集（只需要一次）
+        if (DynamicAtlasManager.Instance != null)
+        {
+            DynamicAtlasManager.Instance.Configure(
+                load: path => Resources.Load<Texture2D>(path),
+                unload: (path, tex) => Resources.UnloadAsset(tex),
+                size: 2048,
+                autoScaleLargeTextures: true
+            );
+        }
+    }
+
+    public void LoadIcons(List<string> iconPaths)
+    {
+        // 清除现有图标
+        ClearIcons();
+
+        // 加载每个图标
+        foreach (string iconPath in iconPaths)
+        {
+            CreateIconItem(iconPath);
+        }
+    }
+
+    private void CreateIconItem(string iconPath)
+    {
+        if (iconPrefab == null || iconContainer == null)
+            return;
+
+        // 实例化图标预制体
+        GameObject iconObj = Instantiate(iconPrefab, iconContainer);
+        Image iconImage = iconObj.GetComponent<Image>();
+
+        if (iconImage == null)
+        {
+            Debug.LogError("图标预制体必须有一个 Image 组件！");
+            Destroy(iconObj);
+            return;
+        }
+
+        // 从动态图集获取精灵
+        Sprite sprite = DynamicAtlasManager.Instance.GetSprite(iconPath);
+
+        if (sprite != null)
+        {
+            iconImage.sprite = sprite;
+
+            // 跟踪此图标项
+            iconItems.Add(new IconItem
+            {
+                gameObject = iconObj,
+                image = iconImage,
+                iconPath = iconPath
+            });
+        }
+        else
+        {
+            Debug.LogWarning($"加载图标失败: {iconPath}");
+            Destroy(iconObj);
+        }
+    }
+
+    private void ClearIcons()
+    {
+        // 从图集中释放所有精灵
+        foreach (var item in iconItems)
+        {
+            if (!string.IsNullOrEmpty(item.iconPath))
+            {
+                DynamicAtlasManager.Instance.ReleaseSprite(item.iconPath);
+            }
+            if (item.gameObject != null)
+            {
+                Destroy(item.gameObject);
+            }
+        }
+        iconItems.Clear();
+    }
+
+    protected override void OnDestroy()
+    {
+        // 清理所有图标
+        ClearIcons();
+        base.OnDestroy();
+    }
+}
+```
+
+### 步骤 3: 与资源管理系统集成
+
+如果您使用 Addressables、YooAsset 或其他资源管理系统，可以将它们与动态图集集成：
+
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+using CycloneGames.AssetManagement.Runtime;
+using UnityEngine;
+
+public class GameInitializer : MonoBehaviour
+{
+    private IAssetPackage assetPackage;
+
+    async void Start()
+    {
+        // 初始化您的资源管理系统
+        assetPackage = await InitializeYourAssetPackageAsync();
+
+        // 使用自定义加载/卸载函数配置动态图集
+        DynamicAtlasManager.Instance.Configure(
+            load: async (path) =>
+            {
+                // 使用您的资源管理系统加载纹理
+                var handle = await assetPackage.LoadAssetAsync<Texture2D>(path);
+                return handle.Asset;
+            },
+            unload: (path, tex) =>
+            {
+                // 使用您的资源管理系统卸载
+                assetPackage.ReleaseAsset(path);
+            },
+            size: 2048,
+            autoScaleLargeTextures: true
+        );
+    }
+}
+```
+
+### 步骤 4: 最佳实践和技巧
+
+1. **始终释放精灵**: 当精灵不再需要时，调用 `ReleaseSprite()` 来减少引用计数。这允许图集在计数达到零时释放空间。
+
+2. **在 OnDestroy 或 OnDisable 中释放**: 当您的 UI 组件被销毁或禁用时，始终释放精灵：
+
+```csharp
+protected override void OnDestroy()
+{
+    if (!string.IsNullOrEmpty(currentIconPath))
+    {
+        DynamicAtlasManager.Instance.ReleaseSprite(currentIconPath);
+        currentIconPath = null;
+    }
+    base.OnDestroy();
+}
+```
+
+3. **使用适当的页面大小**:
+
+   - **1024x1024**: 适用于低端设备或内存受限的情况
+   - **2048x2048**: 推荐用于大多数情况（默认值）
+   - **4096x4096**: 适用于内存充足的高端设备
+
+4. **启用自动缩放**: 设置 `autoScaleLargeTextures: true` 以自动缩放对于图集来说太大的纹理。这可以防止错误并确保所有纹理都可以被打包。
+
+5. **监控图集使用情况**: 在开发中，您可以检查使用了多少页面：
+
+```csharp
+// 这需要访问内部状态，因此主要用于调试
+// 系统在需要时会自动创建新页面
+```
+
+6. **纹理要求**:
+
+   - 纹理必须是可读的（在纹理导入设置中启用 "Read/Write Enabled"）
+   - 纹理应该是支持运行时修改的格式（RGBA32、ARGB32 等）
+   - 压缩格式（DXT、ETC）可能需要转换
+
+7. **性能考虑**:
+   - 打包发生在主线程上，因此避免在单帧中打包许多大纹理
+   - 考虑在加载屏幕期间预加载常用图标
+   - 将图集用于中小型纹理（图标、按钮）而不是大型背景图像
+
+### 步骤 5: 故障排除
+
+**问题: 精灵显示为黑色或缺失**
+
+- 检查纹理是否可读（纹理导入设置 > Read/Write Enabled）
+- 验证纹理路径是否正确
+- 确保在调用 `GetSprite()` 之前成功加载纹理
+
+**问题: 纹理模糊**
+
+- 大纹理被缩放以适合图集
+- 考虑使用较小的源纹理或增加图集页面大小
+- 检查是否启用了 `autoScaleLargeTextures`
+
+**问题: 内存使用率高**
+
+- 确保在精灵不再需要时调用 `ReleaseSprite()`
+- 如果内存受限，减少图集页面大小
+- 限制同时打包的纹理数量
+
+**问题: Draw Call 未减少**
+
+- 确保来自图集的精灵在同一 Canvas 上
+- 检查精灵是否使用相同的材质/着色器
+- 验证 Unity 的批处理是否已启用
+
+## 高级特性
+
+### 自定义过渡驱动器
+
+您可以使用 `IUIWindowTransitionDriver` 覆盖默认的打开/关闭动画。这允许您使用 **DOTween**、**LitMotion** 或 Unity 的 **Animator**。
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+using Cysharp.Threading.Tasks;
+using System.Threading;
+using UnityEngine;
+
+public class FadeTransitionDriver : IUIWindowTransitionDriver
+{
+    public async UniTask PlayOpenAsync(UIWindow window, CancellationToken ct)
+    {
+        CanvasGroup canvasGroup = window.GetComponent<CanvasGroup>();
+        if (canvasGroup == null) return;
+
+        float duration = 0.3f;
+        float elapsed = 0f;
+
+        while (elapsed < duration && !ct.IsCancellationRequested)
+        {
+            elapsed += Time.deltaTime;
+            canvasGroup.alpha = Mathf.Clamp01(elapsed / duration);
+            await UniTask.Yield();
+        }
+
+        canvasGroup.alpha = 1f;
+    }
+
+    public async UniTask PlayCloseAsync(UIWindow window, CancellationToken ct)
+    {
+        CanvasGroup canvasGroup = window.GetComponent<CanvasGroup>();
+        if (canvasGroup == null) return;
+
+        float duration = 0.3f;
+        float elapsed = 0f;
+        float startAlpha = canvasGroup.alpha;
+
+        while (elapsed < duration && !ct.IsCancellationRequested)
+        {
+            elapsed += Time.deltaTime;
+            canvasGroup.alpha = Mathf.Lerp(startAlpha, 0f, elapsed / duration);
+            await UniTask.Yield();
+        }
+
+        canvasGroup.alpha = 0f;
+    }
+}
+
+// 分配给窗口：
+public class MyWindow : UIWindow
+{
+    protected override void Awake()
+    {
+        base.Awake();
+        SetTransitionDriver(new FadeTransitionDriver());
+    }
+}
+```
+
+### 性能优化工具
+
+#### `OptimizeHierarchy`
+
+在 Inspector 中右键单击您的 `UIWindow` 组件，选择 **Optimize Hierarchy**。此工具会扫描您的 UI 层级结构，并禁用非交互元素（如装饰性图像或文本）上的 `RaycastTarget`，从而显著降低 Unity 事件系统射线检测的开销。
+
+#### `SetVisible` API
+
+使用 `window.SetVisible(bool)` 而不是 `gameObject.SetActive(bool)`。
+
+- **SetVisible**: 切换 `CanvasGroup.alpha`、`interactable` 和 `blocksRaycasts`。这避免了启用/禁用 GameObject 时发生的昂贵的 UI 布局和网格重建。
+
+```csharp
+// 而不是：
+gameObject.SetActive(false);
+
+// 使用：
+SetVisible(false);
+```
 
 ## 架构模式 (MVC/MVP)
 
 虽然 `CycloneGames.UIFramework` 是架构无关的，但它旨在支持像 **MVC (Model-View-Controller)** 或 **MVP (Model-View-Presenter)** 这样的结构化模式。
 
 ### 视图 (The View - `UIWindow`)
-你的 `UIWindow` 子类充当 **视图 (View)**。它应该：
--   持有对 UI 组件（按钮、文本）的引用。
--   暴露更新可视化效果的方法（例如 `SetHealth(float value)`）。
--   暴露用户交互的事件（例如 `OnPlayClicked`）。
--   **避免** 包含复杂的业务逻辑。
+
+您的 `UIWindow` 子类充当**视图 (View)**。它应该：
+
+- 持有对 UI 组件（按钮、文本）的引用。
+- 暴露更新可视化效果的方法（例如 `SetHealth(float value)`）。
+- 暴露用户交互的事件（例如 `OnPlayClicked`）。
+- **避免** 包含复杂的业务逻辑。
 
 ### 控制器 / 展示器 (The Controller / Presenter)
-你可以实现一个单独的 Controller 类，或者将 `UIWindow` 用作轻量级控制器。
--   **控制器**: 订阅 `UIWindow` 事件，与游戏模型/服务交互，并更新视图。
--   **模型**: 持有游戏数据的纯 C# 类。
+
+您可以实现一个单独的 Controller 类，或者将 `UIWindow` 用作轻量级控制器。
+
+- **控制器**: 订阅 `UIWindow` 事件，与游戏模型/服务交互，并更新视图。
+- **模型**: 持有游戏数据的纯 C# 类。
 
 **示例 (MVP):**
+
 ```csharp
-public class MainMenuWindow : UIWindow // 视图 (View)
+using System;
+using UnityEngine;
+using UnityEngine.UI;
+
+// 视图
+public class MainMenuWindow : UIWindow
 {
     [SerializeField] private Button playButton;
-    public event Action OnPlayClicked;
+    [SerializeField] private Button settingsButton;
+    [SerializeField] private Text versionText;
 
-    protected override void Awake() {
+    public event Action OnPlayClicked;
+    public event Action OnSettingsClicked;
+
+    protected override void Awake()
+    {
         base.Awake();
         playButton.onClick.AddListener(() => OnPlayClicked?.Invoke());
+        settingsButton.onClick.AddListener(() => OnSettingsClicked?.Invoke());
+    }
+
+    public void SetVersion(string version)
+    {
+        if (versionText != null)
+            versionText.text = $"版本 {version}";
     }
 }
 
-public class MainMenuController // 展示器 (Presenter)
+// 展示器
+public class MainMenuController
 {
     private MainMenuWindow _view;
     private GameService _gameService;
 
-    public MainMenuController(MainMenuWindow view, GameService gameService) {
+    public MainMenuController(MainMenuWindow view, GameService gameService)
+    {
         _view = view;
         _gameService = gameService;
         _view.OnPlayClicked += HandlePlay;
+        _view.OnSettingsClicked += HandleSettings;
+
+        // 使用模型数据更新视图
+        _view.SetVersion(_gameService.GetVersion());
     }
 
-    private void HandlePlay() {
+    private void HandlePlay()
+    {
         _gameService.StartGame();
         _view.Close();
+    }
+
+    private void HandleSettings()
+    {
+        // 打开设置窗口
+        _gameService.OpenSettings();
+    }
+
+    public void Dispose()
+    {
+        if (_view != null)
+        {
+            _view.OnPlayClicked -= HandlePlay;
+            _view.OnSettingsClicked -= HandleSettings;
+        }
     }
 }
 ```
