@@ -1,18 +1,17 @@
 # RPG 移动模块
 
-基于状态机的高性能角色移动模块，专为 Unity RPG 游戏设计，零 GC，Gameplay Ability System (GAS) 适配良好。
+基于状态机的高性能角色移动模块，专为 Unity RPG 游戏设计，Gameplay Ability System (GAS) 适配良好。
 
 <p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
 ## ✨ 特性
 
 - 🎮 **状态机架构** - 清晰的移动状态分离（静止、行走、冲刺、蹲伏、跳跃、下落）
-- ⚡ **零垃圾回收** - 使用 Unity.Mathematics 实现 SIMD 加速的零分配计算
 - 🔌 **GAS 集成就绪** - 可选的通过接口与 Gameplay Ability System 集成
 - 🎯 **新手友好** - 无需任何依赖即可独立工作
 - 📝 **ScriptableObject 配置** - 设计师友好的参数配置
 - 🌍 **动态重力支持** - 支持更改重力方向，适用于行星移动
-- 🎨 **动画就绪** - 内置 Animator 参数支持
+- 🎨 **动画就绪** - 内置 Animator/Animancer 参数支持
 
 ## 📦 快速开始
 
@@ -78,18 +77,6 @@ public class PlayerController : MonoBehaviour
 | **Fall**   | 空中下落，带空中控制                 |
 
 状态根据输入和物理条件自动转换。
-
-### 零 GC 设计
-
-系统使用 `Unity.Mathematics` 类型（`float3`、`quaternion`）而非 Unity 的 `Vector3` 和 `Quaternion`，以消除垃圾回收：
-
-```csharp
-// 传统方式（每帧分配内存）
-Quaternion rotation = Quaternion.Slerp(a, b, t);
-
-// 我们的方式（零分配）
-quaternion rotation = math.slerp(a, b, t);
-```
 
 ## 🎮 独立使用（无 GAS）
 
@@ -293,10 +280,10 @@ public class GASAttributeController : MonoBehaviour
 | **runSpeed**      | 跑步速度       | 5.0    |
 | **sprintSpeed**   | 冲刺速度       | 8.0    |
 | **crouchSpeed**   | 蹲伏速度       | 1.5    |
-| **jumpForce**     | 向上跳跃速度   | 10.0   |
+| **jumpForce**     | 向上跳跃速度   | 8.0    |
 | **maxJumpCount**  | 允许的跳跃次数 | 1      |
 | **gravity**       | 重力加速度     | -25.0  |
-| **rotationSpeed** | 角色旋转速度   | 20.0   |
+| **rotationSpeed** | 角色旋转速度   | 10.0   |
 
 ### 动画参数
 
