@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
+        "Unio",
         "CycloneGames.Logger",
         "Unity.Addressables",
         "Unity.ResourceManager",
