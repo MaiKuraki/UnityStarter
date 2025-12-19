@@ -8,9 +8,18 @@ CycloneGames.GameplayAbilities is a powerful and flexible gameplay ability syste
 
 This system is perfect for developers working on RPGs, MOBAs, or any game that requires a sophisticated skill and attribute system. It is designed to be intuitive for beginners while offering the depth required by professional projects.
 
+## Table of Contents
+
+1. [The GAS Philosophy](#the-gas-philosophy-a-paradigm-shift-for-skill-systems)
+2. [Architecture Overview](#architecture-deep-dive)
+3. [Quick Start Guide](#comprehensive-quick-start-guide)
+4. [Core Concepts](#core-concepts)
+5. [Advanced Features](#advanced-features)
+6. [Best Practices](#best-practices)
+
 ## The GAS Philosophy: A Paradigm Shift for Skill Systems
 
-Before diving into the technical details, it's crucial to understand *why* a system like GAS exists and how it fundamentally differs from traditional approaches.
+Before diving into the technical details, it's crucial to understand _why_ a system like GAS exists and how it fundamentally differs from traditional approaches.
 
 ### The Trouble with Traditional Systems
 
@@ -26,9 +35,9 @@ This approach is not scalable. The number of potential interactions between skil
 
 GAS solves these problems by treating abilities and effects not as functions, but as **data**. This is the core paradigm shift.
 
-*   **GameplayAbilities are Data Assets (`GameplayAbilitySO`):** An "ability" is a `ScriptableObject` that encapsulates its logic and links to other data assets that define its cost, cooldown, and effects. Your character doesn't know what "Fireball" is; it just knows it has an ability identified by a `GameplayTag`.
-*   **Status Effects are Data Assets (`GameplayEffectSO`):** A character is no longer just `isPoisoned`. Instead, they have an **active instance** of a "Poison" `GameplayEffect` asset. This asset *is* the poison. It contains all relevant data: its duration, its periodic damage, the gameplay tags it applies (`Status.Debuff.Poison`), and even how it stacks with other poison effects. The system manages its entire lifecycle automatically.
-*   **Decoupling through Tags (`GameplayTag`):** Tags are the universal language of GAS. They are used to identify everything: abilities (`Ability.Skill.Fireball`), cooldowns (`Cooldown.Skill.Fireball`), status effects (`Status.Debuff.Poison`), character states (`State.Stunned`), and even damage types (`Damage.Type.Fire`). The system uses tags to ask questions like, "Does the ability owner have the `Cooldown.Skill.Fireball` tag?" or "Is the target immune to the `Damage.Type.Fire` tag?" This creates a powerful, decoupled system where different parts can interact without direct references.
+- **GameplayAbilities are Data Assets (`GameplayAbilitySO`):** An "ability" is a `ScriptableObject` that encapsulates its logic and links to other data assets that define its cost, cooldown, and effects. Your character doesn't know what "Fireball" is; it just knows it has an ability identified by a `GameplayTag`.
+- **Status Effects are Data Assets (`GameplayEffectSO`):** A character is no longer just `isPoisoned`. Instead, they have an **active instance** of a "Poison" `GameplayEffect` asset. This asset _is_ the poison. It contains all relevant data: its duration, its periodic damage, the gameplay tags it applies (`Status.Debuff.Poison`), and even how it stacks with other poison effects. The system manages its entire lifecycle automatically.
+- **Decoupling through Tags (`GameplayTag`):** Tags are the universal language of GAS. They are used to identify everything: abilities (`Ability.Skill.Fireball`), cooldowns (`Cooldown.Skill.Fireball`), status effects (`Status.Debuff.Poison`), character states (`State.Stunned`), and even damage types (`Damage.Type.Fire`). The system uses tags to ask questions like, "Does the ability owner have the `Cooldown.Skill.Fireball` tag?" or "Is the target immune to the `Damage.Type.Fire` tag?" This creates a powerful, decoupled system where different parts can interact without direct references.
 
 This data-centric approach empowers designers, promotes reusability, simplifies debugging (you inspect data assets, not complex call stacks), and creates a robust, scalable foundation for your game's mechanics.
 
@@ -44,15 +53,17 @@ This data-centric approach empowers designers, promotes reusability, simplifies 
 | **Complexity Handling** | **Exponential.** As skills and effects are added, the number of `if/else` checks for interactions grows exponentially, leading to unmaintainable code. | **Linear & Tag-Driven.** Interactions are managed by `GameplayTags`. An ability checks "Do I have `Cooldown.Fireball`?" instead of `if (skillManager.fireball_cooldown > 0)`. This scales cleanly.        |
 
 ## Architecture Deep Dive
-- Core Interaction Overview
+
+### Core Interaction Overview
+
 ```mermaid
 classDiagram
     direction TB
-    
+
     class AbilitySystemComponent {
         %% The central hub
     }
-    
+
     class GameplayAbilitySpec {
         %% A granted ability instance
     }
@@ -71,8 +82,10 @@ classDiagram
     AbilitySystemComponent "1" *-- "many" ActiveGameplayEffect : owns/tracks
     AbilitySystemComponent "1" *-- "many" AttributeSet : owns/manages
 ```
-- Gameplay Effect Lifecycle
-``` mermaid
+
+### Gameplay Effect Lifecycle
+
+```mermaid
 classDiagram
     direction LR
 
@@ -112,7 +125,9 @@ classDiagram
     AbilitySystemComponent ..> GameplayEffectSpec : "applies"
     AbilitySystemComponent "1" *-- "many" ActiveGameplayEffect : "tracks"
 ```
-- Ability Activation & Tasks
+
+### Ability Activation & Tasks
+
 ```mermaid
 classDiagram
     direction TB
@@ -124,7 +139,7 @@ classDiagram
     class GameplayAbilitySpec {
         +Ability: GameplayAbility
     }
-    
+
     class GameplayAbility {
         <<abstract>>
         +ActivateAbility(): void
@@ -136,7 +151,7 @@ classDiagram
         +Activate(): void
     }
     note for AbilityTask "Handles asynchronous logic like delays or waiting for player input."
-    
+
     class AbilityTask_WaitTargetData {
         +OnValidData: Action~TargetData~
     }
@@ -153,6 +168,786 @@ classDiagram
     AbilityTask_WaitTargetData o-- "1" ITargetActor : "uses"
 ```
 
+## Comprehensive Quick-Start Guide
+
+This comprehensive guide will walk you through creating a complete "Heal" ability from scratch, step by step. By the end, you'll understand the core concepts and be ready to create your own abilities.
+
+### Prerequisites
+
+Before starting, ensure you have:
+
+- Unity 2021.3 or later
+- The `CycloneGames.GameplayAbilities` package installed
+- All dependencies installed (`GameplayTags`, `Logger`, `AssetManagement`, `Factory`, `Service`)
+
+### Step 1: Project Setup
+
+**1.1 Create Folder Structure**
+
+Organize your project with a clear folder structure. In your `Assets` folder, create:
+
+```
+Assets/
+└── _Project/
+    ├── Scripts/
+    │   ├── Attributes/
+    │   ├── Abilities/
+    │   └── Characters/
+    ├── Data/
+    │   ├── Effects/
+    │   └── Abilities/
+    └── Prefabs/
+```
+
+This structure keeps your code organized and makes it easy to find assets later.
+
+> **Note on Gameplay Tags**: The `CycloneGames.GameplayTags` system automatically registers tags at runtime. Tags can be defined in JSON files in `ProjectSettings/GameplayTags/` or through code attributes. When you use `GameplayTagManager.RequestTag("Ability.Action.Heal")`, it will automatically find and use the tag if it's been defined. You don't need to manually register tags in code.
+
+### Step 2: Create the Attribute Set
+
+The Attribute Set defines what stats your characters have. This is the foundation of your character system.
+
+**2.1 Create PlayerAttributeSet.cs**
+
+In `_Project/Scripts/Attributes/`, create `PlayerAttributeSet.cs`:
+
+```csharp
+// _Project/Scripts/Attributes/PlayerAttributeSet.cs
+using CycloneGames.GameplayAbilities.Runtime;
+using UnityEngine;
+
+/// <summary>
+/// Defines all attributes for a player character.
+/// Attributes are the core stats that abilities and effects modify.
+/// </summary>
+public class PlayerAttributeSet : AttributeSet
+{
+    // Health attributes
+    public readonly GameplayAttribute Health = new GameplayAttribute("Player.Attribute.Health");
+    public readonly GameplayAttribute MaxHealth = new GameplayAttribute("Player.Attribute.MaxHealth");
+
+    // Mana attributes
+    public readonly GameplayAttribute Mana = new GameplayAttribute("Player.Attribute.Mana");
+    public readonly GameplayAttribute MaxMana = new GameplayAttribute("Player.Attribute.MaxMana");
+
+    /// <summary>
+    /// Called before an attribute value changes. Use this to clamp values or apply constraints.
+    /// </summary>
+    public override void PreAttributeChange(GameplayAttribute attribute, ref float newValue)
+    {
+        // Clamp health between 0 and MaxHealth
+        if (attribute.Name == "Player.Attribute.Health")
+        {
+            float maxHealth = GetCurrentValue(MaxHealth);
+            newValue = Mathf.Clamp(newValue, 0, maxHealth);
+        }
+
+        // Clamp mana between 0 and MaxMana
+        if (attribute.Name == "Player.Attribute.Mana")
+        {
+            float maxMana = GetCurrentValue(MaxMana);
+            newValue = Mathf.Clamp(newValue, 0, maxMana);
+        }
+    }
+
+    /// <summary>
+    /// Called after an attribute value changes. Use this for side effects like death detection.
+    /// </summary>
+    public override void PostAttributeChange(GameplayAttribute attribute, float oldValue, float newValue)
+    {
+        // Example: Check for death when health reaches 0
+        if (attribute.Name == "Player.Attribute.Health" && newValue <= 0 && oldValue > 0)
+        {
+            Debug.Log("Player has died!");
+            // Trigger death logic here
+        }
+    }
+}
+```
+
+**Key Points:**
+
+- Attributes are defined as `readonly GameplayAttribute` fields
+- Use `PreAttributeChange` to validate and clamp values
+- Use `PostAttributeChange` for side effects like death detection
+- Attribute names are strings - consider using constants or a centralized tag system
+
+### Step 3: Create the Character Controller
+
+The character controller initializes the Ability System Component and grants abilities to the character.
+
+**3.1 Create PlayerCharacter.cs**
+
+In `_Project/Scripts/Characters/`, create `PlayerCharacter.cs`:
+
+```csharp
+// _Project/Scripts/Characters/PlayerCharacter.cs
+using CycloneGames.GameplayAbilities.Runtime;
+using UnityEngine;
+
+/// <summary>
+/// Main character controller that manages the Ability System Component.
+/// This component must be on the same GameObject as AbilitySystemComponentHolder.
+/// </summary>
+[RequireComponent(typeof(AbilitySystemComponentHolder))]
+public class PlayerCharacter : MonoBehaviour
+{
+    [Header("Abilities")]
+    [Tooltip("The heal ability asset to grant to this character.")]
+    [SerializeField] private GameplayAbilitySO healAbilitySO;
+
+    [Header("Initial Attributes")]
+    [Tooltip("Initial attribute values applied on Start.")]
+    [SerializeField] private float initialHealth = 100f;
+    [SerializeField] private float initialMaxHealth = 100f;
+    [SerializeField] private float initialMana = 50f;
+    [SerializeField] private float initialMaxMana = 50f;
+
+    // Component references
+    private AbilitySystemComponentHolder ascHolder;
+    private PlayerAttributeSet playerAttributes;
+
+    void Awake()
+    {
+        // Get the Ability System Component Holder
+        // This component wraps the AbilitySystemComponent and provides MonoBehaviour integration
+        ascHolder = GetComponent<AbilitySystemComponentHolder>();
+
+        if (ascHolder == null)
+        {
+            Debug.LogError("AbilitySystemComponentHolder not found! Add it to the GameObject.");
+        }
+    }
+
+    void Start()
+    {
+        // CRITICAL: Initialize the Ability System Component
+        // This tells the ASC who owns it (this script) and what the avatar is (this GameObject)
+        ascHolder.AbilitySystemComponent.InitAbilityActorInfo(this, this.gameObject);
+
+        // Create and add the Attribute Set
+        // This is where all character stats are defined
+        playerAttributes = new PlayerAttributeSet();
+        ascHolder.AbilitySystemComponent.AddAttributeSet(playerAttributes);
+
+        // Set initial attribute values
+        SetInitialAttributes();
+
+        // Grant abilities
+        GrantInitialAbilities();
+    }
+
+    /// <summary>
+    /// Sets the initial values for all attributes.
+    /// </summary>
+    private void SetInitialAttributes()
+    {
+        // Create a temporary effect to set initial values
+        // This is a common pattern for initializing attributes
+        var initialEffect = new GameplayEffect(
+            "GE_InitialAttributes",
+            EDurationPolicy.Instant, // Instant means it applies once and is done
+            0, // No duration needed for instant
+            0, // No period needed for instant
+            new System.Collections.Generic.List<ModifierInfo>
+            {
+                new ModifierInfo(playerAttributes.MaxHealth, EAttributeModifierOperation.Override, initialMaxHealth),
+                new ModifierInfo(playerAttributes.Health, EAttributeModifierOperation.Override, initialHealth),
+                new ModifierInfo(playerAttributes.MaxMana, EAttributeModifierOperation.Override, initialMaxMana),
+                new ModifierInfo(playerAttributes.Mana, EAttributeModifierOperation.Override, initialMana)
+            }
+        );
+
+        var spec = GameplayEffectSpec.Create(initialEffect, ascHolder.AbilitySystemComponent);
+        ascHolder.AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
+    }
+
+    /// <summary>
+    /// Grants all initial abilities to this character.
+    /// </summary>
+    private void GrantInitialAbilities()
+    {
+        if (healAbilitySO != null)
+        {
+            // Create the ability instance from the ScriptableObject
+            var ability = healAbilitySO.CreateAbility();
+
+            // Grant it to this character's Ability System Component
+            ascHolder.AbilitySystemComponent.GrantAbility(ability);
+
+            Debug.Log($"Granted ability: {healAbilitySO.AbilityName}");
+        }
+    }
+
+    void Update()
+    {
+        // Example: Activate heal ability with 'H' key
+        if (Input.GetKeyDown(KeyCode.H))
+        {
+            ActivateHealAbility();
+        }
+    }
+
+    /// <summary>
+    /// Finds and activates the heal ability by its tag.
+    /// </summary>
+    private void ActivateHealAbility()
+    {
+        // Get all activatable abilities
+        var abilities = ascHolder.AbilitySystemComponent.GetActivatableAbilities();
+
+        // Find the heal ability by its tag
+        foreach (var spec in abilities)
+        {
+            // Check if this ability has the heal tag
+            if (spec.Ability.AbilityTags.HasTag("Ability.Action.Heal"))
+            {
+                // Try to activate it
+                bool success = ascHolder.AbilitySystemComponent.TryActivateAbility(spec);
+
+                if (success)
+                {
+                    Debug.Log("Heal ability activated!");
+                }
+                else
+                {
+                    Debug.LogWarning("Failed to activate heal ability. Check cost, cooldown, or tag requirements.");
+                }
+
+                return; // Found and attempted activation, exit
+            }
+        }
+
+        Debug.LogWarning("Heal ability not found. Make sure it's granted and has the correct tag.");
+    }
+
+    /// <summary>
+    /// Helper method to get current health (useful for UI, etc.)
+    /// </summary>
+    public float GetCurrentHealth()
+    {
+        return playerAttributes?.GetCurrentValue(playerAttributes.Health) ?? 0f;
+    }
+
+    /// <summary>
+    /// Helper method to get current mana (useful for UI, etc.)
+    /// </summary>
+    public float GetCurrentMana()
+    {
+        return playerAttributes?.GetCurrentValue(playerAttributes.Mana) ?? 0f;
+    }
+}
+```
+
+**Key Points:**
+
+- Always call `InitAbilityActorInfo()` before using the ASC
+- Create and add Attribute Sets before granting abilities
+- Use `GrantAbility()` to give characters abilities
+- Find abilities by their tags using `GetActivatableAbilities()`
+- Use `TryActivateAbility()` to activate abilities (it checks cost, cooldown, etc. automatically)
+
+### Step 4: Create the Heal Ability
+
+Now we'll create the actual ability. An ability has two parts:
+
+1. **Runtime Logic** (`HealAbility.cs`) - The code that runs when activated
+2. **Data Asset** (`HealAbilitySO.cs`) - The ScriptableObject that designers configure
+
+**4.1 Create the Runtime Logic**
+
+In `_Project/Scripts/Abilities/`, create `HealAbility.cs`:
+
+```csharp
+// _Project/Scripts/Abilities/HealAbility.cs
+using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.Logger;
+
+/// <summary>
+/// A simple instant heal ability that restores health to the caster.
+/// This is an "instant" ability - it applies its effect immediately and ends.
+/// </summary>
+public class HealAbility : GameplayAbility
+{
+    /// <summary>
+    /// Called when the ability is activated.
+    /// This is where you put the ability's main logic.
+    /// </summary>
+    public override void ActivateAbility(
+        GameplayAbilityActorInfo actorInfo,
+        GameplayAbilitySpec spec,
+        GameplayAbilityActivationInfo activationInfo)
+    {
+        CLogger.LogInfo($"[HealAbility] Activated by {actorInfo.OwnerActor}");
+
+        // CRITICAL: Commit the ability
+        // This applies the Cost and Cooldown effects defined in the ScriptableObject
+        // It also applies any "Commit Gameplay Effects" defined in the SO
+        CommitAbility(actorInfo, spec);
+
+        // For an instant heal, the actual healing is done by the "Commit Gameplay Effects"
+        // defined in the ScriptableObject asset. If you need custom logic here, you can
+        // create and apply GameplayEffectSpecs manually.
+
+        // End the ability immediately since it's instant
+        EndAbility();
+    }
+
+    /// <summary>
+    /// Required for object pooling. Returns a new instance of this ability.
+    /// The pooling system uses this to create ability instances efficiently.
+    /// </summary>
+    public override GameplayAbility CreatePoolableInstance()
+    {
+        return new HealAbility();
+    }
+}
+```
+
+**4.2 Create the ScriptableObject Factory**
+
+In `_Project/Scripts/Abilities/`, create `HealAbilitySO.cs`:
+
+```csharp
+// _Project/Scripts/Abilities/HealAbilitySO.cs
+using UnityEngine;
+using CycloneGames.GameplayAbilities.Runtime;
+
+/// <summary>
+/// ScriptableObject factory for creating Heal ability instances.
+/// This bridges the gap between editor data (configured in Inspector) and runtime logic.
+/// </summary>
+[CreateAssetMenu(fileName = "GA_Heal", menuName = "CycloneGames/Abilities/Heal")]
+public class HealAbilitySO : GameplayAbilitySO
+{
+    /// <summary>
+    /// Factory method that creates a runtime ability instance from this ScriptableObject.
+    /// This is called when the ability is granted to a character.
+    /// </summary>
+    public override GameplayAbility CreateAbility()
+    {
+        // Create a new instance of the runtime ability class
+        var abilityInstance = new HealAbility();
+
+        // Initialize it with all the data configured in the Inspector
+        // This includes: name, tags, cost, cooldown, etc.
+        abilityInstance.Initialize(
+            AbilityName,                    // Name of the ability
+            InstancingPolicy,               // How the ability is instantiated
+            NetExecutionPolicy,             // Network execution policy
+            CostEffect?.GetGameplayEffect(), // Effect that defines the cost (e.g., mana)
+            CooldownEffect?.GetGameplayEffect(), // Effect that defines the cooldown
+            AbilityTags,                    // Tags that identify this ability
+            ActivationBlockedTags,          // Tags that prevent activation
+            ActivationRequiredTags,         // Tags required for activation
+            CancelAbilitiesWithTag,         // Abilities to cancel when this activates
+            BlockAbilitiesWithTag           // Abilities to block when this is active
+        );
+
+        return abilityInstance;
+    }
+}
+```
+
+**Key Points:**
+
+- The runtime class (`HealAbility`) contains the logic
+- The SO class (`HealAbilitySO`) is the data asset
+- Always call `CommitAbility()` in `ActivateAbility()` - this applies cost and cooldown
+- Use `CreatePoolableInstance()` for object pooling support
+- The `Initialize()` method connects editor data to runtime logic
+
+### Step 5: Create the Gameplay Effects
+
+Gameplay Effects define what happens when abilities are used. We need:
+
+1. **Heal Effect** - Restores health
+2. **Cost Effect** - Consumes mana (optional)
+3. **Cooldown Effect** - Prevents spam (optional)
+
+**5.1 Create the Heal Effect**
+
+1. In Unity, navigate to `_Project/Data/Effects/`
+2. Right-click → `Create → CycloneGames → GameplayAbilities → GameplayEffect`
+3. Name it `GE_Heal`
+4. Configure it in the Inspector:
+   - **Effect Name:** `Heal Effect`
+   - **Duration Policy:** `Instant` (heals immediately, no duration)
+   - **Modifiers:**
+     - Click `+` to add a modifier
+     - **Attribute:** `PlayerAttributeSet.Health` (or type the path manually)
+     - **Operation:** `Add` (adds to current health)
+     - **Magnitude:** `25` (heals 25 HP)
+
+**5.2 Create the Cost Effect (Optional)**
+
+1. Create another GameplayEffect named `GE_Heal_Cost`
+2. Configure it:
+   - **Duration Policy:** `Instant`
+   - **Modifiers:**
+     - **Attribute:** `PlayerAttributeSet.Mana`
+     - **Operation:** `Add`
+     - **Magnitude:** `-10` (negative = consumes 10 mana)
+
+**5.3 Create the Cooldown Effect (Optional)**
+
+1. Create another GameplayEffect named `GE_Heal_Cooldown`
+2. Configure it:
+   - **Duration Policy:** `HasDuration`
+   - **Duration:** `5.0` (5 second cooldown)
+   - **Granted Tags:**
+     - Click `+` and add `Cooldown.Skill.Heal`
+   - **Modifiers:** None (cooldowns don't modify attributes, they just grant tags)
+
+**Key Points:**
+
+- **Instant** effects apply once and are done
+- **HasDuration** effects last for a set time
+- **Infinite** effects last until manually removed
+- Use **Granted Tags** to mark effects (like cooldowns)
+- Negative magnitudes reduce values (for costs/damage)
+
+### Step 6: Create the Ability Asset
+
+Now we'll create the ScriptableObject asset that ties everything together.
+
+**6.1 Create the Ability Asset**
+
+1. In Unity, navigate to `_Project/Data/Abilities/`
+2. Right-click → `Create → CycloneGames → Abilities → Heal`
+3. Name it `GA_Heal`
+4. Configure it in the Inspector:
+
+   **Basic Settings:**
+
+   - **Ability Name:** `Simple Heal`
+   - **Instancing Policy:** `InstancedPerActor` (one instance per character, reused)
+   - **Net Execution Policy:** `LocalPredicted` (for single-player, `LocalOnly` is fine)
+
+   **Tags:**
+
+   - **Ability Tags:**
+     - Click `+` and add `Ability.Action.Heal`
+   - **Activation Blocked Tags:** (leave empty for now)
+   - **Activation Required Tags:** (leave empty for now)
+
+   **Effects:**
+
+   - **Cost Effect:** Drag `GE_Heal_Cost` here (or leave null if no cost)
+   - **Cooldown Effect:** Drag `GE_Heal_Cooldown` here (or leave null if no cooldown)
+   - **Commit Gameplay Effects:**
+     - Click `+` and drag `GE_Heal` here
+     - This effect is applied when `CommitAbility()` is called
+
+**Key Points:**
+
+- **Instancing Policy:** `InstancedPerActor` is most common
+- **Ability Tags** identify the ability (used to find it)
+- **Cost Effect** is checked before activation
+- **Cooldown Effect** prevents rapid reuse
+- **Commit Gameplay Effects** are applied when the ability commits
+
+### Step 7: Set Up the Character in Unity
+
+**7.1 Create the Player GameObject**
+
+1. In your scene, create an empty GameObject named `Player`
+2. Add the `Ability System Component Holder` component
+3. Add the `Player Character` component (you created this earlier)
+4. In the `Player Character` component:
+   - Drag `GA_Heal` from your project into the `Heal Ability SO` field
+   - Set initial attribute values if desired
+
+**7.2 Create a Prefab**
+
+1. Drag the `Player` GameObject from Hierarchy to `_Project/Prefabs/`
+2. This creates a prefab you can reuse
+
+### Step 8: Test Your Ability
+
+**8.1 Run the Scene**
+
+1. Press Play
+2. Press `H` to activate the heal ability
+3. Check the Console for logs
+
+**8.2 Debug Tips**
+
+If the ability doesn't work:
+
+1. **Check Console Logs:** Look for error messages
+2. **Verify Ability is Granted:**
+   ```csharp
+   // Add this to PlayerCharacter.Update() temporarily
+   var abilities = ascHolder.AbilitySystemComponent.GetActivatableAbilities();
+   Debug.Log($"Granted abilities: {abilities.Count}");
+   ```
+3. **Check Tags:** Make sure tags are registered
+4. **Check Cost:** If mana cost is too high, ability won't activate
+5. **Check Cooldown:** If on cooldown, ability won't activate
+
+**8.3 View Attributes (Optional)**
+
+To see attributes in the Inspector, you can add a debug component:
+
+```csharp
+// _Project/Scripts/Debug/AttributeDebugger.cs
+using CycloneGames.GameplayAbilities.Runtime;
+using UnityEngine;
+
+public class AttributeDebugger : MonoBehaviour
+{
+    [SerializeField] private AbilitySystemComponentHolder holder;
+
+    void OnGUI()
+    {
+        if (holder == null) return;
+
+        var asc = holder.AbilitySystemComponent;
+        if (asc == null) return;
+
+        // Get attributes (adjust names to match your AttributeSet)
+        var healthAttr = asc.GetAttribute("Player.Attribute.Health");
+        var manaAttr = asc.GetAttribute("Player.Attribute.Mana");
+
+        if (healthAttr != null)
+        {
+            GUI.Label(new Rect(10, 10, 200, 20), $"Health: {healthAttr.CurrentValue}");
+        }
+        if (manaAttr != null)
+        {
+            GUI.Label(new Rect(10, 30, 200, 20), $"Mana: {manaAttr.CurrentValue}");
+        }
+    }
+}
+```
+
+## Core Concepts
+
+### Gameplay Tags
+
+Gameplay Tags are the universal language of GAS. They identify everything without hard-coded references.
+
+**Common Tag Patterns:**
+
+- `Ability.Skill.Fireball` - Identifies an ability
+- `Cooldown.Skill.Fireball` - Marks a cooldown state
+- `Status.Debuff.Poison` - Identifies a status effect
+- `Damage.Type.Fire` - Identifies damage type
+- `Faction.Player` - Identifies faction/team
+
+**Using Tags:**
+
+```csharp
+// Check if character has a tag
+if (asc.CombinedTags.HasTag("Status.Debuff.Poison"))
+{
+    // Character is poisoned
+}
+
+// Create a tag container
+var poisonTag = GameplayTagContainer.FromTag("Status.Debuff.Poison");
+
+// Remove all effects with a tag
+targetASC.RemoveActiveEffectsWithGrantedTags(poisonTag);
+```
+
+### Gameplay Effects
+
+Gameplay Effects are the building blocks of abilities. They modify attributes, grant tags, and create status effects.
+
+**Duration Policies:**
+
+- **Instant:** Applies once and is done (damage, healing, costs)
+- **HasDuration:** Lasts for a set time (buffs, debuffs, cooldowns)
+- **Infinite:** Lasts until manually removed (equipment stats, auras)
+
+**Modifiers:**
+Modifiers change attribute values:
+
+- **Override:** Sets value to exact amount
+- **Add:** Adds to current value
+- **Multiply:** Multiplies current value
+- **Divide:** Divides current value
+
+**Example - Damage Over Time:**
+
+```csharp
+// Create a poison DoT effect
+var poisonEffect = new GameplayEffect(
+    "Poison DoT",
+    EDurationPolicy.HasDuration, // Lasts 10 seconds
+    10f,                         // Duration: 10 seconds
+    1f,                          // Period: damage every 1 second
+    new List<ModifierInfo>
+    {
+        new ModifierInfo(healthAttr, EAttributeModifierOperation.Add, -5f) // -5 HP per tick
+    }
+);
+```
+
+### Ability Lifecycle
+
+1. **Grant:** Ability is given to a character (`GrantAbility()`)
+2. **Activate:** Player/AI tries to use it (`TryActivateAbility()`)
+3. **CanActivate Check:** System checks cost, cooldown, tags
+4. **Commit:** Cost and cooldown are applied (`CommitAbility()`)
+5. **Execute:** Ability logic runs (`ActivateAbility()`)
+6. **End:** Ability finishes (`EndAbility()`)
+
+### Attribute Sets
+
+Attribute Sets define character stats. They:
+
+- Define attributes as `GameplayAttribute` fields
+- Validate changes in `PreAttributeChange()`
+- React to changes in `PostAttributeChange()`
+- Can have derived attributes (calculated from base attributes)
+
+**Example - Derived Attribute:**
+
+```csharp
+public override float GetCurrentValue(GameplayAttribute attribute)
+{
+    if (attribute.Name == "Player.Attribute.HealthPercent")
+    {
+        float health = GetCurrentValue(Health);
+        float maxHealth = GetCurrentValue(MaxHealth);
+        return maxHealth > 0 ? health / maxHealth : 0f;
+    }
+    return base.GetCurrentValue(attribute);
+}
+```
+
+## Advanced Features
+
+### AbilityTasks
+
+AbilityTasks handle asynchronous operations in abilities. They're essential for complex abilities.
+
+**Built-in Tasks:**
+
+- `AbilityTask_WaitDelay` - Wait for a duration
+- `AbilityTask_WaitTargetData` - Wait for targeting input
+
+**Example - Charged Attack:**
+
+```csharp
+public override async void ActivateAbility(...)
+{
+    CommitAbility(actorInfo, spec);
+
+    // Wait 2 seconds for charge
+    var chargeTask = NewAbilityTask<AbilityTask_WaitDelay>();
+    chargeTask.WaitTime = 2.0f;
+    await chargeTask.ActivateAsync();
+
+    // Apply damage after charge
+    ApplyDamage();
+    EndAbility();
+}
+```
+
+See the [AbilityTask Deep Dive](#abilitytask-deep-dive) section for more details.
+
+### Targeting System
+
+The targeting system finds and selects targets for abilities.
+
+**Built-in Target Actors:**
+
+- `GameplayAbilityTargetActor_SphereOverlap` - Finds targets in radius
+- `GameplayAbilityTargetActor_SingleLineTrace` - Raycast targeting
+- `GameplayAbilityTargetActor_ConeTrace` - Cone-shaped targeting
+
+**Example:**
+
+```csharp
+var targetActor = new GameplayAbilityTargetActor_SphereOverlap(
+    5f, // 5 unit radius
+    GameplayTagContainer.FromTag("Faction.Enemy") // Only target enemies
+);
+
+var task = AbilityTask_WaitTargetData.WaitTargetData(this, targetActor);
+task.OnValidData = (targetData) =>
+{
+    foreach (var targetASC in targetData.AbilitySystemComponents)
+    {
+        ApplyDamageTo(targetASC);
+    }
+    EndAbility();
+};
+task.Activate();
+```
+
+### Execution Calculations
+
+For complex damage formulas, use Execution Calculations instead of simple modifiers.
+
+**When to Use:**
+
+- Damage = AttackPower _ 1.5 - Defense _ 0.5
+- Healing = BaseHeal + SpellPower \* 0.3
+- Any formula involving multiple attributes
+
+**Example:**
+
+```csharp
+public class ExecCalc_Damage : GameplayEffectExecutionCalculation
+{
+    public override void Execute(GameplayEffectExecutionCalculationContext context)
+    {
+        var source = context.Spec.Source;
+        var target = context.Target;
+
+        float attackPower = source.GetAttribute("AttackPower")?.CurrentValue ?? 0f;
+        float defense = target.GetAttribute("Defense")?.CurrentValue ?? 0f;
+
+        float damage = attackPower * 1.5f - defense * 0.5f;
+
+        context.AddOutputModifier(new ModifierInfo(
+            target.GetAttribute("Health"),
+            EAttributeModifierOperation.Add,
+            -damage // Negative for damage
+        ));
+    }
+}
+```
+
+### GameplayCue System
+
+GameplayCues handle visual and audio effects, completely separated from gameplay logic.
+
+**Cue Events:**
+
+- **Executed:** Instant effects (impact VFX, hit sounds)
+- **OnActive:** When effect starts (buff glow, status icon)
+- **WhileActive:** Continuous while active (burning particles)
+- **Removed:** When effect ends (fade-out VFX)
+
+**Example:**
+
+```csharp
+[CreateAssetMenu(menuName = "CycloneGames/GameplayCues/Fireball Impact")]
+public class GC_Fireball_Impact : GameplayCueSO
+{
+    public string ImpactVFXPrefab;
+    public string ImpactSound;
+
+    public override async UniTask OnExecutedAsync(GameplayCueParameters parameters, IGameObjectPoolManager poolManager)
+    {
+        // Spawn VFX
+        var vfx = await poolManager.GetAsync(ImpactVFXPrefab, parameters.TargetObject.transform.position, Quaternion.identity);
+
+        // Play sound
+        var audioClip = await GameplayCueManager.Instance.ResourceLocator.LoadAssetAsync<AudioClip>(ImpactSound);
+        AudioSource.PlayClipAtPoint(audioClip, parameters.TargetObject.transform.position);
+    }
+}
+```
+
+See the [GameplayCue System](#gameplaycue-system) section for more details.
+
 ## Sample Walkthrough
 
 The `Samples` folder contains a practical scene demonstrating several key features of the Gameplay Ability System, including complex abilities and a leveling system. This provides a hands-on look at how the data-driven architecture works in practice.
@@ -161,17 +956,12 @@ The `Samples` folder contains a practical scene demonstrating several key featur
 
 The `SampleScene.unity` features a **Player** and an **Enemy** character, each equipped with an `AbilitySystemComponentHolder` (the MonoBehaviour wrapper) which manages their underlying `AbilitySystemComponent` and `CharacterAttributeSet` instances. The `SampleCombatManager` script handles player input and updates the UI to reflect the real-time status of each character, including their attributes, active gameplay effects, and gameplay tags.
 
--   **Player Controls:**
-    -   **[1] Key:** Cast **Fireball** on the Enemy.
-    -   **[2] Key:** Cast **Purify** to remove poison debuffs from self.
-    -   **[Space] Key:** Grant self 50 XP for testing the leveling system.
--   **Enemy Controls:**
-    -   **[E] Key:** Force the Enemy to cast **PoisonBlade** on the Player.
-
-### Core Sample Components
-
--   **`Character.cs`**: The base script for both Player and Enemy. It initializes the `AbilitySystemComponent`, grants initial abilities and effects, and contains the logic for leveling up.
--   **`CharacterAttributeSet.cs`**: Defines all character stats (`Health`, `Mana`, `AttackPower`, `Defense`, `Level`, `Experience`). It also contains advanced logic for damage calculation (mitigating damage based on defense) and handling character death.
+- **Player Controls:**
+  - **[1] Key:** Cast **Fireball** on the Enemy.
+  - **[2] Key:** Cast **Purify** to remove poison debuffs from self.
+  - **[Space] Key:** Grant self 50 XP for testing the leveling system.
+- **Enemy Controls:**
+  - **[E] Key:** Force the Enemy to cast **PoisonBlade** on the Player.
 
 ### Featured Abilities
 
@@ -179,32 +969,32 @@ The `SampleScene.unity` features a **Player** and an **Enemy** character, each e
 
 Fireball is an offensive ability that deals instant damage and applies a lingering burn effect. It demonstrates:
 
--   **Data-Driven Design**: The ability is defined by `GA_Fireball_SO`. This ScriptableObject links to other `GameplayEffectSO` assets for its mana **cost**, **cooldown**, instant **impact damage**, and the **burn DoT**.
--   **Complex Attribute Interaction**: The final damage isn't just a simple number. When the damage `GameplayEffect` is applied, the target's `CharacterAttributeSet` intercepts it in its `PreProcessInstantEffect` method. It then calculates damage mitigation based on the target's `Defense` attribute before applying the final health reduction.
--   **Stat Snapshotting (`SetSetByCallerMagnitude`):** When Fireball is cast, it "snapshots" the player's `BonusDamageMultiplier` attribute at that moment. This value is passed into the `GameplayEffectSpec`, ensuring that the damage calculation uses the stats from the time of casting, not the time of impact.
+- **Data-Driven Design**: The ability is defined by `GA_Fireball_SO`. This ScriptableObject links to other `GameplayEffectSO` assets for its mana **cost**, **cooldown**, instant **impact damage**, and the **burn DoT**.
+- **Complex Attribute Interaction**: The final damage isn't just a simple number. When the damage `GameplayEffect` is applied, the target's `CharacterAttributeSet` intercepts it in its `PreProcessInstantEffect` method. It then calculates damage mitigation based on the target's `Defense` attribute before applying the final health reduction.
+- **Stat Snapshotting (`SetSetByCallerMagnitude`):** When Fireball is cast, it "snapshots" the player's `BonusDamageMultiplier` attribute at that moment. This value is passed into the `GameplayEffectSpec`, ensuring that the damage calculation uses the stats from the time of casting, not the time of impact.
 
 #### 2. PoisonBlade (Direct Damage + Debuff)
 
 This is the Enemy's primary attack. It's a straightforward example of an ability that applies both instant damage and a persistent poison debuff.
 
--   **Applying Multiple Effects:** The `GA_PoisonBlade` ability applies two separate `GameplayEffect`s in sequence: one for the initial weapon hit and another to apply the `Debuff.Poison` tag and its associated damage-over-time.
+- **Applying Multiple Effects:** The `GA_PoisonBlade` ability applies two separate `GameplayEffect`s in sequence: one for the initial weapon hit and another to apply the `Debuff.Poison` tag and its associated damage-over-time.
 
 #### 3. Purify (Area of Effect Dispel)
 
 Purify is a defensive ability that removes poison effects from the caster. It showcases several advanced concepts:
 
--   **Asynchronous Abilities:** Purify does not execute instantly. It uses an `AbilityTask_WaitTargetData` to perform its logic over time.
--   **Targeting Actors:** It uses a `GameplayAbilityTargetActor_SphereOverlap` to find all valid targets within a radius.
--   **Faction Filtering:** The ability is configured in its `SO` asset to only affect friendly targets (those with the `Faction.Player` tag), demonstrating how to use tags for targeting.
--   **Removing Effects by Tag:** The core logic of the dispel is a single line of code: `RemoveActiveEffectsWithGrantedTags`. It removes any active `GameplayEffect` on the target that grants the `Debuff.Poison` tag.
+- **Asynchronous Abilities:** Purify does not execute instantly. It uses an `AbilityTask_WaitTargetData` to perform its logic over time.
+- **Targeting Actors:** It uses a `GameplayAbilityTargetActor_SphereOverlap` to find all valid targets within a radius.
+- **Faction Filtering:** The ability is configured in its `SO` asset to only affect friendly targets (those with the `Faction.Player` tag), demonstrating how to use tags for targeting.
+- **Removing Effects by Tag:** The core logic of the dispel is a single line of code: `RemoveActiveEffectsWithGrantedTags`. It removes any active `GameplayEffect` on the target that grants the `Debuff.Poison` tag.
 
 ### Leveling System
 
 The sample includes a fully functional leveling system driven by `GameplayEffect`s.
 
--   **Gaining Experience:** When the Enemy dies, its `BountyEffect` is applied to the Player. This effect, `GE_Bounty_Enemy.asset`, simply grants a set amount of the `Experience` attribute.
--   **Triggering a Level Up:** The `CharacterAttributeSet` listens for changes to the `Experience` attribute. When XP is gained, it calls the `CheckForLevelUp` method on the `Character`.
--   **Applying Level Up Stats:** The `CheckForLevelUp` logic calculates how many levels were gained and dynamically creates a new, temporary `GameplayEffect` in code. This effect contains modifiers to increase `Level`, `MaxHealth`, `MaxMana`, and other stats, demonstrating the system's flexibility to create and apply effects on the fly.
+- **Gaining Experience:** When the Enemy dies, its `BountyEffect` is applied to the Player. This effect, `GE_Bounty_Enemy.asset`, simply grants a set amount of the `Experience` attribute.
+- **Triggering a Level Up:** The `CharacterAttributeSet` listens for changes to the `Experience` attribute. When XP is gained, it calls the `CheckForLevelUp` method on the `Character`.
+- **Applying Level Up Stats:** The `CheckForLevelUp` logic calculates how many levels were gained and dynamically creates a new, temporary `GameplayEffect` in code. This effect contains modifiers to increase `Level`, `MaxHealth`, `MaxMana`, and other stats, demonstrating the system's flexibility to create and apply effects on the fly.
 
 ## GameplayCue System
 
@@ -242,10 +1032,10 @@ The `GameplayCueManager` sees the `"GameplayCue.Impact.Explosion"` tag and handl
 
 ### Core Components
 
--   **`GameplayCueManager`**: Singleton that handles cue registration, loading, and execution
--   **`GameplayCueSO`**: ScriptableObject base class for defining cue assets
--   **`GameplayCueParameters`**: Data struct passed to cues containing context (target, source, magnitude, etc.)
--   **`EGameplayCueEvent`**: Enum defining when a cue fires: `Executed`, `OnActive`, `WhileActive`, `Removed`
+- **`GameplayCueManager`**: Singleton that handles cue registration, loading, and execution
+- **`GameplayCueSO`**: ScriptableObject base class for defining cue assets
+- **`GameplayCueParameters`**: Data struct passed to cues containing context (target, source, magnitude, etc.)
+- **`EGameplayCueEvent`**: Enum defining when a cue fires: `Executed`, `OnActive`, `WhileActive`, `Removed`
 
 ### Cue Event Types
 
@@ -298,6 +1088,7 @@ public class GC_Fireball_Impact : GameplayCueSO
 ```
 
 **To use it:**
+
 1. Create the `GC_Fireball_Impact` asset in the Editor
 2. Configure `ImpactVFXPrefab` and `ImpactSound` paths
 3. In your `GameplayEffectSO` (e.g., `GE_Fireball_Damage`), add the tag `"GameplayCue.Impact.Fireball"` to the `GameplayCues` container
@@ -347,6 +1138,7 @@ By implementing `IPersistentGameplayCue`, the system automatically tracks and cl
 ### Registering Cues
 
 **Static Registration** (at game start):
+
 ```csharp
 // In your game's initialization code
 GameplayCueManager.Instance.Initialize(resourceLocator, gameObjectPoolManager);
@@ -356,6 +1148,7 @@ GameplayCueManager.Instance.RegisterStaticCue("GameplayCue.Buff.Burn", burnLoopC
 ```
 
 **Dynamic Runtime Registration** (for code-driven cues):
+
 ```csharp
 public class MyCustomCueHandler : IGameplayCueHandler
 {
@@ -385,253 +1178,30 @@ GameplayCueManager.Instance.RegisterRuntimeHandler(GameplayTagManager.RequestTag
 ### Debugging Cues
 
 If a cue isn't playing:
+
 - Check that the cue tag is added to the `GameplayEffect`'s `GameplayCues` container
 - Verify the cue is registered with `GameplayCueManager`
 - Ensure `GameplayCueManager.Initialize()` was called
 - Check console logs—the manager logs when it can't find a cue
 - Verify the target `GameplayEffectSpec` has a valid target object in `parameters.TargetObject`
 
-
-
 ## Networking Architecture
 
 CycloneGames.GameplayAbilities is designed with a **Network-Architected** approach, meaning the core classes (`GameplayAbility`, `AbilitySystemComponent`) are structured to support replication and prediction, but it is **transport-agnostic**.
 
-> [!IMPORTANT]
-> **Integration Required**: This package does **not** include a built-in networking layer (like Mirror, Netcode for GameObjects, or Photon). You must implement the `ServerTryActivateAbility` and `ClientActivateAbilitySucceed/Failed` bridges yourself using your chosen networking solution.
+> [!IMPORTANT] > **Integration Required**: This package does **not** include a built-in networking layer (like Mirror, Netcode for GameObjects, or Photon). You must implement the `ServerTryActivateAbility` and `ClientActivateAbilitySucceed/Failed` bridges yourself using your chosen networking solution.
 
 #### Execution Policies (`ENetExecutionPolicy`)
 
-*   **LocalOnly**: Runs only on the client. Good for UI or cosmetic abilities.
-*   **ServerOnly**: Client requests activation; Server runs it. Secure, but has latency.
-*   **LocalPredicted**: Client runs immediately (predicts success) while sending a request to the Server.
-    *   **Success**: Server confirms, client keeps the result.
-    *   **Failure**: Server rejects, client **rolls back** (undoes) the ability's effects.
+- **LocalOnly**: Runs only on the client. Good for UI or cosmetic abilities.
+- **ServerOnly**: Client requests activation; Server runs it. Secure, but has latency.
+- **LocalPredicted**: Client runs immediately (predicts success) while sending a request to the Server.
+  - **Success**: Server confirms, client keeps the result.
+  - **Failure**: Server rejects, client **rolls back** (undoes) the ability's effects.
 
 #### Prediction Keys
 
 The system uses `PredictionKey` to track predicted actions. When a client activates a predicted ability, it generates a key. If the server validates it, that key is "approved." If not, all effects tied to that key are removed.
-
-## Comprehensive Quick-Start Guide
-
-This guide will walk you through every step of creating a simple "Heal" ability from scratch.
-
-### Part 1: Project and Folder Setup
-
-1.  **Install Package:** Ensure the `CycloneGames.GameplayAbilities` package and its dependencies (`GameplayTags`, `Logger`, etc.) are installed in your Unity project.
-2.  **Create Folders:** To keep things organized, create the following folder structure inside your `Assets` folder:
-    *   `_Project/Scripts/Attributes`
-    *   `_Project/Scripts/Abilities`
-    *   `_Project/Data/Effects`
-    *   `_Project/Data/Abilities`
-    *   `_Project/Prefabs`
-
-### Part 2: Creating the Core Components
-
-**Step 2.1: The AttributeSet**
-This class will define the stats your characters have.
-
-1.  Inside `_Project/Scripts/Attributes`, create a new C# Script named `PlayerAttributeSet.cs`.
-2.  Open the file and replace its entire content with the following code:
-
-```csharp
-// _Project/Scripts/Attributes/PlayerAttributeSet.cs
-using CycloneGames.GameplayAbilities.Runtime;
-using UnityEngine;
-
-// This class defines the attributes for our character.
-public class PlayerAttributeSet : AttributeSet
-{
-    // Define attributes using a string name, often from a centralized tag class.
-    public readonly GameplayAttribute Health = new GameplayAttribute("Player.Attribute.Health");
-    public readonly GameplayAttribute MaxHealth = new GameplayAttribute("Player.Attribute.MaxHealth");
-    public readonly GameplayAttribute Mana = new GameplayAttribute("Player.Attribute.Mana");
-
-    public override void PreAttributeChange(GameplayAttribute attribute, ref float newValue)
-    {
-        // This function is called before an attribute's CurrentValue is changed.
-        // It's the perfect place to clamp values to a valid range.
-        if (attribute.Name == "Player.Attribute.Health")
-        {
-            newValue = Mathf.Clamp(newValue, 0, GetCurrentValue(MaxHealth));
-        }
-    }
-}
-```
-
-**Step 2.2: The Character Controller**
-This simple script will grant and activate abilities.
-
-1.  Inside `_Project/Scripts`, create a new C# Script named `PlayerCharacter.cs`.
-2.  Replace its content with this code:
-
-```csharp
-// _Project/Scripts/Characters/PlayerCharacter.cs
-using CycloneGames.GameplayAbilities.Runtime;
-using UnityEngine;
-
-// This component requires the AbilitySystemComponentHolder to be on the same GameObject.
-[RequireComponent(typeof(AbilitySystemComponentHolder))]
-public class PlayerCharacter : MonoBehaviour
-{
-    [SerializeField] private GameplayAbilitySO healAbilitySO;
-    
-    private AbilitySystemComponentHolder ascHolder;
-    private PlayerAttributeSet playerAttributes;
-
-    private void Awake()
-    {
-        // Get the holder component.
-        ascHolder = GetComponent<AbilitySystemComponentHolder>();
-    }
-
-    private void Start()
-    {
-        // Initialize the Ability System Component, telling it who owns it (this script)
-        // and who its avatar is (this GameObject).
-        ascHolder.AbilitySystemComponent.InitAbilityActorInfo(this, this.gameObject);
-
-        // Create an instance of our AttributeSet and add it to the ASC.
-        // This is a crucial step!
-        playerAttributes = new PlayerAttributeSet();
-        ascHolder.AbilitySystemComponent.AddAttributeSet(playerAttributes);
-
-        // Grant the Heal ability if the SO is assigned in the Inspector.
-        if (healAbilitySO != null)
-        {
-            ascHolder.AbilitySystemComponent.GrantAbility(healAbilitySO.CreateAbility());
-        }
-    }
-
-    private void Update()
-    {
-        // On 'H' key press, try to activate the Heal ability.
-        if (Input.GetKeyDown(KeyCode.H))
-        {
-            // We find the granted ability (spec) by looking for one with the correct tag.
-            var abilities = ascHolder.AbilitySystemComponent.GetActivatableAbilities();
-            foreach (var spec in abilities)
-            {
-                if (spec.Ability.AbilityTags.HasTag("Ability.Action.Heal"))
-                {
-                    ascHolder.AbilitySystemComponent.TryActivateAbility(spec);
-                    break; // Stop after finding and activating the first match.
-                }
-            }
-        }
-    }
-}
-```
-
-### Part 3: Creating the Heal Ability
-
-Now we will create the two parts of our ability: the runtime logic (`HealAbility.cs`) and the editor-facing data asset (`HealAbilitySO.cs`).
-
-**Step 3.1: The Runtime Logic**
-1.  Inside `_Project/Scripts/Abilities`, create a new C# Script named `HealAbility.cs`.
-2.  Replace its content with this code. This is the code that runs when the ability is active.
-
-```csharp
-// _Project/Scripts/Abilities/HealAbility.cs
-using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.Logger;
-
-public class HealAbility : GameplayAbility
-{
-    public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
-    {
-        CLogger.LogInfo("Heal Ability Activated");
-        
-        // This applies the Cost and Cooldown GameplayEffects.
-        // If an effect to apply on commit is also defined in the SO, it will be applied here too.
-        CommitAbility(actorInfo, spec);
-        
-        // This is an "instant" ability, so we end it immediately after it's done.
-        EndAbility();
-    }
-
-    // This is required by the pooling system. It just needs to return a new instance of itself.
-    public override GameplayAbility CreatePoolableInstance()
-    {
-        return new HealAbility();
-    }
-}
-```
-
-**Step 3.2: The ScriptableObject Factory**
-This class will allow you to create data assets in the Unity Editor.
-
-1.  Inside `_Project/Scripts/Abilities`, create a new C# Script named `HealAbilitySO.cs`.
-2.  Replace its content with this code:
-
-```csharp
-// _Project/Scripts/Abilities/HealAbilitySO.cs
-using UnityEngine;
-using CycloneGames.GameplayAbilities.Runtime;
-
-[CreateAssetMenu(fileName = "GA_Heal", menuName = "Cyclone/Abilities/Heal")]
-public class HealAbilitySO : GameplayAbilitySO
-{
-    // This is the factory method. It bridges the gap between editor data and runtime logic.
-    public override GameplayAbility CreateAbility()
-    {
-        var abilityInstance = new HealAbility();
-        
-        // This call passes all the data configured in the Inspector
-        // to the runtime instance of the ability.
-        abilityInstance.Initialize(
-            AbilityName, 
-            InstancingPolicy, 
-            NetExecutionPolicy, 
-            CostEffect?.CreateGameplayEffect(),
-            CooldownEffect?.CreateGameplayEffect(),
-            AbilityTags,
-            ActivationBlockedTags,
-            ActivationRequiredTags,
-            CancelAbilitiesWithTag,
-            BlockAbilitiesWithTag
-        );
-        
-        return abilityInstance;
-    }
-}
-```
-*Note: The `CostEffect?.CreateGameplayEffect()` part assumes your `GameplayEffectSO` has a method to create a runtime `GameplayEffect` instance. Adjust if your method is named differently.*
-
-### Part 4: Assembling and Configuring in Unity
-
-**Step 4.1: Create the Effect Asset**
-1.  In the Project window, navigate to `_Project/Data/Effects`.
-2.  Right-click > `Create > CycloneGames > GameplayAbilities > GameplayEffect`. Name it `GE_Heal`.
-3.  Select `GE_Heal.asset`. In the Inspector, configure it:
-    *   **Duration Policy:** `Instant`.
-    *   **Modifiers:**
-        *   Click the `+` to add one element.
-        *   **Attribute:** Select `PlayerAttributeSet.Health`.
-        *   **Operation:** `Add`.
-        *   **Magnitude:** Set to `25`.
-
-**Step 4.2: Create the Ability Asset**
-1.  In the Project window, navigate to `_Project/Data/Abilities`.
-2.  Right-click > `Create > Cyclone > Abilities > Heal`. Name it `GA_Heal`.
-3.  Select `GA_Heal.asset`. In the Inspector, configure it:
-    *   **Ability Name:** `Simple Heal`
-    *   **Instancing Policy:** `InstancedPerActor`
-    *   **Ability Tags:**
-        *   Click `+` and add the tag `Ability.Action.Heal`.
-    *   **Commit Gameplay Effects:** (Assuming a list of effects to apply on commit)
-        *   Click `+` and drag the `GE_Heal.asset` into the slot.
-
-**Step 4.3: Build the Player Prefab**
-1.  Create an empty `GameObject` in your scene and name it `Player`.
-2.  Add the following components to it:
-    * `Ability System Component Holder`
-    * `Player Character`
-3.  In the `Player Character` component, drag the `GA_Heal.asset` from your project folder into the `Heal Ability SO` field.
-4.  Drag the `Player` GameObject from the Hierarchy into your `_Project/Prefabs` folder to create a prefab.
-
-**Step 4.4: Test!**
-Run the scene. You won't see attributes in the Inspector because `PlayerAttributeSet` is a pure C# class. To test, you can add a debug log in `PlayerAttributeSet`'s `PreAttributeChange` method to see the value change. Press the `H` key. You should see a "Heal Ability Activated" message in your console.
 
 ## AbilityTask Deep Dive
 
@@ -642,6 +1212,7 @@ Run the scene. You won't see attributes in the Inspector because `PlayerAttribut
 ### Why Use AbilityTasks?
 
 Consider a "Charge Attack" ability:
+
 1. Play charging animation (wait 2 seconds)
 2. Wait for player to confirm target location
 3. Dash to location
@@ -667,7 +1238,7 @@ public override async void ActivateAbility(...)
 
     // Step 3-5: Execute logic with the target data
     DashAndDamage(targetData);
-    
+
     EndAbility();
 }
 ```
@@ -715,10 +1286,10 @@ public class GA_Purify : GameplayAbility
 
         // Create a sphere overlap target actor
         var targetActor = new GameplayAbilityTargetActor_SphereOverlap(radius, requiredTags);
-        
+
         // Create the task that waits for targeting
         var targetTask = AbilityTask_WaitTargetData.WaitTargetData(this, targetActor);
-        
+
         targetTask.OnValidData = (targetData) =>
         {
             // Process each target found
@@ -753,8 +1324,8 @@ public class AbilityTask_WaitForAttributeChange : AbilityTask
     private AbilitySystemComponent targetASC;
 
     public static AbilityTask_WaitForAttributeChange WaitForAttributeChange(
-        GameplayAbility ability, 
-        AbilitySystemComponent target, 
+        GameplayAbility ability,
+        AbilitySystemComponent target,
         GameplayAttribute attribute)
     {
         var task = ability.NewAbilityTask<AbilityTask_WaitForAttributeChange>();
@@ -791,6 +1362,7 @@ public class AbilityTask_WaitForAttributeChange : AbilityTask
 ```
 
 **Usage:**
+
 ```csharp
 var task = AbilityTask_WaitForAttributeChange.WaitForAttributeChange(this, targetASC, targetASC.GetAttribute("Health"));
 task.OnAttributeChanged = (newHealth) =>
@@ -835,6 +1407,7 @@ The `AbilityTask` base class handles pooling automatically. When a task ends, it
 ### Common Patterns
 
 **Pattern 1: Wait for Multiple Conditions**
+
 ```csharp
 var task1 = NewAbilityTask<AbilityTask_WaitDelay>();
 var task2 = NewAbilityTask<AbilityTask_WaitForInput>();
@@ -842,6 +1415,7 @@ var task2 = NewAbilityTask<AbilityTask_WaitForInput>();
 ```
 
 **Pattern 2: Task Chain**
+
 ```csharp
 taskA.OnFinished = () =>
 {
@@ -852,6 +1426,7 @@ taskA.OnFinished = () =>
 ```
 
 **Pattern 3: Timeout**
+
 ```csharp
 var targetTask = NewAbilityTask<AbilityTask_WaitTargetData>();
 var timeoutTask = NewAbilityTask<AbilityTask_WaitDelay>();
@@ -862,10 +1437,6 @@ timeoutTask.OnFinished = () =>
     EndAbility();
 };
 ```
-
-
-
-
 
 ## Targeting System
 
@@ -910,7 +1481,7 @@ public class GameplayAbilityTargetActor_SphereOverlap : ITargetActor
     {
         var casterPosition = (actorInfo.AvatarActor as GameObject).transform.position;
         var hits = Physics.OverlapSphere(casterPosition, radius);
-        
+
         var targetData = new TargetData();
         foreach (var hit in hits)
         {
@@ -921,18 +1492,19 @@ public class GameplayAbilityTargetActor_SphereOverlap : ITargetActor
                 {
                     continue; // Skip targets that don't meet tag requirements
                 }
-                
+
                 targetData.AbilitySystemComponents.Add(holder.AbilitySystemComponent);
                 targetData.HitResults.Add(new RaycastHit()); // Can add actual hit data if needed
             }
         }
-        
+
         onReady?.Invoke(targetData);
     }
 }
 ```
 
 **Usage in Ability:**
+
 ```csharp
 var targetActor = new GameplayAbilityTargetActor_SphereOverlap(5f, GameplayTagContainer.FromTag("Faction.Player"));
 var task = AbilityTask_WaitTargetData.WaitTargetData(this, targetActor);
@@ -951,7 +1523,7 @@ public class GameplayAbilityTargetActor_GroundSelect : MonoBehaviour, ITargetAct
 {
     public float radius = 5f;
     public GameObject visualIndicatorPrefab;
-    
+
     private GameObject indicator;
     private Action<TargetData> onTargetDataReady;
     private bool isActive;
@@ -960,7 +1532,7 @@ public class GameplayAbilityTargetActor_GroundSelect : MonoBehaviour, ITargetAct
     {
         onTargetDataReady = onReady;
         isActive = true;
-        
+
         // Spawn visual indicator
         indicator = Instantiate(visualIndicatorPrefab);
         indicator.transform.localScale = Vector3.one * radius * 2;
@@ -987,10 +1559,10 @@ public class GameplayAbilityTargetActor_GroundSelect : MonoBehaviour, ITargetAct
     public void ConfirmTargeting()
     {
         if (!isActive) return;
-        
+
         var targetData = new TargetData();
         targetData.TargetLocation = indicator.transform.position;
-        
+
         // Find all targets at location
         var hits = Physics.OverlapSphere(indicator.transform.position, radius);
         foreach (var hit in hits)
@@ -1000,7 +1572,7 @@ public class GameplayAbilityTargetActor_GroundSelect : MonoBehaviour, ITargetAct
                 targetData.AbilitySystemComponents.Add(holder.AbilitySystemComponent);
             }
         }
-        
+
         onTargetDataReady?.Invoke(targetData);
         Destroy();
     }
@@ -1033,7 +1605,7 @@ public class GameplayAbilityTargetActor_LineTrace : ITargetActor
     {
         var caster =  (actorInfo.AvatarActor as GameObject);
         var ray = new Ray(caster.transform.position, caster.transform.forward);
-        
+
         if (Physics.Raycast(ray, out RaycastHit hit, maxDistance))
         {
             // Custom filter logic
@@ -1056,6 +1628,7 @@ public class GameplayAbilityTargetActor_LineTrace : ITargetActor
 ```
 
 **Usage:**
+
 ```csharp
 // Only target enemies with low health
 var targetActor = new GameplayAbilityTargetActor_LineTrace(10f, (go) =>
@@ -1081,7 +1654,7 @@ For complex, multi-attribute calculations that go beyond simple modifiers, use `
 | **Predictable** | Yes (client can predict) | No (server-authoritative)                      |
 | **Performance** | Faster                   | Slightly slower                                |
 | **Complexity**  | Low                      | High                                           |
-| **Example**     | Heal for 50 HP           | Damage = AttackPower * 1.5 - Defense * 0.5     |
+| **Example**     | Heal for 50 HP           | Damage = AttackPower _ 1.5 - Defense _ 0.5     |
 
 ### Example: Burn Damage Calculation
 
@@ -1124,6 +1697,7 @@ public class ExecCalc_Burn : GameplayEffectExecutionCalculation
 ```
 
 **Creating the ScriptableObject:**
+
 ```csharp
 [CreateAssetMenu(menuName = "GAS/Execution Calculations/Burn")]
 public class ExecCalcSO_Burn : GameplayEffectExecutionCalculationSO
@@ -1140,6 +1714,7 @@ public class ExecCalcSO_Burn : GameplayEffectExecutionCalculationSO
 In your `GameplayEffectSO`, assign the `ExecCalcSO_Burn` asset to the `Execution` field instead of using simple `Modifiers`.
 
 ### Best Practices
+
 - Use modifiers for straightforward attribute changes
 - Use executions for damage formulas, complex buff scaling, or conditional logic
 - Executions are **not network-predicted**—they always run server-side in multiplayer
@@ -1173,6 +1748,7 @@ In your `GameplayEffectSO`, assign the `ExecCalcSO_Burn` asset to the `Execution
 ### Q: How do I create a damage-over-time (DoT) effect?
 
 Create a `GameplayEffect` with:
+
 - `DurationPolicy = HasDuration` (e.g., 10 seconds)
 - `Period = 1.0f` (damage every 1 second)
 - `Modifiers` targeting Health with negative magnitude
@@ -1182,6 +1758,7 @@ The system automatically applies the modifiers every `Period` seconds for the ef
 ### Q: Why use tags instead of direct component references?
 
 Tags provide **loose coupling**:
+
 - Abilities don't need to know specific enemy types
 - Effects can target "anything with tag X" without hard-coded references
 - Easy to add new content without modifying existing code
@@ -1190,6 +1767,7 @@ Tags provide **loose coupling**:
 ### Q: How do I handle ability cooldowns?
 
 Cooldowns are just `GameplayEffect`s that grant a cooldown tag:
+
 1. Create a `GE_Cooldown_Fireball` effect:
    - `DurationPolicy = HasDuration`, `Duration = 5.0f`
    - `GrantedTags = ["Cooldown.Skill.Fireball"]`
@@ -1208,6 +1786,7 @@ Cooldowns are just `GameplayEffect`s that grant a cooldown tag:
 ### Ability Not Activating
 
 **Checklist:**
+
 - [ ] Is the ability granted? Check `ASC.GetActivatableAbilities()`
 - [ ] Does the ability pass tag requirements? Log `CanActivate()` checks
 - [ ] Is there sufficient resource for cost? Check mana/stamina values
@@ -1219,6 +1798,7 @@ Cooldowns are just `GameplayEffect`s that grant a cooldown tag:
 ### Effect Not Applying
 
 **Checklist:**
+
 - [ ] Does the target meet `ApplicationTagRequirements`?
 - [ ] Is the effect spec created correctly? Verify `GameplayEffectSpec.Create()`
 - [ ] Is the target's ASC initialized?
@@ -1229,7 +1809,8 @@ Cooldowns are just `GameplayEffect`s that grant a cooldown tag:
 ### Tags Not Working as Expected
 
 **Checklist:**
-- [ ] Are tags registered? Call `GameplayTagManager.RequestTag()` early
+
+- [ ] Are tags defined? Tags are automatically registered from JSON files or code attributes, but they must be defined first
 - [ ] Are you checking `CombinedTags` on the ASC (not just `GrantedTags` on a single effect)?
 - [ ] Is the effect active? Check `ActiveGameplayEffects` list
 - [ ] For tag requirements, are you using `RequireTags` vs `IgnoreTags` correctly?
@@ -1239,6 +1820,7 @@ Cooldowns are just `GameplayEffect`s that grant a cooldown tag:
 ### GameplayCue Not Playing
 
 **Checklist:**
+
 - [ ] Is the cue registered with `GameplayCueManager`?
 - [ ] Is `GameplayCueManager.Initialize()` called at game start?
 - [ ] Is the cue tag added to the effect's `GameplayCues` container?
@@ -1253,12 +1835,14 @@ The system is designed for high-performance, zero-GC gameplay. Here are key stra
 ### Object Pooling
 
 Every major object is pooled:
+
 - `GameplayAbilitySpec` - Pooled when abilities are granted/removed
 - `GameplayEffectSpec` - Pooled when effects are created/destroyed
 - `ActiveGameplayEffect` - Pooled during effect lifecycle
 - `AbilityTask` - Pooled during task execution
 
 **You must use the pool APIs:**
+
 ```csharp
 // ✅ GOOD
 var spec = GameplayEffectSpec.Create(effect, source, level); // From pool
@@ -1299,6 +1883,7 @@ public void RemovePoison(AbilitySystemComponent target)
 ### VFX/SFX Pooling
 
 Always use `IGameObjectPoolManager` for cues:
+
 ```csharp
 var vfx = await poolManager.GetAsync(prefabPath, position, rotation); // From pool
 // ... use VFX ...
@@ -1319,18 +1904,18 @@ poolManager.Release(vfx); // Return to pool
 - Use execution calculations sparingly (they're slower than modifiers)
 - Profile regularly—the system is designed for 0GC, verify this in your use case
 
-
 ## Demo Preview
--   DemoLink: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
--   <img src="./Documents~/DemoPreview_2.gif" alt="Demo Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
--   <img src="./Documents~/DemoPreview_1.png" alt="Demo Preview 2" style="width: 100%; height: auto; max-width: 800px;" />
+
+- DemoLink: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
+- <img src="./Documents~/DemoPreview_2.gif" alt="Demo Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
+- <img src="./Documents~/DemoPreview_1.png" alt="Demo Preview 2" style="width: 100%; height: auto; max-width: 800px;" />
 
 ## Dependencies
 
 This package relies on the following external and internal packages:
 
-*   `com.cysharp.unitask`: For asynchronous operations.
-*   `com.cyclone-games.assetmanagement`: For loading assets.
-*   `com.cyclone-games.gameplay-tags`: For the underlying `GameplayTa g` system.
-*   `com.cyclone-games.logger`: For debug logging.
-*   `com.cyclone-games.factory`: For object creation and pooling.
+- `com.cysharp.unitask`: For asynchronous operations.
+- `com.cyclone-games.assetmanagement`: For loading assets.
+- `com.cyclone-games.gameplay-tags`: For the underlying `GameplayTag` system.
+- `com.cyclone-games.logger`: For debug logging.
+- `com.cyclone-games.factory`: For object creation and pooling.
