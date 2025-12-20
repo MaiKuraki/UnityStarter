@@ -23,16 +23,18 @@ Build 模块由几个关键组件组成：
 - **BuildScript**: 完整应用构建管线
 - **HotUpdateBuilder**: 代码和资源的统一热更新工作流
 - **HybridCLR 集成**: C# 代码热更新支持（可选）
+- **Obfuz 集成**: 代码混淆，用于保护您的代码（可选）
 - **YooAsset 集成**: 资源管理和热更新（可选）
 - **Addressables 集成**: Unity 官方资源管理（可选）
 - **Buildalon 集成**: 构建自动化辅助工具（可选）
 
 ### 主要特性
 
-- ✅ **灵活的包支持**: 可与可选包（HybridCLR、YooAsset、Addressables、Buildalon）配合使用，也可不使用
+- ✅ **灵活的包支持**: 可与可选包（HybridCLR、Obfuz、YooAsset、Addressables、Buildalon）配合使用，也可不使用
 - ✅ **自动版本控制**: 基于 Git 的版本生成
 - ✅ **多平台支持**: 支持 Windows、Mac、Android、iOS、WebGL
 - ✅ **热更新就绪**: 代码和资源热更新的完整解决方案
+- ✅ **代码保护**: 集成 Obfuz 混淆以保护您的代码
 - ✅ **CI/CD 友好**: 用于自动化构建的命令行接口
 - ✅ **配置驱动**: 所有设置通过 ScriptableObject 资产
 
@@ -48,6 +50,8 @@ Build 模块由几个关键组件组成：
 Build 系统支持以下可选包。仅安装您需要的包：
 
 - **[HybridCLR](https://github.com/focus-creative-games/hybridclr)** - 用于 C# 代码热更新
+- **[Obfuz](https://github.com/Code-Philosophy/Obfuz)** - 代码混淆，用于保护您的代码
+- **[Obfuz4HybridCLR](https://github.com/Code-Philosophy/Obfuz4HybridCLR)** - Obfuz 的 HybridCLR 热更新程序集扩展
 - **[YooAsset](https://github.com/tuyoogame/YooAsset)** - 轻量级资源管理系统
 - **[Addressables](https://docs.unity3d.com/Packages/com.unity.addressables@latest)** - Unity 官方资源管理（通过 Package Manager）
 - **[Buildalon](https://github.com/virtualmaker/Buildalon)** - 构建自动化辅助工具
@@ -81,6 +85,7 @@ Build 系统支持以下可选包。仅安装您需要的包：
 
 - **Use Buildalon**: 如果已安装 Buildalon 包并想使用其辅助工具，请启用
 - **Use HybridCLR**: 如果已安装 HybridCLR 包并想要代码热更新，请启用
+- **Use Obfuz**: 如果已安装 Obfuz 包并想要代码混淆，请启用（详见下面的 [Obfuz 配置](#obfuz-配置)）
 
 **资源管理系统:**
 
@@ -110,6 +115,19 @@ Build 系统支持以下可选包。仅安装您需要的包：
 2. 选择 **Create > CycloneGames > Build > Addressables Build Config**
 3. 配置 Addressables 特定设置（内容版本、远程目录等）
 
+#### 如果使用 Obfuz
+
+**Obfuz 同时支持 HybridCLR 和非 HybridCLR 项目。** 主要控制开关是 **BuildData.UseObfuz**。
+
+**对于所有项目:**
+1. 在 BuildData 中启用 **Use Obfuz**（这是主要控制开关）
+2. 在 Unity 编辑器中配置 ObfuzSettings（Obfuz 菜单）
+3. 构建管线将在构建期间自动应用混淆
+
+**HybridCLR 项目的额外步骤:**
+- 如果您使用 HybridCLR，也可以在 HybridCLRBuildConfig 中启用 **Enable Obfuz** 以混淆热更新程序集
+- **注意**: BuildData.UseObfuz 优先级更高。如果 BuildData.UseObfuz 已启用，HybridCLRBuildConfig.enableObfuz 会自动被视为已启用
+
 > **注意**: 这些配置资产是可选的。如果未找到它们，系统将使用默认值，但建议创建它们以进行正确配置。
 
 ### 步骤 4: 构建您的项目
@@ -137,7 +155,7 @@ Build 系统支持以下可选包。仅安装您需要的包：
 - **Launch Scene**: 构建的入口点场景
 - **Application Version**: 自动版本控制的版本前缀
 - **Output Base Path**: 构建输出的基础目录
-- **功能标志**: 启用/禁用可选功能（HybridCLR、Buildalon）
+- **功能标志**: 启用/禁用可选功能（HybridCLR、Obfuz、Buildalon）
 - **资源管理选择**: 在 YooAsset、Addressables 或 None 之间选择
 
 **关键点:**
@@ -185,6 +203,8 @@ Build 系统支持以下可选包。仅安装您需要的包：
 Build 系统使用反射来检测和集成可选包：
 
 - **HybridCLR**: 通过 `HybridCLR.Editor.Commands.PrebuildCommand` 类型检测
+- **Obfuz**: 通过 `Obfuz.Settings.ObfuzSettings` 类型检测（基础包）
+- **Obfuz4HybridCLR**: 通过 `Obfuz4HybridCLR.ObfuscateUtil` 类型检测（HybridCLR 扩展）
 - **YooAsset**: 通过 `YooAsset.Editor.AssetBundleBuilder` 类型检测
 - **Addressables**: 通过 `UnityEditor.AddressableAssets.Build` 命名空间检测
 - **Buildalon**: 通过 `VirtualMaker.Buildalon` 命名空间检测
@@ -206,7 +226,8 @@ Build 系统使用反射来检测和集成可选包：
 | Output Base Path      | string     | 输出的基础目录（相对于项目根目录） | ✅ 是 |
 | Use Buildalon         | bool       | 启用 Buildalon 辅助工具            | ❌ 否 |
 | Use HybridCLR         | bool       | 启用 HybridCLR 代码热更新          | ❌ 否 |
-| Asset Management Type | enum       | None / YooAsset / Addressables     | ❌ 否 |
+| Use Obfuz             | bool       | 启用 Obfuz 代码混淆                 | ❌ 否 |
+| Asset Management Type  | enum       | None / YooAsset / Addressables     | ❌ 否 |
 
 **验证:**
 
@@ -270,6 +291,82 @@ YooAsset 配置编辑器提供版本对齐警告：
 
 与 YooAsset 类似，Addressables 配置编辑器提供版本对齐警告和建议。
 
+### Obfuz 配置
+
+**什么是 Obfuz？**
+
+Obfuz 是一个代码混淆工具，通过使代码更难被逆向工程来保护您的 C# 代码。Build 系统集成 Obfuz 以在构建过程中自动混淆您的代码。
+
+**两种操作模式：**
+
+1. **非 HybridCLR 项目**: 使用 Obfuz 的原生构建管线集成。在 BuildData 中启用 **Use Obfuz** 即可激活。
+2. **HybridCLR 项目**: 在编译后混淆热更新程序集，然后重新生成方法桥接和 AOT 泛型引用。在 BuildData 中启用 **Use Obfuz**（也可选择在 HybridCLRBuildConfig 中启用 **Enable Obfuz**）。
+
+**必需的包：**
+
+- **Obfuz**（基础包）- 所有混淆都需要
+- **Obfuz4HybridCLR**（扩展）- 仅 HybridCLR 项目需要
+
+**配置步骤：**
+
+**步骤 1: 安装 Obfuz 包**
+
+通过 Package Manager 或 Git URL 安装：
+- `com.code-philosophy.obfuz`
+- `com.code-philosophy.obfuz4hybridclr`（用于 HybridCLR 项目）
+
+**步骤 2: 在 BuildData 中启用（主要控制）**
+
+1. 选择您的 BuildData 资产
+2. 启用 **Use Obfuz** 复选框
+3. 系统将自动检测 Obfuz 包
+4. **这是主要控制开关** - Obfuz 将根据此设置启用
+
+> **重要**: BuildData.UseObfuz 是主要控制。对于 HybridCLR 项目，如果 BuildData.UseObfuz 已启用，HybridCLRBuildConfig.enableObfuz 会自动被视为已启用。
+
+**步骤 3: 配置 ObfuzSettings（必需）**
+
+1. 在 Unity 编辑器中，转到 **Obfuz** 菜单
+2. 打开 **ObfuzSettings** 窗口
+3. 配置要混淆的程序集：
+   - 将程序集添加到 `assembliesToObfuscate`（对于非 HybridCLR：主程序集；对于 HybridCLR：热更新程序集）
+   - 如果 `Assembly-CSharp` 引用了混淆的程序集（如 Obfuz.Runtime），将其添加到 `NonObfuscatedButReferencingObfuscatedAssemblies`
+4. 保存 ObfuzSettings
+
+> **注意**: Build 系统会自动配置引用列表中的 `Assembly-CSharp`，但您应该在 ObfuzSettings 中验证这一点。
+
+**步骤 4: 对于 HybridCLR 项目（可选的额外控制）**
+
+1. 创建或选择 **HybridCLR Build Config**（如果尚未创建）
+2. 可选择启用 **Enable Obfuz** 复选框（如果 BuildData.UseObfuz 已启用，此选项会自动被视为已启用）
+3. 确保在 ObfuzSettings 中已配置热更新程序集
+
+**构建期间发生的情况：**
+
+**对于非 HybridCLR 项目（当 BuildData.UseObfuz 启用时）：**
+1. 构建预处理器配置 ObfuzSettings
+2. 生成加密 VM 和密钥文件（如需要）
+3. Obfuz 的原生 `ObfuscationProcess` 在构建期间运行
+4. 代码在编译前被混淆
+
+**对于 HybridCLR 项目（当 BuildData.UseObfuz 启用时）：**
+1. 构建预处理器配置 ObfuzSettings
+2. 生成加密 VM 和密钥文件（如需要）
+3. HybridCLR 编译热更新 DLL
+4. **混淆**热更新程序集（使用混淆后的 DLL）
+5. **重新生成**方法桥接和反向 P/Invoke 包装器（使用混淆后的程序集）
+6. **重新生成**AOT 泛型引用（使用混淆后的程序集）
+7. 将混淆后的 DLL 复制到输出目录
+
+> **注意**: 控制优先级为：**BuildData.UseObfuz** > HybridCLRBuildConfig.enableObfuz。如果 BuildData.UseObfuz 已启用，无论 HybridCLRBuildConfig 设置如何，Obfuz 都会工作。
+
+**重要提示：**
+
+- ⚠️ **混淆不可逆**: 始终保留未混淆的备份
+- ⚠️ **充分测试**: 混淆可能会破坏基于反射的代码
+- ✅ **自动前置条件**: Build 系统自动生成加密 VM 和密钥
+- ✅ **HybridCLR 集成**: 混淆后重新生成方法桥接以确保兼容性
+
 ## 构建工作流
 
 ### 完整应用构建
@@ -280,11 +377,12 @@ YooAsset 配置编辑器提供版本对齐警告：
 
 1. 加载 BuildData 配置
 2. 从 Git 生成版本信息
-3. （可选）如果启用，运行 HybridCLR 代码生成
-4. （可选）如果启用资源管理，构建资源包
-5. 构建 Unity 播放器
-6. 将版本信息保存到 `VersionInfoData` 资产
-7. （可选）将资源包复制到输出目录
+3. （可选）如果启用 Obfuz，配置 ObfuzSettings
+4. （可选）如果启用，运行 HybridCLR 代码生成
+5. （可选）如果启用资源管理，构建资源包
+6. 构建 Unity 播放器（对于非 HybridCLR 项目，Obfuz 混淆自动运行）
+7. 将版本信息保存到 `VersionInfoData` 资产
+8. （可选）将资源包复制到输出目录
 
 **菜单项:**
 
@@ -311,9 +409,12 @@ YooAsset 配置编辑器提供版本对齐警告：
 **工作流:**
 
 1. 加载 BuildData
-2. **HybridCLR**: 生成所有代码和元数据（`GenerateAllAndCopy`）
-3. **资源管理**: 构建所有资源包
-4. 输出热更新文件
+2. **Obfuz**: 如果 BuildData.UseObfuz 已启用，生成前置条件（加密 VM、密钥、配置设置）
+3. **HybridCLR**: 生成所有代码和元数据（`GenerateAllAndCopy`）
+4. **Obfuz**: 如果 BuildData.UseObfuz 已启用且使用 HybridCLR，混淆热更新程序集
+5. **Obfuz**: 如果应用了混淆，重新生成方法桥接和 AOT 泛型引用
+6. **资源管理**: 构建所有资源包
+7. 输出热更新文件
 
 **菜单项**: `Build > HotUpdate Pipeline > Full Build (Generate Code + Bundles)`
 
@@ -335,9 +436,12 @@ YooAsset 配置编辑器提供版本对齐警告：
 **工作流:**
 
 1. 加载 BuildData
-2. **HybridCLR**: 仅编译 DLL（`CompileDLLAndCopy`）
-3. **资源管理**: 构建资源包
-4. 输出热更新文件
+2. **Obfuz**: 如果 BuildData.UseObfuz 已启用，生成前置条件（加密 VM、密钥、配置设置）
+3. **HybridCLR**: 仅编译 DLL（`CompileDLLAndCopy`）
+4. **Obfuz**: 如果 BuildData.UseObfuz 已启用且使用 HybridCLR，混淆热更新程序集
+5. **Obfuz**: 如果应用了混淆，重新生成方法桥接和 AOT 泛型引用
+6. **资源管理**: 构建资源包
+7. 输出热更新文件
 
 **菜单项**: `Build > HotUpdate Pipeline > Fast Build (Compile Code + Bundles)`
 
@@ -503,6 +607,31 @@ pipeline {
 2. 或者，如果您不需要，在 BuildData 中禁用 `Use HybridCLR`
 3. 构建将在没有 HybridCLR 功能的情况下继续
 
+### Obfuz 未找到
+
+**警告**: `Obfuz package not found. Skipping obfuscation.`
+
+**解决方案:**
+
+1. 如果您需要代码混淆，请安装 Obfuz 包：
+   - `com.code-philosophy.obfuz`（基础包，必需）
+   - `com.code-philosophy.obfuz4hybridclr`（用于 HybridCLR 项目，必需）
+2. 或者，如果您不需要，在 BuildData 中禁用 `Use Obfuz`
+3. 构建将在没有混淆的情况下继续
+
+### Obfuz 配置问题
+
+**警告**: Obfuz 混淆失败或程序集未配置
+
+**解决方案:**
+
+1. 验证 BuildData 中已启用 **Use Obfuz**（这是主要控制）
+2. 在 Unity 编辑器中打开 **Obfuz > ObfuzSettings**
+3. 验证程序集已添加到 `assembliesToObfuscate`
+4. 如果需要，确保 `Assembly-CSharp` 在 `NonObfuscatedButReferencingObfuscatedAssemblies` 中
+5. 检查是否生成了加密 VM 和密钥文件（Obfuz 菜单）
+6. 对于 HybridCLR: 如果 BuildData.UseObfuz 已启用，HybridCLRBuildConfig.enableObfuz 会自动被视为已启用
+
 ### 资源管理包未找到
 
 **警告**: 未找到资源管理包（YooAsset/Addressables）
@@ -589,6 +718,8 @@ pipeline {
 ## 其他资源
 
 - **HybridCLR 文档**: [HybridCLR GitHub](https://github.com/focus-creative-games/hybridclr)
+- **Obfuz 文档**: [Obfuz GitHub](https://github.com/Code-Philosophy/Obfuz)
+- **Obfuz4HybridCLR 文档**: [Obfuz4HybridCLR GitHub](https://github.com/Code-Philosophy/Obfuz4HybridCLR)
 - **YooAsset 文档**: [YooAsset GitHub](https://github.com/tuyoogame/YooAsset)
 - **Addressables 文档**: [Unity Addressables 手册](https://docs.unity3d.com/Packages/com.unity.addressables@latest)
 - **Buildalon 文档**: [Buildalon GitHub](https://github.com/virtualmaker/Buildalon)
@@ -604,6 +735,7 @@ Assets/Build/
 │   │   ├── BuildScript.cs            # 完整应用构建
 │   │   ├── HotUpdateBuilder.cs       # 热更新管线
 │   │   ├── HybridCLR/                # HybridCLR 集成
+│   │   ├── Obfuz/                    # Obfuz 混淆集成
 │   │   ├── YooAsset/                 # YooAsset 集成
 │   │   ├── Addressables/             # Addressables 集成
 │   │   ├── Buildalon/                # Buildalon 集成

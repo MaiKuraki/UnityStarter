@@ -23,16 +23,18 @@ The Build module consists of several key components:
 - **BuildScript**: Full application build pipeline
 - **HotUpdateBuilder**: Unified hot update workflow for code and assets
 - **HybridCLR Integration**: C# code hot-update support (optional)
+- **Obfuz Integration**: Code obfuscation for protecting your code (optional)
 - **YooAsset Integration**: Asset management and hot-update (optional)
 - **Addressables Integration**: Unity's official asset management (optional)
 - **Buildalon Integration**: Build automation helpers (optional)
 
 ### Key Features
 
-- ✅ **Flexible Package Support**: Works with or without optional packages (HybridCLR, YooAsset, Addressables, Buildalon)
+- ✅ **Flexible Package Support**: Works with or without optional packages (HybridCLR, Obfuz, YooAsset, Addressables, Buildalon)
 - ✅ **Automatic Versioning**: Git-based version generation
 - ✅ **Multi-Platform**: Supports Windows, Mac, Android, iOS, WebGL
 - ✅ **Hot Update Ready**: Complete solution for code and asset hot updates
+- ✅ **Code Protection**: Integrated Obfuz obfuscation for protecting your code
 - ✅ **CI/CD Friendly**: Command-line interface for automated builds
 - ✅ **Configuration-Driven**: All settings via ScriptableObject assets
 
@@ -48,6 +50,8 @@ The Build module consists of several key components:
 The Build system supports the following optional packages. Install only what you need:
 
 - **[HybridCLR](https://github.com/focus-creative-games/hybridclr)** - For C# code hot-updates
+- **[Obfuz](https://github.com/Code-Philosophy/Obfuz)** - Code obfuscation for protecting your code
+- **[Obfuz4HybridCLR](https://github.com/Code-Philosophy/Obfuz4HybridCLR)** - Obfuz extension for HybridCLR hot update assemblies
 - **[YooAsset](https://github.com/tuyoogame/YooAsset)** - Lightweight asset management system
 - **[Addressables](https://docs.unity3d.com/Packages/com.unity.addressables@latest)** - Unity's official asset management (via Package Manager)
 - **[Buildalon](https://github.com/virtualmaker/Buildalon)** - Build automation helpers
@@ -81,6 +85,7 @@ Select the BuildData asset and configure it in the Inspector:
 
 - **Use Buildalon**: Enable if you have Buildalon package installed and want to use its helpers
 - **Use HybridCLR**: Enable if you have HybridCLR package installed and want code hot-updates
+- **Use Obfuz**: Enable if you have Obfuz packages installed and want code obfuscation (see [Obfuz Configuration](#obfuz-configuration) below)
 
 **Asset Management System:**
 
@@ -110,6 +115,19 @@ Depending on your selected options, you may need additional config assets:
 2. Select **Create > CycloneGames > Build > Addressables Build Config**
 3. Configure Addressables-specific settings (content version, remote catalog, etc.)
 
+#### If Using Obfuz
+
+**Obfuz works for both HybridCLR and non-HybridCLR projects.** The primary control is **BuildData.UseObfuz**.
+
+**For All Projects:**
+1. Enable **Use Obfuz** in BuildData (this is the main control switch)
+2. Configure ObfuzSettings in Unity Editor (Obfuz menu)
+3. The build pipeline will automatically apply obfuscation during build
+
+**Additional Step for HybridCLR Projects:**
+- If you're using HybridCLR, you can also enable **Enable Obfuz** in HybridCLRBuildConfig for hot update assembly obfuscation
+- **Note**: BuildData.UseObfuz takes priority. If BuildData.UseObfuz is enabled, HybridCLRBuildConfig.enableObfuz is automatically considered enabled
+
 > **Note**: These config assets are optional. The system will use default values if they're not found, but it's recommended to create them for proper configuration.
 
 ### Step 4: Build Your Project
@@ -137,7 +155,7 @@ Once BuildData is configured, you can build using:
 - **Launch Scene**: Entry point scene for builds
 - **Application Version**: Version prefix for automatic versioning
 - **Output Base Path**: Base directory for build outputs
-- **Feature Flags**: Enable/disable optional features (HybridCLR, Buildalon)
+- **Feature Flags**: Enable/disable optional features (HybridCLR, Obfuz, Buildalon)
 - **Asset Management Selection**: Choose between YooAsset, Addressables, or None
 
 **Key Points:**
@@ -185,6 +203,8 @@ Unified pipeline for hot update builds. Provides two modes:
 The Build system uses reflection to detect and integrate with optional packages:
 
 - **HybridCLR**: Detected via `HybridCLR.Editor.Commands.PrebuildCommand` type
+- **Obfuz**: Detected via `Obfuz.Settings.ObfuzSettings` type (base package)
+- **Obfuz4HybridCLR**: Detected via `Obfuz4HybridCLR.ObfuscateUtil` type (HybridCLR extension)
 - **YooAsset**: Detected via `YooAsset.Editor.AssetBundleBuilder` type
 - **Addressables**: Detected via `UnityEditor.AddressableAssets.Build` namespace
 - **Buildalon**: Detected via `VirtualMaker.Buildalon` namespace
@@ -206,6 +226,7 @@ If a package is not installed, related features are automatically disabled witho
 | Output Base Path      | string     | Base directory for outputs (relative to project root) | ✅ Yes   |
 | Use Buildalon         | bool       | Enable Buildalon helpers                              | ❌ No    |
 | Use HybridCLR         | bool       | Enable HybridCLR code hot-updates                     | ❌ No    |
+| Use Obfuz             | bool       | Enable Obfuz code obfuscation                         | ❌ No    |
 | Asset Management Type | enum       | None / YooAsset / Addressables                        | ❌ No    |
 
 **Validation:**
@@ -270,6 +291,82 @@ The YooAsset config editor provides version alignment warnings:
 
 Similar to YooAsset, the Addressables config editor provides version alignment warnings and suggestions.
 
+### Obfuz Configuration
+
+**What is Obfuz?**
+
+Obfuz is a code obfuscation tool that protects your C# code by making it harder to reverse-engineer. The Build system integrates Obfuz to automatically obfuscate your code during the build process.
+
+**Two Modes of Operation:**
+
+1. **Non-HybridCLR Projects**: Uses Obfuz's native build pipeline integration. Enable **Use Obfuz** in BuildData to activate.
+2. **HybridCLR Projects**: Obfuscates hot update assemblies after compilation, then regenerates method bridges and AOT generic references. Enable **Use Obfuz** in BuildData (and optionally **Enable Obfuz** in HybridCLRBuildConfig).
+
+**Required Packages:**
+
+- **Obfuz** (base package) - Required for all obfuscation
+- **Obfuz4HybridCLR** (extension) - Required only for HybridCLR projects
+
+**Configuration Steps:**
+
+**Step 1: Install Obfuz Packages**
+
+Install via Package Manager or Git URL:
+- `com.code-philosophy.obfuz`
+- `com.code-philosophy.obfuz4hybridclr` (for HybridCLR projects)
+
+**Step 2: Enable in BuildData (Primary Control)**
+
+1. Select your BuildData asset
+2. Enable **Use Obfuz** checkbox
+3. The system will automatically detect Obfuz packages
+4. **This is the main control switch** - Obfuz will be enabled based on this setting
+
+> **Important**: BuildData.UseObfuz is the primary control. For HybridCLR projects, if BuildData.UseObfuz is enabled, HybridCLRBuildConfig.enableObfuz is automatically considered enabled.
+
+**Step 3: Configure ObfuzSettings (Required)**
+
+1. In Unity Editor, go to **Obfuz** menu
+2. Open **ObfuzSettings** window
+3. Configure assemblies to obfuscate:
+   - Add assemblies to `assembliesToObfuscate` (for non-HybridCLR: main assemblies; for HybridCLR: hot update assemblies)
+   - Add `Assembly-CSharp` to `NonObfuscatedButReferencingObfuscatedAssemblies` (if it references obfuscated assemblies)
+4. Save ObfuzSettings
+
+> **Note**: The Build system automatically configures `Assembly-CSharp` in the reference list, but you should verify this in ObfuzSettings.
+
+**Step 4: For HybridCLR Projects (Optional Additional Control)**
+
+1. Create or select **HybridCLR Build Config** (if not already created)
+2. Optionally enable **Enable Obfuz** checkbox (if BuildData.UseObfuz is already enabled, this is automatically considered enabled)
+3. Ensure hot update assemblies are configured in ObfuzSettings
+
+**What Happens During Build:**
+
+**For Non-HybridCLR Projects (when BuildData.UseObfuz is enabled):**
+1. Build preprocessor configures ObfuzSettings
+2. Generates encryption VM and secret key files (if needed)
+3. Obfuz's native `ObfuscationProcess` runs during build
+4. Code is obfuscated before compilation
+
+**For HybridCLR Projects (when BuildData.UseObfuz is enabled):**
+1. Build preprocessor configures ObfuzSettings
+2. Generates encryption VM and secret key files (if needed)
+3. HybridCLR compiles hot update DLLs
+4. **Obfuscates** hot update assemblies using obfuscated DLLs
+5. **Regenerates** method bridge and reverse P/Invoke wrapper using obfuscated assemblies
+6. **Regenerates** AOT generic reference using obfuscated assemblies
+7. Copies obfuscated DLLs to output directory
+
+> **Note**: The control priority is: **BuildData.UseObfuz** > HybridCLRBuildConfig.enableObfuz. If BuildData.UseObfuz is enabled, Obfuz will work regardless of HybridCLRBuildConfig settings.
+
+**Important Notes:**
+
+- ⚠️ **Obfuscation is irreversible**: Always keep unobfuscated backups
+- ⚠️ **Test thoroughly**: Obfuscation can break reflection-based code
+- ✅ **Automatic prerequisites**: Build system generates encryption VM and secret keys automatically
+- ✅ **HybridCLR integration**: Method bridges are regenerated after obfuscation to ensure compatibility
+
 ## Build Workflows
 
 ### Full Application Build
@@ -280,11 +377,12 @@ Similar to YooAsset, the Addressables config editor provides version alignment w
 
 1. Load BuildData configuration
 2. Generate version information from Git
-3. (Optional) Run HybridCLR code generation if enabled
-4. (Optional) Build asset bundles if asset management is enabled
-5. Build Unity player
-6. Save version info to `VersionInfoData` asset
-7. (Optional) Copy asset bundles to output directory
+3. (Optional) Configure ObfuzSettings if Obfuz is enabled
+4. (Optional) Run HybridCLR code generation if enabled
+5. (Optional) Build asset bundles if asset management is enabled
+6. Build Unity player (Obfuz obfuscation runs automatically for non-HybridCLR projects)
+7. Save version info to `VersionInfoData` asset
+8. (Optional) Copy asset bundles to output directory
 
 **Menu Items:**
 
@@ -311,9 +409,12 @@ Similar to YooAsset, the Addressables config editor provides version alignment w
 **Workflow:**
 
 1. Load BuildData
-2. **HybridCLR**: Generate all code and metadata (`GenerateAllAndCopy`)
-3. **Asset Management**: Build all asset bundles
-4. Output hot update files
+2. **Obfuz**: Generate prerequisites (encryption VM, secret key, configure settings) if BuildData.UseObfuz is enabled
+3. **HybridCLR**: Generate all code and metadata (`GenerateAllAndCopy`)
+4. **Obfuz**: Obfuscate hot update assemblies (if BuildData.UseObfuz is enabled and HybridCLR is used)
+5. **Obfuz**: Regenerate method bridges and AOT generic references (if obfuscation was applied)
+6. **Asset Management**: Build all asset bundles
+7. Output hot update files
 
 **Menu Item:** `Build > HotUpdate Pipeline > Full Build (Generate Code + Bundles)`
 
@@ -335,9 +436,12 @@ Similar to YooAsset, the Addressables config editor provides version alignment w
 **Workflow:**
 
 1. Load BuildData
-2. **HybridCLR**: Compile DLLs only (`CompileDLLAndCopy`)
-3. **Asset Management**: Build asset bundles
-4. Output hot update files
+2. **Obfuz**: Generate prerequisites (encryption VM, secret key, configure settings) if BuildData.UseObfuz is enabled
+3. **HybridCLR**: Compile DLLs only (`CompileDLLAndCopy`)
+4. **Obfuz**: Obfuscate hot update assemblies (if BuildData.UseObfuz is enabled and HybridCLR is used)
+5. **Obfuz**: Regenerate method bridges and AOT generic references (if obfuscation was applied)
+6. **Asset Management**: Build asset bundles
+7. Output hot update files
 
 **Menu Item:** `Build > HotUpdate Pipeline > Fast Build (Compile Code + Bundles)`
 
@@ -503,6 +607,31 @@ pipeline {
 2. Or disable `Use HybridCLR` in BuildData if you don't need it
 3. The build will continue without HybridCLR features
 
+### Obfuz Not Found
+
+**Warning**: `Obfuz package not found. Skipping obfuscation.`
+
+**Solution:**
+
+1. Install Obfuz packages if you need code obfuscation:
+   - `com.code-philosophy.obfuz` (base package, required)
+   - `com.code-philosophy.obfuz4hybridclr` (for HybridCLR projects, required)
+2. Or disable `Use Obfuz` in BuildData if you don't need it
+3. The build will continue without obfuscation
+
+### Obfuz Configuration Issues
+
+**Warning**: Obfuz obfuscation failed or assemblies not configured
+
+**Solution:**
+
+1. Verify **Use Obfuz** is enabled in BuildData (this is the primary control)
+2. Open **Obfuz > ObfuzSettings** in Unity Editor
+3. Verify assemblies are added to `assembliesToObfuscate`
+4. Ensure `Assembly-CSharp` is in `NonObfuscatedButReferencingObfuscatedAssemblies` if needed
+5. Check that encryption VM and secret key files are generated (Obfuz menu)
+6. For HybridCLR: If BuildData.UseObfuz is enabled, HybridCLRBuildConfig.enableObfuz is automatically considered enabled
+
 ### Asset Management Package Not Found
 
 **Warning**: Asset management package (YooAsset/Addressables) not found
@@ -589,6 +718,8 @@ pipeline {
 ## Additional Resources
 
 - **HybridCLR Documentation**: [HybridCLR GitHub](https://github.com/focus-creative-games/hybridclr)
+- **Obfuz Documentation**: [Obfuz GitHub](https://github.com/Code-Philosophy/Obfuz)
+- **Obfuz4HybridCLR Documentation**: [Obfuz4HybridCLR GitHub](https://github.com/Code-Philosophy/Obfuz4HybridCLR)
 - **YooAsset Documentation**: [YooAsset GitHub](https://github.com/tuyoogame/YooAsset)
 - **Addressables Documentation**: [Unity Addressables Manual](https://docs.unity3d.com/Packages/com.unity.addressables@latest)
 - **Buildalon Documentation**: [Buildalon GitHub](https://github.com/virtualmaker/Buildalon)
@@ -604,6 +735,7 @@ Assets/Build/
 │   │   ├── BuildScript.cs            # Full app build
 │   │   ├── HotUpdateBuilder.cs       # Hot update pipeline
 │   │   ├── HybridCLR/                # HybridCLR integration
+│   │   ├── Obfuz/                    # Obfuz obfuscation integration
 │   │   ├── YooAsset/                 # YooAsset integration
 │   │   ├── Addressables/             # Addressables integration
 │   │   ├── Buildalon/                # Buildalon integration

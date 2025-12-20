@@ -87,8 +87,8 @@ namespace Build.Pipeline.Editor
                     "The build process will automatically:\n" +
                     "1. Generate encryption VM and secret key files\n" +
                     "2. Configure ObfuzSettings (add Assembly-CSharp to reference list)\n" +
-                    "3. Apply obfuscation to hot update assemblies (if using HybridCLR)\n\n" +
-                    "Note: If using HybridCLR, make sure to also enable Obfuz in HybridCLRBuildConfig.",
+                    "3. Apply obfuscation during build\n\n" +
+                    "Note: This works for both HybridCLR and non-HybridCLR projects. For HybridCLR projects, if this is enabled, HybridCLRBuildConfig.enableObfuz is automatically considered enabled.",
                     MessageType.Info);
             }
             EditorGUILayout.Space(10);
