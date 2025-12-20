@@ -32,7 +32,7 @@ Build 模块由几个关键组件组成：
 
 - ✅ **灵活的包支持**: 可与可选包（HybridCLR、Obfuz、YooAsset、Addressables、Buildalon）配合使用，也可不使用
 - ✅ **自动版本控制**: 基于 Git 的版本生成
-- ✅ **多平台支持**: 支持 Windows、Mac、Android、iOS、WebGL
+- ✅ **多平台支持**: 支持 Windows、Mac、Linux、Android、iOS、WebGL
 - ✅ **热更新就绪**: 代码和资源热更新的完整解决方案
 - ✅ **代码保护**: 集成 Obfuz 混淆以保护您的代码
 - ✅ **CI/CD 友好**: 用于自动化构建的命令行接口
@@ -120,11 +120,13 @@ Build 系统支持以下可选包。仅安装您需要的包：
 **Obfuz 同时支持 HybridCLR 和非 HybridCLR 项目。** 主要控制开关是 **BuildData.UseObfuz**。
 
 **对于所有项目:**
+
 1. 在 BuildData 中启用 **Use Obfuz**（这是主要控制开关）
 2. 在 Unity 编辑器中配置 ObfuzSettings（Obfuz 菜单）
 3. 构建管线将在构建期间自动应用混淆
 
 **HybridCLR 项目的额外步骤:**
+
 - 如果您使用 HybridCLR，也可以在 HybridCLRBuildConfig 中启用 **Enable Obfuz** 以混淆热更新程序集
 - **注意**: BuildData.UseObfuz 优先级更高。如果 BuildData.UseObfuz 已启用，HybridCLRBuildConfig.enableObfuz 会自动被视为已启用
 
@@ -136,10 +138,49 @@ Build 系统支持以下可选包。仅安装您需要的包：
 
 **Unity 编辑器菜单:**
 
+**Release 构建:**
+
 - **Build > Game(Release) > Build Android APK (IL2CPP)**
 - **Build > Game(Release) > Build Windows (IL2CPP)**
 - **Build > Game(Release) > Build Mac (IL2CPP)**
+- **Build > Game(Release) > Build Linux (IL2CPP)**
+- **Build > Game(Release) > Build iOS (IL2CPP)**
 - **Build > Game(Release) > Build WebGL**
+- **Build > Game(Release) > Export Android Project (IL2CPP)**
+
+**Release 快速构建（不清理）:**
+
+- **Build > Game(Release) > Fast > Build Android APK (Fast)**
+- **Build > Game(Release) > Fast > Build Windows (Fast)**
+- **Build > Game(Release) > Fast > Build Mac (Fast)**
+- **Build > Game(Release) > Fast > Build Linux (Fast)**
+- **Build > Game(Release) > Fast > Build iOS (Fast)**
+- **Build > Game(Release) > Fast > Build WebGL (Fast)**
+- **Build > Game(Release) > Fast > Export Android Project (Fast)**
+
+**Debug 构建:**
+
+- **Build > Game(Debug) > Build Android APK (Debug)**
+- **Build > Game(Debug) > Build Windows (Debug)**
+- **Build > Game(Debug) > Build Mac (Debug)**
+- **Build > Game(Debug) > Build Linux (Debug)**
+- **Build > Game(Debug) > Build iOS (Debug)**
+- **Build > Game(Debug) > Build WebGL (Debug)**
+- **Build > Game(Debug) > Export Android Project (Debug)**
+
+**Debug 快速构建（不清理）:**
+
+- **Build > Game(Debug) > Fast > Build Android APK (Debug Fast)**
+- **Build > Game(Debug) > Fast > Build Windows (Debug Fast)**
+- **Build > Game(Debug) > Fast > Build Mac (Debug Fast)**
+- **Build > Game(Debug) > Fast > Build Linux (Debug Fast)**
+- **Build > Game(Debug) > Fast > Build iOS (Debug Fast)**
+- **Build > Game(Debug) > Fast > Build WebGL (Debug Fast)**
+- **Build > Game(Debug) > Fast > Export Android Project (Debug Fast)**
+
+**调试信息:**
+
+- **Build > Print Debug Info** - 打印当前构建配置详情
 
 **或使用热更新管线:**
 
@@ -180,12 +221,14 @@ Build 系统支持以下可选包。仅安装您需要的包：
 
 用于完整应用构建的主构建脚本。处理：
 
-- 多平台构建（Windows、Mac、Android、WebGL）
+- 多平台构建（Windows、Mac、Linux、Android、iOS、WebGL）
 - 自动版本控制
 - 可选的 HybridCLR 代码生成
 - 可选的资源包构建（YooAsset/Addressables）
-- 清理构建选项
+- 清理构建选项（完整构建）和快速构建选项（不清理）
+- Debug 构建选项（支持开发模式和 Profiler）
 - 调试文件管理
+- 构建配置调试信息（Print Debug Info）
 
 #### HotUpdateBuilder
 
@@ -226,8 +269,8 @@ Build 系统使用反射来检测和集成可选包：
 | Output Base Path      | string     | 输出的基础目录（相对于项目根目录） | ✅ 是 |
 | Use Buildalon         | bool       | 启用 Buildalon 辅助工具            | ❌ 否 |
 | Use HybridCLR         | bool       | 启用 HybridCLR 代码热更新          | ❌ 否 |
-| Use Obfuz             | bool       | 启用 Obfuz 代码混淆                 | ❌ 否 |
-| Asset Management Type  | enum       | None / YooAsset / Addressables     | ❌ 否 |
+| Use Obfuz             | bool       | 启用 Obfuz 代码混淆                | ❌ 否 |
+| Asset Management Type | enum       | None / YooAsset / Addressables     | ❌ 否 |
 
 **验证:**
 
@@ -312,6 +355,7 @@ Obfuz 是一个代码混淆工具，通过使代码更难被逆向工程来保�
 **步骤 1: 安装 Obfuz 包**
 
 通过 Package Manager 或 Git URL 安装：
+
 - `com.code-philosophy.obfuz`
 - `com.code-philosophy.obfuz4hybridclr`（用于 HybridCLR 项目）
 
@@ -344,12 +388,14 @@ Obfuz 是一个代码混淆工具，通过使代码更难被逆向工程来保�
 **构建期间发生的情况：**
 
 **对于非 HybridCLR 项目（当 BuildData.UseObfuz 启用时）：**
+
 1. 构建预处理器配置 ObfuzSettings
 2. 生成加密 VM 和密钥文件（如需要）
 3. Obfuz 的原生 `ObfuscationProcess` 在构建期间运行
 4. 代码在编译前被混淆
 
 **对于 HybridCLR 项目（当 BuildData.UseObfuz 启用时）：**
+
 1. 构建预处理器配置 ObfuzSettings
 2. 生成加密 VM 和密钥文件（如需要）
 3. HybridCLR 编译热更新 DLL
@@ -386,10 +432,27 @@ Obfuz 是一个代码混淆工具，通过使代码更难被逆向工程来保�
 
 **菜单项:**
 
+**Release 构建:**
+
 - `Build > Game(Release) > Build Android APK (IL2CPP)`
 - `Build > Game(Release) > Build Windows (IL2CPP)`
 - `Build > Game(Release) > Build Mac (IL2CPP)`
+- `Build > Game(Release) > Build Linux (IL2CPP)`
+- `Build > Game(Release) > Build iOS (IL2CPP)`
 - `Build > Game(Release) > Build WebGL`
+- `Build > Game(Release) > Export Android Project (IL2CPP)`
+
+**Release 快速构建:**
+
+- `Build > Game(Release) > Fast > Build [平台] (Fast)` - 跳过清理构建以加快迭代速度
+
+**Debug 构建:**
+
+- `Build > Game(Debug) > Build [平台] (Debug)` - 包含开发模式、调试符号和 Profiler 支持
+
+**Debug 快速构建:**
+
+- `Build > Game(Debug) > Fast > Build [平台] (Debug Fast)` - 不清理的 Debug 构建
 
 **输出:**
 
@@ -450,6 +513,31 @@ Obfuz 是一个代码混淆工具，通过使代码更难被逆向工程来保�
 - 编译的 HybridCLR DLL
 - 更新的资源包
 
+### 构建配置调试信息
+
+**目的**: 打印详细的构建配置信息，用于故障排查和验证
+
+**菜单项**: `Build > Print Debug Info`
+
+**显示的信息:**
+
+- **基本构建配置**: 应用版本、输出基础路径、当前构建目标
+- **场景配置**: 构建场景列表
+- **Buildalon 配置**: 是否启用 Buildalon
+- **HybridCLR 配置**: HybridCLR 状态、配置资产可用性、AOT DLL 输出目录
+- **Obfuz 配置**: Obfuz 状态、包可用性（基础和 HybridCLR 扩展）、有效的混淆状态
+- **资源管理配置**: 选择的资源管理系统（YooAsset/Addressables/None）和配置资产可用性
+- **版本控制配置**: 版本控制类型、提交哈希、提交计数、完整构建版本
+- **构建目标配置**: 当前构建目标、脚本后端、API 兼容性级别
+
+**使用场景:**
+
+- 构建前验证构建配置
+- 排查缺失的配置资产
+- 检查包可用性
+- 验证功能启用状态
+- 调试配置不匹配问题
+
 ### 独立构建操作
 
 您也可以运行单独的构建操作：
@@ -496,15 +584,15 @@ Build 系统为 CI/CD 集成提供命令行接口。
 
 **参数:**
 
-| 参数                 | 类型        | 描述                                        | 必需  |
-| -------------------- | ----------- | ------------------------------------------- | ----- |
-| `-buildTarget`       | BuildTarget | 目标平台（Android、StandaloneWindows64 等） | ✅ 是 |
-| `-output`            | string      | 输出路径（相对于项目根目录）                | ✅ 是 |
-| `-clean`             | flag        | 清理构建（删除之前的构建）                  | ❌ 否 |
-| `-buildHybridCLR`    | flag        | 运行 HybridCLR 生成                         | ❌ 否 |
-| `-buildYooAsset`     | flag        | 构建 YooAsset 包                            | ❌ 否 |
-| `-buildAddressables` | flag        | 构建 Addressables 内容                      | ❌ 否 |
-| `-version`           | string      | 覆盖版本（默认：来自 Git）                  | ❌ 否 |
+| 参数                 | 类型        | 描述                                                                                   | 必需  |
+| -------------------- | ----------- | -------------------------------------------------------------------------------------- | ----- |
+| `-buildTarget`       | BuildTarget | 目标平台（Android、StandaloneWindows64、StandaloneOSX、StandaloneLinux64、iOS、WebGL） | ✅ 是 |
+| `-output`            | string      | 输出路径（相对于项目根目录）                                                           | ✅ 是 |
+| `-clean`             | flag        | 清理构建（删除之前的构建）                                                             | ❌ 否 |
+| `-buildHybridCLR`    | flag        | 运行 HybridCLR 生成                                                                    | ❌ 否 |
+| `-buildYooAsset`     | flag        | 构建 YooAsset 包                                                                       | ❌ 否 |
+| `-buildAddressables` | flag        | 构建 Addressables 内容                                                                 | ❌ 否 |
+| `-version`           | string      | 覆盖版本（默认：来自 Git）                                                             | ❌ 否 |
 
 **热更新构建:**
 
