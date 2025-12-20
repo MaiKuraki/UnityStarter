@@ -15,9 +15,26 @@ namespace Build.Pipeline.Editor
         private const string DEBUG_FLAG = "<color=cyan>[Obfuz]</color>";
 
         /// <summary>
-        /// Checks if Obfuz packages are available in the project.
+        /// Checks if base Obfuz package is available (works for both HybridCLR and non-HybridCLR projects).
         /// </summary>
-        public static bool IsAvailable()
+        public static bool IsBaseObfuzAvailable()
+        {
+            try
+            {
+                Type obfuzSettingsType = ReflectionCache.GetType("Obfuz.Settings.ObfuzSettings");
+                return obfuzSettingsType != null;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to check base Obfuz availability: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Checks if Obfuz4HybridCLR packages are available (for HybridCLR-specific features).
+        /// </summary>
+        public static bool IsHybridCLRObfuzAvailable()
         {
             try
             {
@@ -27,9 +44,17 @@ namespace Build.Pipeline.Editor
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Failed to check Obfuz availability: {ex.Message}");
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to check Obfuz4HybridCLR availability: {ex.Message}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Checks if Obfuz packages are available in the project (checks HybridCLR extension by default for backward compatibility).
+        /// </summary>
+        public static bool IsAvailable()
+        {
+            return IsHybridCLRObfuzAvailable();
         }
 
         /// <summary>
@@ -38,9 +63,9 @@ namespace Build.Pipeline.Editor
         /// </summary>
         public static void GenerateEncryptionVM()
         {
-            if (!IsAvailable())
+            if (!IsBaseObfuzAvailable())
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Obfuz packages not found. Skipping encryption VM generation.");
+                Debug.LogWarning($"{DEBUG_FLAG} Base Obfuz package not found. Skipping encryption VM generation.");
                 return;
             }
 
@@ -69,9 +94,9 @@ namespace Build.Pipeline.Editor
         /// </summary>
         public static void GenerateSecretKeyFile()
         {
-            if (!IsAvailable())
+            if (!IsBaseObfuzAvailable())
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Obfuz packages not found. Skipping secret key file generation.");
+                Debug.LogWarning($"{DEBUG_FLAG} Base Obfuz package not found. Skipping secret key file generation.");
                 return;
             }
 
@@ -100,7 +125,7 @@ namespace Build.Pipeline.Editor
         /// </summary>
         public static void ConfigureObfuzSettings()
         {
-            if (!IsAvailable())
+            if (!IsBaseObfuzAvailable())
             {
                 return;
             }
@@ -114,7 +139,6 @@ namespace Build.Pipeline.Editor
                     return;
                 }
 
-                // Get Instance property
                 PropertyInfo instanceProperty = ReflectionCache.GetProperty(obfuzSettingsType, "Instance", BindingFlags.Public | BindingFlags.Static);
                 if (instanceProperty == null)
                 {
@@ -173,6 +197,8 @@ namespace Build.Pipeline.Editor
                     Debug.Log($"{DEBUG_FLAG} '{assemblyCSharp}' already in NonObfuscatedButReferencingObfuscatedAssemblies.");
                 }
 
+                LogObfuscatedAssemblies(assemblySettings, assemblySettingsType);
+
                 // Always save to ensure settings are persisted (even if Assembly-CSharp was already present)
                 // This is important because the settings might have been modified in memory but not saved
                 MethodInfo saveMethod = ReflectionCache.GetMethod(obfuzSettingsType, "Save", BindingFlags.Public | BindingFlags.Static);
@@ -207,11 +233,75 @@ namespace Build.Pipeline.Editor
         }
 
         /// <summary>
+        /// Logs the list of assemblies that will be obfuscated.
+        /// </summary>
+        private static void LogObfuscatedAssemblies(object assemblySettings, Type assemblySettingsType)
+        {
+            try
+            {
+                // Try to get assembliesToObfuscate field
+                FieldInfo assembliesToObfuscateField = ReflectionCache.GetField(assemblySettingsType, "assembliesToObfuscate", BindingFlags.Public | BindingFlags.Instance);
+                if (assembliesToObfuscateField == null)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} AssemblySettings.assembliesToObfuscate field not found.");
+                    return;
+                }
+
+                string[] assembliesToObfuscate = assembliesToObfuscateField.GetValue(assemblySettings) as string[];
+
+                // Try to call GetAssembliesToObfuscate() method to get the complete list (including Obfuz.Runtime if enabled)
+                MethodInfo getAssembliesMethod = ReflectionCache.GetMethod(assemblySettingsType, "GetAssembliesToObfuscate", BindingFlags.Public | BindingFlags.Instance);
+                List<string> completeList = null;
+
+                if (getAssembliesMethod != null)
+                {
+                    try
+                    {
+                        object result = getAssembliesMethod.Invoke(assemblySettings, null);
+                        completeList = result as List<string>;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning($"{DEBUG_FLAG} Failed to call GetAssembliesToObfuscate(): {ex.Message}");
+                    }
+                }
+
+                // Log the assemblies that will be obfuscated
+                if (completeList != null && completeList.Count > 0)
+                {
+                    Debug.Log($"{DEBUG_FLAG} === Assemblies to be obfuscated ({completeList.Count}) ===");
+                    for (int i = 0; i < completeList.Count; i++)
+                    {
+                        Debug.Log($"{DEBUG_FLAG}   [{i + 1}] {completeList[i]}");
+                    }
+                    Debug.Log($"{DEBUG_FLAG} =============================================");
+                }
+                else if (assembliesToObfuscate != null && assembliesToObfuscate.Length > 0)
+                {
+                    Debug.Log($"{DEBUG_FLAG} === Assemblies to be obfuscated ({assembliesToObfuscate.Length}) ===");
+                    for (int i = 0; i < assembliesToObfuscate.Length; i++)
+                    {
+                        Debug.Log($"{DEBUG_FLAG}   [{i + 1}] {assembliesToObfuscate[i]}");
+                    }
+                    Debug.Log($"{DEBUG_FLAG} =============================================");
+                }
+                else
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} No assemblies configured for obfuscation. Please configure assembliesToObfuscate in ObfuzSettings.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to log obfuscated assemblies: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Saves ObfuzSettings to disk without clearing the instance.
         /// </summary>
         public static void SaveObfuzSettings()
         {
-            if (!IsAvailable())
+            if (!IsBaseObfuzAvailable())
             {
                 return;
             }
@@ -245,7 +335,7 @@ namespace Build.Pipeline.Editor
         /// </summary>
         public static void ForceReloadObfuzSettings()
         {
-            if (!IsAvailable())
+            if (!IsBaseObfuzAvailable())
             {
                 return;
             }
@@ -278,7 +368,7 @@ namespace Build.Pipeline.Editor
         /// </summary>
         public static void EnsureObfuzPrerequisites()
         {
-            if (!IsAvailable())
+            if (!IsBaseObfuzAvailable())
             {
                 return;
             }
@@ -290,13 +380,111 @@ namespace Build.Pipeline.Editor
         }
 
         /// <summary>
+        /// Sets Obfuz build pipeline settings enable state.
+        /// </summary>
+        private static void SetObfuzBuildPipelineEnabled(bool enabled)
+        {
+            if (!IsBaseObfuzAvailable())
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Base Obfuz package not found. Cannot set build pipeline state.");
+                return;
+            }
+
+            try
+            {
+                Type obfuzSettingsType = ReflectionCache.GetType("Obfuz.Settings.ObfuzSettings");
+                if (obfuzSettingsType == null)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} ObfuzSettings type not found.");
+                    return;
+                }
+
+                PropertyInfo instanceProperty = ReflectionCache.GetProperty(obfuzSettingsType, "Instance", BindingFlags.Public | BindingFlags.Static);
+                if (instanceProperty == null)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} ObfuzSettings.Instance property not found.");
+                    return;
+                }
+
+                object obfuzSettingsInstance = instanceProperty.GetValue(null);
+                if (obfuzSettingsInstance == null)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} ObfuzSettings.Instance is null.");
+                    return;
+                }
+
+                FieldInfo buildPipelineSettingsField = ReflectionCache.GetField(obfuzSettingsType, "buildPipelineSettings", BindingFlags.Public | BindingFlags.Instance);
+                if (buildPipelineSettingsField == null)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} ObfuzSettings.buildPipelineSettings field not found.");
+                    return;
+                }
+
+                object buildPipelineSettings = buildPipelineSettingsField.GetValue(obfuzSettingsInstance);
+                if (buildPipelineSettings == null)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} ObfuzSettings.buildPipelineSettings is null.");
+                    return;
+                }
+
+                Type buildPipelineSettingsType = ReflectionCache.GetType("Obfuz.Settings.BuildPipelineSettings");
+                if (buildPipelineSettingsType == null)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} BuildPipelineSettings type not found.");
+                    return;
+                }
+
+                FieldInfo enableField = ReflectionCache.GetField(buildPipelineSettingsType, "enable", BindingFlags.Public | BindingFlags.Instance);
+                if (enableField == null)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} BuildPipelineSettings.enable field not found.");
+                    return;
+                }
+
+                bool currentEnable = (bool)enableField.GetValue(buildPipelineSettings);
+                if (currentEnable != enabled)
+                {
+                    enableField.SetValue(buildPipelineSettings, enabled);
+                    Debug.Log($"{DEBUG_FLAG} Obfuz build pipeline settings {(enabled ? "enabled" : "disabled")}.");
+                }
+                else
+                {
+                    Debug.Log($"{DEBUG_FLAG} Obfuz build pipeline settings already {(enabled ? "enabled" : "disabled")}.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"{DEBUG_FLAG} Failed to set Obfuz build pipeline state: {ex.Message}\n{ex.StackTrace}");
+            }
+        }
+
+        /// <summary>
+        /// Enables Obfuz build pipeline settings for non-HybridCLR projects.
+        /// This ensures Obfuz's native ObfuscationProcess will run during build.
+        /// </summary>
+        public static void EnableObfuzBuildPipeline()
+        {
+            SetObfuzBuildPipelineEnabled(true);
+        }
+
+        /// <summary>
+        /// Disables Obfuz build pipeline settings.
+        /// This ensures Obfuz's native ObfuscationProcess will be skipped during build.
+        /// </summary>
+        public static void DisableObfuzBuildPipeline()
+        {
+            SetObfuzBuildPipelineEnabled(false);
+        }
+
+        /// <summary>
         /// Obfuscates hot update assemblies for the given build target.
+        /// This method is for HybridCLR-specific obfuscation flow.
         /// </summary>
         public static void ObfuscateHotUpdateAssemblies(BuildTarget target, string outputDir)
         {
-            if (!IsAvailable())
+            if (!IsHybridCLRObfuzAvailable())
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Obfuz packages not found. Skipping obfuscation.");
+                Debug.LogWarning($"{DEBUG_FLAG} Obfuz4HybridCLR packages not found. Skipping hot update assembly obfuscation.");
                 return;
             }
 
@@ -339,9 +527,9 @@ namespace Build.Pipeline.Editor
         /// </summary>
         public static void GenerateMethodBridgeAndReversePInvokeWrapper(BuildTarget target, string obfuscatedHotUpdateDllPath)
         {
-            if (!IsAvailable())
+            if (!IsHybridCLRObfuzAvailable())
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Obfuz packages not found. Skipping method bridge generation.");
+                Debug.LogWarning($"{DEBUG_FLAG} Obfuz4HybridCLR packages not found. Skipping method bridge generation.");
                 return;
             }
 
@@ -384,9 +572,9 @@ namespace Build.Pipeline.Editor
         /// </summary>
         public static void GenerateAOTGenericReference(BuildTarget target, string obfuscatedHotUpdateDllPath)
         {
-            if (!IsAvailable())
+            if (!IsHybridCLRObfuzAvailable())
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Obfuz packages not found. Skipping AOT generic reference generation.");
+                Debug.LogWarning($"{DEBUG_FLAG} Obfuz4HybridCLR packages not found. Skipping AOT generic reference generation.");
                 return;
             }
 
@@ -428,9 +616,9 @@ namespace Build.Pipeline.Editor
         /// </summary>
         public static string GetObfuscatedHotUpdateAssemblyOutputPath(BuildTarget target)
         {
-            if (!IsAvailable())
+            if (!IsHybridCLRObfuzAvailable())
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Obfuz packages not found. Cannot get obfuscated output path.");
+                Debug.LogWarning($"{DEBUG_FLAG} Obfuz4HybridCLR packages not found. Cannot get obfuscated output path.");
                 return null;
             }
 
