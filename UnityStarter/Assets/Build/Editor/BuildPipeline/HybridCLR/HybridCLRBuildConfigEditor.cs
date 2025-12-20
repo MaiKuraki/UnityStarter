@@ -9,6 +9,8 @@ namespace Build.Pipeline.Editor
     {
         private SerializedProperty hotUpdateAssemblies;
         private SerializedProperty hotUpdateDllOutputDirectory;
+        private SerializedProperty enableObfuz;
+        private SerializedProperty aotDllOutputDirectory;
 
         private bool hasValidationErrors = false;
 
@@ -16,6 +18,8 @@ namespace Build.Pipeline.Editor
         {
             hotUpdateAssemblies = serializedObject.FindProperty("hotUpdateAssemblies");
             hotUpdateDllOutputDirectory = serializedObject.FindProperty("hotUpdateDllOutputDirectory");
+            enableObfuz = serializedObject.FindProperty("enableObfuz");
+            aotDllOutputDirectory = serializedObject.FindProperty("aotDllOutputDirectory");
         }
 
         public override void OnInspectorGUI()
@@ -34,11 +38,42 @@ namespace Build.Pipeline.Editor
 
             // Output Settings
             EditorGUILayout.LabelField("Output Settings", EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(hotUpdateDllOutputDirectory);
-            ValidateOutputDirectory();
+
+            // Hot Update DLL Output Directory (drag & drop folder)
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Hot Update DLL Output Directory", GUILayout.Width(200));
+            EditorGUILayout.PropertyField(hotUpdateDllOutputDirectory, GUIContent.none);
+            EditorGUILayout.EndHorizontal();
+            ValidateHotUpdateDllOutputDirectory();
+            EditorGUILayout.Space(5);
+
+            // AOT DLL Output Settings
+            EditorGUILayout.LabelField("AOT DLL Output Settings", EditorStyles.boldLabel);
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("AOT DLL Output Directory", GUILayout.Width(200));
+            EditorGUILayout.PropertyField(aotDllOutputDirectory, GUIContent.none);
+            EditorGUILayout.EndHorizontal();
+            ValidateAOTDllOutputDirectory();
             EditorGUILayout.Space(10);
 
-            // Show validation summary at the end if there are errors
+            // Obfuz Settings
+            EditorGUILayout.LabelField("Obfuz Settings", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(enableObfuz);
+            if (enableObfuz.boolValue)
+            {
+                DrawHelpBox(
+                    "ℹ Obfuz is enabled. Hot update assemblies will be obfuscated before being copied to the output directory.\n\n" +
+                    "When obfuscation is enabled, the build process will:\n" +
+                    "1. Generate encryption VM and secret key files\n" +
+                    "2. Configure ObfuzSettings (add Assembly-CSharp to reference list)\n" +
+                    "3. Compile hot update assemblies\n" +
+                    "4. Apply obfuscation to the assemblies\n" +
+                    "5. Copy obfuscated assemblies to the output directory\n\n" +
+                    "Note: AOT DLLs are still needed and will be copied if AOT DLL Output Directory is configured.",
+                    MessageType.Info);
+            }
+            EditorGUILayout.Space(10);
+
             if (hasValidationErrors)
             {
                 EditorGUILayout.Space(5);
@@ -98,156 +133,185 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        private void ValidateOutputDirectory()
+        private void ValidateHotUpdateDllOutputDirectory()
         {
-            string path = hotUpdateDllOutputDirectory.stringValue;
-            if (string.IsNullOrWhiteSpace(path))
+            if (hotUpdateDllOutputDirectory.objectReferenceValue == null)
             {
                 hasValidationErrors = true;
                 DrawHelpBox(
-                    "❌ Output Directory is required!\n\n" +
-                    "How to fill:\n" +
-                    "Enter a path relative to your project root, starting with 'Assets/'.\n\n" +
-                    "Correct Examples:\n" +
+                    "❌ Hot Update DLL Output Directory is required!\n\n" +
+                    "How to fix:\n" +
+                    "1. Drag a folder from your project (e.g., Assets/HotUpdateDLL) into the field above\n" +
+                    "2. The folder must be within the Assets directory\n" +
+                    "3. The directory will be created automatically if it doesn't exist\n\n" +
+                    "Example folders:\n" +
                     "• Assets/HotUpdateDLL\n" +
                     "• Assets/StreamingAssets/HotUpdateDLL\n" +
-                    "• Assets/Game/HotUpdate/Assemblies\n\n" +
-                    "The directory will be created automatically if it doesn't exist.",
+                    "• Assets/Game/HotUpdate/Assemblies",
                     MessageType.Error);
                 return;
             }
 
-            string trimmedPath = path.Trim();
-            if (trimmedPath.Length == 0)
+            string path = AssetDatabase.GetAssetPath(hotUpdateDllOutputDirectory.objectReferenceValue);
+            if (string.IsNullOrEmpty(path))
             {
                 hasValidationErrors = true;
                 DrawHelpBox(
-                    "❌ Output Directory cannot be empty!\n\n" +
-                    "How to fill:\n" +
-                    "Enter a valid directory path starting with 'Assets/'.\n\n" +
-                    "Correct Examples:\n" +
-                    "• Assets/HotUpdateDLL\n" +
-                    "• Assets/StreamingAssets/HotUpdateDLL",
+                    "❌ Invalid folder reference!\n\n" +
+                    "Please drag a valid folder from your project into the field above.",
+                    MessageType.Error);
+                return;
+            }
+
+            // Validate it's a folder (not a file)
+            if (!AssetDatabase.IsValidFolder(path))
+            {
+                hasValidationErrors = true;
+                DrawHelpBox(
+                    "❌ Selected asset is not a folder!\n\n" +
+                    "Please drag a folder (not a file) from your project into the field above.",
                     MessageType.Error);
                 return;
             }
 
             // Validate path format
-            if (!trimmedPath.StartsWith("Assets/") && !trimmedPath.StartsWith("Assets\\"))
+            if (!path.StartsWith("Assets/") && !path.StartsWith("Assets\\"))
             {
                 hasValidationErrors = true;
                 DrawHelpBox(
                     "❌ Output Directory must be within the Assets folder!\n\n" +
-                    "Current value: " + trimmedPath + "\n\n" +
+                    "Current value: " + path + "\n\n" +
                     "How to fix:\n" +
-                    "The path must start with 'Assets/' (case-sensitive).\n\n" +
+                    "The folder must be within the Assets directory.\n\n" +
                     "Correct Examples:\n" +
                     "• Assets/HotUpdateDLL\n" +
-                    "• Assets/StreamingAssets/HotUpdateDLL\n" +
-                    "• Assets/Game/HotUpdate/Assemblies\n\n" +
-                    "Incorrect Examples:\n" +
-                    "• HotUpdateDLL (missing 'Assets/' prefix)\n" +
-                    "• assets/HotUpdateDLL (wrong case, should be 'Assets')\n" +
-                    "• Assets\\HotUpdateDLL (use forward slash '/' instead of backslash)",
-                    MessageType.Error);
-                return;
-            }
-
-            // Check for invalid characters
-            char[] invalidChars = Path.GetInvalidPathChars();
-            bool hasInvalidChar = false;
-            char invalidChar = '\0';
-            foreach (char c in invalidChars)
-            {
-                if (trimmedPath.Contains(c))
-                {
-                    hasInvalidChar = true;
-                    invalidChar = c;
-                    break;
-                }
-            }
-
-            if (hasInvalidChar)
-            {
-                hasValidationErrors = true;
-                string charDisplay = invalidChar == '\0' ? "null" : $"'{invalidChar}'";
-                DrawHelpBox(
-                    $"❌ Output Directory contains invalid character: {charDisplay}\n\n" +
-                    "How to fix:\n" +
-                    "Remove all invalid characters from the path. Use only letters, numbers, underscores, hyphens, and forward slashes.\n\n" +
-                    "Correct Examples:\n" +
-                    "• Assets/HotUpdateDLL\n" +
-                    "• Assets/HotUpdate_DLL\n" +
-                    "• Assets/HotUpdate-DLL\n\n" +
-                    "Invalid Characters:\n" +
-                    "• < > : \" | ? * and other special characters",
-                    MessageType.Error);
-                return;
-            }
-
-            // Check for relative path issues
-            if (trimmedPath.Contains(".."))
-            {
-                DrawHelpBox(
-                    "⚠ Warning: Output path contains '..' which may cause issues.\n\n" +
-                    "Current value: " + trimmedPath + "\n\n" +
-                    "How to fix:\n" +
-                    "Use a direct path relative to the Assets folder instead of using '..'.\n\n" +
-                    "Correct Examples:\n" +
-                    "• Assets/HotUpdateDLL (instead of Assets/../HotUpdateDLL)\n" +
                     "• Assets/StreamingAssets/HotUpdateDLL",
-                    MessageType.Warning);
+                    MessageType.Error);
+                return;
             }
 
-            // Check if directory exists or can be created
-            string fullPath = GetFullOutputPath();
+            // Show success message
+            string fullPath = GetFullHotUpdateDllOutputPath();
             if (!string.IsNullOrEmpty(fullPath))
             {
                 if (Directory.Exists(fullPath))
                 {
                     DrawHelpBox(
-                        $"✓ Output directory exists and is ready to use.\n\n" +
+                        $"✓ Hot Update DLL output directory is ready.\n\n" +
+                        $"Path: {path}\n" +
                         $"Full Path:\n{fullPath}\n\n" +
                         "The hot update DLLs will be copied to this directory during build.",
                         MessageType.Info);
                 }
                 else
                 {
-                    // Check if parent directory exists
-                    string parentDir = Path.GetDirectoryName(fullPath);
-                    if (Directory.Exists(parentDir))
-                    {
-                        DrawHelpBox(
-                            $"ℹ Output directory will be created automatically during build.\n\n" +
-                            $"Full Path:\n{fullPath}\n\n" +
-                            "The directory doesn't exist yet, but it will be created when you build.",
-                            MessageType.Info);
-                    }
-                    else
-                    {
-                        DrawHelpBox(
-                            $"⚠ Warning: Parent directory does not exist.\n\n" +
-                            $"Full Path:\n{fullPath}\n\n" +
-                            "How to fix:\n" +
-                            "Ensure the parent path is valid. The directory will be created during build, but make sure the path structure is correct.\n\n" +
-                            "Example:\n" +
-                            "If you entered 'Assets/Game/HotUpdateDLL', make sure 'Assets/Game' exists or can be created.",
-                            MessageType.Warning);
-                    }
+                    DrawHelpBox(
+                        $"ℹ Hot Update DLL output directory will be created during build.\n\n" +
+                        $"Path: {path}\n" +
+                        $"Full Path:\n{fullPath}",
+                        MessageType.Info);
                 }
             }
         }
 
-        private string GetFullOutputPath()
+        private void ValidateAOTDllOutputDirectory()
         {
-            if (hotUpdateDllOutputDirectory == null || string.IsNullOrEmpty(hotUpdateDllOutputDirectory.stringValue))
+            if (aotDllOutputDirectory.objectReferenceValue == null)
+            {
+                hasValidationErrors = true;
+                DrawHelpBox(
+                    "❌ AOT DLL Output Directory is required!\n\n" +
+                    "AOT DLLs are essential for HybridCLR supplementary metadata generation at runtime. " +
+                    "Without AOT DLLs, HybridCLR cannot properly load hot update assemblies that:\n" +
+                    "• Reference AOT types (e.g., System.Collections.Generic.List<T>)\n" +
+                    "• Use generics with value types defined in hot update code\n" +
+                    "• Access AOT assembly members (types, methods, fields)\n\n" +
+                    "How to fix:\n" +
+                    "1. Drag a folder from your project (e.g., Assets/HotUpdate/Compiled/AOT) into the field above\n" +
+                    "2. The folder must be within the Assets directory\n" +
+                    "3. This directory will store AOT assemblies needed for metadata generation\n\n" +
+                    "Example folders:\n" +
+                    "• Assets/HotUpdate/Compiled/AOT\n" +
+                    "• Assets/StreamingAssets/AOT\n" +
+                    "• Assets/Game/HotUpdate/AOT\n\n" +
+                    "Note: HybridCLR's MissingMetadataChecker will report errors if hot update code references AOT assemblies without supplementary metadata.",
+                    MessageType.Error);
+                return;
+            }
+
+            string path = AssetDatabase.GetAssetPath(aotDllOutputDirectory.objectReferenceValue);
+            if (string.IsNullOrEmpty(path))
+            {
+                DrawHelpBox(
+                    "⚠ Invalid folder reference!\n\n" +
+                    "Please drag a valid folder from your project into the field above.",
+                    MessageType.Warning);
+                return;
+            }
+
+            // Validate it's a folder (not a file)
+            if (!AssetDatabase.IsValidFolder(path))
+            {
+                DrawHelpBox(
+                    "⚠ Selected asset is not a folder!\n\n" +
+                    "Please drag a folder (not a file) from your project into the field above.",
+                    MessageType.Warning);
+                return;
+            }
+
+            // Validate path format
+            if (!path.StartsWith("Assets/") && !path.StartsWith("Assets\\"))
+            {
+                hasValidationErrors = true;
+                DrawHelpBox(
+                    "❌ AOT DLL Output Directory must be within the Assets folder!\n\n" +
+                    "Current value: " + path + "\n\n" +
+                    "How to fix:\n" +
+                    "The folder must be within the Assets directory.\n\n" +
+                    "Correct Examples:\n" +
+                    "• Assets/HotUpdate/Compiled/AOT\n" +
+                    "• Assets/StreamingAssets/AOT",
+                    MessageType.Error);
+                return;
+            }
+
+            // Show success message
+            string fullPath = GetFullAOTDllOutputPath();
+            if (!string.IsNullOrEmpty(fullPath))
+            {
+                DrawHelpBox(
+                    $"✓ AOT DLL output directory is configured.\n\n" +
+                    $"Path: {path}\n" +
+                    $"Full Path:\n{fullPath}\n\n" +
+                    "AOT assemblies will be copied to this directory for HybridCLR metadata generation at runtime.",
+                    MessageType.Info);
+            }
+        }
+
+        private string GetFullHotUpdateDllOutputPath()
+        {
+            if (hotUpdateDllOutputDirectory == null || hotUpdateDllOutputDirectory.objectReferenceValue == null)
                 return null;
 
-            string relativePath = hotUpdateDllOutputDirectory.stringValue.Trim();
-            if (!relativePath.StartsWith("Assets/") && !relativePath.StartsWith("Assets\\"))
+            string relativePath = AssetDatabase.GetAssetPath(hotUpdateDllOutputDirectory.objectReferenceValue);
+            if (string.IsNullOrEmpty(relativePath))
                 return null;
 
-            // Normalize path separators
+            relativePath = relativePath.Replace('\\', '/');
+
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            return Path.Combine(projectRoot, relativePath).Replace('\\', '/');
+        }
+
+        private string GetFullAOTDllOutputPath()
+        {
+            if (aotDllOutputDirectory == null || aotDllOutputDirectory.objectReferenceValue == null)
+                return null;
+
+            string relativePath = AssetDatabase.GetAssetPath(aotDllOutputDirectory.objectReferenceValue);
+            if (string.IsNullOrEmpty(relativePath))
+                return null;
+
             relativePath = relativePath.Replace('\\', '/');
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));

@@ -32,6 +32,9 @@ namespace Build.Pipeline.Editor
         [Tooltip("If enabled and HybridCLR package is present, perform HybridCLR generation before build.")]
         [SerializeField] private bool useHybridCLR = false;
 
+        [Tooltip("If enabled and Obfuz packages are present, perform code obfuscation during build.")]
+        [SerializeField] private bool useObfuz = false;
+
         [Tooltip("Select the asset management system to use for resource hot-update.")]
         [SerializeField] private AssetManagementType assetManagementType = AssetManagementType.None;
 
@@ -53,6 +56,7 @@ namespace Build.Pipeline.Editor
 
         public bool UseBuildalon => useBuildalon;
         public bool UseHybridCLR => useHybridCLR;
+        public bool UseObfuz => useObfuz;
         public AssetManagementType AssetManagementType => assetManagementType;
 
         public bool UseYooAsset => assetManagementType == AssetManagementType.YooAsset;

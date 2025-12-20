@@ -4,6 +4,7 @@ using UnityEngine;
 
 #if UNITY_EDITOR
 using UnityEditorInternal;
+using UnityEditor;
 #endif
 
 namespace Build.Pipeline.Editor
@@ -15,8 +16,14 @@ namespace Build.Pipeline.Editor
         [Tooltip("Drag Assembly Definition Assets (.asmdef) here that need to be hot updated.")]
         public List<AssemblyDefinitionAsset> hotUpdateAssemblies;
 
-        [Tooltip("The directory within Assets to copy the hot update DLLs to. (e.g., 'Assets/HotUpdateDLL')")]
-        public string hotUpdateDllOutputDirectory = "Assets/HotUpdateDLL";
+        [Tooltip("The directory within Assets to copy the hot update DLLs to. Drag a folder from your project here.")]
+        public DefaultAsset hotUpdateDllOutputDirectory;
+
+        [Tooltip("Enable Obfuz code obfuscation for hot update assemblies.")]
+        public bool enableObfuz = false;
+
+        [Tooltip("The directory within Assets to copy AOT DLLs to. Drag a folder from your project here. Used for AOT metadata generation.")]
+        public DefaultAsset aotDllOutputDirectory;
 
         /// <summary>
         /// Extracts assembly names from the assigned .asmdef files.
@@ -44,6 +51,30 @@ namespace Build.Pipeline.Editor
                 }
             }
             return names;
+        }
+
+        /// <summary>
+        /// Gets the hot update DLL output directory path as a string.
+        /// </summary>
+        public string GetHotUpdateDllOutputDirectoryPath()
+        {
+            if (hotUpdateDllOutputDirectory != null)
+            {
+                return AssetDatabase.GetAssetPath(hotUpdateDllOutputDirectory);
+            }
+            return "Assets/HotUpdateDLL"; // Default fallback
+        }
+
+        /// <summary>
+        /// Gets the AOT DLL output directory path as a string.
+        /// </summary>
+        public string GetAOTDllOutputDirectoryPath()
+        {
+            if (aotDllOutputDirectory != null)
+            {
+                return AssetDatabase.GetAssetPath(aotDllOutputDirectory);
+            }
+            return null; // Optional, return null if not set
         }
 
         [Serializable]
