@@ -13,6 +13,13 @@ namespace Build.Pipeline.Editor
 
         public void OnPreprocessBuild(BuildReport report)
         {
+            // Skip HybridCLR internal builds (for generating stripped AOT DLLs)
+            if (IsHybridCLRInternalBuild(report))
+            {
+                UnityEngine.Debug.Log("[ObfuzBuildPreprocessor] Skipping Obfuz configuration for HybridCLR internal build. HybridCLR generation steps will continue normally.");
+                return;
+            }
+
             if (!ObfuzIntegrator.IsBaseObfuzAvailable())
             {
                 return;
@@ -55,6 +62,34 @@ namespace Build.Pipeline.Editor
             ObfuzIntegrator.SaveObfuzSettings();
 
             UnityEngine.Debug.Log("[ObfuzBuildPreprocessor] ObfuzSettings configured and saved successfully.");
+        }
+
+        /// <summary>
+        /// Checks if this is a HybridCLR internal build for generating stripped AOT DLLs.
+        /// HybridCLR uses temporary builds with paths containing "StrippedAOTDllsTempProj" to generate AOT DLLs.
+        /// HybridCLR sets buildScriptsOnly = true before starting the internal build.
+        /// </summary>
+        private static bool IsHybridCLRInternalBuild(BuildReport report)
+        {
+            if (UnityEditor.EditorUserBuildSettings.buildScriptsOnly)
+            {
+                BuildData buildData = BuildConfigHelper.GetBuildData();
+                if (buildData != null && buildData.UseHybridCLR)
+                {
+                    return true;
+                }
+            }
+
+            if (report != null)
+            {
+                string outputPath = report.summary.outputPath;
+                if (!string.IsNullOrEmpty(outputPath) && outputPath.Contains("StrippedAOTDllsTempProj", System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
     }
 }
