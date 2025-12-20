@@ -35,16 +35,10 @@ This template is designed for developers who want to start with a professional, 
 - ✅ Data-driven ability system (GAS-inspired)
 - ✅ High-performance infrastructure (logging, pooling, audio)
 - ✅ Hot update solution (code + assets)
+- ✅ Code obfuscation integration (Obfuz) for code protection
 - ✅ Build pipeline with CI/CD integration
 - ✅ Modern input system with context stacks
 - ✅ UI framework with hierarchical management
-
-### What This Template Does NOT Provide
-
-- ❌ Game-specific content (levels, characters, assets)
-- ❌ Art assets or shaders
-- ❌ Complete game implementations
-- ❌ Networking game logic
 
 > **📖 Documentation**: Each module has comprehensive documentation. See the [Module Catalog](#module-catalog) section for links to detailed guides.
 
@@ -81,6 +75,7 @@ Complete solution for updating games without app store resubmission:
 
 - **HybridCLR**: C# code hot-updates via DLL compilation
 - **Asset Management**: YooAsset or Addressables for asset hot-updates
+- **Code Protection**: Integrated Obfuz obfuscation for hot update assemblies
 - **Unified Pipeline**: Streamlined build workflow for rapid iteration
 
 ### DI/IoC Support
@@ -103,7 +98,7 @@ Command-line build interface for automated pipelines:
 
 - Automatic versioning from Git
 - Multi-platform builds (Windows, Mac, Android, WebGL)
-- Hot update build workflows
+- Hot update build workflows with optional code obfuscation
 - Integration with Jenkins, TeamCity, GitHub Actions
 
 ## Architecture
@@ -153,7 +148,7 @@ Modules are designed to be:
 | **GameplayFramework** | `CycloneGames.GameplayFramework` | UE-style gameplay architecture (Actor/Pawn/Controller/GameMode). DI-friendly, scalable foundation for game projects.     | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.md) |
 | **GameplayAbilities** | `CycloneGames.GameplayAbilities` | Data-driven ability system (GAS-inspired). ScriptableObject-based abilities, attributes, effects, and status management. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.md) |
 | **GameplayTags**      | `CycloneGames.GameplayTags`      | Hierarchical tag system for decoupled game logic. Runtime registration, auto-generation, and tag-based queries.          | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.md)      |
-| **RPGFoundation**     | `CycloneGames.RPGFoundation`     | RPG-specific extensions (movement, combat, etc.). Foundation components for RPG-type games.                              | [See module directory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)     |
+| **RPGFoundation**     | `CycloneGames.RPGFoundation`     | RPG-specific extensions (movement, combat, etc.). Foundation components for RPG-type games.                              | [See module directory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)    |
 | **BehaviorTree**      | `CycloneGames.BehaviorTree`      | AI behavior tree system. Visual editor, ScriptableObject-based, optimized for mobile devices.                            | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.md)      |
 
 ### 🏗️ Core Infrastructure
@@ -183,9 +178,9 @@ Modules are designed to be:
 
 ### 🔧 Build & Deployment
 
-| Module    | Path           | Description                                                                                                        | Documentation                                    |
-| --------- | -------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
-| **Build** | `Assets/Build` | Comprehensive build pipeline. HybridCLR + asset management integration. Full app builds, hot updates, CI/CD ready. | [README.md](UnityStarter/Assets/Build/README.md) |
+| Module    | Path           | Description                                                                                                                                      | Documentation                                    |
+| --------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| **Build** | `Assets/Build` | Comprehensive build pipeline. HybridCLR + Obfuz + asset management integration. Full app builds, hot updates with code obfuscation, CI/CD ready. | [README.md](UnityStarter/Assets/Build/README.md) |
 
 ### 🌐 Networking
 
@@ -268,6 +263,8 @@ If you only need specific modules:
 ### Optional Dependencies
 
 - **HybridCLR**: C# hot-update ([GitHub](https://github.com/focus-creative-games/hybridclr))
+- **Obfuz**: Code obfuscation ([GitHub](https://github.com/Code-Philosophy/Obfuz))
+- **Obfuz4HybridCLR**: Obfuz extension for HybridCLR ([GitHub](https://github.com/Code-Philosophy/Obfuz4HybridCLR))
 - **YooAsset**: Asset management ([GitHub](https://github.com/tuyoogame/YooAsset))
 - **Addressables**: Unity's asset management (via Package Manager)
 - **Mirror**: Networking ([GitHub](https://github.com/MirrorNetworking/Mirror))
