@@ -13,7 +13,7 @@ namespace Build.Pipeline.Editor
 
         public void OnPreprocessBuild(BuildReport report)
         {
-            if (!ObfuzIntegrator.IsAvailable())
+            if (!ObfuzIntegrator.IsBaseObfuzAvailable())
             {
                 return;
             }
@@ -27,7 +27,7 @@ namespace Build.Pipeline.Editor
             }
             else
             {
-                // Fallback to HybridCLRBuildConfig
+                // Fallback to HybridCLRBuildConfig (for HybridCLR projects)
                 HybridCLRBuildConfig hybridCLRConfig = BuildConfigHelper.GetHybridCLRConfig();
                 if (hybridCLRConfig != null)
                 {
@@ -37,6 +37,9 @@ namespace Build.Pipeline.Editor
 
             if (!isObfuzEnabled)
             {
+                ObfuzIntegrator.DisableObfuzBuildPipeline();
+                ObfuzIntegrator.SaveObfuzSettings();
+                UnityEngine.Debug.Log("[ObfuzBuildPreprocessor] Obfuz is disabled. Build pipeline disabled.");
                 return;
             }
 
@@ -45,8 +48,10 @@ namespace Build.Pipeline.Editor
             // Ensure prerequisites are generated (this will configure ObfuzSettings)
             ObfuzIntegrator.EnsureObfuzPrerequisites();
 
-            // Save settings but don't clear instance yet - we want the configuration to be available during build
-            // The instance will be naturally cleared/reloaded when needed by Obfuz's build callbacks
+            // Enable Obfuz build pipeline (for non-HybridCLR projects, this ensures Obfuz's native ObfuscationProcess runs)
+            // For HybridCLR projects, this doesn't interfere since HybridCLR uses its own obfuscation flow
+            ObfuzIntegrator.EnableObfuzBuildPipeline();
+
             ObfuzIntegrator.SaveObfuzSettings();
 
             UnityEngine.Debug.Log("[ObfuzBuildPreprocessor] ObfuzSettings configured and saved successfully.");
