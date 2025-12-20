@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEngine;
 
 namespace Build.Pipeline.Editor
@@ -71,20 +73,90 @@ namespace Build.Pipeline.Editor
 
             try
             {
+                ForceReloadObfuzSettings();
+
+                string expectedPath = GetEncryptionVMOutputPath();
+                if (!string.IsNullOrEmpty(expectedPath) && File.Exists(expectedPath))
+                {
+                    Type vmType = ReflectionCache.GetType("Obfuz.EncryptionVM.GeneratedEncryptionVirtualMachine");
+                    if (vmType != null)
+                    {
+                        Debug.Log($"{DEBUG_FLAG} Encryption VM file already exists and is compiled at: {expectedPath}");
+                        return;
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"{DEBUG_FLAG} Encryption VM file exists but class is not compiled. Forcing reimport and compilation...");
+                        AssetDatabase.ImportAsset(expectedPath, ImportAssetOptions.ForceUpdate);
+                        AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+                        CompilationPipeline.RequestScriptCompilation();
+                    }
+                }
+
                 Debug.Log($"{DEBUG_FLAG} Generating encryption VM...");
+
+                // Try to use reflection to call the method directly instead of menu item
+                // This is more reliable than ExecuteMenuItem which can fail if ObfuzSettings is not initialized
+                Type obfuzMenuType = ReflectionCache.GetType("Obfuz.Unity.ObfuzMenu");
+                if (obfuzMenuType != null)
+                {
+                    MethodInfo generateMethod = ReflectionCache.GetMethod(obfuzMenuType, "GenerateEncryptionVM", BindingFlags.Public | BindingFlags.Static);
+                    if (generateMethod != null)
+                    {
+                        try
+                        {
+                            generateMethod.Invoke(null, null);
+                            if (!string.IsNullOrEmpty(expectedPath) && File.Exists(expectedPath))
+                            {
+                                Debug.Log($"{DEBUG_FLAG} Encryption VM generated successfully at: {expectedPath}");
+                                AssetDatabase.ImportAsset(expectedPath, ImportAssetOptions.ForceUpdate);
+                                AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+                                System.Threading.Thread.Sleep(100);
+                                UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation();
+                                Debug.Log($"{DEBUG_FLAG} Encryption VM file imported and compilation requested.");
+                                return;
+                            }
+                            else
+                            {
+                                Debug.LogWarning($"{DEBUG_FLAG} GenerateEncryptionVM method executed but file not found at expected path: {expectedPath}");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"{DEBUG_FLAG} Failed to call GenerateEncryptionVM via reflection: {ex.Message}. Trying menu item...");
+                        }
+                    }
+                }
+
                 if (!EditorApplication.ExecuteMenuItem("Obfuz/GenerateEncryptionVM"))
                 {
                     Debug.LogWarning($"{DEBUG_FLAG} Failed to execute Obfuz/GenerateEncryptionVM menu item.");
                 }
                 else
                 {
-                    Debug.Log($"{DEBUG_FLAG} Encryption VM generated successfully.");
+                    if (!string.IsNullOrEmpty(expectedPath) && File.Exists(expectedPath))
+                    {
+                        Debug.Log($"{DEBUG_FLAG} Encryption VM generated successfully at: {expectedPath}");
+
+                        AssetDatabase.ImportAsset(expectedPath, ImportAssetOptions.ForceUpdate);
+                        AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+
+                        System.Threading.Thread.Sleep(100);
+
+                        UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation();
+
+                        Debug.Log($"{DEBUG_FLAG} Encryption VM file imported and compilation requested.");
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"{DEBUG_FLAG} Menu item executed but file not found at expected path: {expectedPath}");
+                    }
                 }
             }
             catch (Exception ex)
             {
                 Debug.LogError($"{DEBUG_FLAG} Failed to generate encryption VM: {ex.Message}\n{ex.StackTrace}");
-                throw;
+                Debug.LogWarning($"{DEBUG_FLAG} Build will continue without obfuscation. Please generate Encryption VM manually via Obfuz menu.");
             }
         }
 
@@ -103,19 +175,147 @@ namespace Build.Pipeline.Editor
             try
             {
                 Debug.Log($"{DEBUG_FLAG} Generating secret key file...");
+
+                Type obfuzMenuType = ReflectionCache.GetType("Obfuz.Unity.ObfuzMenu");
+                if (obfuzMenuType != null)
+                {
+                    MethodInfo saveSecretMethod = ReflectionCache.GetMethod(obfuzMenuType, "SaveSecretFile", BindingFlags.Public | BindingFlags.Static);
+                    if (saveSecretMethod != null)
+                    {
+                        try
+                        {
+                            saveSecretMethod.Invoke(null, null);
+                            Debug.Log($"{DEBUG_FLAG} Secret key file generated successfully via reflection.");
+                            AssetDatabase.Refresh();
+                            return;
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.LogWarning($"{DEBUG_FLAG} Failed to call SaveSecretFile via reflection: {ex.Message}. Trying menu item...");
+                        }
+                    }
+                }
+
                 if (!EditorApplication.ExecuteMenuItem("Obfuz/GenerateSecretKeyFile"))
                 {
                     Debug.LogWarning($"{DEBUG_FLAG} Failed to execute Obfuz/GenerateSecretKeyFile menu item.");
                 }
                 else
                 {
-                    Debug.Log($"{DEBUG_FLAG} Secret key file generated successfully.");
+                    Debug.Log($"{DEBUG_FLAG} Secret key file generated successfully via menu item.");
+                    AssetDatabase.Refresh();
                 }
             }
             catch (Exception ex)
             {
                 Debug.LogError($"{DEBUG_FLAG} Failed to generate secret key file: {ex.Message}\n{ex.StackTrace}");
-                throw;
+                Debug.LogWarning($"{DEBUG_FLAG} Build will continue. Please generate Secret Key file manually via Obfuz menu if needed.");
+            }
+        }
+
+        /// <summary>
+        /// Forces ObfuzSettings to be fully initialized, creating all required sub-objects if they are null.
+        /// This must be called before any other Obfuz operations to prevent null reference exceptions.
+        /// </summary>
+        public static void ForceInitializeObfuzSettings()
+        {
+            if (!IsBaseObfuzAvailable())
+            {
+                return;
+            }
+
+            try
+            {
+                Type obfuzSettingsType = ReflectionCache.GetType("Obfuz.Settings.ObfuzSettings");
+                if (obfuzSettingsType == null)
+                {
+                    return;
+                }
+
+                PropertyInfo instanceProperty = ReflectionCache.GetProperty(obfuzSettingsType, "Instance", BindingFlags.Public | BindingFlags.Static);
+                if (instanceProperty == null)
+                {
+                    return;
+                }
+
+                object obfuzSettingsInstance = instanceProperty.GetValue(null);
+                if (obfuzSettingsInstance == null)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} ObfuzSettings.Instance is null after loading. This may indicate a corrupted settings file.");
+                    return;
+                }
+
+                FieldInfo assemblySettingsField = ReflectionCache.GetField(obfuzSettingsType, "assemblySettings", BindingFlags.Public | BindingFlags.Instance);
+                if (assemblySettingsField != null)
+                {
+                    object assemblySettings = assemblySettingsField.GetValue(obfuzSettingsInstance);
+                    if (assemblySettings == null)
+                    {
+                        Debug.Log($"{DEBUG_FLAG} assemblySettings is null, creating new instance...");
+                        Type assemblySettingsType = ReflectionCache.GetType("Obfuz.Settings.AssemblySettings");
+                        if (assemblySettingsType != null)
+                        {
+                            try
+                            {
+                                object newInstance = Activator.CreateInstance(assemblySettingsType);
+                                assemblySettingsField.SetValue(obfuzSettingsInstance, newInstance);
+                                Debug.Log($"{DEBUG_FLAG} Created new AssemblySettings instance.");
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.LogWarning($"{DEBUG_FLAG} Failed to create AssemblySettings instance: {ex.Message}");
+                            }
+                        }
+                    }
+                }
+
+                // Initialize buildPipelineSettings if null
+                FieldInfo buildPipelineSettingsField = ReflectionCache.GetField(obfuzSettingsType, "buildPipelineSettings", BindingFlags.Public | BindingFlags.Instance);
+                if (buildPipelineSettingsField != null)
+                {
+                    object buildPipelineSettings = buildPipelineSettingsField.GetValue(obfuzSettingsInstance);
+                    if (buildPipelineSettings == null)
+                    {
+                        Debug.Log($"{DEBUG_FLAG} buildPipelineSettings is null, creating new instance...");
+                        Type buildPipelineSettingsType = ReflectionCache.GetType("Obfuz.Settings.BuildPipelineSettings");
+                        if (buildPipelineSettingsType != null)
+                        {
+                            try
+                            {
+                                object newInstance = Activator.CreateInstance(buildPipelineSettingsType);
+                                buildPipelineSettingsField.SetValue(obfuzSettingsInstance, newInstance);
+
+                                FieldInfo linkXmlProcessCallbackOrderField = ReflectionCache.GetField(buildPipelineSettingsType, "linkXmlProcessCallbackOrder", BindingFlags.Public | BindingFlags.Instance);
+                                if (linkXmlProcessCallbackOrderField != null)
+                                {
+                                    linkXmlProcessCallbackOrderField.SetValue(newInstance, 10000);
+                                }
+
+                                FieldInfo obfuscationProcessCallbackOrderField = ReflectionCache.GetField(buildPipelineSettingsType, "obfuscationProcessCallbackOrder", BindingFlags.Public | BindingFlags.Instance);
+                                if (obfuscationProcessCallbackOrderField != null)
+                                {
+                                    obfuscationProcessCallbackOrderField.SetValue(newInstance, 10000);
+                                }
+
+                                Debug.Log($"{DEBUG_FLAG} Created new BuildPipelineSettings instance with default callback orders.");
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.LogWarning($"{DEBUG_FLAG} Failed to create BuildPipelineSettings instance: {ex.Message}");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        EnsureBuildPipelineSettingsInitialized();
+                    }
+                }
+
+                SaveObfuzSettings();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"{DEBUG_FLAG} Failed to force initialize ObfuzSettings: {ex.Message}\n{ex.StackTrace}");
             }
         }
 
@@ -163,8 +363,14 @@ namespace Build.Pipeline.Editor
                 object assemblySettings = assemblySettingsField.GetValue(obfuzSettingsInstance);
                 if (assemblySettings == null)
                 {
-                    Debug.LogWarning($"{DEBUG_FLAG} ObfuzSettings.assemblySettings is null.");
-                    return;
+                    Debug.LogError($"{DEBUG_FLAG} ObfuzSettings.assemblySettings is null. This should have been initialized by ForceInitializeObfuzSettings().");
+                    ForceInitializeObfuzSettings();
+                    assemblySettings = assemblySettingsField.GetValue(obfuzSettingsInstance);
+                    if (assemblySettings == null)
+                    {
+                        Debug.LogError($"{DEBUG_FLAG} Failed to initialize assemblySettings. Cannot configure settings.");
+                        return;
+                    }
                 }
 
                 Type assemblySettingsType = ReflectionCache.GetType("Obfuz.Settings.AssemblySettings");
@@ -210,7 +416,6 @@ namespace Build.Pipeline.Editor
                     AssetDatabase.SaveAssets();
                     AssetDatabase.Refresh();
 
-                    // Verify the configuration was saved
                     string[] savedArray = nonObfuscatedField.GetValue(assemblySettings) as string[];
                     if (savedArray != null && savedArray.Contains(assemblyCSharp))
                     {
@@ -239,7 +444,6 @@ namespace Build.Pipeline.Editor
         {
             try
             {
-                // Try to get assembliesToObfuscate field
                 FieldInfo assembliesToObfuscateField = ReflectionCache.GetField(assemblySettingsType, "assembliesToObfuscate", BindingFlags.Public | BindingFlags.Instance);
                 if (assembliesToObfuscateField == null)
                 {
@@ -266,7 +470,6 @@ namespace Build.Pipeline.Editor
                     }
                 }
 
-                // Log the assemblies that will be obfuscated
                 if (completeList != null && completeList.Count > 0)
                 {
                     Debug.Log($"{DEBUG_FLAG} === Assemblies to be obfuscated ({completeList.Count}) ===");
@@ -364,6 +567,265 @@ namespace Build.Pipeline.Editor
         }
 
         /// <summary>
+        /// Verifies that the Encryption VM class is compiled and available.
+        /// </summary>
+        public static bool VerifyEncryptionVMCompiled()
+        {
+            if (!IsBaseObfuzAvailable())
+            {
+                return false;
+            }
+
+            try
+            {
+                Type vmType = ReflectionCache.GetType("Obfuz.EncryptionVM.GeneratedEncryptionVirtualMachine");
+                if (vmType != null)
+                {
+                    Debug.Log($"{DEBUG_FLAG} Encryption VM class is compiled and available.");
+                    return true;
+                }
+                else
+                {
+                    string expectedPath = GetEncryptionVMOutputPath();
+                    if (!string.IsNullOrEmpty(expectedPath) && File.Exists(expectedPath))
+                    {
+                        Debug.LogError($"{DEBUG_FLAG} Encryption VM file exists at {expectedPath} but class is not compiled. The file may need to be reimported or Unity needs to recompile scripts.");
+                    }
+                    else
+                    {
+                        Debug.LogError($"{DEBUG_FLAG} Encryption VM file does not exist. Please generate it via Obfuz > GenerateEncryptionVM menu.");
+                    }
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"{DEBUG_FLAG} Failed to verify Encryption VM compilation: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Ensures Encryption VM is generated and compiled, waiting for compilation if necessary.
+        /// This should be called before BuildPlayer to ensure the class is available during obfuscation.
+        /// </summary>
+        /// <param name="maxWaitSeconds">Maximum safety timeout in seconds (default: 300 seconds / 5 minutes as safety net)</param>
+        public static void EnsureEncryptionVMGeneratedAndCompiled(int maxWaitSeconds = 300)
+        {
+            if (!IsBaseObfuzAvailable())
+            {
+                return;
+            }
+
+            string expectedPath = GetEncryptionVMOutputPath();
+            bool fileExistedBefore = !string.IsNullOrEmpty(expectedPath) && File.Exists(expectedPath);
+
+            Type vmType = ReflectionCache.GetType("Obfuz.EncryptionVM.GeneratedEncryptionVirtualMachine");
+            if (vmType != null)
+            {
+                Debug.Log($"{DEBUG_FLAG} Encryption VM is already compiled.");
+                return;
+            }
+
+            if (!fileExistedBefore)
+            {
+                Debug.Log($"{DEBUG_FLAG} Encryption VM file does not exist. Generating...");
+                GenerateEncryptionVM();
+            }
+
+            expectedPath = GetEncryptionVMOutputPath();
+            if (string.IsNullOrEmpty(expectedPath) || !File.Exists(expectedPath))
+            {
+                Debug.LogError($"{DEBUG_FLAG} Encryption VM file was not generated. Expected path: {expectedPath}");
+                throw new InvalidOperationException($"Encryption VM file was not generated. Please generate it manually via Obfuz > GenerateEncryptionVM menu.");
+            }
+
+            vmType = ReflectionCache.GetType("Obfuz.EncryptionVM.GeneratedEncryptionVirtualMachine");
+            if (vmType != null)
+            {
+                Debug.Log($"{DEBUG_FLAG} Encryption VM is now compiled.");
+                return;
+            }
+
+            Debug.Log($"{DEBUG_FLAG} Encryption VM file exists but class is not compiled. Forcing reimport and waiting for compilation...");
+
+            AssetDatabase.ImportAsset(expectedPath, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ImportRecursive);
+            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+
+            System.Threading.Thread.Sleep(300);
+
+            CompilationPipeline.RequestScriptCompilation();
+
+            System.Threading.Thread.Sleep(300);
+
+            bool compilationComplete = WaitForCompilationIntelligent(maxWaitSeconds, expectedPath);
+
+            if (!compilationComplete)
+            {
+                vmType = ReflectionCache.GetType("Obfuz.EncryptionVM.GeneratedEncryptionVirtualMachine");
+                if (vmType == null)
+                {
+                    Debug.LogError($"{DEBUG_FLAG} Encryption VM compilation did not complete within {maxWaitSeconds} seconds.");
+                    Debug.LogError($"{DEBUG_FLAG} File exists at: {expectedPath}");
+                    Debug.LogError($"{DEBUG_FLAG} Please generate Encryption VM manually via Obfuz > GenerateEncryptionVM menu and wait for compilation to complete before building.");
+                    throw new InvalidOperationException($"Encryption VM class is not compiled after {maxWaitSeconds} seconds. Please generate it manually and wait for compilation to complete.");
+                }
+                else
+                {
+                    Debug.Log($"{DEBUG_FLAG} Encryption VM compilation completed (verified in final check).");
+                }
+            }
+        }
+
+        private static bool WaitForCompilationIntelligent(int maxWaitSeconds, string expectedPath)
+        {
+            int maxWaitMs = maxWaitSeconds * 1000;
+            int checkIntervalMs = 200;
+            int totalChecks = maxWaitMs / checkIntervalMs;
+
+            bool compilationStarted = false;
+            bool compilationComplete = false;
+            int idleWaitCount = 0;
+            const int maxIdleWait = 5;
+            int compilationStartWaitCount = 0;
+            const int maxCompilationStartWait = 15;
+
+            DateTime startTime = DateTime.Now;
+            Debug.Log($"{DEBUG_FLAG} Waiting for Encryption VM compilation (intelligent wait, safety timeout: {maxWaitSeconds}s)...");
+
+            for (int i = 0; i < totalChecks; i++)
+            {
+                bool isCompiling = EditorApplication.isCompiling;
+
+                if (isCompiling)
+                {
+                    if (!compilationStarted)
+                    {
+                        compilationStarted = true;
+                        double elapsed = (DateTime.Now - startTime).TotalSeconds;
+                        Debug.Log($"{DEBUG_FLAG} Compilation started after {elapsed:F2} seconds. Waiting for completion...");
+                    }
+                    idleWaitCount = 0;
+                    System.Threading.Thread.Sleep(checkIntervalMs);
+                    continue;
+                }
+
+                if (compilationStarted)
+                {
+                    Type vmType = ReflectionCache.GetType("Obfuz.EncryptionVM.GeneratedEncryptionVirtualMachine");
+                    if (vmType != null)
+                    {
+                        compilationComplete = true;
+                        double elapsed = (DateTime.Now - startTime).TotalSeconds;
+                        Debug.Log($"{DEBUG_FLAG} Encryption VM compilation completed successfully after {elapsed:F2} seconds.");
+                        break;
+                    }
+
+                    idleWaitCount++;
+                    if (idleWaitCount < maxIdleWait)
+                    {
+                        System.Threading.Thread.Sleep(checkIntervalMs);
+                        continue;
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"{DEBUG_FLAG} Compilation finished but class is not yet available. This may indicate a compilation issue.");
+                        break;
+                    }
+                }
+                else
+                {
+                    compilationStartWaitCount++;
+                    if (compilationStartWaitCount < maxCompilationStartWait)
+                    {
+                        System.Threading.Thread.Sleep(checkIntervalMs);
+                        continue;
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"{DEBUG_FLAG} Compilation hasn't started after {compilationStartWaitCount * checkIntervalMs / 1000.0f} seconds. Requesting compilation again...");
+                        CompilationPipeline.RequestScriptCompilation();
+                        AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+                        compilationStartWaitCount = 0;
+                        System.Threading.Thread.Sleep(300);
+                        continue;
+                    }
+                }
+            }
+
+            if (!compilationComplete)
+            {
+                Type vmType = ReflectionCache.GetType("Obfuz.EncryptionVM.GeneratedEncryptionVirtualMachine");
+                if (vmType != null)
+                {
+                    double elapsed = (DateTime.Now - startTime).TotalSeconds;
+                    Debug.Log($"{DEBUG_FLAG} Encryption VM compilation completed (verified in final check after {elapsed:F2} seconds).");
+                    return true;
+                }
+            }
+
+            return compilationComplete;
+        }
+
+        /// <summary>
+        /// Gets the encryption VM output path from ObfuzSettings.
+        /// </summary>
+        private static string GetEncryptionVMOutputPath()
+        {
+            try
+            {
+                Type obfuzSettingsType = ReflectionCache.GetType("Obfuz.Settings.ObfuzSettings");
+                if (obfuzSettingsType == null)
+                {
+                    return null;
+                }
+
+                PropertyInfo instanceProperty = ReflectionCache.GetProperty(obfuzSettingsType, "Instance", BindingFlags.Public | BindingFlags.Static);
+                if (instanceProperty == null)
+                {
+                    return null;
+                }
+
+                object obfuzSettingsInstance = instanceProperty.GetValue(null);
+                if (obfuzSettingsInstance == null)
+                {
+                    return null;
+                }
+
+                FieldInfo encryptionVMSettingsField = ReflectionCache.GetField(obfuzSettingsType, "encryptionVMSettings", BindingFlags.Public | BindingFlags.Instance);
+                if (encryptionVMSettingsField == null)
+                {
+                    return null;
+                }
+
+                object encryptionVMSettings = encryptionVMSettingsField.GetValue(obfuzSettingsInstance);
+                if (encryptionVMSettings == null)
+                {
+                    return null;
+                }
+
+                Type encryptionVMSettingsType = ReflectionCache.GetType("Obfuz.Settings.EncryptionVMSettings");
+                if (encryptionVMSettingsType == null)
+                {
+                    return null;
+                }
+
+                FieldInfo codeOutputPathField = ReflectionCache.GetField(encryptionVMSettingsType, "codeOutputPath", BindingFlags.Public | BindingFlags.Instance);
+                if (codeOutputPathField == null)
+                {
+                    return null;
+                }
+
+                return codeOutputPathField.GetValue(encryptionVMSettings) as string;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to get encryption VM output path: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Ensures Obfuz prerequisites are generated before obfuscation.
         /// </summary>
         public static void EnsureObfuzPrerequisites()
@@ -374,9 +836,93 @@ namespace Build.Pipeline.Editor
             }
 
             Debug.Log($"{DEBUG_FLAG} Ensuring Obfuz prerequisites are generated...");
+            ConfigureObfuzSettings();
+
             GenerateEncryptionVM();
             GenerateSecretKeyFile();
-            ConfigureObfuzSettings();
+
+            string vmPath = GetEncryptionVMOutputPath();
+            if (string.IsNullOrEmpty(vmPath) || !File.Exists(vmPath))
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Encryption VM file not found at: {vmPath ?? "null"}");
+                Debug.LogWarning($"{DEBUG_FLAG} Obfuscation may fail. Please generate Encryption VM manually via Obfuz > GenerateEncryptionVM menu.");
+            }
+        }
+
+        /// <summary>
+        /// Ensures Obfuz build pipeline settings are properly initialized.
+        /// This prevents LinkXmlProcess callbackOrder null reference issues.
+        /// Note: This is a lightweight check. For full initialization, use ForceInitializeObfuzSettings().
+        /// </summary>
+        public static void EnsureBuildPipelineSettingsInitialized()
+        {
+            if (!IsBaseObfuzAvailable())
+            {
+                return;
+            }
+
+            try
+            {
+                Type obfuzSettingsType = ReflectionCache.GetType("Obfuz.Settings.ObfuzSettings");
+                if (obfuzSettingsType == null)
+                {
+                    return;
+                }
+
+                PropertyInfo instanceProperty = ReflectionCache.GetProperty(obfuzSettingsType, "Instance", BindingFlags.Public | BindingFlags.Static);
+                if (instanceProperty == null)
+                {
+                    return;
+                }
+
+                object obfuzSettingsInstance = instanceProperty.GetValue(null);
+                if (obfuzSettingsInstance == null)
+                {
+                    ForceInitializeObfuzSettings();
+                    return;
+                }
+
+                FieldInfo buildPipelineSettingsField = ReflectionCache.GetField(obfuzSettingsType, "buildPipelineSettings", BindingFlags.Public | BindingFlags.Instance);
+                if (buildPipelineSettingsField == null)
+                {
+                    return;
+                }
+
+                object buildPipelineSettings = buildPipelineSettingsField.GetValue(obfuzSettingsInstance);
+                if (buildPipelineSettings == null)
+                {
+                    ForceInitializeObfuzSettings();
+                    return;
+                }
+
+                Type buildPipelineSettingsType = ReflectionCache.GetType("Obfuz.Settings.BuildPipelineSettings");
+                if (buildPipelineSettingsType != null)
+                {
+                    FieldInfo linkXmlProcessCallbackOrderField = ReflectionCache.GetField(buildPipelineSettingsType, "linkXmlProcessCallbackOrder", BindingFlags.Public | BindingFlags.Instance);
+                    if (linkXmlProcessCallbackOrderField != null)
+                    {
+                        object currentValue = linkXmlProcessCallbackOrderField.GetValue(buildPipelineSettings);
+                        if (currentValue == null || (currentValue is int && (int)currentValue == 0))
+                        {
+                            linkXmlProcessCallbackOrderField.SetValue(buildPipelineSettings, 10000);
+                        }
+                    }
+
+                    FieldInfo obfuscationProcessCallbackOrderField = ReflectionCache.GetField(buildPipelineSettingsType, "obfuscationProcessCallbackOrder", BindingFlags.Public | BindingFlags.Instance);
+                    if (obfuscationProcessCallbackOrderField != null)
+                    {
+                        object currentValue = obfuscationProcessCallbackOrderField.GetValue(buildPipelineSettings);
+                        if (currentValue == null || (currentValue is int && (int)currentValue == 0))
+                        {
+                            obfuscationProcessCallbackOrderField.SetValue(buildPipelineSettings, 10000);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to ensure build pipeline settings initialization: {ex.Message}");
+            }
         }
 
         /// <summary>

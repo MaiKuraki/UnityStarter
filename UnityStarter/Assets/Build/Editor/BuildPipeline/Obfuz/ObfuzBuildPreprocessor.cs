@@ -1,3 +1,4 @@
+using System;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 
@@ -13,10 +14,14 @@ namespace Build.Pipeline.Editor
 
         public void OnPreprocessBuild(BuildReport report)
         {
-            // Skip HybridCLR internal builds (for generating stripped AOT DLLs)
             if (IsHybridCLRInternalBuild(report))
             {
-                UnityEngine.Debug.Log("[ObfuzBuildPreprocessor] Skipping Obfuz configuration for HybridCLR internal build. HybridCLR generation steps will continue normally.");
+                UnityEngine.Debug.Log("[ObfuzBuildPreprocessor] Detected HybridCLR internal build. Disabling Obfuz build pipeline to prevent interference.");
+                if (ObfuzIntegrator.IsBaseObfuzAvailable())
+                {
+                    ObfuzIntegrator.DisableObfuzBuildPipeline();
+                    ObfuzIntegrator.SaveObfuzSettings();
+                }
                 return;
             }
 
@@ -52,8 +57,23 @@ namespace Build.Pipeline.Editor
 
             UnityEngine.Debug.Log("[ObfuzBuildPreprocessor] Configuring ObfuzSettings before build...");
 
+            ObfuzIntegrator.ForceInitializeObfuzSettings();
+
             // Ensure prerequisites are generated (this will configure ObfuzSettings)
             ObfuzIntegrator.EnsureObfuzPrerequisites();
+
+            try
+            {
+                UnityEngine.Debug.Log("[ObfuzBuildPreprocessor] Ensuring Encryption VM is generated and compiled (adaptive timeout)...");
+                ObfuzIntegrator.EnsureEncryptionVMGeneratedAndCompiled(); // Uses adaptive timeout
+                UnityEngine.Debug.Log("[ObfuzBuildPreprocessor] Encryption VM is ready for obfuscation.");
+            }
+            catch (Exception ex)
+            {
+                UnityEngine.Debug.LogError($"[ObfuzBuildPreprocessor] Failed to ensure Encryption VM is compiled: {ex.Message}");
+                UnityEngine.Debug.LogError("[ObfuzBuildPreprocessor] Build will be cancelled to prevent obfuscation failure.");
+                throw new BuildFailedException($"Encryption VM is not compiled. Please generate it manually via Obfuz > GenerateEncryptionVM menu and wait for compilation to complete before building. Error: {ex.Message}");
+            }
 
             // Enable Obfuz build pipeline (for non-HybridCLR projects, this ensures Obfuz's native ObfuscationProcess runs)
             // For HybridCLR projects, this doesn't interfere since HybridCLR uses its own obfuscation flow
