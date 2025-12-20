@@ -1193,6 +1193,26 @@ namespace Build.Pipeline.Editor
                         }
 
                         buildPlayerOptions.options |= BuildOptions.CompressWithLz4;
+
+                        if (buildData != null && buildData.UseObfuz && ObfuzIntegrator.IsBaseObfuzAvailable())
+                        {
+                            Debug.Log($"{DEBUG_FLAG} Initializing ObfuzSettings before build...");
+                            ObfuzIntegrator.ForceInitializeObfuzSettings();
+
+                            Debug.Log($"{DEBUG_FLAG} Ensuring Encryption VM is generated and compiled (adaptive timeout)...");
+                            try
+                            {
+                                ObfuzIntegrator.EnsureEncryptionVMGeneratedAndCompiled();
+                                Debug.Log($"{DEBUG_FLAG} Encryption VM is ready for obfuscation.");
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.LogError($"{DEBUG_FLAG} Failed to ensure Encryption VM is compiled: {ex.Message}");
+                                Debug.LogError($"{DEBUG_FLAG} Build will be cancelled to prevent obfuscation failure.");
+                                throw new BuildFailedException($"Encryption VM is not compiled. Please generate it manually via Obfuz > GenerateEncryptionVM menu and wait for compilation to complete before building. Error: {ex.Message}");
+                            }
+                        }
+
                         buildReport = BuildPipeline.BuildPlayer(buildPlayerOptions);
                     }
 
