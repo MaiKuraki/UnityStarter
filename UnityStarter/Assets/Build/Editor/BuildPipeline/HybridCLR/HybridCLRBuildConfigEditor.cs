@@ -69,7 +69,7 @@ namespace Build.Pipeline.Editor
                     "3. Compile hot update assemblies\n" +
                     "4. Apply obfuscation to the assemblies\n" +
                     "5. Copy obfuscated assemblies to the output directory\n\n" +
-                    "Note: AOT DLLs are still needed and will be copied if AOT DLL Output Directory is configured.",
+                    "Note: BuildData.UseObfuz takes priority. If BuildData.UseObfuz is enabled, this setting is automatically considered enabled. AOT DLLs are still needed and will be copied if AOT DLL Output Directory is configured.",
                     MessageType.Info);
             }
             EditorGUILayout.Space(10);
