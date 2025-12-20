@@ -12,6 +12,7 @@ namespace Build.Pipeline.Editor
         private SerializedProperty outputBasePath;
         private SerializedProperty useBuildalon;
         private SerializedProperty useHybridCLR;
+        private SerializedProperty useObfuz;
         private SerializedProperty assetManagementType;
 
         private bool hasValidationErrors = false;
@@ -30,6 +31,7 @@ namespace Build.Pipeline.Editor
             outputBasePath = serializedObject.FindProperty("outputBasePath");
             useBuildalon = serializedObject.FindProperty("useBuildalon");
             useHybridCLR = serializedObject.FindProperty("useHybridCLR");
+            useObfuz = serializedObject.FindProperty("useObfuz");
             assetManagementType = serializedObject.FindProperty("assetManagementType");
 
             // Clear validation cache when editor is enabled
@@ -75,6 +77,20 @@ namespace Build.Pipeline.Editor
             EditorGUILayout.LabelField("Build Pipeline Options", EditorStyles.boldLabel);
             EditorGUILayout.PropertyField(useBuildalon);
             EditorGUILayout.PropertyField(useHybridCLR);
+
+            // Obfuz Settings
+            EditorGUILayout.PropertyField(useObfuz);
+            if (useObfuz.boolValue)
+            {
+                DrawHelpBox(
+                    "✓ Obfuz is enabled.\n\n" +
+                    "The build process will automatically:\n" +
+                    "1. Generate encryption VM and secret key files\n" +
+                    "2. Configure ObfuzSettings (add Assembly-CSharp to reference list)\n" +
+                    "3. Apply obfuscation to hot update assemblies (if using HybridCLR)\n\n" +
+                    "Note: If using HybridCLR, make sure to also enable Obfuz in HybridCLRBuildConfig.",
+                    MessageType.Info);
+            }
             EditorGUILayout.Space(10);
 
             // Asset Management System
