@@ -32,7 +32,7 @@ The Build module consists of several key components:
 
 - ✅ **Flexible Package Support**: Works with or without optional packages (HybridCLR, Obfuz, YooAsset, Addressables, Buildalon)
 - ✅ **Automatic Versioning**: Git-based version generation
-- ✅ **Multi-Platform**: Supports Windows, Mac, Android, iOS, WebGL
+- ✅ **Multi-Platform**: Supports Windows, Mac, Linux, Android, iOS, WebGL
 - ✅ **Hot Update Ready**: Complete solution for code and asset hot updates
 - ✅ **Code Protection**: Integrated Obfuz obfuscation for protecting your code
 - ✅ **CI/CD Friendly**: Command-line interface for automated builds
@@ -120,11 +120,13 @@ Depending on your selected options, you may need additional config assets:
 **Obfuz works for both HybridCLR and non-HybridCLR projects.** The primary control is **BuildData.UseObfuz**.
 
 **For All Projects:**
+
 1. Enable **Use Obfuz** in BuildData (this is the main control switch)
 2. Configure ObfuzSettings in Unity Editor (Obfuz menu)
 3. The build pipeline will automatically apply obfuscation during build
 
 **Additional Step for HybridCLR Projects:**
+
 - If you're using HybridCLR, you can also enable **Enable Obfuz** in HybridCLRBuildConfig for hot update assembly obfuscation
 - **Note**: BuildData.UseObfuz takes priority. If BuildData.UseObfuz is enabled, HybridCLRBuildConfig.enableObfuz is automatically considered enabled
 
@@ -136,10 +138,49 @@ Once BuildData is configured, you can build using:
 
 **Unity Editor Menu:**
 
+**Release Builds:**
+
 - **Build > Game(Release) > Build Android APK (IL2CPP)**
 - **Build > Game(Release) > Build Windows (IL2CPP)**
 - **Build > Game(Release) > Build Mac (IL2CPP)**
+- **Build > Game(Release) > Build Linux (IL2CPP)**
+- **Build > Game(Release) > Build iOS (IL2CPP)**
 - **Build > Game(Release) > Build WebGL**
+- **Build > Game(Release) > Export Android Project (IL2CPP)**
+
+**Release Fast Builds (No Clean):**
+
+- **Build > Game(Release) > Fast > Build Android APK (Fast)**
+- **Build > Game(Release) > Fast > Build Windows (Fast)**
+- **Build > Game(Release) > Fast > Build Mac (Fast)**
+- **Build > Game(Release) > Fast > Build Linux (Fast)**
+- **Build > Game(Release) > Fast > Build iOS (Fast)**
+- **Build > Game(Release) > Fast > Build WebGL (Fast)**
+- **Build > Game(Release) > Fast > Export Android Project (Fast)**
+
+**Debug Builds:**
+
+- **Build > Game(Debug) > Build Android APK (Debug)**
+- **Build > Game(Debug) > Build Windows (Debug)**
+- **Build > Game(Debug) > Build Mac (Debug)**
+- **Build > Game(Debug) > Build Linux (Debug)**
+- **Build > Game(Debug) > Build iOS (Debug)**
+- **Build > Game(Debug) > Build WebGL (Debug)**
+- **Build > Game(Debug) > Export Android Project (Debug)**
+
+**Debug Fast Builds (No Clean):**
+
+- **Build > Game(Debug) > Fast > Build Android APK (Debug Fast)**
+- **Build > Game(Debug) > Fast > Build Windows (Debug Fast)**
+- **Build > Game(Debug) > Fast > Build Mac (Debug Fast)**
+- **Build > Game(Debug) > Fast > Build Linux (Debug Fast)**
+- **Build > Game(Debug) > Fast > Build iOS (Debug Fast)**
+- **Build > Game(Debug) > Fast > Build WebGL (Debug Fast)**
+- **Build > Game(Debug) > Fast > Export Android Project (Debug Fast)**
+
+**Debug Information:**
+
+- **Build > Print Debug Info** - Print current build configuration details
 
 **Or use the Hot Update pipeline:**
 
@@ -180,12 +221,14 @@ The build system uses Git for automatic versioning:
 
 The main build script for full application builds. Handles:
 
-- Multi-platform builds (Windows, Mac, Android, WebGL)
+- Multi-platform builds (Windows, Mac, Linux, Android, iOS, WebGL)
 - Automatic versioning
 - Optional HybridCLR code generation
 - Optional asset bundle building (YooAsset/Addressables)
-- Clean build options
+- Clean build options (Full Build) and Fast Build options (No Clean)
+- Debug build options with Development mode and Profiler support
 - Debug file management
+- Build configuration debug information (Print Debug Info)
 
 #### HotUpdateBuilder
 
@@ -312,6 +355,7 @@ Obfuz is a code obfuscation tool that protects your C# code by making it harder 
 **Step 1: Install Obfuz Packages**
 
 Install via Package Manager or Git URL:
+
 - `com.code-philosophy.obfuz`
 - `com.code-philosophy.obfuz4hybridclr` (for HybridCLR projects)
 
@@ -344,12 +388,14 @@ Install via Package Manager or Git URL:
 **What Happens During Build:**
 
 **For Non-HybridCLR Projects (when BuildData.UseObfuz is enabled):**
+
 1. Build preprocessor configures ObfuzSettings
 2. Generates encryption VM and secret key files (if needed)
 3. Obfuz's native `ObfuscationProcess` runs during build
 4. Code is obfuscated before compilation
 
 **For HybridCLR Projects (when BuildData.UseObfuz is enabled):**
+
 1. Build preprocessor configures ObfuzSettings
 2. Generates encryption VM and secret key files (if needed)
 3. HybridCLR compiles hot update DLLs
@@ -386,10 +432,27 @@ Install via Package Manager or Git URL:
 
 **Menu Items:**
 
+**Release Builds:**
+
 - `Build > Game(Release) > Build Android APK (IL2CPP)`
 - `Build > Game(Release) > Build Windows (IL2CPP)`
 - `Build > Game(Release) > Build Mac (IL2CPP)`
+- `Build > Game(Release) > Build Linux (IL2CPP)`
+- `Build > Game(Release) > Build iOS (IL2CPP)`
 - `Build > Game(Release) > Build WebGL`
+- `Build > Game(Release) > Export Android Project (IL2CPP)`
+
+**Release Fast Builds:**
+
+- `Build > Game(Release) > Fast > Build [Platform] (Fast)` - Skips clean build for faster iteration
+
+**Debug Builds:**
+
+- `Build > Game(Debug) > Build [Platform] (Debug)` - Includes Development mode, debugging symbols, and Profiler support
+
+**Debug Fast Builds:**
+
+- `Build > Game(Debug) > Fast > Build [Platform] (Debug Fast)` - Debug build without clean
 
 **Output:**
 
@@ -450,6 +513,31 @@ Install via Package Manager or Git URL:
 - Compiled HybridCLR DLLs
 - Updated asset bundles
 
+### Build Configuration Debug Info
+
+**Purpose**: Print detailed build configuration information for troubleshooting and verification
+
+**Menu Item:** `Build > Print Debug Info`
+
+**Information Displayed:**
+
+- **Basic Build Configuration**: Application version, output base path, current build target
+- **Scene Configuration**: List of build scenes
+- **Buildalon Configuration**: Whether Buildalon is enabled
+- **HybridCLR Configuration**: HybridCLR status, config asset availability, AOT DLL output directory
+- **Obfuz Configuration**: Obfuz status, package availability (base and HybridCLR extension), effective obfuscation state
+- **Asset Management Configuration**: Selected asset management system (YooAsset/Addressables/None) and config asset availability
+- **Version Control Configuration**: Version control type, commit hash, commit count, full build version
+- **Build Target Configuration**: Current build target, scripting backend, API compatibility level
+
+**Use Cases:**
+
+- Verify build configuration before building
+- Troubleshoot missing config assets
+- Check package availability
+- Verify feature enablement status
+- Debug configuration mismatches
+
 ### Standalone Build Operations
 
 You can also run individual build operations:
@@ -496,15 +584,15 @@ The Build system provides command-line interfaces for CI/CD integration.
 
 **Parameters:**
 
-| Parameter            | Type        | Description                                          | Required |
-| -------------------- | ----------- | ---------------------------------------------------- | -------- |
-| `-buildTarget`       | BuildTarget | Target platform (Android, StandaloneWindows64, etc.) | ✅ Yes   |
-| `-output`            | string      | Output path (relative to project root)               | ✅ Yes   |
-| `-clean`             | flag        | Clean build (delete previous build)                  | ❌ No    |
-| `-buildHybridCLR`    | flag        | Run HybridCLR generation                             | ❌ No    |
-| `-buildYooAsset`     | flag        | Build YooAsset bundles                               | ❌ No    |
-| `-buildAddressables` | flag        | Build Addressables content                           | ❌ No    |
-| `-version`           | string      | Override version (default: from Git)                 | ❌ No    |
+| Parameter            | Type        | Description                                                                                  | Required |
+| -------------------- | ----------- | -------------------------------------------------------------------------------------------- | -------- |
+| `-buildTarget`       | BuildTarget | Target platform (Android, StandaloneWindows64, StandaloneOSX, StandaloneLinux64, iOS, WebGL) | ✅ Yes   |
+| `-output`            | string      | Output path (relative to project root)                                                       | ✅ Yes   |
+| `-clean`             | flag        | Clean build (delete previous build)                                                          | ❌ No    |
+| `-buildHybridCLR`    | flag        | Run HybridCLR generation                                                                     | ❌ No    |
+| `-buildYooAsset`     | flag        | Build YooAsset bundles                                                                       | ❌ No    |
+| `-buildAddressables` | flag        | Build Addressables content                                                                   | ❌ No    |
+| `-version`           | string      | Override version (default: from Git)                                                         | ❌ No    |
 
 **Hot Update Build:**
 
