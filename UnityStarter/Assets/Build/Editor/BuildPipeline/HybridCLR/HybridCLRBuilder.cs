@@ -246,7 +246,6 @@ namespace Build.Pipeline.Editor
                 return;
             }
 
-            // Cache config values immediately to avoid potential loss during execution
             string targetDirRelative = config.GetHotUpdateDllOutputDirectoryPath();
             var assemblyNames = config.GetHotUpdateAssemblyNames();
 
@@ -289,6 +288,8 @@ namespace Build.Pipeline.Editor
                 return;
             }
 
+            CleanOldHotUpdateDlls(destinationDir);
+
             int copyCount = 0;
             foreach (var asmName in assemblyNames)
             {
@@ -297,9 +298,7 @@ namespace Build.Pipeline.Editor
 
                 if (File.Exists(srcFile))
                 {
-                    // Use BuildUtils for copying. 
-                    // Note: We do NOT clear the destination directory to preserve existing .meta files.
-                    // Overwriting ensures GUIDs remain stable if files are updated.
+                    // Use BuildUtils for copying
                     BuildUtils.CopyFile(srcFile, dstFile, true);
                     Debug.Log($"{DEBUG_FLAG} Copied: {asmName}.dll -> {targetDirRelative}/{asmName}.dll.bytes");
                     copyCount++;
@@ -481,6 +480,8 @@ namespace Build.Pipeline.Editor
                     Directory.CreateDirectory(destinationDir);
                 }
 
+                CleanOldAOTDlls(destinationDir, aotListFileName);
+
                 List<string> aotAssemblyPaths = new List<string>();
                 string[] dllFiles = Directory.GetFiles(sourceDir, "*.dll", SearchOption.TopDirectoryOnly);
 
@@ -513,6 +514,63 @@ namespace Build.Pipeline.Editor
             {
                 Debug.LogError($"{DEBUG_FLAG} Failed to copy AOT assemblies: {ex.Message}\n{ex.StackTrace}");
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// Cleans up old AOT DLL files and AOT list from the destination directory.
+        /// This ensures only current AOT assemblies are present after the build.
+        /// </summary>
+        private static void CleanOldAOTDlls(string destinationDir, string aotListFileName)
+        {
+            if (!Directory.Exists(destinationDir))
+            {
+                return;
+            }
+
+            string[] oldDllFiles = Directory.GetFiles(destinationDir, "*.dll.bytes", SearchOption.TopDirectoryOnly);
+            foreach (string dllFile in oldDllFiles)
+            {
+                string assetPath = GetRelativePathFromAssets(dllFile);
+                if (!string.IsNullOrEmpty(assetPath))
+                {
+                    AssetDatabase.DeleteAsset(assetPath);
+                    Debug.Log($"{DEBUG_FLAG} Removed old AOT DLL: {assetPath}");
+                }
+            }
+
+            string aotListPath = Path.Combine(destinationDir, aotListFileName);
+            if (File.Exists(aotListPath))
+            {
+                string assetPath = GetRelativePathFromAssets(aotListPath);
+                if (!string.IsNullOrEmpty(assetPath))
+                {
+                    AssetDatabase.DeleteAsset(assetPath);
+                    Debug.Log($"{DEBUG_FLAG} Removed old AOT list: {assetPath}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Cleans up old HotUpdate DLL files from the destination directory.
+        /// This ensures only current assemblies are present after the build.
+        /// </summary>
+        private static void CleanOldHotUpdateDlls(string destinationDir)
+        {
+            if (!Directory.Exists(destinationDir))
+            {
+                return;
+            }
+
+            string[] oldDllFiles = Directory.GetFiles(destinationDir, "*.dll.bytes", SearchOption.TopDirectoryOnly);
+            foreach (string dllFile in oldDllFiles)
+            {
+                string assetPath = GetRelativePathFromAssets(dllFile);
+                if (!string.IsNullOrEmpty(assetPath))
+                {
+                    AssetDatabase.DeleteAsset(assetPath);
+                    Debug.Log($"{DEBUG_FLAG} Removed old HotUpdate DLL: {assetPath}");
+                }
             }
         }
 
