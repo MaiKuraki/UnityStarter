@@ -16,8 +16,14 @@ namespace Build.Pipeline.Editor
         [Tooltip("Drag Assembly Definition Assets (.asmdef) here that need to be hot updated.")]
         public List<AssemblyDefinitionAsset> hotUpdateAssemblies;
 
+        [Tooltip("Drag Assembly Definition Assets (.asmdef) here for cheat/debug DLLs (optional).")]
+        public List<AssemblyDefinitionAsset> cheatAssemblies;
+
         [Tooltip("The directory within Assets to copy the hot update DLLs to. Drag a folder from your project here.")]
         public DefaultAsset hotUpdateDllOutputDirectory;
+
+        [Tooltip("The directory within Assets to copy cheat DLLs to. Drag a folder from your project here (optional).")]
+        public DefaultAsset cheatDllOutputDirectory;
 
         [Tooltip("Enable Obfuz code obfuscation for hot update assemblies.")]
         public bool enableObfuz = false;
@@ -30,10 +36,34 @@ namespace Build.Pipeline.Editor
         /// </summary>
         public List<string> GetHotUpdateAssemblyNames()
         {
-            List<string> names = new List<string>();
-            if (hotUpdateAssemblies == null) return names;
+            return GetAssemblyNamesFromList(hotUpdateAssemblies);
+        }
 
-            foreach (var asm in hotUpdateAssemblies)
+        /// <summary>
+        /// Extracts assembly names from cheat assemblies list.
+        /// </summary>
+        public List<string> GetCheatAssemblyNames()
+        {
+            return GetAssemblyNamesFromList(cheatAssemblies);
+        }
+
+        /// <summary>
+        /// Gets all hot update assembly names (both HotUpdate and Cheat).
+        /// </summary>
+        public List<string> GetAllHotUpdateAssemblyNames()
+        {
+            var allNames = new List<string>();
+            allNames.AddRange(GetHotUpdateAssemblyNames());
+            allNames.AddRange(GetCheatAssemblyNames());
+            return allNames;
+        }
+
+        private List<string> GetAssemblyNamesFromList(List<AssemblyDefinitionAsset> assemblies)
+        {
+            List<string> names = new List<string>();
+            if (assemblies == null) return names;
+
+            foreach (var asm in assemblies)
             {
                 if (asm == null) continue;
 
@@ -63,6 +93,18 @@ namespace Build.Pipeline.Editor
                 return AssetDatabase.GetAssetPath(hotUpdateDllOutputDirectory);
             }
             return "Assets/HotUpdateDLL"; // Default fallback
+        }
+
+        /// <summary>
+        /// Gets the Cheat DLL output directory path as a string.
+        /// </summary>
+        public string GetCheatDllOutputDirectoryPath()
+        {
+            if (cheatDllOutputDirectory != null)
+            {
+                return AssetDatabase.GetAssetPath(cheatDllOutputDirectory);
+            }
+            return null; // Optional, return null if not set
         }
 
         /// <summary>
