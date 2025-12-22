@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
@@ -130,12 +132,24 @@ namespace Build.Pipeline.Editor
             else
             {
                 int nullCount = 0;
+                List<string> packageAssemblies = new List<string>();
+
                 for (int i = 0; i < hotUpdateAssemblies.arraySize; i++)
                 {
                     var element = hotUpdateAssemblies.GetArrayElementAtIndex(i);
                     if (element.objectReferenceValue == null)
                     {
                         nullCount++;
+                    }
+                    else
+                    {
+                        // Check if assembly is not in Assets/ folder (Package Manager packages)
+                        string assetPath = AssetDatabase.GetAssetPath(element.objectReferenceValue);
+                        if (!string.IsNullOrEmpty(assetPath) && !assetPath.StartsWith("Assets/"))
+                        {
+                            string asmName = element.objectReferenceValue.name;
+                            packageAssemblies.Add($"{asmName} ({assetPath})");
+                        }
                     }
                 }
 
@@ -149,6 +163,21 @@ namespace Build.Pipeline.Editor
                         "Tip: Empty slots will be ignored during build, but it's better to remove them for clarity.",
                         MessageType.Warning);
                 }
+
+                if (packageAssemblies.Count > 0)
+                {
+                    DrawHelpBox(
+                        "⚠ Warning: Non-Assets assemblies detected in Hot Update list!\n\n" +
+                        "The following assemblies are not in Assets/ folder (Package Manager packages):\n" +
+                        string.Join("\n", packageAssemblies.Select(asm => $"• {asm}")) + "\n\n" +
+                        "HybridCLR only compiles assemblies in Assets/ folder as hot update DLLs.\n" +
+                        "These assemblies will be automatically filtered out during build.\n\n" +
+                        "Recommendation:\n" +
+                        "• Remove these non-Assets assemblies from the list\n" +
+                        "• Package Manager packages should be AOT assemblies (preserved via link.xml)\n" +
+                        "• If you need this code to be hot-updatable, copy it to Assets/ folder and create a new asmdef",
+                        MessageType.Warning);
+                }
             }
         }
 
@@ -157,12 +186,24 @@ namespace Build.Pipeline.Editor
             if (cheatAssemblies != null && cheatAssemblies.arraySize > 0)
             {
                 int nullCount = 0;
+                List<string> packageAssemblies = new List<string>();
+
                 for (int i = 0; i < cheatAssemblies.arraySize; i++)
                 {
                     var element = cheatAssemblies.GetArrayElementAtIndex(i);
                     if (element.objectReferenceValue == null)
                     {
                         nullCount++;
+                    }
+                    else
+                    {
+                        // Check if assembly is not in Assets/ folder (Package Manager packages)
+                        string assetPath = AssetDatabase.GetAssetPath(element.objectReferenceValue);
+                        if (!string.IsNullOrEmpty(assetPath) && !assetPath.StartsWith("Assets/"))
+                        {
+                            string asmName = element.objectReferenceValue.name;
+                            packageAssemblies.Add($"{asmName} ({assetPath})");
+                        }
                     }
                 }
 
@@ -171,6 +212,21 @@ namespace Build.Pipeline.Editor
                     DrawHelpBox(
                         $"⚠ Warning: {nullCount} empty slot(s) in Cheat Assemblies list.\n\n" +
                         "Empty slots will be ignored during build.",
+                        MessageType.Warning);
+                }
+
+                if (packageAssemblies.Count > 0)
+                {
+                    DrawHelpBox(
+                        "⚠ Warning: Non-Assets assemblies detected in Cheat list!\n\n" +
+                        "The following assemblies are not in Assets/ folder (Package Manager packages):\n" +
+                        string.Join("\n", packageAssemblies.Select(asm => $"• {asm}")) + "\n\n" +
+                        "HybridCLR only compiles assemblies in Assets/ folder as hot update DLLs.\n" +
+                        "These assemblies will be automatically filtered out during build.\n\n" +
+                        "Recommendation:\n" +
+                        "• Remove these non-Assets assemblies from the list\n" +
+                        "• Package Manager packages should be AOT assemblies (preserved via link.xml)\n" +
+                        "• If you need this code to be hot-updatable, copy it to Assets/ folder and create a new asmdef",
                         MessageType.Warning);
                 }
             }
