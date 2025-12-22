@@ -8,7 +8,9 @@ namespace Build.Pipeline.Editor
     public class HybridCLRBuildConfigEditor : UnityEditor.Editor
     {
         private SerializedProperty hotUpdateAssemblies;
+        private SerializedProperty cheatAssemblies;
         private SerializedProperty hotUpdateDllOutputDirectory;
+        private SerializedProperty cheatDllOutputDirectory;
         private SerializedProperty enableObfuz;
         private SerializedProperty aotDllOutputDirectory;
 
@@ -17,7 +19,9 @@ namespace Build.Pipeline.Editor
         private void OnEnable()
         {
             hotUpdateAssemblies = serializedObject.FindProperty("hotUpdateAssemblies");
+            cheatAssemblies = serializedObject.FindProperty("cheatAssemblies");
             hotUpdateDllOutputDirectory = serializedObject.FindProperty("hotUpdateDllOutputDirectory");
+            cheatDllOutputDirectory = serializedObject.FindProperty("cheatDllOutputDirectory");
             enableObfuz = serializedObject.FindProperty("enableObfuz");
             aotDllOutputDirectory = serializedObject.FindProperty("aotDllOutputDirectory");
         }
@@ -34,6 +38,12 @@ namespace Build.Pipeline.Editor
             EditorGUILayout.LabelField("Hot Update Configuration", EditorStyles.boldLabel);
             EditorGUILayout.PropertyField(hotUpdateAssemblies);
             ValidateHotUpdateAssemblies();
+            EditorGUILayout.Space(5);
+
+            // Cheat DLL Configuration (optional)
+            EditorGUILayout.LabelField("Cheat/Debug DLL Configuration (Optional)", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(cheatAssemblies);
+            ValidateCheatAssemblies();
             EditorGUILayout.Space(10);
 
             // Output Settings
@@ -45,6 +55,15 @@ namespace Build.Pipeline.Editor
             EditorGUILayout.PropertyField(hotUpdateDllOutputDirectory, GUIContent.none);
             EditorGUILayout.EndHorizontal();
             ValidateHotUpdateDllOutputDirectory();
+            EditorGUILayout.Space(5);
+
+            // Cheat DLL Output Directory (optional)
+            EditorGUILayout.LabelField("Cheat DLL Output Directory (Optional)", EditorStyles.boldLabel);
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Output Directory", GUILayout.Width(200));
+            EditorGUILayout.PropertyField(cheatDllOutputDirectory, GUIContent.none);
+            EditorGUILayout.EndHorizontal();
+            ValidateCheatDllOutputDirectory();
             EditorGUILayout.Space(5);
 
             // AOT DLL Output Settings
@@ -129,6 +148,114 @@ namespace Build.Pipeline.Editor
                         "• Assign valid Assembly Definition Assets to empty slots\n\n" +
                         "Tip: Empty slots will be ignored during build, but it's better to remove them for clarity.",
                         MessageType.Warning);
+                }
+            }
+        }
+
+        private void ValidateCheatAssemblies()
+        {
+            if (cheatAssemblies != null && cheatAssemblies.arraySize > 0)
+            {
+                int nullCount = 0;
+                for (int i = 0; i < cheatAssemblies.arraySize; i++)
+                {
+                    var element = cheatAssemblies.GetArrayElementAtIndex(i);
+                    if (element.objectReferenceValue == null)
+                    {
+                        nullCount++;
+                    }
+                }
+
+                if (nullCount > 0)
+                {
+                    DrawHelpBox(
+                        $"⚠ Warning: {nullCount} empty slot(s) in Cheat Assemblies list.\n\n" +
+                        "Empty slots will be ignored during build.",
+                        MessageType.Warning);
+                }
+            }
+        }
+
+        private void ValidateCheatDllOutputDirectory()
+        {
+            if (cheatAssemblies == null || cheatAssemblies.arraySize == 0)
+            {
+                DrawHelpBox(
+                    "ℹ No Cheat Assemblies assigned. Cheat DLL Output Directory is optional.\n\n" +
+                    "If you don't need cheat/debug DLLs, you can ignore this setting.",
+                    MessageType.Info);
+                return;
+            }
+
+            if (cheatDllOutputDirectory.objectReferenceValue == null)
+            {
+                DrawHelpBox(
+                    "⚠ Cheat DLL Output Directory is not set, but cheat assemblies are defined.\n\n" +
+                    "How to fix:\n" +
+                    "1. Drag a folder from your project (e.g., Assets/HotUpdate/Compiled/Cheat) into the field above\n" +
+                    "2. The folder must be within the Assets directory\n" +
+                    "3. The directory will be created automatically if it doesn't exist\n\n" +
+                    "Example folders:\n" +
+                    "• Assets/HotUpdate/Compiled/Cheat\n" +
+                    "• Assets/StreamingAssets/Cheat\n" +
+                    "• Assets/Game/Cheat/Assemblies\n\n" +
+                    "Note: Cheat DLLs will not be copied if the output directory is not configured.",
+                    MessageType.Warning);
+                return;
+            }
+
+            string path = AssetDatabase.GetAssetPath(cheatDllOutputDirectory.objectReferenceValue);
+            if (string.IsNullOrEmpty(path))
+            {
+                DrawHelpBox(
+                    "⚠ Invalid folder reference!\n\n" +
+                    "Please drag a valid folder from your project into the field above.",
+                    MessageType.Warning);
+                return;
+            }
+
+            if (!AssetDatabase.IsValidFolder(path))
+            {
+                DrawHelpBox(
+                    "⚠ Selected asset is not a folder!\n\n" +
+                    "Please drag a folder (not a file) from your project into the field above.",
+                    MessageType.Warning);
+                return;
+            }
+
+            if (!path.StartsWith("Assets/") && !path.StartsWith("Assets\\"))
+            {
+                DrawHelpBox(
+                    "⚠ Cheat DLL Output Directory must be within the Assets folder!\n\n" +
+                    "Current value: " + path + "\n\n" +
+                    "How to fix:\n" +
+                    "The folder must be within the Assets directory.\n\n" +
+                    "Correct Examples:\n" +
+                    "• Assets/HotUpdate/Compiled/Cheat\n" +
+                    "• Assets/StreamingAssets/Cheat",
+                    MessageType.Warning);
+                return;
+            }
+
+            string fullPath = GetFullCheatDllOutputPath();
+            if (!string.IsNullOrEmpty(fullPath))
+            {
+                if (Directory.Exists(fullPath))
+                {
+                    DrawHelpBox(
+                        $"✓ Cheat DLL output directory is configured.\n\n" +
+                        $"Path: {path}\n" +
+                        $"Full Path:\n{fullPath}\n\n" +
+                        "Cheat assemblies will be copied to this directory during build.",
+                        MessageType.Info);
+                }
+                else
+                {
+                    DrawHelpBox(
+                        $"ℹ Cheat DLL output directory will be created during build.\n\n" +
+                        $"Path: {path}\n" +
+                        $"Full Path:\n{fullPath}",
+                        MessageType.Info);
                 }
             }
         }
@@ -309,6 +436,21 @@ namespace Build.Pipeline.Editor
                 return null;
 
             string relativePath = AssetDatabase.GetAssetPath(aotDllOutputDirectory.objectReferenceValue);
+            if (string.IsNullOrEmpty(relativePath))
+                return null;
+
+            relativePath = relativePath.Replace('\\', '/');
+
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            return Path.Combine(projectRoot, relativePath).Replace('\\', '/');
+        }
+
+        private string GetFullCheatDllOutputPath()
+        {
+            if (cheatDllOutputDirectory == null || cheatDllOutputDirectory.objectReferenceValue == null)
+                return null;
+
+            string relativePath = AssetDatabase.GetAssetPath(cheatDllOutputDirectory.objectReferenceValue);
             if (string.IsNullOrEmpty(relativePath))
                 return null;
 
