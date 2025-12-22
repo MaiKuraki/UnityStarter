@@ -311,20 +311,28 @@ The BuildData editor provides real-time validation:
 **Key Features:**
 
 - ✅ **Multiple DLL Support**: Configure multiple hot update and cheat assemblies
-- ✅ **Auto-Sync**: Automatically synchronizes `HybridCLRSettings.asset` with configured assemblies
 - ✅ **JSON Lists**: Generates `HotUpdate.bytes` and `Cheat.bytes` list files for runtime loading
 - ✅ **Separate Outputs**: HotUpdate, Cheat, and AOT DLLs can be output to different directories
 
 **⚠️ Important Configuration Note:**
 
-**HybridCLR configuration is based on HybridCLRBuildConfig, not HybridCLRSettings.asset.**
+**HybridCLR requires manual configuration in its Settings window.**
 
-- ✅ **Primary Source**: All DLL lists (Hot Update, Cheat, AOT) are configured in `HybridCLRBuildConfig`
-- ✅ **Auto-Sync**: The build system automatically syncs `HybridCLRSettings.hotUpdateAssemblyDefinitions` from your `HybridCLRBuildConfig` before building
-- ❌ **Do Not Edit Manually**: Do not manually edit `HybridCLRSettings.asset` - it will be overwritten during build
-- ✅ **Single Source of Truth**: `HybridCLRBuildConfig` is the single source of truth for all assembly configurations
+- ✅ **Configuration Source**: All DLL lists (Hot Update, Cheat, AOT) are configured in `HybridCLRBuildConfig`
+- ⚠️ **Manual Setup Required**: You **must** manually configure HybridCLR's Settings to match your `HybridCLRBuildConfig`
+- 📋 **How to Configure HybridCLR Settings**:
+  1. Open Unity menu: `HybridCLR -> Settings`
+  2. In the `Hot Update Assembly Definitions` list, add all `.asmdef` files from your `HybridCLRBuildConfig`
+  3. Ensure the asmdefs in HybridCLR Settings exactly match those in your `HybridCLRBuildConfig`
+- ✅ **Why Two Configs**: `HybridCLRBuildConfig` is used by the build system to determine which DLLs to copy. HybridCLR's Settings is used by HybridCLR for compilation. Both must match.
 
-> **Note**: The build system automatically syncs `HybridCLRSettings.hotUpdateAssemblyDefinitions` with your config before building. Runtime loading uses JSON list files (`HotUpdate.bytes`, `Cheat.bytes`) to load multiple DLLs.
+**📦 Package Assemblies Handling:**
+
+- ✅ **Only Assets/ folder assemblies can be hot update DLLs**: HybridCLR only compiles assemblies in the `Assets/` folder as hot update DLLs. All Package Manager packages (in `Packages/`, `Library/PackageCache/`, or external paths) are AOT assemblies and cannot be hot-updated.
+- ✅ **Package Manager packages are AOT**: These should be preserved via `link.xml` to prevent IL2CPP code stripping, not compiled as hot update DLLs.
+- ⚠️ **If you need Package code to be hot-updatable**: Copy the package code into your `Assets/` folder and create a new asmdef for it.
+
+> **⚠️ Important**: You must manually configure HybridCLR's Settings (via `HybridCLR -> Settings` menu) to match the asmdefs in your `HybridCLRBuildConfig`. The build system uses `HybridCLRBuildConfig` to determine which DLLs to copy. Runtime loading uses JSON list files (`HotUpdate.bytes`, `Cheat.bytes`) to load multiple DLLs.
 
 **JSON List File Format:**
 
@@ -610,12 +618,11 @@ Install via Package Manager or Git URL:
 1. Load BuildData
 2. **Obfuz**: Generate prerequisites (encryption VM, secret key, configure settings) if BuildData.UseObfuz is enabled
 3. **HybridCLR**: Generate all code and metadata (`GenerateAllAndCopy`)
-4. **HybridCLR**: Sync `HybridCLRSettings.asset` with configured assemblies
-5. **Obfuz**: Obfuscate hot update assemblies (if BuildData.UseObfuz is enabled and HybridCLR is used)
-6. **Obfuz**: Regenerate method bridges and AOT generic references (if obfuscation was applied)
-7. **HybridCLR**: Copy DLLs to output directories and generate JSON list files (`HotUpdate.bytes`, `Cheat.bytes`)
-8. **Asset Management**: Build all asset bundles
-9. Output hot update files
+4. **Obfuz**: Obfuscate hot update assemblies (if BuildData.UseObfuz is enabled and HybridCLR is used)
+5. **Obfuz**: Regenerate method bridges and AOT generic references (if obfuscation was applied)
+6. **HybridCLR**: Copy DLLs to output directories and generate JSON list files (`HotUpdate.bytes`, `Cheat.bytes`)
+7. **Asset Management**: Build all asset bundles
+8. Output hot update files
 
 **Menu Item:** `Build > HotUpdate Pipeline > Full Build (Generate Code + Bundles)`
 
@@ -641,12 +648,11 @@ Install via Package Manager or Git URL:
 1. Load BuildData
 2. **Obfuz**: Generate prerequisites (encryption VM, secret key, configure settings) if BuildData.UseObfuz is enabled
 3. **HybridCLR**: Compile DLLs only (`CompileDLLAndCopy`)
-4. **HybridCLR**: Sync `HybridCLRSettings.asset` with configured assemblies
-5. **Obfuz**: Obfuscate hot update assemblies (if BuildData.UseObfuz is enabled and HybridCLR is used)
-6. **Obfuz**: Regenerate method bridges and AOT generic references (if obfuscation was applied)
-7. **HybridCLR**: Copy DLLs to output directories and update JSON list files
-8. **Asset Management**: Build asset bundles
-9. Output hot update files
+4. **Obfuz**: Obfuscate hot update assemblies (if BuildData.UseObfuz is enabled and HybridCLR is used)
+5. **Obfuz**: Regenerate method bridges and AOT generic references (if obfuscation was applied)
+6. **HybridCLR**: Copy DLLs to output directories and update JSON list files
+7. **Asset Management**: Build asset bundles
+8. Output hot update files
 
 **Menu Item:** `Build > HotUpdate Pipeline > Fast Build (Compile Code + Bundles)`
 
@@ -849,9 +855,9 @@ pipeline {
 3. Configure **Hot Update DLL Output Directory** (required): Drag output folder
 4. Configure **AOT DLL Output Directory** (required): Drag folder for AOT metadata DLLs
 5. Optionally configure **Cheat Assemblies** and **Cheat DLL Output Directory** for debug modules
-6. The build system automatically syncs `HybridCLRSettings.asset` with your config
+6. **Manually configure HybridCLR Settings**: Open `HybridCLR -> Settings` and add all asmdefs from your `HybridCLRBuildConfig` to the `Hot Update Assembly Definitions` list
 
-**⚠️ Important**: Always configure DLL lists in `HybridCLRBuildConfig`, not in `HybridCLRSettings.asset`. The build system uses `HybridCLRBuildConfig` as the source of truth and overwrites `HybridCLRSettings.asset` during build.
+**⚠️ Important**: Configure DLL lists in `HybridCLRBuildConfig` first, then manually ensure HybridCLR Settings (via `HybridCLR -> Settings` menu) matches. The build system uses `HybridCLRBuildConfig` to determine which DLLs to copy, while HybridCLR uses its Settings for compilation.
 
 ### Obfuz Not Found
 
@@ -952,7 +958,7 @@ pipeline {
 - ✅ Use **Full Build** for structure changes or clean builds
 - ✅ Use **Fast Build** for rapid iteration
 - ✅ Configure all required output directories in HybridCLR Build Config
-- ✅ The system automatically syncs `HybridCLRSettings.asset` - no manual editing needed
+- ✅ Manually configure HybridCLR Settings (via `HybridCLR -> Settings`) to match your `HybridCLRBuildConfig`
 - ✅ JSON list files (`HotUpdate.bytes`, `Cheat.bytes`) are generated automatically
 - ✅ Test hot updates in development before production
 - ✅ Keep hot update files organized and versioned

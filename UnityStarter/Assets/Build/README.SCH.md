@@ -311,20 +311,28 @@ BuildData 编辑器提供实时验证：
 **主要特性:**
 
 - ✅ **多 DLL 支持**: 可配置多个热更新和 Cheat 程序集
-- ✅ **自动同步**: 自动同步 `HybridCLRSettings.asset` 中的程序集配置
 - ✅ **JSON 列表**: 生成 `HotUpdate.bytes` 和 `Cheat.bytes` 列表文件供运行时加载
 - ✅ **独立输出**: HotUpdate、Cheat 和 AOT DLL 可输出到不同目录
 
 **⚠️ 重要配置说明:**
 
-**HybridCLR 配置以 HybridCLRBuildConfig 为准，不以 HybridCLRSettings.asset 为准。**
+**HybridCLR 需要在其 Settings 窗口中手动配置。**
 
-- ✅ **主要配置源**: 所有 DLL 列表（Hot Update、Cheat、AOT）均在 `HybridCLRBuildConfig` 中配置
-- ✅ **自动同步**: 构建系统会在构建前自动将 `HybridCLRSettings.hotUpdateAssemblyDefinitions` 与您的 `HybridCLRBuildConfig` 同步
-- ❌ **请勿手动编辑**: 请勿手动编辑 `HybridCLRSettings.asset` - 它会在构建过程中被覆盖
-- ✅ **单一配置源**: `HybridCLRBuildConfig` 是所有程序集配置的唯一来源
+- ✅ **配置源**: 所有 DLL 列表（Hot Update、Cheat、AOT）均在 `HybridCLRBuildConfig` 中配置
+- ⚠️ **需要手动设置**: 您**必须**手动配置 HybridCLR 的 Settings 以匹配您的 `HybridCLRBuildConfig`
+- 📋 **如何配置 HybridCLR Settings**:
+  1. 打开 Unity 菜单: `HybridCLR -> Settings`
+  2. 在 `Hot Update Assembly Definitions` 列表中，添加 `HybridCLRBuildConfig` 中的所有 `.asmdef` 文件
+  3. 确保 HybridCLR Settings 中的 asmdefs 与您的 `HybridCLRBuildConfig` 中的完全匹配
+- ✅ **为什么需要两个配置**: `HybridCLRBuildConfig` 被构建系统用来确定要复制哪些 DLL。HybridCLR 的 Settings 被 HybridCLR 用于编译。两者必须匹配。
 
-> **注意**: 构建系统会在构建前自动将 `HybridCLRSettings.hotUpdateAssemblyDefinitions` 与您的配置同步。运行时加载使用 JSON 列表文件（`HotUpdate.bytes`、`Cheat.bytes`）来加载多个 DLL。
+**📦 Package 程序集处理:**
+
+- ✅ **只有 Assets/ 文件夹下的程序集可以作为热更新 DLL**: HybridCLR 只会将 `Assets/` 文件夹下的程序集编译为热更新 DLL。所有 Package Manager 包（位于 `Packages/`、`Library/PackageCache/` 或外部路径）都是 AOT 程序集，不能热更新。
+- ✅ **Package Manager 包程序集是 AOT**: 这些包应该通过 `link.xml` 来防止 IL2CPP 代码裁剪，而不是编译为热更新 DLL。
+- ⚠️ **如果您需要 Package 代码可热更新**: 将包代码复制到 `Assets/` 文件夹中，并为其创建新的 asmdef。
+
+> **⚠️ 重要**: 您必须手动配置 HybridCLR 的 Settings（通过 `HybridCLR -> Settings` 菜单）以匹配您的 `HybridCLRBuildConfig` 中的 asmdefs。构建系统使用 `HybridCLRBuildConfig` 来确定要复制哪些 DLL。运行时加载使用 JSON 列表文件（`HotUpdate.bytes`、`Cheat.bytes`）来加载多个 DLL。
 
 **JSON 列表文件格式:**
 
@@ -610,12 +618,11 @@ Obfuz 是一个代码混淆工具，通过使代码更难被逆向工程来保�
 1. 加载 BuildData
 2. **Obfuz**: 如果 BuildData.UseObfuz 已启用，生成前置条件（加密 VM、密钥、配置设置）
 3. **HybridCLR**: 生成所有代码和元数据（`GenerateAllAndCopy`）
-4. **HybridCLR**: 同步 `HybridCLRSettings.asset` 与配置的程序集
-5. **Obfuz**: 如果 BuildData.UseObfuz 已启用且使用 HybridCLR，混淆热更新程序集
-6. **Obfuz**: 如果应用了混淆，重新生成方法桥接和 AOT 泛型引用
-7. **HybridCLR**: 复制 DLL 到输出目录并生成 JSON 列表文件（`HotUpdate.bytes`、`Cheat.bytes`）
-8. **资源管理**: 构建所有资源包
-9. 输出热更新文件
+4. **Obfuz**: 如果 BuildData.UseObfuz 已启用且使用 HybridCLR，混淆热更新程序集
+5. **Obfuz**: 如果应用了混淆，重新生成方法桥接和 AOT 泛型引用
+6. **HybridCLR**: 复制 DLL 到输出目录并生成 JSON 列表文件（`HotUpdate.bytes`、`Cheat.bytes`）
+7. **资源管理**: 构建所有资源包
+8. 输出热更新文件
 
 **菜单项**: `Build > HotUpdate Pipeline > Full Build (Generate Code + Bundles)`
 
@@ -641,12 +648,11 @@ Obfuz 是一个代码混淆工具，通过使代码更难被逆向工程来保�
 1. 加载 BuildData
 2. **Obfuz**: 如果 BuildData.UseObfuz 已启用，生成前置条件（加密 VM、密钥、配置设置）
 3. **HybridCLR**: 仅编译 DLL（`CompileDLLAndCopy`）
-4. **HybridCLR**: 同步 `HybridCLRSettings.asset` 与配置的程序集
-5. **Obfuz**: 如果 BuildData.UseObfuz 已启用且使用 HybridCLR，混淆热更新程序集
-6. **Obfuz**: 如果应用了混淆，重新生成方法桥接和 AOT 泛型引用
-7. **HybridCLR**: 复制 DLL 到输出目录并更新 JSON 列表文件
-8. **资源管理**: 构建资源包
-9. 输出热更新文件
+4. **Obfuz**: 如果 BuildData.UseObfuz 已启用且使用 HybridCLR，混淆热更新程序集
+5. **Obfuz**: 如果应用了混淆，重新生成方法桥接和 AOT 泛型引用
+6. **HybridCLR**: 复制 DLL 到输出目录并更新 JSON 列表文件
+7. **资源管理**: 构建资源包
+8. 输出热更新文件
 
 **菜单项**: `Build > HotUpdate Pipeline > Fast Build (Compile Code + Bundles)`
 
@@ -849,9 +855,9 @@ pipeline {
 3. 配置 **Hot Update DLL Output Directory**（必需）: 拖拽输出文件夹
 4. 配置 **AOT DLL Output Directory**（必需）: 拖拽用于 AOT 元数据 DLL 的文件夹
 5. 可选配置 **Cheat Assemblies** 和 **Cheat DLL Output Directory** 用于调试模块
-6. 构建系统会自动同步 `HybridCLRSettings.asset` 与您的配置
+6. **手动配置 HybridCLR Settings**: 打开 `HybridCLR -> Settings`，将所有 asmdefs 从您的 `HybridCLRBuildConfig` 添加到 `Hot Update Assembly Definitions` 列表
 
-**⚠️ 重要**: 始终在 `HybridCLRBuildConfig` 中配置 DLL 列表，而不是在 `HybridCLRSettings.asset` 中。构建系统使用 `HybridCLRBuildConfig` 作为配置来源，并在构建过程中覆盖 `HybridCLRSettings.asset`。
+**⚠️ 重要**: 先在 `HybridCLRBuildConfig` 中配置 DLL 列表，然后手动确保 HybridCLR Settings（通过 `HybridCLR -> Settings` 菜单）与之匹配。构建系统使用 `HybridCLRBuildConfig` 来确定要复制哪些 DLL，而 HybridCLR 使用其 Settings 进行编译。
 
 ### Obfuz 未找到
 
@@ -952,7 +958,7 @@ pipeline {
 - ✅ 对结构更改或干净构建使用**完整构建**
 - ✅ 对快速迭代使用**快速构建**
 - ✅ 在 HybridCLR Build Config 中配置所有必需的输出目录
-- ✅ 系统会自动同步 `HybridCLRSettings.asset` - 无需手动编辑
+- ✅ 手动配置 HybridCLR Settings（通过 `HybridCLR -> Settings`）以匹配您的 `HybridCLRBuildConfig`
 - ✅ JSON 列表文件（`HotUpdate.bytes`、`Cheat.bytes`）会自动生成
 - ✅ 在生产前在开发中测试热更新
 - ✅ 保持热更新文件组织有序和版本化
