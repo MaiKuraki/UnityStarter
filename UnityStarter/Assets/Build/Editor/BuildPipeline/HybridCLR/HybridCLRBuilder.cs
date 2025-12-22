@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using UnityEditor;
+using UnityEditorInternal;
 using UnityEngine;
 
 namespace Build.Pipeline.Editor
@@ -305,7 +307,7 @@ namespace Build.Pipeline.Editor
             string targetDirRelative = config.GetHotUpdateDllOutputDirectoryPath();
             var assemblyNames = config.GetHotUpdateAssemblyNames();
 
-            Debug.Log($"{DEBUG_FLAG} Copying HotUpdate DLLs -> OutputDir: {targetDirRelative}, Assemblies: {assemblyNames.Count}");
+            Debug.Log($"{DEBUG_FLAG} Copying HotUpdate DLLs -> OutputDir: {targetDirRelative}, Configured Assemblies: {assemblyNames.Count}");
 
             if (assemblyNames.Count == 0)
             {
@@ -317,28 +319,57 @@ namespace Build.Pipeline.Editor
             BuildUtils.CreateDirectory(destinationDir);
             CleanOldHotUpdateDlls(destinationDir);
 
+            HashSet<string> configuredAssemblyNames = new HashSet<string>(assemblyNames);
             List<string> copiedAssemblyPaths = new List<string>();
             int copyCount = 0;
+            int skippedCount = 0;
 
-            foreach (var asmName in assemblyNames)
+            string[] dllFiles = Directory.GetFiles(sourceDir, "*.dll", SearchOption.TopDirectoryOnly);
+            Debug.Log($"{DEBUG_FLAG} Found {dllFiles.Length} DLL files in source directory: {sourceDir}");
+
+            foreach (string dllFile in dllFiles)
             {
-                string srcFile = Path.Combine(sourceDir, $"{asmName}.dll");
-                string dstFile = Path.Combine(destinationDir, $"{asmName}.dll.bytes");
+                string fileName = Path.GetFileNameWithoutExtension(dllFile);
 
-                if (File.Exists(srcFile))
+                if (configuredAssemblyNames.Contains(fileName))
                 {
-                    BuildUtils.CopyFile(srcFile, dstFile, true);
+                    string dstFile = Path.Combine(destinationDir, $"{fileName}.dll.bytes");
+                    BuildUtils.CopyFile(dllFile, dstFile, true);
                     string relativePath = GetRelativePathFromAssets(dstFile);
                     if (!string.IsNullOrEmpty(relativePath))
                     {
                         copiedAssemblyPaths.Add(relativePath);
                     }
-                    Debug.Log($"{DEBUG_FLAG} Copied HotUpdate DLL: {asmName}.dll -> {targetDirRelative}/{asmName}.dll.bytes");
+                    Debug.Log($"{DEBUG_FLAG} Copied HotUpdate DLL: {fileName}.dll -> {targetDirRelative}/{fileName}.dll.bytes");
                     copyCount++;
                 }
                 else
                 {
-                    Debug.LogError($"{DEBUG_FLAG} HotUpdate DLL not found: {srcFile}");
+                    Debug.Log($"{DEBUG_FLAG} Skipped DLL (not in config): {fileName}.dll");
+                    skippedCount++;
+                }
+            }
+
+            if (copyCount < assemblyNames.Count)
+            {
+                List<string> missingAssemblies = new List<string>();
+                HashSet<string> foundDllNames = new HashSet<string>(dllFiles.Select(f => Path.GetFileNameWithoutExtension(f)));
+
+                foreach (string asmName in assemblyNames)
+                {
+                    if (!foundDllNames.Contains(asmName))
+                    {
+                        missingAssemblies.Add(asmName);
+                    }
+                }
+
+                Debug.LogWarning($"{DEBUG_FLAG} Only {copyCount} out of {assemblyNames.Count} configured HotUpdate assemblies were found and copied. " +
+                    $"Missing assemblies may not have been compiled by HybridCLR. Ensure they are in HybridCLRSettings.hotUpdateAssemblyDefinitions.");
+
+                if (missingAssemblies.Count > 0)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} Missing assemblies ({missingAssemblies.Count}): {string.Join(", ", missingAssemblies)}");
+                    Debug.LogWarning($"{DEBUG_FLAG} Available DLL files in source directory ({foundDllNames.Count}): {string.Join(", ", foundDllNames)}");
                 }
             }
 
@@ -349,7 +380,7 @@ namespace Build.Pipeline.Editor
                 GenerateAssemblyList(target, listPath, copiedAssemblyPaths);
             }
 
-            Debug.Log($"{DEBUG_FLAG} Successfully copied {copyCount} HotUpdate assemblies.");
+            Debug.Log($"{DEBUG_FLAG} Successfully copied {copyCount} HotUpdate assemblies (skipped {skippedCount} files not in config).");
         }
 
         /// <summary>
@@ -371,35 +402,47 @@ namespace Build.Pipeline.Editor
                 return;
             }
 
-            Debug.Log($"{DEBUG_FLAG} Copying Cheat DLLs -> OutputDir: {cheatOutputDir}, Assemblies: {cheatAssemblyNames.Count}");
+            Debug.Log($"{DEBUG_FLAG} Copying Cheat DLLs -> OutputDir: {cheatOutputDir}, Configured Assemblies: {cheatAssemblyNames.Count}");
 
             string destinationDir = Path.Combine(projectRoot, cheatOutputDir);
             BuildUtils.CreateDirectory(destinationDir);
             CleanOldCheatDlls(destinationDir);
 
+            HashSet<string> configuredAssemblyNames = new HashSet<string>(cheatAssemblyNames);
             List<string> copiedAssemblyPaths = new List<string>();
             int copyCount = 0;
+            int skippedCount = 0;
 
-            foreach (var asmName in cheatAssemblyNames)
+            string[] dllFiles = Directory.GetFiles(sourceDir, "*.dll", SearchOption.TopDirectoryOnly);
+            Debug.Log($"{DEBUG_FLAG} Found {dllFiles.Length} DLL files in source directory: {sourceDir}");
+
+            foreach (string dllFile in dllFiles)
             {
-                string srcFile = Path.Combine(sourceDir, $"{asmName}.dll");
-                string dstFile = Path.Combine(destinationDir, $"{asmName}.dll.bytes");
+                string fileName = Path.GetFileNameWithoutExtension(dllFile);
 
-                if (File.Exists(srcFile))
+                if (configuredAssemblyNames.Contains(fileName))
                 {
-                    BuildUtils.CopyFile(srcFile, dstFile, true);
+                    string dstFile = Path.Combine(destinationDir, $"{fileName}.dll.bytes");
+                    BuildUtils.CopyFile(dllFile, dstFile, true);
                     string relativePath = GetRelativePathFromAssets(dstFile);
                     if (!string.IsNullOrEmpty(relativePath))
                     {
                         copiedAssemblyPaths.Add(relativePath);
                     }
-                    Debug.Log($"{DEBUG_FLAG} Copied Cheat DLL: {asmName}.dll -> {cheatOutputDir}/{asmName}.dll.bytes");
+                    Debug.Log($"{DEBUG_FLAG} Copied Cheat DLL: {fileName}.dll -> {cheatOutputDir}/{fileName}.dll.bytes");
                     copyCount++;
                 }
                 else
                 {
-                    Debug.LogWarning($"{DEBUG_FLAG} Cheat DLL not found: {srcFile} (this is normal if cheat DLL is not compiled)");
+                    Debug.Log($"{DEBUG_FLAG} Skipped DLL (not in cheat config): {fileName}.dll");
+                    skippedCount++;
                 }
+            }
+
+            if (copyCount < cheatAssemblyNames.Count)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Only {copyCount} out of {cheatAssemblyNames.Count} configured Cheat assemblies were found and copied. " +
+                    $"Missing assemblies may not have been compiled by HybridCLR. Ensure they are in HybridCLRSettings.hotUpdateAssemblyDefinitions.");
             }
 
             // Generate Cheat list JSON
@@ -409,7 +452,7 @@ namespace Build.Pipeline.Editor
                 GenerateAssemblyList(target, listPath, copiedAssemblyPaths);
             }
 
-            Debug.Log($"{DEBUG_FLAG} Successfully copied {copyCount} Cheat assemblies.");
+            Debug.Log($"{DEBUG_FLAG} Successfully copied {copyCount} Cheat assemblies (skipped {skippedCount} files not in config).");
         }
 
         /// <summary>
@@ -455,94 +498,65 @@ namespace Build.Pipeline.Editor
         }
 
         /// <summary>
-        /// Synchronizes HybridCLRSettings.asset's hotUpdateAssemblies list with HybridCLRBuildConfig.
-        /// Adds missing assemblies and removes extra assemblies based on config.
-        /// Note: This syncs the string list (hotUpdateAssemblies), not the AssemblyDefinitionAsset references.
+        /// Reminder: Users must manually configure HybridCLRSettings.hotUpdateAssemblyDefinitions.
+        /// Auto-sync is not available due to HybridCLR API limitations.
         /// </summary>
         private static void SyncHybridCLRSettings(HybridCLRBuildConfig config)
         {
+            // Auto-sync is disabled - users must manually configure HybridCLRSettings
+            // All asmdefs in HybridCLRBuildConfig must be added to HybridCLRSettings.hotUpdateAssemblyDefinitions
+            // via Unity menu: HybridCLR -> Settings
+
+            var allAsmDefs = new List<AssemblyDefinitionAsset>();
+            if (config.hotUpdateAssemblies != null)
+            {
+                allAsmDefs.AddRange(config.hotUpdateAssemblies.Where(asm => asm != null));
+            }
+            if (config.cheatAssemblies != null)
+            {
+                allAsmDefs.AddRange(config.cheatAssemblies.Where(asm => asm != null));
+            }
+
+            // Filter to only Assets folder assemblies (as documented)
+            var assetsAsmDefs = allAsmDefs.Where(asm =>
+            {
+                string path = AssetDatabase.GetAssetPath(asm);
+                return !string.IsNullOrEmpty(path) && path.StartsWith("Assets/");
+            }).ToList();
+
+            if (assetsAsmDefs.Count > 0)
+            {
+                var assemblyNames = assetsAsmDefs.Select(asm => GetAssemblyNameFromAsmDef(asm)).Where(name => !string.IsNullOrEmpty(name)).ToList();
+                Debug.Log($"{DEBUG_FLAG} ⚠️ Manual Configuration Required: Please ensure the following {assemblyNames.Count} Assets assemblies are added to HybridCLRSettings.hotUpdateAssemblyDefinitions:\n{string.Join(", ", assemblyNames)}\n" +
+                    $"Configure via Unity menu: HybridCLR -> Settings -> Hot Update Assembly Definitions");
+            }
+            else
+            {
+                Debug.Log($"{DEBUG_FLAG} No Assets folder assemblies found in config. Skipping HybridCLRSettings reminder.");
+            }
+
+            return;
+
+        }
+
+        private static string GetAssemblyNameFromAsmDef(AssemblyDefinitionAsset asmDef)
+        {
+            if (asmDef == null) return null;
             try
             {
-                // Load HybridCLRSettings asset
-                string settingsPath = "ProjectSettings/HybridCLRSettings.asset";
-                UnityEngine.Object settingsAsset = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(settingsPath);
-
-                if (settingsAsset == null)
-                {
-                    Debug.LogWarning($"{DEBUG_FLAG} HybridCLRSettings.asset not found at {settingsPath}. Cannot synchronize.");
-                    return;
-                }
-
-                // Use SerializedObject to modify the asset
-                SerializedObject serializedSettings = new SerializedObject(settingsAsset);
-                SerializedProperty hotUpdateAssembliesProp = serializedSettings.FindProperty("hotUpdateAssemblies");
-
-                if (hotUpdateAssembliesProp == null)
-                {
-                    Debug.LogWarning($"{DEBUG_FLAG} hotUpdateAssemblies property not found in HybridCLRSettings. Cannot synchronize.");
-                    return;
-                }
-
-                // Get target assembly names from config (HotUpdate + Cheat)
-                var targetAssemblyNames = config.GetAllHotUpdateAssemblyNames();
-                Debug.Log($"{DEBUG_FLAG} Syncing HybridCLRSettings.hotUpdateAssemblies with {targetAssemblyNames.Count} assemblies from config.");
-
-                // Get current assembly names in HybridCLRSettings
-                HashSet<string> currentAssemblyNames = new HashSet<string>();
-                for (int i = 0; i < hotUpdateAssembliesProp.arraySize; i++)
-                {
-                    SerializedProperty element = hotUpdateAssembliesProp.GetArrayElementAtIndex(i);
-                    string assemblyName = element.stringValue;
-                    if (!string.IsNullOrEmpty(assemblyName))
-                    {
-                        currentAssemblyNames.Add(assemblyName);
-                    }
-                }
-
-                // Check if synchronization is needed
-                bool needsSync = false;
-                if (targetAssemblyNames.Count != currentAssemblyNames.Count)
-                {
-                    needsSync = true;
-                }
-                else
-                {
-                    foreach (var targetName in targetAssemblyNames)
-                    {
-                        if (!currentAssemblyNames.Contains(targetName))
-                        {
-                            needsSync = true;
-                            break;
-                        }
-                    }
-                }
-
-                if (!needsSync)
-                {
-                    Debug.Log($"{DEBUG_FLAG} HybridCLRSettings.hotUpdateAssemblies is already in sync. No changes needed.");
-                    return;
-                }
-
-                // Update the list
-                hotUpdateAssembliesProp.ClearArray();
-                hotUpdateAssembliesProp.arraySize = targetAssemblyNames.Count;
-
-                for (int i = 0; i < targetAssemblyNames.Count; i++)
-                {
-                    SerializedProperty element = hotUpdateAssembliesProp.GetArrayElementAtIndex(i);
-                    element.stringValue = targetAssemblyNames[i];
-                }
-
-                serializedSettings.ApplyModifiedProperties();
-                EditorUtility.SetDirty(settingsAsset);
-                AssetDatabase.SaveAssets();
-
-                Debug.Log($"{DEBUG_FLAG} HybridCLRSettings.hotUpdateAssemblies synchronized successfully. Updated list with {targetAssemblyNames.Count} assemblies: {string.Join(", ", targetAssemblyNames)}");
+                var data = JsonUtility.FromJson<AsmDefJsonData>(asmDef.text);
+                return data?.name;
             }
-            catch (Exception ex)
+            catch
             {
-                Debug.LogError($"{DEBUG_FLAG} Failed to synchronize HybridCLRSettings: {ex.Message}\n{ex.StackTrace}");
+                return null;
             }
+        }
+
+        [Serializable]
+        private class AsmDefJsonData
+        {
+            public string name;
         }
 
         /// <summary>
