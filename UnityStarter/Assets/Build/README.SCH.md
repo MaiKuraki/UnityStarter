@@ -290,11 +290,147 @@ BuildData 编辑器提供实时验证：
 
 **关键设置:**
 
-- HybridCLR 安装路径
-- 代码生成选项
-- DLL 编译设置
+**热更新配置:**
 
-> **注意**: 有关详细配置，请参阅 HybridCLR 文档。Build 系统提供围绕 HybridCLR 构建命令的包装器。
+- **Hot Update Assemblies**: 拖拽需要热更新的 `.asmdef` 文件（必需）
+- **Hot Update DLL Output Directory**: 热更新 DLL 的输出目录（必需）
+
+**Cheat/Debug DLL 配置（可选）:**
+
+- **Cheat Assemblies**: 拖拽用于作弊/调试模块的 `.asmdef` 文件（可选）
+- **Cheat DLL Output Directory**: Cheat DLL 的输出目录（可选，如果配置了 Cheat Assemblies 则建议配置）
+
+**AOT DLL 配置:**
+
+- **AOT DLL Output Directory**: AOT DLL 的输出目录，用于元数据生成（必需）
+
+**Obfuz 设置:**
+
+- **Enable Obfuz**: 为热更新程序集启用混淆（可选）
+
+**主要特性:**
+
+- ✅ **多 DLL 支持**: 可配置多个热更新和 Cheat 程序集
+- ✅ **自动同步**: 自动同步 `HybridCLRSettings.asset` 中的程序集配置
+- ✅ **JSON 列表**: 生成 `HotUpdate.bytes` 和 `Cheat.bytes` 列表文件供运行时加载
+- ✅ **独立输出**: HotUpdate、Cheat 和 AOT DLL 可输出到不同目录
+
+**⚠️ 重要配置说明:**
+
+**HybridCLR 配置以 HybridCLRBuildConfig 为准，不以 HybridCLRSettings.asset 为准。**
+
+- ✅ **主要配置源**: 所有 DLL 列表（Hot Update、Cheat、AOT）均在 `HybridCLRBuildConfig` 中配置
+- ✅ **自动同步**: 构建系统会在构建前自动将 `HybridCLRSettings.hotUpdateAssemblyDefinitions` 与您的 `HybridCLRBuildConfig` 同步
+- ❌ **请勿手动编辑**: 请勿手动编辑 `HybridCLRSettings.asset` - 它会在构建过程中被覆盖
+- ✅ **单一配置源**: `HybridCLRBuildConfig` 是所有程序集配置的唯一来源
+
+> **注意**: 构建系统会在构建前自动将 `HybridCLRSettings.hotUpdateAssemblyDefinitions` 与您的配置同步。运行时加载使用 JSON 列表文件（`HotUpdate.bytes`、`Cheat.bytes`）来加载多个 DLL。
+
+**JSON 列表文件格式:**
+
+构建系统会生成 JSON 列表文件（`.bytes` 扩展名）供运行时 DLL 加载。JSON 结构如下：
+
+```json
+{
+  "assemblies": [
+    "Assets/YourProject/CompiledDLLs/HotUpdate/YourProject.HotUpdate.dll.bytes",
+    "Assets/YourProject/CompiledDLLs/HotUpdate/AnotherHotUpdate.dll.bytes"
+  ]
+}
+```
+
+**运行时加载示例代码:**
+
+以下示例代码展示如何在运行时从 JSON 列表文件加载 DLL：
+
+```csharp
+using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Text;
+using Cysharp.Threading.Tasks;
+using CycloneGames.AssetManagement.Runtime;
+using UnityEngine;
+using YooAsset;
+
+// JSON 结构用于程序集列表
+[Serializable]
+private class AssemblyList
+{
+    public List<string> assemblies;
+}
+
+// 从 JSON 列表加载 HotUpdate DLL
+private async UniTask<bool> LoadHotUpdateDllsAsync(IAssetModule yooAssetModule, CancellationToken cancellationToken = default)
+{
+    try
+    {
+        var rawFilePackage = yooAssetModule.GetPackage("RawFilePackage");
+        if (rawFilePackage == null)
+        {
+            Debug.LogError("RawFilePackage 未找到。");
+            return false;
+        }
+
+        // 加载 JSON 列表文件（调整路径以匹配您的输出目录配置）
+        string listPath = "Assets/YourProject/CompiledDLLs/HotUpdate/HotUpdate.bytes";
+        var listHandle = rawFilePackage.LoadRawFileAsync(listPath, cancellationToken);
+        await listHandle.Task;
+
+        if (!string.IsNullOrEmpty(listHandle.Error))
+        {
+            Debug.LogError($"加载列表文件失败: {listHandle.Error}");
+            listHandle.Dispose();
+            return false;
+        }
+
+        // 解析 JSON
+        byte[] listBytes = listHandle.ReadBytes();
+        listHandle.Dispose();
+        string jsonText = Encoding.UTF8.GetString(listBytes);
+        AssemblyList list = JsonUtility.FromJson<AssemblyList>(jsonText);
+
+        if (list == null || list.assemblies == null || list.assemblies.Count == 0)
+        {
+            Debug.LogError("程序集列表为空。");
+            return false;
+        }
+
+        // 从列表加载每个 DLL
+        foreach (var dllPath in list.assemblies)
+        {
+            var dllHandle = rawFilePackage.LoadRawFileAsync(dllPath, cancellationToken);
+            await dllHandle.Task;
+
+            if (!string.IsNullOrEmpty(dllHandle.Error))
+            {
+                Debug.LogError($"加载 DLL 失败: {dllPath}, 错误: {dllHandle.Error}");
+                dllHandle.Dispose();
+                continue;
+            }
+
+            byte[] dllBytes = dllHandle.ReadBytes();
+            dllHandle.Dispose();
+
+            if (dllBytes != null && dllBytes.Length > 0)
+            {
+                Assembly assembly = Assembly.Load(dllBytes);
+                Debug.Log($"已加载 DLL: {assembly.GetName().FullName}");
+                // 存储程序集引用供后续使用
+            }
+        }
+
+        return true;
+    }
+    catch (Exception ex)
+    {
+        Debug.LogError($"加载 DLL 时发生异常: {ex.Message}");
+        return false;
+    }
+}
+```
+
+> **注意**: 此示例代码展示了基本的加载模式。请调整 `listPath` 以匹配您的 HybridCLR Build Config 输出目录配置。在实际使用中，您应该更优雅地处理错误，验证 DLL 格式，并妥善管理程序集引用。
 
 ### YooAsset Build Config
 
@@ -474,17 +610,21 @@ Obfuz 是一个代码混淆工具，通过使代码更难被逆向工程来保�
 1. 加载 BuildData
 2. **Obfuz**: 如果 BuildData.UseObfuz 已启用，生成前置条件（加密 VM、密钥、配置设置）
 3. **HybridCLR**: 生成所有代码和元数据（`GenerateAllAndCopy`）
-4. **Obfuz**: 如果 BuildData.UseObfuz 已启用且使用 HybridCLR，混淆热更新程序集
-5. **Obfuz**: 如果应用了混淆，重新生成方法桥接和 AOT 泛型引用
-6. **资源管理**: 构建所有资源包
-7. 输出热更新文件
+4. **HybridCLR**: 同步 `HybridCLRSettings.asset` 与配置的程序集
+5. **Obfuz**: 如果 BuildData.UseObfuz 已启用且使用 HybridCLR，混淆热更新程序集
+6. **Obfuz**: 如果应用了混淆，重新生成方法桥接和 AOT 泛型引用
+7. **HybridCLR**: 复制 DLL 到输出目录并生成 JSON 列表文件（`HotUpdate.bytes`、`Cheat.bytes`）
+8. **资源管理**: 构建所有资源包
+9. 输出热更新文件
 
 **菜单项**: `Build > HotUpdate Pipeline > Full Build (Generate Code + Bundles)`
 
 **输出:**
 
-- HybridCLR DLL 在 `HybridCLRData/DllOutput/`
-- 资源包在配置的输出目录中
+- 热更新 DLL 在配置的输出目录，包含 `HotUpdate.bytes` 列表文件
+- Cheat DLL 在配置的输出目录，包含 `Cheat.bytes` 列表文件（如果已配置）
+- AOT DLL 在配置的输出目录，用于元数据生成
+- 资源包在配置的输出目录
 
 ### 热更新 - 快速构建
 
@@ -501,16 +641,19 @@ Obfuz 是一个代码混淆工具，通过使代码更难被逆向工程来保�
 1. 加载 BuildData
 2. **Obfuz**: 如果 BuildData.UseObfuz 已启用，生成前置条件（加密 VM、密钥、配置设置）
 3. **HybridCLR**: 仅编译 DLL（`CompileDLLAndCopy`）
-4. **Obfuz**: 如果 BuildData.UseObfuz 已启用且使用 HybridCLR，混淆热更新程序集
-5. **Obfuz**: 如果应用了混淆，重新生成方法桥接和 AOT 泛型引用
-6. **资源管理**: 构建资源包
-7. 输出热更新文件
+4. **HybridCLR**: 同步 `HybridCLRSettings.asset` 与配置的程序集
+5. **Obfuz**: 如果 BuildData.UseObfuz 已启用且使用 HybridCLR，混淆热更新程序集
+6. **Obfuz**: 如果应用了混淆，重新生成方法桥接和 AOT 泛型引用
+7. **HybridCLR**: 复制 DLL 到输出目录并更新 JSON 列表文件
+8. **资源管理**: 构建资源包
+9. 输出热更新文件
 
 **菜单项**: `Build > HotUpdate Pipeline > Fast Build (Compile Code + Bundles)`
 
 **输出:**
 
-- 编译的 HybridCLR DLL
+- 编译的热更新 DLL 及更新的列表文件
+- 更新的 Cheat DLL（如果已配置）
 - 更新的资源包
 
 ### 构建配置调试信息
@@ -695,6 +838,21 @@ pipeline {
 2. 或者，如果您不需要，在 BuildData 中禁用 `Use HybridCLR`
 3. 构建将在没有 HybridCLR 功能的情况下继续
 
+### HybridCLR 配置问题
+
+**警告**: `HybridCLRBuildConfig not found` 或缺少必需的设置
+
+**解决方案:**
+
+1. 创建 HybridCLR Build Config: **Create > CycloneGames > Build > HybridCLR Build Config**
+2. 配置 **Hot Update Assemblies**（必需）: 拖拽需要热更新的 `.asmdef` 文件
+3. 配置 **Hot Update DLL Output Directory**（必需）: 拖拽输出文件夹
+4. 配置 **AOT DLL Output Directory**（必需）: 拖拽用于 AOT 元数据 DLL 的文件夹
+5. 可选配置 **Cheat Assemblies** 和 **Cheat DLL Output Directory** 用于调试模块
+6. 构建系统会自动同步 `HybridCLRSettings.asset` 与您的配置
+
+**⚠️ 重要**: 始终在 `HybridCLRBuildConfig` 中配置 DLL 列表，而不是在 `HybridCLRSettings.asset` 中。构建系统使用 `HybridCLRBuildConfig` 作为配置来源，并在构建过程中覆盖 `HybridCLRSettings.asset`。
+
 ### Obfuz 未找到
 
 **警告**: `Obfuz package not found. Skipping obfuscation.`
@@ -793,6 +951,9 @@ pipeline {
 
 - ✅ 对结构更改或干净构建使用**完整构建**
 - ✅ 对快速迭代使用**快速构建**
+- ✅ 在 HybridCLR Build Config 中配置所有必需的输出目录
+- ✅ 系统会自动同步 `HybridCLRSettings.asset` - 无需手动编辑
+- ✅ JSON 列表文件（`HotUpdate.bytes`、`Cheat.bytes`）会自动生成
 - ✅ 在生产前在开发中测试热更新
 - ✅ 保持热更新文件组织有序和版本化
 
