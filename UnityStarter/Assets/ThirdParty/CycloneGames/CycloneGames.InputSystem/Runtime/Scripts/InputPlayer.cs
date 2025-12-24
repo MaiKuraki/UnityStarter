@@ -24,6 +24,12 @@ namespace CycloneGames.InputSystem.Runtime
         public ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind { get; private set; }
         public event Action<string> OnContextChanged;
 
+        // Context-aware device kind observable - only emits when the specified context is active
+        public Observable<InputDeviceKind> GetActiveDeviceKindObservableForContext(InputContext context)
+        {
+            return ActiveDeviceKind.Where(_ => _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context));
+        }
+
         // Player Info
         public int PlayerId { get; }
         public InputUser User { get; }
@@ -669,7 +675,10 @@ namespace CycloneGames.InputSystem.Runtime
                                         // Threshold 0.25 (sqrMagnitude) = 0.5 magnitude, filters out tiny noise
                                         if (v.sqrMagnitude > 0.25f && device != null)
                                         {
-                                            UpdateActiveDeviceKind(device);
+                                            if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctxConfig.ActionMap)
+                                            {
+                                                UpdateActiveDeviceKind(device);
+                                            }
                                         }
 
                                         if (v.sqrMagnitude > 1f) v = v.normalized;
@@ -703,14 +712,26 @@ namespace CycloneGames.InputSystem.Runtime
                                     .AddTo(_actionWiringSubscriptions);
                             }
 
-                            action.PerformedAsObservable(token).Subscribe(ctx => UpdateActiveDeviceKind(ctx.control?.device)).AddTo(_actionWiringSubscriptions);
+                            action.PerformedAsObservable(token).Subscribe(ctx =>
+                            {
+                                if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
+                                {
+                                    UpdateActiveDeviceKind(ctx.control?.device);
+                                }
+                            }).AddTo(_actionWiringSubscriptions);
                             _vector2Subjects[key] = subject;
                         }
                         else if (inferredType == ActionValueType.Float)
                         {
                             var subject = new Subject<float>();
                             action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<float>()).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
-                            action.PerformedAsObservable(token).Subscribe(ctx => UpdateActiveDeviceKind(ctx.control?.device)).AddTo(_actionWiringSubscriptions);
+                            action.PerformedAsObservable(token).Subscribe(ctx =>
+                            {
+                                if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
+                                {
+                                    UpdateActiveDeviceKind(ctx.control?.device);
+                                }
+                            }).AddTo(_actionWiringSubscriptions);
                             action.CanceledAsObservable(token).Select(_ => 0f).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
                             _scalarSubjects[key] = subject;
 
@@ -725,7 +746,13 @@ namespace CycloneGames.InputSystem.Runtime
                         {
                             var subject = new Subject<Unit>();
                             action.PerformedAsObservable(token).Select(_ => Unit.Default).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
-                            action.PerformedAsObservable(token).Subscribe(ctx => UpdateActiveDeviceKind(ctx.control?.device)).AddTo(_actionWiringSubscriptions);
+                            action.PerformedAsObservable(token).Subscribe(ctx =>
+                            {
+                                if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
+                                {
+                                    UpdateActiveDeviceKind(ctx.control?.device);
+                                }
+                            }).AddTo(_actionWiringSubscriptions);
                             _buttonSubjects[key] = subject;
 
                             var pressState = new BehaviorSubject<bool>(false);
@@ -762,8 +789,8 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
-        /// Starts independent device detection polling that works even when no Context is active.
-        /// This ensures ActiveDeviceKind updates correctly regardless of Context state.
+        /// Starts device detection polling that only updates ActiveDeviceKind when a Context is active.
+        /// This ensures ActiveDeviceKind behaves like Context bindings - only the top Context responds to device input.
         /// </summary>
         private void StartDeviceDetectionPolling()
         {
@@ -773,6 +800,16 @@ namespace CycloneGames.InputSystem.Runtime
                 .Subscribe(_ =>
                 {
                     if (User == null || !User.valid) return;
+
+                    // Only update ActiveDeviceKind when there's an active Context (top of stack)
+                    if (_contextStack.Count == 0)
+                    {
+                        // CLogger.LogInfo($"{DEBUG_FLAG} [P{PlayerId}] No active context, skipping ActiveDeviceKind update");
+                        return;
+                    }
+
+                    var topContext = _contextStack.Peek();
+                    // CLogger.LogInfo($"{DEBUG_FLAG} [P{PlayerId}] Active context: {topContext.Name} ({topContext.GetType().Name})");
 
                     InputDevice activeDevice = null;
                     double latestTime = 0;
@@ -797,6 +834,7 @@ namespace CycloneGames.InputSystem.Runtime
                         InputDeviceKind newKind = GetDeviceKind(activeDevice);
                         if (_activeDeviceKind.Value != newKind)
                         {
+                            // CLogger.LogInfo($"{DEBUG_FLAG} [P{PlayerId}] Updating ActiveDeviceKind from {_activeDeviceKind.Value} to {newKind} for context {topContext.Name}");
                             UpdateActiveDeviceKind(activeDevice);
                         }
                     }
