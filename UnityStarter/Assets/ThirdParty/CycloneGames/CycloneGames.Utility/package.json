@@ -6,6 +6,8 @@
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
+    "com.unity.burst": "1.8.0",
+    "com.unity.mathematics": "1.3.0",
     "com.cyclone-games.logger": "1.0.0"
   },
   "keywords": [
