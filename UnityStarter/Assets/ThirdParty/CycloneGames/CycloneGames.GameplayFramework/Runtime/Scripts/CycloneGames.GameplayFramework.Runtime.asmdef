@@ -3,6 +3,8 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
+        "Unity.Burst",
+        "Unity.Mathematics",
         "Unity.Cinemachine",
         "CycloneGames.Logger",
         "CycloneGames.Factory.Runtime"
