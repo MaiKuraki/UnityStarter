@@ -1,5 +1,7 @@
 using System;
 using UnityEngine;
+using Unity.Burst;
+using Unity.Mathematics;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
@@ -7,7 +9,7 @@ namespace CycloneGames.GameplayFramework.Runtime
     {
         [SerializeField] private float initialLifeSpanSec = 0;
         public event Action OwnerChanged;
-        
+
         private Actor owner;
         public Actor GetOwner() => owner;
         public T GetOwner<T>() where T : Actor
@@ -32,14 +34,32 @@ namespace CycloneGames.GameplayFramework.Runtime
         }
         public float GetYaw() => transform.eulerAngles.y;
         public Quaternion GetActorRotation() => transform.rotation;
-        void Orientation()
+
+        /// <summary>
+        /// Calculates Euler angles (pitch, yaw, roll) from quaternion using optimized math functions.
+        /// Returns angles in degrees with XYZ axis order. Note: susceptible to gimbal lock.
+        /// </summary>
+        public Vector3 GetOrientation()
+        {
+            return QuaternionToEulerXYZ(transform.rotation);
+        }
+
+        /// <summary>
+        /// Burst-compiled static method for quaternion to Euler XYZ conversion.
+        /// Provides maximum performance for math-heavy operations.
+        /// </summary>
+        [BurstCompile]
+        public static Vector3 QuaternionToEulerXYZ(Quaternion rotation)
         {
             //  wiki: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles
             //  unity Answers: https://answers.unity.com/questions/416169/finding-pitchrollyaw-from-quaternions.html
-            Quaternion q = transform.rotation;
-            float pitch = Mathf.Rad2Deg * Mathf.Atan2(2 * q.x * q.w - 2 * q.y * q.z, 1 - 2 * q.x * q.x - 2 * q.z * q.z);
-            float yaw = Mathf.Rad2Deg * Mathf.Atan2(2 * q.y * q.w - 2 * q.x * q.z, 1 - 2 * q.y * q.y - 2 * q.z * q.z);
-            float roll = Mathf.Rad2Deg * Mathf.Asin(2 * q.x * q.y + 2 * q.z * q.w);
+            quaternion q = rotation;
+            float pitch = math.degrees(math.atan2(2f * q.value.x * q.value.w - 2f * q.value.y * q.value.z,
+                                                  1f - 2f * q.value.x * q.value.x - 2f * q.value.z * q.value.z));
+            float yaw = math.degrees(math.atan2(2f * q.value.y * q.value.w - 2f * q.value.x * q.value.z,
+                                                1f - 2f * q.value.y * q.value.y - 2f * q.value.z * q.value.z));
+            float roll = math.degrees(math.asin(math.clamp(2f * q.value.x * q.value.y + 2f * q.value.z * q.value.w, -1f, 1f)));
+            return new Vector3(pitch, yaw, roll);
         }
 
         void SetLifeSpan(float newLifeSpan)
@@ -59,9 +79,9 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual void OutsideWorldBounds()
         {
-            
+
         }
-        
+
         protected virtual void Awake()
         {
             actorName = gameObject?.name;
@@ -70,27 +90,27 @@ namespace CycloneGames.GameplayFramework.Runtime
         protected virtual void Start()
         {
             SetLifeSpan(initialLifeSpanSec);
-            
+
         }
 
         protected virtual void Update()
         {
-            
+
         }
 
         protected virtual void LateUpdate()
         {
-            
+
         }
 
         protected virtual void FixedUpdate()
         {
-            
+
         }
 
         protected virtual void OnDestroy()
         {
             owner = null;
         }
-    }    
+    }
 }
