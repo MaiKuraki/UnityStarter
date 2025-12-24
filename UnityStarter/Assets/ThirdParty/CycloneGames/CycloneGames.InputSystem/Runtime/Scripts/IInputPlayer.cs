@@ -13,6 +13,12 @@ namespace CycloneGames.InputSystem.Runtime
         ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind { get; }
         event Action<string> OnContextChanged;
 
+        /// <summary>
+        /// Returns an observable that only emits ActiveDeviceKind changes when the specified context is active (at the top of the stack).
+        /// This makes device kind subscriptions behave like context bindings - only the top context responds.
+        /// </summary>
+        Observable<InputDeviceKind> GetActiveDeviceKindObservableForContext(InputContext context);
+
         Observable<Vector2> GetVector2Observable(string actionName);
         Observable<Vector2> GetVector2Observable(string actionMapName, string actionName);
         Observable<Vector2> GetVector2Observable(int actionId);
