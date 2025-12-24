@@ -508,7 +508,11 @@ namespace CycloneGames.InputSystem.Runtime
 
             var topContext = _contextStack.Peek();
             _inputActionAsset.Disable();
-            _inputActionAsset.FindActionMap(topContext.ActionMapName)?.Enable();
+
+            if (!_isInputBlocked)
+            {
+                _inputActionAsset.FindActionMap(topContext.ActionMapName)?.Enable();
+            }
 
             // Subscribe to this specific context's bindings (independent of other contexts, even if they share the same ActionMap)
             foreach (var (source, command) in topContext.ActionBindings)
