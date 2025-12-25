@@ -30,15 +30,19 @@ namespace CycloneGames.Factory.Runtime
         /// </summary>
         public int MinCapacity { get; set; } = 16;
 
-        // How many despawns to wait before checking if we should shrink.
         private const int kCheckInterval = 128;
-        // The pool tries to keep capacity at PeakActive * BufferRatio.
         private const float kBufferRatio = 1.25f;
-        // Limit how many items can be destroyed in a single frame/check to prevent spikes.
         private const int kMaxDestroyPerCheck = 8;
 
         private int _peakActiveSinceLastCheck = 0;
         private int _despawnCounter = 0;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private long _totalGets = 0;
+        private long _totalReturns = 0;
+        private long _totalDiscards = 0;
+        private int _peakActive = 0;
+#endif
 
         protected FastObjectPool(int initialCapacity = 16)
         {
@@ -59,16 +63,30 @@ namespace CycloneGames.Factory.Runtime
                     NumActive++;
                     TrackPeak();
                     OnSpawn(item);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    _totalGets++;
+                    int peak = _peakActive;
+                    if (NumActive > peak)
+                    {
+                        _peakActive = NumActive;
+                    }
+#endif
                     return item;
                 }
-                // If item is invalid (e.g. destroyed externally), it's just dropped here.
             }
 
-            // Pool empty or all popped items were invalid
             item = CreateNew();
             NumActive++;
             TrackPeak();
             OnSpawn(item);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            _totalGets++;
+            int peakCheck = _peakActive;
+            if (NumActive > peakCheck)
+            {
+                _peakActive = NumActive;
+            }
+#endif
             return item;
         }
 
@@ -82,7 +100,6 @@ namespace CycloneGames.Factory.Runtime
 
         public void Despawn(T item)
         {
-            // Crucial check: If the item is already destroyed (Unity fake null), discard it.
             if (!IsValid(item))
             {
                 if (NumActive > 0) NumActive--;
@@ -91,16 +108,21 @@ namespace CycloneGames.Factory.Runtime
 
             NumActive--;
 
-            // If pool is too full, destroy immediately to prevent overflow.
             if (MaxCapacity > 0 && _pool.Count >= MaxCapacity)
             {
                 OnDespawn(item);
                 DestroyItem(item);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                _totalDiscards++;
+#endif
                 return;
             }
 
             OnDespawn(item);
             _pool.Push(item);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            _totalReturns++;
+#endif
 
             _despawnCounter++;
             if (_despawnCounter >= kCheckInterval)
@@ -206,5 +228,38 @@ namespace CycloneGames.Factory.Runtime
                 if (IsValid(item)) DestroyItem(item);
             }
         }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        public PoolStatistics GetStatistics()
+        {
+            return new PoolStatistics
+            {
+                NumActive = NumActive,
+                NumInactive = NumInactive,
+                TotalGets = _totalGets,
+                TotalReturns = _totalReturns,
+                TotalDiscards = _totalDiscards,
+                PeakActive = _peakActive
+            };
+        }
+
+        public void ResetStatistics()
+        {
+            _totalGets = 0;
+            _totalReturns = 0;
+            _totalDiscards = 0;
+            _peakActive = 0;
+        }
+
+        public struct PoolStatistics
+        {
+            public int NumActive;
+            public int NumInactive;
+            public long TotalGets;
+            public long TotalReturns;
+            public long TotalDiscards;
+            public int PeakActive;
+        }
+#endif
     }
 }
