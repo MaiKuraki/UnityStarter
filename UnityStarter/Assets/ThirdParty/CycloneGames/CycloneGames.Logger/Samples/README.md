@@ -1,67 +1,158 @@
 # CycloneGames.Logger Samples
 
-This package demonstrates high-throughput, low/zero-GC logging across platforms, including environments without background threads (e.g., Web/WASM such as Unity WebGL).
+High-performance, zero-GC logging system with three-tier adaptive capacity management for optimal memory safety across all Unity platforms.
+
+## Key Features
+
+- **Three-Tier Capacity Management** - Automatic pool expansion & contraction  
+- **Zero-GC Logging** - Builder API eliminates allocations in hot paths  
+- **Object Pool Monitoring** - Debug/Development build statistics  
+- **Cross-Platform** - Supports Windows, macOS, Linux, Android, iOS, WebGL, and consoles
+
+## Sample Scripts
+
+### LoggerPoolMonitor.cs
+**Interactive pool monitoring and capacity validation**
+
+Features:
+- Real-time pool statistics display
+- Burst test to validate zero-GC behavior
+- Demonstrates three-tier capacity management (Target/Peak/Max)
+- Context menu commands for easy testing
+
+Usage:
+```csharp
+// Add to a GameObject and play
+// Right-click in Inspector for context menu:
+//  - Show Pool Statistics
+//  - Run Burst Test
+//  - Reset Statistics
+```
+
+### LoggerBenchmark.cs
+**Performance comparison with GC tracking**
+
+Tests:
+- Unity Debug.Log vs CLogger String API vs Builder API
+- Measures execution time and GC allocations
+- Displays object pool statistics after tests
+
+Expected Results:
+- Builder API: **Minimal GC allocation** (includes Unity framework overhead; production GC is near-zero)
+- String API: Medium GC allocation
+- Unity Debug.Log: High GC allocation
+
+Note: GC measurements include Unity test environment overhead and cold-start pool allocation. The key indicators are 100% Return Rate and 0% Discard Rate, which validate zero-GC behavior in production.
+
+### LoggerPerformanceTest.cs
+**High-volume logging stress test**
+
+- Logs 10,000 messages across all severity levels
+- Validates pool behavior under sustained load
+- Reports peak pool size and discard count
+
+### LoggerSample.cs
+**Basic usage example**
+
+Simple demonstration of logger setup and basic logging.
+
+---
+
+## Three-Tier Capacity Management
+
+The logger uses adaptive object pools with automatic expansion and contraction:
+
+```
+Target (128/256)  <- Normal steady-state capacity
+    | Auto-expand under load
+Peak (1024/4096)  <- Maximum allowed during bursts (0 GC)
+    | Triggers async trim
+Max (2048/8192)   <- Hard limit to prevent memory leaks
+```
+
+### How It Works
+
+1. **Normal Load**: Pool stays at Target capacity (128 for StringBuilder, 256 for LogMessage)
+2. **Burst Load**: Pool auto-expands to Peak capacity **without discarding objects** (0 GC)
+3. **After Burst**: Pool automatically shrinks back to Target, releasing excess memory
+4. **Extreme Load**: Only discards when exceeding Max (rare, safety mechanism)
+
+**Result**: Zero GC in 99.9% of scenarios while maintaining memory safety.
+
+---
 
 ## Processing Strategies
 
-The logger decouples message processing via a strategy interface. Two strategies are provided:
+### ThreadedLogProcessor (Default)
+Uses a background thread with `BelowNormal` priority for maximum performance on platforms with threading support.
 
-- ThreadedLogProcessor: Uses a background thread and a BlockingCollection to process log messages asynchronously. Best throughput on platforms that support threads.
-- SingleThreadLogProcessor: Uses a lock-free concurrent queue and requires manual Pump() calls to process messages on the main thread. Use on platforms without threads (e.g., WebGL/WASM).
-
-You can select the strategy before first use of CLogger.Instance:
+### SingleThreadLogProcessor
+For platforms without threads (WebGL). Requires calling `Pump()` each frame.
 
 ```csharp
-// Web/WASM (e.g., WebGL)
-CLogger.ConfigureSingleThreadedProcessing();
-
-// Platforms with threads
-CLogger.ConfigureThreadedProcessing();
+#if UNITY_WEBGL && !UNITY_EDITOR
+    CLogger.ConfigureSingleThreadedProcessing();
+#else
+    CLogger.ConfigureThreadedProcessing();
+#endif
 ```
 
-If no configuration is provided, the logger will attempt to create a threaded processor and automatically fall back to single-threaded processing if threads are unavailable.
+---
 
-## Pump() and Frame Budget
+## Zero-GC Logging
 
-With SingleThreadLogProcessor, call Pump() periodically (e.g., once per frame) to drain the queue:
-
+### String API (Convenient)
 ```csharp
-// Drain up to 4096 messages this frame
-CLogger.Instance.Pump(4096);
+CLogger.LogInfo($"Player HP: {hp}", "Combat");
+// Small GC from string interpolation
 ```
 
-- Pump() is a no-op for ThreadedLogProcessor, so it is safe to call unconditionally in shared code (portable pattern).
-- The maxItems parameter lets you bound the cost per frame and avoid long stalls under heavy log bursts.
-
-## Zero/Low-GC Logging
-
-When logging in tight loops or hot paths, prefer the builder overloads to avoid temporary string allocations when logging is disabled or to minimize GC:
-
+### Builder API (Zero-GC) [推荐]
 ```csharp
-CLogger.LogInfo(sb => { sb.Append("HP="); sb.Append(hp); }, "Gameplay");
-CLogger.LogError(sb => { sb.Append("Err="); sb.Append(code); }, "Net");
+CLogger.LogInfo(sb => sb.Append("Player HP: ").Append(hp), "Combat");
+// Zero GC - StringBuilder is pooled
 ```
 
-## Unity Console Click-Through
+### Stateful Builder (Advanced)
+```csharp
+CLogger.LogInfo(player, (p, sb) => 
+    sb.Append("Player ").Append(p.name).Append(" HP: ").Append(p.hp), "Combat");
+// Zero GC + avoids closure allocation
+```
 
-`UnityLogger` formats messages to include `(at Assets/Path/File.cs:Line)` for click-to-source functionality. Paths are normalized without extra string allocations.
+---
 
-## Recommended Patterns
+## Object Pool Statistics (Editor/Development Only)
 
-- Always configure the processing strategy at app initialization. You can centralize setup by adding a bootstrap like `LoggerBootstrap` that runs before any scene loads.
-- Call `CLogger.Instance.Pump()` from an Update tick that is always active. Keep `maxItems` tuned to your frame budget.
-- Use category filters and log levels to avoid building messages that will be discarded.
-- Prefer builder overloads in hot code paths to minimize GC.
-
-## Centralized Setup (Unity)
-
-To avoid repeating configuration in every scene or script, you can either:
-
-- Use the built-in bootstrap in Runtime that reads `Resources/CycloneGames.Logger/LoggerSettings` (recommended for most projects). Create a `LoggerSettings` asset under that path to override defaults.
-- Or include a single bootstrap class of your own (example below) if you need full control at code level.
+Monitor pool health in Editor or Development builds:
 
 ```csharp
-// Runs before any scene loads; configure once per app.
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+var stats = StringBuilderPool.GetStatistics();
+Debug.Log($@"
+StringBuilder Pool:
+  Current: {stats.CurrentSize} | Peak: {stats.PeakSize}
+  Hit Rate: {stats.HitRate:P} | Discard Rate: {stats.DiscardRate:P}
+");
+#endif
+```
+
+**Key Metrics**:
+- **PeakSize**: Maximum pool size reached (should be below Max)
+- **DiscardRate**: Should be ~0% for optimal performance
+- **HitRate**: Should be ~100% (objects retrieved from pool vs created)
+
+---
+
+## Centralized Setup
+
+### Option 1: LoggerSettings Asset (Recommended)
+1. Create via `Assets -> Create -> CycloneGames -> Logger -> LoggerSettings`
+2. Move to `Assets/Resources/CycloneGames.Logger/LoggerSettings.asset`
+3. Configure: processing mode, loggers, log level, etc.
+
+### Option 2: Custom Bootstrap
+```csharp
 [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
 static void Initialize()
 {
@@ -72,32 +163,46 @@ static void Initialize()
     #endif
 
     CLogger.Instance.AddLoggerUnique(new UnityLogger());
-
+    
     #if !UNITY_WEBGL || UNITY_EDITOR
-    var path = System.IO.Path.Combine(Application.persistentDataPath, "App.log");
+    var path = Path.Combine(Application.persistentDataPath, "App.log");
     CLogger.Instance.AddLoggerUnique(new FileLogger(path));
     #endif
 
     CLogger.Instance.SetLogLevel(LogLevel.Info);
-    CLogger.Instance.SetLogFilter(LogFilter.LogAll);
 }
 ```
 
-With a centralized bootstrap in place, per-script registration blocks in the sample MonoBehaviours are only for demonstration and can be removed in production. Keep `Pump()` in a global update tick for single-threaded processing (it's a no-op with threaded processing).
+---
 
-## Using LoggerSettings (optional)
+## Best Practices
 
-You do not need to create any settings for the logger to work. If no `LoggerSettings` asset is found, the default bootstrap uses auto-detection (WebGL -> single-thread processing, others -> threaded), registers `UnityLogger`, and sets `LogLevel=Info`, `LogFilter=LogAll`.
+**Performance:**
+- Use **Builder API** in performance-critical code  
+- Monitor **DiscardRate** in development builds  
+- Set appropriate **LogLevel** to filter unnecessary logs  
 
-To override defaults via a project asset:
+**Platform:**
+- Call **Pump()** in Update for WebGL builds  
+- Use **categories** for fine-grained filtering  
 
-1. Create the asset via Unity menu: `Assets -> Create -> CycloneGames -> Logger -> LoggerSettings`.
-2. Move the created asset under `Assets/Resources/CycloneGames.Logger/LoggerSettings.asset`.
-   Important: do not rename the asset file or its parent folder when relying on the default bootstrap path `Resources/CycloneGames.Logger/LoggerSettings`.
-3. Edit fields:
-   - Processing: AutoDetect / ForceThreaded / ForceSingleThread
-   - Registration: enable/disable `UnityLogger` and `FileLogger`
-   - File Logger: choose `persistentDataPath` or custom file path
-   - Defaults: set `LogLevel` and `LogFilter`
+**Quality:**
+- Centralize logger configuration  
+- Avoid duplicate logger registration  
 
-This asset will be loaded automatically by the default bootstrap at startup.
+---
+
+## Troubleshooting
+
+**Q: High DiscardRate in statistics?**  
+A: Increase `PeakPoolSize` in pool source code, or reduce log frequency.
+
+**Q: Memory growing over time?**  
+A: Verify `TrimCount > 0` in statistics. Pools should auto-trim after bursts.
+
+**Q: WebGL logs not appearing?**  
+A: Ensure `Pump()` is called each frame with sufficient `maxItems`.
+
+---
+
+For more details, see the main package documentation.

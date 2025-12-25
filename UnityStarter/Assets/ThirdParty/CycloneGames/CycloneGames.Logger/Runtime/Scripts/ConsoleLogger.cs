@@ -33,7 +33,20 @@ namespace CycloneGames.Logger
                     sb.Append(logMessage.Category);
                     sb.Append("] ");
                 }
-                if (logMessage.OriginalMessage != null) sb.Append(logMessage.OriginalMessage);
+                
+                if (logMessage.MessageBuilder != null)
+                {
+                    var mb = logMessage.MessageBuilder;
+                    for (int i = 0; i < mb.Length; i++)
+                    {
+                        sb.Append(mb[i]);
+                    }
+                }
+                else if (logMessage.OriginalMessage != null)
+                {
+                    sb.Append(logMessage.OriginalMessage);
+                }
+                
                 if (!string.IsNullOrEmpty(logMessage.FilePath))
                 {
                     sb.Append(" (at ");

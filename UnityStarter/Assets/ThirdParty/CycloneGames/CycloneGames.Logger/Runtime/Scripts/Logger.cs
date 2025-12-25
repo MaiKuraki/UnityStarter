@@ -56,9 +56,11 @@ namespace CycloneGames.Logger
             }
             catch
             {
-                // Fallback for platforms that do not support background threads
                 _processor = new SingleThreadLogProcessor(this);
             }
+            
+            LogMessagePool.Prewarm();
+            Util.StringBuilderPool.Prewarm();
         }
 
         /// <summary>
@@ -197,6 +199,7 @@ namespace CycloneGames.Logger
 
             lock (_filterLock)
             {
+                currentFilter = _currentLogFilter;
                 switch (currentFilter)
                 {
                     case LogFilter.LogWhiteList: return _whiteList.Contains(category);
@@ -268,7 +271,6 @@ namespace CycloneGames.Logger
             catch (InvalidOperationException) { /* Ignore if shutting down. */ }
         }
 
-        // Zero/min-GC-friendly overloads that build messages only when logging is enabled.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void EnqueueMessage(LogLevel level, Action<StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
