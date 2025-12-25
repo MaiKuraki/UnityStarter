@@ -152,9 +152,10 @@ namespace CycloneGames.Audio.Editor
             GUILayout.BeginArea(this.eventListRect);
             this.eventListScrollPosition = EditorGUILayout.BeginScrollView(this.eventListScrollPosition);
 
-            for (int i = 0; i < AudioManager.PreviousEvents.Count; i++)
+            var previousEvents = AudioManager.GetPreviousEvents();
+            for (int i = 0; i < previousEvents.Count; i++)
             {
-                ActiveEvent tempEvent = AudioManager.PreviousEvents[i];
+                ActiveEvent tempEvent = previousEvents[i];
                 GUILayout.Label(tempEvent.timeStarted + " : " + tempEvent.name + " - " + tempEvent.status.ToString());
             }
 
