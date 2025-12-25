@@ -23,21 +23,16 @@ namespace CycloneGames.Factory.Runtime
         private readonly ReaderWriterLockSlim _rwLock = new ReaderWriterLockSlim();
         private readonly ConcurrentQueue<TValue> _pendingDespawns = new ConcurrentQueue<TValue>();
 
-        // --- Auto-Scaling Fields ---
         private readonly float _expansionFactor;
         private readonly float _shrinkBufferFactor;
         private readonly int _shrinkCooldownTicks;
         private int _ticksSinceLastShrink;
         private int _maxActiveSinceLastShrink;
 
-        /// <summary>
-        /// Maximum number of inactive items allowed in the pool. -1 means unlimited.
-        /// </summary>
-        public int MaxCapacity { get; set; } = -1;
+        private int _numActive;
+        private int _numInactive;
 
-        /// <summary>
-        /// Minimum number of items to keep in the pool, preventing over-shrinking during low activity.
-        /// </summary>
+        public int MaxCapacity { get; set; } = -1;
         public int MinCapacity { get; set; } = 16;
 
         private const int kCheckInterval = 64;
@@ -45,38 +40,16 @@ namespace CycloneGames.Factory.Runtime
 
         private bool _disposed;
 
-        public int NumTotal => NumActive + NumInactive;
-        public int NumActive
-        {
-            get
-            {
-                _rwLock.EnterReadLock();
-                try
-                {
-                    return _activeItems.Count;
-                }
-                finally
-                {
-                    if (_rwLock.IsReadLockHeld) _rwLock.ExitReadLock();
-                }
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private long _totalGets = 0;
+        private long _totalReturns = 0;
+        private long _totalDiscards = 0;
+        private int _peakActive = 0;
+#endif
 
-            }
-        }
-        public int NumInactive
-        {
-            get
-            {
-                _rwLock.EnterReadLock();
-                try
-                {
-                    return _inactivePool.Count;
-                }
-                finally
-                {
-                    if (_rwLock.IsReadLockHeld) _rwLock.ExitReadLock();
-                }
-            }
-        }
+        public int NumTotal => NumActive + NumInactive;
+        public int NumActive => Volatile.Read(ref _numActive);
+        public int NumInactive => Volatile.Read(ref _numInactive);
         public Type ItemType => typeof(TValue);
 
         /// <summary>
@@ -126,9 +99,22 @@ namespace CycloneGames.Factory.Runtime
                 }
 
                 TValue item = _inactivePool.Pop();
+                Interlocked.Decrement(ref _numInactive);
+                
                 int index = _activeItems.Count;
                 _activeItems.Add(item);
                 _activeItemIndices[item] = index;
+                Interlocked.Increment(ref _numActive);
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                Interlocked.Increment(ref _totalGets);
+                int active = _activeItems.Count;
+                int peak = Volatile.Read(ref _peakActive);
+                if (active > peak)
+                {
+                    Interlocked.CompareExchange(ref _peakActive, active, peak);
+                }
+#endif
 
                 try
                 {
@@ -136,10 +122,11 @@ namespace CycloneGames.Factory.Runtime
                 }
                 catch (Exception ex)
                 {
-                    // Rollback on failure
                     _activeItems.RemoveAt(_activeItems.Count - 1);
                     _activeItemIndices.Remove(item);
                     _inactivePool.Push(item);
+                    Interlocked.Decrement(ref _numActive);
+                    Interlocked.Increment(ref _numInactive);
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
                     UnityEngine.Debug.LogError($"[CycloneGames.Factory] OnSpawned failed for item of type {typeof(TValue).Name}. Reverting spawn. Error: {ex.Message}");
 #endif
@@ -151,7 +138,7 @@ namespace CycloneGames.Factory.Runtime
             }
             finally
             {
-                if (_rwLock.IsWriteLockHeld) _rwLock.ExitWriteLock();
+                _rwLock.ExitWriteLock();
             }
         }
 
@@ -270,6 +257,10 @@ namespace CycloneGames.Factory.Runtime
             finally
             {
                 _inactivePool.Push(item);
+                Interlocked.Increment(ref _numInactive);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                Interlocked.Increment(ref _totalReturns);
+#endif
             }
         }
 
@@ -285,6 +276,9 @@ namespace CycloneGames.Factory.Runtime
             finally
             {
                 (item as IDisposable)?.Dispose();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                Interlocked.Increment(ref _totalDiscards);
+#endif
             }
         }
 
@@ -297,6 +291,7 @@ namespace CycloneGames.Factory.Runtime
             _activeItemIndices[lastItem] = index;
             _activeItems.RemoveAt(_activeItems.Count - 1);
             _activeItemIndices.Remove(item);
+            Interlocked.Decrement(ref _numActive);
             return true;
         }
 
@@ -362,7 +357,7 @@ namespace CycloneGames.Factory.Runtime
             }
             finally
             {
-                if (_rwLock.IsWriteLockHeld) _rwLock.ExitWriteLock();
+                _rwLock.ExitWriteLock();
             }
         }
 
@@ -378,7 +373,7 @@ namespace CycloneGames.Factory.Runtime
             }
             finally
             {
-                if (_rwLock.IsWriteLockHeld) _rwLock.ExitWriteLock();
+                _rwLock.ExitWriteLock();
             }
         }
 
@@ -393,11 +388,9 @@ namespace CycloneGames.Factory.Runtime
                     {
                         created.OnDespawned();
                     }
-                    catch
-                    {
-                        // Ignore errors during expansion phase, but ensure object is pooled
-                    }
+                    catch { }
                     _inactivePool.Push(created);
+                    Interlocked.Increment(ref _numInactive);
                 }
             }
         }
@@ -408,6 +401,7 @@ namespace CycloneGames.Factory.Runtime
             for (int i = 0; i < numToActuallyRemove; i++)
             {
                 var item = _inactivePool.Pop();
+                Interlocked.Decrement(ref _numInactive);
                 (item as IDisposable)?.Dispose();
             }
         }
@@ -438,11 +432,13 @@ namespace CycloneGames.Factory.Runtime
                 _inactivePool.Clear();
                 _pendingDespawns.Clear();
 
+                Interlocked.Exchange(ref _numActive, 0);
+                Interlocked.Exchange(ref _numInactive, 0);
                 ResetShrinkTracker();
             }
             finally
             {
-                if (_rwLock.IsWriteLockHeld) _rwLock.ExitWriteLock();
+                _rwLock.ExitWriteLock();
             }
         }
 
@@ -469,8 +465,41 @@ namespace CycloneGames.Factory.Runtime
             }
             finally
             {
-                if (_rwLock.IsWriteLockHeld) _rwLock.ExitWriteLock();
+                _rwLock.ExitWriteLock();
             }
         }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        public PoolStatistics GetStatistics()
+        {
+            return new PoolStatistics
+            {
+                NumActive = Volatile.Read(ref _numActive),
+                NumInactive = Volatile.Read(ref _numInactive),
+                TotalGets = Interlocked.Read(ref _totalGets),
+                TotalReturns = Interlocked.Read(ref _totalReturns),
+                TotalDiscards = Interlocked.Read(ref _totalDiscards),
+                PeakActive = Volatile.Read(ref _peakActive)
+            };
+        }
+
+        public void ResetStatistics()
+        {
+            Interlocked.Exchange(ref _totalGets, 0);
+            Interlocked.Exchange(ref _totalReturns, 0);
+            Interlocked.Exchange(ref _totalDiscards, 0);
+            Interlocked.Exchange(ref _peakActive, 0);
+        }
+
+        public struct PoolStatistics
+        {
+            public int NumActive;
+            public int NumInactive;
+            public long TotalGets;
+            public long TotalReturns;
+            public long TotalDiscards;
+            public int PeakActive;
+        }
+#endif
     }
 }
