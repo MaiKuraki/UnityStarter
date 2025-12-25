@@ -225,6 +225,10 @@ namespace CycloneGames.Audio.Runtime
 
             AudioManager.ActiveEvents.Add(this);
             AudioManager.AddPreviousEvent(this);
+            
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AudioManager.TrackEventPlayed();
+#endif
         }
 
         /// <summary>

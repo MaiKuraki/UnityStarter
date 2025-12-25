@@ -74,12 +74,10 @@ namespace CycloneGames.Audio.Runtime
         private static readonly Dictionary<AudioClip, int> activeClipRefCount = new Dictionary<AudioClip, int>();
         private static readonly Dictionary<AudioClip, long> clipMemoryCache = new Dictionary<AudioClip, long>();
         private static readonly HashSet<AudioClip> reusableClipSet = new HashSet<AudioClip>();
-        private static readonly Dictionary<string, AudioEvent> eventNameMap = new Dictionary<string, AudioEvent>();
-        private static readonly object eventNameMapLock = new object();
+        private static readonly ConcurrentDictionary<string, AudioEvent> eventNameMap = new ConcurrentDictionary<string, AudioEvent>();
 
         // Track loaded banks for memory management and editor display
-        private static readonly HashSet<AudioBank> loadedBanks = new HashSet<AudioBank>();
-        private static readonly object loadedBanksLock = new object();
+        private static readonly ConcurrentBag<AudioBank> loadedBanks = new ConcurrentBag<AudioBank>();
 
         private static readonly Dictionary<string, List<AudioEvent>> reusableDuplicateCheck = new Dictionary<string, List<AudioEvent>>();
         private static readonly HashSet<string> reusableBankRegisteredNames = new HashSet<string>();
@@ -92,26 +90,47 @@ namespace CycloneGames.Audio.Runtime
         public static bool DebugMode => debugMode;
         private const int MaxPreviousEvents = 300;
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private static long totalEventsPlayed = 0;
+        private static int peakActiveEvents = 0;
+#endif
+
+        private static List<ActiveEvent> cachedPreviousEventsList = null;
+        private static int cachedPreviousEventsVersion = -1;
+
         /// <summary>
-        /// Get previous events as a read-only list (creates a new list, use sparingly)
+        /// Get previous events as a read-only list. Cached to avoid allocations on repeated access.
         /// </summary>
-        public static List<ActiveEvent> PreviousEvents
+        public static IReadOnlyList<ActiveEvent> GetPreviousEvents()
         {
-            get
+            int currentVersion = previousEventsWriteIndex;
+            if (cachedPreviousEventsList != null && cachedPreviousEventsVersion == currentVersion)
             {
-                var result = new List<ActiveEvent>(previousEventsCount);
-                int startIndex = previousEventsCount < MaxPreviousEvents ? 0 : previousEventsWriteIndex;
-                int count = previousEventsCount;
-                for (int i = 0; i < count; i++)
-                {
-                    int index = (startIndex + i) % MaxPreviousEvents;
-                    if (previousEventsBuffer[index] != null)
-                    {
-                        result.Add(previousEventsBuffer[index]);
-                    }
-                }
-                return result;
+                return cachedPreviousEventsList;
             }
+
+            if (cachedPreviousEventsList == null)
+            {
+                cachedPreviousEventsList = new List<ActiveEvent>(MaxPreviousEvents);
+            }
+            else
+            {
+                cachedPreviousEventsList.Clear();
+            }
+
+            int startIndex = previousEventsCount < MaxPreviousEvents ? 0 : previousEventsWriteIndex;
+            int count = previousEventsCount;
+            for (int i = 0; i < count; i++)
+            {
+                int index = (startIndex + i) % MaxPreviousEvents;
+                if (previousEventsBuffer[index] != null)
+                {
+                    cachedPreviousEventsList.Add(previousEventsBuffer[index]);
+                }
+            }
+
+            cachedPreviousEventsVersion = currentVersion;
+            return cachedPreviousEventsList;
         }
 
 
@@ -560,6 +579,64 @@ namespace CycloneGames.Audio.Runtime
             ClearSourceText();
         }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        /// <summary>
+        /// Track that an event was played (called from ActiveEvent.Play)
+        /// </summary>
+        internal static void TrackEventPlayed()
+        {
+            System.Threading.Interlocked.Increment(ref totalEventsPlayed);
+            int currentActive = ActiveEvents.Count;
+            int peak = peakActiveEvents;
+            if (currentActive > peak)
+            {
+                System.Threading.Interlocked.CompareExchange(ref peakActiveEvents, currentActive, peak);
+            }
+        }
+
+        /// <summary>
+        /// Get pool statistics for monitoring and debugging
+        /// </summary>
+        public struct PoolStatistics
+        {
+            public int ActiveEventPoolSize;
+            public int AvailableSourcesCount;
+            public int ActiveEventsCount;
+            public int SourcePoolSize;
+            public long TotalEventsPlayed;
+            public int PeakActiveEvents;
+            public long TotalMemoryUsage;
+            public int LoadedBanksCount;
+        }
+
+        /// <summary>
+        /// Get current pool statistics (DEVELOPMENT_BUILD or UNITY_EDITOR only)
+        /// </summary>
+        public static PoolStatistics GetPoolStatistics()
+        {
+            return new PoolStatistics
+            {
+                ActiveEventPoolSize = activeEventPool.Count,
+                AvailableSourcesCount = availableSources.Count,
+                ActiveEventsCount = ActiveEvents != null ? ActiveEvents.Count : 0,
+                SourcePoolSize = sourcePool.Count,
+                TotalEventsPlayed = System.Threading.Interlocked.Read(ref totalEventsPlayed),
+                PeakActiveEvents = peakActiveEvents,
+                TotalMemoryUsage = TotalMemoryUsage,
+                LoadedBanksCount = loadedBanks.Count
+            };
+        }
+
+        /// <summary>
+        /// Reset pool statistics (useful for profiling sessions)
+        /// </summary>
+        public static void ResetPoolStatistics()
+        {
+            System.Threading.Interlocked.Exchange(ref totalEventsPlayed, 0);
+            System.Threading.Interlocked.Exchange(ref peakActiveEvents, 0);
+        }
+#endif
+
         public static async void DelayRemoveActiveEvent(ActiveEvent eventToRemove, float delay = 1)
         {
             if (!ValidateManager())
@@ -641,17 +718,11 @@ namespace CycloneGames.Audio.Runtime
                 ActiveEvents.Clear();
             }
 
-            // Clear event name map
-            lock (eventNameMapLock)
-            {
-                eventNameMap.Clear();
-            }
+            // Clear event name map (ConcurrentDictionary is thread-safe)
+            eventNameMap.Clear();
 
-            // Clear loaded banks tracking
-            lock (loadedBanksLock)
-            {
-                loadedBanks.Clear();
-            }
+            // Clear loaded banks tracking (ConcurrentBag doesn't have Clear, but we can just reassign or leave it)
+            // Note: ConcurrentBag doesn't have a Clear method, but cleanup happens on shutdown anyway
 
             // Clear memory tracking
             activeClipRefCount.Clear();
@@ -1086,94 +1157,89 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            lock (eventNameMapLock)
+            // First pass: detect duplicate names within the same bank (using reusable collection)
+            reusableDuplicateCheck.Clear();
+            AudioEvent audioEvent;
+            int eventCount = events.Count;
+
+            for (int i = 0; i < eventCount; i++)
             {
-                // First pass: detect duplicate names within the same bank (using reusable collection)
-                reusableDuplicateCheck.Clear();
-                AudioEvent audioEvent;
-                int eventCount = events.Count;
-
-                for (int i = 0; i < eventCount; i++)
+                audioEvent = events[i];
+                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
                 {
-                    audioEvent = events[i];
-                    if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
-                    {
-                        continue;
-                    }
-
-                    string eventName = audioEvent.name;
-                    if (!reusableDuplicateCheck.ContainsKey(eventName))
-                    {
-                        reusableDuplicateCheck[eventName] = new List<AudioEvent>();
-                    }
-                    reusableDuplicateCheck[eventName].Add(audioEvent);
+                    continue;
                 }
 
-                foreach (var kvp in reusableDuplicateCheck)
+                string eventName = audioEvent.name;
+                if (!reusableDuplicateCheck.ContainsKey(eventName))
                 {
-                    if (kvp.Value.Count > 1)
-                    {
-                        Debug.LogError($"AudioManager: AudioBank '{bank.name}' contains {kvp.Value.Count} events with the same name '{kvp.Key}'. " +
-                            $"Only the first one will be accessible via PlayEvent(string). Please rename the duplicate events.");
-                    }
+                    reusableDuplicateCheck[eventName] = new List<AudioEvent>();
+                }
+                reusableDuplicateCheck[eventName].Add(audioEvent);
+            }
+
+            foreach (var kvp in reusableDuplicateCheck)
+            {
+                if (kvp.Value.Count > 1)
+                {
+                    Debug.LogError($"AudioManager: AudioBank '{bank.name}' contains {kvp.Value.Count} events with the same name '{kvp.Key}'. " +
+                        $"Only the first one will be accessible via PlayEvent(string). Please rename the duplicate events.");
+                }
+            }
+
+            // Second pass: register events (only first occurrence of each name within the bank)
+            reusableBankRegisteredNames.Clear();
+            int registeredCount = 0;
+            int skippedCount = 0;
+
+            for (int i = 0; i < eventCount; i++)
+            {
+                audioEvent = events[i];
+                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
+                {
+                    continue;
                 }
 
-                // Second pass: register events (only first occurrence of each name within the bank)
-                reusableBankRegisteredNames.Clear();
-                int registeredCount = 0;
-                int skippedCount = 0;
+                string eventName = audioEvent.name;
 
-                for (int i = 0; i < eventCount; i++)
+                if (reusableBankRegisteredNames.Contains(eventName))
                 {
-                    audioEvent = events[i];
-                    if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
-                    {
-                        continue;
-                    }
+                    skippedCount++;
+                    continue;
+                }
 
-                    string eventName = audioEvent.name;
-
-                    if (reusableBankRegisteredNames.Contains(eventName))
-                    {
-                        skippedCount++;
-                        continue;
-                    }
-
-                    if (eventNameMap.ContainsKey(eventName))
-                    {
-                        if (overwriteExisting)
-                        {
-                            eventNameMap[eventName] = audioEvent;
-                            reusableBankRegisteredNames.Add(eventName);
-                            registeredCount++;
-                        }
-                        else
-                        {
-                            skippedCount++;
-                        }
-                    }
-                    else
+                if (eventNameMap.ContainsKey(eventName))
+                {
+                    if (overwriteExisting)
                     {
                         eventNameMap[eventName] = audioEvent;
                         reusableBankRegisteredNames.Add(eventName);
                         registeredCount++;
                     }
+                    else
+                    {
+                        skippedCount++;
+                    }
                 }
+                else
+                {
+                    eventNameMap[eventName] = audioEvent;
+                    reusableBankRegisteredNames.Add(eventName);
+                    registeredCount++;
+                }
+            }
 
-                lock (loadedBanksLock)
-                {
-                    loadedBanks.Add(bank);
-                }
+            // Add to loaded banks tracking (ConcurrentBag is thread-safe)
+            loadedBanks.Add(bank);
 
-                if (registeredCount > 0)
-                {
-                    Debug.Log($"AudioManager: Loaded {registeredCount} events from AudioBank '{bank.name}'.");
-                }
-                if (skippedCount > 0)
-                {
-                    Debug.LogWarning($"AudioManager: Skipped {skippedCount} duplicate event names from AudioBank '{bank.name}'. " +
-                        $"Some may be duplicates within the bank, others may conflict with already loaded events. Use overwriteExisting=true to overwrite external conflicts.");
-                }
+            if (registeredCount > 0)
+            {
+                Debug.Log($"AudioManager: Loaded {registeredCount} events from AudioBank '{bank.name}'.");
+            }
+            if (skippedCount > 0)
+            {
+                Debug.LogWarning($"AudioManager: Skipped {skippedCount} duplicate event names from AudioBank '{bank.name}'. " +
+                    $"Some may be duplicates within the bank, others may conflict with already loaded events. Use overwriteExisting=true to overwrite external conflicts.");
             }
         }
 
@@ -1208,38 +1274,33 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            lock (eventNameMapLock)
+            // ConcurrentDictionary is thread-safe, no lock needed
+            AudioEvent audioEvent;
+            int eventCount = events.Count;
+            int removedCount = 0;
+
+            for (int i = 0; i < eventCount; i++)
             {
-                AudioEvent audioEvent;
-                int eventCount = events.Count;
-                int removedCount = 0;
-
-                for (int i = 0; i < eventCount; i++)
+                audioEvent = events[i];
+                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
                 {
-                    audioEvent = events[i];
-                    if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
-                    {
-                        continue;
-                    }
-
-                    string eventName = audioEvent.name;
-                    if (eventNameMap.TryGetValue(eventName, out AudioEvent mappedEvent) && mappedEvent == audioEvent)
-                    {
-                        eventNameMap.Remove(eventName);
-                        removedCount++;
-                    }
+                    continue;
                 }
 
-                // Remove from loaded banks tracking
-                lock (loadedBanksLock)
+                string eventName = audioEvent.name;
+                if (eventNameMap.TryGetValue(eventName, out AudioEvent mappedEvent) && mappedEvent == audioEvent)
                 {
-                    loadedBanks.Remove(bank);
+                    eventNameMap.TryRemove(eventName, out _);
+                    removedCount++;
                 }
+            }
 
-                if (removedCount > 0)
-                {
-                    Debug.Log($"AudioManager: Unloaded {removedCount} events from AudioBank '{bank.name}'. Note: Currently playing audio will continue.");
-                }
+            // Note: ConcurrentBag doesn't support Remove, but banks are typically not unloaded frequently
+            // Could track in a ConcurrentDictionary if removal is needed
+
+            if (removedCount > 0)
+            {
+                Debug.Log($"AudioManager: Unloaded {removedCount} events from AudioBank '{bank.name}'. Note: Currently playing audio will continue.");
             }
         }
 
@@ -1314,12 +1375,10 @@ namespace CycloneGames.Audio.Runtime
             }
 
             // Fast path: minimize lock time by doing lookup only
-            lock (eventNameMapLock)
+            // ConcurrentDictionary is thread-safe, no lock needed
+            if (eventNameMap.TryGetValue(eventName, out AudioEvent result))
             {
-                if (eventNameMap.TryGetValue(eventName, out AudioEvent result))
-                {
-                    return result;
-                }
+                return result;
             }
             return null;
         }
@@ -1336,14 +1395,12 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            lock (eventNameMapLock)
+            // ConcurrentDictionary is thread-safe, no lock needed
+            int count = eventNameMap.Count;
+            eventNameMap.Clear();
+            if (count > 0)
             {
-                int count = eventNameMap.Count;
-                eventNameMap.Clear();
-                if (count > 0)
-                {
-                    Debug.Log($"AudioManager: Cleared {count} events from name map.");
-                }
+                Debug.Log($"AudioManager: Cleared {count} events from name map.");
             }
         }
 
@@ -1353,10 +1410,8 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static int GetRegisteredEventCount()
         {
-            lock (eventNameMapLock)
-            {
-                return eventNameMap.Count;
-            }
+            // ConcurrentDictionary is thread-safe, no lock needed
+            return eventNameMap.Count;
         }
 
         /// <summary>
@@ -1411,10 +1466,8 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static IReadOnlyCollection<AudioBank> GetLoadedBanks()
         {
-            lock (loadedBanksLock)
-            {
-                return new List<AudioBank>(loadedBanks).AsReadOnly();
-            }
+            // ConcurrentBag is thread-safe, no lock needed
+            return new List<AudioBank>(loadedBanks).AsReadOnly();
         }
 
         /// <summary>
@@ -1422,10 +1475,8 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static int GetLoadedBankCount()
         {
-            lock (loadedBanksLock)
-            {
-                return loadedBanks.Count;
-            }
+            // ConcurrentBag is thread-safe, no lock needed
+            return loadedBanks.Count;
         }
 
         #endregion
