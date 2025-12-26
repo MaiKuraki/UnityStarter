@@ -181,7 +181,7 @@ namespace CycloneGames.UIFramework.Editor
             {
                 EditorGUILayout.LabelField($"Class Name: {windowName}", EditorStyles.miniLabel);
                 EditorGUILayout.LabelField($"Prefab Name: {windowName}.prefab", EditorStyles.miniLabel);
-                EditorGUILayout.LabelField($"Config Name: {windowName}.asset", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"Config Name: {windowName}_Config.asset", EditorStyles.miniLabel);
 
                 // Check for existing files
                 CheckAndDisplayExistingFiles();
@@ -248,6 +248,7 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("Configuration Save Path", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox("Drag and drop a folder where the generated UIWindowConfiguration ScriptableObject (.asset file) will be saved.", MessageType.None);
+            EditorGUILayout.HelpBox("ℹ Config files use '_Config' suffix to avoid YooAsset Location conflicts. YooAsset uses filename (without extension) as Location key, so same-named Prefab and ScriptableObject would cause 'Location have existed' warnings.", MessageType.Info);
             DefaultAsset newSoFolder = EditorGUILayout.ObjectField(soFolder, typeof(DefaultAsset), false) as DefaultAsset;
             if (newSoFolder != soFolder)
             {
@@ -260,7 +261,7 @@ namespace CycloneGames.UIFramework.Editor
                 if (AssetDatabase.IsValidFolder(soPath))
                 {
                     EditorGUILayout.LabelField($"Path: {soPath}", EditorStyles.miniLabel);
-                    string configName = string.IsNullOrEmpty(windowName) ? "UIWindow_New.asset" : $"{windowName}.asset";
+                    string configName = string.IsNullOrEmpty(windowName) ? "UIWindow_New_Config.asset" : $"{windowName}_Config.asset";
                     EditorGUILayout.LabelField($"Full Path: {soPath}/{configName}", EditorStyles.miniLabel);
                 }
                 else
@@ -424,7 +425,7 @@ namespace CycloneGames.UIFramework.Editor
 
             string scriptFile = scriptPath + windowName + ".cs";
             string prefabFile = prefabPath + windowName + ".prefab";
-            string configFile = soPath + windowName + ".asset";
+            string configFile = soPath + windowName + "_Config.asset";
 
             return File.Exists(scriptFile) || File.Exists(prefabFile) || File.Exists(configFile);
         }
@@ -444,7 +445,7 @@ namespace CycloneGames.UIFramework.Editor
 
             string scriptFile = scriptPath + windowName + ".cs";
             string prefabFile = prefabPath + windowName + ".prefab";
-            string configFile = soPath + windowName + ".asset";
+            string configFile = soPath + windowName + "_Config.asset";
 
             System.Collections.Generic.List<string> existingFiles = new System.Collections.Generic.List<string>();
             if (File.Exists(scriptFile))
@@ -494,8 +495,8 @@ namespace CycloneGames.UIFramework.Editor
                 string prefabName = windowName + ".prefab";
                 string fullPrefabPath = prefabPath + prefabName;
 
-                // Create SO name (same as prefab name, just with .asset extension)
-                string soName = windowName + ".asset";
+                // Create SO name with _Config suffix to avoid YooAsset Location conflicts
+                string soName = windowName + "_Config.asset";
                 string fullSoPath = soPath + soName;
 
                 CreateScript(fullScriptPath, scriptName, namespaceName);

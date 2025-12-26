@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using CycloneGames.Logger;
 
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
@@ -103,7 +104,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             {
                 if (_atlasService != null && _atlasService != _injectedService)
                 {
-                    Debug.LogWarning("[DynamicAtlasManager] Re-configuring atlas service. Resetting existing service.");
+                    CLogger.LogWarning("[DynamicAtlasManager] Re-configuring atlas service. Resetting existing service.");
                     _atlasService.Dispose();
                     _atlasService = null;
                 }

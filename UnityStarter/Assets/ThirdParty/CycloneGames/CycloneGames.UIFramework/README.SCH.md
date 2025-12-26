@@ -909,13 +909,143 @@ public class MyWindow : UIWindow
 }
 ```
 
-### 性能优化工具
+---
 
-#### `OptimizeHierarchy`
+## 过渡动画系统
+
+UIFramework 提供灵活、可扩展的过渡动画系统，支持 **LitMotion** 和 **DOTween**。您可以使用内置预设或创建自定义动画。
+
+### 内置配置
+
+| 配置 | 效果 | 用途 |
+|------|------|------|
+| `FadeConfig.Default` | 淡入淡出 | 对话框、弹窗 |
+| `ScaleConfig.Default` | 从 80% 缩放 | 模态窗口 |
+| `SlideConfig.Left/Right/Top/Bottom` | 从方向滑入 | 侧边栏、抽屉 |
+| `CompositeConfig.FadeScale` | 淡入 + 缩放 | 高级弹窗 |
+| `CompositeConfig.FadeSlideBottom` | 淡入 + 向上滑动 | 移动端样式底板 |
+
+### 快速使用
+
+```csharp
+// 使用 LitMotion（需要 LIT_MOTION_PRESENT 宏）
+var driver = new LitMotionTransitionDriver(FadeConfig.Default);
+window.SetTransitionDriver(driver);
+
+// 使用 DOTween（需要 DO_TWEEN_PRESENT 宏）
+var driver = new DOTweenTransitionDriver(CompositeConfig.FadeScale);
+window.SetTransitionDriver(driver);
+```
+
+### 自定义配置
+
+```csharp
+// 自定义缩放动画
+var config = new ScaleConfig(scaleFrom: 0.5f, duration: 0.4f);
+window.SetTransitionDriver(new LitMotionTransitionDriver(config));
+
+// 自定义从底部滑入
+var slideConfig = new SlideConfig(
+    direction: SlideDirection.Bottom,
+    offset: 0.3f,
+    duration: 0.35f
+);
+window.SetTransitionDriver(new DOTweenTransitionDriver(slideConfig));
+
+// 组合效果：淡入 + 缩放 + 滑动
+var compositeConfig = new CompositeConfig(
+    fade: true,
+    scale: new ScaleConfig(0.9f),
+    slide: new SlideConfig(SlideDirection.Bottom, 0.2f),
+    duration: 0.3f
+);
+window.SetTransitionDriver(new LitMotionTransitionDriver(compositeConfig));
+```
+
+### 不同的打开/关闭动画
+
+```csharp
+var openConfig = CompositeConfig.FadeScale;
+var closeConfig = FadeConfig.Default;
+
+window.SetTransitionDriver(new LitMotionTransitionDriver(
+    openConfig: openConfig,
+    closeConfig: closeConfig,
+    easeIn: LitMotion.Ease.OutBack,
+    easeOut: LitMotion.Ease.InQuad
+));
+```
+
+### 配置要求
+
+#### LitMotion
+
+1. 通过 Package Manager 安装 `com.annulusgames.lit-motion`
+2. `LIT_MOTION_PRESENT` 会通过 asmdef versionDefines 自动添加
+
+#### DOTween
+
+1. 从 Asset Store 导入 DOTween
+2. 运行 **Tools > Demigiant > DOTween Utility Panel** 并点击 **Create ASMDEF**
+3. 在 **Project Settings > Player > Scripting Define Symbols** 中添加 `DO_TWEEN_PRESENT`
+4. 在您的 asmdef 引用中添加 `DOTween.Modules`
+
+### 扩展动画系统
+
+外部项目可以通过继承基础驱动来创建自定义过渡：
+
+```csharp
+// 1. 创建自定义配置类
+public class RotateConfig : TransitionConfigBase
+{
+    public float Angle { get; }
+    public RotateConfig(float angle = 180f, float duration = 0.3f) : base(duration)
+    {
+        Angle = angle;
+    }
+}
+
+// 2. 扩展驱动以处理您的配置
+public class MyTransitionDriver : LitMotionTransitionDriver
+{
+    public MyTransitionDriver(TransitionConfigBase config) : base(config) { }
+    
+    protected override async UniTask AnimateConfigAsync(
+        TransitionContext ctx, TransitionConfigBase config, bool isOpen, Ease ease, CancellationToken ct)
+    {
+        if (config is RotateConfig rotate)
+        {
+            // 自定义旋转动画
+            float from = isOpen ? rotate.Angle : 0f;
+            float to = isOpen ? 0f : rotate.Angle;
+            var handle = LMotion.Create(from, to, rotate.Duration)
+                .WithEase(ease)
+                .Bind(v => ctx.Transform.rotation = Quaternion.Euler(0, 0, v));
+            await handle.ToUniTask(cancellationToken: ct);
+        }
+        else
+        {
+            await base.AnimateConfigAsync(ctx, config, isOpen, ease, ct);
+        }
+    }
+}
+```
+
+### 性能说明
+
+- **预热后零 GC**：两个驱动都使用结构体上下文和缓存动画
+- **正确清理**：取消时会终止 Tween 以防止内存泄漏
+- **非缩放时间**：动画使用非缩放时间，在 Time.timeScale = 0 时正常工作
+
+---
+
+## 性能优化工具
+
+### `OptimizeHierarchy`
 
 在 Inspector 中右键单击您的 `UIWindow` 组件，选择 **Optimize Hierarchy**。此工具会扫描您的 UI 层级结构，并禁用非交互元素（如装饰性图像或文本）上的 `RaycastTarget`，从而显著降低 Unity 事件系统射线检测的开销。
 
-#### `SetVisible` API
+### `SetVisible` API
 
 使用 `window.SetVisible(bool)` 而不是 `gameObject.SetActive(bool)`。
 
@@ -929,93 +1059,258 @@ gameObject.SetActive(false);
 SetVisible(false);
 ```
 
-## 架构模式 (MVC/MVP)
+---
 
-虽然 `CycloneGames.UIFramework` 是架构无关的，但它旨在支持像 **MVC (Model-View-Controller)** 或 **MVP (Model-View-Presenter)** 这样的结构化模式。
+## 架构模式 (MVP 自动绑定)
 
-### 视图 (The View - `UIWindow`)
+CycloneGames.UIFramework 提供**可选的** MVP (Model-View-Presenter) 支持，具有自动 Presenter 生命周期管理。您可以使用传统方式（所有逻辑写在 UIWindow 中）或使用新的 MVP 模式自动绑定。
 
-您的 `UIWindow` 子类充当**视图 (View)**。它应该：
+### 使用级别
 
-- 持有对 UI 组件（按钮、文本）的引用。
-- 暴露更新可视化效果的方法（例如 `SetHealth(float value)`）。
-- 暴露用户交互的事件（例如 `OnPlayClicked`）。
-- **避免** 包含复杂的业务逻辑。
+| 级别 | 模式 | 使用场景 |
+|------|------|----------|
+| **L0** | `class MyUI : UIWindow` | 简单窗口、新手 |
+| **L1** | `class MyUI : UIWindow` + 手动 Presenter | 手动控制 |
+| **L2** | `class MyUI : UIWindow<TPresenter>` | 自动绑定、无 DI |
+| **L3** | `class MyUI : UIWindow<TPresenter>` + VContainer | 完整 DI 集成 |
 
-### 控制器 / 展示器 (The Controller / Presenter)
+---
 
-您可以实现一个单独的 Controller 类，或者将 `UIWindow` 用作轻量级控制器。
+### Level 0: 传统方式（无 Presenter）
 
-- **控制器**: 订阅 `UIWindow` 事件，与游戏模型/服务交互，并更新视图。
-- **模型**: 持有游戏数据的纯 C# 类。
-
-**示例 (MVP):**
+直接在 UIWindow 中编写所有逻辑 - 简单直接。
 
 ```csharp
-using System;
-using UnityEngine;
-using UnityEngine.UI;
-
-// 视图
-public class MainMenuWindow : UIWindow
+public class UIWindowSimple : UIWindow
 {
-    [SerializeField] private Button playButton;
-    [SerializeField] private Button settingsButton;
-    [SerializeField] private Text versionText;
-
-    public event Action OnPlayClicked;
-    public event Action OnSettingsClicked;
-
+    [SerializeField] private Button closeBtn;
+    
     protected override void Awake()
     {
         base.Awake();
-        playButton.onClick.AddListener(() => OnPlayClicked?.Invoke());
-        settingsButton.onClick.AddListener(() => OnSettingsClicked?.Invoke());
-    }
-
-    public void SetVersion(string version)
-    {
-        if (versionText != null)
-            versionText.text = $"版本 {version}";
-    }
-}
-
-// 展示器
-public class MainMenuController
-{
-    private MainMenuWindow _view;
-    private GameService _gameService;
-
-    public MainMenuController(MainMenuWindow view, GameService gameService)
-    {
-        _view = view;
-        _gameService = gameService;
-        _view.OnPlayClicked += HandlePlay;
-        _view.OnSettingsClicked += HandleSettings;
-
-        // 使用模型数据更新视图
-        _view.SetVersion(_gameService.GetVersion());
-    }
-
-    private void HandlePlay()
-    {
-        _gameService.StartGame();
-        _view.Close();
-    }
-
-    private void HandleSettings()
-    {
-        // 打开设置窗口
-        _gameService.OpenSettings();
-    }
-
-    public void Dispose()
-    {
-        if (_view != null)
-        {
-            _view.OnPlayClicked -= HandlePlay;
-            _view.OnSettingsClicked -= HandleSettings;
-        }
+        closeBtn.onClick.AddListener(() => Close());
     }
 }
 ```
+
+---
+
+### Level 2: 自动绑定（无需 DI 框架）
+
+使用 `UIWindow<TPresenter>` 自动创建和管理 Presenter。
+
+#### 步骤 1: 定义 View 接口
+
+```csharp
+public interface IInventoryView
+{
+    void SetGold(int amount);
+    void SetItemCount(int count);
+}
+```
+
+#### 步骤 2: 创建 View (UIWindow)
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class UIWindowInventory : UIWindow<InventoryPresenter>, IInventoryView
+{
+    [SerializeField] private Text goldText;
+    [SerializeField] private Text itemCountText;
+    
+    public void SetGold(int amount) => goldText.text = amount.ToString("N0");
+    public void SetItemCount(int count) => itemCountText.text = count.ToString();
+}
+```
+
+#### 步骤 3: 创建 Presenter
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+
+public class InventoryPresenter : UIPresenter<IInventoryView>
+{
+    // 从 UIServiceLocator 自动注入（无需 DI 框架）
+    [UIInject] private IInventoryService InventoryService { get; set; }
+    
+    public override void OnViewOpened()
+    {
+        View.SetGold(InventoryService.Gold);
+        View.SetItemCount(InventoryService.ItemCount);
+    }
+    
+    public override void OnViewClosing()
+    {
+        // 保存或清理逻辑
+    }
+    
+    public override void Dispose()
+    {
+        // 取消订阅事件、释放资源
+        base.Dispose();
+    }
+}
+```
+
+#### 步骤 4: 注册服务（无 DI 框架）
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+
+public class GameBootstrap : MonoBehaviour
+{
+    void Awake()
+    {
+        // 注册服务使 [UIInject] 生效
+        UIServiceLocator.Register<IInventoryService>(new InventoryService());
+        UIServiceLocator.Register<IAudioService>(new AudioService());
+    }
+    
+    void OnDestroy()
+    {
+        UIServiceLocator.Clear();
+    }
+}
+```
+
+#### 生命周期
+
+Presenter 生命周期完全自动，与 UIWindow 1:1 映射：
+
+| UIWindow 事件 | Presenter 调用 | 说明 |
+|---------------|----------------|------|
+| `Awake()` | `SetView()` | 视图绑定 |
+| `OnStartOpen()` | `OnViewOpening()` | 打开动画前 |
+| `OnFinishedOpen()` | `OnViewOpened()` | 完全可交互 |
+| `OnStartClose()` | `OnViewClosing()` | 关闭动画前 |
+| `OnFinishedClose()` | `OnViewClosed()` | 关闭动画后 |
+| `OnDestroy()` | `Dispose()` | 清理 |
+
+---
+
+### Level 3: VContainer 集成
+
+对于 VContainer 用户，在脚本定义符号中添加 `VCONTAINER_PRESENT`。
+
+#### 步骤 1: 添加脚本定义符号
+
+在 **Project Settings > Player > Scripting Define Symbols** 中添加：
+```
+VCONTAINER_PRESENT
+```
+
+#### 步骤 2: 注册 Presenter
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.UIFramework.Runtime;
+using CycloneGames.UIFramework.Runtime.Integrations;
+
+public class GameLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // 注册绑定器
+        builder.Register<VContainerWindowBinder>(Lifetime.Singleton);
+        
+        // 注册 Presenter
+        builder.Register<InventoryPresenter>(Lifetime.Transient);
+        builder.Register<SettingsPresenter>(Lifetime.Transient);
+        
+        // 注册服务
+        builder.Register<IInventoryService, InventoryService>(Lifetime.Singleton);
+    }
+}
+```
+
+#### 步骤 3: 初始化绑定器
+
+```csharp
+using VContainer;
+using CycloneGames.UIFramework.Runtime.Integrations;
+
+public class UISystemInitializer
+{
+    public UISystemInitializer(IObjectResolver resolver)
+    {
+        // 这会自动设置 UIPresenterFactory.CustomFactory
+        var binder = new VContainerWindowBinder(resolver);
+    }
+}
+```
+
+#### 使用构造函数注入的 Presenter
+
+```csharp
+using VContainer;
+using CycloneGames.UIFramework.Runtime;
+
+public class InventoryPresenter : UIPresenter<IInventoryView>
+{
+    private readonly IInventoryService _inventoryService;
+    private readonly IAudioService _audioService;
+    
+    [Inject]
+    public InventoryPresenter(IInventoryService inventoryService, IAudioService audioService)
+    {
+        _inventoryService = inventoryService;
+        _audioService = audioService;
+    }
+    
+    public override void OnViewOpened()
+    {
+        View.SetGold(_inventoryService.Gold);
+        _audioService.PlaySFX("ui_open");
+    }
+}
+```
+
+---
+
+### API 参考
+
+#### `UIPresenter<TView>`
+
+| 方法 | 描述 |
+|------|------|
+| `View` | 绑定的视图实例（protected 属性）|
+| `OnViewBound()` | SetView 后、窗口打开前调用 |
+| `OnViewOpening()` | 窗口开始打开时调用 |
+| `OnViewOpened()` | 窗口完全打开时调用 |
+| `OnViewClosing()` | 窗口开始关闭时调用 |
+| `OnViewClosed()` | 关闭动画结束后调用 |
+| `Dispose()` | 窗口销毁时调用 |
+
+
+#### `UIServiceLocator`
+
+| 方法 | 描述 |
+|------|------|
+| `Register<T>(T instance)` | 注册单例服务 |
+| `RegisterFactory<T>(Func<T>)` | 注册延迟工厂 |
+| `Get<T>()` | 获取已注册的服务 |
+| `Unregister<T>()` | 移除服务 |
+| `Clear()` | 清除所有服务 |
+
+#### `UIPresenterFactory`
+
+| 属性/方法 | 描述 |
+|-----------|------|
+| `CustomFactory` | 设置以集成 DI 框架 |
+| `Create<T>()` | 创建 Presenter 实例 |
+| `ClearCache()` | 清除反射缓存 |
+
+---
+
+### 性能说明
+
+- **预热后零 GC**：反射结果被缓存
+- **线程安全**：UIServiceLocator 使用锁保证并发访问
+- **内存安全**：Presenter 随窗口一起销毁
+- **无强制 DI**：无需任何 DI 框架即可工作
+
+
