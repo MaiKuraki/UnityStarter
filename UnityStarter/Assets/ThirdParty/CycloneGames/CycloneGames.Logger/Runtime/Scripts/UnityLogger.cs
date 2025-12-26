@@ -53,7 +53,8 @@ namespace CycloneGames.Logger
 
 #if UNITY_EDITOR
                     // Editor: use clickable hyperlink with custom attributes
-                    sb.Append("\n<a path=\"");
+                    // Extra newline hides the hyperlink from Console single-line preview
+                    sb.Append("\n\n<a path=\"");
                     for (int i = startIndex; i < sourcePath.Length; i++)
                     {
                         sb.Append(sourcePath[i] == '\\' ? '/' : sourcePath[i]);
