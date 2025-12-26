@@ -1160,16 +1160,15 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 }
 ```
 
-> [!NOTE] > `[UIInject]` is **optional**. If your Presenter works without external dependencies, or if you use a full DI framework (Level 3) that handles injection differently, you do not need to use this attribute.
+> [!NOTE]
+> `[UIInject]` is **optional**. If your Presenter works without external dependencies, or if you use a full DI framework (Level 3) that handles injection differently, you do not need to use this attribute.
 
+```csharp
     {
         // Unsubscribe from events, release resources
         base.Dispose();
     }
-
-}
-
-````
+```
 
 #### Step 4: Register Services (No DI Framework)
 
@@ -1190,7 +1189,7 @@ public class GameBootstrap : MonoBehaviour
         UIServiceLocator.Clear();
     }
 }
-````
+```
 
 #### Lifecycle
 
