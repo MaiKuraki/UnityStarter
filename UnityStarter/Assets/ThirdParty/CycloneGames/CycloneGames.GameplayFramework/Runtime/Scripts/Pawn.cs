@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -7,6 +8,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         private PlayerState playerState;
         private Controller controller;
         public Controller Controller => controller;
+        private readonly List<MonoBehaviour> _cachedComponents = new List<MonoBehaviour>(16);
 
         /// <summary>
         /// Notifies components about the initial rotation when a Pawn is spawned.
@@ -30,14 +32,11 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public void NotifyInitialRotation(Quaternion rotation)
         {
-            // Use interface query - this is fast (compiled to direct call) and doesn't require compile-time dependency
-            // Components that implement IInitialRotationSettable will be found via interface query
-            var components = GetComponents<MonoBehaviour>();
-            foreach (var component in components)
+            _cachedComponents.Clear();
+            GetComponents(_cachedComponents);
+            for (int i = 0; i < _cachedComponents.Count; i++)
             {
-                // Direct interface cast - this is fast, no reflection overhead
-                // The 'is' operator is compiled to a direct type check and cast
-                if (component is IInitialRotationSettable settable)
+                if (_cachedComponents[i] is IInitialRotationSettable settable)
                 {
                     settable.SetInitialRotation(rotation, immediate: true);
                 }

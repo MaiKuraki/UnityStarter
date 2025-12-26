@@ -111,6 +111,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         protected virtual void OnDestroy()
         {
             owner = null;
+            OwnerChanged = null;
         }
     }
 }
