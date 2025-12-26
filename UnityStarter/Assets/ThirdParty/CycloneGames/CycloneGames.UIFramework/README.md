@@ -1280,6 +1280,19 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 
 ---
 
+### Design Philosophy: View-First MVP
+
+You might ask: *"Why does the View (UIWindow) create the Presenter, instead of the Presenter creating the View?"*
+
+We chose the **View-First** approach specifically for the Unity engine environment:
+
+1.  **Unity-Native Workflow**: In Unity, UI starts with Prefabs. The "Entry Point" is naturally the `UIWindow` component on a GameObject.
+2.  **Lifecycle Safety**: The Presenter's lifecycle is perfectly bound to the View (`Awake` to `OnDestroy`). You never have "Zombie Presenters" running without a View, which avoids many common null reference errors.
+3.  **Zero Glue Code**: `UIWindow<T>` handles the binding automatically. You don't need separate "ScreenManager" or "Router" scripts just to wire things up.
+4.  **DI Compatible**: Even though the View initiates creation, the `UIPresenterFactory` serves as an indirection layer. This allows full DI frameworks (like VContainer) to intervene and inject dependencies, giving you the best of both worlds: **View-driven lifecycle + DI-driven logic**.
+
+---
+
 ### API Reference
 
 #### `UIPresenter<TView>`

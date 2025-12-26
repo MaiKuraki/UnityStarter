@@ -38,7 +38,7 @@ This template is designed for developers who want to start with a professional, 
 - ✅ Code obfuscation integration (Obfuz) for code protection
 - ✅ Build pipeline with CI/CD integration
 - ✅ Modern input system with context stacks
-- ✅ UI framework with hierarchical management
+- ✅ UI framework with hierarchical management and MVP architecture support
 
 > **📖 Documentation**: Each module has comprehensive documentation. See the [Module Catalog](#module-catalog) section for links to detailed guides.
 
@@ -165,7 +165,7 @@ Modules are designed to be:
 | Module          | Path                       | Description                                                                                                                 | Documentation                                                                               |
 | --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | **InputSystem** | `CycloneGames.InputSystem` | Reactive input wrapper with context stacks. Local co-op support, device auto-detection, runtime YAML keybind configuration. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.md) |
-| **UIFramework** | `CycloneGames.UIFramework` | Hierarchical UI management. Layer-based organization, transitions, asset integration.                                       | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md) |
+| **UIFramework** | `CycloneGames.UIFramework` | Hierarchical UI management. Layer-based, MVP architecture, transitions, asset integration.                                  | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md) |
 
 ### 🛠️ Utilities & Services
 
