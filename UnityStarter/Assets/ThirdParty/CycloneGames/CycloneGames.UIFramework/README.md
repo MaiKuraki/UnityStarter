@@ -917,13 +917,13 @@ The UIFramework provides a flexible, extensible transition animation system supp
 
 ### Built-in Configurations
 
-| Config | Effect | Usage |
-|--------|--------|-------|
-| `FadeConfig.Default` | Fade in/out | Dialogs, popups |
-| `ScaleConfig.Default` | Scale from 80% | Modal windows |
+| Config                              | Effect               | Usage                |
+| ----------------------------------- | -------------------- | -------------------- |
+| `FadeConfig.Default`                | Fade in/out          | Dialogs, popups      |
+| `ScaleConfig.Default`               | Scale from 80%       | Modal windows        |
 | `SlideConfig.Left/Right/Top/Bottom` | Slide from direction | Side panels, drawers |
-| `CompositeConfig.FadeScale` | Fade + Scale | Premium popups |
-| `CompositeConfig.FadeSlideBottom` | Fade + Slide up | Mobile-style sheets |
+| `CompositeConfig.FadeScale`         | Fade + Scale         | Premium popups       |
+| `CompositeConfig.FadeSlideBottom`   | Fade + Slide up      | Mobile-style sheets  |
 
 ### Quick Usage
 
@@ -980,15 +980,21 @@ window.SetTransitionDriver(new LitMotionTransitionDriver(
 
 #### LitMotion
 
-1. Install `com.annulusgames.lit-motion` via Package Manager
-2. The `LIT_MOTION_PRESENT` define is auto-added via asmdef versionDefines
+1.  **Install LitMotion**:
+    - Open **Window > Package Manager**
+    - Click **+ > Add package from git URL...**
+    - Enter `https://github.com/annulusgames/LitMotion.git`
+2.  **Done!**
+    - The `CycloneGames.UIFramework.Runtime.asmdef` handles definitions automatically (`LIT_MOTION_PRESENT`).
+    - You can now use `LitMotionTransitionDriver`.
 
 #### DOTween
 
-1. Import DOTween from Asset Store
-2. Run **Tools > Demigiant > DOTween Utility Panel** and click **Create ASMDEF**
-3. Add `DO_TWEEN_PRESENT` to **Project Settings > Player > Scripting Define Symbols**
-4. Add `DOTween.Modules` to your asmdef references
+1.  **Install DOTween**: Import from Asset Store or Package Manager.
+2.  **Setup**: Run **Tools > Demigiant > DOTween Utility Panel** and click **Create ASMDEF**.
+3.  **Done!**
+    - The `CycloneGames.UIFramework.Runtime.asmdef` handles definitions automatically (`DO_TWEEN_PRESENT`).
+    - You can now use `DOTweenTransitionDriver`.
 
 ### Extending the Animation System
 
@@ -1009,7 +1015,7 @@ public class RotateConfig : TransitionConfigBase
 public class MyTransitionDriver : LitMotionTransitionDriver
 {
     public MyTransitionDriver(TransitionConfigBase config) : base(config) { }
-    
+
     protected override async UniTask AnimateConfigAsync(
         TransitionContext ctx, TransitionConfigBase config, bool isOpen, Ease ease, CancellationToken ct)
     {
@@ -1067,12 +1073,12 @@ CycloneGames.UIFramework provides **optional** MVP (Model-View-Presenter) suppor
 
 ### Usage Levels
 
-| Level | Pattern | Use Case |
-|-------|---------|----------|
-| **L0** | `class MyUI : UIWindow` | Simple windows, beginners |
-| **L1** | `class MyUI : UIWindow` + manual Presenter | Manual control |
-| **L2** | `class MyUI : UIWindow<TPresenter>` | Auto-binding, no DI |
-| **L3** | `class MyUI : UIWindow<TPresenter>` + VContainer | Full DI integration |
+| Level  | Pattern                                          | Use Case                  |
+| ------ | ------------------------------------------------ | ------------------------- |
+| **L0** | `class MyUI : UIWindow`                          | Simple windows, beginners |
+| **L1** | `class MyUI : UIWindow` + manual Presenter       | Manual control            |
+| **L2** | `class MyUI : UIWindow<TPresenter>`              | Auto-binding, no DI       |
+| **L3** | `class MyUI : UIWindow<TPresenter>` + VContainer | Full DI integration       |
 
 ---
 
@@ -1084,7 +1090,7 @@ Write all logic directly in the UIWindow - simple and straightforward.
 public class UIWindowSimple : UIWindow
 {
     [SerializeField] private Button closeBtn;
-    
+
     protected override void Awake()
     {
         base.Awake();
@@ -1120,7 +1126,7 @@ public class UIWindowInventory : UIWindow<InventoryPresenter>, IInventoryView
 {
     [SerializeField] private Text goldText;
     [SerializeField] private Text itemCountText;
-    
+
     public void SetGold(int amount) => goldText.text = amount.ToString("N0");
     public void SetItemCount(int count) => itemCountText.text = count.ToString();
 }
@@ -1135,18 +1141,18 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 {
     // Auto-injected from UIServiceLocator (no DI framework needed)
     [UIInject] private IInventoryService InventoryService { get; set; }
-    
+
     public override void OnViewOpened()
     {
         View.SetGold(InventoryService.Gold);
         View.SetItemCount(InventoryService.ItemCount);
     }
-    
+
     public override void OnViewClosing()
     {
         // Save or cleanup logic
     }
-    
+
     public override void Dispose()
     {
         // Cleanup if needed
@@ -1154,14 +1160,16 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 }
 ```
 
-> [!NOTE]
-> `[UIInject]` is **optional**. If your Presenter works without external dependencies, or if you use a full DI framework (Level 3) that handles injection differently, you do not need to use this attribute.
+> [!NOTE] > `[UIInject]` is **optional**. If your Presenter works without external dependencies, or if you use a full DI framework (Level 3) that handles injection differently, you do not need to use this attribute.
+
     {
         // Unsubscribe from events, release resources
         base.Dispose();
     }
+
 }
-```
+
+````
 
 #### Step 4: Register Services (No DI Framework)
 
@@ -1176,27 +1184,26 @@ public class GameBootstrap : MonoBehaviour
         UIServiceLocator.Register<IInventoryService>(new InventoryService());
         UIServiceLocator.Register<IAudioService>(new AudioService());
     }
-    
+
     void OnDestroy()
     {
         UIServiceLocator.Clear();
     }
 }
-```
+````
 
 #### Lifecycle
 
 The Presenter lifecycle is fully automatic and maps 1:1 to UIWindow:
 
-| UIWindow Event | Presenter Call | Description |
-|----------------|----------------|-------------|
-| `Awake()` | `SetView()` | View binding |
-| `OnStartOpen()` | `OnViewOpening()` | Before open animation |
-| `OnFinishedOpen()` | `OnViewOpened()` | Fully interactive |
-| `OnStartClose()` | `OnViewClosing()` | Before close animation |
-| `OnFinishedClose()` | `OnViewClosed()` | After close animation |
-| `OnDestroy()` | `Dispose()` | Cleanup |
-
+| UIWindow Event      | Presenter Call    | Description            |
+| ------------------- | ----------------- | ---------------------- |
+| `Awake()`           | `SetView()`       | View binding           |
+| `OnStartOpen()`     | `OnViewOpening()` | Before open animation  |
+| `OnFinishedOpen()`  | `OnViewOpened()`  | Fully interactive      |
+| `OnStartClose()`    | `OnViewClosing()` | Before close animation |
+| `OnFinishedClose()` | `OnViewClosed()`  | After close animation  |
+| `OnDestroy()`       | `Dispose()`       | Cleanup                |
 
 ---
 
@@ -1207,6 +1214,7 @@ For VContainer users, add `VCONTAINER_PRESENT` to your scripting define symbols.
 #### Step 1: Add Scripting Define
 
 In **Project Settings > Player > Scripting Define Symbols**, add:
+
 ```
 VCONTAINER_PRESENT
 ```
@@ -1225,11 +1233,11 @@ public class GameLifetimeScope : LifetimeScope
     {
         // Register the binder
         builder.Register<VContainerWindowBinder>(Lifetime.Singleton);
-        
+
         // Register Presenters
         builder.Register<InventoryPresenter>(Lifetime.Transient);
         builder.Register<SettingsPresenter>(Lifetime.Transient);
-        
+
         // Register services
         builder.Register<IInventoryService, InventoryService>(Lifetime.Singleton);
     }
@@ -1262,14 +1270,14 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 {
     private readonly IInventoryService _inventoryService;
     private readonly IAudioService _audioService;
-    
+
     [Inject]
     public InventoryPresenter(IInventoryService inventoryService, IAudioService audioService)
     {
         _inventoryService = inventoryService;
         _audioService = audioService;
     }
-    
+
     public override void OnViewOpened()
     {
         View.SetGold(_inventoryService.Gold);
@@ -1282,7 +1290,7 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 
 ### Design Philosophy: View-First MVP
 
-You might ask: *"Why does the View (UIWindow) create the Presenter, instead of the Presenter creating the View?"*
+You might ask: _"Why does the View (UIWindow) create the Presenter, instead of the Presenter creating the View?"_
 
 We chose the **View-First** approach specifically for the Unity engine environment:
 
@@ -1297,34 +1305,33 @@ We chose the **View-First** approach specifically for the Unity engine environme
 
 #### `UIPresenter<TView>`
 
-| Method | Description |
-|--------|-------------|
-| `View` | The bound view instance (protected property) |
-| `OnViewBound()` | Called after SetView, before window opens |
-| `OnViewOpening()` | Called when window starts opening |
-| `OnViewOpened()` | Called when window is fully open |
-| `OnViewClosing()` | Called when window starts closing |
-| `OnViewClosed()` | Called after close animation |
-| `Dispose()` | Called when window is destroyed |
-
+| Method            | Description                                  |
+| ----------------- | -------------------------------------------- |
+| `View`            | The bound view instance (protected property) |
+| `OnViewBound()`   | Called after SetView, before window opens    |
+| `OnViewOpening()` | Called when window starts opening            |
+| `OnViewOpened()`  | Called when window is fully open             |
+| `OnViewClosing()` | Called when window starts closing            |
+| `OnViewClosed()`  | Called after close animation                 |
+| `Dispose()`       | Called when window is destroyed              |
 
 #### `UIServiceLocator`
 
-| Method | Description |
-|--------|-------------|
-| `Register<T>(T instance)` | Register a singleton service |
-| `RegisterFactory<T>(Func<T>)` | Register a lazy factory |
-| `Get<T>()` | Get a registered service |
-| `Unregister<T>()` | Remove a service |
-| `Clear()` | Clear all services |
+| Method                        | Description                  |
+| ----------------------------- | ---------------------------- |
+| `Register<T>(T instance)`     | Register a singleton service |
+| `RegisterFactory<T>(Func<T>)` | Register a lazy factory      |
+| `Get<T>()`                    | Get a registered service     |
+| `Unregister<T>()`             | Remove a service             |
+| `Clear()`                     | Clear all services           |
 
 #### `UIPresenterFactory`
 
-| Property/Method | Description |
-|-----------------|-------------|
+| Property/Method | Description                         |
+| --------------- | ----------------------------------- |
 | `CustomFactory` | Set to integrate with DI frameworks |
-| `Create<T>()` | Create a Presenter instance |
-| `ClearCache()` | Clear reflection cache |
+| `Create<T>()`   | Create a Presenter instance         |
+| `ClearCache()`  | Clear reflection cache              |
 
 ---
 
@@ -1334,5 +1341,3 @@ We chose the **View-First** approach specifically for the Unity engine environme
 - **Thread-safe**: UIServiceLocator uses locking for concurrent access
 - **Memory-safe**: Presenters are disposed with their windows
 - **No forced DI**: Works without any DI framework
-
-
