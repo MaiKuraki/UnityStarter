@@ -1,10 +1,11 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
     /// <summary>
-    /// A utility for tracking active asset handles for diagnostic purposes.
+    /// Lock-free utility for tracking active asset handles for diagnostic purposes.
     /// </summary>
     public static class HandleTracker
     {
@@ -20,8 +21,10 @@ namespace CycloneGames.AssetManagement.Runtime
         public static bool Enabled { get; set; }
         public static bool EnableStackTrace { get; set; }
 
-        private static readonly Dictionary<int, HandleInfo> activeHandles = new Dictionary<int, HandleInfo>();
-        private static readonly object lockObject = new object();
+        private static readonly ConcurrentDictionary<int, HandleInfo> _activeHandles = new ConcurrentDictionary<int, HandleInfo>();
+
+        [System.ThreadStatic]
+        private static List<HandleInfo> _threadLocalList;
 
         public static void Register(int id, string packageName, string description)
         {
@@ -33,43 +36,40 @@ namespace CycloneGames.AssetManagement.Runtime
                 stackTrace = UnityEngine.StackTraceUtility.ExtractStackTrace();
             }
 
-            lock (lockObject)
+            var info = new HandleInfo
             {
-                var info = new HandleInfo
-                {
-                    Id = id,
-                    PackageName = packageName,
-                    Description = description,
-                    RegistrationTime = System.DateTime.UtcNow,
-                    StackTrace = stackTrace
-                };
-                activeHandles[id] = info;
-            }
+                Id = id,
+                PackageName = packageName,
+                Description = description,
+                RegistrationTime = System.DateTime.UtcNow,
+                StackTrace = stackTrace
+            };
+            _activeHandles[id] = info;
         }
 
         public static void Unregister(int id)
         {
             if (!Enabled) return;
-
-            lock (lockObject)
-            {
-                activeHandles.Remove(id);
-            }
+            _activeHandles.TryRemove(id, out _);
         }
 
         public static List<HandleInfo> GetActiveHandles()
         {
-            var handles = new List<HandleInfo>();
-            if (!Enabled) return handles;
+            var list = _threadLocalList ?? (_threadLocalList = new List<HandleInfo>(64));
+            list.Clear();
 
-            lock (lockObject)
+            if (!Enabled) return list;
+
+            foreach (var kvp in _activeHandles)
             {
-                foreach (var kvp in activeHandles)
-                {
-                    handles.Add(kvp.Value);
-                }
+                list.Add(kvp.Value);
             }
-            return handles;
+            return list;
+        }
+
+        public static int GetActiveHandleCount()
+        {
+            return Enabled ? _activeHandles.Count : 0;
         }
 
         public static string GetActiveHandlesReport()
@@ -82,7 +82,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 return "No active handles.";
             }
 
-            var sb = new StringBuilder();
+            var sb = new StringBuilder(handles.Count * 128);
             sb.AppendLine($"--- Active Asset Handles Report ({handles.Count}) ---");
             foreach (var handle in handles)
             {
@@ -93,6 +93,11 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
             }
             return sb.ToString();
+        }
+
+        public static void Clear()
+        {
+            _activeHandles.Clear();
         }
     }
 }
