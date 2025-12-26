@@ -4,18 +4,54 @@
 
 # CycloneGames.GameplayAbilities
 
-CycloneGames.GameplayAbilities 是一个为 Unity 打造的、功能强大且高度灵活的游戏性能力系统（Gameplay Ability System），其设计深受虚幻引擎（Unreal Engine）著名的 Gameplay Ability System (GAS) 的启发。本系统从零开始构建，以数据驱动为核心，充分利用 Unity 的 `ScriptableObject` 架构，为您提供一个健壮的框架，只需极少的代码即可创建复杂的技能、属性和状态效果。
+为 Unity 打造的强大、数据驱动的游戏性能力系统，灵感来自虚幻引擎的 GAS。
 
-本系统非常适合开发 RPG、MOBA 或任何需要精细技能和属性系统的游戏。它的设计旨在对初学者友好，同时也能提供专业项目所需的深度。
+---
 
-## 目录
+## ✨ 核心特性
 
-1. [GAS 设计哲学](#gas的设计哲学技能系统的范式转移)
-2. [架构概览](#架构深度解析)
-3. [快速上手指南](#综合快速上手指南)
-4. [核心概念](#核心概念)
-5. [高级特性](#高级特性)
-6. [最佳实践](#最佳实践)
+| 特性 | 说明 |
+|------|------|
+| 🎮 **数据驱动的技能** | 在 ScriptableObject 中定义技能，无需修改代码 |
+| ⚡ **GameplayEffect** | 即时/持续/永久效果，支持叠加和周期性触发 |
+| 🏷️ **标签系统** | 使用 GameplayTag 解耦技能、状态、冷却逻辑 |
+| 🎯 **瞄准系统** | 内置球形范围、射线、地面选择等瞄准方式 |
+| 📊 **属性集** | 灵活的角色属性系统，支持验证钩子 |
+| 🎨 **GameplayCue** | VFX/SFX 与游戏逻辑完全分离 |
+| ⏱️ **AbilityTask** | 异步技能逻辑（延迟、瞄准、动画） |
+| 🔄 **对象池** | 零 GC 运行，自动对象池化 |
+
+---
+
+## 📚 目录
+
+### 快速开始
+1. [为什么选择 GAS？](#gas的设计哲学技能系统的范式转移) — 传统方法 vs GAS
+2. [架构概览](#架构深度解析) — 核心组件图
+3. [快速上手](#综合快速上手指南) — 从零构建治疗技能
+
+### 核心概念
+4. [GameplayTag](#gameplay-tags) — GAS 的通用语言
+5. [GameplayEffect](#gameplay-effects) — 修改器、持续时间、叠加
+6. [属性集](#属性集) — 角色数值系统
+7. [技能生命周期](#能力生命周期) — 授予 → 激活 → 提交 → 结束
+
+### 高级特性
+8. [AbilityTask](#abilitytask深度解析) — 技能中的异步操作
+9. [瞄准系统](#targeting-system) — 查找和选择目标
+10. [GameplayCue](#gameplaycue-system) — VFX/SFX 管理
+11. [执行计算](#执行计算) — 复杂伤害公式
+12. [网络架构](#networking-architecture) — 预测与同步
+
+### 参考
+13. [示例演练](#sample-walkthrough) — 火球术、净化、升级系统
+14. [常见问题](#frequently-asked-questions-faq) — FAQ
+15. [故障排除](#troubleshooting-guide) — 调试清单
+16. [性能优化](#performance-optimization) — 零 GC 技巧
+
+---
+
+
 
 ## GAS 的设计哲学：技能系统的范式转移
 
@@ -751,6 +787,20 @@ var poisonTag = GameplayTagContainer.FromTag("Status.Debuff.Poison");
 // 移除所有带有标签的效果
 targetASC.RemoveActiveEffectsWithGrantedTags(poisonTag);
 ```
+
+### 高级标签特性
+
+除了简单的标识作用，标签还能控制强大的游戏逻辑：
+
+#### ActivationOwnedTags (在技能上)
+当技能处于**激活状态**时，自动授予拥有者的标签。
+- **适用场景**：释放"流星火雨"时，授予 `State.Casting` 标签。这可用于播放动画或阻止其他技能释放。
+- **持续时间**：仅在技能激活期间存在。
+
+#### ImmunityTags (在 AbilitySystemComponent 上)
+授予对特定 GameplayEffect 的**完全免疫**。
+- **工作原理**：如果 ASC 拥有 `ImmunityTags`（例如 `State.DebuffImmune`），任何传入的 GameplayEffect 若带有匹配的 **AssetTag** 或 **GrantedTag**（例如 `State.Debuff.Poison`），将被**完全阻止**。
+- **适用场景**："圣盾"技能授予免疫标签，防止所有负面状态效果。
 
 ### Gameplay Effects
 
