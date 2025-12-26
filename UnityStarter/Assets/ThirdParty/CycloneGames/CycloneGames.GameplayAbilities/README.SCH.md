@@ -43,7 +43,7 @@
 11. [执行计算](#执行计算) — 复杂伤害公式
 
 ### 参考
-12. [示例演练](Samples/README.md) — 火球术、净化、升级系统
+12. [示例演练](#示例演练) — 火球术、净化、升级系统
 13. [常见问题](#常见问题-faq) — FAQ
 14. [故障排除](#故障排除指南) — 调试清单
 15. [性能优化](#性能优化) — 零 GC 技巧
@@ -1953,7 +1953,11 @@ poolManager.Release(vfx); // 返回池
 - 谨慎使用执行计算（它们比修改器慢）
 - 定期分析——系统设计为 0GC，请在你的用例中验证这一点
 
+---
+
 ## 示例演练
+
+关于包含的示例（火球术、净化、升级）的综合指南，请阅读 **[示例演练文档](Samples/README.SCH.md)**。
 
 - DemoLink: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
 - <img src="./Documents~/DemoPreview_2.gif" alt="Demo Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
