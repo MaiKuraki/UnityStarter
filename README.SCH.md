@@ -38,7 +38,7 @@
 - ✅ 代码混淆集成（Obfuz）用于代码保护
 - ✅ 带 CI/CD 集成的构建管线
 - ✅ 现代输入系统（支持上下文栈）
-- ✅ 层级式 UI 管理框架
+- ✅ 层级式 UI 管理框架（支持 MVP 架构）
 
 > **📖 文档**: 每个模块都有详细文档。请参阅 [模块目录](#模块目录) 部分以获取详细指南链接。
 
@@ -165,7 +165,7 @@
 | 模块            | 路径                       | 描述                                                                             | 文档                                                                                                |
 | --------------- | -------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | **InputSystem** | `CycloneGames.InputSystem` | 响应式输入封装，支持上下文栈。本地多人支持、设备自动检测、运行时 YAML 键位配置。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.SCH.md) |
-| **UIFramework** | `CycloneGames.UIFramework` | 层级式 UI 管理。基于层的组织、转场动画、资源集成。                               | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
+| **UIFramework** | `CycloneGames.UIFramework` | 层级式 UI 管理。基于层的组织、MVP 架构、转场动画、资源集成。                     | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
 
 ### 🛠️ 工具与服务
 

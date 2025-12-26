@@ -2,6 +2,7 @@ using System;
 using UnityEngine;
 using UnityEngine.Rendering;
 using Unity.Collections.LowLevel.Unsafe;
+using CycloneGames.Logger;
 
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
@@ -72,7 +73,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             if (w > maxWidth || h > maxHeight)
             {
-                Debug.LogError($"[DynamicAtlasPage] Texture ({w}x{h}) is too large for page ({_width}x{_height}, max available: {maxWidth}x{maxHeight} with padding). Cannot insert.");
+                CLogger.LogError($"[DynamicAtlasPage] Texture ({w}x{h}) is too large for page ({_width}x{_height}, max available: {maxWidth}x{maxHeight} with padding). Cannot insert.");
                 return false;
             }
 
@@ -147,7 +148,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             // Fallback to CPU copy
             if (!source.isReadable)
             {
-                Debug.LogError($"[DynamicAtlasPage] Insert failed. GPU CopyTexture failed (Supported: {useCopyTexture}, Format Match: {source.format == Texture.format}) and Source is NOT Readable.");
+                CLogger.LogError($"[DynamicAtlasPage] Insert failed. GPU CopyTexture failed (Supported: {useCopyTexture}, Format Match: {source.format == Texture.format}) and Source is NOT Readable.");
                 return false;
             }
 

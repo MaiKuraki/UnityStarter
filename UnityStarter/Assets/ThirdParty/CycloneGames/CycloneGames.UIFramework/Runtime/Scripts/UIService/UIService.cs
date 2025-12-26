@@ -3,6 +3,7 @@ using Cysharp.Threading.Tasks;
 using CycloneGames.Factory.Runtime;             // For IUnityObjectSpawner
 using CycloneGames.Service.Runtime;             // For IMainCameraService
 using CycloneGames.AssetManagement.Runtime;     // For IAssetPathBuilderFactory
+using CycloneGames.Logger;
 
 namespace CycloneGames.UIFramework.Runtime
 {
@@ -88,7 +89,7 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (isInitialized)
             {
-                UnityEngine.Debug.LogWarning($"{DEBUG_FLAG} UIService already initialized. Operation aborted.");
+                CLogger.LogWarning($"{DEBUG_FLAG} UIService already initialized. Operation aborted.");
                 return;
             }
             if (factory == null) throw new ArgumentNullException(nameof(factory));
@@ -133,7 +134,7 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (isInitialized)
             {
-                UnityEngine.Debug.LogWarning($"{DEBUG_FLAG} UIService already initialized. Operation aborted.");
+                CLogger.LogWarning($"{DEBUG_FLAG} UIService already initialized. Operation aborted.");
                 return;
             }
             if (factory == null) throw new ArgumentNullException(nameof(factory));
@@ -160,11 +161,11 @@ namespace CycloneGames.UIFramework.Runtime
                 UnityEngine.GameObject managerObject = new UnityEngine.GameObject("UIManager_RuntimeInstance");
                 uiManagerInstance = managerObject.AddComponent<UIManager>();
                 UnityEngine.Object.DontDestroyOnLoad(managerObject); // Make it persist across scene loads
-                UnityEngine.Debug.Log($"{DEBUG_FLAG} UIManager instance created and marked DontDestroyOnLoad.");
+                CLogger.LogInfo($"{DEBUG_FLAG} UIManager instance created and marked DontDestroyOnLoad.");
             }
             else
             {
-                UnityEngine.Debug.Log($"{DEBUG_FLAG} Found existing UIManager instance in the scene.");
+                CLogger.LogInfo($"{DEBUG_FLAG} Found existing UIManager instance in the scene.");
             }
 
             // Initialize the UIManager instance with the provided dependencies.
@@ -176,7 +177,7 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (!isInitialized || uiManagerInstance == null)
             {
-                UnityEngine.Debug.LogError($"{DEBUG_FLAG} UIService or UIManager is not initialized. Operation aborted.");
+                CLogger.LogError($"{DEBUG_FLAG} UIService or UIManager is not initialized. Operation aborted.");
                 return false;
             }
             return true;
@@ -249,7 +250,7 @@ namespace CycloneGames.UIFramework.Runtime
 
         public void Dispose()
         {
-            UnityEngine.Debug.Log($"{DEBUG_FLAG} Disposing UIService.");
+            CLogger.LogInfo($"{DEBUG_FLAG} Disposing UIService.");
             if (uiManagerInstance != null)
             {
                 // Decide if UIService disposing should destroy the UIManager GameObject.
@@ -265,7 +266,7 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (!CheckInitialization())
             {
-                UnityEngine.Debug.LogError($"{DEBUG_FLAG} UIService is not initialized. Operation aborted.");
+                CLogger.LogError($"{DEBUG_FLAG} UIService is not initialized. Operation aborted.");
                 return (0, 0);
             }
             return uiManagerInstance.GetRootCanvasSize();
