@@ -1,13 +1,10 @@
 {
-    "name": "CycloneGames.GameplayAbilities.Runtime",
-    "rootNamespace": "",
+    "name": "CycloneGames.GameplayAbilities.Core",
+    "rootNamespace": "CycloneGames.GameplayAbilities.Core",
     "references": [
-        "UniTask",
         "CycloneGames.Logger",
-        "CycloneGames.Factory.Runtime",
-        "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.GameplayTags.Runtime",
-        "CycloneGames.GameplayAbilities.Core"
+        "CycloneGames.Factory.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -17,5 +14,5 @@
     "autoReferenced": true,
     "defineConstraints": [],
     "versionDefines": [],
-    "noEngineReferences": false
+    "noEngineReferences": true
 }

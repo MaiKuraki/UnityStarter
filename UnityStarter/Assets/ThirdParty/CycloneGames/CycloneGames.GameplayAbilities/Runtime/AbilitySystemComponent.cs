@@ -23,6 +23,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public static PredictionKey NewKey()
         {
+            // Wraparound to prevent overflow during long sessions (skip 0 as it means invalid)
+            if (nextKey >= int.MaxValue - 1)
+            {
+                nextKey = 1;
+            }
             return new PredictionKey { Key = nextKey++ };
         }
 
@@ -51,6 +56,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GameplayTagCountContainer CombinedTags { get; } = new GameplayTagCountContainer();
         private readonly GameplayTagCountContainer looseTags = new GameplayTagCountContainer();
         private readonly GameplayTagCountContainer fromEffectsTags = new GameplayTagCountContainer();
+        
+        /// <summary>
+        /// Tags that grant immunity to effects. Effects with AssetTags or GrantedTags matching these will be blocked.
+        /// </summary>
+        public GameplayTagContainer ImmunityTags { get; } = new GameplayTagContainer();
 
         private readonly List<AttributeSet> attributeSets = new List<AttributeSet>(4);
         private readonly Dictionary<string, GameplayAttribute> attributes = new Dictionary<string, GameplayAttribute>(32);
@@ -75,6 +85,48 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly List<ActiveGameplayEffect> pendingPredictedEffects = new List<ActiveGameplayEffect>();
 
         public IFactory<IGameplayEffectContext> EffectContextFactory { get; private set; }
+        
+        #region Tag Event Convenience API
+        
+        /// <summary>
+        /// Registers a callback for when a specific tag is added or removed from this ASC.
+        /// </summary>
+        public void RegisterTagEventCallback(GameplayTag tag, GameplayTagEventType eventType, OnTagCountChangedDelegate callback)
+        {
+            CombinedTags.RegisterTagEventCallback(tag, eventType, callback);
+        }
+        
+        /// <summary>
+        /// Removes a tag event callback.
+        /// </summary>
+        public void RemoveTagEventCallback(GameplayTag tag, GameplayTagEventType eventType, OnTagCountChangedDelegate callback)
+        {
+            CombinedTags.RemoveTagEventCallback(tag, eventType, callback);
+        }
+        
+        /// <summary>
+        /// Adds an immunity tag. Effects matching this tag will be blocked.
+        /// </summary>
+        public void AddImmunityTag(GameplayTag tag)
+        {
+            if (!tag.IsNone && !ImmunityTags.HasTag(tag))
+            {
+                ImmunityTags.AddTag(tag);
+            }
+        }
+        
+        /// <summary>
+        /// Removes an immunity tag.
+        /// </summary>
+        public void RemoveImmunityTag(GameplayTag tag)
+        {
+            if (!tag.IsNone)
+            {
+                ImmunityTags.RemoveTag(tag);
+            }
+        }
+        
+        #endregion
 
         public AbilitySystemComponent(IFactory<IGameplayEffectContext> effectContextFactory)
         {
@@ -216,6 +268,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             spec.IsActive = true;
             tickingAbilities.Add(spec);
+            
+            // Apply ActivationOwnedTags - tags granted while ability is active
+            if (ability.ActivationOwnedTags != null && !ability.ActivationOwnedTags.IsEmpty)
+            {
+                looseTags.AddTags(ability.ActivationOwnedTags);
+                UpdateCombinedTags();
+            }
 
             ability.ActivateAbility(new GameplayAbilityActorInfo(OwnerActor, AvatarActor), spec, activationInfo);
 
@@ -277,6 +336,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     ability.Spec.IsActive = false;
                     tickingAbilities.Remove(ability.Spec);
+                    
+                    // Remove ActivationOwnedTags when ability ends
+                    if (ability.ActivationOwnedTags != null && !ability.ActivationOwnedTags.IsEmpty)
+                    {
+                        looseTags.RemoveTags(ability.ActivationOwnedTags);
+                        UpdateCombinedTags();
+                    }
                 }
 
                 // This ensures that flags like 'isEnding' are ready for the next activation.
@@ -369,6 +435,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private bool CanApplyEffect(GameplayEffectSpec spec)
         {
+            // Check immunity - block effects whose tags match any immunity tag
+            if (!ImmunityTags.IsEmpty)
+            {
+                if (spec.Def.AssetTags.HasAny(ImmunityTags) || spec.Def.GrantedTags.HasAny(ImmunityTags))
+                {
+                    CLogger.LogInfo($"Apply GameplayEffect '{spec.Def.Name}' blocked: target has immunity to effect's tags.");
+                    return false;
+                }
+            }
+            
             if (spec.Def.ApplicationTagRequirements.RequiredTags != null && !spec.Def.ApplicationTagRequirements.RequiredTags.IsEmpty)
             {
                 if (!CombinedTags.HasAll(spec.Def.ApplicationTagRequirements.RequiredTags))
@@ -566,11 +642,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     if (cueTag.IsNone) continue;
 
-                    GameplayCueManager.Instance.HandleCue(cueTag, eventType, effect.Spec).Forget();
+                    GameplayCueManager.Default.HandleCue(cueTag, eventType, effect.Spec).Forget();
 
                     if (eventType == EGameplayCueEvent.OnActive)
                     {
-                        GameplayCueManager.Instance.HandleCue(cueTag, EGameplayCueEvent.WhileActive, effect.Spec).Forget();
+                        GameplayCueManager.Default.HandleCue(cueTag, EGameplayCueEvent.WhileActive, effect.Spec).Forget();
                     }
                 }
             }
@@ -612,7 +688,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 foreach (var cueTag in effect.Spec.Def.GameplayCues)
                 {
                     if (cueTag.IsNone) continue;
-                    GameplayCueManager.Instance.HandleCue(cueTag, EGameplayCueEvent.Removed, effect.Spec).Forget();
+                    GameplayCueManager.Default.HandleCue(cueTag, EGameplayCueEvent.Removed, effect.Spec).Forget();
                 }
             }
 

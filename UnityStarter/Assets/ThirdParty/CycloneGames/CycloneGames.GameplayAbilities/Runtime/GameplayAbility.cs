@@ -148,6 +148,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public GameplayTagContainer BlockAbilitiesWithTag { get; protected set; }
 
+        /// <summary>
+        /// Tags that are granted to the owner while this ability is active.
+        /// These tags are added when the ability activates and removed when it ends.
+        /// </summary>
+        public GameplayTagContainer ActivationOwnedTags { get; protected set; }
+
         #endregion
 
         #region Runtime Properties
@@ -178,7 +184,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void Initialize(string name, EGameplayAbilityInstancingPolicy instancingPolicy, ENetExecutionPolicy netExecutionPolicy,
             GameplayEffect cost, GameplayEffect cooldown, GameplayTagContainer abilityTags,
             GameplayTagContainer activationBlockedTags, GameplayTagContainer activationRequiredTags,
-            GameplayTagContainer cancelAbilitiesWithTag, GameplayTagContainer blockAbilitiesWithTag)
+            GameplayTagContainer cancelAbilitiesWithTag, GameplayTagContainer blockAbilitiesWithTag,
+            GameplayTagContainer activationOwnedTags = null)
         {
             Name = name;
             InstancingPolicy = instancingPolicy;
@@ -190,6 +197,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ActivationRequiredTags = activationRequiredTags ?? new GameplayTagContainer();
             CancelAbilitiesWithTag = cancelAbilitiesWithTag ?? new GameplayTagContainer();
             BlockAbilitiesWithTag = blockAbilitiesWithTag ?? new GameplayTagContainer();
+            ActivationOwnedTags = activationOwnedTags ?? new GameplayTagContainer();
         }
 
         /// <summary>
