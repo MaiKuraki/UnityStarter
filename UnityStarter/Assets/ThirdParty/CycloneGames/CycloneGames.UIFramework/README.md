@@ -909,13 +909,143 @@ public class MyWindow : UIWindow
 }
 ```
 
-### Performance Optimization Tools
+---
 
-#### `OptimizeHierarchy`
+## Transition Animation System
+
+The UIFramework provides a flexible, extensible transition animation system supporting **LitMotion** and **DOTween**. You can use built-in presets or create custom animations.
+
+### Built-in Configurations
+
+| Config | Effect | Usage |
+|--------|--------|-------|
+| `FadeConfig.Default` | Fade in/out | Dialogs, popups |
+| `ScaleConfig.Default` | Scale from 80% | Modal windows |
+| `SlideConfig.Left/Right/Top/Bottom` | Slide from direction | Side panels, drawers |
+| `CompositeConfig.FadeScale` | Fade + Scale | Premium popups |
+| `CompositeConfig.FadeSlideBottom` | Fade + Slide up | Mobile-style sheets |
+
+### Quick Usage
+
+```csharp
+// Using LitMotion (requires LIT_MOTION_PRESENT define)
+var driver = new LitMotionTransitionDriver(FadeConfig.Default);
+window.SetTransitionDriver(driver);
+
+// Using DOTween (requires DO_TWEEN_PRESENT define)
+var driver = new DOTweenTransitionDriver(CompositeConfig.FadeScale);
+window.SetTransitionDriver(driver);
+```
+
+### Custom Configuration
+
+```csharp
+// Custom scale animation
+var config = new ScaleConfig(scaleFrom: 0.5f, duration: 0.4f);
+window.SetTransitionDriver(new LitMotionTransitionDriver(config));
+
+// Custom slide from bottom
+var slideConfig = new SlideConfig(
+    direction: SlideDirection.Bottom,
+    offset: 0.3f,
+    duration: 0.35f
+);
+window.SetTransitionDriver(new DOTweenTransitionDriver(slideConfig));
+
+// Composite: Fade + Scale + Slide
+var compositeConfig = new CompositeConfig(
+    fade: true,
+    scale: new ScaleConfig(0.9f),
+    slide: new SlideConfig(SlideDirection.Bottom, 0.2f),
+    duration: 0.3f
+);
+window.SetTransitionDriver(new LitMotionTransitionDriver(compositeConfig));
+```
+
+### Different Open/Close Animations
+
+```csharp
+var openConfig = CompositeConfig.FadeScale;
+var closeConfig = FadeConfig.Default;
+
+window.SetTransitionDriver(new LitMotionTransitionDriver(
+    openConfig: openConfig,
+    closeConfig: closeConfig,
+    easeIn: LitMotion.Ease.OutBack,
+    easeOut: LitMotion.Ease.InQuad
+));
+```
+
+### Setup Requirements
+
+#### LitMotion
+
+1. Install `com.annulusgames.lit-motion` via Package Manager
+2. The `LIT_MOTION_PRESENT` define is auto-added via asmdef versionDefines
+
+#### DOTween
+
+1. Import DOTween from Asset Store
+2. Run **Tools > Demigiant > DOTween Utility Panel** and click **Create ASMDEF**
+3. Add `DO_TWEEN_PRESENT` to **Project Settings > Player > Scripting Define Symbols**
+4. Add `DOTween.Modules` to your asmdef references
+
+### Extending the Animation System
+
+External projects can create custom transitions by inheriting from the base drivers:
+
+```csharp
+// 1. Create a custom config class
+public class RotateConfig : TransitionConfigBase
+{
+    public float Angle { get; }
+    public RotateConfig(float angle = 180f, float duration = 0.3f) : base(duration)
+    {
+        Angle = angle;
+    }
+}
+
+// 2. Extend the driver to handle your config
+public class MyTransitionDriver : LitMotionTransitionDriver
+{
+    public MyTransitionDriver(TransitionConfigBase config) : base(config) { }
+    
+    protected override async UniTask AnimateConfigAsync(
+        TransitionContext ctx, TransitionConfigBase config, bool isOpen, Ease ease, CancellationToken ct)
+    {
+        if (config is RotateConfig rotate)
+        {
+            // Custom rotation animation
+            float from = isOpen ? rotate.Angle : 0f;
+            float to = isOpen ? 0f : rotate.Angle;
+            var handle = LMotion.Create(from, to, rotate.Duration)
+                .WithEase(ease)
+                .Bind(v => ctx.Transform.rotation = Quaternion.Euler(0, 0, v));
+            await handle.ToUniTask(cancellationToken: ct);
+        }
+        else
+        {
+            await base.AnimateConfigAsync(ctx, config, isOpen, ease, ct);
+        }
+    }
+}
+```
+
+### Performance Notes
+
+- **Zero GC after warmup**: Both drivers use struct-based context and cached animations
+- **Proper cleanup**: Tweens are killed on cancellation to prevent memory leaks
+- **Unscaled time**: Animations use unscaled time, working correctly during Time.timeScale = 0
+
+---
+
+## Performance Optimization Tools
+
+### `OptimizeHierarchy`
 
 Right-click your `UIWindow` component in the Inspector and select **Optimize Hierarchy**. This tool scans your UI hierarchy and disables `RaycastTarget` on non-interactive elements (like decorative Images or Texts), significantly reducing the cost of Unity's event system raycasts.
 
-#### `SetVisible` API
+### `SetVisible` API
 
 Use `window.SetVisible(bool)` instead of `gameObject.SetActive(bool)`.
 
@@ -929,93 +1059,280 @@ gameObject.SetActive(false);
 SetVisible(false);
 ```
 
-## Architecture Patterns (MVC/MVP)
+---
 
-While `CycloneGames.UIFramework` is architecture-agnostic, it is designed to support structured patterns like **MVC (Model-View-Controller)** or **MVP (Model-View-Presenter)**.
+## Architecture Patterns (MVP with Auto-Binding)
 
-### The View (`UIWindow`)
+CycloneGames.UIFramework provides **optional** MVP (Model-View-Presenter) support with automatic Presenter lifecycle management. You can use the traditional approach (all logic in UIWindow) or the new MVP pattern with automatic binding.
 
-Your `UIWindow` subclass acts as the **View**. It should:
+### Usage Levels
 
-- Hold references to UI components (Buttons, Texts).
-- Expose methods to update the visualization (e.g., `SetHealth(float value)`).
-- Expose events for user interactions (e.g., `OnPlayClicked`).
-- **Avoid** containing complex business logic.
+| Level | Pattern | Use Case |
+|-------|---------|----------|
+| **L0** | `class MyUI : UIWindow` | Simple windows, beginners |
+| **L1** | `class MyUI : UIWindow` + manual Presenter | Manual control |
+| **L2** | `class MyUI : UIWindow<TPresenter>` | Auto-binding, no DI |
+| **L3** | `class MyUI : UIWindow<TPresenter>` + VContainer | Full DI integration |
 
-### The Controller / Presenter
+---
 
-You can implement a separate Controller class or use the `UIWindow` as a lightweight controller.
+### Level 0: Traditional (No Presenter)
 
-- **Controller**: Subscribes to `UIWindow` events, interacts with the game model/services, and updates the View.
-- **Model**: Pure C# classes holding your game data.
-
-**Example (MVP):**
+Write all logic directly in the UIWindow - simple and straightforward.
 
 ```csharp
-using System;
-using UnityEngine;
-using UnityEngine.UI;
-
-// The View
-public class MainMenuWindow : UIWindow
+public class UIWindowSimple : UIWindow
 {
-    [SerializeField] private Button playButton;
-    [SerializeField] private Button settingsButton;
-    [SerializeField] private Text versionText;
-
-    public event Action OnPlayClicked;
-    public event Action OnSettingsClicked;
-
+    [SerializeField] private Button closeBtn;
+    
     protected override void Awake()
     {
         base.Awake();
-        playButton.onClick.AddListener(() => OnPlayClicked?.Invoke());
-        settingsButton.onClick.AddListener(() => OnSettingsClicked?.Invoke());
-    }
-
-    public void SetVersion(string version)
-    {
-        if (versionText != null)
-            versionText.text = $"Version {version}";
-    }
-}
-
-// The Presenter
-public class MainMenuController
-{
-    private MainMenuWindow _view;
-    private GameService _gameService;
-
-    public MainMenuController(MainMenuWindow view, GameService gameService)
-    {
-        _view = view;
-        _gameService = gameService;
-        _view.OnPlayClicked += HandlePlay;
-        _view.OnSettingsClicked += HandleSettings;
-
-        // Update view with model data
-        _view.SetVersion(_gameService.GetVersion());
-    }
-
-    private void HandlePlay()
-    {
-        _gameService.StartGame();
-        _view.Close();
-    }
-
-    private void HandleSettings()
-    {
-        // Open settings window
-        _gameService.OpenSettings();
-    }
-
-    public void Dispose()
-    {
-        if (_view != null)
-        {
-            _view.OnPlayClicked -= HandlePlay;
-            _view.OnSettingsClicked -= HandleSettings;
-        }
+        closeBtn.onClick.AddListener(() => Close());
     }
 }
 ```
+
+---
+
+### Level 2: Auto-Binding (No DI Framework Required)
+
+Use `UIWindow<TPresenter>` to automatically create and manage Presenters.
+
+#### Step 1: Define View Interface
+
+```csharp
+public interface IInventoryView
+{
+    void SetGold(int amount);
+    void SetItemCount(int count);
+}
+```
+
+#### Step 2: Create the View (UIWindow)
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
+using UnityEngine.UI;
+
+public class UIWindowInventory : UIWindow<InventoryPresenter>, IInventoryView
+{
+    [SerializeField] private Text goldText;
+    [SerializeField] private Text itemCountText;
+    
+    public void SetGold(int amount) => goldText.text = amount.ToString("N0");
+    public void SetItemCount(int count) => itemCountText.text = count.ToString();
+}
+```
+
+#### Step 3: Create the Presenter
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+
+public class InventoryPresenter : UIPresenter<IInventoryView>
+{
+    // Auto-injected from UIServiceLocator (no DI framework needed)
+    [UIInject] private IInventoryService InventoryService { get; set; }
+    
+    public override void OnViewOpened()
+    {
+        View.SetGold(InventoryService.Gold);
+        View.SetItemCount(InventoryService.ItemCount);
+    }
+    
+    public override void OnViewClosing()
+    {
+        // Save or cleanup logic
+    }
+    
+    public override void Dispose()
+    {
+        // Cleanup if needed
+    }
+}
+```
+
+> [!NOTE]
+> `[UIInject]` is **optional**. If your Presenter works without external dependencies, or if you use a full DI framework (Level 3) that handles injection differently, you do not need to use this attribute.
+    {
+        // Unsubscribe from events, release resources
+        base.Dispose();
+    }
+}
+```
+
+#### Step 4: Register Services (No DI Framework)
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+
+public class GameBootstrap : MonoBehaviour
+{
+    void Awake()
+    {
+        // Register services for [UIInject] to work
+        UIServiceLocator.Register<IInventoryService>(new InventoryService());
+        UIServiceLocator.Register<IAudioService>(new AudioService());
+    }
+    
+    void OnDestroy()
+    {
+        UIServiceLocator.Clear();
+    }
+}
+```
+
+#### Lifecycle
+
+The Presenter lifecycle is fully automatic and maps 1:1 to UIWindow:
+
+| UIWindow Event | Presenter Call | Description |
+|----------------|----------------|-------------|
+| `Awake()` | `SetView()` | View binding |
+| `OnStartOpen()` | `OnViewOpening()` | Before open animation |
+| `OnFinishedOpen()` | `OnViewOpened()` | Fully interactive |
+| `OnStartClose()` | `OnViewClosing()` | Before close animation |
+| `OnFinishedClose()` | `OnViewClosed()` | After close animation |
+| `OnDestroy()` | `Dispose()` | Cleanup |
+
+
+---
+
+### Level 3: VContainer Integration
+
+For VContainer users, add `VCONTAINER_PRESENT` to your scripting define symbols.
+
+#### Step 1: Add Scripting Define
+
+In **Project Settings > Player > Scripting Define Symbols**, add:
+```
+VCONTAINER_PRESENT
+```
+
+#### Step 2: Register Presenters
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.UIFramework.Runtime;
+using CycloneGames.UIFramework.Runtime.Integrations;
+
+public class GameLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // Register the binder
+        builder.Register<VContainerWindowBinder>(Lifetime.Singleton);
+        
+        // Register Presenters
+        builder.Register<InventoryPresenter>(Lifetime.Transient);
+        builder.Register<SettingsPresenter>(Lifetime.Transient);
+        
+        // Register services
+        builder.Register<IInventoryService, InventoryService>(Lifetime.Singleton);
+    }
+}
+```
+
+#### Step 3: Initialize Binder
+
+```csharp
+using VContainer;
+using CycloneGames.UIFramework.Runtime.Integrations;
+
+public class UISystemInitializer
+{
+    public UISystemInitializer(IObjectResolver resolver)
+    {
+        // This sets UIPresenterFactory.CustomFactory automatically
+        var binder = new VContainerWindowBinder(resolver);
+    }
+}
+```
+
+#### Presenter with Constructor Injection
+
+```csharp
+using VContainer;
+using CycloneGames.UIFramework.Runtime;
+
+public class InventoryPresenter : UIPresenter<IInventoryView>
+{
+    private readonly IInventoryService _inventoryService;
+    private readonly IAudioService _audioService;
+    
+    [Inject]
+    public InventoryPresenter(IInventoryService inventoryService, IAudioService audioService)
+    {
+        _inventoryService = inventoryService;
+        _audioService = audioService;
+    }
+    
+    public override void OnViewOpened()
+    {
+        View.SetGold(_inventoryService.Gold);
+        _audioService.PlaySFX("ui_open");
+    }
+}
+```
+
+---
+
+### Design Philosophy: View-First MVP
+
+You might ask: *"Why does the View (UIWindow) create the Presenter, instead of the Presenter creating the View?"*
+
+We chose the **View-First** approach specifically for the Unity engine environment:
+
+1.  **Unity-Native Workflow**: In Unity, UI starts with Prefabs. The "Entry Point" is naturally the `UIWindow` component on a GameObject.
+2.  **Lifecycle Safety**: The Presenter's lifecycle is perfectly bound to the View (`Awake` to `OnDestroy`). You never have "Zombie Presenters" running without a View, which avoids many common null reference errors.
+3.  **Zero Glue Code**: `UIWindow<T>` handles the binding automatically. You don't need separate "ScreenManager" or "Router" scripts just to wire things up.
+4.  **DI Compatible**: Even though the View initiates creation, the `UIPresenterFactory` serves as an indirection layer. This allows full DI frameworks (like VContainer) to intervene and inject dependencies, giving you the best of both worlds: **View-driven lifecycle + DI-driven logic**.
+
+---
+
+### API Reference
+
+#### `UIPresenter<TView>`
+
+| Method | Description |
+|--------|-------------|
+| `View` | The bound view instance (protected property) |
+| `OnViewBound()` | Called after SetView, before window opens |
+| `OnViewOpening()` | Called when window starts opening |
+| `OnViewOpened()` | Called when window is fully open |
+| `OnViewClosing()` | Called when window starts closing |
+| `OnViewClosed()` | Called after close animation |
+| `Dispose()` | Called when window is destroyed |
+
+
+#### `UIServiceLocator`
+
+| Method | Description |
+|--------|-------------|
+| `Register<T>(T instance)` | Register a singleton service |
+| `RegisterFactory<T>(Func<T>)` | Register a lazy factory |
+| `Get<T>()` | Get a registered service |
+| `Unregister<T>()` | Remove a service |
+| `Clear()` | Clear all services |
+
+#### `UIPresenterFactory`
+
+| Property/Method | Description |
+|-----------------|-------------|
+| `CustomFactory` | Set to integrate with DI frameworks |
+| `Create<T>()` | Create a Presenter instance |
+| `ClearCache()` | Clear reflection cache |
+
+---
+
+### Performance Notes
+
+- **Zero GC after warmup**: Reflection results are cached
+- **Thread-safe**: UIServiceLocator uses locking for concurrent access
+- **Memory-safe**: Presenters are disposed with their windows
+- **No forced DI**: Works without any DI framework
+
+

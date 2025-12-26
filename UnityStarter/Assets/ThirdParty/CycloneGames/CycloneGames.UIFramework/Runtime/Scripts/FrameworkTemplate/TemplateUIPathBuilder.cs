@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.Logger;
 
 namespace CycloneGames.UIFramework.Runtime.Editor // Or a runtime namespace
 {
@@ -17,7 +18,7 @@ namespace CycloneGames.UIFramework.Runtime.Editor // Or a runtime namespace
         {
             if (string.IsNullOrEmpty(windowName))
             {
-                UnityEngine.Debug.LogWarning("[TemplateUIPathBuilder] windowName is null or empty. Cannot generate asset path.");
+                CLogger.LogWarning("[TemplateUIPathBuilder] windowName is null or empty. Cannot generate asset path.");
                 return string.Empty;
             }
             // Using string.Format for clarity, though interpolation is also fine here.

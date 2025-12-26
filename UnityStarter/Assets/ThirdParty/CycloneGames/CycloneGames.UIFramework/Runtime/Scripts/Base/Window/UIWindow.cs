@@ -1,6 +1,7 @@
 using UnityEngine;
 using Cysharp.Threading.Tasks;
 using System.Threading;
+using CycloneGames.Logger;
 
 namespace CycloneGames.UIFramework.Runtime
 {
@@ -41,7 +42,7 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (string.IsNullOrEmpty(newWindowName))
             {
-                Debug.LogError("[UIWindow] Window name cannot be null or empty.", this);
+                CLogger.LogError("[UIWindow] Window name cannot be null or empty.");
                 // Fallback to GameObject name if newWindowName is invalid, though this should be avoided.
                 windowNameInternal = gameObject.name;
                 return;
