@@ -54,11 +54,15 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             return false;
         }
+
+        /// <summary>
+        /// Finds a PlayerStart for the given controller. 
+        /// </summary>
         Actor FindPlayerStart(Controller Player, string IncommingName = "")
         {
-            PlayerStart[] playerStartArray = GameObject.FindObjectsByType<PlayerStart>(FindObjectsSortMode.InstanceID);
+            var playerStarts = PlayerStart.GetAllPlayerStarts();
 
-            if (playerStartArray == null || playerStartArray.Length == 0)
+            if (playerStarts == null || playerStarts.Count == 0)
             {
                 CLogger.LogWarning($"{DEBUG_FLAG} No PlayerStart found in the scene");
                 return null;
@@ -66,8 +70,9 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             if (!string.IsNullOrEmpty(IncommingName))
             {
-                foreach (var st in playerStartArray)
+                for (int i = 0; i < playerStarts.Count; i++)
                 {
+                    var st = playerStarts[i];
                     if (string.Equals(st.GetName(), IncommingName, System.StringComparison.Ordinal))
                     {
                         Player.SetStartSpot(st);
@@ -76,9 +81,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
             }
 
-            if (playerStartArray.Length > 0)
+            if (playerStarts.Count > 0)
             {
-                var randomStartSpot = playerStartArray[0]; //   Return first one in the list.
+                var randomStartSpot = playerStarts[0]; // Return first one in the list
                 Player.SetStartSpot(randomStartSpot);
                 return randomStartSpot;
             }

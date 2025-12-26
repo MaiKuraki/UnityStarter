@@ -114,7 +114,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public virtual void SetControlRotation(Quaternion NewRotation)
         {
-            if (!controlRotation.Equals(NewRotation))
+            if (controlRotation != NewRotation)
             {
                 controlRotation = NewRotation;
             }
