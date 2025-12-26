@@ -1149,6 +1149,14 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
     
     public override void Dispose()
     {
+        // Cleanup if needed
+    }
+}
+```
+
+> [!NOTE]
+> `[UIInject]` is **optional**. If your Presenter works without external dependencies, or if you use a full DI framework (Level 3) that handles injection differently, you do not need to use this attribute.
+    {
         // Unsubscribe from events, release resources
         base.Dispose();
     }
