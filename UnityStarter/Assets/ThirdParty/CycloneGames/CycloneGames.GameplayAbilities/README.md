@@ -37,17 +37,16 @@ A powerful, data-driven Gameplay Ability System for Unity, inspired by Unreal En
 7. [Ability Lifecycle](#ability-lifecycle) — Grant → Activate → Commit → End
 
 ### Advanced Features
-8. [AbilityTasks](#abilitytask-deep-dive) — Async operations in abilities
-9. [Targeting System](#targeting-system) — Find and select targets
+8. [AbilityTasks](#abilitytasks) — Async operations in abilities
+9. [Targeting System](#targeting-system-overview) — Find and select targets
 10. [GameplayCues](#gameplaycue-system) — VFX/SFX management
 11. [Execution Calculations](#execution-calculations) — Complex damage formulas
-12. [Networking](#networking-architecture) — Prediction and replication
 
 ### Reference
-13. [Samples Walkthrough](#sample-walkthrough) — Fireball, Purify, Leveling
-14. [FAQ](#frequently-asked-questions-faq) — Common questions answered
-15. [Troubleshooting](#troubleshooting-guide) — Debug checklist
-16. [Performance](#performance-optimization) — Zero-GC tips
+12. [Samples Walkthrough](Samples/README.md) — Fireball, Purify, Leveling
+13. [FAQ](#frequently-asked-questions-faq) — Common questions answered
+14. [Troubleshooting](#troubleshooting-guide) — Debug checklist
+15. [Performance](#performance-optimization) — Zero-GC tips
 
 ---
 
@@ -900,7 +899,7 @@ public override async void ActivateAbility(...)
 
 See the [AbilityTask Deep Dive](#abilitytask-deep-dive) section for more details.
 
-### Targeting System
+### Targeting System Overview
 
 The targeting system finds and selects targets for abilities.
 
@@ -1488,7 +1487,7 @@ timeoutTask.OnFinished = () =>
 };
 ```
 
-## Targeting System
+### Targeting System Deep Dive
 
 The targeting system allows abilities to find and select targets based on spatial queries, tag requirements, and custom filter logic. It works seamlessly with `AbilityTask_WaitTargetData` for async targeting workflows.
 
