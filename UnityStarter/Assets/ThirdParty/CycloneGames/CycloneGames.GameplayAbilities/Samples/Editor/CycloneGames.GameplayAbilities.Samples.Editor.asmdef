@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.GameplayAbilities.Samples.Editor",
+    "rootNamespace": "CycloneGames.GameplayAbilities.Sample.Editor",
+    "references": [
+        "CycloneGames.GameplayAbilities.Core",
+        "CycloneGames.GameplayAbilities.Runtime",
+        "CycloneGames.GameplayAbilities.Editor",
+        "CycloneGames.GameplayAbilities.Samples",
+        "CycloneGames.GameplayAbilities.Sample"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

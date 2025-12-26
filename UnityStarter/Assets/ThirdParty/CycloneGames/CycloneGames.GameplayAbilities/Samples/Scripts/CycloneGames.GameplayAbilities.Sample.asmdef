@@ -3,10 +3,12 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
+        "VContainer",
         "CycloneGames.Logger",
         "CycloneGames.Utility.Runtime",
         "CycloneGames.Factory.Runtime",
         "CycloneGames.GameplayTags.Runtime",
+        "CycloneGames.GameplayAbilities.Core",
         "CycloneGames.GameplayAbilities.Runtime"
     ],
     "includePlatforms": [],
@@ -16,6 +18,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vcontainer",
+            "expression": "",
+            "define": "VCONTAINER_PRESENT"
+        }
+    ],
     "noEngineReferences": false
 }

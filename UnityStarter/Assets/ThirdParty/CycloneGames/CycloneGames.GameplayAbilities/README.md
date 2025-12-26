@@ -4,18 +4,54 @@
 
 # CycloneGames.GameplayAbilities
 
-CycloneGames.GameplayAbilities is a powerful and flexible gameplay ability system for Unity, heavily inspired by Unreal Engine's renowned Gameplay Ability System (GAS). It's designed from the ground up to be data-driven, leveraging Unity's `ScriptableObject` architecture to provide a robust framework for creating complex skills, attributes, and status effects with minimal new code.
+A powerful, data-driven Gameplay Ability System for Unity, inspired by Unreal Engine's GAS.
 
-This system is perfect for developers working on RPGs, MOBAs, or any game that requires a sophisticated skill and attribute system. It is designed to be intuitive for beginners while offering the depth required by professional projects.
+---
 
-## Table of Contents
+## ✨ Key Features
 
-1. [The GAS Philosophy](#the-gas-philosophy-a-paradigm-shift-for-skill-systems)
-2. [Architecture Overview](#architecture-deep-dive)
-3. [Quick Start Guide](#comprehensive-quick-start-guide)
-4. [Core Concepts](#core-concepts)
-5. [Advanced Features](#advanced-features)
-6. [Best Practices](#best-practices)
+| Feature | Description |
+|---------|-------------|
+| 🎮 **Data-Driven Abilities** | Define abilities in ScriptableObjects, no code changes needed |
+| ⚡ **GameplayEffects** | Instant/Duration/Infinite effects with stacking & periodic ticks |
+| 🏷️ **Tag-Based System** | Decouple logic with GameplayTags for abilities, states, cooldowns |
+| 🎯 **Targeting System** | Built-in sphere overlap, line trace, and ground select actors |
+| 📊 **AttributeSets** | Flexible character stats with validation hooks |
+| 🎨 **GameplayCues** | Separate VFX/SFX from gameplay logic |
+| ⏱️ **AbilityTasks** | Async ability logic (delays, targeting, animations) |
+| 🔄 **Object Pooling** | Zero-GC operation with automatic pooling |
+
+---
+
+## 📚 Table of Contents
+
+### Getting Started
+1. [Why GAS?](#the-gas-philosophy-a-paradigm-shift-for-skill-systems) — Traditional vs GAS approach
+2. [Architecture](#architecture-deep-dive) — Core component diagrams
+3. [Quick Start](#comprehensive-quick-start-guide) — Build a Heal ability from scratch
+
+### Core Concepts
+4. [GameplayTags](#gameplay-tags) — Universal language of GAS
+5. [GameplayEffects](#gameplay-effects) — Modifiers, duration, stacking
+6. [AttributeSets](#attribute-sets) — Character stats system
+7. [Ability Lifecycle](#ability-lifecycle) — Grant → Activate → Commit → End
+
+### Advanced Features
+8. [AbilityTasks](#abilitytask-deep-dive) — Async operations in abilities
+9. [Targeting System](#targeting-system) — Find and select targets
+10. [GameplayCues](#gameplaycue-system) — VFX/SFX management
+11. [Execution Calculations](#execution-calculations) — Complex damage formulas
+12. [Networking](#networking-architecture) — Prediction and replication
+
+### Reference
+13. [Samples Walkthrough](#sample-walkthrough) — Fireball, Purify, Leveling
+14. [FAQ](#frequently-asked-questions-faq) — Common questions answered
+15. [Troubleshooting](#troubleshooting-guide) — Debug checklist
+16. [Performance](#performance-optimization) — Zero-GC tips
+
+---
+
+
 
 ## The GAS Philosophy: A Paradigm Shift for Skill Systems
 
@@ -751,6 +787,20 @@ var poisonTag = GameplayTagContainer.FromTag("Status.Debuff.Poison");
 // Remove all effects with a tag
 targetASC.RemoveActiveEffectsWithGrantedTags(poisonTag);
 ```
+
+### Advanced Tag Features
+
+Beyond simple identification, tags control powerful gameplay logic:
+
+#### ActivationOwnedTags (On Ability)
+Tags that are **automatically granted** to the ability owner while the ability is active.
+- **Use Case**: When casting "Meteor", grant `State.Casting`. This can be used to play animations or block other abilities.
+- **Duration**: Persists only as long as the ability is active.
+
+#### ImmunityTags (On AbilitySystemComponent)
+Tags that grant **total immunity** to specific GameplayEffects.
+- **How it works**: If the ASC has `ImmunityTags` (e.g., `State.DebuffImmune`), any incoming GameplayEffect with a matching **AssetTag** or **GrantedTag** (`State.Debuff.Poison`) will be **blocked** completely.
+- **Use Case**: A "Divine Shield" ability grants an immunity tag to preventing all negative status effects.
 
 ### Gameplay Effects
 
