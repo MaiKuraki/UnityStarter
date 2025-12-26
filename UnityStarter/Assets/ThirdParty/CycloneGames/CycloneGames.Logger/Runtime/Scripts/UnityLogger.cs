@@ -41,26 +41,44 @@ namespace CycloneGames.Logger
                     sb.Append(logMessage.OriginalMessage);
                 }
 
-                // Append clickable file path and line number for Unity Console without extra string allocations.
                 if (!string.IsNullOrEmpty(logMessage.FilePath))
                 {
-                    sb.Append('\n');
-                    sb.Append("(at ");
-
-                    // Try to make path relative from Assets for better Unity Console click-through.
-                    // Use IndexOf (no allocation) and then append characters manually to avoid Substring allocations.
                     string sourcePath = logMessage.FilePath;
                     int assetsIndex = sourcePath.IndexOf("/Assets/", StringComparison.OrdinalIgnoreCase);
+                    if (assetsIndex < 0)
+                    {
+                        assetsIndex = sourcePath.IndexOf("\\Assets\\", StringComparison.OrdinalIgnoreCase);
+                    }
                     int startIndex = assetsIndex >= 0 ? assetsIndex + 1 : 0;
+
+#if UNITY_EDITOR
+                    // Editor: use clickable hyperlink with custom attributes
+                    sb.Append("\n<a path=\"");
                     for (int i = startIndex; i < sourcePath.Length; i++)
                     {
-                        char c = sourcePath[i];
-                        sb.Append(c == '\\' ? '/' : c);
+                        sb.Append(sourcePath[i] == '\\' ? '/' : sourcePath[i]);
                     }
-
+                    sb.Append("\" line=\"");
+                    sb.Append(logMessage.LineNumber);
+                    sb.Append("\">(at ");
+                    for (int i = startIndex; i < sourcePath.Length; i++)
+                    {
+                        sb.Append(sourcePath[i] == '\\' ? '/' : sourcePath[i]);
+                    }
+                    sb.Append(':');
+                    sb.Append(logMessage.LineNumber);
+                    sb.Append(")</a>");
+#else
+                    // Runtime: plain text without rich text tags
+                    sb.Append("\n(at ");
+                    for (int i = startIndex; i < sourcePath.Length; i++)
+                    {
+                        sb.Append(sourcePath[i] == '\\' ? '/' : sourcePath[i]);
+                    }
                     sb.Append(':');
                     sb.Append(logMessage.LineNumber);
                     sb.Append(')');
+#endif
                 }
                 unityMessage = sb.ToString();
             }
@@ -71,21 +89,18 @@ namespace CycloneGames.Logger
 
             switch (logMessage.Level)
             {
-                // Trace and Debug often map to Log to differentiate from Info if needed,
-                // or if specific Trace/Debug behavior (like conditional compilation) isn't handled by CLogger.
                 case LogLevel.Trace:
                 case LogLevel.Debug:
                 case LogLevel.Info:
-                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage);
+                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage, logMessage.FilePath, logMessage.LineNumber);
                     break;
                 case LogLevel.Warning:
-                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage);
+                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage, logMessage.FilePath, logMessage.LineNumber);
                     break;
                 case LogLevel.Error:
-                case LogLevel.Fatal: // Fatal errors are typically logged as errors in Unity.
-                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage);
+                case LogLevel.Fatal:
+                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage, logMessage.FilePath, logMessage.LineNumber);
                     break;
-                    // LogLevel.None should be filtered by CLogger.ShouldLog and not reach here.
             }
         }
 
