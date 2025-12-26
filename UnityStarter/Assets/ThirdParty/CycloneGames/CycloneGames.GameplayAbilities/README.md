@@ -43,7 +43,7 @@ A powerful, data-driven Gameplay Ability System for Unity, inspired by Unreal En
 11. [Execution Calculations](#execution-calculations) — Complex damage formulas
 
 ### Reference
-12. [Samples Walkthrough](Samples/README.md) — Fireball, Purify, Leveling
+12. [Samples Walkthrough](#sample-walkthrough) — Fireball, Purify, Leveling
 13. [FAQ](#frequently-asked-questions-faq) — Common questions answered
 14. [Troubleshooting](#troubleshooting-guide) — Debug checklist
 15. [Performance](#performance-optimization) — Zero-GC tips
@@ -1953,7 +1953,11 @@ poolManager.Release(vfx); // Return to pool
 - Use execution calculations sparingly (they're slower than modifiers)
 - Profile regularly—the system is designed for 0GC, verify this in your use case
 
-## Demo Preview
+---
+
+## Sample Walkthrough
+
+For a comprehensive guide to the included samples (Fireball, Purification, Leveling), please read the **[Samples Documentation](Samples/README.md)**.
 
 - DemoLink: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
 - <img src="./Documents~/DemoPreview_2.gif" alt="Demo Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
