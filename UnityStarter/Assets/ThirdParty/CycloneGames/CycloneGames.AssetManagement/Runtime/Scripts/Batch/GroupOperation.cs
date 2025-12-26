@@ -68,6 +68,7 @@ namespace CycloneGames.AssetManagement.Runtime.Batch
 				Progress = Math.Min(1f, _totalWeight <= 0f ? 1f : accWeight / _totalWeight);
 			}
 			IsDone = true;
+			Progress = 1f;
 			if (!string.IsNullOrEmpty(_error))
 			{
 				_tcs.TrySetException(new Exception(_error));

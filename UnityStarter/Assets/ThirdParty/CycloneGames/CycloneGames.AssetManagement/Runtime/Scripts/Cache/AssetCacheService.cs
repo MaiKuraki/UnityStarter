@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace CycloneGames.AssetManagement.Runtime.Cache
 {
 	/// <summary>
-	/// Zero-GC LRU cache for asset handles.
-	/// Uses internal pooling for nodes to avoid allocations during cache operations.
+	/// Thread-safe LRU cache for asset handles with zero-GC operations.
+	/// NOTE: Get() loads assets synchronously which must be called from main thread.
 	/// </summary>
 	public sealed class AssetCacheService : IDisposable
 	{
@@ -19,11 +20,16 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
 		private static class NodePool
 		{
-			private static readonly Stack<Node> _pool = new Stack<Node>(128);
+			private const int MAX_POOL_SIZE = 256;
+			private static readonly Stack<Node> _pool = new Stack<Node>(64);
+			private static readonly object _lock = new object();
 
 			public static Node Get()
 			{
-				return _pool.Count > 0 ? _pool.Pop() : new Node();
+				lock (_lock)
+				{
+					return _pool.Count > 0 ? _pool.Pop() : new Node();
+				}
 			}
 
 			public static void Release(Node node)
@@ -32,17 +38,24 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 				node.Handle = null;
 				node.Next = null;
 				node.Prev = null;
-				_pool.Push(node);
+				lock (_lock)
+				{
+					if (_pool.Count < MAX_POOL_SIZE)
+					{
+						_pool.Push(node);
+					}
+				}
 			}
 		}
 
 		private readonly IAssetPackage _package;
 		private readonly int _maxEntries;
 		private readonly Dictionary<string, Node> _map;
+		private readonly ReaderWriterLockSlim _rwLock = new ReaderWriterLockSlim(LockRecursionPolicy.NoRecursion);
 
 		private Node _head;
 		private Node _tail;
-		private bool _disposed;
+		private int _disposed;
 
 		public AssetCacheService(IAssetPackage package, int maxEntries = 128)
 		{
@@ -53,59 +66,105 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
 		public T Get<T>(string location) where T : UnityEngine.Object
 		{
-			if (_disposed || string.IsNullOrEmpty(location)) return null;
+			if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(location)) return null;
 
-			if (_map.TryGetValue(location, out var node))
+			_rwLock.EnterUpgradeableReadLock();
+			try
 			{
-				MoveToHead(node);
-				return node.Handle.Asset as T;
+				if (_map.TryGetValue(location, out var node))
+				{
+					_rwLock.EnterWriteLock();
+					try
+					{
+						MoveToHead(node);
+					}
+					finally
+					{
+						_rwLock.ExitWriteLock();
+					}
+					return node.Handle.Asset as T;
+				}
+
+				// Need to load new asset - requires write lock
+				_rwLock.EnterWriteLock();
+				try
+				{
+					// Double-check after acquiring write lock
+					if (_map.TryGetValue(location, out node))
+					{
+						MoveToHead(node);
+						return node.Handle.Asset as T;
+					}
+
+					var h = _package.LoadAssetSync<T>(location);
+					if (h == null) return null;
+
+					node = NodePool.Get();
+					node.Key = location;
+					node.Handle = h;
+
+					AddToHead(node);
+					_map[location] = node;
+
+					EvictIfNeeded();
+
+					return h.Asset;
+				}
+				finally
+				{
+					_rwLock.ExitWriteLock();
+				}
 			}
-
-			// Load new
-			var h = _package.LoadAssetSync<T>(location);
-			if (h == null) return null;
-
-			// Create node
-			node = NodePool.Get();
-			node.Key = location;
-			// Safe cast due to covariance (out TAsset)
-			node.Handle = h;
-
-			AddToHead(node);
-			_map[location] = node;
-
-			EvictIfNeeded();
-
-			return h.Asset as T;
+			finally
+			{
+				_rwLock.ExitUpgradeableReadLock();
+			}
 		}
 
 		public bool TryRelease(string location)
 		{
-			if (_disposed || string.IsNullOrEmpty(location)) return false;
-			if (_map.TryGetValue(location, out var node))
+			if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(location)) return false;
+
+			_rwLock.EnterWriteLock();
+			try
 			{
-				RemoveNode(node);
-				_map.Remove(location);
-				node.Handle.Dispose();
-				NodePool.Release(node);
-				return true;
+				if (_map.TryGetValue(location, out var node))
+				{
+					RemoveNode(node);
+					_map.Remove(location);
+					node.Handle.Dispose();
+					NodePool.Release(node);
+					return true;
+				}
+				return false;
 			}
-			return false;
+			finally
+			{
+				_rwLock.ExitWriteLock();
+			}
 		}
 
 		public void Clear()
 		{
-			var current = _head;
-			while (current != null)
+			_rwLock.EnterWriteLock();
+			try
 			{
-				current.Handle.Dispose();
-				var next = current.Next;
-				NodePool.Release(current);
-				current = next;
+				var current = _head;
+				while (current != null)
+				{
+					current.Handle.Dispose();
+					var next = current.Next;
+					NodePool.Release(current);
+					current = next;
+				}
+				_map.Clear();
+				_head = null;
+				_tail = null;
 			}
-			_map.Clear();
-			_head = null;
-			_tail = null;
+			finally
+			{
+				_rwLock.ExitWriteLock();
+			}
 		}
 
 		private void EvictIfNeeded()
@@ -138,7 +197,6 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 		private void MoveToHead(Node node)
 		{
 			if (node == _head) return;
-
 			RemoveNode(node);
 			AddToHead(node);
 		}
@@ -157,9 +215,9 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
 		public void Dispose()
 		{
-			if (_disposed) return;
-			_disposed = true;
+			if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 			Clear();
+			_rwLock.Dispose();
 		}
 	}
 }
