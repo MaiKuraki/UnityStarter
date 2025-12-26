@@ -1,4 +1,5 @@
 using UnityEngine;
+using CycloneGames.Logger;
 
 namespace CycloneGames.UIFramework.Runtime
 {
@@ -34,7 +35,7 @@ namespace CycloneGames.UIFramework.Runtime
             // Auto-cleanup logic to ensure 0-overhead when using Location mode
             if (source == PrefabSource.Location && windowPrefab != null)
             {
-                Debug.LogWarning($"[UIWindowConfiguration] Source switched to 'Location', clearing 'WindowPrefab' reference to prevent memory overhead for '{this.name}'.", this);
+                CLogger.LogWarning($"[UIWindowConfiguration] Source switched to 'Location', clearing 'WindowPrefab' reference to prevent memory overhead for '{this.name}'.");
                 windowPrefab = null;
             }
 
@@ -43,26 +44,26 @@ namespace CycloneGames.UIFramework.Runtime
                 // Ensure the prefab actually has a UIWindow component.
                 if (windowPrefab.GetComponent<UIWindow>() == null)
                 {
-                    Debug.LogError($"[UIWindowConfiguration] Prefab '{windowPrefab.name}' for '{this.name}' does not have a UIWindow component.", this);
+                    CLogger.LogError($"[UIWindowConfiguration] Prefab '{windowPrefab.name}' for '{this.name}' does not have a UIWindow component.");
                     // windowPrefab = null; // Optionally clear if invalid
                 }
             }
             if (string.IsNullOrEmpty(prefabLocation) && windowPrefab == null)
             {
-                Debug.LogWarning($"[UIWindowConfiguration] Neither PrefabLocation nor WindowPrefab is set for '{this.name}'.", this);
+                CLogger.LogWarning($"[UIWindowConfiguration] Neither PrefabLocation nor WindowPrefab is set for '{this.name}'.");
             }
             // Warn when the selected source is not properly configured
             if (source == PrefabSource.PrefabReference && windowPrefab == null)
             {
-                Debug.LogWarning($"[UIWindowConfiguration] Source is 'PrefabReference' but WindowPrefab is not assigned for '{this.name}'.", this);
+                CLogger.LogWarning($"[UIWindowConfiguration] Source is 'PrefabReference' but WindowPrefab is not assigned for '{this.name}'.");
             }
             if (source == PrefabSource.Location && string.IsNullOrEmpty(prefabLocation))
             {
-                Debug.LogWarning($"[UIWindowConfiguration] Source is 'Location' but PrefabLocation is empty for '{this.name}'.", this);
+                CLogger.LogWarning($"[UIWindowConfiguration] Source is 'Location' but PrefabLocation is empty for '{this.name}'.");
             }
             if (layer == null)
             {
-                Debug.LogWarning($"[UIWindowConfiguration] Layer is not set for '{this.name}'.", this);
+                CLogger.LogWarning($"[UIWindowConfiguration] Layer is not set for '{this.name}'.");
             }
         }
 #endif

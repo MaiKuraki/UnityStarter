@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.Logger;
 
 namespace CycloneGames.UIFramework.Runtime.Editor // Or a runtime namespace if used in builds
 {
@@ -17,7 +18,7 @@ namespace CycloneGames.UIFramework.Runtime.Editor // Or a runtime namespace if u
                     return new TemplateUIPathBuilder();
                 // Add other types as needed, e.g., "Audio", "Characters"
                 default:
-                    UnityEngine.Debug.LogError($"[TemplateAssetPathBuilderFactory] Unknown asset path builder type requested: {type}");
+                    CLogger.LogError($"[TemplateAssetPathBuilderFactory] Unknown asset path builder type requested: {type}");
                     return null;
             }
         }
