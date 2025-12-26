@@ -917,13 +917,13 @@ UIFramework 提供灵活、可扩展的过渡动画系统，支持 **LitMotion**
 
 ### 内置配置
 
-| 配置 | 效果 | 用途 |
-|------|------|------|
-| `FadeConfig.Default` | 淡入淡出 | 对话框、弹窗 |
-| `ScaleConfig.Default` | 从 80% 缩放 | 模态窗口 |
-| `SlideConfig.Left/Right/Top/Bottom` | 从方向滑入 | 侧边栏、抽屉 |
-| `CompositeConfig.FadeScale` | 淡入 + 缩放 | 高级弹窗 |
-| `CompositeConfig.FadeSlideBottom` | 淡入 + 向上滑动 | 移动端样式底板 |
+| 配置                                | 效果            | 用途           |
+| ----------------------------------- | --------------- | -------------- |
+| `FadeConfig.Default`                | 淡入淡出        | 对话框、弹窗   |
+| `ScaleConfig.Default`               | 从 80% 缩放     | 模态窗口       |
+| `SlideConfig.Left/Right/Top/Bottom` | 从方向滑入      | 侧边栏、抽屉   |
+| `CompositeConfig.FadeScale`         | 淡入 + 缩放     | 高级弹窗       |
+| `CompositeConfig.FadeSlideBottom`   | 淡入 + 向上滑动 | 移动端样式底板 |
 
 ### 快速使用
 
@@ -980,15 +980,21 @@ window.SetTransitionDriver(new LitMotionTransitionDriver(
 
 #### LitMotion
 
-1. 通过 Package Manager 安装 `com.annulusgames.lit-motion`
-2. `LIT_MOTION_PRESENT` 会通过 asmdef versionDefines 自动添加
+1.  **安装 LitMotion**:
+    - 打开 **Window > Package Manager**
+    - 点击 **+ > Add package from git URL...**
+    - 输入 `https://github.com/annulusgames/LitMotion.git`
+2.  **完成**
+    - `CycloneGames.UIFramework.Runtime.asmdef` 会自动处理宏定义 (`LIT_MOTION_PRESENT`)。
+    - 您现在可以使用 `LitMotionTransitionDriver` 了。
 
 #### DOTween
 
-1. 从 Asset Store 导入 DOTween
-2. 运行 **Tools > Demigiant > DOTween Utility Panel** 并点击 **Create ASMDEF**
-3. 在 **Project Settings > Player > Scripting Define Symbols** 中添加 `DO_TWEEN_PRESENT`
-4. 在您的 asmdef 引用中添加 `DOTween.Modules`
+1.  **安装 DOTween**: 从 Asset Store 或 Package Manager 导入。
+2.  **设置**: 运行 **Tools > Demigiant > DOTween Utility Panel** 并点击 **Create ASMDEF**。
+3.  **完成**
+    - `CycloneGames.UIFramework.Runtime.asmdef` 会自动处理宏定义 (`DO_TWEEN_PRESENT`)。
+    - 您现在可以使用 `DOTweenTransitionDriver` 了。
 
 ### 扩展动画系统
 
@@ -1009,7 +1015,7 @@ public class RotateConfig : TransitionConfigBase
 public class MyTransitionDriver : LitMotionTransitionDriver
 {
     public MyTransitionDriver(TransitionConfigBase config) : base(config) { }
-    
+
     protected override async UniTask AnimateConfigAsync(
         TransitionContext ctx, TransitionConfigBase config, bool isOpen, Ease ease, CancellationToken ct)
     {
@@ -1067,12 +1073,12 @@ CycloneGames.UIFramework 提供**可选的** MVP (Model-View-Presenter) 支持�
 
 ### 使用级别
 
-| 级别 | 模式 | 使用场景 |
-|------|------|----------|
-| **L0** | `class MyUI : UIWindow` | 简单窗口、新手 |
-| **L1** | `class MyUI : UIWindow` + 手动 Presenter | 手动控制 |
-| **L2** | `class MyUI : UIWindow<TPresenter>` | 自动绑定、无 DI |
-| **L3** | `class MyUI : UIWindow<TPresenter>` + VContainer | 完整 DI 集成 |
+| 级别   | 模式                                             | 使用场景        |
+| ------ | ------------------------------------------------ | --------------- |
+| **L0** | `class MyUI : UIWindow`                          | 简单窗口、新手  |
+| **L1** | `class MyUI : UIWindow` + 手动 Presenter         | 手动控制        |
+| **L2** | `class MyUI : UIWindow<TPresenter>`              | 自动绑定、无 DI |
+| **L3** | `class MyUI : UIWindow<TPresenter>` + VContainer | 完整 DI 集成    |
 
 ---
 
@@ -1084,7 +1090,7 @@ CycloneGames.UIFramework 提供**可选的** MVP (Model-View-Presenter) 支持�
 public class UIWindowSimple : UIWindow
 {
     [SerializeField] private Button closeBtn;
-    
+
     protected override void Awake()
     {
         base.Awake();
@@ -1120,7 +1126,7 @@ public class UIWindowInventory : UIWindow<InventoryPresenter>, IInventoryView
 {
     [SerializeField] private Text goldText;
     [SerializeField] private Text itemCountText;
-    
+
     public void SetGold(int amount) => goldText.text = amount.ToString("N0");
     public void SetItemCount(int count) => itemCountText.text = count.ToString();
 }
@@ -1135,18 +1141,18 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 {
     // 从 UIServiceLocator 自动注入（无需 DI 框架）
     [UIInject] private IInventoryService InventoryService { get; set; }
-    
+
     public override void OnViewOpened()
     {
         View.SetGold(InventoryService.Gold);
         View.SetItemCount(InventoryService.ItemCount);
     }
-    
+
     public override void OnViewClosing()
     {
         // 保存或清理逻辑
     }
-    
+
     public override void Dispose()
     {
         // 清理逻辑
@@ -1154,14 +1160,16 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 }
 ```
 
-> [!NOTE]
-> `[UIInject]` 是**完全可选的**。如果您的 Presenter 没有外部依赖，或者您使用的是完整的 DI 框架（Level 3，它会接管注入逻辑），则无需使用此属性。
+> [!NOTE] > `[UIInject]` 是**完全可选的**。如果您的 Presenter 没有外部依赖，或者您使用的是完整的 DI 框架（Level 3，它会接管注入逻辑），则无需使用此属性。
+
     {
         // 取消订阅事件、释放资源
         base.Dispose();
     }
+
 }
-```
+
+````
 
 #### 步骤 4: 注册服务（无 DI 框架）
 
@@ -1176,26 +1184,26 @@ public class GameBootstrap : MonoBehaviour
         UIServiceLocator.Register<IInventoryService>(new InventoryService());
         UIServiceLocator.Register<IAudioService>(new AudioService());
     }
-    
+
     void OnDestroy()
     {
         UIServiceLocator.Clear();
     }
 }
-```
+````
 
 #### 生命周期
 
 Presenter 生命周期完全自动，与 UIWindow 1:1 映射：
 
-| UIWindow 事件 | Presenter 调用 | 说明 |
-|---------------|----------------|------|
-| `Awake()` | `SetView()` | 视图绑定 |
-| `OnStartOpen()` | `OnViewOpening()` | 打开动画前 |
-| `OnFinishedOpen()` | `OnViewOpened()` | 完全可交互 |
-| `OnStartClose()` | `OnViewClosing()` | 关闭动画前 |
-| `OnFinishedClose()` | `OnViewClosed()` | 关闭动画后 |
-| `OnDestroy()` | `Dispose()` | 清理 |
+| UIWindow 事件       | Presenter 调用    | 说明       |
+| ------------------- | ----------------- | ---------- |
+| `Awake()`           | `SetView()`       | 视图绑定   |
+| `OnStartOpen()`     | `OnViewOpening()` | 打开动画前 |
+| `OnFinishedOpen()`  | `OnViewOpened()`  | 完全可交互 |
+| `OnStartClose()`    | `OnViewClosing()` | 关闭动画前 |
+| `OnFinishedClose()` | `OnViewClosed()`  | 关闭动画后 |
+| `OnDestroy()`       | `Dispose()`       | 清理       |
 
 ---
 
@@ -1206,6 +1214,7 @@ Presenter 生命周期完全自动，与 UIWindow 1:1 映射：
 #### 步骤 1: 添加脚本定义符号
 
 在 **Project Settings > Player > Scripting Define Symbols** 中添加：
+
 ```
 VCONTAINER_PRESENT
 ```
@@ -1224,11 +1233,11 @@ public class GameLifetimeScope : LifetimeScope
     {
         // 注册绑定器
         builder.Register<VContainerWindowBinder>(Lifetime.Singleton);
-        
+
         // 注册 Presenter
         builder.Register<InventoryPresenter>(Lifetime.Transient);
         builder.Register<SettingsPresenter>(Lifetime.Transient);
-        
+
         // 注册服务
         builder.Register<IInventoryService, InventoryService>(Lifetime.Singleton);
     }
@@ -1261,14 +1270,14 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 {
     private readonly IInventoryService _inventoryService;
     private readonly IAudioService _audioService;
-    
+
     [Inject]
     public InventoryPresenter(IInventoryService inventoryService, IAudioService audioService)
     {
         _inventoryService = inventoryService;
         _audioService = audioService;
     }
-    
+
     public override void OnViewOpened()
     {
         View.SetGold(_inventoryService.Gold);
@@ -1281,7 +1290,7 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 
 ### 设计理念：为何选择 View-First MVP？
 
-您可能会问：*“为什么是 View 创建 Presenter，而不是 Presenter 创建 View？”*
+您可能会问：_“为什么是 View 创建 Presenter，而不是 Presenter 创建 View？”_
 
 我们针对 Unity 引擎特性专门选择了 **View-First**（视图驱动）模式：
 
@@ -1296,34 +1305,33 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 
 #### `UIPresenter<TView>`
 
-| 方法 | 描述 |
-|------|------|
-| `View` | 绑定的视图实例（protected 属性）|
-| `OnViewBound()` | SetView 后、窗口打开前调用 |
-| `OnViewOpening()` | 窗口开始打开时调用 |
-| `OnViewOpened()` | 窗口完全打开时调用 |
-| `OnViewClosing()` | 窗口开始关闭时调用 |
-| `OnViewClosed()` | 关闭动画结束后调用 |
-| `Dispose()` | 窗口销毁时调用 |
-
+| 方法              | 描述                             |
+| ----------------- | -------------------------------- |
+| `View`            | 绑定的视图实例（protected 属性） |
+| `OnViewBound()`   | SetView 后、窗口打开前调用       |
+| `OnViewOpening()` | 窗口开始打开时调用               |
+| `OnViewOpened()`  | 窗口完全打开时调用               |
+| `OnViewClosing()` | 窗口开始关闭时调用               |
+| `OnViewClosed()`  | 关闭动画结束后调用               |
+| `Dispose()`       | 窗口销毁时调用                   |
 
 #### `UIServiceLocator`
 
-| 方法 | 描述 |
-|------|------|
-| `Register<T>(T instance)` | 注册单例服务 |
-| `RegisterFactory<T>(Func<T>)` | 注册延迟工厂 |
-| `Get<T>()` | 获取已注册的服务 |
-| `Unregister<T>()` | 移除服务 |
-| `Clear()` | 清除所有服务 |
+| 方法                          | 描述             |
+| ----------------------------- | ---------------- |
+| `Register<T>(T instance)`     | 注册单例服务     |
+| `RegisterFactory<T>(Func<T>)` | 注册延迟工厂     |
+| `Get<T>()`                    | 获取已注册的服务 |
+| `Unregister<T>()`             | 移除服务         |
+| `Clear()`                     | 清除所有服务     |
 
 #### `UIPresenterFactory`
 
-| 属性/方法 | 描述 |
-|-----------|------|
-| `CustomFactory` | 设置以集成 DI 框架 |
-| `Create<T>()` | 创建 Presenter 实例 |
-| `ClearCache()` | 清除反射缓存 |
+| 属性/方法       | 描述                |
+| --------------- | ------------------- |
+| `CustomFactory` | 设置以集成 DI 框架  |
+| `Create<T>()`   | 创建 Presenter 实例 |
+| `ClearCache()`  | 清除反射缓存        |
 
 ---
 
@@ -1333,5 +1341,3 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 - **线程安全**：UIServiceLocator 使用锁保证并发访问
 - **内存安全**：Presenter 随窗口一起销毁
 - **无强制 DI**：无需任何 DI 框架即可工作
-
-
