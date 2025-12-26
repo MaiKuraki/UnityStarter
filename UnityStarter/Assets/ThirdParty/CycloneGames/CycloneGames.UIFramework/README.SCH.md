@@ -1160,16 +1160,15 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 }
 ```
 
-> [!NOTE] > `[UIInject]` 是**完全可选的**。如果您的 Presenter 没有外部依赖，或者您使用的是完整的 DI 框架（Level 3，它会接管注入逻辑），则无需使用此属性。
+> [!NOTE]
+> `[UIInject]` 是**完全可选的**。如果您的 Presenter 没有外部依赖，或者您使用的是完整的 DI 框架（Level 3，它会接管注入逻辑），则无需使用此属性。
 
+```csharp
     {
         // 取消订阅事件、释放资源
         base.Dispose();
     }
-
-}
-
-````
+```
 
 #### 步骤 4: 注册服务（无 DI 框架）
 
@@ -1190,7 +1189,7 @@ public class GameBootstrap : MonoBehaviour
         UIServiceLocator.Clear();
     }
 }
-````
+```
 
 #### 生命周期
 
