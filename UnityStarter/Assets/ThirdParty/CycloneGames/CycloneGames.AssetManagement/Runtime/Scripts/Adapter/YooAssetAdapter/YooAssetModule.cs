@@ -1,7 +1,6 @@
 #if YOOASSET_PRESENT
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using YooAsset;
 using Cysharp.Threading.Tasks;
 
@@ -109,7 +108,11 @@ namespace CycloneGames.AssetManagement.Runtime
                     cache = _packageNamesCache;
                     if (cache == null)
                     {
-                        cache = _packages.Keys.ToList();
+                        cache = new List<string>(_packages.Count);
+                        foreach (var key in _packages.Keys)
+                        {
+                            cache.Add(key);
+                        }
                         _packageNamesCache = cache;
                     }
                 }

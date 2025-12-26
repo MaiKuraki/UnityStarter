@@ -2,303 +2,514 @@
 
 English | [简体中文](./README.SCH.md)
 
-A DI-first, interface-driven, unified asset management abstraction layer for Unity. It decouples your game logic from the underlying asset system (like YooAsset, Addressables, or Resources), allowing you to write cleaner, more portable, and high-performance code. A default, zero-GC provider for YooAsset is included.
+A DI-first, interface-driven, unified asset management abstraction layer for Unity. It decouples your game logic from the underlying asset system (YooAsset, Addressables, or Resources), enabling cleaner, more portable, and high-performance code.
+
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+- [Provider Comparison](#provider-comparison)
+- [Usage Examples](#usage-examples)
+  - [YooAsset Provider](#yooasset-provider)
+  - [Addressables Provider](#addressables-provider)
+  - [Resources Provider](#resources-provider)
+- [Hot Update Workflow](#hot-update-workflow)
+- [Advanced Features](#advanced-features)
+- [API Reference](#api-reference)
+
+---
 
 ## Requirements
 
-- Unity 2022.3+
-- Optional: `com.tuyoogame.yooasset`
-- Optional: `com.unity.addressables`
-- Optional: `com.cysharp.unitask`
-- Optional: `jp.hadashikick.vcontainer`
-- Optional: `com.cysharp.r3` (for `IPatchService` events)
+| Dependency | Required | Description |
+|------------|----------|-------------|
+| Unity | 2022.3+ | Minimum Unity version |
+| UniTask | Yes | `com.cysharp.unitask` - Async/await support |
+| YooAsset | Optional | `com.tuyoogame.yooasset` - Recommended provider |
+| Addressables | Optional | `com.unity.addressables` - Alternative provider |
+| VContainer | Optional | `jp.hadashikick.vcontainer` - DI integration |
+| R3 | Optional | `com.cysharp.r3` - For `IPatchService` events |
+
+## Installation
+
+1. Import the package into your Unity project
+2. The module automatically detects available providers via Assembly Definition references
+3. No manual scripting define symbols configuration required
+
+---
 
 ## Quick Start
 
-To get started, you need an implementation of the `IAssetModule` interface. The following example demonstrates how to use the `YooAssetModule` and load an asset, showcasing the unified, provider-agnostic API.
+This section walks you through loading your first asset in just a few steps.
+
+### Step 1: Initialize (Once at Game Startup)
 
 ```csharp
 using CycloneGames.AssetManagement.Runtime;
 using Cysharp.Threading.Tasks;
-using UnityEngine;
-using YooAsset; // YooAsset is only needed here for provider-specific options
+using YooAsset;
 
-public class MyGameManager
+public class GameBootstrap
 {
-    private IAssetModule assetModule;
-
-    public async UniTaskVoid Start()
+    // Store the module reference for later access
+    public static IAssetModule AssetModule { get; private set; }
+    
+    public async UniTask Initialize()
     {
-        // 1. Initialize the Module (ideally in a DI container)
-        assetModule = new YooAssetModule();
-        assetModule.Initialize(new AssetManagementOptions());
+        // Create and initialize the module (do this once)
+        AssetModule = new YooAssetModule();
+        await AssetModule.InitializeAsync();
 
-        // 2. Create and initialize a package
-        var package = assetModule.CreatePackage("DefaultPackage");
+        // Create and initialize a package (do this once per package)
+        var package = AssetModule.CreatePackage("DefaultPackage");
         
-        // Provider-specific options are passed directly.
-        // This is one of the few places you need to reference the underlying provider's types.
-        var yooAssetOptions = new HostPlayModeParameters(); 
-        // ... configure yooAssetOptions if needed ...
-
-        var initOptions = new AssetPackageInitOptions(AssetPlayMode.Host, yooAssetOptions);
-        bool success = await package.InitializeAsync(initOptions);
-        if (!success)
-        {
-            Debug.LogError("Package initialization failed.");
-            return;
-        }
-
-        // 3. Load an asset using the unified API
-        await LoadMyPlayer(package);
+        var initOptions = new AssetPackageInitOptions(
+            AssetPlayMode.Offline,
+            new OfflinePlayModeParameters()
+        );
+        
+        await package.InitializeAsync(initOptions);
     }
+}
+```
 
-    private async UniTask LoadMyPlayer(IAssetPackage package)
+### Step 2: Load Assets (Anywhere in Your Game)
+
+```csharp
+using UnityEngine;
+
+public class PlayerSpawner
+{
+    public async UniTask SpawnPlayer()
     {
-        // The API call is the same, regardless of the backend!
-        using (var handle = package.LoadAssetAsync<GameObject>("Prefabs/MyPlayer"))
+        // Get the existing package (don't create it again!)
+        var package = GameBootstrap.AssetModule.GetPackage("DefaultPackage");
+        
+        // Load and use the asset
+        using (var handle = package.LoadAssetAsync<GameObject>("Prefabs/Player"))
         {
-            await handle.Task; // Asynchronously wait for the asset to load
-
-            if (handle.Asset)
+            await handle.Task;
+            
+            if (handle.Asset != null)
             {
-                // Instantiate the loaded asset. Both sync and async methods are available.
-                // Use the sync version if the handle is already complete for a zero-GC instantiation.
-                var go = package.InstantiateSync(handle);
+                GameObject player = package.InstantiateSync(handle);
             }
         }
     }
 }
 ```
 
-## More Usage Examples
+> [!TIP]
+> **CreatePackage vs GetPackage**
+> - `CreatePackage(name)` - Call once during initialization to create a new package
+> - `GetPackage(name)` - Call anywhere else to retrieve an existing package
 
-### Offline Play Mode (YooAsset)
+---
 
-Here is how to initialize a package for `OfflinePlayMode`, which is common for single-player games where all assets are included in the initial build.
+## Core Concepts
+
+### Architecture Overview
+
+```
+Game Logic
+    |
+    v
+IAssetModule (Interface)
+    |
+    +-- YooAssetModule (Recommended)
+    +-- AddressablesModule
+    +-- ResourcesModule
+    |
+    v
+IAssetPackage (Interface)
+    |
+    v
+Asset Loading / Instantiation / Scene Management
+```
+
+### Key Interfaces
+
+| Interface | Purpose |
+|-----------|---------|
+| `IAssetModule` | Entry point for the asset system. Creates and manages packages. |
+| `IAssetPackage` | Handles all asset operations: loading, instantiation, scenes. |
+| `IAssetHandle<T>` | Represents a loaded asset. Disposable for memory management. |
+| `IPatchService` | High-level hot update workflow (YooAsset only). |
+
+### Handle Lifecycle
+
+Handles represent loaded assets and must be properly disposed:
 
 ```csharp
-// 1. Initialize the Module as usual
-assetModule = new YooAssetModule();
-assetModule.Initialize(new AssetManagementOptions());
-
-// 2. Create a package
-var package = assetModule.CreatePackage("DefaultPackage");
-
-// 3. Create YooAsset-specific parameters for Offline Mode
-var yooAssetOfflineParams = new OfflinePlayModeParameters(); 
-// In this mode, YooAsset locates assets via a build-in file query service,
-// which is configured in the YooAsset Editor settings.
-
-// 4. Wrap provider-specific options into our generic InitOptions
-var initOptions = new AssetPackageInitOptions(
-    AssetPlayMode.Offline,      // Set the play mode
-    yooAssetOfflineParams       // Pass the provider-specific options
-);
-
-// 5. Initialize the package
-bool success = await package.InitializeAsync(initOptions);
-if (success)
+// Option 1: Using statement (recommended)
+using (var handle = package.LoadAssetAsync<Texture2D>("Textures/Icon"))
 {
-    // The package is now ready to load assets from the local build.
+    await handle.Task;
+    // Use handle.Asset here
+}
+// Automatically disposed
+
+// Option 2: Manual disposal
+var handle = package.LoadAssetAsync<Texture2D>("Textures/Icon");
+await handle.Task;
+// ... use the asset ...
+handle.Dispose(); // Don't forget this!
+```
+
+---
+
+## Provider Comparison
+
+| Feature | YooAsset | Addressables | Resources |
+|---------|----------|--------------|-----------|
+| Sync Loading | Yes | No | Yes |
+| Async Loading | Yes | Yes | Yes |
+| Hot Update | Yes | Limited | No |
+| Scene Loading | Yes | Yes | No |
+| Raw File Loading | Yes | No | No |
+| Recommended For | Production | Existing Projects | Prototyping |
+
+---
+
+## Usage Examples
+
+### YooAsset Provider
+
+YooAsset is the recommended provider with full feature support.
+
+#### Offline Mode (Single-player Games)
+
+```csharp
+public async UniTask InitializeOffline()
+{
+    // 1. Create and initialize module
+    var assetModule = new YooAssetModule();
+    await assetModule.InitializeAsync();
+
+    // 2. Create package
+    var package = assetModule.CreatePackage("DefaultPackage");
+
+    // 3. Initialize for offline mode
+    var initOptions = new AssetPackageInitOptions(
+        AssetPlayMode.Offline,
+        new OfflinePlayModeParameters()
+    );
+    
+    await package.InitializeAsync(initOptions);
+
+    // 4. Load assets
+    using (var handle = package.LoadAssetAsync<GameObject>("Prefabs/Enemy"))
+    {
+        await handle.Task;
+        var enemy = package.InstantiateSync(handle);
+    }
+}
+```
+
+#### Host Mode (Online Games with Hot Update)
+
+```csharp
+public async UniTask InitializeOnline()
+{
+    var assetModule = new YooAssetModule();
+    await assetModule.InitializeAsync();
+
+    var package = assetModule.CreatePackage("DefaultPackage");
+
+    // Configure host mode with your CDN
+    var hostParams = new HostPlayModeParameters
+    {
+        BuildinQueryServices = new DefaultBuildinQueryServices(),
+        RemoteServices = new DefaultRemoteServices("https://cdn.example.com/bundles")
+    };
+
+    var initOptions = new AssetPackageInitOptions(AssetPlayMode.Host, hostParams);
+    await package.InitializeAsync(initOptions);
 }
 ```
 
 ### Addressables Provider
 
-The Addressables provider has a simpler initialization flow, as it initializes globally. Note that the Addressables provider does not support synchronous operations.
+Suitable for projects already using Unity Addressables.
 
 ```csharp
-using Cysharp.Threading.Tasks;
-using UnityEngine;
-
-public class MyAddressablesManager
+public async UniTask UseAddressables()
 {
-    private IAssetModule assetModule;
+    // 1. Create and initialize
+    var assetModule = new AddressablesModule();
+    await assetModule.InitializeAsync();
 
-    public async UniTaskVoid Start()
+    // 2. Create package
+    var package = assetModule.CreatePackage("DefaultPackage");
+
+    // 3. Load assets (async only)
+    using (var handle = package.LoadAssetAsync<GameObject>("MyAddressableKey"))
     {
-        // 1. Create the module
-        assetModule = new AddressablesModule();
-        
-        // 2. Initialize and wait for it to be ready
-        // Addressables initializes asynchronously in the background.
-        // We must wait for the 'Initialized' flag to become true.
-        assetModule.Initialize();
-        await UniTask.WaitUntil(() => assetModule.Initialized);
-
-        Debug.Log("Addressables Module Initialized.");
-
-        // 3. Create a "package" (this is a logical grouping for Addressables)
-        var package = assetModule.CreatePackage("DefaultPackage");
-        
-        // 4. Load an asset
-        // Note: Addressables provider only supports async operations.
-        using (var handle = package.LoadAssetAsync<GameObject>("MyAddressablePrefab"))
+        await handle.Task;
+        if (handle.Asset != null)
         {
-            await handle.Task;
-            if (handle.Asset)
-            {
-                var go = await package.InstantiateAsync(handle).Task;
-            }
+            var instance = await package.InstantiateAsync(handle).Task;
         }
     }
 }
 ```
+
 > [!NOTE]
-> The Addressables provider has some limitations compared to the YooAsset provider:
-> - It does not support synchronous loading or instantiation.
-> - It does not support the `IPatchService` workflow.
-> - Advanced features like version querying and pre-downloading specific versions are not available.
+> Addressables limitations:
+> - No synchronous operations
+> - No `IPatchService` support
+> - No raw file loading
 
 ### Resources Provider
 
-The `Resources` provider is the simplest and is useful for quick prototyping or accessing assets bundled directly with the game. It does not require any special initialization.
+Best for quick prototyping or small projects.
 
 ```csharp
-// 1. Create and initialize the module
-assetModule = new ResourcesModule();
-assetModule.Initialize(); // Initialization is synchronous
-
-// 2. Create a package
-var package = assetModule.CreatePackage("DefaultPackage");
-
-// 3. Load an asset (both sync and async are supported)
-using (var handle = package.LoadAssetAsync<GameObject>("Path/In/Resources/Folder"))
+public async UniTask UseResources()
 {
-    await handle.Task;
-    if (handle.Asset)
+    // 1. Create and initialize (synchronous)
+    var assetModule = new ResourcesModule();
+    await assetModule.InitializeAsync();
+
+    // 2. Create package
+    var package = assetModule.CreatePackage("DefaultPackage");
+
+    // 3. Load from Resources folder
+    using (var handle = package.LoadAssetAsync<Sprite>("Icons/Coin"))
     {
-        var go = package.InstantiateSync(handle);
+        await handle.Task;
+        myImage.sprite = handle.Asset;
     }
 }
 ```
+
 > [!WARNING]
-> The `Resources` provider has significant limitations:
-> - It cannot load scenes.
-> - It does not support any download or patch features.
-> - `LoadAllAssetsAsync` is a blocking, synchronous operation.
-> - Assets loaded from `Resources` cannot be unloaded individually, which can lead to higher memory usage. It is generally not recommended for production use in large projects.
+> Resources limitations:
+> - Cannot load scenes
+> - No hot update support
+> - Assets cannot be individually unloaded
+> - Not recommended for production
 
-## Features
+---
 
-- **Interface-First Design**: Decouples your game logic from the underlying asset system. Write your code against a stable interface and swap the backend anytime without major refactoring.
-- **DI-Friendly**: Designed from the ground up for dependency injection (`VContainer`, `Zenject`, etc.), making it easy to manage asset loading services in a clean and testable way.
-- **Unified API**: Provides a single, consistent API for all asset operations. Whether you're using `YooAsset`, `Addressables`, or a custom `Resources` wrapper, the calling code remains the same.
-- **High-Performance & Low GC**: Fully asynchronous API based on `UniTask` for maximum performance. The included YooAsset provider is optimized to reduce garbage collection, especially on hot paths like asset instantiation.
-- **Extensible**: Easily create your own providers by implementing the `IAssetModule` and `IAssetPackage` interfaces.
-- **Advanced Features**: Built-in support for the full asset lifecycle, including version checking, manifest updates, pre-downloading, and cache management.
+## Hot Update Workflow
 
-## High-Level Update Workflow (YooAsset Provider)
+### High-Level API (Recommended)
 
-For a streamlined update process, the `YooAsset` provider includes a high-level `IPatchService` that encapsulates the entire update state machine. It uses `R3` (Reactive Extensions) to provide event streams.
+The `IPatchService` provides a complete update workflow with event-driven architecture:
 
 ```csharp
-// 1. Get the patch service from the module
-IPatchService patchService = assetModule.CreatePatchService("DefaultPackage");
+public async UniTask RunPatchFlow()
+{
+    // Get the patch service
+    var patchService = assetModule.CreatePatchService("DefaultPackage");
 
-// 2. Subscribe to patch events
-patchService.PatchEvents
-    .Subscribe(evt =>
+    // Subscribe to events
+    patchService.PatchEvents.Subscribe(evt =>
     {
-        var (patchEvent, args) = evt;
-        if (patchEvent == PatchEvent.FoundNewVersion)
+        var (eventType, args) = evt;
+        
+        switch (eventType)
         {
-            var eventArgs = (FoundNewVersionEventArgs)args;
-            // Show a dialog to the user: "Found new version with size {eventArgs.TotalDownloadSizeBytes}"
-            // If user confirms, call patchService.Download();
-        }
-        else if (patchEvent == PatchEvent.PatchDone)
-        {
-            // Patch is complete, proceed to game
+            case PatchEvent.FoundNewVersion:
+                var versionArgs = (FoundNewVersionEventArgs)args;
+                Debug.Log($"New version found! Size: {versionArgs.TotalDownloadSizeBytes} bytes");
+                // Show confirmation dialog, then call:
+                // patchService.Download();
+                break;
+                
+            case PatchEvent.DownloadProgress:
+                var progressArgs = (DownloadProgressEventArgs)args;
+                Debug.Log($"Progress: {progressArgs.Progress:P0}");
+                break;
+                
+            case PatchEvent.PatchDone:
+                Debug.Log("Update complete!");
+                break;
+                
+            case PatchEvent.PatchFailed:
+                Debug.LogError("Update failed!");
+                break;
         }
     });
 
-// 3. Run the patch process
-await patchService.RunAsync(autoDownloadOnFoundNewVersion: false);
+    // Start the patch process
+    await patchService.RunAsync(autoDownloadOnFoundNewVersion: false);
+}
 ```
 
-## Low-Level Update & Download API
+### Low-Level API (Fine-grained Control)
 
-For more granular control, you can use the low-level `IAssetPackage` API.
-
-- **Request latest version**:
-  ```csharp
-  string version = await package.RequestPackageVersionAsync();
-  ```
-
-- **Pre-download a specific version** (without switching the active manifest):
-  ```csharp
-  var downloader = await package.CreatePreDownloaderForAllAsync(version, downloadingMaxNumber: 10, failedTryAgain: 3);
-  if (downloader != null)
-  {
-      await downloader.StartAsync(); // Supports cancellation
-  }
-  ```
-
-- **Update active manifest**:
-  ```csharp
-  bool manifestUpdated = await package.UpdatePackageManifestAsync(version);
-  ```
-
-- **Download by tags**:
-  ```csharp
-  IDownloader downloader = package.CreateDownloaderForTags(new[]{"Base", "UI"}, 10, 3);
-  downloader.Begin();
-  await downloader.StartAsync();
-  ```
-
-- **Clear cache**:
-  ```csharp
-  await package.ClearCacheFilesAsync(ClearCacheMode.Unused);
-  ```
-
-## RawFile Loading
-
-RawFile support allows you to load non-compressed files like JSON, text files, or binary data. This is particularly useful for configuration files, game data, or any non-Unity asset content.
+For custom update flows:
 
 ```csharp
-// Asynchronous loading (recommended)
-using (var rawFileHandle = package.LoadRawFileAsync("Config/game_settings.json"))
+// Check for updates
+string latestVersion = await package.RequestPackageVersionAsync();
+
+// Update manifest
+bool updated = await package.UpdatePackageManifestAsync(latestVersion);
+
+// Create downloader
+var downloader = package.CreateDownloaderForAll(downloadingMaxNumber: 10, failedTryAgain: 3);
+
+// Monitor progress
+while (!downloader.IsDone)
 {
-    await rawFileHandle.Task;
-    
-    if (rawFileHandle.IsDone && string.IsNullOrEmpty(rawFileHandle.Error))
-    {
-        string jsonText = rawFileHandle.ReadText();
-        // Parse JSON, use text, etc.
-    }
+    Debug.Log($"Downloaded: {downloader.CurrentDownloadBytes}/{downloader.TotalDownloadBytes}");
+    await UniTask.Yield();
 }
 
-// Synchronous loading (only if handle is guaranteed to be ready)
-var rawFileHandle = package.LoadRawFileSync("Data/level.bin");
-if (rawFileHandle.IsDone)
-{
-    byte[] binaryData = rawFileHandle.ReadBytes();
-    // Process binary data
-}
-rawFileHandle.Dispose();
+// Clear unused cache
+await package.ClearCacheFilesAsync(ClearCacheMode.Unused);
 ```
-> [!NOTE]
-> RawFile support is currently available in the YooAsset provider. The Addressables and Resources providers do not support RawFile loading - use `LoadAssetAsync<TextAsset>` for text files in those cases.
 
-## Scene Management
+---
+
+## Advanced Features
+
+### Raw File Loading
+
+Load non-Unity files like JSON, XML, or binary data:
 
 ```csharp
-// Asynchronous load
-var sceneHandle = package.LoadSceneAsync("Assets/Scenes/Main.unity");
+// Async loading
+using (var handle = package.LoadRawFileAsync("Config/settings.json"))
+{
+    await handle.Task;
+    string jsonText = handle.ReadText();
+    var settings = JsonUtility.FromJson<GameSettings>(jsonText);
+}
+
+// Sync loading
+var handle = package.LoadRawFileSync("Data/level.bin");
+byte[] data = handle.ReadBytes();
+handle.Dispose();
+```
+
+### Scene Management
+
+```csharp
+// Load scene
+var sceneHandle = package.LoadSceneAsync("Assets/Scenes/Gameplay.unity");
 await sceneHandle.Task;
 
-// Asynchronous unload
+// The scene is now active
+
+// Unload scene
 await package.UnloadSceneAsync(sceneHandle);
 ```
 
-## Scripting Define Symbols
+### Batch Loading
 
-This package uses Assembly Definition Files (`.asmdef`) to automatically define symbols based on which other packages are present in your project.
+Load multiple assets with progress tracking:
 
-- `YOOASSET_PRESENT`: Enables the YooAsset provider.
-- `ADDRESSABLES_PRESENT`: Enables the Addressables provider.
-- `VCONTAINER_PRESENT`: Enables VContainer integration helpers.
+```csharp
+using CycloneGames.AssetManagement.Runtime.Batch;
 
-You do not need to manage these symbols manually.
+var group = new GroupOperation();
+
+// Add operations with optional weights
+group.Add(package.LoadAssetAsync<Texture2D>("Tex1"), weight: 1f);
+group.Add(package.LoadAssetAsync<Texture2D>("Tex2"), weight: 1f);
+group.Add(package.LoadAssetAsync<AudioClip>("Music"), weight: 2f);
+
+// Track progress
+_ = TrackProgress(group);
+
+await group.StartAsync();
+
+async UniTask TrackProgress(GroupOperation op)
+{
+    while (!op.IsDone)
+    {
+        loadingBar.value = op.Progress;
+        await UniTask.Yield();
+    }
+}
+```
+
+### LRU Cache
+
+Automatic caching with LRU eviction:
+
+```csharp
+using CycloneGames.AssetManagement.Runtime.Cache;
+
+var cache = new AssetCacheService(package, maxEntries: 100);
+
+// Get from cache (loads if not cached)
+var sprite = cache.Get<Sprite>("Icons/Coin");
+
+// Release specific item
+cache.TryRelease("Icons/Coin");
+
+// Clear all
+cache.Clear();
+```
+
+### Handle Tracking (Debug)
+
+Track active handles to detect leaks:
+
+```csharp
+// Enable tracking (do this before loading assets)
+HandleTracker.Enabled = true;
+HandleTracker.EnableStackTrace = true; // For detailed leak analysis
+
+// Later, check for leaks
+var report = HandleTracker.GetActiveHandlesReport();
+Debug.Log(report);
+```
+
+---
+
+## API Reference
+
+### IAssetModule
+
+| Method | Description |
+|--------|-------------|
+| `InitializeAsync(options)` | Initialize the asset system |
+| `Destroy()` | Cleanup and release resources |
+| `CreatePackage(name)` | Create a new asset package |
+| `GetPackage(name)` | Get an existing package |
+| `RemovePackageAsync(name)` | Remove and destroy a package |
+| `CreatePatchService(name)` | Create a patch service (YooAsset only) |
+
+### IAssetPackage
+
+| Method | Description |
+|--------|-------------|
+| `InitializeAsync(options)` | Initialize the package |
+| `DestroyAsync()` | Destroy the package |
+| `LoadAssetAsync<T>(location)` | Load an asset asynchronously |
+| `LoadAssetSync<T>(location)` | Load an asset synchronously |
+| `LoadAllAssetsAsync<T>(location)` | Load all assets at location |
+| `InstantiateAsync(handle)` | Instantiate a loaded prefab |
+| `InstantiateSync(handle)` | Sync instantiate (zero-GC) |
+| `LoadSceneAsync(location)` | Load a scene |
+| `UnloadSceneAsync(handle)` | Unload a scene |
+| `LoadRawFileAsync(location)` | Load a raw file |
+| `UnloadUnusedAssets()` | Unload unused assets |
+
+### Scripting Define Symbols
+
+These symbols are automatically defined based on installed packages:
+
+| Symbol | When Defined |
+|--------|--------------|
+| `YOOASSET_PRESENT` | YooAsset package is installed |
+| `ADDRESSABLES_PRESENT` | Addressables package is installed |
+| `VCONTAINER_PRESENT` | VContainer package is installed |
+
+---
+
+## Best Practices
+
+1. **Always dispose handles** - Use `using` statements or call `Dispose()` manually
+2. **Use async loading** - Sync loading blocks the main thread
+3. **Choose the right provider** - YooAsset for production, Resources for prototyping
+4. **Enable handle tracking in development** - Helps find memory leaks early
+5. **Use DI containers** - Register `IAssetModule` as a singleton for clean architecture

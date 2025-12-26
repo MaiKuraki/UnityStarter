@@ -11,24 +11,83 @@ using UnityEngine.ResourceManagement.ResourceProviders;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal static class AddressablesHandlePool<T> where T : class, new()
+    /// <summary>
+    /// Adaptive thread-safe object pool with automatic expansion and shrinking for Addressables handles.
+    /// </summary>
+    internal static class AdaptiveAddressablesPool<T> where T : class, new()
     {
-        private static readonly Stack<T> _pool = new Stack<T>(32);
+        private const int SOFT_LIMIT = 64;
+        private const int HARD_LIMIT = 512;
+        private const int SHRINK_THRESHOLD_MS = 30000;
+        private const int SHRINK_BATCH_SIZE = 16;
+
+        private static readonly Stack<T> _pool = new Stack<T>(SOFT_LIMIT);
+        private static readonly object _poolLock = new object();
+        private static long _lastAccessTicks;
+        private static int _highWaterMark;
 
         public static T Get()
         {
-            lock (_pool)
+            lock (_poolLock)
             {
-                return _pool.Count > 0 ? _pool.Pop() : new T();
+                _lastAccessTicks = DateTime.UtcNow.Ticks;
+                if (_pool.Count > 0)
+                {
+                    return _pool.Pop();
+                }
             }
+            return new T();
         }
 
         public static void Release(T item)
         {
             if (item == null) return;
-            lock (_pool)
+            lock (_poolLock)
             {
-                _pool.Push(item);
+                _lastAccessTicks = DateTime.UtcNow.Ticks;
+                int count = _pool.Count;
+
+                if (count < HARD_LIMIT)
+                {
+                    _pool.Push(item);
+                    if (count + 1 > _highWaterMark)
+                    {
+                        _highWaterMark = count + 1;
+                    }
+                }
+
+                TryShrinkIfIdle(count);
+            }
+        }
+
+        private static void TryShrinkIfIdle(int currentCount)
+        {
+            if (currentCount <= SOFT_LIMIT) return;
+
+            long idleMs = (DateTime.UtcNow.Ticks - _lastAccessTicks) / TimeSpan.TicksPerMillisecond;
+            if (idleMs < SHRINK_THRESHOLD_MS) return;
+
+            int toRemove = Math.Min(SHRINK_BATCH_SIZE, currentCount - SOFT_LIMIT);
+            for (int i = 0; i < toRemove && _pool.Count > SOFT_LIMIT; i++)
+            {
+                _pool.Pop();
+            }
+        }
+
+        public static (int current, int highWaterMark) GetStats()
+        {
+            lock (_poolLock)
+            {
+                return (_pool.Count, _highWaterMark);
+            }
+        }
+
+        public static void Clear()
+        {
+            lock (_poolLock)
+            {
+                _pool.Clear();
+                _highWaterMark = 0;
             }
         }
     }
@@ -71,7 +130,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public static AddressableAssetHandle<TAsset> Create(int id, AsyncOperationHandle<TAsset> raw, CancellationToken cancellationToken)
         {
-            var h = AddressablesHandlePool<AddressableAssetHandle<TAsset>>.Get();
+            var h = AdaptiveAddressablesPool<AddressableAssetHandle<TAsset>>.Get();
             h.Initialize(id, raw, cancellationToken);
             return h;
         }
@@ -83,7 +142,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (Raw.IsValid()) Addressables.Release(Raw);
             Raw = default;
             _task = default;
-            AddressablesHandlePool<AddressableAssetHandle<TAsset>>.Release(this);
+            AdaptiveAddressablesPool<AddressableAssetHandle<TAsset>>.Release(this);
         }
     }
 
@@ -110,7 +169,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public static AddressableAllAssetsHandle<TAsset> Create(int id, AsyncOperationHandle<IList<TAsset>> raw, CancellationToken cancellationToken)
         {
-            var h = AddressablesHandlePool<AddressableAllAssetsHandle<TAsset>>.Get();
+            var h = AdaptiveAddressablesPool<AddressableAllAssetsHandle<TAsset>>.Get();
             h.Initialize(id, raw, cancellationToken);
             return h;
         }
@@ -122,7 +181,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (raw.IsValid()) Addressables.Release(raw);
             raw = default;
             _task = default;
-            AddressablesHandlePool<AddressableAllAssetsHandle<TAsset>>.Release(this);
+            AdaptiveAddressablesPool<AddressableAllAssetsHandle<TAsset>>.Release(this);
         }
     }
 
@@ -149,7 +208,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public static AddressableInstantiateHandle Create(int id, AsyncOperationHandle<GameObject> raw, CancellationToken cancellationToken)
         {
-            var h = AddressablesHandlePool<AddressableInstantiateHandle>.Get();
+            var h = AdaptiveAddressablesPool<AddressableInstantiateHandle>.Get();
             h.Initialize(id, raw, cancellationToken);
             return h;
         }
@@ -161,7 +220,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (raw.IsValid()) Addressables.Release(raw);
             raw = default;
             _task = default;
-            AddressablesHandlePool<AddressableInstantiateHandle>.Release(this);
+            AdaptiveAddressablesPool<AddressableInstantiateHandle>.Release(this);
         }
     }
     
@@ -203,7 +262,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public static AddressableSceneHandle Create(int id, AsyncOperationHandle<SceneInstance> raw, CancellationToken cancellationToken)
         {
-            var h = AddressablesHandlePool<AddressableSceneHandle>.Get();
+            var h = AdaptiveAddressablesPool<AddressableSceneHandle>.Get();
             h.Initialize(id, raw, cancellationToken);
             return h;
         }
@@ -216,7 +275,7 @@ namespace CycloneGames.AssetManagement.Runtime
              Raw = default;
              ScenePath = null;
              _task = default;
-             AddressablesHandlePool<AddressableSceneHandle>.Release(this);
+             AdaptiveAddressablesPool<AddressableSceneHandle>.Release(this);
         }
     }
 
