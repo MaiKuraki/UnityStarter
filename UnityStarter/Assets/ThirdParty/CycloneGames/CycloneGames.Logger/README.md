@@ -1,6 +1,3 @@
-> [!NOTE]
-> The README and some of the code were co-authored by AI.
-
 # CycloneGames.Logger
 
 English | [简体中文](README.SCH.md)
@@ -35,6 +32,30 @@ void Start()
 }
 ```
 
+## Unity Console Integration
+
+CLogger includes a clickable hyperlink feature for quick source navigation in the Unity Editor Console:
+
+- **Single-click** on the hyperlink `(at Assets/.../File.cs:27)` to open the file at the exact line in your configured code editor
+- The hyperlink is formatted to remain hidden in the Console's single-line preview, keeping the log list clean
+
+<img src="./Documents~/Doc_01.png" alt="Hyperlink support in Unity Console" style="width: 100%; height: auto; max-width: 800px;" />
+
+### Console Pro Users
+
+If you use [Console Pro](https://assetstore.unity.com/packages/tools/utilities/console-pro-11889), we recommend enabling **single-line display mode** for a cleaner log list:
+
+**Multi-line Mode:**
+
+<img src="./Documents~/Doc_02.png" alt="Multi-line display" style="width: 100%; height: auto; max-width: 800px;" />
+
+**Single-line Mode (Recommended):**
+
+<img src="./Documents~/Doc_03.png" alt="Single-line display" style="width: 100%; height: auto; max-width: 800px;" />
+
+> [!TIP]
+> Single-line mode hides the source location hyperlink in the log list, reducing visual clutter while still allowing click-to-source navigation when you select a log entry.
+
 ## Object Pool Architecture
 
 The logger employs **three-tier adaptive capacity management** for optimal zero-GC performance:
@@ -55,10 +76,10 @@ Configure globally either via a project asset or via code.
 
 ### Using LoggerSettings (recommended)
 
-1) Create the asset: `Assets -> Create -> CycloneGames -> Logger -> LoggerSettings`
-2) Place it at: `Assets/Resources/CycloneGames.Logger/LoggerSettings.asset`
+1. Create the asset: `Assets -> Create -> CycloneGames -> Logger -> LoggerSettings`
+2. Place it at: `Assets/Resources/CycloneGames.Logger/LoggerSettings.asset`
    Important: Do not rename the asset file or its parent folder. The loader expects `Resources/CycloneGames.Logger/LoggerSettings`.
-3) Edit fields:
+3. Edit fields:
    - Processing: AutoDetect / ForceThreaded / ForceSingleThread
    - Registration: enable/disable UnityLogger, FileLogger
    - File Logger: choose persistentDataPath or custom file path/name
@@ -105,7 +126,7 @@ CLogger.LogError(sb => { sb.Append("Err="); sb.Append(code); }, "Net");
 ### Stateful builder (advanced, avoids closure allocation)
 
 ```csharp
-CLogger.LogInfo(player, (p, sb) => 
+CLogger.LogInfo(player, (p, sb) =>
     sb.Append("Player ").Append(p.name).Append(" HP: ").Append(p.hp), "Combat");
 ```
 
@@ -121,7 +142,7 @@ var msgStats = LogMessagePool.GetStatistics();
 Debug.Log($@"
 StringBuilder Pool - Current: {sbStats.CurrentSize}, Peak: {sbStats.PeakSize}
   Hit Rate: {sbStats.HitRate:P}, Discard Rate: {sbStats.DiscardRate:P}
-  
+
 LogMessage Pool - Current: {msgStats.CurrentSize}, Peak: {msgStats.PeakSize}
   Hit Rate: {msgStats.HitRate:P}, Discard Rate: {msgStats.DiscardRate:P}
 ");
@@ -129,6 +150,7 @@ LogMessage Pool - Current: {msgStats.CurrentSize}, Peak: {msgStats.PeakSize}
 ```
 
 **Key Metrics**:
+
 - **PeakSize**: Maximum pool size reached (should stay well below Max capacity)
 - **DiscardRate**: Should be ~0% for optimal performance
 - **HitRate**: Should be ~100% (objects from pool vs newly allocated)
@@ -190,15 +212,18 @@ CLogger.Instance.SetLogFilter(LogFilter.LogWhiteList);
 ## Best practices
 
 **Performance:**
+
 - Use builder overloads in hot paths for zero-GC
 - Monitor DiscardRate during development (should be ~0%)
 - Set appropriate LogLevel to reduce overhead
 
 **Platform:**
+
 - Tune Pump(maxItems) for single-threaded processing to fit frame budget
 - Use centralized bootstrap (settings asset or code) to avoid duplicate registration
 
 **Quality:**
+
 - Use AddLoggerUnique for global sinks
 - Use AddLogger for per-feature dedicated sinks (e.g., a benchmark file)
 - In the Unity Editor, avoid adding ConsoleLogger alongside UnityLogger to prevent duplicate console entries
@@ -206,6 +231,7 @@ CLogger.Instance.SetLogFilter(LogFilter.LogWhiteList);
 ## Samples
 
 See `/Samples` folder for:
+
 - **LoggerPoolMonitor**: Interactive pool statistics and burst testing
 - **LoggerBenchmark**: Performance comparison with GC tracking
 - **LoggerPerformanceTest**: High-volume stress testing
