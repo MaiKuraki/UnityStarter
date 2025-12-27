@@ -4,6 +4,7 @@ using System.Threading;
 using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Rendering.Universal;
 
 namespace CycloneGames.Service.Runtime
 {
@@ -15,212 +16,292 @@ namespace CycloneGames.Service.Runtime
 
     public interface IGraphicsSettingService
     {
-        void SetQualityLevel(int newQualityLevel);
+        // Quality & Frame Rate
+        void SetQualityLevel(int qualityLevel);
         int CurrentQualityLevel { get; }
         IReadOnlyList<string> QualityLevels { get; }
-        void ChangeRenderResolution(int newShortEdgeResolution, ScreenOrientation screenOrientation = ScreenOrientation.Landscape);
+        void SetTargetFrameRate(int targetFramerate);
+        void SetVSyncCount(int vSyncCount);
+
+        // Resolution
+        void SetRenderResolution(int shortEdgeResolution, ScreenOrientation orientation = ScreenOrientation.Landscape);
         Vector2Int TargetRenderResolution { get; }
+        void SetRenderScale(float scale);
+        float RenderScale { get; }
 
-        /// <summary>
-        /// Sets the target frame rate for the application, suggesting a desired number of frames per second for rendering.
-        /// This can be used to limit CPU/GPU usage on powerful machines or to target a specific performance level on mobile to conserve battery.
-        /// </summary>
-        /// <param name="targetFramerate">The desired frames per second (FPS). A value of -1 indicates the platform's default target frame rate, which allows for uncapped performance where possible.</param>
-        /// <remarks>
-        /// <para><b>[CRITICAL] VSync Override Behavior:</b></para>
-        /// <para>This property is completely subordinate to the VSync setting. If VSync is enabled in any form (<c>QualitySettings.vSyncCount > 0</c>), this <c>targetFrameRate</c> value will be <b>ignored</b> entirely.</para>
-        /// <para>When VSync is active, the engine's primary goal is to synchronize frame rendering with the monitor's refresh cycle to prevent screen tearing. Consequently, the actual frame rate will be determined by the monitor's refresh rate (e.g., 60Hz, 120Hz, 144Hz) or an integer divisor of it (e.g., 60, 40, 30 on a 120Hz display).</para>
-        /// <para><b>To guarantee the effectiveness of this method, ensure VSync is disabled via code:</b></para>
-        /// <c>QualitySettings.vSyncCount = 0;</c>
-        /// </remarks>
-        /// <seealso cref="QualitySettings.vSyncCount"/>
-        void ChangeApplicationFrameRate(int targetFramerate);
+        // Anti-Aliasing
+        void SetAntiAliasing(int msaaLevel);
+        int AntiAliasingLevel { get; }
 
-        /// <summary>
-        /// Sets the vertical synchronization (VSync) count for the application. 0 indicates VSync is disabled.
-        /// </summary>
-        /// <param name="vSyncCount"></param>
-        void ChangeVSyncCount(int vSyncCount);
+        // Shadows
+        void SetShadowDistance(float distance);
+
+        // Textures
+        void SetTextureQuality(int mipmapLimit);
+        int TextureQuality { get; }
+        void SetAnisotropicFiltering(AnisotropicFiltering mode);
+        AnisotropicFiltering AnisotropicFilteringMode { get; }
+
+        // LOD & Rendering Features
+        void SetLodBias(float bias);
+        float LodBias { get; }
+        void SetSoftParticles(bool enabled);
+        bool SoftParticlesEnabled { get; }
+
+        // HDR (URP)
+        void SetHDR(bool enabled, Camera camera = null);
+
+        // Bulk Apply
+        void ApplySettings(in GraphicsSettingsData settings, Camera camera = null);
     }
 
-    public class GraphicsSettingService : IGraphicsSettingService
+    public sealed class GraphicsSettingService : IGraphicsSettingService, IDisposable
     {
-        private const string DEBUG_FLAG = "[GraphicsSetting]";
+        private const string DEBUG_FLAG = "[GraphicsSettings]";
+
         private int _currentQualityLevel = -1;
-        private CancellationTokenSource _cancelChangeResolution;
         private IReadOnlyList<string> _qualityLevels;
         private Vector2Int _targetRenderResolution;
+        private CancellationTokenSource _resolutionCts;
 
         public int CurrentQualityLevel
         {
             get
             {
-                if (_currentQualityLevel == -1)
-                {
+                if (_currentQualityLevel < 0)
                     _currentQualityLevel = QualitySettings.GetQualityLevel();
-                }
                 return _currentQualityLevel;
             }
         }
 
-        public IReadOnlyList<string> QualityLevels
-        {
-            get
-            {
-                if (_qualityLevels == null)
-                {
-                    _qualityLevels = QualitySettings.names;
-                }
-                return _qualityLevels;
-            }
-        }
-
-        /// <summary>
-        /// Gets the target rendering resolution that was last set or attempted by the service.
-        /// Note: In the Unity Editor, Screen.width and Screen.height might differ from this value.
-        /// This property reflects the resolution passed to Screen.SetResolution().
-        /// </summary>
+        public IReadOnlyList<string> QualityLevels => _qualityLevels ??= QualitySettings.names;
         public Vector2Int TargetRenderResolution => _targetRenderResolution;
+        public float RenderScale => UniversalRenderPipeline.asset?.renderScale ?? 1f;
+        public int AntiAliasingLevel => QualitySettings.antiAliasing;
+        public int TextureQuality => QualitySettings.globalTextureMipmapLimit;
+        public AnisotropicFiltering AnisotropicFilteringMode => QualitySettings.anisotropicFiltering;
+        public float LodBias => QualitySettings.lodBias;
+        public bool SoftParticlesEnabled => QualitySettings.softParticles;
 
         public GraphicsSettingService()
         {
-            Initialize();
-        }
-
-        public void Initialize()
-        {
-            // Initialize with the current screen resolution at startup
             _targetRenderResolution = new Vector2Int(Screen.width, Screen.height);
-            CLogger.LogInfo($"{DEBUG_FLAG} Initialized. Target Render Resolution set to: {Screen.width}x{Screen.height}");
-            // _currentQualityLevel will be fetched on first access
-            // _qualityLevels will be fetched on first access
+            CLogger.LogInfo($"{DEBUG_FLAG} Initialized. Resolution: {Screen.width}x{Screen.height}");
         }
 
-        public void SetQualityLevel(int newQualityLevel)
+        #region Quality & Frame Rate
+
+        public void SetQualityLevel(int qualityLevel)
         {
-            if (newQualityLevel < 0 || newQualityLevel >= QualityLevels.Count)
+            if (qualityLevel < 0 || qualityLevel >= QualityLevels.Count)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid quality level: {newQualityLevel}");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid quality level: {qualityLevel}");
                 return;
             }
-
-            CLogger.LogInfo($"{DEBUG_FLAG} CurrentQualityLevel: {CurrentQualityLevel}, NewQualityLevel: {newQualityLevel}");
-            QualitySettings.SetQualityLevel(newQualityLevel, true);
-            _currentQualityLevel = newQualityLevel;
+            QualitySettings.SetQualityLevel(qualityLevel, true);
+            _currentQualityLevel = qualityLevel;
+            CLogger.LogInfo($"{DEBUG_FLAG} Quality level set to: {qualityLevel}");
         }
 
-        public void ChangeRenderResolution(int newShortEdgeResolution, ScreenOrientation screenOrientation = ScreenOrientation.Landscape)
-        {
-            CancelResolutionChange();
-
-            _cancelChangeResolution = new CancellationTokenSource();
-            ChangeScreenResolutionAsync(_cancelChangeResolution.Token, newShortEdgeResolution, screenOrientation).Forget();
-        }
-
-        public void ChangeApplicationFrameRate(int targetFramerate)
+        public void SetTargetFrameRate(int targetFramerate)
         {
             Application.targetFrameRate = targetFramerate;
-            CLogger.LogInfo($"{DEBUG_FLAG} Change application target frame rate, current: {Application.targetFrameRate}, target: {targetFramerate}");
         }
 
-        private void CancelResolutionChange()
+        public void SetVSyncCount(int vSyncCount)
         {
-            if (_cancelChangeResolution != null)
-            {
-                if (_cancelChangeResolution.Token.CanBeCanceled)
-                {
-                    _cancelChangeResolution.Cancel();
-                }
-                _cancelChangeResolution.Dispose();
-                _cancelChangeResolution = null;
-            }
+            QualitySettings.vSyncCount = Mathf.Clamp(vSyncCount, 0, 4);
         }
 
-        private async UniTask ChangeScreenResolutionAsync(CancellationToken cancelToken, int newShortEdgeResolution, ScreenOrientation screenOrientation = ScreenOrientation.Landscape)
+        #endregion
+
+        #region Resolution
+
+        public void SetRenderResolution(int shortEdgeResolution, ScreenOrientation orientation = ScreenOrientation.Landscape)
+        {
+            CancelPendingResolutionChange();
+            _resolutionCts = new CancellationTokenSource();
+            SetResolutionAsync(shortEdgeResolution, orientation, _resolutionCts.Token).Forget();
+        }
+
+        public void SetRenderScale(float scale)
+        {
+            var asset = UniversalRenderPipeline.asset;
+            if (asset == null)
+            {
+                CLogger.LogWarning("URP asset not found, cannot set render scale", DEBUG_FLAG);
+                return;
+            }
+            asset.renderScale = Mathf.Clamp(scale, 0.1f, 2f);
+        }
+
+        private async UniTaskVoid SetResolutionAsync(int shortEdge, ScreenOrientation orientation, CancellationToken ct)
         {
             try
             {
-                // It's important to get the current aspect ratio from the *actual* screen dimensions
-                // if you want the new resolution to maintain the current physical display aspect ratio.
-                // However, if the game is in a window, Screen.width/height might be the window size.
-                // For calculating resolution based on a fixed aspect ratio (e.g., 16:9), you might use a predefined aspect ratio.
-                // Here, we're using the current Screen.width/Screen.height which is typical.
-                float aspectRatio = (float)Screen.width / Screen.height;
-                if (Screen.height == 0) // Avoid division by zero
-                {
-                    aspectRatio = 16f / 9f; // Default to a common aspect ratio if height is zero
-                    CLogger.LogWarning($"{DEBUG_FLAG} Screen.height is 0. Defaulting aspect ratio to 16:9 for calculation.");
-                }
+                float aspect = Screen.height > 0 ? (float)Screen.width / Screen.height : 16f / 9f;
+                var (w, h) = CalculateResolution(shortEdge, orientation, aspect);
+                _targetRenderResolution = new Vector2Int(w, h);
 
-                var (newScreenWidth, newScreenHeight) = CalculateNewResolution(newShortEdgeResolution, screenOrientation, aspectRatio);
+                Screen.SetResolution(w, h, Screen.fullScreen);
+                await UniTask.Delay(100, DelayType.Realtime, PlayerLoopTiming.Update, ct);
 
-                // Update the target resolution before attempting to set it
-                _targetRenderResolution = new Vector2Int(newScreenWidth, newScreenHeight);
-                CLogger.LogInfo($"{DEBUG_FLAG} Attempting to set render resolution to: {_targetRenderResolution.x}x{_targetRenderResolution.y}");
-                CLogger.LogInfo($"{DEBUG_FLAG} Current Screen.width/height before SetResolution: {Screen.width}x{Screen.height}");
-
-                Screen.SetResolution(newScreenWidth, newScreenHeight, Screen.fullScreen); // Using Screen.fullScreen to maintain current mode
-
-                // Log what was commanded to Screen.SetResolution
-                CLogger.LogInfo($"{DEBUG_FLAG} Screen.SetResolution({newScreenWidth}, {newScreenHeight}, {Screen.fullScreen}) called.");
-
-                // A short delay can sometimes be useful for Screen.width/height to update, though not guaranteed.
-                await UniTask.Delay(100, DelayType.Realtime, PlayerLoopTiming.Update, cancelToken);
-
-                // Log the reported Screen.width/height after the attempt.
-                // This is what Unity reports, which can differ from _targetRenderResolution, especially in editor.
-                CLogger.LogInfo($"{DEBUG_FLAG} Post-change screen resolution, reported by Screen.width/height: {Screen.width}x{Screen.height}. Target was: {_targetRenderResolution.x}x{_targetRenderResolution.y}");
+                CLogger.LogInfo($"{DEBUG_FLAG} Resolution changed to: {w}x{h}");
             }
-            catch (OperationCanceledException)
-            {
-                CLogger.LogInfo($"{DEBUG_FLAG} Resolution change was canceled.");
-            }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
-                CLogger.LogError($"{DEBUG_FLAG} An error occurred while changing the resolution: {ex.Message}");
+                CLogger.LogError($"{DEBUG_FLAG} Resolution change failed: {ex.Message}");
             }
         }
 
-        private (int width, int height) CalculateNewResolution(int newShortEdgeResolution, ScreenOrientation screenOrientation, float aspectRatio)
+        private static (int width, int height) CalculateResolution(int shortEdge, ScreenOrientation orientation, float aspect)
         {
-            if (aspectRatio <= 0) // Safety check for invalid aspect ratio
+            if (aspect <= 0) aspect = 16f / 9f;
+
+            int w, h;
+            if (orientation == ScreenOrientation.Landscape)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid aspect ratio ({aspectRatio}) for resolution calculation. Defaulting to 16:9 aspect ratio for calculation logic.");
-                aspectRatio = 16f / 9f; // Fallback to a common aspect ratio
+                h = shortEdge;
+                w = Mathf.RoundToInt(shortEdge * aspect);
             }
-
-            int calculatedWidth, calculatedHeight;
-
-            switch (screenOrientation)
+            else
             {
-                case ScreenOrientation.Landscape:
-                    // Short edge is height
-                    calculatedHeight = newShortEdgeResolution;
-                    calculatedWidth = Mathf.RoundToInt(newShortEdgeResolution * aspectRatio);
-                    break;
-                case ScreenOrientation.Portrait:
-                    // Short edge is width
-                    calculatedWidth = newShortEdgeResolution;
-                    calculatedHeight = Mathf.RoundToInt(newShortEdgeResolution / aspectRatio);
-                    break;
-                default:
-                    CLogger.LogError($"{DEBUG_FLAG} Unknown screen orientation: {screenOrientation}. Defaulting to Landscape calculation.");
-                    // Defaulting to Landscape logic as a fallback
-                    calculatedHeight = newShortEdgeResolution;
-                    calculatedWidth = Mathf.RoundToInt(newShortEdgeResolution * aspectRatio);
-                    break; // Or throw new ArgumentOutOfRangeException
+                w = shortEdge;
+                h = Mathf.RoundToInt(shortEdge / aspect);
             }
-            // Ensure non-zero dimensions
-            if (calculatedWidth <= 0) calculatedWidth = 1;
-            if (calculatedHeight <= 0) calculatedHeight = 1;
-
-            return (calculatedWidth, calculatedHeight);
+            return (Mathf.Max(1, w), Mathf.Max(1, h));
         }
 
-        public void ChangeVSyncCount(int vSyncCount)
+        private void CancelPendingResolutionChange()
         {
-            if(vSyncCount < 0 || vSyncCount > 2) throw new ArgumentOutOfRangeException(nameof(vSyncCount), vSyncCount, "VSyncCount must be between 0 and 2.");
-            QualitySettings.vSyncCount = vSyncCount;
+            if (_resolutionCts != null)
+            {
+                _resolutionCts.Cancel();
+                _resolutionCts.Dispose();
+                _resolutionCts = null;
+            }
+        }
+
+        #endregion
+
+        #region Anti-Aliasing
+
+        public void SetAntiAliasing(int msaaLevel)
+        {
+            // Valid MSAA levels: 0, 2, 4, 8
+            int validLevel = msaaLevel switch
+            {
+                <= 0 => 0,
+                <= 2 => 2,
+                <= 4 => 4,
+                _ => 8
+            };
+            QualitySettings.antiAliasing = validLevel;
+
+            // Also set on URP asset if available
+            var asset = UniversalRenderPipeline.asset;
+            if (asset != null)
+            {
+                asset.msaaSampleCount = validLevel == 0 ? 1 : validLevel;
+            }
+        }
+
+        #endregion
+
+        #region Shadows
+
+        /// <summary>
+        /// Sets shadow distance. For URP shadow resolution/cascades, modify the URP Asset directly or use Quality Levels.
+        /// </summary>
+        public void SetShadowDistance(float distance)
+        {
+            QualitySettings.shadowDistance = Mathf.Max(0, distance);
+        }
+
+        #endregion
+
+        #region Textures
+
+        public void SetTextureQuality(int mipmapLimit)
+        {
+            // 0=Full, 1=Half, 2=Quarter, 3=Eighth
+            QualitySettings.globalTextureMipmapLimit = Mathf.Clamp(mipmapLimit, 0, 3);
+        }
+
+        public void SetAnisotropicFiltering(AnisotropicFiltering mode)
+        {
+            QualitySettings.anisotropicFiltering = mode;
+        }
+
+        #endregion
+
+        #region LOD & Features
+
+        public void SetLodBias(float bias)
+        {
+            QualitySettings.lodBias = Mathf.Clamp(bias, 0.3f, 2f);
+        }
+
+        public void SetSoftParticles(bool enabled)
+        {
+            QualitySettings.softParticles = enabled;
+        }
+
+        #endregion
+
+        #region HDR
+
+        public void SetHDR(bool enabled, Camera camera = null)
+        {
+            var asset = UniversalRenderPipeline.asset;
+            if (asset != null)
+            {
+                asset.supportsHDR = enabled;
+            }
+
+            // Also set post-processing on specific camera if provided
+            if (camera != null)
+            {
+                var cameraData = camera.GetUniversalAdditionalCameraData();
+                if (cameraData != null)
+                {
+                    cameraData.renderPostProcessing = enabled;
+                }
+            }
+        }
+
+        #endregion
+
+        #region Bulk Apply
+
+        public void ApplySettings(in GraphicsSettingsData settings, Camera camera = null)
+        {
+            SetQualityLevel(settings.QualityLevel);
+            SetTargetFrameRate(settings.TargetFrameRate);
+            SetVSyncCount(settings.VSyncCount);
+            SetAntiAliasing(settings.AntiAliasingLevel);
+            SetShadowDistance(settings.ShadowDistance);
+            SetTextureQuality(settings.TextureQuality);
+            SetAnisotropicFiltering((AnisotropicFiltering)settings.AnisotropicFiltering);
+            SetLodBias(settings.LodBias);
+            SetSoftParticles(settings.SoftParticles);
+            SetRenderScale(settings.RenderScale);
+            SetHDR(settings.HDREnabled, camera);
+
+            if (settings.ShortEdgeResolution > 0)
+            {
+                SetRenderResolution(settings.ShortEdgeResolution);
+            }
+
+            CLogger.LogInfo($"{DEBUG_FLAG} All graphics settings applied");
+        }
+
+        #endregion
+
+        public void Dispose()
+        {
+            CancelPendingResolutionChange();
         }
     }
 }

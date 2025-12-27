@@ -9,26 +9,13 @@ namespace CycloneGames.Service.Runtime
         void AddCameraToStack(Camera camera, int index);
         void RemoveCameraFromStack(Camera camera);
     }
+
     public class MainCameraService : IMainCameraService
     {
-        private const string DEBUG_FLAG = "[MainCameraService]";
-        public Camera MainCameraInst => mainCamera.CameraInst;
-        private MainCamera mainCamera => MainCamera.Instance ?? UnityEngine.GameObject.FindFirstObjectByType<MainCamera>();
+        public Camera MainCameraInst => mainCamera?.CameraInst;
+        private MainCamera mainCamera => MainCamera.Instance ?? GameObject.FindFirstObjectByType<MainCamera>();
 
-        public MainCameraService()
-        {
-            Initialize();
-        }
-
-        public void Initialize()
-        {
-
-        }
-
-        private MainCamera TryGetMainCamera()
-        {
-            return MainCamera.Instance ?? UnityEngine.GameObject.FindFirstObjectByType<MainCamera>();
-        }
+        public MainCameraService() { }
 
         public void AddCameraToStack(Camera camera, int index = 0)
         {
