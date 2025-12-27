@@ -656,10 +656,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         void OnDestroy()
         {
-            // Note: Clearing StatePool affects all instances, which can cause issues during scene transitions.
-            // Only clear if this is the last instance, or use a reference counting mechanism.
-            // For now, we'll clear it but the Update/ExecuteStateMachine methods will handle null states gracefully.
-            StatePool<MovementStateBase2D>.Clear();
+            // StatePool uses flyweight pattern - states are stateless singletons
+            // No cleanup needed; Domain Reload handles static cleanup
         }
 
         void OnDrawGizmosSelected()
