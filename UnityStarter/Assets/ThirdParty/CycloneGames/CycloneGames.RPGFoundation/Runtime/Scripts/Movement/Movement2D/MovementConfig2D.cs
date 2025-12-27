@@ -5,7 +5,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
     public enum MovementType2D
     {
         Platformer, // Standard 2D Side-scroller (X/Y movement, Gravity on Y)
-        BeltScroll, // DNF Style (X/Z movement on ground, Y is Jump/Height, Gravity on Y)
+        BeltScroll, // DNF Style belt-scrolling: X for horizontal, Y for depth (no gravity on ground plane)
+                    // Jump adds temporary Y offset via physics; camera should use Sorting Order for depth
         TopDown     // Classic RPG Style (X/Y movement, No Gravity, No Jump)
     }
 

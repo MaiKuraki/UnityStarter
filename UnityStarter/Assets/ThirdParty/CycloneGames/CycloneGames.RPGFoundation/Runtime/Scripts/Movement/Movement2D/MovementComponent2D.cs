@@ -443,26 +443,45 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
             if (config.movementType == MovementType2D.TopDown)
             {
+                // TopDown: Full X/Y control, no gravity
                 _rigidbody.velocity = new Vector2(displacement.x / dt, displacement.y / dt);
             }
             else if (config.movementType == MovementType2D.BeltScroll)
             {
-                // BeltScroll (DNF): displacement.y maps to Z position (Rigidbody2D doesn't handle Z)
-                float zMove = displacement.y;
-                transform.position += new Vector3(0, 0, zMove);
-
-                // Keep Y velocity controlled by Physics (Gravity/Jump)
-                // Unless the state explicitly set VerticalVelocity (like JumpState)
-                // But wait, JumpState sets context.VerticalVelocity.
-                // We need to apply context.VerticalVelocity to Rigidbody.Y if it was modified?
-                // Actually, let's stick to the pattern:
-                // X velocity = displacement.x / dt
-                // Y velocity = _rigidbody.velocity.y (Physics)
-
-                _rigidbody.velocity = new Vector2(targetVelocity.x, _rigidbody.velocity.y);
+                // BeltScroll (DNF-style): 
+                // - X axis: horizontal movement
+                // - Y axis: BOTH depth (input.y) AND jump height
+                // 
+                // Unlike true 3D, DNF-style games use Y for depth simulation.
+                // The depth movement (input.y → displacement.y) is applied directly.
+                // Jump is handled by JumpState setting Rigidbody velocity.y.
+                // 
+                // Key insight: In DNF, when on ground, input.y moves you in "depth".
+                // When jumping, Rigidbody.velocity.y handles the arc.
+                // Since we're using Rigidbody2D, both are naturally combined.
+                
+                // When grounded, depth movement is controlled by states (WalkState, RunState, etc.)
+                // States should output displacement.y for depth movement when MovementType is BeltScroll.
+                // When in air (Jump/Fall), states control horizontal only; physics handles vertical.
+                
+                bool isAirborne = _currentState != null && 
+                                  (_currentState.StateType == Movement.MovementStateType.Jump || 
+                                   _currentState.StateType == Movement.MovementStateType.Fall);
+                
+                if (isAirborne)
+                {
+                    // In air: X from input, Y from physics (gravity/jump)
+                    _rigidbody.velocity = new Vector2(targetVelocity.x, _rigidbody.velocity.y);
+                }
+                else
+                {
+                    // On ground: Full X/Y control for depth movement, no gravity effect on grounded depth
+                    _rigidbody.velocity = new Vector2(displacement.x / dt, displacement.y / dt);
+                }
             }
             else
             {
+                // Platformer: X from input, Y from physics
                 _rigidbody.velocity = new Vector2(targetVelocity.x, _rigidbody.velocity.y);
             }
 
@@ -656,10 +675,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         void OnDestroy()
         {
-            // Note: Clearing StatePool affects all instances, which can cause issues during scene transitions.
-            // Only clear if this is the last instance, or use a reference counting mechanism.
-            // For now, we'll clear it but the Update/ExecuteStateMachine methods will handle null states gracefully.
-            StatePool<MovementStateBase2D>.Clear();
+            // StatePool uses flyweight pattern - states are stateless singletons
+            // No cleanup needed; Domain Reload handles static cleanup
         }
 
         void OnDrawGizmosSelected()

@@ -3,13 +3,13 @@ using UnityEngine;
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement
 {
+    /// <summary>
+    /// Cache for Animator parameter hashes. Avoids per-frame StringToHash calls.
+    /// </summary>
     public static class AnimationParameterCache
     {
-        private static readonly Dictionary<string, int> _parameterHashes = new Dictionary<string, int>(16);
+        private static readonly Dictionary<string, int> _parameterHashes = new Dictionary<string, int>(32);
 
-        /// <summary>
-        /// Gets or creates a parameter hash from string name. 
-        /// </summary>
         public static int GetHash(string parameterName)
         {
             if (string.IsNullOrEmpty(parameterName))
@@ -23,17 +23,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             return hash;
         }
 
-        /// <summary>
-        /// Pre-warms the cache with parameter names to avoid runtime allocations.
-        /// Call during initialization for best performance.
-        /// </summary>
         public static void PreWarm(params string[] parameterNames)
         {
-            if (parameterNames == null || parameterNames.Length == 0)
-                return;
+            if (parameterNames == null) return;
 
-            foreach (string name in parameterNames)
+            for (int i = 0; i < parameterNames.Length; i++)
             {
+                string name = parameterNames[i];
                 if (!string.IsNullOrEmpty(name) && !_parameterHashes.ContainsKey(name))
                 {
                     _parameterHashes[name] = Animator.StringToHash(name);
@@ -41,12 +37,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             }
         }
 
-        /// <summary>
-        /// Clears the cache. Use with caution in production.
-        /// </summary>
-        public static void Clear()
-        {
-            _parameterHashes.Clear();
-        }
+        public static void Clear() => _parameterHashes.Clear();
     }
 }
