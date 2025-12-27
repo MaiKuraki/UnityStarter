@@ -955,7 +955,8 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         void OnDestroy()
         {
-            StatePool<MovementStateBase>.Clear();
+            // StatePool uses flyweight pattern - states are stateless singletons
+            // No cleanup needed; Domain Reload handles static cleanup
         }
 
 #if UNITY_EDITOR

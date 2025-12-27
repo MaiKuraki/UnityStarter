@@ -253,6 +253,8 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
 
             // Show Animancer parameter mode option only when Animancer is selected
             AnimationSystemType currentSystem = (AnimationSystemType)_animationSystem.enumValueIndex;
+            AnimancerParameterMode paramMode = AnimancerParameterMode.StringParameter;
+
             if (currentSystem == AnimationSystemType.Animancer)
             {
                 EditorGUILayout.Space(3);
@@ -262,6 +264,8 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                     "• Animator Hash: Use Animator hash values (for HybridAnimancerComponent with Animator Controller)\n" +
                     "• String Parameter: Use direct string parameters (for AnimancerComponent Parameters mode)"));
 
+                paramMode = (AnimancerParameterMode)_animancerParameterMode.enumValueIndex;
+
                 EditorGUILayout.Space(3);
                 EditorGUI.indentLevel++;
                 _showAnimationSystemHelp = EditorGUILayout.Foldout(_showAnimationSystemHelp, "Help & Details", EditorStyles.foldout);
@@ -270,27 +274,25 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                 {
                     EditorGUI.indentLevel++;
                     EditorGUILayout.HelpBox(
-                        "Animancer Parameter Mode Guide:\n" +
-                        "• Animator Hash Mode:\n" +
-                        "  - Use with HybridAnimancerComponent\n" +
-                        "  - Requires Animator Controller with parameters defined\n" +
-                        "  - Parameters are accessed via Animator hash values\n" +
-                        "  - Supports Root Motion (via HybridAnimancerComponent's Animator)\n" +
-                        "• String Parameter Mode:\n" +
-                        "  - Can use with HybridAnimancerComponent OR AnimancerComponent\n" +
-                        "  - With HybridAnimancerComponent: Supports Root Motion (has Animator)\n" +
-                        "  - With AnimancerComponent: Does NOT support Root Motion (no Animator)\n" +
-                        "  - Parameters are accessed directly by string name\n" +
-                        "  - Parameters are created automatically when first used (if using AnimancerComponent)\n" +
-                        "  - If Animator Controller has parameters, will use Animator API\n" +
-                        "  - If Animator Controller lacks parameters, will fallback to Parameters mode\n" +
-                        "• Root Motion Support:\n" +
-                        "  - HybridAnimancerComponent: ALWAYS supports Root Motion (has Animator)\n" +
-                        "  - AnimancerComponent: NEVER supports Root Motion (no Animator)\n" +
-                        "  - Root Motion support depends on component type, NOT parameter mode\n" +
-                        "• Recommendation:\n" +
-                        "  - Need Root Motion: Use HybridAnimancerComponent (any parameter mode works)\n" +
-                        "  - Don't need Root Motion: Use AnimancerComponent + String Parameter",
+                        "Animancer Parameter Mode Guide:\n\n" +
+                        "【Animator Hash Mode】\n" +
+                        "• Use with: HybridAnimancerComponent + Animator Controller\n" +
+                        "• Setup: Animator Controller must have parameters defined\n" +
+                        "• Root Motion: ✓ Supported (via HybridAnimancerComponent's Animator)\n" +
+                        "• If Animator has no Controller assigned: Parameters are safely ignored\n\n" +
+                        "【String Parameter Mode】\n" +
+                        "• Use with: HybridAnimancerComponent OR AnimancerComponent\n" +
+                        "• Setup: Parameters are created automatically in Animancer when first used\n" +
+                        "• With HybridAnimancerComponent: Root Motion ✓ Supported\n" +
+                        "• With AnimancerComponent: Root Motion ✗ NOT Supported\n\n" +
+                        "【Using Custom Animation Controller?】\n" +
+                        "If you handle animations separately (e.g., via Animancer API directly,\n" +
+                        "like RPGPlayerCharacterAnimationController using OnJumpStart event):\n" +
+                        "→ Leave ALL parameter fields empty below to disable built-in control\n\n" +
+                        "【Quick Reference】\n" +
+                        "• Need Root Motion? → Use HybridAnimancerComponent\n" +
+                        "• Simple setup? → Animator Hash + Animator Controller with parameters\n" +
+                        "• Custom control? → Clear all parameters, use events (OnJumpStart, OnLanded)",
                         MessageType.Info);
                     EditorGUI.indentLevel--;
                 }
@@ -300,33 +302,92 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
 
             EditorGUILayout.Space(5);
 
-            // Animation Parameters
+            // Animation Parameters - Show contextual help based on configuration
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("Animation Parameters", EditorStyles.miniLabel);
 
-            // Show help text based on selected system
+            // Check if all parameters are empty
+            bool allEmpty = string.IsNullOrEmpty(_movementSpeedParameter.stringValue) &&
+                           string.IsNullOrEmpty(_isGroundedParameter.stringValue) &&
+                           string.IsNullOrEmpty(_jumpTrigger.stringValue) &&
+                           string.IsNullOrEmpty(_rollTrigger.stringValue);
+
+            bool hasAnyParameter = !allEmpty;
+
+            // Determine and show appropriate help message
             if (currentSystem == AnimationSystemType.Animancer)
             {
-                AnimancerParameterMode paramMode = (AnimancerParameterMode)_animancerParameterMode.enumValueIndex;
                 if (paramMode == AnimancerParameterMode.AnimatorHash)
                 {
-                    EditorGUILayout.HelpBox(
-                        "Animator Hash Mode: Ensure these parameter names match your Animator Controller parameters.",
-                        MessageType.Info);
+                    if (allEmpty)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "✓ Direct API Mode: All parameters empty.\n" +
+                            "MovementComponent will NOT control animations.\n" +
+                            "Use this when you have a custom animation controller that handles animations via events (OnJumpStart, OnLanded).",
+                            MessageType.Info);
+                    }
+                    else
+                    {
+                        EditorGUILayout.HelpBox(
+                            "Parameter-Based Mode: These parameters will be set on your Animator Controller.\n\n" +
+                            "Requirements:\n" +
+                            "• Animator component must have a Controller assigned\n" +
+                            "• Controller must have parameters with matching names\n" +
+                            "• Parameter types: Speed=Float, IsGrounded=Bool, Jump/Roll=Trigger\n\n" +
+                            "⚠ If no Animator Controller: Parameters will be sent to Animancer's\n" +
+                            "   Parameters system as Bool values (Triggers won't auto-reset!).",
+                            MessageType.Warning);
+                    }
                 }
                 else
                 {
-                    EditorGUILayout.HelpBox(
-                        "String Parameter Mode: These parameters will be automatically created in Animancer when first used.",
-                        MessageType.Info);
+                    // String Parameter mode
+                    if (hasAnyParameter)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "String Parameter Mode: Parameters auto-created in Animancer.\n\n" +
+                            "⚠ Triggers (Jump, Roll) will be created as Bool and won't auto-reset!\n" +
+                            "   You may need to manually reset them, or use Direct API Mode instead\n" +
+                            "   (clear all parameters and handle animations via OnJumpStart event).",
+                            MessageType.Warning);
+                    }
+                    else
+                    {
+                        EditorGUILayout.HelpBox(
+                            "✓ Direct API Mode: Parameters will be auto-created when used.\n" +
+                            "Leave empty to handle animations via custom controller.",
+                            MessageType.Info);
+                    }
                 }
                 EditorGUILayout.Space(3);
             }
+            else
+            {
+                // Unity Animator mode
+                EditorGUILayout.HelpBox(
+                    "Unity Animator Mode: These parameter names must exist in your Animator Controller.\n" +
+                    "Parameter types: Speed=Float, IsGrounded=Bool, Jump/Roll=Trigger",
+                    MessageType.Info);
+                EditorGUILayout.Space(3);
+            }
 
-            EditorGUILayout.PropertyField(_movementSpeedParameter);
-            EditorGUILayout.PropertyField(_isGroundedParameter);
-            EditorGUILayout.PropertyField(_jumpTrigger);
-            EditorGUILayout.PropertyField(_rollTrigger);
+            EditorGUILayout.PropertyField(_movementSpeedParameter, new GUIContent(
+                "Movement Speed Parameter",
+                "Float parameter for movement speed (used in Blend Trees).\n" +
+                "Leave empty to skip setting this parameter."));
+            EditorGUILayout.PropertyField(_isGroundedParameter, new GUIContent(
+                "Is Grounded Parameter",
+                "Bool parameter for grounded state.\n" +
+                "Leave empty to skip setting this parameter."));
+            EditorGUILayout.PropertyField(_jumpTrigger, new GUIContent(
+                "Jump Trigger",
+                "Trigger parameter for jump animation.\n" +
+                "Leave empty to skip setting this parameter."));
+            EditorGUILayout.PropertyField(_rollTrigger, new GUIContent(
+                "Roll Trigger",
+                "Trigger parameter for roll/dodge animation.\n" +
+                "Leave empty to skip setting this parameter."));
             EditorGUILayout.EndVertical();
 
             serializedObject.ApplyModifiedProperties();
