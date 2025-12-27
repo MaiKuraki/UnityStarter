@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.IO;
+using CycloneGames.Logger;
 using UnityEngine;
 using VYaml.Parser;
 using VYaml.Emitter;
@@ -11,83 +12,86 @@ using Unity.Collections;
 namespace CycloneGames.Service.Runtime
 {
     /// <summary>
-    /// A service that manages device-specific settings like graphics, audio, localization and etc.
+    /// Generic service for managing device-specific settings with YAML persistence.
+    /// 
+    /// Usage:
+    ///   // Initialize with auto device detection
+    ///   var provider = new GraphicsSettingsDefaultProvider();
+    ///   var service = new DeviceSettingsService<GraphicsSettingsData>("graphics.yaml", provider, "Settings");
+    ///   service.LoadSettings();
+    ///   
+    ///   // Modify single property (zero-GC via ref)
+    ///   service.UpdateSettings((ref GraphicsSettingsData s) => s.AntiAliasingLevel = 4);
+    ///   service.SaveSettings();
+    ///   
+    ///   // Modify multiple properties
+    ///   service.UpdateSettings((ref GraphicsSettingsData s) => {
+    ///       s.TextureQuality = 0;
+    ///       s.RenderScale = 1.5f;
+    ///   });
+    ///   service.SaveSettings();
     /// </summary>
-    /// <typeparam name="T">The settings data struct.</typeparam>
     public class DeviceSettingsService<T> : ISettingsService<T> where T : struct
     {
-        // A delegate that defines an action to modify a struct by reference.
+        private const string DEBUG_FLAG = "[DeviceSettings]";
+
         public delegate void RefAction(ref T settings);
 
-        private const string DEBUG_FLAG = "[DeviceSettingsService]";
         private T _settings;
         private string _filePath;
         private string _tempFilePath;
         private YamlSerializerOptions _serializerOptions;
         private IDefaultProvider<T> _defaultProvider;
+        private string _cachedTypeName;
+
         public bool IsInitialized { get; private set; }
-        public string cachedTypeName;
-        
-        /// <summary>
-        /// Gets a COPY of the current settings for safe reading.
-        /// </summary>
         public T Settings => _settings;
 
         public DeviceSettingsService() { }
 
-        public DeviceSettingsService(string fileName, IDefaultProvider<T> defaultProvider, string basePathInPersistentDataPath = null)
+        public DeviceSettingsService(string fileName, IDefaultProvider<T> defaultProvider, string subDirectory = null)
         {
-            Initialize(fileName, defaultProvider, basePathInPersistentDataPath);
+            Initialize(fileName, defaultProvider, subDirectory);
         }
 
-        public void Initialize(string fileName, IDefaultProvider<T> defaultProvider, string basePathInPersistentDataPath = null)
+        public void Initialize(string fileName, IDefaultProvider<T> defaultProvider, string subDirectory = null)
         {
             if (IsInitialized)
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Service for type '{typeof(T).FullName}' has already been initialized. Skipping re-initialization.");
+                CLogger.LogWarning($"{DEBUG_FLAG} Already initialized for type '{_cachedTypeName}'");
                 return;
             }
 
             if (string.IsNullOrEmpty(fileName))
-            {
-                Debug.LogError($"{DEBUG_FLAG} 'fileName' cannot be null or empty.");
-                throw new ArgumentException("File name must be provided for the settings service.", nameof(fileName));
-            }
+                throw new ArgumentException("File name must be provided", nameof(fileName));
 
-            _serializerOptions = new YamlSerializerOptions
-            {
-                Resolver = SettingsYamlResolver.Instance
-            };
+            _serializerOptions = new YamlSerializerOptions { Resolver = SettingsYamlResolver.Instance };
+            _cachedTypeName = typeof(T).Name;
 
-            // Path.Combine handles null or empty basePathInPersistentDataPath gracefully.
-            string directoryPath = string.IsNullOrEmpty(basePathInPersistentDataPath)
+            string directory = string.IsNullOrEmpty(subDirectory)
                 ? Application.persistentDataPath
-                : Path.Combine(Application.persistentDataPath, basePathInPersistentDataPath);
+                : Path.Combine(Application.persistentDataPath, subDirectory);
 
-            _filePath = Path.Combine(directoryPath, fileName);
+            _filePath = Path.Combine(directory, fileName);
             _tempFilePath = _filePath + ".tmp";
-
             _defaultProvider = defaultProvider;
             _settings = _defaultProvider.GetDefault();
 
-            cachedTypeName = typeof(T).FullName;
             IsInitialized = true;
-
-            Debug.Log($"{DEBUG_FLAG} Initialized for type '{cachedTypeName}'. Path: {_filePath}");
+            CLogger.LogInfo($"{DEBUG_FLAG} Initialized for '{_cachedTypeName}' at: {_filePath}");
         }
 
         /// <summary>
-        /// Safely updates the internal settings using a provided action.
+        /// Modify settings via ref delegate. Zero-GC, no struct copy.
+        /// Example: service.UpdateSettings((ref T s) => s.SomeProperty = value);
         /// </summary>
-        /// <param name="updateAction">The action to perform on the settings.</param>
         public void UpdateSettings(RefAction updateAction)
         {
             if (!IsInitialized)
             {
-                Debug.LogError($"{DEBUG_FLAG} Service not initialized, cannot update settings for type '{cachedTypeName}'.");
+                CLogger.LogError($"{DEBUG_FLAG} Not initialized, cannot update '{_cachedTypeName}'");
                 return;
             }
-            // The action directly modifies the internal _settings struct.
             updateAction(ref _settings);
         }
 
@@ -95,14 +99,13 @@ namespace CycloneGames.Service.Runtime
         {
             if (!IsInitialized)
             {
-                Debug.LogError($"{DEBUG_FLAG} Service for type '{cachedTypeName}' is not initialized. Cannot load settings.");
+                CLogger.LogError($"{DEBUG_FLAG} Not initialized, cannot load '{_cachedTypeName}'");
                 return;
             }
 
             if (!File.Exists(_filePath))
             {
-                Debug.Log($"{DEBUG_FLAG} Settings file not found for '{cachedTypeName}' at '{_filePath}'. Creating a new one with default values.");
-                // SaveSettings will now handle directory creation, so this call is safe.
+                CLogger.LogInfo($"{DEBUG_FLAG} Settings file not found for '{_cachedTypeName}', creating with defaults");
                 SaveSettings();
                 return;
             }
@@ -116,7 +119,7 @@ namespace CycloneGames.Service.Runtime
             }
             catch (Exception ex)
             {
-                Debug.LogError($"{DEBUG_FLAG} Failed to parse '{_filePath}' for type '{cachedTypeName}', it may be corrupted. Error: {ex.Message}. Resetting to default.");
+                CLogger.LogError($"{DEBUG_FLAG} Failed to parse '{_filePath}': {ex.Message}. Resetting to default.");
                 _settings = _defaultProvider.GetDefault();
                 SaveSettings();
             }
@@ -126,7 +129,7 @@ namespace CycloneGames.Service.Runtime
         {
             if (!IsInitialized)
             {
-                Debug.LogError($"{DEBUG_FLAG} Service for type '{cachedTypeName}' is not initialized. Cannot save settings.");
+                CLogger.LogError($"{DEBUG_FLAG} Not initialized, cannot save '{_cachedTypeName}'");
                 return;
             }
 
@@ -136,7 +139,6 @@ namespace CycloneGames.Service.Runtime
                 if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                 {
                     Directory.CreateDirectory(directory);
-                    Debug.Log($"{DEBUG_FLAG} Created directory for settings: {directory}");
                 }
 
                 var bufferWriter = new ArrayBufferWriter<byte>();
@@ -148,14 +150,12 @@ namespace CycloneGames.Service.Runtime
                 NativeFile.WriteAllBytes(_tempFilePath, nativeBytes);
 
                 if (File.Exists(_filePath))
-                {
                     File.Delete(_filePath);
-                }
                 File.Move(_tempFilePath, _filePath);
             }
             catch (Exception ex)
             {
-                Debug.LogError($"{DEBUG_FLAG} Failed to save settings for type '{cachedTypeName}' to '{_filePath}'. Error: {ex.Message}");
+                CLogger.LogError($"{DEBUG_FLAG} Failed to save '{_cachedTypeName}': {ex.Message}");
             }
         }
     }
