@@ -7,10 +7,7 @@
         "Unio",
         "CycloneGames.Logger",
         "Unity.RenderPipelines.Universal.Runtime",
-        "TND.Upscaling.Framework.Runtime.Core",
-        "TND.Upscaling.Framework.Runtime.URP",
-        "TND.Upscaling.FSR3",
-        "TND.Upscaling.SGSR2"
+        "TND.Upscaling.Framework.Runtime.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
