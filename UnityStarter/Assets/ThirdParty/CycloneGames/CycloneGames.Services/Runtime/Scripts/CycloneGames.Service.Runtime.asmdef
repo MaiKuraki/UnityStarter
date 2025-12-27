@@ -6,7 +6,11 @@
         "VYaml.Core",
         "Unio",
         "CycloneGames.Logger",
-        "Unity.RenderPipelines.Universal.Runtime"
+        "Unity.RenderPipelines.Universal.Runtime",
+        "TND.Upscaling.Framework.Runtime.Core",
+        "TND.Upscaling.Framework.Runtime.URP",
+        "TND.Upscaling.FSR3",
+        "TND.Upscaling.SGSR2"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -15,6 +19,32 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.tnd.upscaling",
+            "expression": "1.0.0",
+            "define": "TND_UPSCALING_PRESENT"
+        },
+        {
+            "name": "com.tnd.upscaler.fsr3",
+            "expression": "1.0.0",
+            "define": "FSR_3_PRESENT"
+        },
+        {
+            "name": "com.tnd.upscaler.sgsr2",
+            "expression": "1.0.0",
+            "define": "SGSR_2_PRESENT"
+        },
+        {
+            "name": "com.tnd.upscaler.dlss",
+            "expression": "1.0.0",
+            "define": "DLSS_PRESENT"
+        },
+        {
+            "name": "com.tnd.upscaler.xess",
+            "expression": "1.0.0",
+            "define": "XESS_PRESENT"
+        }
+    ],
     "noEngineReferences": false
 }
