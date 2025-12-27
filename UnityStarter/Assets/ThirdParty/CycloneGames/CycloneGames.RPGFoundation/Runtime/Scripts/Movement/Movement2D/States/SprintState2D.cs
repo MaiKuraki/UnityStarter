@@ -12,9 +12,21 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             float speed = context.GetFinalSpeed(context.Config.sprintSpeed, StateType);
             float horizontalVelocity = context.InputDirection.x * speed;
 
-            velocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
-            context.CurrentSpeed = math.abs(horizontalVelocity);
-            context.CurrentVelocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
+            // For BeltScroll and TopDown modes, Y input controls depth/vertical movement
+            float verticalVelocity = 0f;
+            if (context.Config.movementType == MovementType2D.BeltScroll || 
+                context.Config.movementType == MovementType2D.TopDown)
+            {
+                verticalVelocity = context.InputDirection.y * speed;
+            }
+            else
+            {
+                verticalVelocity = context.Rigidbody.velocity.y;
+            }
+
+            velocity = new float2(horizontalVelocity, verticalVelocity);
+            context.CurrentSpeed = math.length(new float2(horizontalVelocity, verticalVelocity));
+            context.CurrentVelocity = velocity;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
