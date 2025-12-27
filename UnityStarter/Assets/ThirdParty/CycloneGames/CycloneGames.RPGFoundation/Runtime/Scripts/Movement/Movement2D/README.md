@@ -16,10 +16,42 @@ A high-performance, state machine-based 2D character movement system for Unity p
 
 ## 🎯 Perfect For
 
-- **DNF-style Games** - Side-scrolling beat 'em up
+- **DNF-style Games** - Side-scrolling beat 'em up with depth movement
 - **Platformers** - Metroidvania, Castlevania
 - **2D Fighters** - Street Fighter, KOF style
 - **2.5D Games** - Trine, LittleBigPlanet
+- **Top-Down RPGs** - Classic RPG style
+
+## 📦 Movement Types
+
+### MovementType2D Enum
+
+| Type           | Description            | Input                 | Physics          |
+| -------------- | ---------------------- | --------------------- | ---------------- |
+| **Platformer** | Standard side-scroller | X=horizontal          | Y=gravity/jump   |
+| **BeltScroll** | DNF-style with depth   | X=horizontal, Y=depth | Jump via physics |
+| **TopDown**    | Classic RPG view       | X/Y=movement          | No gravity       |
+
+### BeltScroll Mode (DNF-Style)
+
+Belt-scrolling games like DNF (Dungeon Fighter) use a **pseudo-3D** approach where:
+
+- **X axis**: Horizontal movement (left/right)
+- **Y axis**: Simulates depth (up = further away, down = closer)
+- **Jump**: Temporarily adds Y offset via Rigidbody2D physics
+
+```
+┌────────────────────────────────────────────┐
+  DNF-Style Belt-Scrolling Movement
+├────────────────────────────────────────────┤
+  Input.y ↑ = Move "into" the screen (far)
+  Input.y ↓ = Move "out" of the screen (near)
+  Jump = Temporary Y offset (physics-driven)
+  Sprite Sorting = Based on Y position
+└────────────────────────────────────────────┘
+```
+
+**Important**: Use SpriteRenderer's `Sorting Layer` or `Order in Layer` based on Y position for proper depth rendering.
 
 ## 📦 Quick Start
 
@@ -39,6 +71,8 @@ Assign:
 
 ### Step 3: Basic Input
 
+#### Platformer Mode
+
 ```csharp
 using UnityEngine;
 using CycloneGames.RPGFoundation.Runtime.Movement2D;
@@ -54,11 +88,42 @@ public class Player2DController : MonoBehaviour
 
     void Update()
     {
-        // Horizontal input only
+        // Horizontal input only for Platformer
         float horizontal = Input.GetAxis("Horizontal");
         _movement.SetInputDirection(new Vector2(horizontal, 0));
 
         // Jump
+        _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
+
+        // Sprint
+        _movement.SetSprintHeld(Input.GetButton("Sprint"));
+    }
+}
+```
+
+#### BeltScroll Mode (DNF-Style)
+
+```csharp
+using UnityEngine;
+using CycloneGames.RPGFoundation.Runtime.Movement2D;
+
+public class DNFStyleController : MonoBehaviour
+{
+    private MovementComponent2D _movement;
+
+    void Awake()
+    {
+        _movement = GetComponent<MovementComponent2D>();
+    }
+
+    void Update()
+    {
+        // X = horizontal movement, Y = depth movement
+        float horizontal = Input.GetAxis("Horizontal");
+        float vertical = Input.GetAxis("Vertical");
+        _movement.SetInputDirection(new Vector2(horizontal, vertical));
+
+        // Jump (adds temporary Y offset via physics)
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
 
         // Sprint
