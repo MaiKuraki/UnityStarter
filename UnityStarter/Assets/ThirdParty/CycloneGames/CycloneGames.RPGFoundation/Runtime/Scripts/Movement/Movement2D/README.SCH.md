@@ -16,10 +16,42 @@
 
 ## 🎯 完美适用于
 
-- **DNF 类游戏** - 横版格斗
+- **DNF 类游戏** - 带纵深的横版格斗
 - **平台跳跃游戏** - 恶魔城、银河战士
 - **2D 格斗游戏** - 街霸、拳皇风格
 - **2.5D 游戏** - Trine、小小大星球
+- **俯视角 RPG** - 经典 RPG 风格
+
+## 📦 移动类型
+
+### MovementType2D 枚举
+
+| 类型           | 描述            | 输入               | 物理           |
+| -------------- | --------------- | ------------------ | -------------- |
+| **Platformer** | 标准横板卷轴    | X=水平移动         | Y=重力/跳跃    |
+| **BeltScroll** | DNF 风格带纵深  | X=水平移动, Y=纵深 | 跳跃由物理控制 |
+| **TopDown**    | 经典 RPG 俯视角 | X/Y=移动           | 无重力         |
+
+### BeltScroll 模式（DNF 风格）
+
+类似 DNF（地下城与勇士）的横版格斗游戏使用**伪 3D** 方式：
+
+- **X 轴**：水平移动（左/右）
+- **Y 轴**：模拟纵深（上=远，下=近）
+- **跳跃**：通过 Rigidbody2D 物理临时增加 Y 偏移
+
+```
+┌────────────────────────────────────────────┐
+  DNF 风格横版卷轴移动
+├────────────────────────────────────────────┤
+  Input.y ↑ = 向屏幕内移动（远）
+  Input.y ↓ = 向屏幕外移动（近）
+  跳跃 = 临时 Y 偏移（由物理驱动）
+  精灵排序 = 基于 Y 坐标
+└────────────────────────────────────────────┘
+```
+
+**重要**：使用 SpriteRenderer 的 `Sorting Layer` 或基于 Y 坐标的 `Order in Layer` 实现正确的深度渲染。
 
 ## 📦 快速开始
 
@@ -39,6 +71,8 @@
 
 ### 步骤 3：基础输入
 
+#### Platformer 模式
+
 ```csharp
 using UnityEngine;
 using CycloneGames.RPGFoundation.Runtime.Movement2D;
@@ -54,11 +88,42 @@ public class Player2DController : MonoBehaviour
 
     void Update()
     {
-        // 仅水平输入
+        // Platformer 模式仅需水平输入
         float horizontal = Input.GetAxis("Horizontal");
         _movement.SetInputDirection(new Vector2(horizontal, 0));
 
         // 跳跃
+        _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
+
+        // 冲刺
+        _movement.SetSprintHeld(Input.GetButton("Sprint"));
+    }
+}
+```
+
+#### BeltScroll 模式（DNF 风格）
+
+```csharp
+using UnityEngine;
+using CycloneGames.RPGFoundation.Runtime.Movement2D;
+
+public class DNFStyleController : MonoBehaviour
+{
+    private MovementComponent2D _movement;
+
+    void Awake()
+    {
+        _movement = GetComponent<MovementComponent2D>();
+    }
+
+    void Update()
+    {
+        // X = 水平移动, Y = 纵深移动
+        float horizontal = Input.GetAxis("Horizontal");
+        float vertical = Input.GetAxis("Vertical");
+        _movement.SetInputDirection(new Vector2(horizontal, vertical));
+
+        // 跳跃（通过物理添加临时 Y 偏移）
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
 
         // 冲刺
