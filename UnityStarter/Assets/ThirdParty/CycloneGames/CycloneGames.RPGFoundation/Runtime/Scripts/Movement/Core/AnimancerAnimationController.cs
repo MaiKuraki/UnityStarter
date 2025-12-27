@@ -20,6 +20,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         private readonly bool _useAnimatorMode;
         private readonly bool _isValid;
         private readonly HashSet<int> _validParameterHashes;
+        private readonly object _cachedParameters;  // Cached to avoid per-frame reflection
 
         public bool IsValid => _isValid;
 
@@ -35,8 +36,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             _animator = ExtractAnimatorFromAnimancer(animancerComponent);
             _hashToNameMap = parameterNameMap ?? new Dictionary<int, string>();
 
-            // Prefer Animator mode if available (HybridAnimancerComponent)
-            _useAnimatorMode = _animator != null && _animator.isActiveAndEnabled;
+            // Only use Animator mode if Animator has a Controller assigned
+            // Without a Controller, there are no parameters to set
+            _useAnimatorMode = _animator != null && _animator.isActiveAndEnabled && _animator.runtimeAnimatorController != null;
 
             // Cache valid parameter hashes from Animator Controller if using Animator mode
             // Note: We can only cache parameters in Editor mode, in Runtime we'll use try-catch
@@ -56,6 +58,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 #endif
 
             _isValid = _useAnimatorMode || (_animancerComponent != null && IsAnimancerComponentValid());
+
+            // Cache Parameters property once to avoid repeated reflection
+            _cachedParameters = CacheParametersProperty();
         }
 
         private static Animator ExtractAnimatorFromAnimancer(UnityEngine.Object component)
@@ -102,7 +107,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             return component != null && component.isActiveAndEnabled;
         }
 
-        private object GetParametersProperty()
+        private object CacheParametersProperty()
         {
             if (_animancerComponent == null) return null;
 
@@ -126,6 +131,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
                 return null;
             }
 #endif
+        }
+
+        private object GetParametersProperty()
+        {
+            return _cachedParameters;
         }
 
         private void SetParameterValue<T>(int parameterHash, T value)
@@ -163,22 +173,20 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
         /// <summary>
         /// Checks if a parameter exists in the Animator Controller.
-        /// If using Parameters mode, checks if the parameter name exists in the hash map.
+        /// In Editor: validates against cached parameter hashes.
+        /// In Runtime: trusts Animator mode if available (returns true to use Animator API).
         /// </summary>
         private bool IsParameterValid(int parameterHash)
         {
             if (_useAnimatorMode)
             {
-                // If we have cached valid hashes (Editor mode), check against them
+                // Editor mode: check against cached valid hashes
                 if (_validParameterHashes.Count > 0)
                 {
                     return _validParameterHashes.Contains(parameterHash);
                 }
-                // In Runtime mode, if we don't have cached parameters, check if we have the name in our map
-                // If we have the name, it means the parameter should exist in Parameters mode
-                // We'll try Parameters mode as fallback if Animator Controller doesn't have it
-                // This prevents warnings when Animator Controller doesn't have the parameter
-                return false; // Return false to trigger fallback to Parameters mode
+                // Runtime mode: trust Animator API directly, let Unity handle invalid parameters
+                return true;
             }
             else
             {

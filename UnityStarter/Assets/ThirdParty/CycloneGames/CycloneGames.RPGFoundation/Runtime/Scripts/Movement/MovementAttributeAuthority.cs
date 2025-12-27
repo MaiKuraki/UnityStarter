@@ -29,7 +29,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         [SerializeField] private float airControlMultiplier = 1f;
         [SerializeField] private float rotationSpeedMultiplier = 1f;
 
-        private Dictionary<MovementAttribute, float> _multipliers = new Dictionary<MovementAttribute, float>();
+        private Dictionary<MovementAttribute, float> _multipliers = new Dictionary<MovementAttribute, float>(16);
 
         void Awake()
         {
