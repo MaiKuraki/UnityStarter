@@ -13,6 +13,22 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.ai.navigation",
+            "expression": "",
+            "define": "UNITY_AI_NAVIGATION"
+        },
+        {
+            "name": "com.arongranberg.astar",
+            "expression": "",
+            "define": "ASTAR_PATHFINDING"
+        },
+        {
+            "name": "com.projectdawn.navigation",
+            "expression": "",
+            "define": "AGENTS_NAVIGATION"
+        }
+    ],
     "noEngineReferences": false
 }

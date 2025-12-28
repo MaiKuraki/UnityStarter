@@ -13,7 +13,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         MaxJumpCount,
         Gravity,
         AirControlMultiplier,
-        RotationSpeed
+        RotationSpeed,
+        ClimbSpeed,
+        SwimSpeed,
+        FlySpeed
     }
 
     /// <summary>

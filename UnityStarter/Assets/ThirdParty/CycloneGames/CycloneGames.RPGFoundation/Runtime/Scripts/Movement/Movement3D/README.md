@@ -305,6 +305,122 @@ animator.SetFloat("Speed", movement.Velocity.magnitude);
 animator.SetFloat("Speed", movement.CurrentSpeed);
 ```
 
+## 🚀 Advanced Features
+
+### Force System
+
+Apply external forces to the character for jump pads, explosions, wind zones, etc.
+
+```csharp
+// Jump pad / spring
+movement.LaunchCharacter(new Vector3(0, 15, 5));
+
+// Wind zone (call every frame)
+movement.AddForce(windDirection * windStrength);
+
+// Explosion
+movement.AddExplosionForce(100f, explosionPoint, 10f, upwardsModifier: 0.5f);
+```
+
+| Method                                             | Description                     |
+| -------------------------------------------------- | ------------------------------- |
+| `LaunchCharacter(velocity, overrideXY, overrideZ)` | One-time velocity impulse       |
+| `AddForce(force)`                                  | Continuous force (acceleration) |
+| `AddExplosionForce(force, origin, radius)`         | Radial force with falloff       |
+
+### Ceiling Detection
+
+Prevents character from clipping through low ceilings during jumps.
+
+| Parameter                | Description               | Default |
+| ------------------------ | ------------------------- | ------- |
+| `enableCeilingDetection` | Enable/disable feature    | true    |
+| `ceilingCheckDistance`   | Extra distance above head | 0.1     |
+
+### Gap Bridging
+
+Automatically performs a small hop to cross gaps when running fast enough.
+
+```
+Running fast → Detects gap → Silent hop → Lands on other side
+```
+
+| Parameter              | Description                       | Default |
+| ---------------------- | --------------------------------- | ------- |
+| `enableGapBridging`    | Enable/disable feature            | true    |
+| `minSpeedForGapBridge` | Minimum speed to trigger (m/s)    | 4.0     |
+| `maxGapDistance`       | Maximum bridgeable gap width (m)  | 1.5     |
+| `maxGapHeightDiff`     | Max height difference allowed (m) | 0.3     |
+
+> **Note**: Walking slowly will NOT trigger gap bridging - character will fall normally.
+
+### AI Pathfinding System
+
+Support for multiple pathfinding backends with conditional compilation. Select your preferred system in `MovementConfig` → **AI Pathfinding**.
+
+| System            | Package                      | 2D Support | Features                     |
+| ----------------- | ---------------------------- | ---------- | ---------------------------- |
+| Unity NavMesh     | `com.unity.ai.navigation`    | ❌         | OffMeshLink traversal        |
+| A\* Pathfinding   | `com.arongranberg.astar`     | ✅         | Grid/Navmesh graphs          |
+| Agents Navigation | `com.projectdawn.navigation` | ❌         | DOTS-based, high performance |
+
+#### Unified Interface
+
+All providers implement `IPathfindingProvider`:
+
+```csharp
+IPathfindingProvider provider = GetComponent<NavMeshInputProvider>(); // or AStarInputProvider
+provider.SetDestination(targetPosition);
+
+if (provider.HasReachedDestination)
+{
+    // Arrived at destination
+}
+
+// Stop navigation
+provider.StopNavigation();
+```
+
+#### NavMesh Provider
+
+```csharp
+// Requires: com.unity.ai.navigation
+var navInput = GetComponent<NavMeshInputProvider>();
+navInput.SetDestination(targetPosition);
+```
+
+Features:
+
+- Automatic OffMeshLink traversal (jumping gaps)
+- Uses MovementComponent for actual movement (same physics/states)
+
+#### A\* Pathfinding Provider
+
+```csharp
+// Requires: com.arongranberg.astar
+var astarInput = GetComponent<AStarInputProvider>();
+astarInput.SetDestination(targetPosition);
+```
+
+Features:
+
+- Supports Grid, Navmesh, Point graphs
+- Auto-repath support
+- 2D mode available (`is2DMode` toggle in Inspector)
+
+#### Agents Navigation Provider
+
+```csharp
+// Requires: com.projectdawn.navigation (DOTS)
+var agentsNav = GetComponent<AgentsNavigationProvider>();
+agentsNav.SetDestination(targetPosition);
+```
+
+Features:
+
+- ECS-based for large agent counts
+- High performance simulation
+
 ## 🎯 Best Practices
 
 ### ✅ Do
