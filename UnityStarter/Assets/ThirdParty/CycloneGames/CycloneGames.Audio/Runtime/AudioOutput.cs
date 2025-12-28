@@ -107,14 +107,18 @@ namespace CycloneGames.Audio.Runtime
 
             ProcessConnectedNode(0, activeEvent);
 
-            SetSourceProperties(activeEvent.sources);
+            SetSourceProperties(activeEvent);
         }
 
-        private void SetSourceProperties(List<EventSource> sources)
+        private void SetSourceProperties(ActiveEvent activeEvent)
         {
-            for (int i = 0; i < sources.Count; i++)
+            int count = activeEvent.SourceCount;
+            for (int i = 0; i < count; i++)
             {
-                AudioSource eventSource = sources[i].source;
+                var es = activeEvent.GetSource(i);
+                if (!es.IsValid) continue;
+
+                AudioSource eventSource = es.source;
                 eventSource.outputAudioMixerGroup = this.mixerGroup;
                 eventSource.loop = this.loop;
                 eventSource.spatialBlend = this.spatialBlend;
@@ -126,14 +130,12 @@ namespace CycloneGames.Audio.Runtime
                     eventSource.SetCustomCurve(AudioSourceCurveType.CustomRolloff, this.attenuationCurve);
                     eventSource.dopplerLevel = this.dopplerLevel;
                     eventSource.reverbZoneMix = this.ReverbZoneMix;
-                    if (this.ReverbZoneMix == 0)
-                    {
-                        eventSource.bypassReverbZones = true;
-                    }
+                    if (this.ReverbZoneMix == 0) eventSource.bypassReverbZones = true;
                     eventSource.spread = this.Spread;
                 }
             }
         }
+
 
 #if UNITY_EDITOR
 

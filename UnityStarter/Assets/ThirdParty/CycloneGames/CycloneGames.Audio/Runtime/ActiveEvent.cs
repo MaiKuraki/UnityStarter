@@ -1,11 +1,10 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using System.Collections;
-using System.Collections.Generic;
-using UnityEngine;
 using System;
+using System.Buffers;
 using System.Threading;
+using UnityEngine;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -14,6 +13,9 @@ using UnityEditor;
 
 namespace CycloneGames.Audio.Runtime
 {
+    /// <summary>
+    /// Lightweight handle for safe ActiveEvent reference without holding strong reference
+    /// </summary>
     public struct AudioHandle
     {
         private ActiveEvent internalEvent;
@@ -29,442 +31,313 @@ namespace CycloneGames.Audio.Runtime
 
         public void Stop()
         {
-            if (IsValid)
-            {
-                internalEvent.Stop();
-            }
+            if (IsValid) internalEvent.Stop();
         }
 
         public void StopImmediate()
         {
-            if (IsValid)
-            {
-                internalEvent.StopImmediate();
-            }
+            if (IsValid) internalEvent.StopImmediate();
         }
-        
-        // Expose other necessary methods safely
+
         public float EstimatedRemainingTime => IsValid ? internalEvent.EstimatedRemainingTime : 0f;
         public bool IsPlaying => IsValid;
     }
 
     /// <summary>
-    /// The runtime event of an Audio Event that is currently playing
+    /// Zero-allocation struct for audio source data. Use IsValid to check validity.
     /// </summary>
-    [System.Serializable]
+    public struct EventSource
+    {
+        public AudioSource source;
+        public AudioParameter parameter;
+        public AnimationCurve responseCurve;
+        public float startTime;
+
+        public bool IsValid => source != null;
+    }
+
+    /// <summary>
+    /// Runtime event of an AudioEvent that is currently playing
+    /// </summary>
+    [Serializable]
     public class ActiveEvent
     {
-        // Internal generation count for handle validation
-        internal int generation = 0;
-        
-        // Cached reference to the main camera to avoid repeated calls to Camera.main, which can impact performance.
+        internal int generation;
+
         private static Camera mainCamera;
         private static int mainCameraCacheFrame = -1;
 
-        /// <summary>
-        /// The name of the audio event to be played
-        /// </summary>
-        public string name = "";
-        /// <summary>
-        /// The AudioEvent that is being played
-        /// </summary>
-        public AudioEvent rootEvent { get; private set; }
-        /// <summary>
-        /// The AudioSource to play the AudioEvent on
-        /// </summary>
-        public List<EventSource> sources { get; private set; } = new List<EventSource>();
-        /// <summary>
-        /// The latest status of the event
-        /// </summary>
-        public EventStatus status = EventStatus.Initialized;
-        /// <summary>
-        /// The AudioParameters in use by the event
-        /// </summary>
-        private ActiveParameter[] activeParameters;
-        public float timeStarted = 0f;
-        /// <summary>
-        /// The Transform to use to calculate the user's gaze position
-        /// </summary>
-        private Transform gazeReference;
-        /// <summary>
-        /// The transform that the sound should follow in the scene
-        /// </summary>
-        internal Transform emitterTransform = null;
-        private Vector3 lastEmitterPos;
-        /// <summary>
-        /// The text associated with the event, usually for subtitles
-        /// </summary>
-        internal string text = "";
-        /// <summary>
-        /// Time in seconds before the audio file will start playing
-        /// </summary>
-        internal float initialDelay = 0;
-        /// <summary>
-        /// The volume of the event before parameters are applied
-        /// </summary>
-        private float eventVolume = 0;
-        /// <summary>
-        /// The volume that the event is fading to or settled on after fading
-        /// </summary>
-        private float targetVolume = 1;
-        /// <summary>
-        /// The pitch value 
-        /// </summary>
-        private float eventPitch = 1;
-        /// <summary>
-        /// The amount of time in seconds that the event will fade in or out
-        /// </summary>
-        private float targetFadeTime = 0;
-        /// <summary>
-        /// The amount of time in seconds that the event has been fading in or out
-        /// </summary>
-        private float currentFadeTime = 0;
-        /// <summary>
-        /// The amount of time in seconds since the event started
-        /// </summary>
-        private float elapsedTime = 0;
-        /// <summary>
-        /// The previous volume the event was at before starting a fade
-        /// </summary>
-        private float fadeOriginVolume = 0;
-        /// <summary>
-        /// Whether the event is currently fading out to be stopped
-        /// </summary>
-        private bool fadeStopQueued = false;
-        /// <summary>
-        /// Whether the event has played a sound yet
-        /// </summary>
-        private bool hasPlayed = false;
-        /// <summary>
-        /// Whether the event is loading asynchronously
-        /// </summary>
-        internal bool isAsync = false;
-        /// <summary>
-        /// Whether the event is using the user's gaze for a parameter
-        /// </summary>
-        private bool useGaze = false;
-        private bool callbackActivated = false;
-        private bool hasTimeAdvanced = false;
-        internal bool hasSnapshotTransition = false;
-        private CancellationTokenSource cancellationTokenSource;
+        private const int MaxSourcesPerEvent = 8;
+        private const int MaxParametersPerEvent = 8;
 
-        /// <summary>
-        /// The DSP time at which the event is scheduled to play. -1 means play immediately.
-        /// </summary>
+        public string name = "";
+        public AudioEvent rootEvent { get; private set; }
+
+        // Zero-allocation source array with fixed capacity
+        private EventSource[] sourcesArray = new EventSource[MaxSourcesPerEvent];
+        private int sourceCount;
+
+        public int SourceCount => sourceCount;
+        public EventSource GetSource(int index) => index >= 0 && index < sourceCount ? sourcesArray[index] : default;
+
+        // Legacy property for backward compatibility - returns a ReadOnlySpan view
+        internal ReadOnlySpan<EventSource> SourcesSpan => new ReadOnlySpan<EventSource>(sourcesArray, 0, sourceCount);
+
+        public EventStatus status = EventStatus.Initialized;
+
+        private ActiveParameter[] activeParameters;
+        private int activeParameterCount;
+
+        public float timeStarted;
+        private Transform gazeReference;
+        internal Transform emitterTransform;
+        private Vector3 lastEmitterPos;
+        internal string text = "";
+        internal float initialDelay;
+        private float eventVolume;
+        private float targetVolume = 1f;
+        private float eventPitch = 1f;
+        private float targetFadeTime;
+        private float currentFadeTime;
+        private float elapsedTime;
+        private float fadeOriginVolume;
+        private bool fadeStopQueued;
+        private bool hasPlayed;
+        internal bool isAsync;
+        private bool useGaze;
+        private bool callbackActivated;
+        private bool hasTimeAdvanced;
+        internal bool hasSnapshotTransition;
+        private CancellationTokenSource cancellationTokenSource;
         internal double scheduledDspTime = -1;
 
-        /// <summary>
-        /// The time left on the event unless it is stopped or the pitch changes
-        /// </summary>
         public float EstimatedRemainingTime { get; private set; }
-        /// <summary>
-        /// Whether the event has been muted
-        /// </summary>
-        public bool Muted { get; private set; } = false;
-        /// <summary>
-        /// Whether the event has been soloed
-        /// </summary>
-        public bool Soloed { get; private set; } = false;
+        public bool Muted { get; private set; }
+        public bool Soloed { get; private set; }
 
-        /// <summary>
-        /// Delegate for event completion callback
-        /// </summary>
         public delegate void EventCompleted();
-
-        /// <summary>
-        /// Callback when the event stops
-        /// </summary>
         public event EventCompleted CompletionCallback;
 
-        /// <summary>
-        /// Default Constructor for pooling.
-        /// </summary>
         public ActiveEvent()
         {
-            this.sources = new List<EventSource>(4); // Pre-allocate for efficiency
+            sourcesArray = new EventSource[MaxSourcesPerEvent];
+            activeParameters = new ActiveParameter[MaxParametersPerEvent];
         }
 
-        public void Initialize(AudioEvent eventToPlay, Transform emitterTransform)
+        public void Initialize(AudioEvent eventToPlay, Transform emitter)
         {
-            this.generation++; // Increment generation on initialization
-            this.rootEvent = eventToPlay;
-            this.name = eventToPlay.name;
-            this.emitterTransform = emitterTransform;
-            if (emitterTransform != null)
-            {
-                this.lastEmitterPos = emitterTransform.position;
-            }
+            generation++;
+            rootEvent = eventToPlay;
+            name = eventToPlay.name;
+            emitterTransform = emitter;
+            if (emitter != null) lastEmitterPos = emitter.position;
 
-            if (this.cancellationTokenSource != null)
-            {
-                this.cancellationTokenSource.Dispose();
-            }
-            this.cancellationTokenSource = new CancellationTokenSource();
+            cancellationTokenSource?.Dispose();
+            cancellationTokenSource = new CancellationTokenSource();
 
             InitializeParameters();
         }
 
-        /// <summary>
-        /// Internal AudioManager use: starts the audio event
-        /// </summary>
         public void Play()
         {
-            this.timeStarted = Time.time;
-            this.rootEvent.SetActiveEventProperties(this);
+            timeStarted = Time.time;
+            rootEvent.SetActiveEventProperties(this);
 
-            if (this.sources.Count == 0 && !this.hasSnapshotTransition && !this.isAsync)
+            if (sourceCount == 0 && !hasSnapshotTransition && !isAsync)
             {
-                this.status = EventStatus.Error;
+                status = EventStatus.Error;
                 AudioManager.AddPreviousEvent(this);
                 return;
             }
 
             SetStartingSourceProperties();
-
-            this.status = EventStatus.Played;
-
+            status = EventStatus.Played;
             AudioManager.ActiveEvents.Add(this);
             AudioManager.AddPreviousEvent(this);
-            
+
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             AudioManager.TrackEventPlayed();
 #endif
         }
 
-        /// <summary>
-        /// Internal AudioManager use: update fade and RTPC values
-        /// </summary>
         public void Update()
         {
-            if (this.rootEvent == null)
+            if (rootEvent == null)
             {
                 StopImmediate();
                 return;
             }
 
             float dt = Time.deltaTime;
-            this.elapsedTime += dt;
+            elapsedTime += dt;
 
-            if (!this.hasPlayed && this.elapsedTime >= this.initialDelay)
+            if (!hasPlayed && elapsedTime >= initialDelay)
             {
-                this.hasPlayed = true;
+                hasPlayed = true;
                 PlayAllSources();
             }
 
-            if (this.emitterTransform != null)
+            if (emitterTransform != null)
             {
-                Vector3 newPos = this.emitterTransform.position;
-                // Use sqrMagnitude comparison to avoid sqrt calculation
-                Vector3 delta = newPos - this.lastEmitterPos;
-                if (delta.sqrMagnitude > 0.000001f) // 0.001mm threshold
+                Vector3 newPos = emitterTransform.position;
+                Vector3 delta = newPos - lastEmitterPos;
+                if (delta.sqrMagnitude > 0.000001f)
                 {
                     SetAllSourcePositions(newPos);
-                    this.lastEmitterPos = newPos;
+                    lastEmitterPos = newPos;
                 }
             }
 
-            if (this.hasPlayed && this.currentFadeTime < this.targetFadeTime)
+            if (hasPlayed && currentFadeTime < targetFadeTime)
             {
                 UpdateFade(dt);
             }
 
-            if (!this.rootEvent.Output.loop)
+            if (!rootEvent.Output.loop)
             {
                 UpdateRemainingTime();
-                if (this.hasPlayed && !IsAnySourcePlaying())
+                if (hasPlayed && !IsAnySourcePlaying())
                 {
                     StopImmediate();
                 }
             }
 
-            if (this.useGaze)
-            {
-                UpdateGaze();
-            }
+            if (useGaze) UpdateGaze();
 
             UpdateParameters();
             ApplyParameters();
         }
 
-        /// <summary>
-        /// Stops the event using the default fade time if applicable
-        /// </summary>
         public void Stop()
         {
-            if (this.rootEvent.FadeOut <= 0)
+            if (rootEvent.FadeOut <= 0)
             {
                 StopImmediate();
             }
             else
             {
-                this.targetVolume = 0;
-                this.fadeOriginVolume = this.sources[0].source.volume;
-                this.targetFadeTime = this.rootEvent.FadeOut;
-                this.currentFadeTime = 0;
-                this.fadeStopQueued = true;
+                targetVolume = 0;
+                fadeOriginVolume = sourceCount > 0 && sourcesArray[0].IsValid ? sourcesArray[0].source.volume : 0;
+                targetFadeTime = rootEvent.FadeOut;
+                currentFadeTime = 0;
+                fadeStopQueued = true;
             }
         }
 
-        /// <summary>
-        /// Stops the event immediately, ignoring the event's fade time
-        /// </summary>
         public void StopImmediate()
         {
-            // Prevent the event from being stopped multiple times, which can cause issues like returning sources to the pool multiple times.
-            if (this.status == EventStatus.Stopped)
+            if (status == EventStatus.Stopped) return;
+
+            if (cancellationTokenSource != null)
             {
-                return;
+                cancellationTokenSource.Cancel();
+                cancellationTokenSource.Dispose();
+                cancellationTokenSource = null;
             }
 
-            if (this.cancellationTokenSource != null)
+            if (CompletionCallback != null && !callbackActivated)
             {
-                this.cancellationTokenSource.Cancel();
-                this.cancellationTokenSource.Dispose();
-                this.cancellationTokenSource = null;
-            }
-
-            if (this.CompletionCallback != null && !this.callbackActivated)
-            {
-                this.callbackActivated = true;
+                callbackActivated = true;
                 CompletionCallback();
             }
 
-            this.status = EventStatus.Stopped;
-
+            status = EventStatus.Stopped;
             StopAllSources();
-
             AudioManager.DelayRemoveActiveEvent(this);
         }
 
-        /// <summary>
-        /// Set the value of a parameter on this event independent of the root parameter's value
-        /// </summary>
-        /// <param name="localParameter">The AudioParameter set on the root AudioEvent</param>
-        /// <param name="newValue">The new local value on this event instance (does not set the AudioParameter value)</param>
         public void SetLocalParameter(AudioParameter localParameter, float newValue)
         {
-            bool hasParameter = false;
-            ActiveParameter tempParameter;
-            int paramCount = this.activeParameters.Length;
-            for (int i = 0; i < paramCount; i++)
+            for (int i = 0; i < activeParameterCount; i++)
             {
-                tempParameter = this.activeParameters[i];
-                if (tempParameter.rootParameter.parameter == localParameter)
+                var param = activeParameters[i];
+                if (param != null && param.rootParameter.parameter == localParameter)
                 {
-                    hasParameter = true;
-                    tempParameter.CurrentValue = newValue;
+                    param.CurrentValue = newValue;
+                    return;
                 }
-            }
-
-            if (!hasParameter)
-            {
-                //Debug.LogWarningFormat("Audio event {0} does not have parameter {1}", this.rootEvent.name, localParameter.name);
             }
         }
 
         public void OnAsyncLoadCompleted()
         {
-            if (this.status == EventStatus.Stopped)
+            if (status == EventStatus.Stopped)
             {
-                // If the event was stopped while loading, just clean up
                 StopImmediate();
                 return;
             }
 
-            // Now that the clip is loaded, we can apply the final properties and play
             SetStartingSourceProperties();
-            if (this.initialDelay == 0)
+            if (initialDelay == 0)
             {
-                this.hasPlayed = true;
+                hasPlayed = true;
                 PlayAllSources();
             }
         }
 
         public CancellationToken GetCancellationToken()
         {
-            return this.cancellationTokenSource?.Token ?? CancellationToken.None;
+            return cancellationTokenSource?.Token ?? CancellationToken.None;
         }
 
         public bool AddEventSource(AudioClip clip, AudioParameter parameter = null, AnimationCurve responseCurve = null, float startTime = 0)
         {
-            if (this.rootEvent == null)
+            if (rootEvent == null)
             {
-                Debug.LogWarningFormat(this.emitterTransform, "AudioManager: Can't find audio event for {0}!", this.name);
+                Debug.LogWarning($"AudioManager: Can't find audio event for {name}!");
                 StopImmediate();
                 return false;
             }
 
-            EventSource newSource = new EventSource();
-            newSource.source = AudioManager.GetUnusedSource();
-
-            if (newSource.source == null)
+            if (sourceCount >= MaxSourcesPerEvent)
             {
-                Debug.LogWarningFormat(this.emitterTransform, "AudioManager: Can't find unused audio source for event {0}!", this.name);
+                Debug.LogWarning($"AudioManager: Max sources ({MaxSourcesPerEvent}) reached for event {name}");
+                return false;
+            }
+
+            AudioSource source = AudioManager.GetUnusedSource();
+            if (source == null)
+            {
+                Debug.LogWarning($"AudioManager: Can't find unused audio source for event {name}!");
                 StopImmediate();
                 return false;
             }
 
-            newSource.source.loop = this.rootEvent.Output.loop;
-            newSource.source.clip = clip;
-            newSource.parameter = parameter;
-            newSource.responseCurve = responseCurve;
-            newSource.startTime = startTime;
-            sources.Add(newSource);
+            source.loop = rootEvent.Output.loop;
+            source.clip = clip;
+
+            sourcesArray[sourceCount] = new EventSource
+            {
+                source = source,
+                parameter = parameter,
+                responseCurve = responseCurve,
+                startTime = startTime
+            };
+            sourceCount++;
 
             return true;
         }
 
-        /// <summary>
-        /// Internal AudioManager use: initializes the volume based on the event's AudioOutput
-        /// </summary>
-        /// <param name="newVolume">The target volume for the AudioSource (not necessarily the current volume)</param>
-        public void SetVolume(float newVolume)
-        {
-            this.targetVolume = newVolume;
-        }
+        public void SetVolume(float newVolume) => targetVolume = newVolume;
+        public void ModulateVolume(float volumeDelta) => targetVolume += volumeDelta;
 
-        /// <summary>
-        /// Offset the volume by the specified amount
-        /// </summary>
-        /// <param name="volumeDelta">A number between -1 and 1 for volume changes</param>
-        public void ModulateVolume(float volumeDelta)
-        {
-            this.targetVolume += volumeDelta;
-        }
-
-        /// <summary>
-        /// Overwrite the pitch with a new value
-        /// </summary>
-        /// <param name="newPitch">Pitch value between -1 and 3</param>
         public void SetPitch(float newPitch)
         {
             if (newPitch <= 0)
             {
-                Debug.LogWarningFormat("Invalid pitch set in event {0}", this.rootEvent.name);
+                Debug.LogWarning($"Invalid pitch set in event {rootEvent.name}");
                 return;
             }
-
-            this.eventPitch = newPitch;
+            eventPitch = newPitch;
         }
 
-        /// <summary>
-        /// Offset the pitch by the specified amount
-        /// </summary>
-        /// <param name="pitchDelta">A number between -1 and 3 for pitch changes</param>
-        public void ModulatePitch(float pitchDelta)
-        {
-            this.eventPitch += pitchDelta;
-        }
+        public void ModulatePitch(float pitchDelta) => eventPitch += pitchDelta;
 
         public void SetEmitterPosition(Vector3 newPos)
         {
-            if (this.sources.Count > 0)
+            if (sourceCount > 0 && sourcesArray[0].IsValid)
             {
-                this.sources[0].source.transform.position = newPos;
-            }
-            else
-            {
-                Debug.LogWarningFormat(this.emitterTransform, "No audio emitter for active event {0}", this.name);
+                sourcesArray[0].source.transform.position = newPos;
             }
         }
 
@@ -472,144 +345,114 @@ namespace CycloneGames.Audio.Runtime
 
         private void SetStartingSourceProperties()
         {
-            if (this.rootEvent.FadeIn > 0)
+            if (rootEvent.FadeIn > 0)
             {
-                SetallSourceVolumes(0);
-                this.eventVolume = 0;
-                this.fadeOriginVolume = 0;
-                this.currentFadeTime = 0;
-                this.targetFadeTime = this.rootEvent.FadeIn;
+                SetAllSourceVolumes(0);
+                eventVolume = 0;
+                fadeOriginVolume = 0;
+                currentFadeTime = 0;
+                targetFadeTime = rootEvent.FadeIn;
             }
             else
             {
-                SetallSourceVolumes(this.targetVolume);
-                this.eventVolume = this.targetVolume;
+                SetAllSourceVolumes(targetVolume);
+                eventVolume = targetVolume;
             }
 
-            if (this.sources.Count == 0) return; // Don't apply other properties if async loading is not complete
+            if (sourceCount == 0) return;
 
-            SetAllSourcePitches(this.eventPitch);
+            SetAllSourcePitches(eventPitch);
 
-            this.useGaze = HasGazeProperty();
-            if (this.useGaze)
+            useGaze = HasGazeProperty();
+            if (useGaze)
             {
                 UpdateMainCameraCache();
                 if (mainCamera != null)
                 {
-                    this.gazeReference = mainCamera.transform;
+                    gazeReference = mainCamera.transform;
                     UpdateGaze();
                 }
             }
 
             ApplyParameters();
 
-            if (this.initialDelay == 0 && !this.isAsync)
+            if (initialDelay == 0 && !isAsync)
             {
-                this.hasPlayed = true;
+                hasPlayed = true;
                 PlayAllSources();
             }
         }
 
-        private void SetallSourceVolumes(float newVolume)
+        private void SetAllSourceVolumes(float newVolume)
         {
-            int count = this.sources.Count;
-            EventSource eventSource;
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < sourceCount; i++)
             {
-                eventSource = this.sources[i];
-                if (eventSource != null && eventSource.source != null)
-                {
-                    eventSource.source.volume = newVolume;
-                }
+                ref var es = ref sourcesArray[i];
+                if (es.IsValid) es.source.volume = newVolume;
             }
         }
 
         private void SetAllSourcePitches(float newPitch)
         {
-            int count = this.sources.Count;
-            EventSource eventSource;
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < sourceCount; i++)
             {
-                eventSource = this.sources[i];
-                if (eventSource != null && eventSource.source != null)
-                {
-                    eventSource.source.pitch = newPitch;
-                }
+                ref var es = ref sourcesArray[i];
+                if (es.IsValid) es.source.pitch = newPitch;
             }
         }
 
         private void PlayAllSources()
         {
-            int count = this.sources.Count;
-            bool useScheduled = this.scheduledDspTime > 0;
-            EventSource eventSource;
-            
-            for (int i = 0; i < count; i++)
+            bool useScheduled = scheduledDspTime > 0;
+            for (int i = 0; i < sourceCount; i++)
             {
-                eventSource = this.sources[i];
-                if (eventSource == null || eventSource.source == null) continue;
-                
+                ref var es = ref sourcesArray[i];
+                if (!es.IsValid) continue;
+
                 if (useScheduled)
                 {
-                    double playTime = this.scheduledDspTime + eventSource.startTime;
-                    eventSource.source.PlayScheduled(playTime);
+                    es.source.PlayScheduled(scheduledDspTime + es.startTime);
                 }
                 else
                 {
-                    eventSource.source.Play();
-                    // Only set time if not using PlayScheduled, as PlayScheduled handles timing
-                    if (eventSource.startTime > 0)
-                    {
-                        eventSource.source.time = eventSource.startTime;
-                    }
+                    es.source.Play();
+                    if (es.startTime > 0) es.source.time = es.startTime;
                 }
             }
         }
 
         private void StopAllSources()
         {
-            int count = this.sources.Count;
-            EventSource tempSource;
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < sourceCount; i++)
             {
-                tempSource = this.sources[i];
-                if (tempSource != null && tempSource.source != null)
+                ref var es = ref sourcesArray[i];
+                if (es.IsValid)
                 {
-                    tempSource.source.Stop();
-                    // Reset scheduled time to avoid accidental replays or logic errors
-                    tempSource.source.SetScheduledEndTime(double.MaxValue); 
+                    es.source.Stop();
+                    es.source.SetScheduledEndTime(double.MaxValue);
                 }
             }
         }
 
         public void SetAllSourcePositions(Vector3 position)
         {
-            int count = this.sources.Count;
-            EventSource eventSource;
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < sourceCount; i++)
             {
-                eventSource = this.sources[i];
-                if (eventSource != null && eventSource.source != null && eventSource.source.transform != null)
+                ref var es = ref sourcesArray[i];
+                if (es.IsValid && es.source.transform != null)
                 {
-                    eventSource.source.transform.position = position;
+                    es.source.transform.position = position;
                 }
             }
         }
 
         private bool IsAnySourcePlaying()
         {
-            // Early exit optimization: check sources in reverse order for better cache locality
-            int count = this.sources.Count;
-            EventSource eventSource;
-            for (int i = count - 1; i >= 0; i--)
+            for (int i = sourceCount - 1; i >= 0; i--)
             {
-                eventSource = this.sources[i];
-                if (eventSource != null && eventSource.source != null && eventSource.source.isPlaying)
-                {
-                    return true;
-                }
+                ref var es = ref sourcesArray[i];
+                if (es.IsValid && es.source.isPlaying) return true;
             }
-
             return false;
         }
 
@@ -619,135 +462,93 @@ namespace CycloneGames.Audio.Runtime
 
         private void InitializeParameters()
         {
-            this.activeParameters = new ActiveParameter[this.rootEvent.Parameters.Count];
-            for (int i = 0; i < this.activeParameters.Length; i++)
+            var eventParams = rootEvent.Parameters;
+            int count = eventParams?.Count ?? 0;
+            activeParameterCount = 0;
+
+            if (count == 0) return;
+
+            for (int i = 0; i < count && i < MaxParametersPerEvent; i++)
             {
-                if (this.rootEvent.Parameters[i] != null)
+                var p = eventParams[i];
+                if (p != null)
                 {
-                    this.activeParameters[i] = new ActiveParameter(this.rootEvent.Parameters[i]);
+                    activeParameters[activeParameterCount++] = new ActiveParameter(p);
                 }
             }
         }
 
-        /// <summary>
-        /// Internal AudioManager use: Sync changes to the parameters on all ActiveEvents
-        /// </summary>
         private void UpdateParameters()
         {
-            int paramCount = this.activeParameters.Length;
-            AudioEventParameter tempParam;
-            ActiveParameter activeParam;
-            for (int i = 0; i < paramCount; i++)
+            for (int i = 0; i < activeParameterCount; i++)
             {
-                activeParam = this.activeParameters[i];
-                if (activeParam == null) continue;
-                
-                tempParam = activeParam.rootParameter;
-                if (tempParam == null || tempParam.parameter == null)
-                {
-                    continue;
-                }
+                var ap = activeParameters[i];
+                if (ap?.rootParameter?.parameter == null) continue;
 
-                if (tempParam.CurrentValue != tempParam.parameter.CurrentValue)
+                if (ap.rootParameter.CurrentValue != ap.rootParameter.parameter.CurrentValue)
                 {
-                    tempParam.SyncParameter();
+                    ap.rootParameter.SyncParameter();
                 }
             }
         }
 
-        /// <summary>
-        /// Internal AudioManager use: applies parameter changes
-        /// </summary>
         private void ApplyParameters()
         {
-            if (this.activeParameters == null || this.activeParameters.Length == 0)
-            {
-                // No parameters, apply base values directly
-                int sourceCount = this.sources.Count;
-                EventSource tempSource;
-                for (int i = 0; i < sourceCount; i++)
-                {
-                    tempSource = this.sources[i];
-                    if (tempSource != null && tempSource.source != null)
-                    {
-                        if (tempSource.parameter != null && tempSource.responseCurve != null)
-                        {
-                            float volumeScale = tempSource.responseCurve.Evaluate(tempSource.parameter.CurrentValue);
-                            tempSource.source.volume = this.eventVolume * volumeScale;
-                        }
-                        else
-                        {
-                            tempSource.source.volume = this.eventVolume;
-                        }
-                        tempSource.source.pitch = this.eventPitch;
-                    }
-                }
-                return;
-            }
+            float tempVolume = eventVolume;
+            float tempPitch = eventPitch;
 
-            float tempVolume = this.eventVolume;
-            float tempPitch = this.eventPitch;
-            int paramCount = this.activeParameters.Length;
-            ActiveParameter tempParameter;
-            for (int i = 0; i < paramCount; i++)
+            for (int i = 0; i < activeParameterCount; i++)
             {
-                tempParameter = this.activeParameters[i];
-                if (tempParameter?.rootParameter == null) continue;
-                
-                switch (tempParameter.rootParameter.paramType)
+                var param = activeParameters[i];
+                if (param?.rootParameter == null) continue;
+
+                switch (param.rootParameter.paramType)
                 {
                     case ParameterType.Volume:
-                        tempVolume *= tempParameter.CurrentResult;
+                        tempVolume *= param.CurrentResult;
                         break;
                     case ParameterType.Pitch:
-                        tempPitch *= tempParameter.CurrentResult;
+                        tempPitch *= param.CurrentResult;
                         break;
                 }
             }
 
-            int sourceCount2 = this.sources.Count;
-            EventSource tempSource2;
-            for (int i = 0; i < sourceCount2; i++)
+            for (int i = 0; i < sourceCount; i++)
             {
-                tempSource2 = this.sources[i];
-                if (tempSource2 == null || tempSource2.source == null) continue;
-                
-                tempSource2.source.volume = tempVolume;
-                tempSource2.source.pitch = tempPitch;
-                if (tempSource2.parameter != null && tempSource2.responseCurve != null)
+                ref var es = ref sourcesArray[i];
+                if (!es.IsValid) continue;
+
+                es.source.pitch = tempPitch;
+                if (es.parameter != null && es.responseCurve != null)
                 {
-                    float volumeScale = tempSource2.responseCurve.Evaluate(tempSource2.parameter.CurrentValue);
-                    tempSource2.source.volume = this.eventVolume * volumeScale;
+                    float volumeScale = es.responseCurve.Evaluate(es.parameter.CurrentValue);
+                    es.source.volume = eventVolume * volumeScale;
+                }
+                else
+                {
+                    es.source.volume = tempVolume;
                 }
             }
         }
 
-        /// <summary>
-        /// Internal AudioManager use: update volume on ActiveEvents fading in and out
-        /// </summary>
         private void UpdateFade(float dt)
         {
-            // Avoid division by zero
-            if (this.targetFadeTime <= 0.0001f)
+            if (targetFadeTime <= 0.0001f)
             {
-                this.eventVolume = this.targetVolume;
-                SetallSourceVolumes(this.eventVolume);
-                if (this.fadeStopQueued)
-                {
-                    StopImmediate();
-                }
+                eventVolume = targetVolume;
+                SetAllSourceVolumes(eventVolume);
+                if (fadeStopQueued) StopImmediate();
                 return;
             }
 
-            this.currentFadeTime += dt;
-            float percentageFaded = this.currentFadeTime / this.targetFadeTime;
+            currentFadeTime += dt;
+            float t = currentFadeTime / targetFadeTime;
 
-            if (percentageFaded >= 1.0f)
+            if (t >= 1f)
             {
-                this.eventVolume = this.targetVolume;
-                this.currentFadeTime = this.targetFadeTime;
-
-                if (this.fadeStopQueued)
+                eventVolume = targetVolume;
+                currentFadeTime = targetFadeTime;
+                if (fadeStopQueued)
                 {
                     StopImmediate();
                     return;
@@ -755,183 +556,161 @@ namespace CycloneGames.Audio.Runtime
             }
             else
             {
-                // Linear interpolation optimized for performance
-                float volumeDelta = this.targetVolume - this.fadeOriginVolume;
-                this.eventVolume = this.fadeOriginVolume + (volumeDelta * percentageFaded);
+                eventVolume = fadeOriginVolume + (targetVolume - fadeOriginVolume) * t;
             }
 
-            SetallSourceVolumes(this.eventVolume);
+            SetAllSourceVolumes(eventVolume);
         }
 
         public void Reset()
         {
-            // generation is NOT reset here, it increments on Initialize. 
-            // Or we can increment here to invalidate old handles immediately.
-            // Incrementing in Initialize is safer as it marks the start of a new life.
-            
-            this.name = "";
-            this.rootEvent = null;
-            this.sources.Clear(); // Keep capacity
-            this.status = EventStatus.Initialized;
-            this.activeParameters = null;
-            this.timeStarted = 0;
-            this.gazeReference = null;
-            this.emitterTransform = null;
-            this.text = "";
-            this.initialDelay = 0;
-            this.eventVolume = 0;
-            this.targetVolume = 1;
-            this.eventPitch = 1;
-            this.targetFadeTime = 0;
-            this.currentFadeTime = 0;
-            this.elapsedTime = 0;
-            this.fadeOriginVolume = 0;
-            this.fadeStopQueued = false;
-            this.hasPlayed = false;
-            this.isAsync = false;
-            this.useGaze = false;
-            this.callbackActivated = false;
-            this.hasTimeAdvanced = false;
-            this.hasSnapshotTransition = false;
-            this.scheduledDspTime = -1;
-            
-            if (this.cancellationTokenSource != null)
+            name = "";
+            rootEvent = null;
+
+            // Clear sources without reallocating
+            for (int i = 0; i < sourceCount; i++)
             {
-                this.cancellationTokenSource.Cancel();
-                this.cancellationTokenSource.Dispose();
-                this.cancellationTokenSource = null;
+                sourcesArray[i] = default;
+            }
+            sourceCount = 0;
+
+            // Clear parameters without reallocating
+            for (int i = 0; i < activeParameterCount; i++)
+            {
+                activeParameters[i] = null;
+            }
+            activeParameterCount = 0;
+
+            status = EventStatus.Initialized;
+            timeStarted = 0;
+            gazeReference = null;
+            emitterTransform = null;
+            text = "";
+            initialDelay = 0;
+            eventVolume = 0;
+            targetVolume = 1;
+            eventPitch = 1;
+            targetFadeTime = 0;
+            currentFadeTime = 0;
+            elapsedTime = 0;
+            fadeOriginVolume = 0;
+            fadeStopQueued = false;
+            hasPlayed = false;
+            isAsync = false;
+            useGaze = false;
+            callbackActivated = false;
+            hasTimeAdvanced = false;
+            hasSnapshotTransition = false;
+            scheduledDspTime = -1;
+
+            if (cancellationTokenSource != null)
+            {
+                cancellationTokenSource.Cancel();
+                cancellationTokenSource.Dispose();
+                cancellationTokenSource = null;
             }
 
-            this.EstimatedRemainingTime = 0;
-            this.Muted = false;
-            this.Soloed = false;
-            this.CompletionCallback = null;
+            EstimatedRemainingTime = 0;
+            Muted = false;
+            Soloed = false;
+            CompletionCallback = null;
         }
 
-        /// <summary>
-        /// Recalculate estimated time the event will be active for
-        /// </summary>
         private void UpdateRemainingTime()
         {
-            if (this.rootEvent == null)
-            {
-                Debug.LogWarningFormat(this.emitterTransform, "AudioManager: Can't find audio event for {0}!", this.name);
-                StopImmediate();
-                return;
-            }
-
-            if (this.sources.Count == 0)
-            {
-                return;
-            }
-
-            AudioSource mainSource = this.sources[0].source;
-            if (mainSource == null || mainSource.clip == null)
+            if (rootEvent == null)
             {
                 StopImmediate();
                 return;
             }
 
-            // Cache clip length to avoid repeated property access
-            float clipLength = mainSource.clip.length;
+            if (sourceCount == 0) return;
+
+            ref var mainSource = ref sourcesArray[0];
+            if (!mainSource.IsValid || mainSource.source.clip == null)
+            {
+                StopImmediate();
+                return;
+            }
+
+            float clipLength = mainSource.source.clip.length;
             if (clipLength <= 0)
             {
                 StopImmediate();
                 return;
             }
 
-            if (this.rootEvent.Output.loop)
+            if (rootEvent.Output.loop)
             {
-                this.EstimatedRemainingTime = 500;
+                EstimatedRemainingTime = 500;
             }
             else
             {
-                float currentTime = mainSource.time;
-                float pitch = mainSource.pitch;
-                // Avoid division by zero
-                if (pitch > 0.001f)
-                {
-                    this.EstimatedRemainingTime = (clipLength - currentTime) / pitch;
-                }
-                else
-                {
-                    this.EstimatedRemainingTime = clipLength;
-                }
+                float currentTime = mainSource.source.time;
+                float pitch = mainSource.source.pitch;
+                EstimatedRemainingTime = pitch > 0.001f ? (clipLength - currentTime) / pitch : clipLength;
             }
 
-            if (this.hasTimeAdvanced && mainSource.time == 0)
+            if (hasTimeAdvanced && mainSource.source.time == 0)
             {
                 StopImmediate();
                 return;
             }
 
-            if (this.EstimatedRemainingTime <= this.rootEvent.FadeOut)
+            if (EstimatedRemainingTime <= rootEvent.FadeOut)
             {
                 Stop();
             }
         }
 
-        /// <summary>
-        /// Check if any of the parameters on the event use gaze for the value
-        /// </summary>
-        /// <returns>Whether at least one parameter uses gaze</returns>
         private bool HasGazeProperty()
         {
-            for (int i = 0; i < this.rootEvent.Parameters.Count; i++)
-            {
-                AudioParameter tempParam = this.rootEvent.Parameters[i].parameter;
+            var eventParams = rootEvent.Parameters;
+            int count = eventParams?.Count ?? 0;
 
-                if (tempParam == null)
+            for (int i = 0; i < count; i++)
+            {
+                var p = eventParams[i]?.parameter;
+                if (p == null)
                 {
-                    Debug.LogWarningFormat("Audio event '{0}' has a null parameter!", this.rootEvent.name);
+                    Debug.LogWarning($"Audio event '{rootEvent.name}' has a null parameter!");
                     continue;
                 }
-
-                if (tempParam.UseGaze)
-                {
-                    return true;
-                }
+                if (p.UseGaze) return true;
             }
-
             return false;
         }
 
-        /// <summary>
-        /// Get the user's head position relative to the audio event, and set the property's value
-        /// </summary>
         private void UpdateGaze()
         {
-            if (this.sources.Count == 0) return;
+            if (sourceCount == 0) return;
 
-            AudioSource mainSource = this.sources[0].source;
-            if (mainSource == null) return;
+            ref var mainSource = ref sourcesArray[0];
+            if (!mainSource.IsValid) return;
 
-            if (this.gazeReference == null)
+            if (gazeReference == null)
             {
                 UpdateMainCameraCache();
                 if (mainCamera != null)
                 {
-                    this.gazeReference = mainCamera.transform;
+                    gazeReference = mainCamera.transform;
                 }
                 else
                 {
-                    // No main camera found, disable gaze updates for this event.
-                    this.useGaze = false;
+                    useGaze = false;
                     return;
                 }
             }
 
-            Vector3 posDelta = this.gazeReference.position - mainSource.transform.position;
-            float gazeAngle = Mathf.Abs(180 - Vector3.Angle(this.gazeReference.forward, posDelta));
+            Vector3 posDelta = gazeReference.position - mainSource.source.transform.position;
+            float gazeAngle = Mathf.Abs(180 - Vector3.Angle(gazeReference.forward, posDelta));
 
-            int paramCount = this.activeParameters.Length;
-            ActiveParameter tempParameter;
-            for (int i = 0; i < paramCount; i++)
+            for (int i = 0; i < activeParameterCount; i++)
             {
-                tempParameter = this.activeParameters[i];
-                if (tempParameter.rootParameter.parameter.UseGaze)
+                var param = activeParameters[i];
+                if (param.rootParameter.parameter.UseGaze)
                 {
-                    tempParameter.CurrentValue = gazeAngle;
+                    param.CurrentValue = gazeAngle;
                 }
             }
         }
@@ -950,101 +729,74 @@ namespace CycloneGames.Audio.Runtime
 
         #region Editor
 
-        /// <summary>
-        /// Set whether the defined parameter on the event uses the player's gaze angle
-        /// </summary>
-        /// <param name="toggle"></param>
-        /// <param name="gazeParameter"></param>
         public void ToggleGaze(bool toggle, AudioParameter gazeParameter)
         {
-            this.useGaze = toggle;
-
+            useGaze = toggle;
             if (!toggle)
             {
-            int paramCount = this.activeParameters.Length;
-            ActiveParameter tempParameter;
-            for (int i = 0; i < paramCount; i++)
-            {
-                tempParameter = this.activeParameters[i];
-                if (tempParameter.rootParameter.parameter == gazeParameter)
+                for (int i = 0; i < activeParameterCount; i++)
                 {
-                    tempParameter.Reset();
+                    var param = activeParameters[i];
+                    if (param.rootParameter.parameter == gazeParameter)
+                    {
+                        param.Reset();
+                    }
                 }
             }
-            }
         }
 
-        /// <summary>
-        /// Toggles whether the event is audible
-        /// </summary>
-        public void ToggleMute()
-        {
-            SetMute(!this.Muted);
-        }
+        public void ToggleMute() => SetMute(!Muted);
 
-        /// <summary>
-        /// Sets whether the event is audible
-        /// </summary>
-        /// <param name="toggle">Whether sound should be made inaudible</param>
         public void SetMute(bool toggle)
         {
-            this.Muted = toggle;
-            int count = this.sources.Count;
-            EventSource eventSource;
-            for (int i = 0; i < count; i++)
+            Muted = toggle;
+            for (int i = 0; i < sourceCount; i++)
             {
-                eventSource = this.sources[i];
-                if (eventSource != null && eventSource.source != null)
-                {
-                    eventSource.source.mute = toggle;
-                }
+                ref var es = ref sourcesArray[i];
+                if (es.IsValid) es.source.mute = toggle;
             }
         }
 
-        /// <summary>
-        /// Toggles whether only this sound (and other soloed sounds) are audible
-        /// </summary>
         public void ToggleSolo()
         {
-            this.Soloed = !this.Soloed;
+            Soloed = !Soloed;
             AudioManager.ApplyActiveSolos();
         }
 
-        /// <summary>
-        /// Mutes all other non-soloed events
-        /// </summary>
-        /// <param name="toggle">Whether this event is part of the isolated audible events</param>
         public void SetSolo(bool toggle)
         {
-            this.Soloed = toggle;
+            Soloed = toggle;
             AudioManager.ApplyActiveSolos();
         }
 
-        /// <summary>
-        /// Internal AudioManager use: applies solo property to AudioSource, ignoring "mute" property
-        /// </summary>
-        public void ApplySolo()
-        {
-            SetMute(!this.Soloed);
-        }
-
-        /// <summary>
-        /// Internal AudioManager use: clears all solo properties, and reverts to mute property
-        /// </summary>
+        public void ApplySolo() => SetMute(!Soloed);
         public void ClearSolo()
         {
-            this.Soloed = false;
-            SetMute(this.Muted);
+            Soloed = false;
+            SetMute(Muted);
+        }
+
+        // Legacy compatibility: provide sources as list for code that expects List<EventSource>
+        private System.Collections.Generic.List<EventSource> sourcesList;
+        public System.Collections.Generic.List<EventSource> sources
+        {
+            get
+            {
+                if (sourcesList == null) sourcesList = new System.Collections.Generic.List<EventSource>(MaxSourcesPerEvent);
+                sourcesList.Clear();
+                for (int i = 0; i < sourceCount; i++)
+                {
+                    sourcesList.Add(sourcesArray[i]);
+                }
+                return sourcesList;
+            }
         }
 
 #if UNITY_EDITOR
 
         public void DisplayProperties()
         {
-            if (this.sources.Count == 0 || this.sources[0] == null || this.sources[0].source == null)
-            {
-                return;
-            }
+            if (sourceCount == 0 || !sourcesArray[0].IsValid) return;
 
             if (emitterTransform != null)
             {
@@ -1052,7 +804,7 @@ namespace CycloneGames.Audio.Runtime
             }
             else
             {
-                EditorGUILayout.LabelField("Emitter:" + this.sources[0].source.gameObject.name);
+                EditorGUILayout.LabelField("Emitter:" + sourcesArray[0].source.gameObject.name);
             }
         }
 
@@ -1064,19 +816,12 @@ namespace CycloneGames.Audio.Runtime
 
         public virtual void DrawNode(int id, Rect window)
         {
-            GUI.Window(id, window, DrawWindow, this.name);
+            GUI.Window(id, window, DrawWindow, name);
         }
 
 #endif
 
         #endregion
-    }
-    public class EventSource
-    {
-        public AudioSource source = null;
-        public AudioParameter parameter = null;
-        public AnimationCurve responseCurve = null;
-        public float startTime = 0;
     }
 
     public enum EventStatus
