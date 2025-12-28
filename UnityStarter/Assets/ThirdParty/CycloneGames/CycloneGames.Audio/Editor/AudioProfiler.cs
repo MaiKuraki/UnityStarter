@@ -122,19 +122,20 @@ namespace CycloneGames.Audio.Editor
             for (int i = 0; i < currentEvents.Length; i++)
             {
                 ActiveEvent tempActiveEvent = activeEvents[i];
-                if (tempActiveEvent.sources.Count == 0)
-                {
-                    //Debug.LogFormat("No sources for event {0}", tempActiveEvent.name);
-                    //continue;
-                }
                 ProfilerEvent tempProfilerEvent = new ProfilerEvent();
                 tempProfilerEvent.eventName = tempActiveEvent.name;
-                if (tempActiveEvent.sources != null && tempActiveEvent.sources.Count > 0)
+                
+                if (tempActiveEvent.SourceCount > 0)
                 {
-                    tempProfilerEvent.clip = tempActiveEvent.sources[0].source.clip;
-                    tempProfilerEvent.emitterObject = tempActiveEvent.sources[0].source.gameObject;
-                    tempProfilerEvent.bus = tempActiveEvent.rootEvent.Output.mixerGroup;
+                    var source = tempActiveEvent.GetSource(0);
+                    if (source.IsValid)
+                    {
+                        tempProfilerEvent.clip = source.source.clip;
+                        tempProfilerEvent.emitterObject = source.source.gameObject;
+                        tempProfilerEvent.bus = tempActiveEvent.rootEvent.Output.mixerGroup;
+                    }
                 }
+                
                 tempProfilerEvent.activeEvent = tempActiveEvent;
                 currentEvents[i] = tempProfilerEvent;
             }
