@@ -207,7 +207,8 @@ AudioPoolConfig.SetConfig(handle.AssetObject as AudioPoolConfig);
 AudioManager.ReloadPoolConfig();
 ```
 
-> [!NOTE] > `ReloadPoolConfig()` 会更新池大小限制，但保留现有的 AudioSource。
+> [!NOTE]
+> `ReloadPoolConfig()` 会更新池大小限制，但保留现有的 AudioSource。
 
 #### 运行时监控
 
