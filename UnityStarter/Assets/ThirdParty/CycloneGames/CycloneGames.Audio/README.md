@@ -207,7 +207,8 @@ AudioPoolConfig.SetConfig(handle.AssetObject as AudioPoolConfig);
 AudioManager.ReloadPoolConfig();
 ```
 
-> [!NOTE] > `ReloadPoolConfig()` updates pool size limits but preserves existing AudioSources.
+> [!NOTE]
+> `ReloadPoolConfig()` updates pool size limits but preserves existing AudioSources.
 
 #### Runtime Monitoring
 
