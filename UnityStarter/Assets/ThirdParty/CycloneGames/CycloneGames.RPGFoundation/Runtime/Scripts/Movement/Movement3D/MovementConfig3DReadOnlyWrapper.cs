@@ -30,7 +30,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         // 3D-specific properties
         public float rollDistance => _config.rollDistance;
         public float rollDuration => _config.rollDuration;
-        public float climbSpeed => _config.climbSpeed;
+        public float climbSpeed => _config.ladderClimbSpeed;
         public float swimSpeed => _config.swimSpeed;
         public float flySpeed => _config.flySpeed;
         public float gravity => _config.gravity;

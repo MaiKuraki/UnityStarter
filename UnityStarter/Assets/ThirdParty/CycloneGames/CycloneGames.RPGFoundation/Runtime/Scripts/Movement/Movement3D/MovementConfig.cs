@@ -8,7 +8,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         // Special Movement - displayed in Custom Editor
         public float rollDistance = 5f;
         public float rollDuration = 0.5f;
-        public float climbSpeed = 2f;
         public float swimSpeed = 3f;
         public float flySpeed = 6f;
 
@@ -46,6 +45,28 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         [Tooltip("Maximum height difference allowed for gap bridging (m).")]
         public float maxGapHeightDiff = 0.3f;
 
+        // Ladder Climbing - displayed in Custom Editor
+        public bool enableLadderClimbing = true;
+        public float ladderClimbSpeed = 3f;
+        public LayerMask ladderLayer = 0;
+
+        // Wall Climbing - displayed in Custom Editor
+        public bool enableWallClimbing = false;
+        public float wallClimbSpeed = 2f;
+        public LayerMask wallLayer = 0;
+        public float wallCheckDistance = 0.5f;
+        public float wallClingDuration = 0.5f;
+        public float wallSlideSpeed = 2f;
+
+        // Wall Jump - displayed in Custom Editor
+        public bool enableWallJump = true;
+        public float wallJumpForceHorizontal = 8f;
+        public float wallJumpForceVertical = 10f;
+        public float wallJumpCooldown = 0.1f;
+        [Tooltip("Minimum angle difference (degrees) to consider as different wall for continuous wall jump.")]
+        [Range(30f, 120f)]
+        public float differentWallAngle = 60f;
+
         // AI Pathfinding - displayed in Custom Editor
         [Tooltip("Pathfinding system to use for AI navigation. Requires corresponding package installed.")]
         public PathfindingSystem pathfindingSystem = PathfindingSystem.None;
@@ -54,10 +75,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         public float rotationSpeed = 10f;
 
         // Animation Parameters (Additional) - displayed in Custom Editor
-        [Tooltip("Parameter name for roll trigger (Trigger)")]
         public string rollTrigger = "Roll";
-
-        [Tooltip("Parameter name for climbing state (Bool)")]
         public string climbingParameter = "IsClimbing";
+        public string wallSlidingParameter = "IsWallSliding";
     }
 }

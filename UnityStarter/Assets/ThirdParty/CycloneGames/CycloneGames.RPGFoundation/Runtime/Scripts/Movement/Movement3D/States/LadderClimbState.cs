@@ -2,11 +2,7 @@ using Unity.Mathematics;
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 {
-    /// <summary>
-    /// Climbing state for ladder/wall climbing.
-    /// Vertical movement only, no gravity, controlled by input.
-    /// </summary>
-    public class ClimbState : MovementStateBase
+    public class LadderClimbState : MovementStateBase
     {
         public override MovementStateType StateType => MovementStateType.Climb;
 
@@ -27,9 +23,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
-            float climbSpeed = context.GetAttributeValue(MovementAttribute.ClimbSpeed, context.Config.climbSpeed);
+            float climbSpeed = context.GetAttributeValue(MovementAttribute.ClimbSpeed, context.Config.ladderClimbSpeed);
             
-            // Y input controls vertical climbing, X input controls horizontal movement on ladder
             float verticalInput = context.InputDirection.z;
             float horizontalInput = context.InputDirection.x;
             
@@ -65,14 +60,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
         {
-            // Exit climbing via jump (detach from ladder)
             if (context.JumpPressed)
             {
                 return StatePool<MovementStateBase>.GetState<JumpState>();
             }
 
-            // External state change request handles returning to other states
             return null;
         }
     }
 }
+
