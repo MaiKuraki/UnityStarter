@@ -40,14 +40,27 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private SerializedProperty _inputXParameter;
         private SerializedProperty _inputYParameter;
 
+        // Moving Platform
+        private SerializedProperty _enableMovingPlatform;
+        private SerializedProperty _inheritPlatformRotation;
+        private SerializedProperty _inheritPlatformMomentum;
+        private SerializedProperty _platformLayer;
+
         // Foldout states
         private bool _showMovementTypeHelp = false;
         private bool _showAirMovementHelp = false;
         private bool _showPhysicsHelp = false;
         private bool _showGroundDetectionHelp = false;
+        private bool _showMovingPlatformHelp = false;
+        private bool _showGapBridgingHelp = false;
         private bool _showOtherHelp = false;
         private bool _showFacingHelp = false;
         private bool _showAnimationSystemHelp = false;
+
+        // Gap Bridging
+        private SerializedProperty _enableGapBridging;
+        private SerializedProperty _minSpeedForGapBridge;
+        private SerializedProperty _maxGapDistance;
 
         private void OnEnable()
         {
@@ -81,6 +94,13 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             _rollTrigger = serializedObject.FindProperty("rollTrigger");
             _inputXParameter = serializedObject.FindProperty("inputXParameter");
             _inputYParameter = serializedObject.FindProperty("inputYParameter");
+            _enableMovingPlatform = serializedObject.FindProperty("enableMovingPlatform");
+            _inheritPlatformRotation = serializedObject.FindProperty("inheritPlatformRotation");
+            _inheritPlatformMomentum = serializedObject.FindProperty("inheritPlatformMomentum");
+            _platformLayer = serializedObject.FindProperty("platformLayer");
+            _enableGapBridging = serializedObject.FindProperty("enableGapBridging");
+            _minSpeedForGapBridge = serializedObject.FindProperty("minSpeedForGapBridge");
+            _maxGapDistance = serializedObject.FindProperty("maxGapDistance");
         }
 
         public override void OnInspectorGUI()
@@ -339,6 +359,97 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                         "  - Set initial facing: true = right, false = left\n" +
                         "• TopDown Mode: NOT USED - relies on Animator BlendTree for 4-direction sprites\n" +
                         "• Best Practice: Set this based on your character's initial spawn direction",
+                        MessageType.Info);
+                    EditorGUI.indentLevel--;
+                }
+                EditorGUILayout.EndVertical();
+
+                EditorGUILayout.Space(5);
+
+                // Moving Platform - For Platformer and BeltScroll
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                EditorGUILayout.LabelField("Moving Platform (Platformer/BeltScroll)", EditorStyles.miniLabel);
+                EditorGUILayout.PropertyField(_enableMovingPlatform, new GUIContent(
+                    "Enable Moving Platform",
+                    "Enable moving platform support. Character will move with platforms.\n" +
+                    "Requires platform to have a Rigidbody2D component."));
+
+                if (_enableMovingPlatform.boolValue)
+                {
+                    EditorGUI.indentLevel++;
+                    EditorGUILayout.PropertyField(_inheritPlatformRotation, new GUIContent(
+                        "Inherit Platform Rotation",
+                        "Character will rotate with rotating platforms.\n" +
+                        "2D platforms typically only translate, so this is disabled by default."));
+                    EditorGUILayout.PropertyField(_inheritPlatformMomentum, new GUIContent(
+                        "Inherit Platform Momentum",
+                        "Character keeps platform velocity when jumping off.\n" +
+                        "Creates natural feeling when jumping from moving platforms."));
+                    EditorGUILayout.PropertyField(_platformLayer, new GUIContent(
+                        "Platform Layer",
+                        "LayerMask for detecting moving platforms.\n" +
+                        "If empty, uses Ground Layer instead."));
+                    EditorGUI.indentLevel--;
+                }
+
+                EditorGUILayout.Space(3);
+                EditorGUI.indentLevel++;
+                _showMovingPlatformHelp = EditorGUILayout.Foldout(_showMovingPlatformHelp, "Help & Details", EditorStyles.foldout);
+                EditorGUI.indentLevel--;
+                if (_showMovingPlatformHelp)
+                {
+                    EditorGUI.indentLevel++;
+                    EditorGUILayout.HelpBox(
+                        "Moving Platform Support (2D):\n" +
+                        "• Platform Requirements:\n" +
+                        "  - Must have a Collider2D component\n" +
+                        "  - Layer must match Platform Layer (or Ground Layer if empty)\n" +
+                        "  - Rigidbody2D is optional (velocity calculated from Transform delta)\n" +
+                        "• Features:\n" +
+                        "  - Character automatically moves with platform\n" +
+                        "  - Supports 2D translation and rotation\n" +
+                        "  - Zero allocation design\n" +
+                        "• Inherit Rotation: Typically disabled for 2D games\n" +
+                        "  - Enable only for rotating platforms",
+                        MessageType.Info);
+                    EditorGUI.indentLevel--;
+                }
+                EditorGUILayout.EndVertical();
+                EditorGUILayout.Space(5);
+
+                // Gap Bridging (Mario Style) - For Platformer only
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                EditorGUILayout.LabelField("Gap Bridging (Mario Style)", EditorStyles.miniLabel);
+                EditorGUILayout.PropertyField(_enableGapBridging, new GUIContent(
+                    "Enable Gap Bridging",
+                    "Maintain grounded state across small gaps when running fast.\n" +
+                    "Character 'slides' over gaps like Mario running fast."));
+
+                if (_enableGapBridging.boolValue)
+                {
+                    EditorGUI.indentLevel++;
+                    EditorGUILayout.PropertyField(_minSpeedForGapBridge, new GUIContent(
+                        "Min Speed",
+                        "Minimum speed (m/s) required to bridge gaps."));
+                    EditorGUILayout.PropertyField(_maxGapDistance, new GUIContent(
+                        "Max Gap Distance",
+                        "Maximum gap width (m) that can be bridged."));
+                    EditorGUI.indentLevel--;
+                }
+
+                EditorGUILayout.Space(3);
+                EditorGUI.indentLevel++;
+                _showGapBridgingHelp = EditorGUILayout.Foldout(_showGapBridgingHelp, "Help & Details", EditorStyles.foldout);
+                EditorGUI.indentLevel--;
+                if (_showGapBridgingHelp)
+                {
+                    EditorGUI.indentLevel++;
+                    EditorGUILayout.HelpBox(
+                        "Gap Bridging (Mario Style):\n" +
+                        "• When running fast, character stays grounded over small gaps\n" +
+                        "• Checks for ground ahead when current ground is missing\n" +
+                        "• Creates fluid running experience like classic Mario games\n" +
+                        "• Only active in Platformer mode",
                         MessageType.Info);
                     EditorGUI.indentLevel--;
                 }
