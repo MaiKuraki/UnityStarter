@@ -215,7 +215,35 @@ if (astarInput.HasReachedDestination)
 
 - 使用 A\* 原生 2D Grid/Point 图
 - 在 XY 平面工作
+- 在 XY 平面工作
 - 通过反射调用 `MovementComponent2D.SetInputDirection`
+
+### 🧗 攀爬系统 (2D)
+
+为 2D 平台和俯视游戏提供完整的攀爬支持：
+
+| 模式              | 进入条件         | 移动方式                  | 场景                 |
+| ----------------- | ---------------- | ------------------------- | -------------------- |
+| **梯子 (Ladder)** | 触发区域 + 按上  | 上/下/左/右               | 标准梯子             |
+| **贴墙 (Wall)**   | 空中 + 墙 + 输入 | 上/下 (藤蔓/网格: 全方向) | 贴墙滑落, 藤蔓, 网格 |
+
+#### 设置步骤
+
+1. 在 `MovementConfig2D` 中启用 `enableLadderClimbing` 或 `enableWallClimbing`。
+2. 指定 `Ladder Layer` 和 `Wall Layer`（例如 "Ladder", "Wall"）。
+3. 为梯子区域创建 Trigger Collider 2D。
+4. 对于贴墙攀爬，确保角色的 Collider 能够检测到墙的 Layer。
+
+#### 2D 蹬墙跳
+
+- **机制**: 反转 X 轴速度并施加 Y 轴速度。
+- **连续性**: 支持在墙壁间连续跳跃（类似洛克人/马里奥机制）。
+- **配置**:
+  ```csharp
+  config.wallJumpForceX = 8f;
+  config.wallJumpForceY = 10f;
+  config.wallSlideSpeed = 2f;
+  ```
 
 ## ⚙️ 配置
 
