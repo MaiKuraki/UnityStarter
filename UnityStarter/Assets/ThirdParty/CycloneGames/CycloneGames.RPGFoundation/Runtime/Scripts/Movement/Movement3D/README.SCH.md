@@ -303,6 +303,122 @@ animator.SetFloat("Speed", movement.Velocity.magnitude);
 animator.SetFloat("Speed", movement.CurrentSpeed);
 ```
 
+## 🚀 高级功能
+
+### 力场系统
+
+为角色施加外部力，用于跳板、爆炸、风场等效果。
+
+```csharp
+// 跳板/弹簧
+movement.LaunchCharacter(new Vector3(0, 15, 5));
+
+// 风场（每帧调用）
+movement.AddForce(windDirection * windStrength);
+
+// 爆炸
+movement.AddExplosionForce(100f, explosionPoint, 10f, upwardsModifier: 0.5f);
+```
+
+| 方法                                               | 说明             |
+| -------------------------------------------------- | ---------------- |
+| `LaunchCharacter(velocity, overrideXY, overrideZ)` | 一次性速度冲量   |
+| `AddForce(force)`                                  | 持续力（加速度） |
+| `AddExplosionForce(force, origin, radius)`         | 带衰减的径向力   |
+
+### 天花板检测
+
+防止角色在跳跃时穿透低矮的天花板。
+
+| 参数                     | 说明             | 默认值 |
+| ------------------------ | ---------------- | ------ |
+| `enableCeilingDetection` | 启用/禁用功能    | true   |
+| `ceilingCheckDistance`   | 头顶额外检测距离 | 0.1    |
+
+### 沟槽跨越
+
+当跑步速度足够快时，自动进行小跳来跨越沟槽。
+
+```
+快速奔跑 → 检测到沟槽 → 静默小跳 → 落到对面
+```
+
+| 参数                   | 说明                     | 默认值 |
+| ---------------------- | ------------------------ | ------ |
+| `enableGapBridging`    | 启用/禁用功能            | true   |
+| `minSpeedForGapBridge` | 触发所需的最低速度 (m/s) | 4.0    |
+| `maxGapDistance`       | 可跨越的最大沟槽宽度 (m) | 1.5    |
+| `maxGapHeightDiff`     | 允许的最大高度差 (m)     | 0.3    |
+
+> **注意**：慢走时不会触发沟槽跨越 - 角色会正常掉落。
+
+### AI 寻路系统
+
+支持多种寻路后端，使用条件编译。在 `MovementConfig` → **AI Pathfinding** 中选择你偏好的系统。
+
+| 系统              | 包名                         | 2D 支持 | 特性              |
+| ----------------- | ---------------------------- | ------- | ----------------- |
+| Unity NavMesh     | `com.unity.ai.navigation`    | ❌      | OffMeshLink 遍历  |
+| A\* Pathfinding   | `com.arongranberg.astar`     | ✅      | Grid/Navmesh 图   |
+| Agents Navigation | `com.projectdawn.navigation` | ❌      | DOTS 驱动，高性能 |
+
+#### 统一接口
+
+所有提供器都实现 `IPathfindingProvider`：
+
+```csharp
+IPathfindingProvider provider = GetComponent<NavMeshInputProvider>(); // 或 AStarInputProvider
+provider.SetDestination(targetPosition);
+
+if (provider.HasReachedDestination)
+{
+    // 已到达目的地
+}
+
+// 停止导航
+provider.StopNavigation();
+```
+
+#### NavMesh 提供器
+
+```csharp
+// 需要: com.unity.ai.navigation
+var navInput = GetComponent<NavMeshInputProvider>();
+navInput.SetDestination(targetPosition);
+```
+
+功能特性：
+
+- 自动 OffMeshLink 遍历（跳跃沟壑）
+- 使用 MovementComponent 进行实际移动（相同的物理/状态）
+
+#### A\* Pathfinding 提供器
+
+```csharp
+// 需要: com.arongranberg.astar
+var astarInput = GetComponent<AStarInputProvider>();
+astarInput.SetDestination(targetPosition);
+```
+
+功能特性：
+
+- 支持 Grid、Navmesh、Point 图
+- 自动重新寻路支持
+- 可启用 2D 模式（Inspector 中的 `is2DMode` 开关）
+
+#### Agents Navigation 提供器
+
+```csharp
+// 需要: com.projectdawn.navigation (DOTS)
+var agentsNav = GetComponent<AgentsNavigationProvider>();
+agentsNav.SetDestination(targetPosition);
+```
+
+功能特性：
+
+- 基于 ECS，适合大量代理
+- 高性能模拟
+
 ## 🎯 最佳实践
 
 ### ✅ 应该

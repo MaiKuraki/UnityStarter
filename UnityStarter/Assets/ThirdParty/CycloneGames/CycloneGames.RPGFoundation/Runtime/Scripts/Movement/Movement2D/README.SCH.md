@@ -168,6 +168,55 @@ _movement.SetInputDirection(new Vector2(-1, 0)); // 朝左
 config.airControlMultiplier = 0.5f; // 空中 50% 控制力
 ```
 
+### 沟槽跨越（马里奥风格）
+
+当快速奔跑时，角色会保持接地状态跨越小沟槽 - 就像马里奥一样！
+
+```
+快速奔跑 → 未检测到地面 → 检查前方 → 发现地面 → 保持接地！
+```
+
+| 参数                   | 说明                     | 默认值 |
+| ---------------------- | ------------------------ | ------ |
+| `enableGapBridging`    | 启用/禁用功能            | true   |
+| `minSpeedForGapBridge` | 触发所需的最低速度 (m/s) | 4.0    |
+| `maxGapDistance`       | 可跨越的最大沟槽宽度 (m) | 1.0    |
+
+> **注意**：慢走时不会触发沟槽跨越 - 角色会正常掉入沟槽。
+
+### AI 寻路（2D）
+
+对于 2D 游戏，推荐使用 **A\* Pathfinding Project**，因为它原生支持 2D Grid 图。
+
+| 系统              | 2D 支持 | 原因              |
+| ----------------- | ------- | ----------------- |
+| A\* Pathfinding   | ✅      | 原生 2D Grid 支持 |
+| Unity NavMesh     | ❌      | 仅 XZ 平面        |
+| Agents Navigation | ❌      | 专注 3D DOTS      |
+
+#### 在 2D 中使用 A\* PathFinding
+
+```csharp
+// 需要: com.arongranberg.astar
+var astarInput = GetComponent<AStarInputProvider>();
+
+// 重要：在 Inspector 中启用 2D 模式
+// - is2DMode: true
+
+astarInput.SetDestination(targetPosition);
+
+if (astarInput.HasReachedDestination)
+{
+    // 已到达目标
+}
+```
+
+功能特性：
+
+- 使用 A\* 原生 2D Grid/Point 图
+- 在 XY 平面工作
+- 通过反射调用 `MovementComponent2D.SetInputDirection`
+
 ## ⚙️ 配置
 
 ### MovementConfig2D 参数

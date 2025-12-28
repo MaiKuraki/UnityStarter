@@ -32,12 +32,36 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private SerializedProperty _isGroundedParameter;
         private SerializedProperty _jumpTrigger;
         private SerializedProperty _rollTrigger;
+        private SerializedProperty _climbingParameter;
+
+        // Moving Platform
+        private SerializedProperty _enableMovingPlatform;
+        private SerializedProperty _inheritPlatformRotation;
+        private SerializedProperty _inheritPlatformMomentum;
+        private SerializedProperty _platformLayer;
 
         // Foldout states
         private bool _showSpecialMovementHelp = false;
         private bool _showPhysicsHelp = false;
+        private bool _showMovingPlatformHelp = false;
+        private bool _showCeilingDetectionHelp = false;
+        private bool _showGapBridgingHelp = false;
         private bool _showRotationHelp = false;
         private bool _showAnimationSystemHelp = false;
+
+        // Ceiling Detection
+        private SerializedProperty _enableCeilingDetection;
+        private SerializedProperty _ceilingCheckDistance;
+
+        // Gap Bridging
+        private SerializedProperty _enableGapBridging;
+        private SerializedProperty _minSpeedForGapBridge;
+        private SerializedProperty _maxGapDistance;
+        private SerializedProperty _maxGapHeightDiff;
+
+        // AI Pathfinding
+        private SerializedProperty _pathfindingSystem;
+        private bool _showPathfindingHelp = false;
 
         private void OnEnable()
         {
@@ -65,6 +89,18 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             _isGroundedParameter = serializedObject.FindProperty("isGroundedParameter");
             _jumpTrigger = serializedObject.FindProperty("jumpTrigger");
             _rollTrigger = serializedObject.FindProperty("rollTrigger");
+            _climbingParameter = serializedObject.FindProperty("climbingParameter");
+            _enableMovingPlatform = serializedObject.FindProperty("enableMovingPlatform");
+            _inheritPlatformRotation = serializedObject.FindProperty("inheritPlatformRotation");
+            _inheritPlatformMomentum = serializedObject.FindProperty("inheritPlatformMomentum");
+            _platformLayer = serializedObject.FindProperty("platformLayer");
+            _enableCeilingDetection = serializedObject.FindProperty("enableCeilingDetection");
+            _ceilingCheckDistance = serializedObject.FindProperty("ceilingCheckDistance");
+            _enableGapBridging = serializedObject.FindProperty("enableGapBridging");
+            _minSpeedForGapBridge = serializedObject.FindProperty("minSpeedForGapBridge");
+            _maxGapDistance = serializedObject.FindProperty("maxGapDistance");
+            _maxGapHeightDiff = serializedObject.FindProperty("maxGapHeightDiff");
+            _pathfindingSystem = serializedObject.FindProperty("pathfindingSystem");
         }
 
         public override void OnInspectorGUI()
@@ -205,6 +241,174 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                     "• Step Height: Maximum step-up height\n" +
                     "  - Allows smooth walking over small obstacles\n" +
                     "  - Typical: 0.2-0.4",
+                    MessageType.Info);
+                EditorGUI.indentLevel--;
+            }
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(5);
+
+            // Moving Platform
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Moving Platform", EditorStyles.miniLabel);
+            EditorGUILayout.PropertyField(_enableMovingPlatform, new GUIContent(
+                "Enable Moving Platform",
+                "Enable moving platform support. Character will move with platforms.\n" +
+                "Requires platform to have a Rigidbody component."));
+
+            if (_enableMovingPlatform.boolValue)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.PropertyField(_inheritPlatformRotation, new GUIContent(
+                    "Inherit Platform Rotation",
+                    "Character will rotate with rotating platforms.\n" +
+                    "Disable for platforms that only translate."));
+                EditorGUILayout.PropertyField(_inheritPlatformMomentum, new GUIContent(
+                    "Inherit Platform Momentum",
+                    "Character keeps platform velocity when jumping off.\n" +
+                    "Creates natural feeling when jumping from moving platforms."));
+                EditorGUILayout.PropertyField(_platformLayer, new GUIContent(
+                    "Platform Layer",
+                    "LayerMask for detecting moving platforms.\n" +
+                    "If empty, uses Ground Layer instead."));
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.Space(3);
+            EditorGUI.indentLevel++;
+            _showMovingPlatformHelp = EditorGUILayout.Foldout(_showMovingPlatformHelp, "Help & Details", EditorStyles.foldout);
+            EditorGUI.indentLevel--;
+            if (_showMovingPlatformHelp)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.HelpBox(
+                    "Moving Platform Support:\n" +
+                    "• Platform Requirements:\n" +
+                    "  - Must have a Collider component\n" +
+                    "  - Layer must match Platform Layer (or Ground Layer if empty)\n" +
+                    "  - Rigidbody is optional (velocity calculated from Transform delta)\n" +
+                    "• Features:\n" +
+                    "  - Character automatically moves with platform\n" +
+                    "  - Supports both translation and rotation\n" +
+                    "  - Zero allocation design\n" +
+                    "• Inherit Rotation: Enable for rotating platforms\n" +
+                    "  - Disable for horizontal/vertical moving platforms only",
+                    MessageType.Info);
+                EditorGUI.indentLevel--;
+            }
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(5);
+
+            // Ceiling Detection
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Ceiling Detection", EditorStyles.miniLabel);
+            EditorGUILayout.PropertyField(_enableCeilingDetection, new GUIContent(
+                "Enable Ceiling Detection",
+                "Prevent character from clipping through ceilings during jumps."));
+
+            if (_enableCeilingDetection.boolValue)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.PropertyField(_ceilingCheckDistance, new GUIContent(
+                    "Check Distance",
+                    "Extra distance above character head to check for ceiling."));
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.Space(3);
+            EditorGUI.indentLevel++;
+            _showCeilingDetectionHelp = EditorGUILayout.Foldout(_showCeilingDetectionHelp, "Help & Details", EditorStyles.foldout);
+            EditorGUI.indentLevel--;
+            if (_showCeilingDetectionHelp)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.HelpBox(
+                    "Ceiling Detection:\n" +
+                    "• Prevents head clipping through low ceilings\n" +
+                    "• Only active when character is moving upward\n" +
+                    "• Uses spherecast for accurate detection\n" +
+                    "• Stops vertical velocity when ceiling is detected",
+                    MessageType.Info);
+                EditorGUI.indentLevel--;
+            }
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(5);
+
+            // Gap Bridging
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Gap Bridging", EditorStyles.miniLabel);
+            EditorGUILayout.PropertyField(_enableGapBridging, new GUIContent(
+                "Enable Gap Bridging",
+                "Auto-jump across small gaps when running at sufficient speed."));
+
+            if (_enableGapBridging.boolValue)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.PropertyField(_minSpeedForGapBridge, new GUIContent(
+                    "Min Speed",
+                    "Minimum speed (m/s) required to trigger gap bridging."));
+                EditorGUILayout.PropertyField(_maxGapDistance, new GUIContent(
+                    "Max Gap Distance",
+                    "Maximum gap width (m) that can be bridged."));
+                EditorGUILayout.PropertyField(_maxGapHeightDiff, new GUIContent(
+                    "Max Height Diff",
+                    "Maximum height difference (m) allowed for gap bridging."));
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.Space(3);
+            EditorGUI.indentLevel++;
+            _showGapBridgingHelp = EditorGUILayout.Foldout(_showGapBridgingHelp, "Help & Details", EditorStyles.foldout);
+            EditorGUI.indentLevel--;
+            if (_showGapBridgingHelp)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.HelpBox(
+                    "Gap Bridging (Auto-Jump):\n" +
+                    "• Character auto-jumps when running toward a gap\n" +
+                    "• Only triggers at sufficient speed\n" +
+                    "• Scans for landing point across the gap\n" +
+                    "• Jump height is calculated based on gap height difference\n" +
+                    "• Has cooldown to prevent rapid re-triggering",
+                    MessageType.Info);
+                EditorGUI.indentLevel--;
+            }
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(5);
+
+            // AI Pathfinding
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("AI Pathfinding", EditorStyles.miniLabel);
+            EditorGUILayout.PropertyField(_pathfindingSystem, new GUIContent(
+                "Pathfinding System",
+                "Select the pathfinding system for AI navigation.\n" +
+                "Requires the corresponding package to be installed."));
+
+            // Show availability status
+            var system = (CycloneGames.RPGFoundation.Runtime.Movement.PathfindingSystem)_pathfindingSystem.enumValueIndex;
+            string statusMessage = GetPathfindingStatus(system);
+            if (!string.IsNullOrEmpty(statusMessage))
+            {
+                EditorGUILayout.HelpBox(statusMessage, MessageType.Warning);
+            }
+
+            EditorGUILayout.Space(3);
+            EditorGUI.indentLevel++;
+            _showPathfindingHelp = EditorGUILayout.Foldout(_showPathfindingHelp, "Help & Details", EditorStyles.foldout);
+            EditorGUI.indentLevel--;
+            if (_showPathfindingHelp)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.HelpBox(
+                    "AI Pathfinding Systems:\n" +
+                    "• None: Manual control only\n" +
+                    "• Unity NavMesh: Built-in, requires com.unity.ai.navigation\n" +
+                    "• A* Pathfinding: Third-party, requires com.arongranberg.astar\n" +
+                    "• Agents Navigation: DOTS-based, requires com.projectdawn.navigation\n\n" +
+                    "Add corresponding provider component to AI characters.",
                     MessageType.Info);
                 EditorGUI.indentLevel--;
             }
@@ -388,9 +592,41 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                 "Roll Trigger",
                 "Trigger parameter for roll/dodge animation.\n" +
                 "Leave empty to skip setting this parameter."));
+            EditorGUILayout.PropertyField(_climbingParameter, new GUIContent(
+                "Climbing Parameter",
+                "Bool parameter for climbing state.\n" +
+                "Set to true when entering ClimbState, false when exiting.\n" +
+                "Leave empty to skip setting this parameter."));
             EditorGUILayout.EndVertical();
 
             serializedObject.ApplyModifiedProperties();
+        }
+
+        private string GetPathfindingStatus(CycloneGames.RPGFoundation.Runtime.Movement.PathfindingSystem system)
+        {
+            switch (system)
+            {
+                case CycloneGames.RPGFoundation.Runtime.Movement.PathfindingSystem.UnityNavMesh:
+#if !UNITY_AI_NAVIGATION
+                    return "Unity AI Navigation package (com.unity.ai.navigation) is not installed.";
+#else
+                    return null;
+#endif
+                case CycloneGames.RPGFoundation.Runtime.Movement.PathfindingSystem.AStarPathfinding:
+#if !ASTAR_PATHFINDING
+                    return "A* Pathfinding Project (com.arongranberg.astar) is not installed.";
+#else
+                    return null;
+#endif
+                case CycloneGames.RPGFoundation.Runtime.Movement.PathfindingSystem.AgentsNavigation:
+#if !AGENTS_NAVIGATION
+                    return "Agents Navigation (com.projectdawn.navigation) is not installed.";
+#else
+                    return null;
+#endif
+                default:
+                    return null;
+            }
         }
     }
 }

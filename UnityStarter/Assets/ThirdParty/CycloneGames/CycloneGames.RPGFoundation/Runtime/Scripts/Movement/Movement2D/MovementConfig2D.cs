@@ -63,6 +63,24 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                  "Set initial facing: true = right, false = left")]
         public bool facingRight = true;
 
+        // Moving Platform - displayed in Custom Editor
+        [Tooltip("Enable moving platform support. Character will move with platforms.")]
+        public bool enableMovingPlatform = true;
+        [Tooltip("Inherit platform rotation. Character will rotate with rotating platforms.")]
+        public bool inheritPlatformRotation = false;
+        [Tooltip("Inherit platform momentum when jumping off. Character will keep platform velocity.")]
+        public bool inheritPlatformMomentum = true;
+        [Tooltip("Layer mask for detecting moving platforms. If empty, uses groundLayer.")]
+        public LayerMask platformLayer = 0;
+
+        // Gap Bridging (Mario Style) - displayed in Custom Editor
+        [Tooltip("Enable gap bridging to maintain grounded state across small gaps while running.")]
+        public bool enableGapBridging = true;
+        [Tooltip("Minimum speed required to bridge gaps (m/s).")]
+        public float minSpeedForGapBridge = 4f;
+        [Tooltip("Maximum gap distance that can be bridged (m).")]
+        public float maxGapDistance = 1.0f;
+
         // Animation Parameters (Additional) - displayed in Custom Editor
         [Tooltip("Parameter name for vertical speed (Float)")]
         public string verticalSpeedParameter = "VerticalSpeed";

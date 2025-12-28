@@ -168,6 +168,55 @@ Adjust horizontal movement while in air:
 config.airControlMultiplier = 0.5f; // 50% control in air
 ```
 
+### Gap Bridging (Mario Style)
+
+When running fast, the character maintains grounded state across small gaps - just like Mario!
+
+```
+Running fast → No ground detected → Check ahead → Ground found → Stay grounded!
+```
+
+| Parameter              | Description                      | Default |
+| ---------------------- | -------------------------------- | ------- |
+| `enableGapBridging`    | Enable/disable feature           | true    |
+| `minSpeedForGapBridge` | Minimum speed to trigger (m/s)   | 4.0     |
+| `maxGapDistance`       | Maximum bridgeable gap width (m) | 1.0     |
+
+> **Note**: Walking slowly will NOT trigger gap bridging - character will fall into the gap normally.
+
+### AI Pathfinding (2D)
+
+For 2D games, **A\* Pathfinding Project** is the recommended solution as it natively supports 2D Grid graphs.
+
+| System            | 2D Support | Reason                 |
+| ----------------- | ---------- | ---------------------- |
+| A\* Pathfinding   | ✅         | Native 2D Grid support |
+| Unity NavMesh     | ❌         | XZ plane only          |
+| Agents Navigation | ❌         | 3D DOTS focus          |
+
+#### Using A\* PathFinding in 2D
+
+```csharp
+// Requires: com.arongranberg.astar
+var astarInput = GetComponent<AStarInputProvider>();
+
+// IMPORTANT: Enable 2D mode in Inspector
+// - is2DMode: true
+
+astarInput.SetDestination(targetPosition);
+
+if (astarInput.HasReachedDestination)
+{
+    // Arrived at target
+}
+```
+
+Features:
+
+- Uses A\* native 2D Grid/Point graphs
+- Works on XY plane
+- Calls `MovementComponent2D.SetInputDirection` via reflection
+
 ## ⚙️ Configuration
 
 ### MovementConfig2D Parameters

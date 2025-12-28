@@ -3,9 +3,18 @@
     "rootNamespace": "",
     "references": [
         "Unity.Mathematics",
+        "Unity.Collections",
+        "Unity.Entities",
+        "Unity.Transforms",
         "CycloneGames.Logger",
         "Kybernetik.Animancer",
-        "CycloneGames.GameplayFramework.Runtime"
+        "CycloneGames.GameplayFramework.Runtime",
+        "Unity.AI.Navigation",
+        "AstarPathfindingProject",
+        "PackageTools",
+        "Drawing",
+        "ProjectDawn.Navigation",
+        "ProjectDawn.Navigation.Hybrid"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -24,6 +33,31 @@
             "name": "com.cyclone-games.gameplay-framework",
             "expression": "",
             "define": "GAMEPLAY_FRAMEWORK_PRESENT"
+        },
+        {
+            "name": "com.unity.ai.navigation",
+            "expression": "",
+            "define": "UNITY_AI_NAVIGATION"
+        },
+        {
+            "name": "com.arongranberg.astar",
+            "expression": "",
+            "define": "ASTAR_PATHFINDING"
+        },
+        {
+            "name": "com.projectdawn.navigation",
+            "expression": "",
+            "define": "AGENTS_NAVIGATION"
+        },
+        {
+            "name": "com.unity.entities",
+            "expression": "",
+            "define": "UNITY_ENTITIES"
+        },
+        {
+            "name": "com.arongranberg.astar",
+            "expression": "",
+            "define": "ALINE_PRESENT"
         }
     ],
     "noEngineReferences": false
