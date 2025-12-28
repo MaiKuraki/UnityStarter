@@ -70,6 +70,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         private const float _minSqrMagnitudeForMovement = 0.0001f;
 
+        private MovingPlatformData2D _movingPlatform;
+        private Collider2D _lastGroundCollider;
+        private Vector2 _inheritedPlatformVelocity;
+        private Vector2 _lastGroundVelocity; // Character's own velocity when last grounded
+
         private float DeltaTime => (ignoreTimeScale ? Time.unscaledDeltaTime : Time.deltaTime) * LocalTimeScale;
         private float FixedDeltaTime => (ignoreTimeScale ? Time.fixedUnscaledDeltaTime : Time.fixedDeltaTime) * LocalTimeScale;
 
@@ -318,9 +323,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             }
 
             HandleJumpBuffer();
+            ApplyMovingPlatform();
             UpdateContext();
             ExecuteStateMachine();
             UpdateFacing();
+            UpdateMovingPlatformTracking();
         }
 
         void FixedUpdate()
@@ -346,7 +353,17 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 ? _groundCheck.position
                 : (Vector2)transform.position + config.groundCheckOffset;
 
-            _context.IsGrounded = Physics2D.OverlapBox(checkPosition, config.groundCheckSize, 0, config.groundLayer);
+            _lastGroundCollider = Physics2D.OverlapBox(checkPosition, config.groundCheckSize, 0, config.groundLayer);
+            _context.IsGrounded = _lastGroundCollider != null;
+
+            // Gap Bridging (Mario Style): If no ground but moving fast, check for ground ahead
+            if (!_context.IsGrounded && config.enableGapBridging)
+            {
+                if (TryBridgeGap2D(checkPosition))
+                {
+                    _context.IsGrounded = true; // Maintain grounded state across gap
+                }
+            }
 
             // Only reset JumpCount when truly landed (not in Jump/Fall state)
             // This prevents false positives from ground detection during jump apex
@@ -363,6 +380,127 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             }
             _wasGrounded = _context.IsGrounded;
         }
+
+        /// <summary>
+        /// Mario-style gap bridging: check if there's ground ahead when running fast.
+        /// Maintains grounded state to "slide" across small gaps.
+        /// </summary>
+        private bool TryBridgeGap2D(Vector2 currentCheckPos)
+        {
+            if (config == null) return false;
+            
+            // Only bridge when moving fast enough
+            float currentSpeed = Mathf.Abs(_context.CurrentVelocity.x);
+            if (currentSpeed < config.minSpeedForGapBridge) return false;
+
+            // Get movement direction
+            float moveDir = Mathf.Sign(_context.CurrentVelocity.x);
+            if (Mathf.Approximately(moveDir, 0)) return false;
+
+            // Check for ground ahead at increasing distances
+            for (float dist = 0.3f; dist <= config.maxGapDistance; dist += 0.2f)
+            {
+                Vector2 aheadPos = currentCheckPos + new Vector2(moveDir * dist, 0);
+                Collider2D ground = Physics2D.OverlapBox(aheadPos, config.groundCheckSize, 0, config.groundLayer);
+                
+                if (ground != null)
+                {
+                    // Found ground ahead - bridge the gap
+                    _lastGroundCollider = ground;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Applies movement from the moving platform before processing character movement.
+        /// </summary>
+        private void ApplyMovingPlatform()
+        {
+            if (config == null || !config.enableMovingPlatform || !_movingPlatform.isOnPlatform)
+                return;
+
+            if (_movingPlatform.platformTransform == null)
+            {
+                _movingPlatform.Clear();
+                return;
+            }
+
+            Vector2 deltaPos = _movingPlatform.GetPlatformDeltaPosition(transform);
+            if (deltaPos.sqrMagnitude > 0.0001f)
+            {
+                transform.position += (Vector3)deltaPos;
+            }
+
+            if (config.inheritPlatformRotation)
+            {
+                float deltaRotZ = _movingPlatform.GetPlatformDeltaRotationZ(transform);
+                if (Mathf.Abs(deltaRotZ) > 0.01f)
+                {
+                    transform.Rotate(0, 0, deltaRotZ);
+                }
+            }
+            // Note: localPosition is updated in UpdateMovingPlatformTracking after character movement
+        }
+
+        /// <summary>
+        /// Updates moving platform tracking after character movement is processed.
+        /// Applies platform momentum when leaving platform (jumping off).
+        /// </summary>
+        private void UpdateMovingPlatformTracking()
+        {
+            if (config == null || !config.enableMovingPlatform)
+            {
+                if (_movingPlatform.isOnPlatform) _movingPlatform.Clear();
+                return;
+            }
+
+            if (!_context.IsGrounded)
+            {
+                // Left platform - apply momentum if configured
+                if (_movingPlatform.isOnPlatform && config.inheritPlatformMomentum)
+                {
+                    _inheritedPlatformVelocity = _movingPlatform.platformVelocity;
+                }
+                if (_movingPlatform.isOnPlatform) _movingPlatform.Clear();
+                return;
+            }
+            else
+            {
+                // On ground - clear inherited velocities
+                _inheritedPlatformVelocity = Vector2.zero;
+                _lastGroundVelocity = Vector2.zero;
+            }
+
+            if (_lastGroundCollider != null)
+            {
+                Rigidbody2D groundRb = _lastGroundCollider.attachedRigidbody;
+                LayerMask platformMask = config.platformLayer != 0 ? config.platformLayer : config.groundLayer;
+                bool isValidPlatform = groundRb != null &&
+                                       ((1 << _lastGroundCollider.gameObject.layer) & platformMask) != 0;
+
+                if (isValidPlatform)
+                {
+                    if (_movingPlatform.platform != groundRb)
+                    {
+                        _movingPlatform.SetPlatform(groundRb, transform);
+                    }
+                    else
+                    {
+                        _movingPlatform.UpdatePlatformVelocity(DeltaTime);
+                        // Update localPosition AFTER character movement to include running
+                        _movingPlatform.localPosition = _movingPlatform.platformTransform.InverseTransformPoint(transform.position);
+                        _movingPlatform.localRotationZ = transform.eulerAngles.z - _movingPlatform.platformTransform.eulerAngles.z;
+                    }
+                    return;
+                }
+            }
+
+            if (_movingPlatform.isOnPlatform) _movingPlatform.Clear();
+        }
+
 
         private void HandleCoyoteTime()
         {
@@ -482,7 +620,34 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             else
             {
                 // Platformer: X from input, Y from physics
-                _rigidbody.velocity = new Vector2(targetVelocity.x, _rigidbody.velocity.y);
+                Vector2 finalVelocity = new Vector2(targetVelocity.x, _rigidbody.velocity.y);
+                
+                if (_context.IsGrounded)
+                {
+                    // Save character's ground velocity for jump momentum
+                    _lastGroundVelocity = new Vector2(displacement.x / dt, 0);
+                }
+                else
+                {
+                    // In air: apply inherited momentum (platform + character's own velocity)
+                    Vector2 totalInheritedVelocity = _inheritedPlatformVelocity + _lastGroundVelocity;
+                    
+                    if (totalInheritedVelocity.sqrMagnitude > _minSqrMagnitudeForMovement)
+                    {
+                        // Use whichever is greater: inherited momentum or player input
+                        float inheritedSpeed = Mathf.Abs(totalInheritedVelocity.x);
+                        float inputSpeed = Mathf.Abs(targetVelocity.x);
+                        
+                        if (inheritedSpeed > inputSpeed)
+                        {
+                            // Inherited momentum is stronger - use it
+                            finalVelocity.x = totalInheritedVelocity.x;
+                        }
+                        // else: player input is stronger, use normal velocity
+                    }
+                }
+                
+                _rigidbody.velocity = finalVelocity;
             }
 
             MovementStateBase2D nextState = _currentState.EvaluateTransition(ref _context);

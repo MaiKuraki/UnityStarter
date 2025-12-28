@@ -108,6 +108,18 @@ namespace CycloneGames.RPGFoundation.Runtime
         private bool _worldUpChanged = true;
         private static readonly float3 UnityUpVector = new float3(0, 1, 0);
 
+        private MovingPlatformData _movingPlatform;
+        private RaycastHit _lastGroundHit;
+        private Vector3 _inheritedPlatformVelocity;
+        private Vector3 _lastGroundVelocity; // Character's own velocity when last grounded
+
+        // Force system
+        private Vector3 _pendingImpulse;
+        private Vector3 _pendingForce;
+
+        // Gap bridging
+        private float _gapBridgeCooldown;
+
         private float DeltaTime => (ignoreTimeScale ? Time.unscaledDeltaTime : Time.deltaTime) * LocalTimeScale;
 
         #region IMovementStateQuery Implementation
@@ -357,8 +369,48 @@ namespace CycloneGames.RPGFoundation.Runtime
                 }
             }
 
+            // Update cooldowns
+            if (_gapBridgeCooldown > 0) _gapBridgeCooldown -= DeltaTime;
+
+            ApplyMovingPlatform();
             UpdateContext();
+
+            // Check for gap bridging before falling (only when grounded and moving)
+            if (_context.IsGrounded && config != null && config.enableGapBridging)
+            {
+                TryBridgeGap();
+            }
+
             ExecuteStateMachine();
+            
+            // Apply pending forces
+            ApplyPendingForces();
+            
+            // Check ceiling during jumps
+            CheckCeiling();
+
+            UpdateMovingPlatformTracking();
+        }
+
+        /// <summary>
+        /// Apply accumulated impulse and force to character movement.
+        /// </summary>
+        private void ApplyPendingForces()
+        {
+            // Apply impulse (one-time velocity)
+            if (_pendingImpulse.sqrMagnitude > _minSqrMagnitudeForMovement)
+            {
+                _characterController.Move(_pendingImpulse * DeltaTime);
+                _pendingImpulse = Vector3.zero;
+            }
+
+            // Apply continuous force (acceleration)
+            if (_pendingForce.sqrMagnitude > _minSqrMagnitudeForMovement)
+            {
+                Vector3 forceDisplacement = _pendingForce * DeltaTime * DeltaTime;
+                _characterController.Move(forceDisplacement);
+                _pendingForce = Vector3.zero;
+            }
         }
 
         private void InitializeContext(IAnimationController animationController)
@@ -491,9 +543,48 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             if (!shouldUseRootMotion)
             {
-                if (math.lengthsq(displacement) > _minSqrMagnitudeForMovement)
+                float3 totalDisplacement = displacement;
+
+                if (_context.IsGrounded)
                 {
-                    _characterController.Move(displacement);
+                    // Save character's ground velocity for jump momentum
+                    // Only horizontal velocity (exclude vertical/gravity)
+                    float3 horizontalDisplacement = displacement;
+                    horizontalDisplacement.y = 0;
+                    _lastGroundVelocity = horizontalDisplacement / math.max(DeltaTime, 0.0001f);
+                }
+                else
+                {
+                    // In air: apply inherited momentum (platform + character's own velocity)
+                    float3 totalInheritedVelocity = (float3)_inheritedPlatformVelocity + (float3)_lastGroundVelocity;
+                    
+                    // Apply inherited velocity, but let player input override by not adding displacement twice
+                    // The idea: inherited velocity replaces the air movement, not adds to it
+                    if (math.lengthsq(totalInheritedVelocity) > _minSqrMagnitudeForMovement)
+                    {
+                        // Project displacement onto inherited velocity direction to see if player is moving same way
+                        float3 inheritedDir = math.normalizesafe(totalInheritedVelocity);
+                        float3 displacementHorizontal = new float3(displacement.x, 0, displacement.z);
+                        
+                        // Use whichever is greater: inherited momentum or player input
+                        float inheritedSpeed = math.length(totalInheritedVelocity);
+                        float inputSpeed = math.length(displacementHorizontal) / math.max(DeltaTime, 0.0001f);
+                        
+                        if (inheritedSpeed > inputSpeed)
+                        {
+                            // Inherited momentum is stronger - use it, but allow perpendicular input
+                            float3 inheritedMovement = totalInheritedVelocity * DeltaTime;
+                            
+                            // Keep vertical movement from state (jump/gravity)
+                            totalDisplacement = new float3(inheritedMovement.x, displacement.y, inheritedMovement.z);
+                        }
+                        // else: player input is stronger, use normal displacement
+                    }
+                }
+
+                if (math.lengthsq(totalDisplacement) > _minSqrMagnitudeForMovement)
+                {
+                    _characterController.Move(totalDisplacement);
                 }
             }
 
@@ -543,6 +634,97 @@ namespace CycloneGames.RPGFoundation.Runtime
         }
 
         /// <summary>
+        /// Applies movement from the moving platform before processing character movement.
+        /// Called at the start of Update to ensure character moves with platform.
+        /// </summary>
+        private void ApplyMovingPlatform()
+        {
+            if (config == null || !config.enableMovingPlatform || !_movingPlatform.isOnPlatform)
+                return;
+
+            if (_movingPlatform.platformTransform == null)
+            {
+                _movingPlatform.Clear();
+                return;
+            }
+
+            Vector3 deltaPos = _movingPlatform.GetPlatformDeltaPosition(transform);
+            if (deltaPos.sqrMagnitude > 0.0001f)
+            {
+                _characterController.Move(deltaPos);
+            }
+
+            if (config.inheritPlatformRotation)
+            {
+                Quaternion deltaRot = _movingPlatform.GetPlatformDeltaRotation(transform);
+                if (Quaternion.Angle(Quaternion.identity, deltaRot) > 0.01f)
+                {
+                    transform.rotation = deltaRot * transform.rotation;
+                    _currentRotation = transform.rotation;
+                }
+            }
+            // Note: localPosition is updated in UpdateMovingPlatformTracking after character movement
+        }
+
+        /// <summary>
+        /// Updates moving platform tracking after character movement is processed.
+        /// Detects if standing on a Rigidbody and tracks its movement for next frame.
+        /// Applies platform momentum when leaving platform (jumping off).
+        /// </summary>
+        private void UpdateMovingPlatformTracking()
+        {
+            if (config == null || !config.enableMovingPlatform)
+            {
+                if (_movingPlatform.isOnPlatform) _movingPlatform.Clear();
+                return;
+            }
+
+            if (!_context.IsGrounded)
+            {
+                // Left platform - apply momentum if configured
+                if (_movingPlatform.isOnPlatform && config.inheritPlatformMomentum)
+                {
+                    _inheritedPlatformVelocity = _movingPlatform.platformVelocity;
+                }
+                if (_movingPlatform.isOnPlatform) _movingPlatform.Clear();
+                return;
+            }
+            else
+            {
+                // On ground - clear inherited velocities
+                _inheritedPlatformVelocity = Vector3.zero;
+                _lastGroundVelocity = Vector3.zero;
+            }
+
+            // Check for Rigidbody on the ground object
+            if (_lastGroundHit.collider != null)
+            {
+                Rigidbody groundRb = _lastGroundHit.collider.attachedRigidbody;
+                LayerMask platformMask = config.platformLayer != 0 ? config.platformLayer : config.groundLayer;
+                bool isValidPlatform = groundRb != null && 
+                                       ((1 << _lastGroundHit.collider.gameObject.layer) & platformMask) != 0;
+
+                if (isValidPlatform)
+                {
+                    if (_movingPlatform.platform != groundRb)
+                    {
+                        _movingPlatform.SetPlatform(groundRb, transform);
+                    }
+                    else
+                    {
+                        _movingPlatform.UpdatePlatformVelocity(DeltaTime);
+                        // Update localPosition AFTER character movement to include running
+                        _movingPlatform.localPosition = _movingPlatform.platformTransform.InverseTransformPoint(transform.position);
+                        _movingPlatform.localRotation = Quaternion.Inverse(_movingPlatform.platformTransform.rotation) * transform.rotation;
+                    }
+                    return;
+                }
+            }
+
+            if (_movingPlatform.isOnPlatform) _movingPlatform.Clear();
+        }
+
+        /// <summary>
         /// Checks if the character is grounded using a combination of CharacterController.isGrounded
         /// and a custom raycast check for more accurate ground detection.
         /// Supports WorldUpSource for wall-walking and ceiling-walking scenarios.
@@ -562,13 +744,7 @@ namespace CycloneGames.RPGFoundation.Runtime
         /// <summary>
         /// Verifies ground contact using SphereCast.
         /// Returns true if ground is detected within the configured distance and slope limit.
-        /// 
-        /// Note: groundedCheckDistance represents the maximum allowed distance from the character's
-        /// bottom to the ground. The raycast starts slightly above the bottom (to avoid starting
-        /// inside colliders) and checks downward for ground within this distance.
-        /// 
-        /// Important: If groundedCheckDistance is smaller than CharacterController's skinWidth,
-        /// the effective threshold is adjusted to skinWidth to prevent detection failures.
+        /// Also caches hit info for moving platform detection.
         /// </summary>
         private bool VerifyGroundedWithRaycast()
         {
@@ -585,13 +761,13 @@ namespace CycloneGames.RPGFoundation.Runtime
             float effectiveGroundedCheckDistance = Mathf.Max(config.groundedCheckDistance, _characterController.skinWidth);
             float checkDistance = startOffset + effectiveGroundedCheckDistance + sphereRadius * 0.1f;
 
-            if (Physics.SphereCast(rayOrigin, sphereRadius, rayDirection, out RaycastHit hit, checkDistance, config.groundLayer))
+            if (Physics.SphereCast(rayOrigin, sphereRadius, rayDirection, out _lastGroundHit, checkDistance, config.groundLayer))
             {
-                float distanceFromBottom = Vector3.Dot(hit.point - controllerBottom, -WorldUp);
+                float distanceFromBottom = Vector3.Dot(_lastGroundHit.point - controllerBottom, -WorldUp);
 
                 if (distanceFromBottom >= 0 && distanceFromBottom <= effectiveGroundedCheckDistance)
                 {
-                    float angle = Vector3.Angle(hit.normal, WorldUp);
+                    float angle = Vector3.Angle(_lastGroundHit.normal, WorldUp);
                     if (angle <= config.slopeLimit)
                     {
                         return true;
@@ -1067,5 +1243,155 @@ namespace CycloneGames.RPGFoundation.Runtime
             Gizmos.DrawWireSphere(rangeEnd, 0.02f);
         }
 #endif
+
+        #region Force System API
+
+        /// <summary>
+        /// Launch the character with a velocity impulse.
+        /// Useful for jump pads, springs, explosions, etc.
+        /// </summary>
+        /// <param name="velocity">The velocity to apply</param>
+        /// <param name="overrideXY">If true, replaces horizontal velocity instead of adding</param>
+        /// <param name="overrideZ">If true, replaces vertical velocity instead of adding</param>
+        public void LaunchCharacter(Vector3 velocity, bool overrideXY = true, bool overrideZ = true)
+        {
+            if (overrideXY)
+            {
+                _pendingImpulse.x = velocity.x;
+                _pendingImpulse.z = velocity.z;
+            }
+            else
+            {
+                _pendingImpulse.x += velocity.x;
+                _pendingImpulse.z += velocity.z;
+            }
+
+            if (overrideZ)
+            {
+                _context.VerticalVelocity = velocity.y;
+            }
+            else
+            {
+                _context.VerticalVelocity += velocity.y;
+            }
+
+            // Clear grounded state to allow launch
+            _context.IsGrounded = false;
+        }
+
+        /// <summary>
+        /// Add a continuous force to the character.
+        /// Call every frame for continuous effects like wind.
+        /// </summary>
+        /// <param name="force">Force vector (m/s²)</param>
+        public void AddForce(Vector3 force)
+        {
+            _pendingForce += force;
+        }
+
+        /// <summary>
+        /// Add an explosion force to the character.
+        /// </summary>
+        /// <param name="force">Explosion force magnitude</param>
+        /// <param name="origin">Explosion origin point</param>
+        /// <param name="radius">Explosion radius</param>
+        /// <param name="upwardsModifier">Adds upward bias (0-1)</param>
+        public void AddExplosionForce(float force, Vector3 origin, float radius, float upwardsModifier = 0.5f)
+        {
+            Vector3 direction = transform.position - origin;
+            float distance = direction.magnitude;
+
+            if (distance > radius || distance < 0.001f) return;
+
+            // Calculate falloff (linear)
+            float falloff = 1f - (distance / radius);
+            float finalForce = force * falloff;
+
+            // Normalize and apply upward modifier
+            direction = direction.normalized;
+            direction.y += upwardsModifier;
+            direction = direction.normalized;
+
+            LaunchCharacter(direction * finalForce, false, false);
+        }
+
+        #endregion
+
+        #region Ceiling Detection
+
+        /// <summary>
+        /// Check for ceiling collision during upward movement.
+        /// Prevents character from clipping through ceilings.
+        /// </summary>
+        private void CheckCeiling()
+        {
+            if (config == null || !config.enableCeilingDetection) return;
+            if (_context.VerticalVelocity <= 0) return; // Only check when moving upward
+
+            float height = _characterController.height;
+            float radius = _characterController.radius * 0.9f;
+            Vector3 origin = transform.position + Vector3.up * (height - radius);
+
+            if (Physics.SphereCast(origin, radius, Vector3.up, out _, 
+                config.ceilingCheckDistance + radius, config.groundLayer))
+            {
+                _context.VerticalVelocity = 0f; // Stop upward movement
+            }
+        }
+
+        #endregion
+
+        #region Gap Bridging
+
+        /// <summary>
+        /// Check if character can bridge a gap by auto-jumping.
+        /// Called when character is about to fall off an edge.
+        /// </summary>
+        /// <returns>True if auto-jump was triggered</returns>
+        private bool TryBridgeGap()
+        {
+            if (config == null || !config.enableGapBridging) return false;
+            if (_gapBridgeCooldown > 0) return false;
+            if (_context.CurrentSpeed < config.minSpeedForGapBridge) return false;
+
+            // Get horizontal movement direction
+            Vector3 moveDir = new Vector3(_context.CurrentVelocity.x, 0, _context.CurrentVelocity.z).normalized;
+            if (moveDir.sqrMagnitude < 0.01f) return false;
+
+            // Check if front has ground (if yes, not a gap)
+            Vector3 frontPoint = transform.position + moveDir * _characterController.radius;
+            if (Physics.Raycast(frontPoint, Vector3.down, config.groundedCheckDistance * 3, config.groundLayer))
+                return false;
+
+            // Scan forward for landing point
+            for (float dist = 0.5f; dist <= config.maxGapDistance; dist += 0.3f)
+            {
+                Vector3 checkPoint = frontPoint + moveDir * dist + Vector3.up * 0.5f;
+
+                if (Physics.Raycast(checkPoint, Vector3.down, out RaycastHit hit, 
+                    1f + config.maxGapHeightDiff, config.groundLayer))
+                {
+                    float heightDiff = Mathf.Abs(hit.point.y - transform.position.y);
+                    if (heightDiff <= config.maxGapHeightDiff)
+                    {
+                        // Found landing point - silent hop (no state change)
+                        // Just apply vertical velocity, let physics handle the rest
+                        // Don't set IsGrounded = false to avoid triggering JumpState
+                        float jumpHeight = 0.3f + heightDiff * 0.5f; // Minimal hop
+                        float jumpVelocity = Mathf.Sqrt(2f * Mathf.Abs(config.gravity) * jumpHeight);
+                        
+                        _context.VerticalVelocity = jumpVelocity;
+                        // Keep IsGrounded - ground check will naturally detect air next frame
+                        _gapBridgeCooldown = 0.3f; // Shorter cooldown for fluid movement
+                        
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        #endregion
     }
 }
