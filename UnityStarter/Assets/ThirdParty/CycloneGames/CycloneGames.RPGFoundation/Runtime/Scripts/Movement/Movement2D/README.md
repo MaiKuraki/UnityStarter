@@ -217,6 +217,33 @@ Features:
 - Works on XY plane
 - Calls `MovementComponent2D.SetInputDirection` via reflection
 
+### Climbing System (2D)
+
+Complete climbing support for 2D platformers and top-down games:
+
+| Mode       | Entry              | Movement                             | Use Case            |
+| ---------- | ------------------ | ------------------------------------ | ------------------- |
+| **Ladder** | Trigger + Up       | Up/Down/Left/Right                   | Standard ladders    |
+| **Wall**   | Air + Wall + Input | Up/Down (Vines/Nets: All directions) | Wall sliding, Vines |
+
+#### Setup
+
+1. Enable `enableLadderClimbing` or `enableWallClimbing` in `MovementConfig2D`.
+2. Assign `Ladder Layer` and `Wall Layer` (e.g., "Ladder", "Wall").
+3. Create Trigger Colliders for Ladder zones.
+4. For Wall Climbing, ensure character has Colliders to detect wall layers.
+
+#### Wall Jump (2D)
+
+- **Mechanic**: Reverses X velocity and adds Y velocity.
+- **Continuous**: Supports jumping between walls (like Mega Man X).
+- **Config**:
+  ```csharp
+  config.wallJumpForceX = 8f;
+  config.wallJumpForceY = 10f;
+  config.wallSlideSpeed = 2f;
+  ```
+
 ## ⚙️ Configuration
 
 ### MovementConfig2D Parameters
