@@ -198,9 +198,22 @@ namespace CycloneGames.Audio.Editor
                 DragAndDrop.visualMode = DragAndDropVisualMode.Rejected;
             }
 
+
             GUILayout.BeginHorizontal(EditorStyles.toolbar);
             this.editorType = (EditorTypes)GUILayout.Toolbar((int)this.editorType, this.editorTypeNames, EditorStyles.toolbarButton);
             GUILayout.FlexibleSpace();
+            
+            // Save Bank button
+            if (this.audioBank != null)
+            {
+                GUI.color = EditorUtility.IsDirty(this.audioBank) ? new Color(1f, 0.8f, 0.3f) : Color.white;
+                if (GUILayout.Button("💾 Save Bank", EditorStyles.toolbarButton))
+                {
+                    SaveBank();
+                }
+                GUI.color = Color.white;
+            }
+            
             if (GUILayout.Button("Actions", EditorStyles.toolbarDropDown))
             {
                 GenericMenu newNodeMenu = new GenericMenu();
@@ -209,6 +222,8 @@ namespace CycloneGames.Audio.Editor
                 newNodeMenu.AddItem(new GUIContent("Preview Event"), false, PreviewEvent);
                 newNodeMenu.AddItem(new GUIContent("Stop Preview"), false, StopPreview);
                 newNodeMenu.AddItem(new GUIContent("Sort Events"), false, SortEventList);
+                newNodeMenu.AddSeparator("");
+                newNodeMenu.AddItem(new GUIContent("Save Bank"), false, SaveBank);
                 newNodeMenu.ShowAsContext();
             }
             GUILayout.EndHorizontal();
@@ -1822,6 +1837,50 @@ namespace CycloneGames.Audio.Editor
             viewPosition.x -= this.panX;
             viewPosition.y -= this.panY;
             return viewPosition;
+        }
+
+        /// <summary>
+        /// Save the AudioBank and all its sub-assets to disk
+        /// </summary>
+        private void SaveBank()
+        {
+            if (this.audioBank == null)
+            {
+                Debug.LogWarning("AudioGraph: No AudioBank to save.");
+                return;
+            }
+
+            // Mark the bank and all events as dirty
+            EditorUtility.SetDirty(this.audioBank);
+
+            if (this.audioBank.EditorEvents != null)
+            {
+                foreach (var audioEvent in this.audioBank.EditorEvents)
+                {
+                    if (audioEvent != null)
+                    {
+                        EditorUtility.SetDirty(audioEvent);
+                        
+                        // Mark all nodes in the event
+                        if (audioEvent.EditorNodes != null)
+                        {
+                            foreach (var node in audioEvent.EditorNodes)
+                            {
+                                if (node != null)
+                                {
+                                    EditorUtility.SetDirty(node);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Save all assets
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            Debug.Log($"AudioGraph: Saved AudioBank '{this.audioBank.name}' with {this.audioBank.AudioEvents?.Count ?? 0} events.");
         }
 
         #endregion
