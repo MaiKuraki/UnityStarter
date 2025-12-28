@@ -419,6 +419,68 @@ agentsNav.SetDestination(targetPosition);
 - 基于 ECS，适合大量代理
 - 高性能模拟
 
+### 🧗 攀爬系统
+
+支持两种攀爬模式，具有完全的方向控制：
+
+| 模式              | 进入条件                     | 移动方式           | 退出                |
+| ----------------- | ---------------------------- | ------------------ | ------------------- |
+| **梯子 (Ladder)** | 进入触发区域 + 按上键        | 上/下/左/右        | 跳跃或到达顶端/底端 |
+| **贴墙 (Wall)**   | 在空中 + 靠近墙面 + 向墙移动 | 沿墙面 上/下/左/右 | 蹬墙跳或滑落        |
+
+#### 梯子攀爬 (Ladder Climbing)
+
+```csharp
+// 进入梯子区域并按上键触发梯子攀爬
+// 在 MovementConfig 中配置：
+config.enableLadderClimbing = true;
+config.ladderClimbSpeed = 3f;
+config.ladderLayer = LayerMask.GetMask("Ladder");
+```
+
+功能特性：
+
+- 攀爬时无重力
+- 支持完全的垂直和水平移动
+- 按跳跃键脱离梯子
+
+#### 贴墙攀爬 (Wall Climbing)
+
+```csharp
+// 在空中靠近墙面并向墙面方向按键触发
+// 在 MovementConfig 中配置：
+config.enableWallClimbing = true;
+config.wallClimbSpeed = 2f;
+config.wallLayer = LayerMask.GetMask("Wall");
+config.wallClingDuration = 0.5f;  // 滑落前的悬挂时间
+config.wallSlideSpeed = 2f;
+```
+
+功能特性：
+
+- 可配置的悬挂时间
+- **全向曲面移动**：在弯曲墙面和天花板上平滑移动
+- **动态表面吸附**：自动吸附在表面（包括天花板）
+- 悬挂超时后自动滑落
+
+#### 蹬墙跳 (Wall Jump)
+
+```csharp
+// 悬挂在墙上时按跳跃键
+// 在 MovementConfig 中配置：
+config.enableWallJump = true;
+config.wallJumpForceHorizontal = 8f;
+config.wallJumpForceVertical = 10f;
+config.differentWallAngle = 60f;  // 用于连续蹬墙跳判定
+```
+
+功能特性：
+
+- 按角度推离墙面（使用墙面法线）
+- 支持在狭窄空间（井/角落）连续蹬墙跳
+- 3D：支持任意墙面角度
+- 蹬墙跳不消耗多段跳次数
+
 ## 🎯 最佳实践
 
 ### ✅ 应该

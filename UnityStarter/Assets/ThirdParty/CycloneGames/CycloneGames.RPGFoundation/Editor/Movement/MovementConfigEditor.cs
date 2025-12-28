@@ -16,7 +16,6 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private SerializedProperty _maxJumpCount;
         private SerializedProperty _rollDistance;
         private SerializedProperty _rollDuration;
-        private SerializedProperty _climbSpeed;
         private SerializedProperty _swimSpeed;
         private SerializedProperty _flySpeed;
         private SerializedProperty _gravity;
@@ -33,6 +32,7 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private SerializedProperty _jumpTrigger;
         private SerializedProperty _rollTrigger;
         private SerializedProperty _climbingParameter;
+        private SerializedProperty _wallSlidingParameter;
 
         // Moving Platform
         private SerializedProperty _enableMovingPlatform;
@@ -48,6 +48,7 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private bool _showGapBridgingHelp = false;
         private bool _showRotationHelp = false;
         private bool _showAnimationSystemHelp = false;
+        private bool _showClimbingHelp = false;
 
         // Ceiling Detection
         private SerializedProperty _enableCeilingDetection;
@@ -58,6 +59,26 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private SerializedProperty _minSpeedForGapBridge;
         private SerializedProperty _maxGapDistance;
         private SerializedProperty _maxGapHeightDiff;
+
+        // Ladder Climbing
+        private SerializedProperty _enableLadderClimbing;
+        private SerializedProperty _ladderClimbSpeed;
+        private SerializedProperty _ladderLayer;
+
+        // Wall Climbing
+        private SerializedProperty _enableWallClimbing;
+        private SerializedProperty _wallClimbSpeed;
+        private SerializedProperty _wallLayer;
+        private SerializedProperty _wallCheckDistance;
+        private SerializedProperty _wallClingDuration;
+        private SerializedProperty _wallSlideSpeed;
+
+        // Wall Jump
+        private SerializedProperty _enableWallJump;
+        private SerializedProperty _wallJumpForceHorizontal;
+        private SerializedProperty _wallJumpForceVertical;
+        private SerializedProperty _wallJumpCooldown;
+        private SerializedProperty _differentWallAngle;
 
         // AI Pathfinding
         private SerializedProperty _pathfindingSystem;
@@ -73,7 +94,6 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             _maxJumpCount = serializedObject.FindProperty("maxJumpCount");
             _rollDistance = serializedObject.FindProperty("rollDistance");
             _rollDuration = serializedObject.FindProperty("rollDuration");
-            _climbSpeed = serializedObject.FindProperty("climbSpeed");
             _swimSpeed = serializedObject.FindProperty("swimSpeed");
             _flySpeed = serializedObject.FindProperty("flySpeed");
             _gravity = serializedObject.FindProperty("gravity");
@@ -90,6 +110,7 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             _jumpTrigger = serializedObject.FindProperty("jumpTrigger");
             _rollTrigger = serializedObject.FindProperty("rollTrigger");
             _climbingParameter = serializedObject.FindProperty("climbingParameter");
+            _wallSlidingParameter = serializedObject.FindProperty("wallSlidingParameter");
             _enableMovingPlatform = serializedObject.FindProperty("enableMovingPlatform");
             _inheritPlatformRotation = serializedObject.FindProperty("inheritPlatformRotation");
             _inheritPlatformMomentum = serializedObject.FindProperty("inheritPlatformMomentum");
@@ -100,6 +121,27 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             _minSpeedForGapBridge = serializedObject.FindProperty("minSpeedForGapBridge");
             _maxGapDistance = serializedObject.FindProperty("maxGapDistance");
             _maxGapHeightDiff = serializedObject.FindProperty("maxGapHeightDiff");
+            
+            // Ladder Climbing
+            _enableLadderClimbing = serializedObject.FindProperty("enableLadderClimbing");
+            _ladderClimbSpeed = serializedObject.FindProperty("ladderClimbSpeed");
+            _ladderLayer = serializedObject.FindProperty("ladderLayer");
+            
+            // Wall Climbing
+            _enableWallClimbing = serializedObject.FindProperty("enableWallClimbing");
+            _wallClimbSpeed = serializedObject.FindProperty("wallClimbSpeed");
+            _wallLayer = serializedObject.FindProperty("wallLayer");
+            _wallCheckDistance = serializedObject.FindProperty("wallCheckDistance");
+            _wallClingDuration = serializedObject.FindProperty("wallClingDuration");
+            _wallSlideSpeed = serializedObject.FindProperty("wallSlideSpeed");
+            
+            // Wall Jump
+            _enableWallJump = serializedObject.FindProperty("enableWallJump");
+            _wallJumpForceHorizontal = serializedObject.FindProperty("wallJumpForceHorizontal");
+            _wallJumpForceVertical = serializedObject.FindProperty("wallJumpForceVertical");
+            _wallJumpCooldown = serializedObject.FindProperty("wallJumpCooldown");
+            _differentWallAngle = serializedObject.FindProperty("differentWallAngle");
+            
             _pathfindingSystem = serializedObject.FindProperty("pathfindingSystem");
         }
 
@@ -141,9 +183,6 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             EditorGUILayout.PropertyField(_rollDuration, new GUIContent(
                 "Roll Duration",
                 "Time it takes to complete a roll animation."));
-            EditorGUILayout.PropertyField(_climbSpeed, new GUIContent(
-                "Climb Speed",
-                "Speed when climbing walls or ladders."));
             EditorGUILayout.PropertyField(_swimSpeed, new GUIContent(
                 "Swim Speed",
                 "Speed when swimming in water."));
@@ -163,8 +202,6 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                     "• Roll: Quick dodge/evade movement\n" +
                     "  - Distance: How far the character travels\n" +
                     "  - Duration: How long the roll takes (affects speed)\n" +
-                    "• Climb Speed: Speed when climbing vertical surfaces\n" +
-                    "  - Used for wall climbing, ladder climbing\n" +
                     "• Swim Speed: Speed when in water\n" +
                     "  - Typically slower than ground movement\n" +
                     "• Fly Speed: Speed when flying\n" +
@@ -372,6 +409,105 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                     "• Scans for landing point across the gap\n" +
                     "• Jump height is calculated based on gap height difference\n" +
                     "• Has cooldown to prevent rapid re-triggering",
+                    MessageType.Info);
+                EditorGUI.indentLevel--;
+            }
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.Space(5);
+
+            // Climbing
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Climbing", EditorStyles.miniLabel);
+
+            // Ladder Climbing
+            EditorGUILayout.PropertyField(_enableLadderClimbing, new GUIContent(
+                "Enable Ladder Climbing",
+                "Enable climbing on ladders via trigger zones."));
+
+            if (_enableLadderClimbing.boolValue)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.PropertyField(_ladderClimbSpeed, new GUIContent(
+                    "Ladder Climb Speed",
+                    "Speed when climbing ladders."));
+                EditorGUILayout.PropertyField(_ladderLayer, new GUIContent(
+                    "Ladder Layer",
+                    "Layer mask for ladder detection."));
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.Space(3);
+
+            // Wall Climbing
+            EditorGUILayout.PropertyField(_enableWallClimbing, new GUIContent(
+                "Enable Wall Climbing",
+                "Enable clinging to and climbing walls."));
+
+            if (_enableWallClimbing.boolValue)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.PropertyField(_wallClimbSpeed, new GUIContent(
+                    "Wall Climb Speed",
+                    "Speed when climbing walls."));
+                EditorGUILayout.PropertyField(_wallLayer, new GUIContent(
+                    "Wall Layer",
+                    "Layer mask for wall detection."));
+                EditorGUILayout.PropertyField(_wallCheckDistance, new GUIContent(
+                    "Wall Check Distance",
+                    "Distance for wall detection raycast."));
+                EditorGUILayout.PropertyField(_wallClingDuration, new GUIContent(
+                    "Cling Duration",
+                    "Time character can cling before sliding."));
+                EditorGUILayout.PropertyField(_wallSlideSpeed, new GUIContent(
+                    "Slide Speed",
+                    "Speed when sliding down wall."));
+
+                EditorGUILayout.Space(3);
+
+                // Wall Jump
+                EditorGUILayout.PropertyField(_enableWallJump, new GUIContent(
+                    "Enable Wall Jump",
+                    "Enable jumping off walls."));
+
+                if (_enableWallJump.boolValue)
+                {
+                    EditorGUI.indentLevel++;
+                    EditorGUILayout.PropertyField(_wallJumpForceHorizontal, new GUIContent(
+                        "Wall Jump Force H",
+                        "Horizontal force when wall jumping."));
+                    EditorGUILayout.PropertyField(_wallJumpForceVertical, new GUIContent(
+                        "Wall Jump Force V",
+                        "Vertical force when wall jumping."));
+                    EditorGUILayout.PropertyField(_wallJumpCooldown, new GUIContent(
+                        "Wall Jump Cooldown",
+                        "Cooldown before re-clinging to same wall."));
+                    EditorGUILayout.PropertyField(_differentWallAngle, new GUIContent(
+                        "Different Wall Angle",
+                        "Minimum angle difference (degrees) to consider as different wall.\nRecommended: 60° for normal walls, 90° for strict, 45° for lenient."));
+                    EditorGUI.indentLevel--;
+                }
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.Space(3);
+            EditorGUI.indentLevel++;
+            _showClimbingHelp = EditorGUILayout.Foldout(_showClimbingHelp, "Help & Details", EditorStyles.foldout);
+            EditorGUI.indentLevel--;
+            if (_showClimbingHelp)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.HelpBox(
+                    "Climbing System:\n" +
+                    "• Ladder: Enter zone + press Up to climb\n" +
+                    "  - No gravity, free vertical movement\n" +
+                    "  - Jump to detach\n" +
+                    "• Wall: In air + near wall + move toward wall\n" +
+                    "  - Cling for duration, then slide down\n" +
+                    "  - Wall Jump: Push off wall at angle\n" +
+                    "  - Supports continuous wall jump in narrow spaces\n" +
+                    "  - Different Wall Angle: Controls what counts as 'different wall'\n" +
+                    "    for consecutive wall jumps",
                     MessageType.Info);
                 EditorGUI.indentLevel--;
             }

@@ -32,10 +32,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         public float3 CurrentVelocity;
         public float CurrentSpeed;
 
-        /// <summary>
-        /// Whether to use root motion for the current state.
-        /// </summary>
         public bool UseRootMotion;
+
+        // Wall Jump state
+        public bool IsWallJumping;
+        public Vector3 WallJumpDirection;
+        public Vector3 LastWallNormal;
+        public float LastWallJumpTime;
 
         public IMovementAuthority MovementAuthority;
 

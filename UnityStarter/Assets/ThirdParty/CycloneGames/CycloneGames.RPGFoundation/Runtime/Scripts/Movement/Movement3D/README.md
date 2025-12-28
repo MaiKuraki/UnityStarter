@@ -421,6 +421,68 @@ Features:
 - ECS-based for large agent counts
 - High performance simulation
 
+### Climbing System
+
+Two climbing modes with full directional control:
+
+| Mode       | Entry                                 | Movement                   | Exit                     |
+| ---------- | ------------------------------------- | -------------------------- | ------------------------ |
+| **Ladder** | Enter trigger zone + Up input         | Up/Down/Left/Right         | Jump or reach top/bottom |
+| **Wall**   | In air + Near wall + Move toward wall | Up/Down along wall surface | Wall Jump or Slide off   |
+
+#### Ladder Climbing
+
+```csharp
+// Ladder climbing is triggered by entering a ladder zone and pressing up
+// Configure in MovementConfig:
+config.enableLadderClimbing = true;
+config.ladderClimbSpeed = 3f;
+config.ladderLayer = LayerMask.GetMask("Ladder");
+```
+
+Features:
+
+- No gravity while climbing
+- Full vertical and horizontal movement
+- Jump to detach
+
+#### Wall Climbing
+
+```csharp
+// Wall climbing triggers when in air, near wall, and pressing toward wall
+// Configure in MovementConfig:
+config.enableWallClimbing = true;
+config.wallClimbSpeed = 2f;
+config.wallLayer = LayerMask.GetMask("Wall");
+config.wallClingDuration = 0.5f;  // Time before sliding
+config.wallSlideSpeed = 2f;
+```
+
+Features:
+
+- Cling to wall for configurable duration
+- **Omni-directional Surface Movement**: Move smoothly across curved walls and ceilings
+- **Dynamic Surface Adhesion**: Automatically sticks to surfaces (including ceilings)
+- Auto-slide after cling timeout
+
+#### Wall Jump
+
+```csharp
+// Wall jump when clinging to wall
+// Configure in MovementConfig:
+config.enableWallJump = true;
+config.wallJumpForceHorizontal = 8f;
+config.wallJumpForceVertical = 10f;
+config.differentWallAngle = 60f;  // For continuous wall jump
+```
+
+Features:
+
+- Push away from wall at angle (uses wall normal)
+- Supports continuous wall jump in narrow spaces
+- 3D: Works with any wall angle (wells, corners)
+- Wall jump is independent of double jump count
+
 ## 🎯 Best Practices
 
 ### ✅ Do

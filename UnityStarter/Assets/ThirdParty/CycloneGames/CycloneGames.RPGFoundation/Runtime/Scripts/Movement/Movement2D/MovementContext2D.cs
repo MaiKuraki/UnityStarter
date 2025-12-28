@@ -31,6 +31,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
 
         public float2 CurrentVelocity;
         public float CurrentSpeed;
+        public float VerticalVelocity;
+
+        // Wall Jump state
+        public bool IsWallJumping;
+        public Vector2 WallJumpDirection;
+        public int LastWallSide;
+        public float LastWallJumpTime;
 
         public IMovementAuthority MovementAuthority;
 
