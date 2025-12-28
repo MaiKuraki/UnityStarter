@@ -50,16 +50,43 @@ namespace CycloneGames.Audio.Editor
             if (showPoolStatus)
             {
                 EditorGUI.indentLevel++;
-                int totalSources = AudioManager.SourcePool.Count;
-                int availableSources = AudioManager.AvailableSources.Count;
-                int activeSources = totalSources - availableSources;
+                
+                // Smart Pool Info
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                EditorGUILayout.LabelField("Smart Pool Configuration", EditorStyles.boldLabel);
+                
+                // Show active config status
+                string configStatus = AudioManager.PoolStats.HasConfig ? "✓ Custom Config" : "○ Using Defaults";
+                EditorGUILayout.LabelField("Config", configStatus);
+                EditorGUILayout.LabelField("Device Tier", AudioManager.PoolStats.DeviceTier);
+                EditorGUILayout.EndVertical();
+                
+                EditorGUILayout.Space(3);
+                
+                // Pool sizes
+                int totalSources = AudioManager.PoolStats.CurrentSize;
+                int availableSources = AudioManager.PoolStats.Available;
+                int activeSources = AudioManager.PoolStats.InUse;
 
-                EditorGUILayout.LabelField("Total Sources", totalSources.ToString());
+                EditorGUILayout.LabelField("Initial Size", AudioManager.PoolStats.InitialSize.ToString());
+                EditorGUILayout.LabelField("Current Size", $"{totalSources} / {AudioManager.PoolStats.MaxSize}");
                 EditorGUILayout.LabelField("Active Sources", activeSources.ToString());
                 EditorGUILayout.LabelField("Available Sources", availableSources.ToString());
 
+                // Usage bar
                 Rect progressRect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
-                EditorGUI.ProgressBar(progressRect, (float)activeSources / totalSources, $"{activeSources} / {totalSources} Used");
+                float ratio = AudioManager.PoolStats.UsageRatio;
+                EditorGUI.ProgressBar(progressRect, ratio, $"{activeSources} / {totalSources} ({ratio:P0})");
+
+                EditorGUILayout.Space(3);
+                
+                // Smart pool stats
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                EditorGUILayout.LabelField("Smart Pool Statistics", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("Peak Usage", AudioManager.PoolStats.PeakUsage.ToString());
+                EditorGUILayout.LabelField("Total Expansions", AudioManager.PoolStats.TotalExpansions.ToString());
+                EditorGUILayout.LabelField("Voice Steals", AudioManager.PoolStats.TotalSteals.ToString());
+                EditorGUILayout.EndVertical();
 
                 EditorGUI.indentLevel--;
             }

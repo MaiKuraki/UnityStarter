@@ -4,7 +4,6 @@
 using UnityEngine;
 using UnityEngine.Audio;
 using System.Globalization;
-using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System;
@@ -14,93 +13,118 @@ using Cysharp.Threading.Tasks;
 namespace CycloneGames.Audio.Runtime
 {
     /// <summary>
-    /// The manager that handles the playback of AudioEvents
+    /// High-performance audio event playback manager with thread-safe operations
     /// </summary>
     public class AudioManager : MonoBehaviour, IAudioService
     {
-        /// <summary>
-        /// Singleton instance of the audio manager
-        /// </summary>
         public static AudioManager Instance { get; private set; }
-        /// <summary>
-        /// Flag for creating instances, set to false during shutdown 
-        /// </summary>
+
         private static bool AllowCreateInstance = true;
         private static int mainThreadId;
-        private static AudioListener cachedAudioListener = null;
-        private static Camera cachedMainCamera = null;
+        private static AudioListener cachedAudioListener;
+        private static Camera cachedMainCamera;
         private static int cachedMainCameraFrame = -1;
 
-        /// <summary>
-        /// The currently-playing events at runtime
-        /// </summary>
+        // Static constructor ensures mainThreadId is set when class is first accessed
+        static AudioManager()
+        {
+            mainThreadId = Thread.CurrentThread.ManagedThreadId;
+        }
+
         public static List<ActiveEvent> ActiveEvents { get; private set; }
 
-        private static readonly Stack<ActiveEvent> activeEventPool = new Stack<ActiveEvent>();
+        private static readonly Stack<ActiveEvent> activeEventPool = new Stack<ActiveEvent>(64);
         private static readonly Queue<AudioSource> availableSources = new Queue<AudioSource>();
         public static IReadOnlyCollection<AudioSource> AvailableSources => availableSources;
         private static readonly ConcurrentQueue<Action> commandQueue = new ConcurrentQueue<Action>();
         private static readonly ActiveEvent[] previousEventsBuffer = new ActiveEvent[MaxPreviousEvents];
-        private static int previousEventsWriteIndex = 0;
-        private static int previousEventsCount = 0;
-        /// <summary>
-        /// The language that all voice events should play in
-        /// </summary>
-        public static int CurrentLanguage { get; private set; }
-        /// <summary>
-        /// The full list of languages available
-        /// </summary>
-        public static string[] Languages;
-        /// <summary>
-        /// The number of AudioSources to create in the pool. Set this in the Inspector.
-        /// If set to 0, a platform-specific default will be used (Desktop: 80, Mobile: 32, WebGL: 24).
-        /// </summary>
-        [SerializeField]
-        private int customPoolSize = 0;
+        private static int previousEventsWriteIndex;
+        private static int previousEventsCount;
 
+        public static int CurrentLanguage { get; private set; }
+        public static string[] Languages;
+
+        [Header("Pool Configuration")]
+        [Tooltip("Set to 0 to use auto-detected pool size based on device. Set > 0 to override with fixed size.")]
+        [SerializeField] private int customPoolSize = 0;
+        
         [Header("Mixing")]
-        [SerializeField]
-        private AudioMixer mainMixer;
+        [SerializeField] private AudioMixer mainMixer;
         private static AudioMixer staticMainMixer;
 
-        private static bool isInitialized = false;
-        /// <summary>
-        /// The total list of AudioSources for the manager to use
-        /// </summary>
+        private static bool isInitialized;
         private static readonly List<AudioSource> sourcePool = new List<AudioSource>();
         public static IReadOnlyList<AudioSource> SourcePool => sourcePool;
 
-        // Memory tracking fields
+        // Smart pool management
+        private static AudioPoolConfig activePoolConfig;
+        private static int initialPoolSize;
+        private static int currentPoolSize;
+        private static int maxPoolSize;
+        private static float lastPoolExpansionTime;
+        private static float lastHighUsageTime;
+        private static float lastShrinkTime;
+
+        // Pool statistics
+        private static int peakPoolUsage;
+        private static int totalExpansions;
+        private static int totalSteals;
+
+
+        // Memory tracking - use struct-based approach for better cache coherence
         private static readonly Dictionary<AudioClip, int> activeClipRefCount = new Dictionary<AudioClip, int>();
         private static readonly Dictionary<AudioClip, long> clipMemoryCache = new Dictionary<AudioClip, long>();
         private static readonly HashSet<AudioClip> reusableClipSet = new HashSet<AudioClip>();
+
+        // O(1) lookup and removal for event names
         private static readonly ConcurrentDictionary<string, AudioEvent> eventNameMap = new ConcurrentDictionary<string, AudioEvent>();
 
-        // Track loaded banks for memory management and editor display
-        private static readonly ConcurrentBag<AudioBank> loadedBanks = new ConcurrentBag<AudioBank>();
+        // O(1) bank tracking with instance ID as key for fast unload
+        private static readonly ConcurrentDictionary<int, AudioBank> loadedBanks = new ConcurrentDictionary<int, AudioBank>();
 
+        // Reusable collections to avoid allocations during bank loading
         private static readonly Dictionary<string, List<AudioEvent>> reusableDuplicateCheck = new Dictionary<string, List<AudioEvent>>();
         private static readonly HashSet<string> reusableBankRegisteredNames = new HashSet<string>();
 
-        public static long TotalMemoryUsage { get; private set; } = 0;
+        public static long TotalMemoryUsage { get; private set; }
         public static IReadOnlyDictionary<AudioClip, int> ActiveClipRefCount => activeClipRefCount;
         public static IReadOnlyDictionary<AudioClip, long> ClipMemoryCache => clipMemoryCache;
 
-        private static bool debugMode = false;
+        private static bool debugMode;
         public static bool DebugMode => debugMode;
         private const int MaxPreviousEvents = 300;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        private static long totalEventsPlayed = 0;
-        private static int peakActiveEvents = 0;
+#if UNITY_ANDROID || UNITY_IOS
+        private static float lastMobileUpdateTime;
+        private const float MobileUpdateInterval = 0.008f; // ~120Hz max to save battery
 #endif
 
-        private static List<ActiveEvent> cachedPreviousEventsList = null;
-        private static int cachedPreviousEventsVersion = -1;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private static long totalEventsPlayed;
+        private static int peakActiveEvents;
+#endif
 
         /// <summary>
-        /// Get previous events as a read-only list. Cached to avoid allocations on repeated access.
+        /// Runtime pool statistics for monitoring and debugging.
         /// </summary>
+        public static class PoolStats
+        {
+            public static int InitialSize => initialPoolSize;
+            public static int CurrentSize => currentPoolSize;
+            public static int MaxSize => maxPoolSize;
+            public static int InUse => currentPoolSize - availableSources.Count;
+            public static int Available => availableSources.Count;
+            public static float UsageRatio => currentPoolSize > 0 ? (float)InUse / currentPoolSize : 0f;
+            public static int PeakUsage => peakPoolUsage;
+            public static int TotalExpansions => totalExpansions;
+            public static int TotalSteals => totalSteals;
+            public static string DeviceTier => activePoolConfig?.GetDeviceTierName() ?? AudioPoolConfig.GetDefaultDeviceTierName();
+            public static bool HasConfig => activePoolConfig != null;
+        }
+
+        private static List<ActiveEvent> cachedPreviousEventsList;
+        private static int cachedPreviousEventsVersion = -1;
+
         public static IReadOnlyList<ActiveEvent> GetPreviousEvents()
         {
             int currentVersion = previousEventsWriteIndex;
@@ -109,14 +133,8 @@ namespace CycloneGames.Audio.Runtime
                 return cachedPreviousEventsList;
             }
 
-            if (cachedPreviousEventsList == null)
-            {
-                cachedPreviousEventsList = new List<ActiveEvent>(MaxPreviousEvents);
-            }
-            else
-            {
-                cachedPreviousEventsList.Clear();
-            }
+            cachedPreviousEventsList ??= new List<ActiveEvent>(MaxPreviousEvents);
+            cachedPreviousEventsList.Clear();
 
             int startIndex = previousEventsCount < MaxPreviousEvents ? 0 : previousEventsWriteIndex;
             int count = previousEventsCount;
@@ -133,8 +151,6 @@ namespace CycloneGames.Audio.Runtime
             return cachedPreviousEventsList;
         }
 
-
-
         #region Interface
 
         ActiveEvent IAudioService.PlayEvent(AudioEvent eventToPlay, GameObject emitterObject) => PlayEvent(eventToPlay, emitterObject);
@@ -150,33 +166,21 @@ namespace CycloneGames.Audio.Runtime
         public void SetMixerVolume(string parameterName, float volume)
         {
             if (mainMixer != null)
-            {
                 mainMixer.SetFloat(parameterName, volume);
-            }
             else
-            {
                 Debug.LogWarning("AudioManager: Main Mixer not assigned.");
-            }
         }
 
         public float GetMixerVolume(string parameterName)
         {
-            if (mainMixer != null)
-            {
-                if (mainMixer.GetFloat(parameterName, out float value))
-                {
-                    return value;
-                }
-            }
+            if (mainMixer != null && mainMixer.GetFloat(parameterName, out float value))
+                return value;
             return 0f;
         }
 
         /// <summary>
-        /// Start playing an AudioEvent. Thread-safe (returns null if called from background thread).
+        /// Start playing an AudioEvent. Thread-safe.
         /// </summary>
-        /// <param name="eventToPlay">The AudioEvent to play</param>
-        /// <param name="emitterObject">The GameObject to play the event on</param>
-        /// <returns>The reference for the runtime event that can be modified or stopped explicitly</returns>
         public static ActiveEvent PlayEvent(AudioEvent eventToPlay, GameObject emitterObject)
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
@@ -185,19 +189,14 @@ namespace CycloneGames.Audio.Runtime
                 return null;
             }
 
-            if (!ValidateManager() || !ValidateEvent(eventToPlay))
-            {
-                return null;
-            }
+            if (!ValidateManager() || !ValidateEvent(eventToPlay)) return null;
 
             Transform emitterTransform = emitterObject != null ? emitterObject.transform : null;
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitterTransform);
             tempEvent.Play();
 
             if (tempEvent.status != EventStatus.Error)
-            {
                 TrackMemory(tempEvent, true);
-            }
 
             return tempEvent;
         }
@@ -210,77 +209,54 @@ namespace CycloneGames.Audio.Runtime
                 return null;
             }
 
-            if (!ValidateManager() || !ValidateEvent(eventToPlay))
-            {
-                return null;
-            }
+            if (!ValidateManager() || !ValidateEvent(eventToPlay)) return null;
 
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, null);
             tempEvent.Play();
             tempEvent.SetAllSourcePositions(position);
 
             if (tempEvent.status != EventStatus.Error)
-            {
                 TrackMemory(tempEvent, true);
-            }
 
             return tempEvent;
         }
 
-        /// <summary>
-        /// Start playing an AudioEvent by name. Thread-safe (returns null if called from background thread).
-        /// </summary>
-        /// <param name="eventName">The name of the AudioEvent to play</param>
-        /// <param name="emitterObject">The GameObject to play the event on</param>
-        /// <returns>The reference for the runtime event that can be modified or stopped explicitly</returns>
         public static ActiveEvent PlayEvent(string eventName, GameObject emitterObject)
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                string capturedName = eventName; // Capture for closure
+                string capturedName = eventName;
                 commandQueue.Enqueue(() => PlayEvent(capturedName, emitterObject));
                 return null;
             }
 
-            if (!ValidateManager() || string.IsNullOrEmpty(eventName))
-            {
-                return null;
-            }
+            if (!ValidateManager() || string.IsNullOrEmpty(eventName)) return null;
 
             AudioEvent eventToPlay = GetEventByName(eventName);
             if (eventToPlay == null)
             {
-                Debug.LogWarning($"AudioManager: Event '{eventName}' not found. Make sure the AudioBank is loaded.");
+                Debug.LogWarning($"AudioManager: Event '{eventName}' not found.");
                 return null;
             }
 
             return PlayEvent(eventToPlay, emitterObject);
         }
 
-        /// <summary>
-        /// Start playing an AudioEvent by name at a specific position. Thread-safe (returns null if called from background thread).
-        /// </summary>
-        /// <param name="eventName">The name of the AudioEvent to play</param>
-        /// <param name="position">The position to play the event at</param>
-        /// <returns>The reference for the runtime event that can be modified or stopped explicitly</returns>
         public static ActiveEvent PlayEvent(string eventName, Vector3 position)
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                string capturedName = eventName; // Capture for closure
+                string capturedName = eventName;
                 commandQueue.Enqueue(() => PlayEvent(capturedName, position));
                 return null;
             }
 
-            if (!ValidateManager() || string.IsNullOrEmpty(eventName))
-            {
-                return null;
-            }
+            if (!ValidateManager() || string.IsNullOrEmpty(eventName)) return null;
 
             AudioEvent eventToPlay = GetEventByName(eventName);
             if (eventToPlay == null)
             {
-                Debug.LogWarning($"AudioManager: Event '{eventName}' not found. Make sure the AudioBank is loaded.");
+                Debug.LogWarning($"AudioManager: Event '{eventName}' not found.");
                 return null;
             }
 
@@ -288,86 +264,45 @@ namespace CycloneGames.Audio.Runtime
         }
 
         /// <summary>
-        /// Start playing an AudioEvent by name at a specific DSP time (high precision for rhythm games).
+        /// Play audio at precise DSP time for rhythm games
         /// </summary>
-        /// <param name="eventName">The name of the AudioEvent to play</param>
-        /// <param name="emitterObject">The GameObject to play the event on</param>
-        /// <param name="dspTime">The AudioSettings.dspTime to play at</param>
         public static ActiveEvent PlayEventScheduled(string eventName, GameObject emitterObject, double dspTime)
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                string capturedName = eventName; // Capture for closure
+                string capturedName = eventName;
                 double capturedDspTime = AudioSettings.dspTime;
-                double adjustedDspTime = dspTime;
-                if (dspTime > capturedDspTime)
-                {
-                    adjustedDspTime = dspTime;
-                }
-                else
-                {
-                    adjustedDspTime = capturedDspTime + 0.01;
-                }
-
+                double adjustedDspTime = dspTime > capturedDspTime ? dspTime : capturedDspTime + 0.01;
                 commandQueue.Enqueue(() => PlayEventScheduled(capturedName, emitterObject, adjustedDspTime));
                 return null;
             }
 
-            if (!ValidateManager() || string.IsNullOrEmpty(eventName))
-            {
-                return null;
-            }
+            if (!ValidateManager() || string.IsNullOrEmpty(eventName)) return null;
 
             AudioEvent eventToPlay = GetEventByName(eventName);
             if (eventToPlay == null)
             {
-                Debug.LogWarning($"AudioManager: Event '{eventName}' not found. Make sure the AudioBank is loaded.");
+                Debug.LogWarning($"AudioManager: Event '{eventName}' not found.");
                 return null;
             }
 
             return PlayEventScheduled(eventToPlay, emitterObject, dspTime);
         }
 
-        /// <summary>
-        /// Start playing an AudioEvent at a specific DSP time (high precision for rhythm games).
-        /// </summary>
-        /// <param name="eventToPlay">The AudioEvent to play</param>
-        /// <param name="emitterObject">The GameObject to play the event on</param>
-        /// <param name="dspTime">The AudioSettings.dspTime to play at</param>
         public static ActiveEvent PlayEventScheduled(AudioEvent eventToPlay, GameObject emitterObject, double dspTime)
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                // Scheduled playback from background thread: capture current dspTime to adjust delay
                 double capturedDspTime = AudioSettings.dspTime;
-                double adjustedDspTime = dspTime;
-                if (dspTime > capturedDspTime)
-                {
-                    // If scheduled time is in the future, it's still valid
-                    adjustedDspTime = dspTime;
-                }
-                else
-                {
-                    // If scheduled time has passed, play immediately
-                    adjustedDspTime = capturedDspTime + 0.01; // Small delay to ensure proper scheduling
-                }
-
+                double adjustedDspTime = dspTime > capturedDspTime ? dspTime : capturedDspTime + 0.01;
                 commandQueue.Enqueue(() => PlayEventScheduled(eventToPlay, emitterObject, adjustedDspTime));
                 return null;
             }
 
-            if (!ValidateManager() || !ValidateEvent(eventToPlay))
-            {
-                return null;
-            }
+            if (!ValidateManager() || !ValidateEvent(eventToPlay)) return null;
 
-            // Validate dspTime is not in the past
             double currentDspTime = AudioSettings.dspTime;
-            if (dspTime < currentDspTime)
-            {
-                // If scheduled time has passed, play immediately
-                dspTime = currentDspTime + 0.01;
-            }
+            if (dspTime < currentDspTime) dspTime = currentDspTime + 0.01;
 
             Transform emitterTransform = emitterObject != null ? emitterObject.transform : null;
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitterTransform);
@@ -375,35 +310,19 @@ namespace CycloneGames.Audio.Runtime
             tempEvent.Play();
 
             if (tempEvent.status != EventStatus.Error)
-            {
                 TrackMemory(tempEvent, true);
-            }
 
             return tempEvent;
         }
 
         private static ActiveEvent GetActiveEventFromPool(AudioEvent eventToPlay, Transform emitter)
         {
-            ActiveEvent activeEvent;
-            if (activeEventPool.Count > 0)
-            {
-                activeEvent = activeEventPool.Pop();
-                activeEvent.Initialize(eventToPlay, emitter);
-            }
-            else
-            {
-                activeEvent = new ActiveEvent();
-                activeEvent.Initialize(eventToPlay, emitter);
-            }
+            ActiveEvent activeEvent = activeEventPool.Count > 0 ? activeEventPool.Pop() : new ActiveEvent();
+            activeEvent.Initialize(eventToPlay, emitter);
             return activeEvent;
         }
 
-        /// <summary>
-        /// Start playing an AudioEvent
-        /// </summary>
-        /// <param name="eventToPlay">The AudioEvent to play</param>
-        /// <param name="emitter">The AudioSource component to play the event on</param>
-        /// <returns>The reference for the runtime event that can be modified or stopped explicitly</returns>
+        [Obsolete("Playing on AudioSource is deprecated")]
         public static ActiveEvent PlayEvent(AudioEvent eventToPlay, AudioSource emitter)
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
@@ -412,27 +331,18 @@ namespace CycloneGames.Audio.Runtime
                 return null;
             }
 
-            Debug.LogWarningFormat("AudioManager: deprecated function called on event {0} - play on an AudioSource no longer supported");
-            if (!ValidateManager() || !ValidateEvent(eventToPlay))
-            {
-                return null;
-            }
+            Debug.LogWarning("AudioManager: Deprecated - play on AudioSource no longer supported");
+            if (!ValidateManager() || !ValidateEvent(eventToPlay)) return null;
 
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitter.transform);
             tempEvent.Play();
 
             if (tempEvent.status != EventStatus.Error)
-            {
                 TrackMemory(tempEvent, true);
-            }
 
             return tempEvent;
         }
 
-        /// <summary>
-        /// Stop all active instances of an audio event
-        /// </summary>
-        /// <param name="eventsToStop">The event to stop all instances of</param>
         public static void StopAll(AudioEvent eventsToStop)
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
@@ -441,54 +351,37 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            if (!ValidateManager())
-            {
-                return;
-            }
+            if (!ValidateManager()) return;
 
-            ActiveEvent tempEvent;
             for (int i = ActiveEvents.Count - 1; i >= 0; i--)
             {
-                tempEvent = ActiveEvents[i];
+                var tempEvent = ActiveEvents[i];
                 if (tempEvent.rootEvent == eventsToStop)
-                {
                     tempEvent.Stop();
-                }
             }
         }
 
-        /// <summary>
-        /// Stop all active instances of an audio event by name
-        /// </summary>
-        /// <param name="eventName">The name of the event to stop all instances of</param>
         public static void StopAll(string eventName)
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                string capturedName = eventName; // Capture for closure
+                string capturedName = eventName;
                 commandQueue.Enqueue(() => StopAll(capturedName));
                 return;
             }
 
-            if (!ValidateManager() || string.IsNullOrEmpty(eventName))
-            {
-                return;
-            }
+            if (!ValidateManager() || string.IsNullOrEmpty(eventName)) return;
 
             AudioEvent eventToStop = GetEventByName(eventName);
             if (eventToStop == null)
             {
-                Debug.LogWarning($"AudioManager: Event '{eventName}' not found. Make sure the AudioBank is loaded.");
+                Debug.LogWarning($"AudioManager: Event '{eventName}' not found.");
                 return;
             }
 
             StopAll(eventToStop);
         }
 
-        /// <summary>
-        /// Stop all active instances of a group
-        /// </summary>
-        /// <param name="groupNum">The group number to stop all instances of</param>
         public static void StopAll(int groupNum)
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
@@ -497,80 +390,49 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            if (!ValidateManager())
-            {
-                return;
-            }
+            if (!ValidateManager()) return;
 
-            ActiveEvent tempEvent;
             for (int i = ActiveEvents.Count - 1; i >= 0; i--)
             {
-                tempEvent = ActiveEvents[i];
+                var tempEvent = ActiveEvents[i];
                 if (tempEvent.rootEvent.Group == groupNum)
-                {
                     tempEvent.Stop();
-                }
             }
         }
 
-        /// <summary>
-        /// Clear an ActiveEvent from the list of ActiveEvents
-        /// </summary>
-        /// <param name="stoppedEvent">The event that is no longer playing to remove from the ActiveEvent list</param>
         public static void RemoveActiveEvent(ActiveEvent stoppedEvent)
         {
-            if (!ValidateManager())
-            {
-                return;
-            }
+            if (!ValidateManager()) return;
 
-            // Return all associated AudioSources to the available pool.
-            List<EventSource> sources = stoppedEvent.sources;
-            AudioSource tempSource;
-            int sourceCount = sources.Count;
+            // Return AudioSources to pool
+            int sourceCount = stoppedEvent.SourceCount;
             for (int i = 0; i < sourceCount; i++)
             {
-                tempSource = sources[i].source;
-                // A null check is important here, as the source might have been destroyed.
-                if (tempSource != null)
-                {
-                    // We assume a source is only ever returned once per event stop, so we don't need a .Contains check,
-                    // which would be inefficient (O(n)) for a queue.
-                    availableSources.Enqueue(tempSource);
-                }
+                var es = stoppedEvent.GetSource(i);
+                if (es.IsValid)
+                    availableSources.Enqueue(es.source);
             }
 
             TrackMemory(stoppedEvent, false);
             ActiveEvents.Remove(stoppedEvent);
 
-            // Return ActiveEvent to pool
             stoppedEvent.Reset();
             activeEventPool.Push(stoppedEvent);
-
-            stoppedEvent = null;
         }
 
         public static void AddPreviousEvent(ActiveEvent newEvent)
         {
             previousEventsBuffer[previousEventsWriteIndex] = newEvent;
             previousEventsWriteIndex = (previousEventsWriteIndex + 1) % MaxPreviousEvents;
-            if (previousEventsCount < MaxPreviousEvents)
-            {
-                previousEventsCount++;
-            }
+            if (previousEventsCount < MaxPreviousEvents) previousEventsCount++;
         }
 
-        /// <summary>
-        /// Get the list of all cultures for compatible languges
-        /// </summary>
         public static void UpdateLanguages()
         {
             CultureInfo[] cultures = CultureInfo.GetCultures(CultureTypes.AllCultures);
             Languages = new string[cultures.Length];
             for (int i = 0; i < cultures.Length; i++)
-            {
                 Languages[i] = cultures[i].Name;
-            }
         }
 
         public static void SetDebugMode(bool toggle)
@@ -580,23 +442,15 @@ namespace CycloneGames.Audio.Runtime
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-        /// <summary>
-        /// Track that an event was played (called from ActiveEvent.Play)
-        /// </summary>
         internal static void TrackEventPlayed()
         {
-            System.Threading.Interlocked.Increment(ref totalEventsPlayed);
+            Interlocked.Increment(ref totalEventsPlayed);
             int currentActive = ActiveEvents.Count;
             int peak = peakActiveEvents;
             if (currentActive > peak)
-            {
-                System.Threading.Interlocked.CompareExchange(ref peakActiveEvents, currentActive, peak);
-            }
+                Interlocked.CompareExchange(ref peakActiveEvents, currentActive, peak);
         }
 
-        /// <summary>
-        /// Get pool statistics for monitoring and debugging
-        /// </summary>
         public struct PoolStatistics
         {
             public int ActiveEventPoolSize;
@@ -609,55 +463,47 @@ namespace CycloneGames.Audio.Runtime
             public int LoadedBanksCount;
         }
 
-        /// <summary>
-        /// Get current pool statistics (DEVELOPMENT_BUILD or UNITY_EDITOR only)
-        /// </summary>
         public static PoolStatistics GetPoolStatistics()
         {
             return new PoolStatistics
             {
                 ActiveEventPoolSize = activeEventPool.Count,
                 AvailableSourcesCount = availableSources.Count,
-                ActiveEventsCount = ActiveEvents != null ? ActiveEvents.Count : 0,
+                ActiveEventsCount = ActiveEvents?.Count ?? 0,
                 SourcePoolSize = sourcePool.Count,
-                TotalEventsPlayed = System.Threading.Interlocked.Read(ref totalEventsPlayed),
+                TotalEventsPlayed = Interlocked.Read(ref totalEventsPlayed),
                 PeakActiveEvents = peakActiveEvents,
                 TotalMemoryUsage = TotalMemoryUsage,
                 LoadedBanksCount = loadedBanks.Count
             };
         }
 
-        /// <summary>
-        /// Reset pool statistics (useful for profiling sessions)
-        /// </summary>
         public static void ResetPoolStatistics()
         {
-            System.Threading.Interlocked.Exchange(ref totalEventsPlayed, 0);
-            System.Threading.Interlocked.Exchange(ref peakActiveEvents, 0);
+            Interlocked.Exchange(ref totalEventsPlayed, 0);
+            Interlocked.Exchange(ref peakActiveEvents, 0);
         }
 #endif
 
         public static async void DelayRemoveActiveEvent(ActiveEvent eventToRemove, float delay = 1)
         {
-            if (!ValidateManager())
-            {
-                return;
-            }
+            if (!ValidateManager()) return;
 
             try
             {
                 await UniTask.Delay(TimeSpan.FromSeconds(delay), ignoreTimeScale: false, cancellationToken: eventToRemove.GetCancellationToken());
-
                 if (eventToRemove.status != EventStatus.Error)
-                {
                     RemoveActiveEvent(eventToRemove);
-                }
             }
             catch (OperationCanceledException)
             {
-                // This is expected if the event is stopped abruptly. No action needed.
+                // Expected when event stopped abruptly
             }
         }
+
+        #endregion
+
+        #region Unity Lifecycle
 
         private void Awake()
         {
@@ -665,83 +511,56 @@ namespace CycloneGames.Audio.Runtime
 
             if (Instance != null)
             {
-                // If an instance already exists and it's not this one, destroy this one.
-                if (Instance != this)
-                {
-                    Destroy(gameObject);
-                }
+                if (Instance != this) Destroy(gameObject);
                 return;
             }
 
-            // This is the first instance.
             Instance = this;
             DontDestroyOnLoad(gameObject);
 
-            if (!isInitialized)
-            {
-                Initialize();
-            }
+            if (!isInitialized) Initialize();
         }
 
         private void OnDestroy()
         {
-            if (Instance == this)
-            {
-                Cleanup();
-            }
+            if (Instance == this) Cleanup();
         }
 
-        private void OnApplicationQuit()
-        {
-            Cleanup();
-        }
+        private void OnApplicationQuit() => Cleanup();
 
-        /// <summary>
-        /// Cleanup resources on shutdown to prevent memory leaks
-        /// </summary>
         private static void Cleanup()
         {
-            // Stop all active events
             if (ActiveEvents != null)
             {
-                ActiveEvent tempEvent;
-                int eventCount = ActiveEvents.Count;
-                for (int i = eventCount - 1; i >= 0; i--)
+                for (int i = ActiveEvents.Count - 1; i >= 0; i--)
                 {
                     if (i >= ActiveEvents.Count) continue;
-                    tempEvent = ActiveEvents[i];
-                    if (tempEvent != null)
-                    {
-                        tempEvent.StopImmediate();
-                    }
+                    ActiveEvents[i]?.StopImmediate();
                 }
                 ActiveEvents.Clear();
             }
 
-            // Clear event name map (ConcurrentDictionary is thread-safe)
             eventNameMap.Clear();
-
-            // Clear loaded banks tracking (ConcurrentBag doesn't have Clear, but we can just reassign or leave it)
-            // Note: ConcurrentBag doesn't have a Clear method, but cleanup happens on shutdown anyway
-
-            // Clear memory tracking
+            loadedBanks.Clear();
             activeClipRefCount.Clear();
             clipMemoryCache.Clear();
             TotalMemoryUsage = 0;
-
-            // Clear pools
             activeEventPool.Clear();
             availableSources.Clear();
-
-            // Clear command queue
             while (commandQueue.TryDequeue(out _)) { }
-
             AllowCreateInstance = false;
         }
 
         private void Update()
         {
-            // Process command queue with limit to prevent frame time spikes
+#if UNITY_ANDROID || UNITY_IOS
+            // Throttle updates on mobile to save battery
+            float currentTime = Time.unscaledTime;
+            if (currentTime - lastMobileUpdateTime < MobileUpdateInterval) return;
+            lastMobileUpdateTime = currentTime;
+#endif
+
+            // Process command queue with frame limit
             int commandProcessed = 0;
             const int maxCommandsPerFrame = 10;
             while (commandProcessed < maxCommandsPerFrame && commandQueue.TryDequeue(out Action command))
@@ -750,74 +569,126 @@ namespace CycloneGames.Audio.Runtime
                 commandProcessed++;
             }
 
-            // Update active events with early exit optimization
-            // Reverse iteration allows safe removal during iteration
+            // Update active events
             int eventCount = ActiveEvents.Count;
-            ActiveEvent tempEvent;
             for (int i = eventCount - 1; i >= 0; i--)
             {
-                if (i >= ActiveEvents.Count) continue; // Safety check for concurrent modifications
-
-                tempEvent = ActiveEvents[i];
-                if (tempEvent == null || tempEvent.status == EventStatus.Stopped)
-                {
-                    continue;
-                }
-
-                if (tempEvent.sources.Count == 0)
-                {
-                    continue;
-                }
-
+                if (i >= ActiveEvents.Count) continue;
+                var tempEvent = ActiveEvents[i];
+                if (tempEvent == null || tempEvent.status == EventStatus.Stopped) continue;
+                if (tempEvent.SourceCount == 0) continue;
                 tempEvent.Update();
             }
+
+            // Track peak usage
+            int currentUsage = PoolStats.InUse;
+            if (currentUsage > peakPoolUsage) peakPoolUsage = currentUsage;
+
+            // Smart pool shrinking
+            TryShrinkPool();
         }
 
-        /// <summary>
-        /// Instantiate a new GameObject and add the AudioManager component as a fallback.
-        /// </summary>
+        #endregion
+
+        #region Initialization
+
         private static void CreateInstance()
         {
-            if (Instance != null || !AllowCreateInstance)
-            {
-                return;
-            }
-
-            // This will create the object, and its Awake() method will handle all initialization.
+            if (Instance != null || !AllowCreateInstance) return;
             new GameObject("AudioManager").AddComponent<AudioManager>();
         }
 
-        /// <summary>
-        /// Initializes the AudioManager instance.
-        /// </summary>
         private void Initialize()
         {
             CurrentLanguage = 0;
-            staticMainMixer = this.mainMixer;
-            ActiveEvents = new List<ActiveEvent>();
-            CreateSources();
+            staticMainMixer = mainMixer;
+            ActiveEvents = new List<ActiveEvent>(64);
+            
+            // Initialize smart pool configuration (auto-discovery only)
+            activePoolConfig = AudioPoolConfig.FindConfig();
+            InitializeSmartPool();
+            
             ValidateAudioListener();
             Application.quitting += HandleQuitting;
             isInitialized = true;
+            
+            string configSource = activePoolConfig != null ? "Auto-discovered" : "Defaults";
+            Debug.Log($"AudioManager: Initialized with {currentPoolSize} sources (max: {maxPoolSize}, tier: {PoolStats.DeviceTier}, config: {configSource})");
+        }
+
+        private void InitializeSmartPool()
+        {
+            // Determine pool sizes based on configuration and device
+            if (customPoolSize > 0)
+            {
+                // Custom pool size overrides everything
+                initialPoolSize = customPoolSize;
+                maxPoolSize = customPoolSize;
+            }
+            else if (activePoolConfig != null)
+            {
+                // Use config asset values
+                initialPoolSize = activePoolConfig.GetInitialPoolSizeForPlatform();
+                maxPoolSize = activePoolConfig.GetMaxPoolSizeForDevice();
+            }
+            else
+            {
+                // Use static defaults (no config exists)
+                initialPoolSize = AudioPoolConfig.GetDefaultInitialPoolSizeForPlatform();
+                maxPoolSize = AudioPoolConfig.GetDefaultMaxPoolSizeForDevice();
+            }
+
+            currentPoolSize = 0;
+            peakPoolUsage = 0;
+            totalExpansions = 0;
+            totalSteals = 0;
+            lastHighUsageTime = Time.time;
+
+            // Pre-allocate capacity
+            if (sourcePool.Capacity < maxPoolSize)
+                sourcePool.Capacity = maxPoolSize;
+
+            // Create initial sources
+            CreateSources(initialPoolSize);
         }
 
         /// <summary>
-        /// Ensures that there is an AudioListener in the scene.
-        /// It prioritizes adding it to the main camera for correct 3D audio positioning.
-        /// As a fallback, it adds it to the AudioManager's GameObject.
+        /// Reload pool configuration from a new AudioPoolConfig.
+        /// Call this after hot-updating the config to apply new settings.
+        /// Note: This only updates pool size limits, existing sources are preserved.
         /// </summary>
+        public static void ReloadPoolConfig()
+        {
+            // Re-fetch config (will get the one set via SetConfig)
+            activePoolConfig = AudioPoolConfig.FindConfig();
+            
+            // Update pool limits based on new config
+            if (activePoolConfig != null)
+            {
+                int newInitial = activePoolConfig.GetInitialPoolSizeForPlatform();
+                int newMax = activePoolConfig.GetMaxPoolSizeForDevice();
+                
+                // Only update if not using custom override
+                if (Instance != null && Instance.customPoolSize <= 0)
+                {
+                    initialPoolSize = newInitial;
+                    maxPoolSize = newMax;
+                    
+                    // Update capacity if needed
+                    if (sourcePool.Capacity < maxPoolSize)
+                        sourcePool.Capacity = maxPoolSize;
+                    
+                    Debug.Log($"AudioManager: Pool config reloaded (initial: {initialPoolSize}, max: {maxPoolSize}, tier: {PoolStats.DeviceTier})");
+                }
+            }
+        }
+
         private void ValidateAudioListener()
         {
-            if (cachedAudioListener != null && cachedAudioListener.gameObject != null)
-            {
-                return;
-            }
+            if (cachedAudioListener != null && cachedAudioListener.gameObject != null) return;
 
             cachedAudioListener = FindObjectOfType<AudioListener>();
-            if (cachedAudioListener != null)
-            {
-                return;
-            }
+            if (cachedAudioListener != null) return;
 
             Camera mainCamera = GetMainCamera();
             if (mainCamera != null)
@@ -827,8 +698,8 @@ namespace CycloneGames.Audio.Runtime
             }
             else
             {
-                Debug.LogWarning("No AudioListener or main camera found in the scene. Creating AudioListener on AudioManager. 3D audio positioning may be incorrect.");
-                cachedAudioListener = this.gameObject.AddComponent<AudioListener>();
+                Debug.LogWarning("No AudioListener or main camera found. Creating AudioListener on AudioManager.");
+                cachedAudioListener = gameObject.AddComponent<AudioListener>();
             }
         }
 
@@ -836,63 +707,28 @@ namespace CycloneGames.Audio.Runtime
         {
             int currentFrame = Time.frameCount;
             if (cachedMainCamera != null && cachedMainCamera.gameObject != null && cachedMainCameraFrame == currentFrame)
-            {
                 return cachedMainCamera;
-            }
 
             cachedMainCamera = Camera.main;
             cachedMainCameraFrame = currentFrame;
             return cachedMainCamera;
         }
 
-        /// <summary>
-        /// On shutdown we cannot create an instance
-        /// </summary>
-        private static void HandleQuitting()
+        private static void HandleQuitting() => AllowCreateInstance = false;
+
+        private void CreateSources(int count)
         {
-            AllowCreateInstance = false;
-        }
-
-        /// <summary>
-        /// Create the pool of AudioSources with platform-optimized settings
-        /// </summary>
-        private void CreateSources()
-        {
-            int poolCount;
-            if (this.customPoolSize > 0)
+            int startIndex = currentPoolSize;
+            
+            for (int i = 0; i < count; i++)
             {
-                poolCount = this.customPoolSize;
-            }
-            else
-            {
-#if UNITY_WEBGL
-                // WebGL has limited audio capabilities, use smaller pool
-                poolCount = 24;
-#elif UNITY_ANDROID || UNITY_IOS
-                // Mobile platforms: balance between performance and memory
-                poolCount = 32;
-#else
-                // Desktop platforms: can handle larger pools
-                poolCount = 80;
-#endif
-            }
-
-            // Pre-allocate list capacity to avoid resizing
-            if (sourcePool.Capacity < poolCount)
-            {
-                sourcePool.Capacity = poolCount;
-            }
-
-            for (int i = 0; i < poolCount; i++)
-            {
-                GameObject sourceGO = new GameObject($"AudioSource{i}");
+                var sourceGO = new GameObject($"AudioSource{startIndex + i}");
                 sourceGO.transform.localScale = new Vector3(0.1f, 0.1f, 0.1f);
-                sourceGO.transform.SetParent(this.transform);
-                AudioSource tempSource = sourceGO.AddComponent<AudioSource>();
+                sourceGO.transform.SetParent(transform);
+                var tempSource = sourceGO.AddComponent<AudioSource>();
                 tempSource.playOnAwake = false;
 
 #if UNITY_WEBGL || UNITY_ANDROID || UNITY_IOS
-                // Optimize for mobile/WebGL: disable expensive features by default
                 tempSource.bypassEffects = false;
                 tempSource.bypassListenerEffects = false;
                 tempSource.bypassReverbZones = false;
@@ -900,90 +736,181 @@ namespace CycloneGames.Audio.Runtime
 
                 sourcePool.Add(tempSource);
                 availableSources.Enqueue(tempSource);
+
 #if UNITY_EDITOR
-                TextMesh newText = sourceGO.AddComponent<TextMesh>();
+                var newText = sourceGO.AddComponent<TextMesh>();
                 newText.characterSize = 0.2f;
 #endif
             }
+            
+            currentPoolSize += count;
         }
 
-        private static void ClearSourceText()
+        /// <summary>
+        /// Attempt to expand the pool when more sources are needed.
+        /// Returns true if expansion was successful.
+        /// </summary>
+        private bool TryExpandPool()
         {
-            // Cache TextMesh components to avoid repeated GetComponent calls
-            foreach (var source in sourcePool)
+            if (currentPoolSize >= maxPoolSize) return false;
+
+            int increment = activePoolConfig?.ExpansionIncrement ?? AudioPoolConfig.DefaultExpansionIncrement;
+            int actualIncrement = Mathf.Min(increment, maxPoolSize - currentPoolSize);
+
+            if (actualIncrement <= 0) return false;
+
+            CreateSources(actualIncrement);
+            lastPoolExpansionTime = Time.time;
+            totalExpansions++;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log($"AudioManager: Pool expanded to {currentPoolSize}/{maxPoolSize} sources (expansion #{totalExpansions})");
+#endif
+            return true;
+        }
+
+        /// <summary>
+        /// Attempt to steal a source from the oldest, lowest-priority playing event.
+        /// Returns the stolen source or null if no suitable source found.
+        /// </summary>
+        private static AudioSource TryStealSource()
+        {
+            if (ActiveEvents == null || ActiveEvents.Count == 0) return null;
+
+            ActiveEvent oldest = null;
+            float oldestTime = float.MaxValue;
+
+            for (int i = 0; i < ActiveEvents.Count; i++)
             {
-                if (source != null)
+                var evt = ActiveEvents[i];
+                if (evt == null || evt.status == EventStatus.Stopped) continue;
+                if (evt.rootEvent == null) continue;
+                
+                // Skip high-priority and looping events
+                if (evt.rootEvent.Output != null && evt.rootEvent.Output.loop) continue;
+                
+                if (evt.timeStarted < oldestTime)
                 {
-#if UNITY_EDITOR
-                    TextMesh tempText = source.GetComponent<TextMesh>();
-                    if (tempText != null)
+                    oldestTime = evt.timeStarted;
+                    oldest = evt;
+                }
+            }
+
+            if (oldest != null && oldest.SourceCount > 0)
+            {
+                var source = oldest.GetSource(0);
+                if (source.IsValid)
+                {
+                    oldest.StopImmediate();
+                    totalSteals++;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    Debug.LogWarning($"AudioManager: Voice stolen from '{oldest.name}' (total steals: {totalSteals})");
+#endif
+                    return source.source;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Shrink the pool if it's been idle for a while.
+        /// Called during Update to gradually release unused sources.
+        /// </summary>
+        private void TryShrinkPool()
+        {
+            if (currentPoolSize <= initialPoolSize) return;
+
+            float currentTime = Time.time;
+            float idleTime = currentTime - lastHighUsageTime;
+            float usageRatio = PoolStats.UsageRatio;
+
+            // Get thresholds from config or use defaults
+            float shrinkUsageThreshold = activePoolConfig?.ShrinkUsageThreshold ?? AudioPoolConfig.DefaultShrinkUsageThreshold;
+            float shrinkIdleThreshold = activePoolConfig?.ShrinkIdleThreshold ?? AudioPoolConfig.DefaultShrinkIdleThreshold;
+            float shrinkInterval = activePoolConfig?.ShrinkInterval ?? AudioPoolConfig.DefaultShrinkInterval;
+
+            // Update high usage time if pool is busy
+            if (usageRatio >= shrinkUsageThreshold)
+            {
+                lastHighUsageTime = currentTime;
+                return;
+            }
+
+            // Check if we should shrink
+            if (idleTime < shrinkIdleThreshold) return;
+            if (currentTime - lastShrinkTime < shrinkInterval) return;
+
+            // Shrink by one
+            if (availableSources.Count > 0 && currentPoolSize > initialPoolSize)
+            {
+                var sourceToRemove = availableSources.Dequeue();
+                if (sourceToRemove != null)
+                {
+                    sourcePool.Remove(sourceToRemove);
+                    Destroy(sourceToRemove.gameObject);
+                    currentPoolSize--;
+                    lastShrinkTime = currentTime;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    if (currentPoolSize % 8 == 0) // Log every 8 shrinks
                     {
-                        tempText.text = string.Empty;
+                        Debug.Log($"AudioManager: Pool shrunk to {currentPoolSize}/{maxPoolSize} sources");
                     }
 #endif
                 }
             }
         }
 
-        /// <summary>
-        /// Get the number of active instances of an AudioEvent
-        /// </summary>
-        /// <param name="audioEvent">The event to query the number of active instances of</param>
-        /// <returns>The number of active instances of the specified AudioEvent</returns>
-        private static int CountActiveInstances(AudioEvent audioEvent)
+        private static void ClearSourceText()
         {
-            if (audioEvent == null || ActiveEvents == null)
+#if UNITY_EDITOR
+            foreach (var source in sourcePool)
             {
-                return 0;
-            }
-
-            int tempCount = 0;
-            int count = ActiveEvents.Count;
-            ActiveEvent activeEvent;
-            // Reverse iteration for better cache locality when checking many events
-            for (int i = count - 1; i >= 0; i--)
-            {
-                activeEvent = ActiveEvents[i];
-                if (activeEvent != null && activeEvent.rootEvent == audioEvent && activeEvent.status != EventStatus.Stopped)
+                if (source != null)
                 {
-                    tempCount++;
+                    var tempText = source.GetComponent<TextMesh>();
+                    if (tempText != null) tempText.text = string.Empty;
                 }
             }
-
-            return tempCount;
+#endif
         }
 
-        /// <summary>
-        /// Call an immediate stop on all active audio events of a particular group
-        /// </summary>
-        /// <param name="groupNum">The group number to stop</param>
+        #endregion
+
+        #region Source Management
+
+        private static int CountActiveInstances(AudioEvent audioEvent)
+        {
+            if (audioEvent == null || ActiveEvents == null) return 0;
+
+            int count = 0;
+            int eventCount = ActiveEvents.Count;
+            for (int i = eventCount - 1; i >= 0; i--)
+            {
+                var ae = ActiveEvents[i];
+                if (ae != null && ae.rootEvent == audioEvent && ae.status != EventStatus.Stopped)
+                    count++;
+            }
+            return count;
+        }
+
         private static void StopGroupInstances(int groupNum)
         {
             if (ActiveEvents == null) return;
 
-            // Reverse iteration allows safe removal during iteration
-            int count = ActiveEvents.Count;
-            ActiveEvent tempEvent;
-            for (int i = count - 1; i >= 0; i--)
+            for (int i = ActiveEvents.Count - 1; i >= 0; i--)
             {
-                if (i >= ActiveEvents.Count) continue; // Safety check
-
-                tempEvent = ActiveEvents[i];
-                if (tempEvent != null && tempEvent.rootEvent != null && tempEvent.rootEvent.Group == groupNum)
-                {
+                if (i >= ActiveEvents.Count) continue;
+                var tempEvent = ActiveEvents[i];
+                if (tempEvent?.rootEvent != null && tempEvent.rootEvent.Group == groupNum)
                     tempEvent.StopImmediate();
-                }
             }
         }
 
-        /// <summary>
-        /// Look for an existing AudioSource component that is not currently playing
-        /// </summary>
-        /// <returns>An AudioSource reference if one exists, otherwise null</returns>
         public static AudioSource GetUnusedSource()
         {
-            // Using Dequeue is an O(1) operation, which is highly efficient.
-            // We loop to ensure we don't return a source that was destroyed.
             int maxAttempts = availableSources.Count;
             int attempts = 0;
 
@@ -991,71 +918,69 @@ namespace CycloneGames.Audio.Runtime
             {
                 AudioSource tempSource = availableSources.Dequeue();
                 if (tempSource != null && tempSource.gameObject != null)
-                {
                     return tempSource;
-                }
-                // If source was destroyed, it's implicitly removed from the pool. Continue to the next.
                 attempts++;
             }
 
-            // Pool is empty or only contained destroyed sources.
-            // Try to find any available source from the pool directly
-            AudioSource source;
+            // Fallback: find any non-playing source
             int poolCount = sourcePool.Count;
             for (int i = 0; i < poolCount; i++)
             {
-                source = sourcePool[i];
+                var source = sourcePool[i];
                 if (source != null && source.gameObject != null && !source.isPlaying)
-                {
                     return source;
+            }
+
+            // Smart pool: try to expand
+            if (Instance != null && Instance.TryExpandPool())
+            {
+                // After expansion, try again
+                if (availableSources.Count > 0)
+                {
+                    return availableSources.Dequeue();
                 }
             }
 
-            Debug.LogWarning("Audio source pool is empty. Consider increasing pool size.");
+            // Smart pool: try voice stealing as last resort
+            var stolenSource = TryStealSource();
+            if (stolenSource != null)
+            {
+                return stolenSource;
+            }
+
+            Debug.LogWarning($"AudioManager: Source pool exhausted ({currentPoolSize}/{maxPoolSize}). All sources in use and none can be stolen.");
             return null;
         }
-
 
         private static long CalculateAudioClipMemoryUsage(AudioClip clip)
         {
             if (clip == null) return 0;
-            return clip.samples * clip.channels * 2; // 16-bit samples
+            return clip.samples * clip.channels * 2L; // 16-bit samples
         }
 
         private static void TrackMemory(ActiveEvent activeEvent, bool isAdding)
         {
             reusableClipSet.Clear();
-            int sourceCount = activeEvent.sources.Count;
-            EventSource eventSource;
+
+            int sourceCount = activeEvent.SourceCount;
             for (int i = 0; i < sourceCount; i++)
             {
-                eventSource = activeEvent.sources[i];
-                if (eventSource != null && eventSource.source != null && eventSource.source.clip != null)
-                {
-                    reusableClipSet.Add(eventSource.source.clip);
-                }
+                var es = activeEvent.GetSource(i);
+                if (es.IsValid && es.source.clip != null)
+                    reusableClipSet.Add(es.source.clip);
             }
 
             int direction = isAdding ? 1 : -1;
             foreach (var clip in reusableClipSet)
             {
-                // Update reference count with optimized dictionary access
-                if (!activeClipRefCount.TryGetValue(clip, out int count))
-                {
-                    count = 0;
-                }
+                if (!activeClipRefCount.TryGetValue(clip, out int count)) count = 0;
                 count += direction;
 
                 if (count > 0)
-                {
                     activeClipRefCount[clip] = count;
-                }
                 else
-                {
                     activeClipRefCount.Remove(clip);
-                }
 
-                // Update total memory usage.
                 if (isAdding)
                 {
                     if (!clipMemoryCache.ContainsKey(clip))
@@ -1065,7 +990,7 @@ namespace CycloneGames.Audio.Runtime
                         TotalMemoryUsage += memory;
                     }
                 }
-                else if (count == 0) // Only decrease memory when the last reference is removed.
+                else if (count == 0)
                 {
                     if (clipMemoryCache.TryGetValue(clip, out long memory))
                     {
@@ -1076,60 +1001,33 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        /// <summary>
-        /// Make sure that the AudioManager has all of the required components
-        /// </summary>
-        /// <returns>Whether there is a valid AudioManager instance</returns>
         public static bool ValidateManager()
         {
             if (Instance == null)
             {
-                if (!AllowCreateInstance) { return false; }
-
-                // Try to find an instance that the user might have placed in the scene.
+                if (!AllowCreateInstance) return false;
                 Instance = FindObjectOfType<AudioManager>();
-
-                // If no instance exists in the scene, create one.
-                if (Instance == null)
-                {
-                    CreateInstance();
-                }
+                if (Instance == null) CreateInstance();
             }
             return Instance != null;
         }
 
         private static bool ValidateEvent(AudioEvent eventToPlay)
         {
-            if (eventToPlay == null)
-            {
-                return false;
-            }
-
-            if (!eventToPlay.ValidateAudioFiles())
-            {
-                return false;
-            }
-
-            if (eventToPlay.InstanceLimit > 0 && CountActiveInstances(eventToPlay) >= eventToPlay.InstanceLimit)
-            {
-                return false;
-            }
-
-            if (eventToPlay.Group != 0)
-            {
-                StopGroupInstances(eventToPlay.Group);
-            }
-
+            if (eventToPlay == null) return false;
+            if (!eventToPlay.ValidateAudioFiles()) return false;
+            if (eventToPlay.InstanceLimit > 0 && CountActiveInstances(eventToPlay) >= eventToPlay.InstanceLimit) return false;
+            if (eventToPlay.Group != 0) StopGroupInstances(eventToPlay.Group);
             return true;
         }
 
+        #endregion
+
+        #region Bank Management
+
         /// <summary>
-        /// Load an AudioBank and register all its events by name for fast string-based lookup.
-        /// Note: This does NOT preload audio clips into memory. Audio clips are loaded on-demand when events are played.
-        /// Thread-safe and can be called from any thread (queued to main thread if needed).
+        /// Load AudioBank and register events for string-based lookup. Thread-safe.
         /// </summary>
-        /// <param name="bank">The AudioBank to load</param>
-        /// <param name="overwriteExisting">If true, overwrite existing events with the same name. If false, skip duplicates.</param>
         public static void LoadBank(AudioBank bank, bool overwriteExisting = false)
         {
             if (bank == null)
@@ -1140,73 +1038,52 @@ namespace CycloneGames.Audio.Runtime
 
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                AudioBank capturedBank = bank; // Capture for closure
+                AudioBank capturedBank = bank;
                 commandQueue.Enqueue(() => LoadBank(capturedBank, overwriteExisting));
                 return;
             }
 
-            if (!ValidateManager())
-            {
-                return;
-            }
+            if (!ValidateManager()) return;
 
-            List<AudioEvent> events = bank.AudioEvents;
+            var events = bank.AudioEvents;
             if (events == null || events.Count == 0)
             {
                 Debug.LogWarning($"AudioManager: AudioBank '{bank.name}' contains no events.");
                 return;
             }
 
-            // First pass: detect duplicate names within the same bank (using reusable collection)
+            // Detect duplicates within bank
             reusableDuplicateCheck.Clear();
-            AudioEvent audioEvent;
             int eventCount = events.Count;
 
             for (int i = 0; i < eventCount; i++)
             {
-                audioEvent = events[i];
-                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
-                {
-                    continue;
-                }
+                var audioEvent = events[i];
+                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name)) continue;
 
                 string eventName = audioEvent.name;
                 if (!reusableDuplicateCheck.ContainsKey(eventName))
-                {
                     reusableDuplicateCheck[eventName] = new List<AudioEvent>();
-                }
                 reusableDuplicateCheck[eventName].Add(audioEvent);
             }
 
             foreach (var kvp in reusableDuplicateCheck)
             {
                 if (kvp.Value.Count > 1)
-                {
-                    Debug.LogError($"AudioManager: AudioBank '{bank.name}' contains {kvp.Value.Count} events with the same name '{kvp.Key}'. " +
-                        $"Only the first one will be accessible via PlayEvent(string). Please rename the duplicate events.");
-                }
+                    Debug.LogError($"AudioManager: Bank '{bank.name}' has {kvp.Value.Count} events named '{kvp.Key}'.");
             }
 
-            // Second pass: register events (only first occurrence of each name within the bank)
+            // Register events
             reusableBankRegisteredNames.Clear();
-            int registeredCount = 0;
-            int skippedCount = 0;
+            int registeredCount = 0, skippedCount = 0;
 
             for (int i = 0; i < eventCount; i++)
             {
-                audioEvent = events[i];
-                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
-                {
-                    continue;
-                }
+                var audioEvent = events[i];
+                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name)) continue;
 
                 string eventName = audioEvent.name;
-
-                if (reusableBankRegisteredNames.Contains(eventName))
-                {
-                    skippedCount++;
-                    continue;
-                }
+                if (reusableBankRegisteredNames.Contains(eventName)) { skippedCount++; continue; }
 
                 if (eventNameMap.ContainsKey(eventName))
                 {
@@ -1229,63 +1106,38 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
 
-            // Add to loaded banks tracking (ConcurrentBag is thread-safe)
-            loadedBanks.Add(bank);
+            // Track bank with instance ID for O(1) unload
+            loadedBanks[bank.GetInstanceID()] = bank;
 
             if (registeredCount > 0)
-            {
-                Debug.Log($"AudioManager: Loaded {registeredCount} events from AudioBank '{bank.name}'.");
-            }
+                Debug.Log($"AudioManager: Loaded {registeredCount} events from '{bank.name}'.");
             if (skippedCount > 0)
-            {
-                Debug.LogWarning($"AudioManager: Skipped {skippedCount} duplicate event names from AudioBank '{bank.name}'. " +
-                    $"Some may be duplicates within the bank, others may conflict with already loaded events. Use overwriteExisting=true to overwrite external conflicts.");
-            }
+                Debug.LogWarning($"AudioManager: Skipped {skippedCount} duplicate events from '{bank.name}'.");
         }
 
-        /// <summary>
-        /// Unload an AudioBank and remove all its events from the name map.
-        /// Note: This does NOT stop currently playing audio from this bank. Use UnloadBankAndStopEvents if you want to stop them.
-        /// Thread-safe and can be called from any thread (queued to main thread if needed).
-        /// </summary>
-        /// <param name="bank">The AudioBank to unload</param>
         public static void UnloadBank(AudioBank bank)
         {
-            if (bank == null)
-            {
-                return;
-            }
+            if (bank == null) return;
 
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                AudioBank capturedBank = bank; // Capture for closure
+                AudioBank capturedBank = bank;
                 commandQueue.Enqueue(() => UnloadBank(capturedBank));
                 return;
             }
 
-            if (!ValidateManager())
-            {
-                return;
-            }
+            if (!ValidateManager()) return;
 
-            List<AudioEvent> events = bank.AudioEvents;
-            if (events == null || events.Count == 0)
-            {
-                return;
-            }
+            var events = bank.AudioEvents;
+            if (events == null || events.Count == 0) return;
 
-            // ConcurrentDictionary is thread-safe, no lock needed
-            AudioEvent audioEvent;
-            int eventCount = events.Count;
             int removedCount = 0;
+            int eventCount = events.Count;
 
             for (int i = 0; i < eventCount; i++)
             {
-                audioEvent = events[i];
-                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
-                {
-                    continue;
-                }
+                var audioEvent = events[i];
+                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name)) continue;
 
                 string eventName = audioEvent.name;
                 if (eventNameMap.TryGetValue(eventName, out AudioEvent mappedEvent) && mappedEvent == audioEvent)
@@ -1295,216 +1147,125 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
 
-            // Note: ConcurrentBag doesn't support Remove, but banks are typically not unloaded frequently
-            // Could track in a ConcurrentDictionary if removal is needed
+            loadedBanks.TryRemove(bank.GetInstanceID(), out _);
 
             if (removedCount > 0)
-            {
-                Debug.Log($"AudioManager: Unloaded {removedCount} events from AudioBank '{bank.name}'. Note: Currently playing audio will continue.");
-            }
+                Debug.Log($"AudioManager: Unloaded {removedCount} events from '{bank.name}'.");
         }
 
-        /// <summary>
-        /// Unload an AudioBank, remove all its events from the name map, and stop all active events from this bank.
-        /// Thread-safe and can be called from any thread (queued to main thread if needed).
-        /// </summary>
-        /// <param name="bank">The AudioBank to unload</param>
         public static void UnloadBankAndStopEvents(AudioBank bank)
         {
-            if (bank == null)
-            {
-                return;
-            }
+            if (bank == null) return;
 
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                AudioBank capturedBank = bank; // Capture for closure
+                AudioBank capturedBank = bank;
                 commandQueue.Enqueue(() => UnloadBankAndStopEvents(capturedBank));
                 return;
             }
 
-            if (!ValidateManager())
-            {
-                return;
-            }
+            if (!ValidateManager()) return;
 
-            List<AudioEvent> events = bank.AudioEvents;
-            if (events == null || events.Count == 0)
-            {
-                return;
-            }
+            var events = bank.AudioEvents;
+            if (events == null || events.Count == 0) return;
 
-            // First, stop all active events from this bank
+            // Stop all active events from this bank
             if (ActiveEvents != null && ActiveEvents.Count > 0)
             {
-                ActiveEvent tempEvent;
-                int activeCount = ActiveEvents.Count;
                 int stoppedCount = 0;
-
-                for (int i = activeCount - 1; i >= 0; i--)
+                for (int i = ActiveEvents.Count - 1; i >= 0; i--)
                 {
                     if (i >= ActiveEvents.Count) continue;
-                    tempEvent = ActiveEvents[i];
-                    if (tempEvent != null && tempEvent.rootEvent != null && events.Contains(tempEvent.rootEvent))
+                    var tempEvent = ActiveEvents[i];
+                    if (tempEvent?.rootEvent != null && events.Contains(tempEvent.rootEvent))
                     {
                         tempEvent.StopImmediate();
                         stoppedCount++;
                     }
                 }
-
                 if (stoppedCount > 0)
-                {
-                    Debug.Log($"AudioManager: Stopped {stoppedCount} active events from AudioBank '{bank.name}'.");
-                }
+                    Debug.Log($"AudioManager: Stopped {stoppedCount} events from '{bank.name}'.");
             }
 
-            // Then unload the bank (this will remove from name map)
             UnloadBank(bank);
         }
 
-        /// <summary>
-        /// Get an AudioEvent by name.
-        /// </summary>
-        /// <param name="eventName">The name of the event to find</param>
-        /// <returns>The AudioEvent if found, null otherwise</returns>
         public static AudioEvent GetEventByName(string eventName)
         {
-            if (string.IsNullOrEmpty(eventName))
-            {
-                return null;
-            }
-
-            // Fast path: minimize lock time by doing lookup only
-            // ConcurrentDictionary is thread-safe, no lock needed
-            if (eventNameMap.TryGetValue(eventName, out AudioEvent result))
-            {
-                return result;
-            }
-            return null;
+            if (string.IsNullOrEmpty(eventName)) return null;
+            eventNameMap.TryGetValue(eventName, out AudioEvent result);
+            return result;
         }
 
-        /// <summary>
-        /// Clear all registered events from the name map. Use with caution.
-        /// Thread-safe and can be called from any thread (queued to main thread if needed).
-        /// </summary>
         public static void ClearEventNameMap()
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                commandQueue.Enqueue(() => ClearEventNameMap());
+                commandQueue.Enqueue(ClearEventNameMap);
                 return;
             }
 
-            // ConcurrentDictionary is thread-safe, no lock needed
             int count = eventNameMap.Count;
             eventNameMap.Clear();
             if (count > 0)
-            {
                 Debug.Log($"AudioManager: Cleared {count} events from name map.");
-            }
         }
 
-        /// <summary>
-        /// Get the number of registered events in the name map.
-        /// Thread-safe.
-        /// </summary>
-        public static int GetRegisteredEventCount()
-        {
-            // ConcurrentDictionary is thread-safe, no lock needed
-            return eventNameMap.Count;
-        }
+        public static int GetRegisteredEventCount() => eventNameMap.Count;
 
-        /// <summary>
-        /// Validate an AudioBank for duplicate event names within the bank.
-        /// Returns a dictionary mapping duplicate names to their event lists.
-        /// Thread-safe.
-        /// </summary>
-        /// <param name="bank">The AudioBank to validate</param>
-        /// <returns>Dictionary of duplicate names and their events. Empty if no duplicates.</returns>
         public static Dictionary<string, List<AudioEvent>> ValidateBankForDuplicateNames(AudioBank bank)
         {
-            Dictionary<string, List<AudioEvent>> duplicates = new Dictionary<string, List<AudioEvent>>();
+            var duplicates = new Dictionary<string, List<AudioEvent>>();
+            if (bank?.AudioEvents == null) return duplicates;
 
-            if (bank == null || bank.AudioEvents == null)
-            {
-                return duplicates;
-            }
-
-            Dictionary<string, List<AudioEvent>> nameGroups = new Dictionary<string, List<AudioEvent>>();
-            AudioEvent audioEvent;
+            var nameGroups = new Dictionary<string, List<AudioEvent>>();
             int eventCount = bank.AudioEvents.Count;
 
             for (int i = 0; i < eventCount; i++)
             {
-                audioEvent = bank.AudioEvents[i];
-                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
-                {
-                    continue;
-                }
+                var audioEvent = bank.AudioEvents[i];
+                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name)) continue;
 
                 string eventName = audioEvent.name;
                 if (!nameGroups.ContainsKey(eventName))
-                {
                     nameGroups[eventName] = new List<AudioEvent>();
-                }
                 nameGroups[eventName].Add(audioEvent);
             }
 
             foreach (var kvp in nameGroups)
             {
                 if (kvp.Value.Count > 1)
-                {
                     duplicates[kvp.Key] = kvp.Value;
-                }
             }
 
             return duplicates;
         }
 
-        /// <summary>
-        /// Get all loaded banks. Thread-safe.
-        /// </summary>
         public static IReadOnlyCollection<AudioBank> GetLoadedBanks()
         {
-            // ConcurrentBag is thread-safe, no lock needed
-            return new List<AudioBank>(loadedBanks).AsReadOnly();
+            return new List<AudioBank>(loadedBanks.Values).AsReadOnly();
         }
 
-        /// <summary>
-        /// Get the number of loaded banks. Thread-safe.
-        /// </summary>
-        public static int GetLoadedBankCount()
-        {
-            // ConcurrentBag is thread-safe, no lock needed
-            return loadedBanks.Count;
-        }
+        public static int GetLoadedBankCount() => loadedBanks.Count;
 
         #endregion
 
         #region Editor
 
-        /// <summary>
-        /// Mute all ActiveEvents that are not soloed
-        /// </summary>
         public static void ApplyActiveSolos()
         {
             ValidateManager();
 
             bool soloActive = false;
-            for (int i = 0; i < ActiveEvents.Count; i++)
+            int count = ActiveEvents.Count;
+            for (int i = 0; i < count; i++)
             {
-                if (ActiveEvents[i].Soloed)
-                {
-                    soloActive = true;
-                }
+                if (ActiveEvents[i].Soloed) { soloActive = true; break; }
             }
 
             if (soloActive)
             {
-                for (int i = 0; i < ActiveEvents.Count; i++)
-                {
-                    ActiveEvents[i].ApplySolo();
-                }
+                for (int i = 0; i < count; i++) ActiveEvents[i].ApplySolo();
             }
             else
             {
@@ -1512,17 +1273,11 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        /// <summary>
-        /// Unmute all events
-        /// </summary>
         public static void ClearActiveSolos()
         {
             ValidateManager();
-
-            for (int i = 0; i < ActiveEvents.Count; i++)
-            {
-                ActiveEvents[i].ClearSolo();
-            }
+            int count = ActiveEvents.Count;
+            for (int i = 0; i < count; i++) ActiveEvents[i].ClearSolo();
         }
 
         #endregion
