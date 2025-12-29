@@ -7,6 +7,10 @@ namespace Build.Pipeline.Editor
     [CustomEditor(typeof(AddressablesBuildConfig))]
     public class AddressablesBuildConfigEditor : UnityEditor.Editor
     {
+        // Duplicate detection
+        private static string[] allConfigGuids;
+        private static bool hasCheckedForDuplicates;
+
         private SerializedProperty versionMode;
         private SerializedProperty manualVersion;
         private SerializedProperty versionPrefix;
@@ -36,8 +40,14 @@ namespace Build.Pipeline.Editor
             serializedObject.Update();
             hasValidationErrors = false;
 
+            // Check for duplicates
+            CheckForDuplicates();
+
             EditorGUILayout.LabelField("Addressables Build Configuration", EditorStyles.boldLabel);
             EditorGUILayout.Space(5);
+
+            // Duplicate warning
+            DrawDuplicateWarning();
 
             // Version Settings
             EditorGUILayout.LabelField("Version Settings", EditorStyles.boldLabel);
@@ -425,6 +435,36 @@ namespace Build.Pipeline.Editor
         private void DrawHelpBox(string message, MessageType type)
         {
             EditorGUILayout.HelpBox(message, type);
+        }
+
+        private void CheckForDuplicates()
+        {
+            if (!hasCheckedForDuplicates || Event.current.type == EventType.Layout)
+            {
+                allConfigGuids = AssetDatabase.FindAssets("t:AddressablesBuildConfig");
+                hasCheckedForDuplicates = true;
+            }
+        }
+
+        private void DrawDuplicateWarning()
+        {
+            if (allConfigGuids != null && allConfigGuids.Length > 1)
+            {
+                EditorGUILayout.HelpBox(
+                    $"⚠ Multiple AddressablesBuildConfig assets detected ({allConfigGuids.Length} found).\n" +
+                    "Only one AddressablesBuildConfig should exist in the project. Please delete duplicates.",
+                    MessageType.Warning);
+
+                if (GUILayout.Button("Show All in Console"))
+                {
+                    foreach (var guid in allConfigGuids)
+                    {
+                        string path = AssetDatabase.GUIDToAssetPath(guid);
+                        Debug.Log($"AddressablesBuildConfig found at: {path}");
+                    }
+                }
+                EditorGUILayout.Space(5);
+            }
         }
     }
 }
