@@ -40,6 +40,7 @@ In the editor window:
 2. Click **Save and Generate Constants** to save the configuration and generate the `InputActions.cs` file.
 
 The generated file will contain:
+
 - `InputActions.Contexts.*` - String constants for context names (e.g., `InputActions.Contexts.Gameplay`)
 - `InputActions.ActionMaps.*` - String constants for action map names (e.g., `InputActions.ActionMaps.PlayerActions`)
 - `InputActions.Actions.*` - Integer hash IDs for actions (e.g., `InputActions.Actions.Gameplay_Move`)
@@ -223,7 +224,7 @@ When UI B overlays UI A, use the Context Stack to manage input priority:
 using R3; // Required for AddTo extension
 
 // UI A
-public class UIPageA : MonoBehaviour
+public class UIWindowA : MonoBehaviour
 {
     private InputContext _context;
 
@@ -233,10 +234,10 @@ public class UIPageA : MonoBehaviour
         // ActionMap required, name optional (defaults to "UIActions")
         _context = new InputContext("UIActions", "UI")
             .AddBinding(..., new ActionCommand(OnConfirmA));
-        
+
         // Bind lifecycle to this component - automatically removes when disabled/destroyed
         _context.AddTo(this);
-        
+
         input.PushContext(_context); // Stack: [A]
     }
 
@@ -244,7 +245,7 @@ public class UIPageA : MonoBehaviour
 }
 
 // UI B (Overlays A)
-public class UIPageB : MonoBehaviour
+public class UIWindowB : MonoBehaviour
 {
     private InputContext _context;
 
@@ -254,10 +255,10 @@ public class UIPageB : MonoBehaviour
         // Same name is fine, different instance
         _context = new InputContext("UIActions", "UI")
             .AddBinding(..., new ActionCommand(OnConfirmB));
-        
+
         // Bind lifecycle to this component
         _context.AddTo(this);
-        
+
         input.PushContext(_context); // Stack: [A, B]. B is top, A is paused.
     }
 
@@ -298,7 +299,7 @@ public class GameplayController : MonoBehaviour
             .AddBinding(input.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(OnMove))
             .AddBinding(input.GetButtonObservable("PlayerActions", "Jump"), new ActionCommand(OnJump))
             .AddBinding(input.GetButtonObservable("PlayerActions", "Attack"), new ActionCommand(OnAttack));
-        
+
         _gameplayContext.AddTo(this);
         input.PushContext(_gameplayContext); // Stack: [Gameplay]
     }
@@ -317,16 +318,17 @@ public class PauseMenu : MonoBehaviour
             .AddBinding(input.GetVector2Observable("PlayerActions", "Move"), new MoveCommand(OnMenuNavigate)) // Menu navigation
             .AddBinding(input.GetButtonObservable("PlayerActions", "Confirm"), new ActionCommand(OnMenuConfirm))
             .AddBinding(input.GetButtonObservable("PlayerActions", "Cancel"), new ActionCommand(OnMenuCancel));
-        
+
         _pauseContext.AddTo(this);
         input.PushContext(_pauseContext); // Stack: [Gameplay, PauseMenu]. Only PauseMenu bindings are active.
     }
-    
+
     // When PauseMenu is destroyed, Gameplay context automatically resumes
 }
 ```
 
 **Key Points**:
+
 - ✅ Multiple contexts can safely share the same ActionMap name
 - ✅ Each context's bindings are independent and stored in the context object
 - ✅ Switching contexts correctly activates only the top context's bindings
@@ -589,6 +591,7 @@ if (inputPlayer.ActiveContextName.Value == InputActions.Contexts.Gameplay)
 ```
 
 **Important Notes:**
+
 - ✅ Context is an independent object, no pre-registration needed
 - ✅ If Context is not yet active (not Push), add bindings then Push, bindings will take effect immediately
 - ⚠️ If Context is already active (already Push), after adding bindings you need to call `RefreshActiveContext()` to make new bindings take effect
@@ -625,6 +628,7 @@ inputPlayer.RefreshActiveContext();
 ```
 
 **Important Notes:**
+
 - `RemoveBindingFromContext` allows you to remove specific bindings from a context without affecting other bindings
 - `RemoveContext` removes the entire context and all its bindings, **and automatically removes it from the stack** (if it's in the stack)
 
@@ -643,7 +647,7 @@ using R3; // Required for AddTo extension
 public class InputContextManager
 {
     private static InputContext _sharedGameplayContext;
-    
+
     public static InputContext GetGameplayContext(IInputPlayer inputPlayer)
     {
         if (_sharedGameplayContext == null)
@@ -663,12 +667,12 @@ public class SceneA : MonoBehaviour
     {
         var inputPlayer = InputManager.Instance.GetInputPlayer(0);
         var ctx = InputContextManager.GetGameplayContext(inputPlayer);
-        
+
         // For shared contexts, you may want to manually manage removal
         // Or bind to a persistent GameObject that outlives scene changes
         inputPlayer.PushContext(ctx);
     }
-    
+
     private void OnDestroy()
     {
         // For shared contexts, manually remove when scene unloads
@@ -689,20 +693,20 @@ using R3; // Required for AddTo extension
 public class SceneA : MonoBehaviour
 {
     private InputContext _gameplayContext;
-    
+
     private void Start()
     {
         var inputPlayer = InputManager.Instance.GetInputPlayer(0);
         _gameplayContext = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
             .AddBinding(inputPlayer.GetVector2Observable(InputActions.Actions.Gameplay_Move), new MoveCommand(OnMoveA))
             .AddBinding(inputPlayer.GetButtonObservable(InputActions.Actions.Gameplay_Jump), new ActionCommand(OnJumpA));
-        
+
         // Bind lifecycle to this component - automatically removes when scene unloads
         _gameplayContext.AddTo(this);
-        
+
         inputPlayer.PushContext(_gameplayContext);
     }
-    
+
     // OnDestroy is no longer needed - AddTo(this) handles cleanup automatically!
 }
 ```

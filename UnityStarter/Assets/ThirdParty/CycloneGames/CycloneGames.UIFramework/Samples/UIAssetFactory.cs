@@ -20,7 +20,7 @@ namespace CycloneGames.UIFramework.Runtime.Samples
     {
         public string GetAssetPath(string key)
         {
-            return key;
+            return $"{key}_Config";
         }
     }
 }
