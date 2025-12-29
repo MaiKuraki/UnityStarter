@@ -36,7 +36,7 @@ namespace CycloneGames.UIFramework.Runtime
         /// </summary>
         /// <param name="windowName">The name of the UI window.</param>
         /// <returns>The UIWindow instance if found and active, otherwise null.</returns>
-        UIWindow GetUIWindow(string windowName); // Renamed from GetUIPage for consistency
+        UIWindow GetUIWindow(string windowName); // Renamed from GetUIWindow for consistency
 
         // Optional: Methods to manage UI camera stacking if not handled internally by UIManager
         // void AddUICameraToMainCameraStack();

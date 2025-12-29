@@ -224,7 +224,7 @@ public class SimplePlayer : MonoBehaviour
 using R3; // 需要引入 R3 命名空间以使用 AddTo 扩展
 
 // UI A
-public class UIPageA : MonoBehaviour
+public class UIWindowA : MonoBehaviour
 {
     private InputContext _context;
 
@@ -245,7 +245,7 @@ public class UIPageA : MonoBehaviour
 }
 
 // UI B (叠加在 A 上)
-public class UIPageB : MonoBehaviour
+public class UIWindowB : MonoBehaviour
 {
     private InputContext _context;
 

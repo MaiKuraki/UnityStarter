@@ -1,3 +1,6 @@
+// Copyright (c) CycloneGames
+// Licensed under the MIT License.
+
 using UnityEditor;
 using UnityEngine;
 using System.Collections.Generic;
@@ -8,356 +11,639 @@ namespace CycloneGames.Audio.Editor
     [CustomEditor(typeof(AudioManager))]
     public class AudioManagerEditor : UnityEditor.Editor
     {
-        private bool showPoolStatus = true;
-        private bool showActiveEvents = true;
-        private bool showMemoryUsage = true;
-        private bool showLoadedBanks = true;
-        private bool showEventNameMap = true;
+        // Foldout states
         private bool showStatistics = true;
+        private bool showPoolStatus = true;
+        private bool showLoadedBanks = true;
+        private bool showEventNameMap = false;
+        private bool showMemoryUsage = false;
+        private bool showActiveEvents = true;
 
+        // Cached lists to avoid per-frame allocations
         private readonly List<KeyValuePair<AudioClip, long>> sortedClipList = new List<KeyValuePair<AudioClip, long>>();
         private readonly List<AudioBank> loadedBanksList = new List<AudioBank>();
+        private readonly List<AudioBank> banksToUnload = new List<AudioBank>();
 
         // Search field state
         private string searchEventName = "";
 
+        // Scroll positions
+        private Vector2 activeEventsScrollPos;
+        private Vector2 memoryScrollPos;
+        private Vector2 eventMapScrollPos;
+
+        // Colors for visual styling
+        private static readonly Color statsColor = new Color(0.3f, 0.6f, 0.8f);
+        private static readonly Color poolColor = new Color(0.4f, 0.7f, 0.4f);
+        private static readonly Color banksColor = new Color(0.7f, 0.5f, 0.8f);
+        private static readonly Color eventsColor = new Color(0.8f, 0.6f, 0.3f);
+        private static readonly Color memoryColor = new Color(0.6f, 0.5f, 0.7f);
+        private static readonly Color activeColor = new Color(0.5f, 0.7f, 0.6f);
+        private static readonly Color successColor = new Color(0.3f, 0.8f, 0.4f);
+        private static readonly Color warningColor = new Color(0.9f, 0.7f, 0.3f);
+
+        // Cached GUIStyles to avoid per-frame allocations
+        private GUIStyle _titleStyle;
+        private GUIStyle _subtitleStyle;
+        private GUIStyle _foldoutLabelStyle;
+        private GUIStyle _statValueStyle;
+        private GUIStyle _sectionLabelStyle;
+        private bool _stylesInitialized;
+
+        private void InitializeStyles()
+        {
+            if (_stylesInitialized) return;
+            _stylesInitialized = true;
+
+            _titleStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                fontSize = 14,
+                alignment = TextAnchor.MiddleCenter
+            };
+
+            _subtitleStyle = new GUIStyle(EditorStyles.centeredGreyMiniLabel)
+            {
+                fontSize = 10
+            };
+
+            _foldoutLabelStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                normal = { textColor = Color.white },
+                alignment = TextAnchor.MiddleLeft
+            };
+
+            _statValueStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = 18
+            };
+
+            _sectionLabelStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                fontSize = 11
+            };
+        }
+
         public override void OnInspectorGUI()
         {
-            base.OnInspectorGUI();
-            Repaint();
+            InitializeStyles();
 
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField("------ Audio Management State ------", EditorStyles.boldLabel);
-            EditorGUILayout.Space();
+            // Title
+            DrawTitle();
+
+            EditorGUILayout.Space(5);
 
             if (!Application.isPlaying)
             {
-                EditorGUILayout.HelpBox("Runtime data is only available in Play Mode.", MessageType.Info);
+                EditorGUILayout.HelpBox("Runtime data is only available in Play Mode.\nEnter Play Mode to see audio system status.", MessageType.Info);
+                
+                EditorGUILayout.Space(5);
+                DrawDefaultInspector();
                 return;
             }
 
-            DrawStatistics();
-            DrawPoolStatus();
-            DrawLoadedBanks();
-            DrawEventNameMap();
-            DrawMemoryUsage();
-            DrawActiveEvents();
-        }
+            // Quick Stats Overview
+            DrawQuickStats();
 
-        private void DrawPoolStatus()
-        {
-            showPoolStatus = EditorGUILayout.Foldout(showPoolStatus, "AudioSource Pool Status", true);
-            if (showPoolStatus)
-            {
-                EditorGUI.indentLevel++;
-                
-                // Smart Pool Info
-                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUILayout.LabelField("Smart Pool Configuration", EditorStyles.boldLabel);
-                
-                // Show active config status
-                string configStatus = AudioManager.PoolStats.HasConfig ? "✓ Custom Config" : "○ Using Defaults";
-                EditorGUILayout.LabelField("Config", configStatus);
-                EditorGUILayout.LabelField("Device Tier", AudioManager.PoolStats.DeviceTier);
-                EditorGUILayout.EndVertical();
-                
-                EditorGUILayout.Space(3);
-                
-                // Pool sizes
-                int totalSources = AudioManager.PoolStats.CurrentSize;
-                int availableSources = AudioManager.PoolStats.Available;
-                int activeSources = AudioManager.PoolStats.InUse;
+            EditorGUILayout.Space(3);
 
-                EditorGUILayout.LabelField("Initial Size", AudioManager.PoolStats.InitialSize.ToString());
-                EditorGUILayout.LabelField("Current Size", $"{totalSources} / {AudioManager.PoolStats.MaxSize}");
-                EditorGUILayout.LabelField("Active Sources", activeSources.ToString());
-                EditorGUILayout.LabelField("Available Sources", availableSources.ToString());
-
-                // Usage bar
-                Rect progressRect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
-                float ratio = AudioManager.PoolStats.UsageRatio;
-                EditorGUI.ProgressBar(progressRect, ratio, $"{activeSources} / {totalSources} ({ratio:P0})");
-
-                EditorGUILayout.Space(3);
-                
-                // Smart pool stats
-                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                EditorGUILayout.LabelField("Smart Pool Statistics", EditorStyles.boldLabel);
-                EditorGUILayout.LabelField("Peak Usage", AudioManager.PoolStats.PeakUsage.ToString());
-                EditorGUILayout.LabelField("Total Expansions", AudioManager.PoolStats.TotalExpansions.ToString());
-                EditorGUILayout.LabelField("Voice Steals", AudioManager.PoolStats.TotalSteals.ToString());
-                EditorGUILayout.EndVertical();
-
-                EditorGUI.indentLevel--;
-            }
-        }
-
-        private void DrawMemoryUsage()
-        {
-            showMemoryUsage = EditorGUILayout.Foldout(showMemoryUsage, "Memory Usage", true);
-            if (showMemoryUsage)
-            {
-                EditorGUI.indentLevel++;
-
-                EditorGUILayout.HelpBox("This tracks the memory of raw AudioClip sample data managed by the AudioManager. It does not include the full overhead of the Unity audio engine (FMOD).", MessageType.Info);
-
-                EditorGUILayout.LabelField("Tracked AudioClip Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage));
-
-                // Populate the reusable list and sort it to avoid LINQ overhead.
-                sortedClipList.Clear();
-                foreach (var kvp in AudioManager.ClipMemoryCache)
-                {
-                    sortedClipList.Add(kvp);
-                }
-                sortedClipList.Sort((a, b) => b.Value.CompareTo(a.Value));
-
-                foreach (var kvp in sortedClipList)
-                {
-                    if (kvp.Key == null) continue;
-
-                    int refCount = AudioManager.ActiveClipRefCount.TryGetValue(kvp.Key, out int count) ? count : 0;
-                    EditorGUILayout.LabelField($"{kvp.Key.name} ({refCount} refs)", ToMemorySizeString(kvp.Value));
-                }
-                EditorGUI.indentLevel--;
-            }
-        }
-
-        private void DrawActiveEvents()
-        {
-            showActiveEvents = EditorGUILayout.Foldout(showActiveEvents, $"Active Events ({AudioManager.ActiveEvents.Count})", true);
-            if (showActiveEvents)
-            {
-                EditorGUI.indentLevel++;
-                if (AudioManager.ActiveEvents.Count == 0)
-                {
-                    EditorGUILayout.HelpBox("No active events.", MessageType.Info);
-                }
-                else
-                {
-                    foreach (var activeEvent in AudioManager.ActiveEvents)
-                    {
-                        if (activeEvent == null || activeEvent.rootEvent == null) continue;
-
-                        string emitterName = activeEvent.emitterTransform != null ? activeEvent.emitterTransform.name : "No Emitter";
-                        string status = activeEvent.status.ToString();
-                        EditorGUILayout.BeginHorizontal();
-                        EditorGUILayout.LabelField($"{activeEvent.rootEvent.name}", GUILayout.Width(200));
-                        EditorGUILayout.LabelField($"on {emitterName}", GUILayout.Width(150));
-                        EditorGUILayout.LabelField($"Status: {status}", GUILayout.Width(100));
-                        EditorGUILayout.EndHorizontal();
-                    }
-                }
-                EditorGUI.indentLevel--;
-            }
-        }
-
-        private void DrawStatistics()
-        {
-            showStatistics = EditorGUILayout.Foldout(showStatistics, "Statistics", true);
+            // Statistics Section
+            showStatistics = DrawFoldoutHeader("Overview", showStatistics, statsColor);
             if (showStatistics)
             {
-                EditorGUI.indentLevel++;
-
-                EditorGUILayout.LabelField("Registered Events", AudioManager.GetRegisteredEventCount().ToString());
-                EditorGUILayout.LabelField("Loaded Banks", AudioManager.GetLoadedBankCount().ToString());
-                EditorGUILayout.LabelField("Active Events", AudioManager.ActiveEvents.Count.ToString());
-                EditorGUILayout.LabelField("Total Memory Usage", ToMemorySizeString(AudioManager.TotalMemoryUsage));
-
-                EditorGUI.indentLevel--;
+                DrawStatisticsSection();
             }
-        }
 
-        private void DrawLoadedBanks()
-        {
-            showLoadedBanks = EditorGUILayout.Foldout(showLoadedBanks, $"Loaded Banks ({AudioManager.GetLoadedBankCount()})", true);
+            EditorGUILayout.Space(3);
+
+            // Pool Status Section
+            showPoolStatus = DrawFoldoutHeader("AudioSource Pool", showPoolStatus, poolColor);
+            if (showPoolStatus)
+            {
+                DrawPoolStatusSection();
+            }
+
+            EditorGUILayout.Space(3);
+
+            // Loaded Banks Section
+            int bankCount = AudioManager.GetLoadedBankCount();
+            showLoadedBanks = DrawFoldoutHeader($"Loaded Banks ({bankCount})", showLoadedBanks, banksColor);
             if (showLoadedBanks)
             {
-                EditorGUI.indentLevel++;
+                DrawLoadedBanksSection();
+            }
 
-                EditorGUILayout.HelpBox("LoadBank only registers event names for lookup. Audio clips are loaded on-demand when events are played.\n\n" +
-                    "Warning: Duplicate event names within the same bank will cause only the first one to be accessible via PlayEvent(string).", MessageType.Info);
+            EditorGUILayout.Space(3);
 
-                loadedBanksList.Clear();
-                var banks = AudioManager.GetLoadedBanks();
-                foreach (var bank in banks)
+            // Active Events Section
+            int activeCount = AudioManager.ActiveEvents.Count;
+            showActiveEvents = DrawFoldoutHeader($"Active Events ({activeCount})", showActiveEvents, activeColor);
+            if (showActiveEvents)
+            {
+                DrawActiveEventsSection();
+            }
+
+            EditorGUILayout.Space(3);
+
+            // Event Name Map Section
+            int registeredCount = AudioManager.GetRegisteredEventCount();
+            showEventNameMap = DrawFoldoutHeader($"Event Registry ({registeredCount})", showEventNameMap, eventsColor);
+            if (showEventNameMap)
+            {
+                DrawEventNameMapSection();
+            }
+
+            EditorGUILayout.Space(3);
+
+            // Memory Usage Section
+            showMemoryUsage = DrawFoldoutHeader("Memory Usage", showMemoryUsage, memoryColor);
+            if (showMemoryUsage)
+            {
+                DrawMemoryUsageSection();
+            }
+
+            // Auto-repaint during play mode
+            Repaint();
+        }
+
+        private void DrawTitle()
+        {
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+
+            EditorGUILayout.LabelField("Audio Manager", _titleStyle, GUILayout.Height(24));
+
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.LabelField("Runtime Audio System Controller", _subtitleStyle);
+        }
+
+        private void DrawQuickStats()
+        {
+            EditorGUILayout.BeginHorizontal();
+
+            // Active Sources
+            DrawStatBox("Active", AudioManager.PoolStats.InUse.ToString(), poolColor);
+            
+            // Loaded Banks
+            DrawStatBox("Banks", AudioManager.GetLoadedBankCount().ToString(), banksColor);
+            
+            // Active Events
+            DrawStatBox("Events", AudioManager.ActiveEvents.Count.ToString(), activeColor);
+            
+            // Memory
+            DrawStatBox("Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage), memoryColor);
+
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawStatBox(string label, string value, Color color)
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.MinWidth(70));
+            
+            EditorGUILayout.LabelField(label, EditorStyles.centeredGreyMiniLabel);
+            
+            _statValueStyle.normal.textColor = color;
+            EditorGUILayout.LabelField(value, _statValueStyle, GUILayout.Height(22));
+            
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawStatisticsSection()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            DrawStatRow("Registered Events", AudioManager.GetRegisteredEventCount().ToString());
+            DrawStatRow("Loaded Banks", AudioManager.GetLoadedBankCount().ToString());
+            DrawStatRow("Active Events", AudioManager.ActiveEvents.Count.ToString());
+            DrawStatRow("Total Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage));
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawPoolStatusSection()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            // Config status
+            string configStatus = AudioManager.PoolStats.HasConfig ? "[OK] Custom Config" : "[!] Using Defaults";
+            Color statusColor = AudioManager.PoolStats.HasConfig ? successColor : warningColor;
+            
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Configuration", GUILayout.Width(100));
+            GUI.color = statusColor;
+            EditorGUILayout.LabelField(configStatus, EditorStyles.boldLabel);
+            GUI.color = Color.white;
+            EditorGUILayout.EndHorizontal();
+
+            DrawStatRow("Device Tier", AudioManager.PoolStats.DeviceTier);
+
+            EditorGUILayout.Space(5);
+
+            // Pool sizes grid
+            EditorGUILayout.LabelField("Pool Status", _sectionLabelStyle);
+            
+            EditorGUILayout.BeginHorizontal();
+            DrawMiniStatBox("Initial", AudioManager.PoolStats.InitialSize.ToString());
+            DrawMiniStatBox("Current", AudioManager.PoolStats.CurrentSize.ToString());
+            DrawMiniStatBox("Max", AudioManager.PoolStats.MaxSize.ToString());
+            DrawMiniStatBox("Available", AudioManager.PoolStats.Available.ToString());
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space(3);
+
+            // Usage bar
+            int activeSources = AudioManager.PoolStats.InUse;
+            int totalSources = AudioManager.PoolStats.CurrentSize;
+            float ratio = AudioManager.PoolStats.UsageRatio;
+            
+            Rect progressRect = EditorGUILayout.GetControlRect(false, 18);
+            EditorGUI.ProgressBar(progressRect, ratio, $"Usage: {activeSources} / {totalSources} ({ratio:P0})");
+
+            EditorGUILayout.Space(5);
+
+            // Smart pool stats
+            EditorGUILayout.LabelField("Performance", _sectionLabelStyle);
+            
+            EditorGUILayout.BeginHorizontal();
+            DrawMiniStatBox("Peak", AudioManager.PoolStats.PeakUsage.ToString());
+            DrawMiniStatBox("Expansions", AudioManager.PoolStats.TotalExpansions.ToString());
+            DrawMiniStatBox("Steals", AudioManager.PoolStats.TotalSteals.ToString());
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawMiniStatBox(string label, string value)
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.MinWidth(60));
+            EditorGUILayout.LabelField(label, EditorStyles.centeredGreyMiniLabel);
+            EditorGUILayout.LabelField(value, EditorStyles.boldLabel);
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawLoadedBanksSection()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            loadedBanksList.Clear();
+            var banks = AudioManager.GetLoadedBanks();
+            foreach (var bank in banks)
+            {
+                if (bank != null)
                 {
-                    if (bank != null)
-                    {
-                        loadedBanksList.Add(bank);
-                    }
+                    loadedBanksList.Add(bank);
+                }
+            }
+
+            if (loadedBanksList.Count == 0)
+            {
+                EditorGUILayout.LabelField("No banks loaded", EditorStyles.centeredGreyMiniLabel);
+                EditorGUILayout.HelpBox("Use AudioManager.LoadBank() to load banks at runtime.", MessageType.Info);
+            }
+            else
+            {
+                for (int i = 0; i < loadedBanksList.Count; i++)
+                {
+                    var bank = loadedBanksList[i];
+                    DrawBankRow(bank, i);
                 }
 
-                if (loadedBanksList.Count == 0)
+                EditorGUILayout.Space(5);
+
+                if (GUILayout.Button("Unload All Banks", GUILayout.Height(22)))
                 {
-                    EditorGUILayout.HelpBox("No banks loaded. Use AudioManager.LoadBank() to load banks.", MessageType.Info);
-                }
-                else
-                {
-                    foreach (var bank in loadedBanksList)
+                    if (EditorUtility.DisplayDialog("Unload All Banks",
+                        "Are you sure you want to unload all banks?\nThis will remove all registered events.",
+                        "Yes", "Cancel"))
                     {
-                        EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                        EditorGUILayout.BeginHorizontal();
-                        EditorGUILayout.ObjectField(bank, typeof(AudioBank), false, GUILayout.Width(200));
-
-                        if (bank.AudioEvents != null)
-                        {
-                            EditorGUILayout.LabelField($"({bank.AudioEvents.Count} events)", GUILayout.Width(100));
-                            
-                            // Check for duplicate names
-                            var duplicates = AudioManager.ValidateBankForDuplicateNames(bank);
-                            if (duplicates.Count > 0)
-                            {
-                                EditorGUILayout.LabelField("⚠", GUILayout.Width(20));
-                                if (GUILayout.Button($"View {duplicates.Count} Duplicates", EditorStyles.miniButton, GUILayout.Width(120)))
-                                {
-                                    string message = $"AudioBank '{bank.name}' has duplicate event names:\n\n";
-                                    foreach (var dup in duplicates)
-                                    {
-                                        message += $"'{dup.Key}': {dup.Value.Count} events\n";
-                                    }
-                                    message += "\nOnly the first event of each name will be accessible via PlayEvent(string).";
-                                    EditorUtility.DisplayDialog("Duplicate Event Names", message, "OK");
-                                }
-                            }
-                        }
-                        EditorGUILayout.EndHorizontal();
-
-                        EditorGUILayout.BeginHorizontal();
-                        if (GUILayout.Button("Unload", GUILayout.Width(80)))
-                        {
-                            if (EditorUtility.DisplayDialog("Unload Bank",
-                                $"Unload '{bank.name}'? This will remove event name mappings.\n\nNote: Currently playing audio from this bank will continue playing.",
-                                "Unload", "Cancel"))
-                            {
-                                AudioManager.UnloadBank(bank);
-                            }
-                        }
-                        if (GUILayout.Button("Unload & Stop", GUILayout.Width(100)))
-                        {
-                            if (EditorUtility.DisplayDialog("Unload Bank and Stop Events",
-                                $"Unload '{bank.name}' and stop all active events from this bank?",
-                                "Yes", "Cancel"))
-                            {
-                                AudioManager.UnloadBankAndStopEvents(bank);
-                            }
-                        }
-                        EditorGUILayout.EndHorizontal();
-                        EditorGUILayout.EndVertical();
-                    }
-                }
-
-                EditorGUILayout.Space();
-                if (GUILayout.Button("Clear All Banks"))
-                {
-                    if (EditorUtility.DisplayDialog("Clear All Banks",
-                        "Are you sure you want to unload all banks? This will remove all registered events.",
-                        "Yes", "No"))
-                    {
-                        var banksToUnload = new List<AudioBank>(loadedBanksList);
+                        banksToUnload.Clear();
+                        banksToUnload.AddRange(loadedBanksList);
                         foreach (var bank in banksToUnload)
                         {
                             AudioManager.UnloadBank(bank);
                         }
                     }
                 }
-
-                EditorGUI.indentLevel--;
             }
+
+            EditorGUILayout.EndVertical();
         }
 
-        private void DrawEventNameMap()
+        private void DrawBankRow(AudioBank bank, int index)
         {
-            showEventNameMap = EditorGUILayout.Foldout(showEventNameMap, $"Event Name Map ({AudioManager.GetRegisteredEventCount()})", true);
-            if (showEventNameMap)
+            // Alternating background
+            Rect rowRect = EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            if (index % 2 == 0)
             {
-                EditorGUI.indentLevel++;
+                EditorGUI.DrawRect(rowRect, new Color(0.5f, 0.5f, 0.5f, 0.05f));
+            }
 
-                EditorGUILayout.HelpBox("This shows all events registered by name. Use AudioManager.PlayEvent(string) to play events by name.", MessageType.Info);
-
-                // Show registered event count
-                int registeredCount = AudioManager.GetRegisteredEventCount();
-                EditorGUILayout.HelpBox($"Total registered events: {registeredCount}", MessageType.None);
-
-                if (registeredCount > 0)
+            EditorGUILayout.BeginHorizontal();
+            
+            // Bank reference
+            EditorGUILayout.ObjectField(bank, typeof(AudioBank), false, GUILayout.Width(150));
+            
+            // Event count
+            int eventCount = bank.AudioEvents != null ? bank.AudioEvents.Count : 0;
+            EditorGUILayout.LabelField($"{eventCount} events", EditorStyles.miniLabel, GUILayout.Width(60));
+            
+            // Duplicate warning
+            var duplicates = AudioManager.ValidateBankForDuplicateNames(bank);
+            if (duplicates.Count > 0)
+            {
+                GUI.color = warningColor;
+                if (GUILayout.Button($"[!] {duplicates.Count} duplicates", EditorStyles.miniButton, GUILayout.Width(90)))
                 {
-                    EditorGUILayout.HelpBox("Use AudioManager.PlayEvent(string) to play events by name.", MessageType.Info);
-                }
-
-                // Show search functionality
-                EditorGUILayout.Space();
-                EditorGUILayout.LabelField("Search Event by Name:", EditorStyles.boldLabel);
-                EditorGUILayout.BeginHorizontal();
-                searchEventName = EditorGUILayout.TextField(searchEventName, GUILayout.Width(200));
-                if (GUILayout.Button("Find", GUILayout.Width(60)))
-                {
-                    if (!string.IsNullOrEmpty(searchEventName))
+                    string message = $"AudioBank '{bank.name}' has duplicate event names:\n\n";
+                    foreach (var dup in duplicates)
                     {
-                        var foundEvent = AudioManager.GetEventByName(searchEventName);
-                        if (foundEvent != null)
-                        {
-                            EditorUtility.FocusProjectWindow();
-                            Selection.activeObject = foundEvent;
-                            EditorGUIUtility.PingObject(foundEvent);
-                        }
-                        else
-                        {
-                            EditorUtility.DisplayDialog("Event Not Found",
-                                $"Event '{searchEventName}' is not registered. Make sure the bank containing this event is loaded.",
-                                "OK");
-                        }
+                        message += $"'{dup.Key}': {dup.Value.Count} events\n";
                     }
+                    message += "\nOnly the first event will be accessible via PlayEvent(string).";
+                    EditorUtility.DisplayDialog("Duplicate Event Names", message, "OK");
                 }
-                if (GUILayout.Button("Clear", GUILayout.Width(60)))
+                GUI.color = Color.white;
+            }
+
+            GUILayout.FlexibleSpace();
+
+            // Unload button (keeps playing events)
+            if (GUILayout.Button("Unload", EditorStyles.miniButtonLeft, GUILayout.Width(50)))
+            {
+                if (EditorUtility.DisplayDialog("Unload Bank",
+                    $"Unload '{bank.name}'?\n\nNote: Currently playing audio will continue.",
+                    "Unload", "Cancel"))
                 {
-                    searchEventName = "";
+                    AudioManager.UnloadBank(bank);
                 }
+            }
+            // Unload & Stop button (stops all events from this bank)
+            if (GUILayout.Button("& Stop", EditorStyles.miniButtonRight, GUILayout.Width(45)))
+            {
+                if (EditorUtility.DisplayDialog("Unload & Stop",
+                    $"Unload '{bank.name}' AND stop all playing events from this bank?",
+                    "Yes", "Cancel"))
+                {
+                    AudioManager.UnloadBankAndStopEvents(bank);
+                }
+            }
+
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawActiveEventsSection()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            var activeEvents = AudioManager.ActiveEvents;
+            
+            if (activeEvents.Count == 0)
+            {
+                EditorGUILayout.LabelField("No active events", EditorStyles.centeredGreyMiniLabel);
+            }
+            else
+            {
+                // Header
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("Event", EditorStyles.miniLabel, GUILayout.Width(140));
+                EditorGUILayout.LabelField("Emitter", EditorStyles.miniLabel, GUILayout.Width(100));
+                EditorGUILayout.LabelField("Status", EditorStyles.miniLabel, GUILayout.Width(80));
                 EditorGUILayout.EndHorizontal();
 
-                // Show all registered event names for reference
-                if (registeredCount > 0 && registeredCount <= 50) // Only show if reasonable number
+                // Separator
+                Rect separatorRect = EditorGUILayout.GetControlRect(false, 1);
+                EditorGUI.DrawRect(separatorRect, Color.gray * 0.5f);
+
+                // Scrollable list (max 6 visible)
+                float itemHeight = 20f;
+                int visibleItems = Mathf.Min(6, activeEvents.Count);
+                
+                activeEventsScrollPos = EditorGUILayout.BeginScrollView(activeEventsScrollPos, 
+                    GUILayout.Height(visibleItems * itemHeight + 5));
+
+                for (int i = 0; i < activeEvents.Count; i++)
                 {
-                    EditorGUILayout.Space();
-                    EditorGUILayout.LabelField("Registered Event Names:", EditorStyles.boldLabel);
-                    EditorGUI.indentLevel++;
-                    EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-                    var allBanks = AudioManager.GetLoadedBanks();
-                    foreach (var bank in allBanks)
-                    {
-                        if (bank == null || bank.AudioEvents == null) continue;
-                        foreach (var evt in bank.AudioEvents)
-                        {
-                            if (evt != null && !string.IsNullOrEmpty(evt.name))
-                            {
-                                EditorGUILayout.BeginHorizontal();
-                                if (GUILayout.Button(evt.name, EditorStyles.linkLabel, GUILayout.Width(200)))
-                                {
-                                    EditorUtility.FocusProjectWindow();
-                                    Selection.activeObject = evt;
-                                    EditorGUIUtility.PingObject(evt);
-                                }
-                                EditorGUILayout.LabelField($"from {bank.name}", EditorStyles.miniLabel);
-                                EditorGUILayout.EndHorizontal();
-                            }
-                        }
-                    }
-                    EditorGUILayout.EndVertical();
-                    EditorGUI.indentLevel--;
-                }
-                else if (registeredCount > 50)
-                {
-                    EditorGUILayout.HelpBox($"Too many events ({registeredCount}) to display. Use search to find specific events.", MessageType.Info);
+                    var activeEvent = activeEvents[i];
+                    if (activeEvent == null || activeEvent.rootEvent == null) continue;
+
+                    DrawActiveEventRow(activeEvent, i);
                 }
 
-                EditorGUI.indentLevel--;
+                EditorGUILayout.EndScrollView();
             }
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawActiveEventRow(ActiveEvent activeEvent, int index)
+        {
+            Rect rowRect = EditorGUILayout.BeginHorizontal(GUILayout.Height(18));
+            if (index % 2 == 0)
+            {
+                EditorGUI.DrawRect(rowRect, new Color(0.5f, 0.5f, 0.5f, 0.1f));
+            }
+
+            // Event name
+            EditorGUILayout.LabelField(activeEvent.rootEvent.name, GUILayout.Width(140));
+
+            // Emitter name
+            string emitterName = activeEvent.emitterTransform != null ? activeEvent.emitterTransform.name : "-";
+            EditorGUILayout.LabelField(emitterName, EditorStyles.miniLabel, GUILayout.Width(100));
+
+            // Status with color
+            string status = activeEvent.status.ToString();
+            Color statusColor = activeEvent.status == EventStatus.Played ? successColor : Color.gray;
+            GUI.color = statusColor;
+            EditorGUILayout.LabelField(status, EditorStyles.miniLabel, GUILayout.Width(80));
+            GUI.color = Color.white;
+
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawEventNameMapSection()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            int registeredCount = AudioManager.GetRegisteredEventCount();
+
+            // Search bar
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Search:", GUILayout.Width(50));
+            searchEventName = EditorGUILayout.TextField(searchEventName, GUILayout.MinWidth(120));
+            
+            if (GUILayout.Button("Find", EditorStyles.miniButtonLeft, GUILayout.Width(40)))
+            {
+                if (!string.IsNullOrEmpty(searchEventName))
+                {
+                    var foundEvent = AudioManager.GetEventByName(searchEventName);
+                    if (foundEvent != null)
+                    {
+                        EditorUtility.FocusProjectWindow();
+                        Selection.activeObject = foundEvent;
+                        EditorGUIUtility.PingObject(foundEvent);
+                    }
+                    else
+                    {
+                        EditorUtility.DisplayDialog("Event Not Found",
+                            $"Event '{searchEventName}' is not registered.\nMake sure the bank is loaded.",
+                            "OK");
+                    }
+                }
+            }
+            if (GUILayout.Button("Clear", EditorStyles.miniButtonRight, GUILayout.Width(40)))
+            {
+                searchEventName = "";
+            }
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space(3);
+
+            // Event list
+            if (registeredCount > 0 && registeredCount <= 50)
+            {
+                eventMapScrollPos = EditorGUILayout.BeginScrollView(eventMapScrollPos, GUILayout.Height(120));
+
+                var allBanks = AudioManager.GetLoadedBanks();
+                foreach (var bank in allBanks)
+                {
+                    if (bank == null || bank.AudioEvents == null) continue;
+                    foreach (var evt in bank.AudioEvents)
+                    {
+                        if (evt != null && !string.IsNullOrEmpty(evt.name))
+                        {
+                            EditorGUILayout.BeginHorizontal();
+                            if (GUILayout.Button(evt.name, EditorStyles.linkLabel, GUILayout.Width(180)))
+                            {
+                                EditorUtility.FocusProjectWindow();
+                                Selection.activeObject = evt;
+                                EditorGUIUtility.PingObject(evt);
+                            }
+                            EditorGUILayout.LabelField($"[{bank.name}]", EditorStyles.miniLabel);
+                            EditorGUILayout.EndHorizontal();
+                        }
+                    }
+                }
+
+                EditorGUILayout.EndScrollView();
+            }
+            else if (registeredCount > 50)
+            {
+                EditorGUILayout.HelpBox($"Too many events ({registeredCount}) to display.\nUse search to find specific events.", MessageType.Info);
+            }
+            else
+            {
+                EditorGUILayout.LabelField("No events registered", EditorStyles.centeredGreyMiniLabel);
+            }
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawMemoryUsageSection()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            EditorGUILayout.LabelField($"Total Tracked: {ToMemorySizeString(AudioManager.TotalMemoryUsage)}", EditorStyles.boldLabel);
+
+            EditorGUILayout.Space(3);
+
+            // Populate and sort the list
+            sortedClipList.Clear();
+            foreach (var kvp in AudioManager.ClipMemoryCache)
+            {
+                sortedClipList.Add(kvp);
+            }
+            sortedClipList.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+            if (sortedClipList.Count == 0)
+            {
+                EditorGUILayout.LabelField("No audio clips loaded", EditorStyles.centeredGreyMiniLabel);
+            }
+            else
+            {
+                memoryScrollPos = EditorGUILayout.BeginScrollView(memoryScrollPos, GUILayout.Height(100));
+
+                for (int i = 0; i < sortedClipList.Count; i++)
+                {
+                    var kvp = sortedClipList[i];
+                    if (kvp.Key == null) continue;
+
+                    Rect rowRect = EditorGUILayout.BeginHorizontal();
+                    if (i % 2 == 0)
+                    {
+                        EditorGUI.DrawRect(rowRect, new Color(0.5f, 0.5f, 0.5f, 0.1f));
+                    }
+
+                    int refCount = AudioManager.ActiveClipRefCount.TryGetValue(kvp.Key, out int count) ? count : 0;
+                    
+                    EditorGUILayout.LabelField(kvp.Key.name, GUILayout.MinWidth(120));
+                    EditorGUILayout.LabelField($"{refCount} refs", EditorStyles.miniLabel, GUILayout.Width(45));
+                    EditorGUILayout.LabelField(ToMemorySizeString(kvp.Value), EditorStyles.boldLabel, GUILayout.Width(70));
+
+                    EditorGUILayout.EndHorizontal();
+                }
+
+                EditorGUILayout.EndScrollView();
+            }
+
+            EditorGUILayout.HelpBox("Tracks raw AudioClip sample data. Does not include Unity audio engine overhead.", MessageType.None);
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawStatRow(string label, string value)
+        {
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField(label, GUILayout.Width(120));
+            EditorGUILayout.LabelField(value, EditorStyles.boldLabel);
+            EditorGUILayout.EndHorizontal();
+        }
+
+        #region Utility Methods
+
+        private bool DrawFoldoutHeader(string title, bool foldout, Color color)
+        {
+            EditorGUILayout.Space(2);
+
+            Rect rect = EditorGUILayout.GetControlRect(false, 22);
+
+            // Background
+            Color bgColor = foldout ? color : new Color(color.r * 0.7f, color.g * 0.7f, color.b * 0.7f);
+            EditorGUI.DrawRect(rect, bgColor);
+
+            // Border
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1), Color.black * 0.2f);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1, rect.width, 1), Color.black * 0.2f);
+
+            // Label - use cached style
+            Rect labelRect = new Rect(rect.x + 20, rect.y, rect.width - 20, rect.height);
+            EditorGUI.LabelField(labelRect, title, _foldoutLabelStyle);
+
+            // Arrow
+            string arrow = foldout ? "v" : ">";
+            Rect arrowRect = new Rect(rect.x + 5, rect.y, 15, rect.height);
+            EditorGUI.LabelField(arrowRect, arrow, _foldoutLabelStyle);
+
+            // Click handling
+            if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
+            {
+                foldout = !foldout;
+                Event.current.Use();
+            }
+
+            return foldout;
         }
 
         private static string ToMemorySizeString(long bytes)
         {
             if (bytes < 1024) return $"{bytes} B";
-            if (bytes < 1024 * 1024) return $"{(bytes / 1024.0):F2} KB";
+            if (bytes < 1024 * 1024) return $"{(bytes / 1024.0):F1} KB";
             if (bytes < 1024 * 1024 * 1024) return $"{(bytes / (1024.0 * 1024.0)):F2} MB";
             return $"{(bytes / (1024.0 * 1024.0 * 1024.0)):F2} GB";
         }
+
+        #endregion
     }
 }
