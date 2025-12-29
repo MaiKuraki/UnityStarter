@@ -16,5 +16,12 @@
     "name": "CycloneGames",
     "email": "",
     "url": ""
-  }
+  },
+  "samples": [
+    {
+      "displayName": "Behavior Tree Sample",
+      "description": "Behavior Tree Sample",
+      "path": "Samples"
+    }
+  ]
 }
