@@ -9,6 +9,10 @@ namespace Build.Pipeline.Editor
     [CustomEditor(typeof(HybridCLRBuildConfig))]
     public class HybridCLRBuildConfigEditor : UnityEditor.Editor
     {
+        // Duplicate detection
+        private static string[] allConfigGuids;
+        private static bool hasCheckedForDuplicates;
+
         private SerializedProperty hotUpdateAssemblies;
         private SerializedProperty cheatAssemblies;
         private SerializedProperty hotUpdateDllOutputDirectory;
@@ -33,8 +37,14 @@ namespace Build.Pipeline.Editor
             serializedObject.Update();
             hasValidationErrors = false;
 
+            // Check for duplicates
+            CheckForDuplicates();
+
             EditorGUILayout.LabelField("HybridCLR Build Configuration", EditorStyles.boldLabel);
             EditorGUILayout.Space(5);
+
+            // Duplicate warning
+            DrawDuplicateWarning();
 
             // Hot Update Configuration
             EditorGUILayout.LabelField("Hot Update Configuration", EditorStyles.boldLabel);
@@ -519,6 +529,36 @@ namespace Build.Pipeline.Editor
         private void DrawHelpBox(string message, MessageType type)
         {
             EditorGUILayout.HelpBox(message, type);
+        }
+
+        private void CheckForDuplicates()
+        {
+            if (!hasCheckedForDuplicates || Event.current.type == EventType.Layout)
+            {
+                allConfigGuids = AssetDatabase.FindAssets("t:HybridCLRBuildConfig");
+                hasCheckedForDuplicates = true;
+            }
+        }
+
+        private void DrawDuplicateWarning()
+        {
+            if (allConfigGuids != null && allConfigGuids.Length > 1)
+            {
+                EditorGUILayout.HelpBox(
+                    $"⚠ Multiple HybridCLRBuildConfig assets detected ({allConfigGuids.Length} found).\n" +
+                    "Only one HybridCLRBuildConfig should exist in the project. Please delete duplicates.",
+                    MessageType.Warning);
+
+                if (GUILayout.Button("Show All in Console"))
+                {
+                    foreach (var guid in allConfigGuids)
+                    {
+                        string path = AssetDatabase.GUIDToAssetPath(guid);
+                        Debug.Log($"HybridCLRBuildConfig found at: {path}");
+                    }
+                }
+                EditorGUILayout.Space(5);
+            }
         }
     }
 }
