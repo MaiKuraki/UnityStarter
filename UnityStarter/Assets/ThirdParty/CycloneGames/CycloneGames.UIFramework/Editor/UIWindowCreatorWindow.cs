@@ -15,7 +15,9 @@ namespace CycloneGames.UIFramework.Editor
         public string scriptFolderPath = "";
         public string prefabFolderPath = "";
         public string configFolderPath = "";
+        public string presenterFolderPath = "";
         public string namespaceName = "";
+        public bool useMVP = false;
     }
 
     public class UIWindowCreatorWindow : EditorWindow
@@ -27,10 +29,12 @@ namespace CycloneGames.UIFramework.Editor
         private DefaultAsset scriptFolder;
         private DefaultAsset soFolder;
         private DefaultAsset prefabFolder;
+        private DefaultAsset presenterFolder;
         private UILayerConfiguration selectedLayer;
         private string windowName = "";
         private GameObject templatePrefab;
         private Vector2 scrollPosition;
+        private bool useMVP = false;
 
         private string settingsPath;
 
@@ -95,6 +99,7 @@ namespace CycloneGames.UIFramework.Editor
                     if (settings != null)
                     {
                         namespaceName = settings.namespaceName ?? "";
+                        useMVP = settings.useMVP;
 
                         if (!string.IsNullOrEmpty(settings.scriptFolderPath))
                         {
@@ -107,6 +112,10 @@ namespace CycloneGames.UIFramework.Editor
                         if (!string.IsNullOrEmpty(settings.configFolderPath))
                         {
                             soFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(settings.configFolderPath);
+                        }
+                        if (!string.IsNullOrEmpty(settings.presenterFolderPath))
+                        {
+                            presenterFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(settings.presenterFolderPath);
                         }
                     }
                 }
@@ -126,7 +135,9 @@ namespace CycloneGames.UIFramework.Editor
                     namespaceName = namespaceName ?? "",
                     scriptFolderPath = scriptFolder != null ? AssetDatabase.GetAssetPath(scriptFolder) : "",
                     prefabFolderPath = prefabFolder != null ? AssetDatabase.GetAssetPath(prefabFolder) : "",
-                    configFolderPath = soFolder != null ? AssetDatabase.GetAssetPath(soFolder) : ""
+                    configFolderPath = soFolder != null ? AssetDatabase.GetAssetPath(soFolder) : "",
+                    presenterFolderPath = presenterFolder != null ? AssetDatabase.GetAssetPath(presenterFolder) : "",
+                    useMVP = useMVP
                 };
 
                 string json = JsonUtility.ToJson(settings, true);
@@ -289,7 +300,60 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(10);
 
-            // Section 4: Template (Optional)
+            // Section 4: MVP Architecture (Optional)
+            DrawSectionHeader("MVP Architecture (Optional)");
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Use MVP Pattern", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox("Enable to generate View interface and Presenter class alongside the UIWindow. " +
+                "This follows the Model-View-Presenter pattern for better separation of concerns.", MessageType.None);
+            
+            bool newUseMVP = EditorGUILayout.Toggle("Generate MVP Structure", useMVP);
+            if (newUseMVP != useMVP)
+            {
+                useMVP = newUseMVP;
+                SaveSettings();
+            }
+
+            if (useMVP)
+            {
+                EditorGUILayout.Space(5);
+                EditorGUILayout.HelpBox("MVP will generate:\n" +
+                    $"• I{windowName}View - View interface (in Script folder)\n" +
+                    $"• {windowName}Presenter - Presenter class (in Presenter folder)\n" +
+                    $"• {windowName} will implement I{windowName}View", MessageType.Info);
+
+                EditorGUILayout.Space(5);
+                EditorGUILayout.LabelField("Presenter Save Path", EditorStyles.boldLabel);
+                EditorGUILayout.HelpBox("Drag and drop a folder where the Presenter script will be saved. Can be same as Script folder.", MessageType.None);
+                DefaultAsset newPresenterFolder = EditorGUILayout.ObjectField(presenterFolder, typeof(DefaultAsset), false) as DefaultAsset;
+                if (newPresenterFolder != presenterFolder)
+                {
+                    presenterFolder = newPresenterFolder;
+                    SaveSettings();
+                }
+                if (presenterFolder != null)
+                {
+                    string presenterPath = AssetDatabase.GetAssetPath(presenterFolder);
+                    if (AssetDatabase.IsValidFolder(presenterPath))
+                    {
+                        EditorGUILayout.LabelField($"Path: {presenterPath}", EditorStyles.miniLabel);
+                        EditorGUILayout.LabelField($"Presenter: {presenterPath}/{windowName}Presenter.cs", EditorStyles.miniLabel);
+                    }
+                    else
+                    {
+                        EditorGUILayout.HelpBox("⚠ Selected path is not a valid folder.", MessageType.Warning);
+                    }
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox("⚠ Presenter folder is required when using MVP.", MessageType.Warning);
+                }
+            }
+            EditorGUILayout.EndVertical();
+            EditorGUILayout.Space(10);
+
+            // Section 5: Template (Optional)
             DrawSectionHeader("Template (Optional)");
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -373,18 +437,25 @@ namespace CycloneGames.UIFramework.Editor
             if (string.IsNullOrEmpty(windowName))
                 return false;
 
+            // MVP requires presenter folder
+            if (useMVP && presenterFolder == null)
+                return false;
+
             if (!IsValidCSharpIdentifier(windowName))
                 return false;
 
             string scriptPath = scriptFolder != null ? AssetDatabase.GetAssetPath(scriptFolder) : "";
             string soPath = soFolder != null ? AssetDatabase.GetAssetPath(soFolder) : "";
             string prefabPath = prefabFolder != null ? AssetDatabase.GetAssetPath(prefabFolder) : "";
+            string presenterPath = presenterFolder != null ? AssetDatabase.GetAssetPath(presenterFolder) : "";
 
             if (!string.IsNullOrEmpty(scriptPath) && !AssetDatabase.IsValidFolder(scriptPath))
                 return false;
             if (!string.IsNullOrEmpty(soPath) && !AssetDatabase.IsValidFolder(soPath))
                 return false;
             if (!string.IsNullOrEmpty(prefabPath) && !AssetDatabase.IsValidFolder(prefabPath))
+                return false;
+            if (useMVP && !string.IsNullOrEmpty(presenterPath) && !AssetDatabase.IsValidFolder(presenterPath))
                 return false;
 
             if (HasExistingFiles())
@@ -469,6 +540,7 @@ namespace CycloneGames.UIFramework.Editor
                 string scriptPath = AssetDatabase.GetAssetPath(scriptFolder);
                 string soPath = AssetDatabase.GetAssetPath(soFolder);
                 string prefabPath = AssetDatabase.GetAssetPath(prefabFolder);
+                string presenterPath = useMVP && presenterFolder != null ? AssetDatabase.GetAssetPath(presenterFolder) : "";
 
                 // Ensure paths start with "Assets/"
                 if (!scriptPath.StartsWith("Assets/"))
@@ -477,6 +549,8 @@ namespace CycloneGames.UIFramework.Editor
                     soPath = "Assets/" + soPath;
                 if (!prefabPath.StartsWith("Assets/"))
                     prefabPath = "Assets/" + prefabPath;
+                if (useMVP && !string.IsNullOrEmpty(presenterPath) && !presenterPath.StartsWith("Assets/"))
+                    presenterPath = "Assets/" + presenterPath;
 
                 // Ensure paths end with "/"
                 if (!scriptPath.EndsWith("/"))
@@ -485,6 +559,8 @@ namespace CycloneGames.UIFramework.Editor
                     soPath += "/";
                 if (!prefabPath.EndsWith("/"))
                     prefabPath += "/";
+                if (useMVP && !string.IsNullOrEmpty(presenterPath) && !presenterPath.EndsWith("/"))
+                    presenterPath += "/";
 
                 // Create script name
                 string scriptName = windowName;
@@ -499,7 +575,19 @@ namespace CycloneGames.UIFramework.Editor
                 string soName = windowName + "_Config.asset";
                 string fullSoPath = soPath + soName;
 
-                CreateScript(fullScriptPath, scriptName, namespaceName);
+                // MVP file paths
+                string fullViewInterfacePath = useMVP ? scriptPath + "I" + windowName + "View.cs" : "";
+                string fullPresenterPath = useMVP ? presenterPath + windowName + "Presenter.cs" : "";
+
+                // Create scripts (including MVP if enabled)
+                CreateScript(fullScriptPath, scriptName, namespaceName, useMVP);
+                
+                if (useMVP)
+                {
+                    CreateViewInterface(fullViewInterfacePath, scriptName, namespaceName);
+                    CreatePresenter(fullPresenterPath, scriptName, namespaceName);
+                }
+                
                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
 
                 GameObject prefabInstance = CreatePrefab(fullPrefabPath, scriptName, null);
@@ -527,7 +615,16 @@ namespace CycloneGames.UIFramework.Editor
                 string message = $"UIWindow '{windowName}' created successfully!\n\n" +
                                $"Script: {fullScriptPath}\n" +
                                $"Prefab: {fullPrefabPath}\n" +
-                               $"Config: {fullSoPath}\n\n";
+                               $"Config: {fullSoPath}\n";
+
+                if (useMVP)
+                {
+                    message += $"\nMVP Files:\n" +
+                               $"View Interface: {fullViewInterfacePath}\n" +
+                               $"Presenter: {fullPresenterPath}\n";
+                }
+
+                message += "\n";
 
                 if (!scriptAdded)
                 {
@@ -546,7 +643,272 @@ namespace CycloneGames.UIFramework.Editor
             }
         }
 
-        private void CreateScript(string scriptPath, string className, string namespaceName)
+        private void CreateScript(string scriptPath, string className, string namespaceName, bool useMVP = false)
+        {
+            EnsureDirectoryExists(scriptPath);
+
+            // Generate script content based on MVP mode
+            string scriptContent;
+            string viewInterface = useMVP ? $"I{className}View" : "";
+            string baseClass = "UIWindow";
+            string implementsView = useMVP ? $", {viewInterface}" : "";
+
+            if (string.IsNullOrEmpty(namespaceName))
+            {
+                if (useMVP)
+                {
+                    scriptContent = $@"using CycloneGames.UIFramework.Runtime;
+
+public class {className} : {baseClass}{implementsView}
+{{
+    // Add your UI element references here
+    // Example:
+    // [SerializeField] private Button closeButton;
+    
+    protected override void Awake()
+    {{
+        base.Awake();
+        // Initialize your UI elements here
+    }}
+
+    #region {viewInterface} Implementation
+
+    // TODO: Implement your View interface methods here
+    // Example:
+    // public void ShowLoading(bool show) {{ loadingPanel.SetActive(show); }}
+
+    #endregion
+}}";
+                }
+                else
+                {
+                    scriptContent = $@"using CycloneGames.UIFramework.Runtime;
+
+public class {className} : {baseClass}
+{{
+    // Add your UI element references here
+    // Example:
+    // [SerializeField] private Button closeButton;
+    
+    protected override void Awake()
+    {{
+        base.Awake();
+        // Initialize your UI elements here
+    }}
+}}";
+                }
+            }
+            else
+            {
+                if (useMVP)
+                {
+                    scriptContent = $@"using CycloneGames.UIFramework.Runtime;
+
+namespace {namespaceName}
+{{
+    public class {className} : {baseClass}{implementsView}
+    {{
+        // Add your UI element references here
+        // Example:
+        // [SerializeField] private Button closeButton;
+        
+        protected override void Awake()
+        {{
+            base.Awake();
+            // Initialize your UI elements here
+        }}
+
+        #region {viewInterface} Implementation
+
+        // TODO: Implement your View interface methods here
+        // Example:
+        // public void ShowLoading(bool show) {{ loadingPanel.SetActive(show); }}
+
+        #endregion
+    }}
+}}";
+                }
+                else
+                {
+                    scriptContent = $@"using CycloneGames.UIFramework.Runtime;
+
+namespace {namespaceName}
+{{
+    public class {className} : {baseClass}
+    {{
+        // Add your UI element references here
+        // Example:
+        // [SerializeField] private Button closeButton;
+        
+        protected override void Awake()
+        {{
+            base.Awake();
+            // Initialize your UI elements here
+        }}
+    }}
+}}";
+                }
+            }
+
+            WriteScriptFile(scriptPath, scriptContent);
+        }
+
+        private void CreateViewInterface(string scriptPath, string className, string namespaceName)
+        {
+            EnsureDirectoryExists(scriptPath);
+
+            string interfaceName = $"I{className}View";
+            string scriptContent;
+
+            if (string.IsNullOrEmpty(namespaceName))
+            {
+                scriptContent = $@"/// <summary>
+/// View interface for {className}.
+/// Define all UI-related methods that the Presenter can call.
+/// The {className} class implements this interface.
+/// </summary>
+public interface {interfaceName}
+{{
+    // TODO: Add your view methods here
+    // Example:
+    // void ShowLoading(bool show);
+    // void SetTitle(string title);
+    // void SetButtonInteractable(bool interactable);
+}}";
+            }
+            else
+            {
+                scriptContent = $@"namespace {namespaceName}
+{{
+    /// <summary>
+    /// View interface for {className}.
+    /// Define all UI-related methods that the Presenter can call.
+    /// The {className} class implements this interface.
+    /// </summary>
+    public interface {interfaceName}
+    {{
+        // TODO: Add your view methods here
+        // Example:
+        // void ShowLoading(bool show);
+        // void SetTitle(string title);
+        // void SetButtonInteractable(bool interactable);
+    }}
+}}";
+            }
+
+            WriteScriptFile(scriptPath, scriptContent);
+        }
+
+        private void CreatePresenter(string scriptPath, string className, string namespaceName)
+        {
+            EnsureDirectoryExists(scriptPath);
+
+            string presenterName = $"{className}Presenter";
+            string viewInterface = $"I{className}View";
+            string scriptContent;
+
+            if (string.IsNullOrEmpty(namespaceName))
+            {
+                scriptContent = $@"using CycloneGames.UIFramework.Runtime;
+
+/// <summary>
+/// Presenter for {className}.
+/// Handles business logic and communicates with the View through {viewInterface}.
+/// </summary>
+public class {presenterName} : UIPresenter<{viewInterface}>
+{{
+    protected override void OnViewBound()
+    {{
+        // Called when View is first bound (during UIWindow.Awake)
+        // Use for early initialization
+    }}
+
+    public override void OnViewOpening()
+    {{
+        // Called when window starts opening
+        // Use for preparing data or starting loading operations
+    }}
+
+    public override void OnViewOpened()
+    {{
+        // Called when window is fully opened and interactive
+        // Use for populating UI with data
+    }}
+
+    public override void OnViewClosing()
+    {{
+        // Called when window starts closing
+        // Use for saving state or cancelling ongoing operations
+    }}
+
+    public override void OnViewClosed()
+    {{
+        // Called when window finishes closing
+        // Use for final cleanup before destruction
+    }}
+
+    public override void Dispose()
+    {{
+        // Cleanup resources
+        base.Dispose();
+    }}
+}}";
+            }
+            else
+            {
+                scriptContent = $@"using CycloneGames.UIFramework.Runtime;
+
+namespace {namespaceName}
+{{
+    /// <summary>
+    /// Presenter for {className}.
+    /// Handles business logic and communicates with the View through {viewInterface}.
+    /// </summary>
+    public class {presenterName} : UIPresenter<{viewInterface}>
+    {{
+        protected override void OnViewBound()
+        {{
+            // Called when View is first bound (during UIWindow.Awake)
+            // Use for early initialization
+        }}
+
+        public override void OnViewOpening()
+        {{
+            // Called when window starts opening
+            // Use for preparing data or starting loading operations
+        }}
+
+        public override void OnViewOpened()
+        {{
+            // Called when window is fully opened and interactive
+            // Use for populating UI with data
+        }}
+
+        public override void OnViewClosing()
+        {{
+            // Called when window starts closing
+            // Use for saving state or cancelling ongoing operations
+        }}
+
+        public override void OnViewClosed()
+        {{
+            // Called when window finishes closing
+            // Use for final cleanup before destruction
+        }}
+
+        public override void Dispose()
+        {{
+            // Cleanup resources
+            base.Dispose();
+        }}
+    }}
+}}";
+            }
+
+            WriteScriptFile(scriptPath, scriptContent);
+        }
+
+        private void EnsureDirectoryExists(string scriptPath)
         {
             string directory = Path.GetDirectoryName(scriptPath);
             if (!Directory.Exists(directory))
@@ -563,57 +925,15 @@ namespace CycloneGames.UIFramework.Editor
                 }
                 AssetDatabase.Refresh();
             }
+        }
 
-            // Generate script content (with or without namespace)
-            string scriptContent;
-            if (string.IsNullOrEmpty(namespaceName))
-            {
-                scriptContent = $@"using CycloneGames.UIFramework.Runtime;
-
-public class {className} : UIWindow
-{{
-    // Add your UI element references here
-    // Example:
-    // [SerializeField] private Button closeButton;
-    
-    protected override void Awake()
-    {{
-        base.Awake();
-        // Initialize your UI elements here
-    }}
-}}";
-            }
-            else
-            {
-                scriptContent = $@"using CycloneGames.UIFramework.Runtime;
-
-namespace {namespaceName}
-{{
-    public class {className} : UIWindow
-    {{
-        // Add your UI element references here
-        // Example:
-        // [SerializeField] private Button closeButton;
-        
-        protected override void Awake()
-        {{
-            base.Awake();
-            // Initialize your UI elements here
-        }}
-    }}
-}}";
-            }
-
-            // Write script file (Unity will automatically generate .meta file on import)
-            byte[] bytes = Encoding.UTF8.GetBytes(scriptContent);
+        private void WriteScriptFile(string scriptPath, string content)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(content);
             using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
             NativeFile.WriteAllBytes(scriptPath, nativeBytes);
 
-            // Import the asset to ensure meta file is generated
-            // Note: This may not trigger compilation if auto-refresh is disabled
             AssetDatabase.ImportAsset(scriptPath, ImportAssetOptions.ForceUpdate);
-
-            // Force a refresh to trigger compilation
             AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
         }
 
