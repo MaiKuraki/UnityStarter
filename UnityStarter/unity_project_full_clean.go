@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,9 @@ import (
 	"sync"
 	"time"
 )
+
+// Command-line flags
+var ciMode bool
 
 // Folders and file extensions to delete
 var directoriesToDelete = []string{
@@ -214,29 +218,44 @@ func deleteFiles(basePath string) error {
 }
 
 func main() {
+	// Parse command-line flags
+	flag.BoolVar(&ciMode, "ci", false, "Run in CI mode (non-interactive, no confirmation prompts)")
+	flag.Parse()
+
 	basePath, err := os.Getwd()
 	if err != nil {
 		fmt.Printf("Unable to get current directory: %s\n", err)
-		waitForKeyPress()
-		return
+		if !ciMode {
+			waitForKeyPress()
+		}
+		os.Exit(1)
 	}
 
 	fmt.Printf("Target Directory: %s\n", basePath)
+	if ciMode {
+		fmt.Println("[CI Mode] Running in non-interactive mode")
+	}
 
 	// Check if Unity is running
 	if isRunning, pid := checkUnityRunning(basePath); isRunning {
 		fmt.Printf("\n[WARNING] Unity Editor appears to be running (PID: %d).\n", pid)
 		fmt.Println("Cleaning while Unity is open WILL cause errors and file locks.")
 		fmt.Println("Please close Unity and try again.")
+		if ciMode {
+			fmt.Println("\n[CI Mode] Aborting due to Unity running. Exit code: 1")
+			os.Exit(1)
+		}
 		fmt.Println("\nPress 'Enter' to FORCE continue (not recommended), or 'Ctrl+C' to cancel...")
+		bufio.NewReader(os.Stdin).ReadBytes('\n')
 	} else {
 		fmt.Println("This tool will delete the following if they exist:")
 		fmt.Println("Directories:", directoriesToDelete)
 		fmt.Println("Files with extensions:", fileExtensionsToDelete)
-		fmt.Println("\nPress 'Enter' to confirm and start cleaning, or 'Ctrl+C' to cancel...")
+		if !ciMode {
+			fmt.Println("\nPress 'Enter' to confirm and start cleaning, or 'Ctrl+C' to cancel...")
+			bufio.NewReader(os.Stdin).ReadBytes('\n')
+		}
 	}
-
-	bufio.NewReader(os.Stdin).ReadBytes('\n')
 
 	startTime := time.Now()
 
@@ -247,8 +266,12 @@ func main() {
 	}
 
 	duration := time.Since(startTime)
-	fmt.Printf("\nOperation completed in %s. Press any key to exit...\n", duration)
-	waitForKeyPress()
+	if ciMode {
+		fmt.Printf("\nOperation completed in %s.\n", duration)
+	} else {
+		fmt.Printf("\nOperation completed in %s. Press any key to exit...\n", duration)
+		waitForKeyPress()
+	}
 }
 
 // waitForKeyPress waits for the user to press any key before closing
