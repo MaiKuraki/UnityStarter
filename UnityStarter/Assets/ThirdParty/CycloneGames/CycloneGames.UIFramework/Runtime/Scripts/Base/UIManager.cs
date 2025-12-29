@@ -445,6 +445,7 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             uiWindowInstance.SetWindowName(windowName);
+            uiWindowInstance.SetConfiguration(windowConfig);
             uiLayer.AddWindow(uiWindowInstance);
             activeWindows[windowName] = uiWindowInstance;
 

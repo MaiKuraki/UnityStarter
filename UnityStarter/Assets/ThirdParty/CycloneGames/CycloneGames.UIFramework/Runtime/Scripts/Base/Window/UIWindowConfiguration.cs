@@ -23,11 +23,13 @@ namespace CycloneGames.UIFramework.Runtime
         [SerializeField] private UIWindow windowPrefab; // Should be a prefab of a UIWindow
         [SerializeField] private string prefabLocation; // Optional: location string for loading via AssetManagement
         [SerializeField] private UILayerConfiguration layer; // The layer this window belongs to
+        [SerializeField, Range(-100, 400)] private int priority = 0; // Priority for sorting within the layer
 
         public UIWindow WindowPrefab => windowPrefab;
         public string PrefabLocation => prefabLocation;
         public PrefabSource Source => source;
         public UILayerConfiguration Layer => layer;
+        public int Priority => priority;
 
 #if UNITY_EDITOR
         private void OnValidate()
