@@ -12,7 +12,7 @@ namespace CycloneGames.UIFramework.Runtime
 
     public abstract class UIWindowState : IUIWindowState
     {
-        protected const string DEBUG_FLAG = "[UIWindowState]"; // Changed from UIPageState
+        protected const string DEBUG_FLAG = "[UIWindowState]"; // Changed from UIWindowState
         public abstract void OnEnter(UIWindow window);
         public abstract void OnExit(UIWindow window);
         public virtual void Update(UIWindow window) { } // Default empty update

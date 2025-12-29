@@ -68,6 +68,10 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private const int MaxFrames = 300;
 
+        // Cached lists to avoid per-frame allocations
+        private readonly List<AudioMixerGroup> _cachedBuses = new List<AudioMixerGroup>();
+        private readonly List<GameObject> _cachedEmitters = new List<GameObject>();
+
         /// <summary>
         /// Display the profiler window
         /// </summary>
@@ -173,8 +177,12 @@ namespace CycloneGames.Audio.Editor
             this.eventY = 20;
             this.emitterY = 20;
             this.busY = 20;
-            List<AudioMixerGroup> buses = new List<AudioMixerGroup>();
-            List<GameObject> emitters = new List<GameObject>();
+            
+            // Clear and reuse cached lists instead of allocating new ones
+            _cachedBuses.Clear();
+            _cachedEmitters.Clear();
+            var buses = _cachedBuses;
+            var emitters = _cachedEmitters;
 
             BeginWindows();
             for (int i = 0; i < profilerEvents.Length; i++)

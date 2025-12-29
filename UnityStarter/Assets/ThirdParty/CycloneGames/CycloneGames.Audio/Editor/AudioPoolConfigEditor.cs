@@ -47,6 +47,11 @@ namespace CycloneGames.Audio.Editor
         private SerializedProperty shrinkUsageThreshold;
         private SerializedProperty shrinkInterval;
 
+        // Cached GUIStyles to avoid per-frame allocations
+        private GUIStyle _titleStyle;
+        private GUIStyle _foldoutLabelStyle;
+        private bool _stylesInitialized;
+
         private void OnEnable()
         {
             webGLMaxPoolSize = serializedObject.FindProperty("webGLMaxPoolSize");
@@ -63,11 +68,33 @@ namespace CycloneGames.Audio.Editor
             shrinkIdleThreshold = serializedObject.FindProperty("shrinkIdleThreshold");
             shrinkUsageThreshold = serializedObject.FindProperty("shrinkUsageThreshold");
             shrinkInterval = serializedObject.FindProperty("shrinkInterval");
+            _stylesInitialized = false;
+        }
+
+        private void InitializeStyles()
+        {
+            if (_stylesInitialized) return;
+            _stylesInitialized = true;
+
+            _titleStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                fontSize = 16,
+                alignment = TextAnchor.MiddleCenter
+            };
+
+            _foldoutLabelStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                normal = { textColor = Color.white },
+                alignment = TextAnchor.MiddleLeft
+            };
         }
 
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
+
+            // Initialize cached styles
+            InitializeStyles();
 
             // Check for duplicates
             CheckForDuplicates();
@@ -126,13 +153,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.BeginHorizontal();
             GUILayout.FlexibleSpace();
             
-            var titleStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                fontSize = 16,
-                alignment = TextAnchor.MiddleCenter
-            };
-            
-            EditorGUILayout.LabelField("🎵 Audio Pool Configuration", titleStyle, GUILayout.Height(24));
+            EditorGUILayout.LabelField("Audio Pool Configuration", _titleStyle, GUILayout.Height(24));
             
             GUILayout.FlexibleSpace();
             EditorGUILayout.EndHorizontal();
@@ -419,20 +440,14 @@ namespace CycloneGames.Audio.Editor
             EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1), Color.black * 0.3f);
             EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1, rect.width, 1), Color.black * 0.3f);
             
-            // Label
-            var style = new GUIStyle(EditorStyles.boldLabel)
-            {
-                normal = { textColor = Color.white },
-                alignment = TextAnchor.MiddleLeft
-            };
-            
+            // Label - use cached style
             Rect labelRect = new Rect(rect.x + 20, rect.y, rect.width - 20, rect.height);
-            EditorGUI.LabelField(labelRect, title, style);
+            EditorGUI.LabelField(labelRect, title, _foldoutLabelStyle);
             
             // Arrow
-            string arrow = foldout ? "▼" : "▶";
+            string arrow = foldout ? "v" : ">";
             Rect arrowRect = new Rect(rect.x + 5, rect.y, 15, rect.height);
-            EditorGUI.LabelField(arrowRect, arrow, style);
+            EditorGUI.LabelField(arrowRect, arrow, _foldoutLabelStyle);
             
             // Click handling
             if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
@@ -486,46 +501,5 @@ namespace CycloneGames.Audio.Editor
         }
 
         #endregion
-
-        [MenuItem("Assets/Create/CycloneGames/Audio/Audio Pool Config", priority = 0)]
-        public static void CreateAudioPoolConfig()
-        {
-            // Check if one already exists
-            var existingGuids = AssetDatabase.FindAssets("t:AudioPoolConfig");
-            if (existingGuids.Length > 0)
-            {
-                string existingPath = AssetDatabase.GUIDToAssetPath(existingGuids[0]);
-                bool create = EditorUtility.DisplayDialog(
-                    "AudioPoolConfig Already Exists",
-                    $"An AudioPoolConfig already exists at:\n{existingPath}\n\n" +
-                    "Only one config should exist. Create anyway?",
-                    "Create Anyway", "Cancel");
-
-                if (!create) return;
-            }
-
-            var config = ScriptableObject.CreateInstance<AudioPoolConfig>();
-            string path = "Assets/AudioPoolConfig.asset";
-
-            // If in a specific folder, save there
-            string selectedPath = AssetDatabase.GetAssetPath(Selection.activeObject);
-            if (!string.IsNullOrEmpty(selectedPath))
-            {
-                if (!AssetDatabase.IsValidFolder(selectedPath))
-                {
-                    selectedPath = System.IO.Path.GetDirectoryName(selectedPath);
-                }
-                path = $"{selectedPath}/AudioPoolConfig.asset";
-            }
-
-            path = AssetDatabase.GenerateUniqueAssetPath(path);
-            AssetDatabase.CreateAsset(config, path);
-            AssetDatabase.SaveAssets();
-
-            EditorUtility.FocusProjectWindow();
-            Selection.activeObject = config;
-
-            Debug.Log($"Created AudioPoolConfig at: {path}");
-        }
     }
 }

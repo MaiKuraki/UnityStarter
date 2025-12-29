@@ -7,8 +7,28 @@ namespace CycloneGames.UIFramework.Runtime
 {
     public class UIWindow : MonoBehaviour
     {
-        [SerializeField, Header("Priority Override"), Range(-100, 400)] private int priority = 0; // Default priority
-        public int Priority => priority;
+        // [NOTE] localPriority is commented out as we currently prefer to set Priority only in UIWindowConfiguration.
+        // However, in some special cases, developers may want to place UI prefabs directly in the scene hierarchy
+        // (as children under the UIFramework's layer objects) without creating them via code (UIManager.OpenWindow).
+        // In such cases, these scene-placed windows won't have a UIWindowConfiguration, and localPriority would be needed.
+        // To re-enable: uncomment the field below and update the Priority property to fallback to _localPriority.
+        // 
+        // [SerializeField, Header("Local Priority (used when no Configuration)"), Range(-100, 400)] 
+        // private int _localPriority = 0;
+        
+        private UIWindowConfiguration _configuration;
+        
+        /// <summary>
+        /// Priority from Configuration. Returns 0 if no Configuration is set.
+        /// Note: If you need to support scene-placed windows without Configuration,
+        /// uncomment _localPriority above and change this to: _configuration != null ? _configuration.Priority : _localPriority
+        /// </summary>
+        public int Priority => _configuration?.Priority ?? 0;
+        
+        /// <summary>
+        /// Sets the UIWindowConfiguration for this window (called by UIManager).
+        /// </summary>
+        public void SetConfiguration(UIWindowConfiguration config) => _configuration = config;
 
         private string windowNameInternal;
         public string WindowName => windowNameInternal;
