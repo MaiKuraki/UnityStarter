@@ -52,6 +52,37 @@ namespace CycloneGames.InputSystem.Editor
 
         private List<(string label, System.Action drawButtons, float estimatedWidth)> _toolbarSections;
 
+        private static readonly GUIContent _playerSlotsLabel = new GUIContent("Player Slots");
+        private static readonly GUIContent _addPlayerLabel = new GUIContent("+ Add Player");
+        private static readonly GUIContent _removeLabel = new GUIContent("Remove");
+        private static readonly GUIContent _joinActionLabel = new GUIContent("Join Action");
+        private static readonly GUIContent _longPressLabel = new GUIContent("Long Press (ms)");
+        private static readonly GUIContent _longPressThresholdLabel = new GUIContent("Long Press Threshold (0-1)");
+        private static readonly GUIContent _contextsLabel = new GUIContent("Contexts");
+        private static readonly GUIContent _configSettingsLabel = new GUIContent("Configuration Settings");
+        private static readonly GUIContent _userConfigSettingsLabel = new GUIContent("User Config Settings");
+        private static readonly GUIContent _codegenSettingsLabel = new GUIContent("Code Generation Settings");
+        private static readonly GUIContent _defaultConfigFolderLabel = new GUIContent("Default Config Folder");
+        private static readonly GUIContent _fullPathLabel = new GUIContent("Full Path", "Complete path where default config is located (updates in real-time). If file doesn't exist, please Load or Generate first.");
+        private static readonly GUIContent _subdirPathLabel = new GUIContent("Subdirectory Path", "Subdirectory path relative to PersistentData (e.g., \"/Config\" or \"Config\"). Leave empty to save directly in PersistentData.");
+        private static readonly GUIContent _codegenFolderLabel = new GUIContent("Codegen Output Folder");
+        private static readonly GUIContent _namespaceLabel = new GUIContent("Namespace");
+        private static readonly GUIContent _generateConstantsLabel = new GUIContent("Generate Constants");
+        private static readonly GUIContent _noConfigMessage = new GUIContent("No configuration loaded. Generate or load a configuration file using the toolbar.");
+        private static readonly GUIContent _noPlayersMessage = new GUIContent("No players configured. Click 'Add Player' to create the first player.");
+
+        private static readonly GUILayoutOption _width100 = GUILayout.Width(100);
+        private static readonly GUILayoutOption _width60 = GUILayout.Width(60);
+        private static readonly GUILayoutOption _width220 = GUILayout.Width(220);
+        private static readonly GUILayoutOption _width130 = GUILayout.Width(130);
+
+        private static readonly Color _proSkinSeparatorColor = new Color(0.3f, 0.3f, 0.3f, 0.8f);
+        private static readonly Color _lightSkinSeparatorColor = new Color(0.6f, 0.6f, 0.6f, 0.8f);
+        private static readonly Color _proSkinLabelColor = new Color(0.9f, 0.9f, 0.95f, 1f);
+        private static readonly Color _lightSkinLabelColor = new Color(0.15f, 0.15f, 0.2f, 1f);
+
+        private readonly GUIContent[] _playerLabels = new GUIContent[16]; // Support up to 16 players
+
         [MenuItem("Tools/CycloneGames/Input System Editor")]
         public static void ShowWindow()
         {
@@ -376,12 +407,12 @@ namespace CycloneGames.InputSystem.Editor
                     margin = new RectOffset(0, 0, 0, 0),
                     border = new RectOffset(0, 0, 0, 0)
                 };
-                _toolbarSectionLabelStyle.normal.textColor = isProSkin ? new Color(0.9f, 0.9f, 0.95f, 1f) : new Color(0.15f, 0.15f, 0.2f, 1f);
+                _toolbarSectionLabelStyle.normal.textColor = isProSkin ? _proSkinLabelColor : _lightSkinLabelColor;
             }
 
             if (themeChanged)
             {
-                _toolbarSectionLabelStyle.normal.textColor = isProSkin ? new Color(0.9f, 0.9f, 0.95f, 1f) : new Color(0.15f, 0.15f, 0.2f, 1f);
+                _toolbarSectionLabelStyle.normal.textColor = isProSkin ? _proSkinLabelColor : _lightSkinLabelColor;
             }
 
             UpdateSectionButtonStyles(isProSkin);
@@ -398,8 +429,8 @@ namespace CycloneGames.InputSystem.Editor
 
                 var slotsProp = _serializedConfig.FindProperty("_playerSlots");
                 EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField("Player Slots", EditorStyles.boldLabel);
-                if (GUILayout.Button("+ Add Player", GUILayout.Width(100)))
+                EditorGUILayout.LabelField(_playerSlotsLabel, EditorStyles.boldLabel);
+                if (GUILayout.Button(_addPlayerLabel, _width100))
                 {
                     AddNewPlayer(slotsProp);
                 }
@@ -411,8 +442,18 @@ namespace CycloneGames.InputSystem.Editor
                     {
                         var slotProp = slotsProp.GetArrayElementAtIndex(i);
                         EditorGUILayout.BeginHorizontal();
-                        EditorGUILayout.LabelField($"Player {i}", EditorStyles.boldLabel);
-                        if (GUILayout.Button("Remove", GUILayout.Width(60)))
+                        // Use cached player label
+                        if (i < _playerLabels.Length)
+                        {
+                            if (_playerLabels[i] == null)
+                                _playerLabels[i] = new GUIContent($"Player {i}");
+                            EditorGUILayout.LabelField(_playerLabels[i], EditorStyles.boldLabel);
+                        }
+                        else
+                        {
+                            EditorGUILayout.LabelField($"Player {i}", EditorStyles.boldLabel);
+                        }
+                        if (GUILayout.Button(_removeLabel, _width60))
                         {
                             slotsProp.DeleteArrayElementAtIndex(i);
                             break;
@@ -421,7 +462,7 @@ namespace CycloneGames.InputSystem.Editor
 
                         EditorGUI.indentLevel++;
                         EditorGUILayout.PropertyField(slotProp.FindPropertyRelative("PlayerId"));
-                        EditorGUILayout.LabelField("Join Action", EditorStyles.boldLabel);
+                        EditorGUILayout.LabelField(_joinActionLabel, EditorStyles.boldLabel);
                         EditorGUI.indentLevel++;
                         var joinTypeProp = slotProp.FindPropertyRelative("JoinAction.Type");
                         var joinActionProp = slotProp.FindPropertyRelative("JoinAction.ActionName");
@@ -443,7 +484,7 @@ namespace CycloneGames.InputSystem.Editor
                         if (joinType == CycloneGames.InputSystem.Runtime.ActionValueType.Button)
                         {
                             EditorGUILayout.BeginHorizontal();
-                            EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
+                            EditorGUILayout.LabelField(_longPressLabel, _overflowLabelStyle, _width220);
                             EditorGUILayout.PropertyField(joinLongPressProp, GUIContent.none, true);
                             EditorGUILayout.EndHorizontal();
                         }
@@ -451,11 +492,11 @@ namespace CycloneGames.InputSystem.Editor
                         {
                             var joinThresholdProp = slotProp.FindPropertyRelative("JoinAction.LongPressValueThreshold");
                             EditorGUILayout.BeginHorizontal();
-                            EditorGUILayout.LabelField("Long Press (ms)", _overflowLabelStyle, GUILayout.Width(220));
+                            EditorGUILayout.LabelField(_longPressLabel, _overflowLabelStyle, _width220);
                             EditorGUILayout.PropertyField(joinLongPressProp, GUIContent.none, true);
                             EditorGUILayout.EndHorizontal();
                             EditorGUILayout.BeginHorizontal();
-                            EditorGUILayout.LabelField("Long Press Threshold (0-1)", _overflowLabelStyle, GUILayout.Width(220));
+                            EditorGUILayout.LabelField(_longPressThresholdLabel, _overflowLabelStyle, _width220);
                             EditorGUILayout.PropertyField(joinThresholdProp, GUIContent.none, true);
                             EditorGUILayout.EndHorizontal();
                         }
@@ -466,7 +507,7 @@ namespace CycloneGames.InputSystem.Editor
                         int previousCount = _previousContextCounts.TryGetValue(i, out var count) ? count : contextsProp.arraySize;
                         
                         EditorGUI.BeginChangeCheck();
-                        EditorGUILayout.PropertyField(contextsProp, new GUIContent("Contexts"), true);
+                        EditorGUILayout.PropertyField(contextsProp, _contextsLabel, true);
                         bool contextsChanged = EditorGUI.EndChangeCheck();
                         
                         int currentCount = contextsProp.arraySize;
@@ -713,10 +754,8 @@ namespace CycloneGames.InputSystem.Editor
 
         private void DrawToolbarSeparator()
         {
-            bool isProSkin = EditorGUIUtility.isProSkin;
             Rect rect = GUILayoutUtility.GetRect(1, EditorGUIUtility.singleLineHeight, GUILayout.Width(1));
-            Color separatorColor = isProSkin ? new Color(0.3f, 0.3f, 0.3f, 0.8f) : new Color(0.6f, 0.6f, 0.6f, 0.8f);
-            EditorGUI.DrawRect(rect, separatorColor);
+            EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? _proSkinSeparatorColor : _lightSkinSeparatorColor);
         }
 
         private void DrawStatusBar()
@@ -730,11 +769,11 @@ namespace CycloneGames.InputSystem.Editor
         private void DrawCodegenSettings()
         {
             EditorGUILayout.Space();
-            EditorGUILayout.LabelField("Configuration Settings", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(_configSettingsLabel, EditorStyles.boldLabel);
             EditorGUI.indentLevel++;
 
             EditorGUI.BeginChangeCheck();
-            var newDefaultConfigFolder = (DefaultAsset)EditorGUILayout.ObjectField("Default Config Folder", _defaultConfigFolder, typeof(DefaultAsset), false);
+            var newDefaultConfigFolder = (DefaultAsset)EditorGUILayout.ObjectField(_defaultConfigFolderLabel, _defaultConfigFolder, typeof(DefaultAsset), false);
             if (EditorGUI.EndChangeCheck())
             {
                 if (newDefaultConfigFolder != _defaultConfigFolder)
