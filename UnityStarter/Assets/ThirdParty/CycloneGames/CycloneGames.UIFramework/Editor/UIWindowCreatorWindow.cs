@@ -532,10 +532,138 @@ namespace CycloneGames.UIFramework.Editor
             }
         }
 
+        /// <summary>
+        /// Performs comprehensive validation before creating UIWindow.
+        /// Checks: folder existence, file conflicts, window name validity.
+        /// Returns error message if validation fails, empty string if successful.
+        /// </summary>
+        private string ValidateBeforeCreate()
+        {
+            var errors = new System.Collections.Generic.List<string>();
+
+            // === 1. Validate Window Name ===
+            if (string.IsNullOrEmpty(windowName))
+            {
+                errors.Add("• Window name is required");
+            }
+            else if (!IsValidCSharpIdentifier(windowName))
+            {
+                errors.Add($"• Window name '{windowName}' is not a valid C# identifier");
+            }
+
+            // === 2. Validate Folder References ===
+            if (scriptFolder == null)
+            {
+                errors.Add("• Script folder reference is missing");
+            }
+            if (prefabFolder == null)
+            {
+                errors.Add("• Prefab folder reference is missing");
+            }
+            if (soFolder == null)
+            {
+                errors.Add("• Configuration folder reference is missing");
+            }
+            if (useMVP && presenterFolder == null)
+            {
+                errors.Add("• Presenter folder reference is required when using MVP");
+            }
+            if (selectedLayer == null)
+            {
+                errors.Add("• UILayer configuration is required");
+            }
+
+            // Early return if references are missing
+            if (errors.Count > 0)
+            {
+                return "Missing Required Fields:\n\n" + string.Join("\n", errors);
+            }
+
+            // === 3. Validate Folder Existence ===
+            var missingFolders = new System.Collections.Generic.List<string>();
+
+            string scriptPath = AssetDatabase.GetAssetPath(scriptFolder);
+            string prefabPath = AssetDatabase.GetAssetPath(prefabFolder);
+            string soPath = AssetDatabase.GetAssetPath(soFolder);
+            string presenterPath = useMVP && presenterFolder != null ? AssetDatabase.GetAssetPath(presenterFolder) : "";
+
+            if (!AssetDatabase.IsValidFolder(scriptPath))
+            {
+                missingFolders.Add($"• Script folder: {scriptPath}");
+            }
+            if (!AssetDatabase.IsValidFolder(prefabPath))
+            {
+                missingFolders.Add($"• Prefab folder: {prefabPath}");
+            }
+            if (!AssetDatabase.IsValidFolder(soPath))
+            {
+                missingFolders.Add($"• Config folder: {soPath}");
+            }
+            if (useMVP && !string.IsNullOrEmpty(presenterPath) && !AssetDatabase.IsValidFolder(presenterPath))
+            {
+                missingFolders.Add($"• Presenter folder: {presenterPath}");
+            }
+
+            if (missingFolders.Count > 0)
+            {
+                return "Folders No Longer Exist:\n\nThe following folders may have been deleted or moved:\n" + string.Join("\n", missingFolders) + "\n\nPlease re-select the folders.";
+            }
+
+            // === 4. Check for Existing Files ===
+            var existingFiles = new System.Collections.Generic.List<string>();
+
+            // Normalize paths
+            if (!scriptPath.EndsWith("/")) scriptPath += "/";
+            if (!prefabPath.EndsWith("/")) prefabPath += "/";
+            if (!soPath.EndsWith("/")) soPath += "/";
+            if (useMVP && !string.IsNullOrEmpty(presenterPath) && !presenterPath.EndsWith("/")) presenterPath += "/";
+
+            // Check main files
+            string scriptFile = scriptPath + windowName + ".cs";
+            string prefabFile = prefabPath + windowName + ".prefab";
+            string configFile = soPath + windowName + "_Config.asset";
+
+            if (File.Exists(scriptFile))
+                existingFiles.Add($"• Script: {scriptFile}");
+            if (File.Exists(prefabFile))
+                existingFiles.Add($"• Prefab: {prefabFile}");
+            if (File.Exists(configFile))
+                existingFiles.Add($"• Config: {configFile}");
+
+            // Check MVP files
+            if (useMVP)
+            {
+                string viewInterfaceFile = scriptPath + "I" + windowName + "View.cs";
+                string presenterFile = presenterPath + windowName + "Presenter.cs";
+
+                if (File.Exists(viewInterfaceFile))
+                    existingFiles.Add($"• View Interface: {viewInterfaceFile}");
+                if (File.Exists(presenterFile))
+                    existingFiles.Add($"• Presenter: {presenterFile}");
+            }
+
+            if (existingFiles.Count > 0)
+            {
+                return "Files Already Exist:\n\nThe following files would be overwritten:\n" + string.Join("\n", existingFiles) + "\n\nPlease delete or rename them first, or choose a different window name.";
+            }
+
+            // All validations passed
+            return "";
+        }
+
         private void CreateUIWindow()
         {
             try
             {
+                // === Pre-creation Safety Validation ===
+                // Validate all paths and check for existing files before proceeding
+                string validationError = ValidateBeforeCreate();
+                if (!string.IsNullOrEmpty(validationError))
+                {
+                    EditorUtility.DisplayDialog("Validation Failed", validationError, "OK");
+                    return;
+                }
+
                 // Get paths (Unity API expects paths starting with "Assets/")
                 string scriptPath = AssetDatabase.GetAssetPath(scriptFolder);
                 string soPath = AssetDatabase.GetAssetPath(soFolder);
