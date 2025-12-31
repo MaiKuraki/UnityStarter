@@ -60,6 +60,16 @@ namespace CycloneGames.UIFramework.Runtime
         /// <summary>
         /// Cleanup resources. Called when the window is destroyed (OnDestroy).
         /// Always call base.Dispose() when overriding.
+        /// 
+        /// IMPORTANT: Unsubscribe from all events here to prevent memory leaks.
+        /// Example:
+        /// <code>
+        /// public override void Dispose()
+        /// {
+        ///     SomeService.OnDataChanged -= HandleDataChanged;
+        ///     base.Dispose();
+        /// }
+        /// </code>
         /// </summary>
         public virtual void Dispose()
         {
