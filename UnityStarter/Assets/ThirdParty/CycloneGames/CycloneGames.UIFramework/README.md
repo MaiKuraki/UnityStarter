@@ -1202,17 +1202,14 @@ The Presenter lifecycle is fully automatic and maps 1:1 to UIWindow:
 
 ### Level 3: VContainer Integration
 
-For VContainer users, add `VCONTAINER_PRESENT` to your scripting define symbols.
+When your project has VContainer package (`jp.hadashikick.vcontainer`) installed, UIFramework automatically enables VContainer integration.
 
-#### Step 1: Add Scripting Define
+> [!NOTE]
+>
+> The `VCONTAINER_PRESENT` define symbol is configured in `CycloneGames.UIFramework.Runtime.asmdef` via `versionDefines`.
+> When Unity detects the VContainer package, it automatically adds this symbol. **No manual Project Settings configuration required**.
 
-In **Project Settings > Player > Scripting Define Symbols**, add:
-
-```
-VCONTAINER_PRESENT
-```
-
-#### Step 2: Understand Architecture
+#### Step 1: Understand Architecture
 
 UIFramework is designed to be **DI-agnostic**, VContainer integration is implemented via adapter pattern:
 
@@ -1233,7 +1230,7 @@ VContainer
     └── Not registered → Auto-fallback to Activator + [UIInject]
 ```
 
-#### Step 3: Complete Configuration Example
+#### Step 2: Complete Configuration Example
 
 ```csharp
 using VContainer;
@@ -1322,7 +1319,7 @@ public class GameLifetimeScope : LifetimeScope
 >
 > Scene-scoped services are also supported: each `VContainerWindowBinder` maintains its own resolver in the stack, auto-cleaned on dispose.
 
-#### Step 4: Create UI System Initializer
+#### Step 3: Create UI System Initializer
 
 ```csharp
 using VContainer;
@@ -1346,7 +1343,7 @@ public class UISystemInitializer : IStartable
 }
 ```
 
-#### Step 5: Writing Presenters
+#### Step 4: Writing Presenters
 
 **Approach A: Using `[UIInject]` (No registration needed, hot-update friendly)**
 
@@ -1391,7 +1388,7 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 }
 ```
 
-#### Step 6: Scene-Scoped Services (Optional)
+#### Step 5: Scene-Scoped Services (Optional)
 
 If your scene has exclusive services that need to be used in UI, simply register `UIServiceLocatorBridge`:
 
