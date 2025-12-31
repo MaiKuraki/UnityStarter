@@ -14,6 +14,7 @@ namespace CycloneGames.UIFramework.Samples
     {
         [Header("Configuration")]
         public string testIconPath = "svg-spinners--tadpole"; // Ensure this exists in Resources/svg-spinners--tadpole.png
+        public string testIconPath2 = "line-md--github"; // line-md--github.png
         public Transform uiRoot;
 
         private IAssetModule _assetModule;
@@ -80,7 +81,7 @@ namespace CycloneGames.UIFramework.Samples
             // Create Image
             var imgObj = new GameObject("AtlasSprite");
             imgObj.transform.SetParent(uiRoot, false);
-            imgObj.transform.localPosition = new Vector3(0, -300, 0);
+            imgObj.transform.localPosition = new Vector3(-100, -300, 0);
             var img = imgObj.AddComponent<Image>();
             img.rectTransform.sizeDelta = new Vector2(128, 128);
 
@@ -95,6 +96,24 @@ namespace CycloneGames.UIFramework.Samples
             else
             {
                 Debug.LogWarning($"[AtlasSample] Sprite not found at path: {testIconPath}. Check if file exists in Resources folder.");
+            }
+
+            var imgObj2 = new GameObject("AtlasSprite2");
+            imgObj2.transform.SetParent(uiRoot, false);
+            imgObj2.transform.localPosition = new Vector3(100, -300, 0);
+            var img2 = imgObj2.AddComponent<Image>();
+            img2.rectTransform.sizeDelta = new Vector2(128, 128);
+
+            Sprite sprite2 = DynamicAtlasManager.Instance.GetSprite(testIconPath2);
+
+            if (sprite2 != null)
+            {
+                img2.sprite = sprite2;
+                Debug.Log($"[AtlasSample] Sprite assigned from Atlas: {sprite2.name}");
+            }
+            else
+            {
+                Debug.LogWarning($"[AtlasSample] Sprite not found at path: {testIconPath2}. Check if file exists in Resources folder.");
             }
         }
 

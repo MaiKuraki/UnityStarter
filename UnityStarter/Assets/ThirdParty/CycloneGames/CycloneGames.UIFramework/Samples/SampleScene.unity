@@ -152,6 +152,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   testIconPath: svg-spinners--tadpole
+  testIconPath2: line-md--github
   uiRoot: {fileID: 991521749}
 --- !u!4 &434097967
 Transform:
