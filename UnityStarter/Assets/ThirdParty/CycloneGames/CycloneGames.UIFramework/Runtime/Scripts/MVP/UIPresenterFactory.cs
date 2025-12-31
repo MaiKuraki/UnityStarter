@@ -41,12 +41,15 @@ namespace CycloneGames.UIFramework.Runtime
                 return null;
             }
 
-            // Use custom factory if set (DI framework integration)
             if (CustomFactory != null)
             {
                 try
                 {
-                    return CustomFactory(presenterType);
+                    var customPresenter = CustomFactory(presenterType);
+                    if (customPresenter != null)
+                    {
+                        return customPresenter;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -55,7 +58,6 @@ namespace CycloneGames.UIFramework.Runtime
                 }
             }
 
-            // Default: create via Activator (requires parameterless constructor)
             IUIPresenter presenter;
             try
             {
@@ -67,7 +69,6 @@ namespace CycloneGames.UIFramework.Runtime
                 return null;
             }
 
-            // Auto-inject services marked with [UIInject]
             AutoInjectServices(presenter);
 
             return presenter;

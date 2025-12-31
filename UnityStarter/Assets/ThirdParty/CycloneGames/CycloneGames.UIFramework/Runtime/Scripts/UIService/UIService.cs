@@ -53,18 +53,18 @@ namespace CycloneGames.UIFramework.Runtime
         private const string DEBUG_FLAG = "[UIService]";
         private UIManager uiManagerInstance;
 
-        // Dependencies are injected via constructor
+        // Dependencies
         private IAssetPathBuilderFactory assetPathBuilderFactory;
         private IUnityObjectSpawner objectSpawner;
         private IMainCameraService mainCameraService;
 
         private bool isInitialized = false;
 
-        // Default constructor might be used if service locator pattern is used elsewhere to provide dependencies later.
-        // However, constructor injection is generally preferred for clarity of dependencies.
+        /// <summary>
+        /// Default constructor. Call Initialize() to complete setup.
+        /// </summary>
         public UIService()
         {
-            //  You must Initialize UIService
             isInitialized = false;
         }
 
