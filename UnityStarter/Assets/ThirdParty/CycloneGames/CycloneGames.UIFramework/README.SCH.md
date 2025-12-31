@@ -1161,14 +1161,8 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 ```
 
 > [!NOTE]
+>
 > `[UIInject]` 是**完全可选的**。如果您的 Presenter 没有外部依赖，或者您使用的是完整的 DI 框架（Level 3，它会接管注入逻辑），则无需使用此属性。
-
-```csharp
-    {
-        // 取消订阅事件、释放资源
-        base.Dispose();
-    }
-```
 
 #### 步骤 4: 注册服务（无 DI 框架）
 
@@ -1218,72 +1212,308 @@ Presenter 生命周期完全自动，与 UIWindow 1:1 映射：
 VCONTAINER_PRESENT
 ```
 
-#### 步骤 2: 注册 Presenter
+#### 步骤 2: 理解架构
+
+UIFramework 设计为 **DI 框架无关**，VContainer 集成通过适配器模式实现：
+
+```
+VContainer
+├── IUIService (UIService) ← 主入口，通过 RegisterBuildCallback 初始化
+│   ├── 依赖: IAssetPathBuilderFactory
+│   ├── 依赖: IUnityObjectSpawner
+│   ├── 依赖: IMainCameraService (可选)
+│   └── 依赖: IAssetPackage (可选)
+│
+├── VContainerWindowBinder ← 适配器，连接 VContainer 与 Presenter 工厂
+│
+├── UISystemInitializer ← 初始化绑定器
+│
+└── Presenter 类型（可选注册）
+    ├── 已注册 → 使用 VContainer 构造函数注入
+    └── 未注册 → 自动回退到 Activator + [UIInject]
+```
+
+#### 步骤 3: 完整配置示例
 
 ```csharp
 using VContainer;
 using VContainer.Unity;
 using CycloneGames.UIFramework.Runtime;
 using CycloneGames.UIFramework.Runtime.Integrations;
+using CycloneGames.Factory.Runtime;
+using CycloneGames.Service.Runtime;
+using CycloneGames.AssetManagement.Runtime;
 
 public class GameLifetimeScope : LifetimeScope
 {
     protected override void Configure(IContainerBuilder builder)
     {
-        // 注册绑定器
+        // ========================================
+        // 1. UIService 的依赖项
+        // ========================================
+        builder.Register<IAssetPathBuilderFactory, TemplateAssetPathBuilderFactory>(Lifetime.Singleton);
+        builder.Register<IUnityObjectSpawner, DefaultUnityObjectSpawner>(Lifetime.Singleton);
+        builder.Register<IMainCameraService, MainCameraService>(Lifetime.Singleton);
+
+        // 热更新项目：注册 IAssetPackage
+        // builder.RegisterInstance(yourAssetPackage).As<IAssetPackage>();
+
+        // ========================================
+        // 2. UIService - 使用 RegisterBuildCallback 初始化
+        // ========================================
+        // UIService 保持 DI 无关设计，通过回调手动初始化
+        builder.Register<IUIService, UIService>(Lifetime.Singleton);
+        builder.RegisterBuildCallback(resolver =>
+        {
+            var uiService = resolver.Resolve<IUIService>();
+            var factory = resolver.Resolve<IAssetPathBuilderFactory>();
+            var spawner = resolver.Resolve<IUnityObjectSpawner>();
+            var cameraService = resolver.Resolve<IMainCameraService>();
+
+            // 如果有 IAssetPackage，使用带 package 的重载
+            // var package = resolver.Resolve<IAssetPackage>();
+            // uiService.Initialize(factory, spawner, cameraService, package);
+
+            // 否则使用默认重载
+            uiService.Initialize(factory, spawner, cameraService);
+        });
+
+        // ========================================
+        // 3. UIFramework Presenter 支持
+        // ========================================
         builder.Register<VContainerWindowBinder>(Lifetime.Singleton);
+        builder.RegisterEntryPoint<UISystemInitializer>();
 
-        // 注册 Presenter
-        builder.Register<InventoryPresenter>(Lifetime.Transient);
-        builder.Register<SettingsPresenter>(Lifetime.Transient);
-
-        // 注册服务
+        // ========================================
+        // 4. 业务服务（Presenter 使用的服务）
+        // ========================================
         builder.Register<IInventoryService, InventoryService>(Lifetime.Singleton);
+        builder.Register<IAudioService, AudioService>(Lifetime.Singleton);
+
+        // ========================================
+        // 5. Presenter 注册 - 可选！
+        // ========================================
+        // 如果不注册，UIPresenterFactory 会自动回退到 Activator 创建
+        // 热更新程序集中的 Presenter 使用 [UIInject] 属性注入
+
+        // 如果需要构造函数注入，显式注册：
+        // builder.Register<InventoryPresenter>(Lifetime.Transient);
     }
 }
 ```
 
-#### 步骤 3: 初始化绑定器
+> [!NOTE]
+>
+> **关于 `[UIInject]` 与 VContainer 的集成**
+>
+> `VContainerWindowBinder` 创建时会自动将 VContainer 的解析器注册到 `UIServiceLocator`。
+> 这意味着 `[UIInject]` 可以**自动注入 VContainer 中注册的服务**：
+>
+> ```csharp
+> // 在 VContainer 中注册
+> builder.Register<IAudioService, AudioService>(Lifetime.Singleton);
+>
+> // 在 Presenter 中使用 [UIInject]（无需在 VContainer 注册 Presenter）
+> public class HotUpdatePresenter : UIPresenter<IView>
+> {
+>     [UIInject] private IAudioService AudioService { get; set; } // ✅ 自动从 VContainer 解析
+> }
+> ```
+>
+> 场景作用域服务也受支持：每个 `VContainerWindowBinder` 维护独立的解析器栈，销毁时自动清理。
+
+#### 步骤 4: 创建 UI 系统初始化器
 
 ```csharp
 using VContainer;
+using VContainer.Unity;
 using CycloneGames.UIFramework.Runtime.Integrations;
 
-public class UISystemInitializer
+public class UISystemInitializer : IStartable
 {
+    private readonly VContainerWindowBinder _binder;
+
+    [Inject]
     public UISystemInitializer(IObjectResolver resolver)
     {
-        // 这会自动设置 UIPresenterFactory.CustomFactory
-        var binder = new VContainerWindowBinder(resolver);
+        _binder = new VContainerWindowBinder(resolver);
+    }
+
+    public void Start()
+    {
+        CycloneGames.Logger.CLogger.Log("[UISystemInitializer] VContainer integration initialized");
     }
 }
 ```
 
-#### 使用构造函数注入的 Presenter
+#### 步骤 5: Presenter 编写方式
+
+**方式 A: 使用 `[UIInject]`（无需注册，热更新友好）**
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+
+// 无需在 VContainer 中注册，自动回退到 Activator 创建
+public class InventoryPresenter : UIPresenter<IInventoryView>
+{
+    [UIInject] private IInventoryService InventoryService { get; set; }
+    [UIInject] private IAudioService AudioService { get; set; }
+
+    public override void OnViewOpened()
+    {
+        View.SetGold(InventoryService.Gold);
+        AudioService.PlaySFX("ui_open");
+    }
+}
+```
+
+**方式 B: 使用构造函数注入（需要在 VContainer 注册）**
 
 ```csharp
 using VContainer;
 using CycloneGames.UIFramework.Runtime;
 
+// 需要注册: builder.Register<InventoryPresenter>(Lifetime.Transient);
 public class InventoryPresenter : UIPresenter<IInventoryView>
 {
     private readonly IInventoryService _inventoryService;
-    private readonly IAudioService _audioService;
 
     [Inject]
-    public InventoryPresenter(IInventoryService inventoryService, IAudioService audioService)
+    public InventoryPresenter(IInventoryService inventoryService)
     {
         _inventoryService = inventoryService;
-        _audioService = audioService;
     }
 
     public override void OnViewOpened()
     {
         View.SetGold(_inventoryService.Gold);
-        _audioService.PlaySFX("ui_open");
     }
 }
 ```
+
+#### 步骤 6: 场景作用域服务（可选）
+
+如果场景有专属服务需要在 UI 中使用，只需注册 `UIServiceLocatorBridge`：
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.UIFramework.Runtime.Integrations;
+
+public class BattleSceneLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // 场景专属服务
+        builder.Register<IBattleService, BattleService>(Lifetime.Scoped);
+        builder.Register<IEnemySpawner, EnemySpawner>(Lifetime.Scoped);
+
+        // 一行代码：构建时立即将场景 resolver 推入 UIServiceLocator，销毁时自动弹出
+        builder.Register<UIServiceLocatorBridge>(Lifetime.Scoped);
+    }
+}
+```
+
+> [!IMPORTANT]
+>
+> **何时需要注册 `UIServiceLocatorBridge`？**
+>
+> | 场景                                | 是否需要                                     |
+> | ----------------------------------- | -------------------------------------------- |
+> | 只使用 Root 全局服务                | ❌ 不需要（`VContainerWindowBinder` 已处理） |
+> | 有场景专属服务需要 `[UIInject]`     | ✅ 需要在该场景的 LifetimeScope 注册         |
+> | 使用构造函数注入（非 `[UIInject]`） | ❌ 不需要（VContainer 自动处理父子作用域）   |
+>
+> **如果忘记注册**：`[UIInject]` 注入场景服务时会返回 `null`，但不会抛出异常。
+
+现在场景 UI 可以通过 `[UIInject]` 访问场景服务：
+
+```csharp
+public class BattleHUDPresenter : UIPresenter<IBattleHUDView>
+{
+    [UIInject] private IBattleService BattleService { get; set; }  // 场景服务 ✅
+    [UIInject] private IAudioService AudioService { get; set; }    // 全局服务 ✅
+
+    public override void OnViewOpened()
+    {
+        View.SetEnemyCount(BattleService.EnemyCount);
+    }
+}
+```
+
+> [!TIP]
+>
+> **解析器栈的工作原理**
+>
+> ```
+> 全局 Root Scope 启动 → VContainerWindowBinder Push(rootResolver)
+> 进入战斗场景 → UIServiceLocatorBridge Push(battleResolver)
+>
+> [UIInject] 解析 IBattleService:
+>   1. 查 battleResolver → 找到！
+>
+> [UIInject] 解析 IAudioService:
+>   1. 查 battleResolver → 未找到
+>   2. 查 rootResolver → 找到！
+>
+> 离开战斗场景 → UIServiceLocatorBridge.Dispose() Pop(battleResolver)
+> ```
+
+#### 使用 UIService 打开 UI
+
+```csharp
+public class GameController
+{
+    private readonly IUIService _uiService;
+
+    [Inject]
+    public GameController(IUIService uiService)
+    {
+        _uiService = uiService;
+    }
+
+    public async void OpenInventory()
+    {
+        var window = await _uiService.OpenUIAsync("UIWindow_Inventory");
+
+        if (window is UIWindow<InventoryPresenter> inventoryWindow)
+        {
+            inventoryWindow.Presenter.RefreshData();
+        }
+    }
+
+    public void CloseInventory()
+    {
+        _uiService.CloseUI("UIWindow_Inventory");
+    }
+}
+```
+
+> [!IMPORTANT]
+>
+> **工作原理**
+>
+> ```
+> VContainer 构建容器
+>     │
+>     ▼
+> RegisterBuildCallback 执行
+>     │  - 解析 UIService 及其依赖
+>     │  - 调用 uiService.Initialize(...)
+>     ▼
+> UISystemInitializer.Start() 被调用
+>     │  - 创建 VContainerWindowBinder
+>     │  - 设置 UIPresenterFactory.CustomFactory
+>     ▼
+> 运行时：uiService.OpenUIAsync("UIWindow_Inventory")
+>     │  - UIManager 加载预制体
+>     │  - 实例化 UIWindow<InventoryPresenter>
+>     ▼
+> UIWindow.Awake()
+>     │  - UIPresenterFactory.Create<InventoryPresenter>()
+>     ├─ VContainer 已注册 → 构造函数注入
+>     └─ VContainer 未注册 → Activator + [UIInject] 注入
+> ```
 
 ---
 
