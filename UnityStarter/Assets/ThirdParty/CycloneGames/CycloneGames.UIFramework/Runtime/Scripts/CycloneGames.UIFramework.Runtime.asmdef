@@ -9,7 +9,8 @@
         "CycloneGames.AssetManagement.Runtime",
         "LitMotion",
         "UniTask.DOTween",
-        "DOTween.Modules"
+        "DOTween.Modules",
+        "VContainer"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -23,6 +24,11 @@
             "name": "com.annulusgames.lit-motion",
             "expression": "",
             "define": "LIT_MOTION_PRESENT"
+        },
+        {
+            "name": "jp.hadashikick.vcontainer",
+            "expression": "",
+            "define": "VCONTAINER_PRESENT"
         }
     ],
     "noEngineReferences": false
