@@ -14,10 +14,13 @@ namespace CycloneGames.UIFramework.Runtime
     /// - OnStartClose() → Presenter.OnViewClosing()
     /// - OnFinishedClose() → Presenter.OnViewClosed()
     /// - OnDestroy() → Presenter.Dispose()
+    /// 
+    /// Note: new() constraint removed to support VContainer constructor injection.
+    /// UIPresenterFactory handles creation via CustomFactory (DI) or Activator (requires parameterless ctor).
     /// </summary>
-    /// <typeparam name="TPresenter">The presenter type. Must implement IUIPresenter and have a parameterless constructor.</typeparam>
+    /// <typeparam name="TPresenter">The presenter type. Must implement IUIPresenter.</typeparam>
     public abstract class UIWindow<TPresenter> : UIWindow
-        where TPresenter : class, IUIPresenter, new()
+        where TPresenter : class, IUIPresenter
     {
         private TPresenter _presenter;
 

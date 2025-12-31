@@ -1161,14 +1161,8 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 ```
 
 > [!NOTE]
+>
 > `[UIInject]` is **optional**. If your Presenter works without external dependencies, or if you use a full DI framework (Level 3) that handles injection differently, you do not need to use this attribute.
-
-```csharp
-    {
-        // Unsubscribe from events, release resources
-        base.Dispose();
-    }
-```
 
 #### Step 4: Register Services (No DI Framework)
 
@@ -1218,72 +1212,308 @@ In **Project Settings > Player > Scripting Define Symbols**, add:
 VCONTAINER_PRESENT
 ```
 
-#### Step 2: Register Presenters
+#### Step 2: Understand Architecture
+
+UIFramework is designed to be **DI-agnostic**, VContainer integration is implemented via adapter pattern:
+
+```
+VContainer
+├── IUIService (UIService) ← Main entry point, initialized via RegisterBuildCallback
+│   ├── Dependency: IAssetPathBuilderFactory
+│   ├── Dependency: IUnityObjectSpawner
+│   ├── Dependency: IMainCameraService (optional)
+│   └── Dependency: IAssetPackage (optional)
+│
+├── VContainerWindowBinder ← Adapter connecting VContainer with Presenter factory
+│
+├── UISystemInitializer ← Initializes the binder
+│
+└── Presenter types (optional registration)
+    ├── Registered → Uses VContainer constructor injection
+    └── Not registered → Auto-fallback to Activator + [UIInject]
+```
+
+#### Step 3: Complete Configuration Example
 
 ```csharp
 using VContainer;
 using VContainer.Unity;
 using CycloneGames.UIFramework.Runtime;
 using CycloneGames.UIFramework.Runtime.Integrations;
+using CycloneGames.Factory.Runtime;
+using CycloneGames.Service.Runtime;
+using CycloneGames.AssetManagement.Runtime;
 
 public class GameLifetimeScope : LifetimeScope
 {
     protected override void Configure(IContainerBuilder builder)
     {
-        // Register the binder
+        // ========================================
+        // 1. UIService Dependencies
+        // ========================================
+        builder.Register<IAssetPathBuilderFactory, TemplateAssetPathBuilderFactory>(Lifetime.Singleton);
+        builder.Register<IUnityObjectSpawner, DefaultUnityObjectSpawner>(Lifetime.Singleton);
+        builder.Register<IMainCameraService, MainCameraService>(Lifetime.Singleton);
+
+        // Hot-update projects: register IAssetPackage
+        // builder.RegisterInstance(yourAssetPackage).As<IAssetPackage>();
+
+        // ========================================
+        // 2. UIService - Use RegisterBuildCallback to Initialize
+        // ========================================
+        // UIService maintains DI-agnostic design, initialized via callback
+        builder.Register<IUIService, UIService>(Lifetime.Singleton);
+        builder.RegisterBuildCallback(resolver =>
+        {
+            var uiService = resolver.Resolve<IUIService>();
+            var factory = resolver.Resolve<IAssetPathBuilderFactory>();
+            var spawner = resolver.Resolve<IUnityObjectSpawner>();
+            var cameraService = resolver.Resolve<IMainCameraService>();
+
+            // If IAssetPackage is registered, use the overload with package
+            // var package = resolver.Resolve<IAssetPackage>();
+            // uiService.Initialize(factory, spawner, cameraService, package);
+
+            // Otherwise use default overload
+            uiService.Initialize(factory, spawner, cameraService);
+        });
+
+        // ========================================
+        // 3. UIFramework Presenter Support
+        // ========================================
         builder.Register<VContainerWindowBinder>(Lifetime.Singleton);
+        builder.RegisterEntryPoint<UISystemInitializer>();
 
-        // Register Presenters
-        builder.Register<InventoryPresenter>(Lifetime.Transient);
-        builder.Register<SettingsPresenter>(Lifetime.Transient);
-
-        // Register services
+        // ========================================
+        // 4. Business Services (used by Presenters)
+        // ========================================
         builder.Register<IInventoryService, InventoryService>(Lifetime.Singleton);
+        builder.Register<IAudioService, AudioService>(Lifetime.Singleton);
+
+        // ========================================
+        // 5. Presenter Registration - OPTIONAL!
+        // ========================================
+        // If not registered, UIPresenterFactory auto-falls back to Activator
+        // Presenters in hot-update assemblies use [UIInject] for injection
+
+        // For constructor injection, register explicitly:
+        // builder.Register<InventoryPresenter>(Lifetime.Transient);
     }
 }
 ```
 
-#### Step 3: Initialize Binder
+> [!NOTE]
+>
+> **About `[UIInject]` and VContainer Integration**
+>
+> `VContainerWindowBinder` automatically registers VContainer's resolver with `UIServiceLocator` on creation.
+> This means `[UIInject]` can **automatically inject services registered in VContainer**:
+>
+> ```csharp
+> // Register in VContainer
+> builder.Register<IAudioService, AudioService>(Lifetime.Singleton);
+>
+> // Use [UIInject] in Presenter (no need to register Presenter in VContainer)
+> public class HotUpdatePresenter : UIPresenter<IView>
+> {
+>     [UIInject] private IAudioService AudioService { get; set; } // ✅ Auto-resolved from VContainer
+> }
+> ```
+>
+> Scene-scoped services are also supported: each `VContainerWindowBinder` maintains its own resolver in the stack, auto-cleaned on dispose.
+
+#### Step 4: Create UI System Initializer
 
 ```csharp
 using VContainer;
+using VContainer.Unity;
 using CycloneGames.UIFramework.Runtime.Integrations;
 
-public class UISystemInitializer
+public class UISystemInitializer : IStartable
 {
+    private readonly VContainerWindowBinder _binder;
+
+    [Inject]
     public UISystemInitializer(IObjectResolver resolver)
     {
-        // This sets UIPresenterFactory.CustomFactory automatically
-        var binder = new VContainerWindowBinder(resolver);
+        _binder = new VContainerWindowBinder(resolver);
+    }
+
+    public void Start()
+    {
+        CycloneGames.Logger.CLogger.Log("[UISystemInitializer] VContainer integration initialized");
     }
 }
 ```
 
-#### Presenter with Constructor Injection
+#### Step 5: Writing Presenters
+
+**Approach A: Using `[UIInject]` (No registration needed, hot-update friendly)**
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+
+// No VContainer registration needed, auto-falls back to Activator
+public class InventoryPresenter : UIPresenter<IInventoryView>
+{
+    [UIInject] private IInventoryService InventoryService { get; set; }
+    [UIInject] private IAudioService AudioService { get; set; }
+
+    public override void OnViewOpened()
+    {
+        View.SetGold(InventoryService.Gold);
+        AudioService.PlaySFX("ui_open");
+    }
+}
+```
+
+**Approach B: Using Constructor Injection (Requires VContainer registration)**
 
 ```csharp
 using VContainer;
 using CycloneGames.UIFramework.Runtime;
 
+// Requires registration: builder.Register<InventoryPresenter>(Lifetime.Transient);
 public class InventoryPresenter : UIPresenter<IInventoryView>
 {
     private readonly IInventoryService _inventoryService;
-    private readonly IAudioService _audioService;
 
     [Inject]
-    public InventoryPresenter(IInventoryService inventoryService, IAudioService audioService)
+    public InventoryPresenter(IInventoryService inventoryService)
     {
         _inventoryService = inventoryService;
-        _audioService = audioService;
     }
 
     public override void OnViewOpened()
     {
         View.SetGold(_inventoryService.Gold);
-        _audioService.PlaySFX("ui_open");
     }
 }
 ```
+
+#### Step 6: Scene-Scoped Services (Optional)
+
+If your scene has exclusive services that need to be used in UI, simply register `UIServiceLocatorBridge`:
+
+```csharp
+using VContainer;
+using VContainer.Unity;
+using CycloneGames.UIFramework.Runtime.Integrations;
+
+public class BattleSceneLifetimeScope : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        // Scene-exclusive services
+        builder.Register<IBattleService, BattleService>(Lifetime.Scoped);
+        builder.Register<IEnemySpawner, EnemySpawner>(Lifetime.Scoped);
+
+        // One line: pushes scene resolver immediately on construction, auto-pops on dispose
+        builder.Register<UIServiceLocatorBridge>(Lifetime.Scoped);
+    }
+}
+```
+
+> [!IMPORTANT]
+>
+> **When is `UIServiceLocatorBridge` needed?**
+>
+> | Scenario                                       | Required?                                      |
+> | ---------------------------------------------- | ---------------------------------------------- |
+> | Only using Root global services                | ❌ No (`VContainerWindowBinder` handles it)    |
+> | Scene-exclusive services via `[UIInject]`      | ✅ Yes, register in that scene's LifetimeScope |
+> | Using constructor injection (not `[UIInject]`) | ❌ No (VContainer handles parent-child scopes) |
+>
+> **If you forget to register**: `[UIInject]` will return `null` for scene services, but won't throw.
+
+Now scene UI can access scene services via `[UIInject]`:
+
+```csharp
+public class BattleHUDPresenter : UIPresenter<IBattleHUDView>
+{
+    [UIInject] private IBattleService BattleService { get; set; }  // Scene service ✅
+    [UIInject] private IAudioService AudioService { get; set; }    // Global service ✅
+
+    public override void OnViewOpened()
+    {
+        View.SetEnemyCount(BattleService.EnemyCount);
+    }
+}
+```
+
+> [!TIP]
+>
+> **How the Resolver Stack Works**
+>
+> ```
+> Global Root Scope starts → VContainerWindowBinder Push(rootResolver)
+> Enter Battle Scene → UIServiceLocatorBridge Push(battleResolver)
+>
+> [UIInject] resolves IBattleService:
+>   1. Check battleResolver → Found!
+>
+> [UIInject] resolves IAudioService:
+>   1. Check battleResolver → Not found
+>   2. Check rootResolver → Found!
+>
+> Leave Battle Scene → UIServiceLocatorBridge.Dispose() Pop(battleResolver)
+> ```
+
+#### Using UIService to Open UI
+
+```csharp
+public class GameController
+{
+    private readonly IUIService _uiService;
+
+    [Inject]
+    public GameController(IUIService uiService)
+    {
+        _uiService = uiService;
+    }
+
+    public async void OpenInventory()
+    {
+        var window = await _uiService.OpenUIAsync("UIWindow_Inventory");
+
+        if (window is UIWindow<InventoryPresenter> inventoryWindow)
+        {
+            inventoryWindow.Presenter.RefreshData();
+        }
+    }
+
+    public void CloseInventory()
+    {
+        _uiService.CloseUI("UIWindow_Inventory");
+    }
+}
+```
+
+> [!IMPORTANT]
+>
+> **How It Works**
+>
+> ```
+> VContainer builds container
+>     │
+>     ▼
+> RegisterBuildCallback executes
+>     │  - Resolves UIService and dependencies
+>     │  - Calls uiService.Initialize(...)
+>     ▼
+> UISystemInitializer.Start() called
+>     │  - Creates VContainerWindowBinder
+>     │  - Sets UIPresenterFactory.CustomFactory
+>     ▼
+> Runtime: uiService.OpenUIAsync("UIWindow_Inventory")
+>     │  - UIManager loads prefab
+>     │  - Instantiates UIWindow<InventoryPresenter>
+>     ▼
+> UIWindow.Awake()
+>     │  - UIPresenterFactory.Create<InventoryPresenter>()
+>     ├─ VContainer registered → Constructor injection
+>     └─ VContainer not registered → Activator + [UIInject] injection
+> ```
 
 ---
 

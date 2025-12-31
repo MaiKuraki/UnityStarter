@@ -4,22 +4,24 @@ using VContainer;
 
 namespace CycloneGames.UIFramework.Runtime.Integrations
 {
-    /// <summary>
-    /// VContainer integration for UIFramework. Automatically injects dependencies
-    /// into UIWindow instances and resolves Presenters from the container.
-    /// </summary>
-    public sealed class VContainerWindowBinder : IUIWindowBinder
+    public sealed class VContainerWindowBinder : IUIWindowBinder, IDisposable
     {
         private readonly IObjectResolver _resolver;
-        
+        private readonly Func<Type, object> _serviceResolver;
+        private readonly Func<Type, IUIPresenter> _presenterResolver;
+        private bool _disposed;
+
         public VContainerWindowBinder(IObjectResolver resolver)
         {
             _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
             
-            // Override factory to use VContainer for Presenter creation
-            UIPresenterFactory.CustomFactory = ResolvePresenter;
+            _serviceResolver = ResolveService;
+            _presenterResolver = ResolvePresenter;
+            
+            UIPresenterFactory.CustomFactory = _presenterResolver;
+            UIServiceLocator.PushResolver(_serviceResolver);
         }
-        
+
         private IUIPresenter ResolvePresenter(Type presenterType)
         {
             try
@@ -28,34 +30,40 @@ namespace CycloneGames.UIFramework.Runtime.Integrations
             }
             catch (VContainerException)
             {
-                // Fallback: type not registered, create manually
                 return null;
             }
         }
-        
-        /// <summary>
-        /// Injects dependencies into the window using VContainer.
-        /// </summary>
+
+        private object ResolveService(Type serviceType)
+        {
+            try
+            {
+                return _resolver.Resolve(serviceType);
+            }
+            catch (VContainerException)
+            {
+                return null;
+            }
+        }
+
         public void OnWindowCreated(UIWindow window)
         {
             if (window == null) return;
             _resolver.Inject(window);
         }
-        
-        /// <summary>
-        /// Called when window is being destroyed. Override for custom cleanup.
-        /// </summary>
+
         public void OnWindowDestroying(UIWindow window)
         {
-            // VContainer handles disposal automatically for scoped registrations
         }
-        
-        /// <summary>
-        /// Clears the custom factory. Call on dispose to prevent memory leaks.
-        /// </summary>
+
         public void Dispose()
         {
-            if (UIPresenterFactory.CustomFactory == ResolvePresenter)
+            if (_disposed) return;
+            _disposed = true;
+
+            UIServiceLocator.PopResolver();
+            
+            if (UIPresenterFactory.CustomFactory == _presenterResolver)
             {
                 UIPresenterFactory.CustomFactory = null;
             }
