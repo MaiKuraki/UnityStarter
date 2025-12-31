@@ -1202,17 +1202,14 @@ Presenter 生命周期完全自动，与 UIWindow 1:1 映射：
 
 ### Level 3: VContainer 集成
 
-对于 VContainer 用户，在脚本定义符号中添加 `VCONTAINER_PRESENT`。
+当项目安装了 VContainer 包（`jp.hadashikick.vcontainer`）时，UIFramework 会自动启用 VContainer 集成。
 
-#### 步骤 1: 添加脚本定义符号
+> [!NOTE]
+>
+> `VCONTAINER_PRESENT` 定义符号已在 `CycloneGames.UIFramework.Runtime.asmdef` 的 `versionDefines` 中配置。
+> 当 Unity 检测到 VContainer 包时，会自动添加此符号，**无需手动配置 Project Settings**。
 
-在 **Project Settings > Player > Scripting Define Symbols** 中添加：
-
-```
-VCONTAINER_PRESENT
-```
-
-#### 步骤 2: 理解架构
+#### 步骤 1: 理解架构
 
 UIFramework 设计为 **DI 框架无关**，VContainer 集成通过适配器模式实现：
 
@@ -1233,7 +1230,7 @@ VContainer
     └── 未注册 → 自动回退到 Activator + [UIInject]
 ```
 
-#### 步骤 3: 完整配置示例
+#### 步骤 2: 完整配置示例
 
 ```csharp
 using VContainer;
@@ -1322,7 +1319,7 @@ public class GameLifetimeScope : LifetimeScope
 >
 > 场景作用域服务也受支持：每个 `VContainerWindowBinder` 维护独立的解析器栈，销毁时自动清理。
 
-#### 步骤 4: 创建 UI 系统初始化器
+#### 步骤 3: 创建 UI 系统初始化器
 
 ```csharp
 using VContainer;
@@ -1346,7 +1343,7 @@ public class UISystemInitializer : IStartable
 }
 ```
 
-#### 步骤 5: Presenter 编写方式
+#### 步骤 4: Presenter 编写方式
 
 **方式 A: 使用 `[UIInject]`（无需注册，热更新友好）**
 
@@ -1391,7 +1388,7 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 }
 ```
 
-#### 步骤 6: 场景作用域服务（可选）
+#### 步骤 5: 场景作用域服务（可选）
 
 如果场景有专属服务需要在 UI 中使用，只需注册 `UIServiceLocatorBridge`：
 
