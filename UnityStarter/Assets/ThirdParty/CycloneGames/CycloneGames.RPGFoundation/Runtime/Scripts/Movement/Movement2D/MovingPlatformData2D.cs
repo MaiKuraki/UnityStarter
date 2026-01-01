@@ -42,7 +42,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             localRotationZ = characterTransform.eulerAngles.z - platformTransform.eulerAngles.z;
             lastPlatformPosition = platformTransform.position;
             lastPlatformRotationZ = platformTransform.eulerAngles.z;
+#if UNITY_6000_0_OR_NEWER
+            platformVelocity = rb.linearVelocity;
+#else
             platformVelocity = rb.velocity;
+#endif
             isOnPlatform = true;
         }
 

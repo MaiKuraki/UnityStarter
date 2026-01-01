@@ -388,7 +388,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         private bool TryBridgeGap2D(Vector2 currentCheckPos)
         {
             if (config == null) return false;
-            
+
             // Only bridge when moving fast enough
             float currentSpeed = Mathf.Abs(_context.CurrentVelocity.x);
             if (currentSpeed < config.minSpeedForGapBridge) return false;
@@ -402,7 +402,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             {
                 Vector2 aheadPos = currentCheckPos + new Vector2(moveDir * dist, 0);
                 Collider2D ground = Physics2D.OverlapBox(aheadPos, config.groundCheckSize, 0, config.groundLayer);
-                
+
                 if (ground != null)
                 {
                     // Found ground ahead - bridge the gap
@@ -549,7 +549,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 int inputYHash = AnimationParameterCache.GetHash(config.inputYParameter);
 
                 _context.AnimationController.SetBool(groundedHash, _context.IsGrounded);
+#if UNITY_6000_0_OR_NEWER
+                _context.AnimationController.SetFloat(verticalHash, _rigidbody.linearVelocity.y);
+#else
                 _context.AnimationController.SetFloat(verticalHash, _rigidbody.velocity.y);
+#endif
                 _context.AnimationController.SetFloat(inputXHash, _context.InputDirection.x);
                 _context.AnimationController.SetFloat(inputYHash, _context.InputDirection.y);
             }
@@ -577,12 +581,20 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
             _currentState.OnUpdate(ref _context, out displacement);
 
             float dt = DeltaTime > 0 ? DeltaTime : 1f;
+#if UNITY_6000_0_OR_NEWER
+            Vector2 targetVelocity = new Vector2(displacement.x / dt, _rigidbody.linearVelocity.y);
+#else
             Vector2 targetVelocity = new Vector2(displacement.x / dt, _rigidbody.velocity.y);
+#endif
 
             if (config.movementType == MovementType2D.TopDown)
             {
                 // TopDown: Full X/Y control, no gravity
+#if UNITY_6000_0_OR_NEWER
+                _rigidbody.linearVelocity = new Vector2(displacement.x / dt, displacement.y / dt);
+#else
                 _rigidbody.velocity = new Vector2(displacement.x / dt, displacement.y / dt);
+#endif
             }
             else if (config.movementType == MovementType2D.BeltScroll)
             {
@@ -597,31 +609,43 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 // Key insight: In DNF, when on ground, input.y moves you in "depth".
                 // When jumping, Rigidbody.velocity.y handles the arc.
                 // Since we're using Rigidbody2D, both are naturally combined.
-                
+
                 // When grounded, depth movement is controlled by states (WalkState, RunState, etc.)
                 // States should output displacement.y for depth movement when MovementType is BeltScroll.
                 // When in air (Jump/Fall), states control horizontal only; physics handles vertical.
-                
-                bool isAirborne = _currentState != null && 
-                                  (_currentState.StateType == Movement.MovementStateType.Jump || 
+
+                bool isAirborne = _currentState != null &&
+                                  (_currentState.StateType == Movement.MovementStateType.Jump ||
                                    _currentState.StateType == Movement.MovementStateType.Fall);
-                
+
                 if (isAirborne)
                 {
                     // In air: X from input, Y from physics (gravity/jump)
+#if UNITY_6000_0_OR_NEWER
+                    _rigidbody.linearVelocity = new Vector2(targetVelocity.x, _rigidbody.linearVelocity.y);
+#else
                     _rigidbody.velocity = new Vector2(targetVelocity.x, _rigidbody.velocity.y);
+#endif
                 }
                 else
                 {
                     // On ground: Full X/Y control for depth movement, no gravity effect on grounded depth
+#if UNITY_6000_0_OR_NEWER
+                    _rigidbody.linearVelocity = new Vector2(displacement.x / dt, displacement.y / dt);
+#else
                     _rigidbody.velocity = new Vector2(displacement.x / dt, displacement.y / dt);
+#endif
                 }
             }
             else
             {
                 // Platformer: X from input, Y from physics
+#if UNITY_6000_0_OR_NEWER
+                Vector2 finalVelocity = new Vector2(targetVelocity.x, _rigidbody.linearVelocity.y);
+#else
                 Vector2 finalVelocity = new Vector2(targetVelocity.x, _rigidbody.velocity.y);
-                
+#endif
+
                 if (_context.IsGrounded)
                 {
                     // Save character's ground velocity for jump momentum
@@ -630,14 +654,18 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                 else
                 {
                     // In air: apply inherited momentum (platform + character's own velocity)
+#if UNITY_6000_0_OR_NEWER
                     Vector2 totalInheritedVelocity = _inheritedPlatformVelocity + _lastGroundVelocity;
-                    
+#else
+                    Vector2 totalInheritedVelocity = _inheritedPlatformVelocity + _lastGroundVelocity;
+#endif
+
                     if (totalInheritedVelocity.sqrMagnitude > _minSqrMagnitudeForMovement)
                     {
                         // Use whichever is greater: inherited momentum or player input
                         float inheritedSpeed = Mathf.Abs(totalInheritedVelocity.x);
                         float inputSpeed = Mathf.Abs(targetVelocity.x);
-                        
+
                         if (inheritedSpeed > inputSpeed)
                         {
                             // Inherited momentum is stronger - use it
@@ -646,8 +674,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
                         // else: player input is stronger, use normal velocity
                     }
                 }
-                
+
+#if UNITY_6000_0_OR_NEWER
+                _rigidbody.linearVelocity = finalVelocity;
+#else
                 _rigidbody.velocity = finalVelocity;
+#endif
             }
 
             MovementStateBase2D nextState = _currentState.EvaluateTransition(ref _context);
