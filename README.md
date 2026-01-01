@@ -8,7 +8,8 @@ A production-ready, modular Unity project template that provides a solid foundat
 >
 > If you find this project helpful, please consider giving it a star ⭐. Thank you!
 
-![Unity](https://img.shields.io/badge/Unity-2022.3%20LTS+-black?logo=unity)
+![Unity](https://img.shields.io/badge/Unity-2022.3%20LTS-black?logo=unity)
+![Unity6](https://img.shields.io/badge/Unity-6000.3%20LTS-black?logo=unity)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
 
