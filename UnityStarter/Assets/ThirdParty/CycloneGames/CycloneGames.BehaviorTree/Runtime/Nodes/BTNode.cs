@@ -160,5 +160,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         }
 
         public virtual void OnDrawGizmos() { }
+
+        /// <summary>
+        /// Factory method to create the optimized runtime node execution instance.
+        /// </summary>
+        /// <returns>A new instance of RuntimeNode</returns>
+        public virtual CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode() 
+        { 
+            return null; // Base implementation returns null or throws 
+        }
     }
 }
