@@ -447,14 +447,28 @@
     box-shadow: 0 0 6px rgba(255, 0, 0, 0.4);
 }
 
-/* Title Enhancement */
 #title {
     position: relative;
 }
 
-/* Node size - optimized to balance information display and space efficiency */
 .node {
     min-width: 130px;
     max-width: 160px;
-    width: 140px;
+    width: 130px;
+}
+
+.running-edge {
+    --unity-colors-default: rgb(70, 143, 73);
+}
+
+.running-edge .edge-path {
+    stroke-width: 3px;
+}
+
+.success-edge {
+    --unity-colors-default: rgb(39, 255, 0);
+}
+
+.failure-edge {
+    --unity-colors-default: rgb(255, 0, 0);
 }
