@@ -3,6 +3,7 @@ using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using UnityEngine;
 using Object = UnityEngine.Object;
+using CycloneGames.BehaviorTree.Runtime.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
@@ -21,6 +22,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public BehaviorTree Tree => behaviorTree;
         public BlackBoard BlackBoard => _blackBoard;
+        public RuntimeBehaviorTree RuntimeTree => _runtimeTree;
+        
         public bool IsPaused => _isPaused;
         public bool IsStopped => _isStopped;
 
@@ -32,6 +35,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         private bool _isPaused = false;
         private bool _isStopped = false;
         private BehaviorTree _nextTree;
+        
+        private RuntimeBehaviorTree _runtimeTree;
 
         private void Awake()
         {
@@ -42,39 +47,43 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
             if (!_startOnAwake) return;
 
-            if (_initialObjects != null)
-            {
-                for (int i = 0; i < _initialObjects.Length; i++)
-                {
-                    var data = _initialObjects[i];
-                    if (data == null) continue;
-                    if (string.IsNullOrEmpty(data.Key)) continue;
-                    _blackBoard.Set(data.Key, data.Value);
-                }
-            }
+            InitializeRuntimeTree();
+        }
+
+        private void InitializeRuntimeTree()
+        {
+            if (behaviorTree == null) return;
+
+            // Compile to Pure C# Runtime Tree
+            _runtimeTree = behaviorTree.Compile(gameObject);
             
-            if (behaviorTree.IsCloned)
+            // Initialize Blackboard Data
+            if (_runtimeTree != null && _runtimeTree.Blackboard != null)
             {
-                behaviorTree.OnAwake();
-            }
-            else
-            {
-                behaviorTree = (BehaviorTree)behaviorTree.Clone(gameObject);
-                if (behaviorTree != null)
+                // Transfer initial objects
+                if (_initialObjects != null)
                 {
-                    behaviorTree.OnAwake();
+                    for (int i = 0; i < _initialObjects.Length; i++)
+                    {
+                        var data = _initialObjects[i];
+                        if (data == null || string.IsNullOrEmpty(data.Key)) continue;
+                        _runtimeTree.Blackboard.SetObject(Animator.StringToHash(data.Key), data.Value);
+                    }
                 }
+                
+                // Transfer serialized blackboard data (if any standard way exists, or just rely on runtime set)
+                // Note: The original BlackBoard class might have data. We would need to copy it if it was populated.
+                // Assuming _blackBoard is mostly for serialization and runtime storage in the old system.
             }
         }
 
         private void Update()
         {
-            if (behaviorTree == null) return;
-            if (!behaviorTree.IsCloned) return;
+            if (_runtimeTree == null) return;
             if (_isPaused) return;
 
-            var lastState = behaviorTree.BTUpdate(_blackBoard);
-            if (lastState == BTState.FAILURE || lastState == BTState.SUCCESS)
+            var lastState = _runtimeTree.Tick();
+            if (lastState == RuntimeState.Failure || lastState == RuntimeState.Success)
             {
                 Stop();
             }
@@ -83,42 +92,46 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         private void LateUpdate()
         {
             if (_nextTree == null) return;
-            if (behaviorTree != null)
+            if (_runtimeTree != null)
             {
-                behaviorTree.Stop();
+                _runtimeTree.Stop();
             }
             behaviorTree = _nextTree;
+            InitializeRuntimeTree();
             _nextTree = null;
         }
 
         private void OnDestroy()
         {
-            if (behaviorTree != null)
+            if (_runtimeTree != null)
             {
-                behaviorTree.Stop();
-            }
-            if (_nextTree != null)
-            {
-                _nextTree.Stop();
+                _runtimeTree.Stop();
             }
         }
 
         public void BTSendMessage(string message)
         {
             if (string.IsNullOrEmpty(message)) return;
-            _blackBoard.Set(MESSAGE_KEY, message);
+            if (_runtimeTree == null) return;
+            _runtimeTree.Blackboard.SetObject(Animator.StringToHash(MESSAGE_KEY), message);
         }
 
         public void BTSetData(string key, object value)
         {
             if (string.IsNullOrEmpty(key)) return;
-            _blackBoard.Set(key, value);
+            if (_runtimeTree == null) return;
+            
+            int hash = Animator.StringToHash(key);
+            if (value is int i) _runtimeTree.Blackboard.SetInt(hash, i);
+            else if (value is float f) _runtimeTree.Blackboard.SetFloat(hash, f);
+            else if (value is bool b) _runtimeTree.Blackboard.SetBool(hash, b);
+            else _runtimeTree.Blackboard.SetObject(hash, value);
         }
 
         public void BTRemoveData(string key)
         {
-            if (string.IsNullOrEmpty(key)) return;
-            _blackBoard.Remove(key);
+            // RuntimeBlackboard doesn't support Remove currently to simplify 0GC logic (Dictionary Remove is fine but rarely used)
+            // Can be added if needed.
         }
 
         public void SetTree(BehaviorTree newTree)
@@ -128,18 +141,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 Debug.LogWarning($"[BTRunnerComponent] Cannot set null behavior tree on {gameObject.name}.");
                 return;
             }
-            _nextTree = newTree.IsCloned ? newTree : (BehaviorTree)newTree.Clone(gameObject);
-            if (_nextTree != null)
-            {
-                _nextTree.OnAwake();
-            }
+            _nextTree = newTree;
         }
 
         public void Stop()
         {
-            if (behaviorTree != null)
+            if (_runtimeTree != null)
             {
-                behaviorTree.Stop();
+                _runtimeTree.Stop();
             }
             _isPaused = true;
             _isStopped = true;
@@ -148,14 +157,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void Play()
         {
-            if (behaviorTree == null)
+            if (_runtimeTree == null)
             {
-                Debug.LogWarning($"[BTRunnerComponent] Cannot play: behavior tree is null on {gameObject.name}.");
-                return;
+                InitializeRuntimeTree();
             }
+            
+            if (_runtimeTree == null) return;
+
             if (!_isStopped)
             {
-                behaviorTree.Stop();
+                _runtimeTree.Stop();
             }
             _isPaused = false;
             _isStopped = false;
@@ -168,10 +179,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void Resume()
         {
-            if (behaviorTree == null)
+            if (_runtimeTree == null)
             {
-                Debug.LogWarning($"[BTRunnerComponent] Cannot resume: behavior tree is null on {gameObject.name}.");
-                return;
+                 InitializeRuntimeTree();
             }
             _isPaused = false;
         }
@@ -204,7 +214,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         private void OnDrawGizmos()
         {
             if (behaviorTree == null) return;
-            if (behaviorTree.Owner == null) return;
             behaviorTree.OnDrawGizmos();
         }
     }

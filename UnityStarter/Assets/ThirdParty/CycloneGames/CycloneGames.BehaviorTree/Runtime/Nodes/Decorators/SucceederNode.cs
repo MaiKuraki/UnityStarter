@@ -7,12 +7,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
     {
         protected override BTState OnRun(IBlackBoard blackBoard)
         {
-            var childState = Child.Run(blackBoard);
-            if (childState == BTState.RUNNING)
+            if (Child.Run(blackBoard) == BTState.FAILURE)
             {
-                return BTState.RUNNING;
+                return BTState.SUCCESS;
             }
-            return BTState.SUCCESS;
+            return Child.State;
+        }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeSucceederNode();
+            node.GUID = GUID;
+            if (Child != null)
+            {
+                node.Child = Child.CreateRuntimeNode();
+            }
+            return node;
         }
     }
 }

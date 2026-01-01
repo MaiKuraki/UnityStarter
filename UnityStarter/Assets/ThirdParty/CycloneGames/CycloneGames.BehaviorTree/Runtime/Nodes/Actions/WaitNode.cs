@@ -23,6 +23,20 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
                 _duration = Random.Range(_range.x, _range.y);
             }
         }
+        public override BTNode Clone()
+        {
+            WaitNode node = (WaitNode)base.Clone();
+            node.Duration = Duration;
+            return node;
+        }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeWaitNode();
+            node.GUID = GUID;
+            node.Duration = Duration;
+            return node;
+        }
         protected override BTState OnRun(IBlackBoard blackBoard)
         {
             _time += Time.deltaTime;

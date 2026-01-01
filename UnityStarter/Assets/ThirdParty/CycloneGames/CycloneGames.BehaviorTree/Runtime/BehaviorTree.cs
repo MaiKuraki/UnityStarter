@@ -233,6 +233,38 @@ namespace CycloneGames.BehaviorTree.Runtime
             }
         }
 
+        /// <summary>
+        /// Compiles the ScriptableObject-based behavior tree into a pure C# runtime instance.
+        /// This method is 0GC at runtime after the initial compilation.
+        /// </summary>
+        /// <param name="owner">Optional owner object</param>
+        /// <returns>A new RuntimeBehaviorTree instance</returns>
+        public CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree Compile(object owner = null)
+        {
+            if (Root == null)
+            {
+                Debug.LogError("[BehaviorTree] Cannot compile: Root is null.");
+                return null;
+            }
+
+            // Create optimized runtime blackboard
+            var blackboard = new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBlackboard();
+            
+            // Generate runtime node hierarchy
+            var runtimeRoot = Root.CreateRuntimeNode();
+            if (runtimeRoot == null)
+            {
+                // Fallback or error if root doesn't support runtime creation yet
+                Debug.LogError($"[BehaviorTree] Root node {Root.GetType().Name} returned null for runtime creation. Ensure CreateRuntimeNode is implemented.");
+                return null;
+            }
+            
+            runtimeRoot.OnAwake();
+
+            // Create runtime tree container
+            return new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree(runtimeRoot, blackboard, owner);
+        }
+
         #region Editor Methods
 #if UNITY_EDITOR
         public void SetEditorOwner(GameObject owner)

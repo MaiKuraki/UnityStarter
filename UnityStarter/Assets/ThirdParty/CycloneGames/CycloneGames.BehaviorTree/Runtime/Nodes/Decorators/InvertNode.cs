@@ -20,14 +20,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         {
             switch (Child.Run(blackBoard))
             {
-                case BTState.RUNNING:
-                    return BTState.RUNNING;
-                case BTState.FAILURE:
-                    return BTState.SUCCESS;
-                case BTState.SUCCESS:
-                    return BTState.FAILURE;
+                case BTState.FAILURE: return BTState.SUCCESS;
+                case BTState.SUCCESS: return BTState.FAILURE;
+                case BTState.RUNNING: return BTState.RUNNING;
             }
-            return BTState.SUCCESS;
+            return BTState.FAILURE;
+        }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeInverterNode();
+            node.GUID = GUID;
+            if (Child != null)
+            {
+                node.Child = Child.CreateRuntimeNode();
+            }
+            return node;
         }
         protected override void OnStop(IBlackBoard blackBoard) { }
     }

@@ -25,5 +25,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Conditions.BlackBoards
             clone._message = _message;
             return clone;
         }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions.RuntimeMessageReceiveNode();
+            node.GUID = GUID;
+            node.KeyHash = UnityEngine.Animator.StringToHash(_key);
+            node.ExpectedMessage = _message;
+            return node;
+        }
     }
 }
