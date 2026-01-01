@@ -1,5 +1,4 @@
 using System.Text;
-using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -141,7 +140,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var contextStats = GameplayEffectContext.GetStatistics();
             sb.AppendLine($"[GameplayEffectContext] Pool:{contextStats.PoolSize} Active:{contextStats.ActiveCount} Peak:{contextStats.PeakActive} Gets:{contextStats.TotalGets} Misses:{contextStats.TotalMisses} HitRate:{contextStats.HitRate:P1}");
             
-            CLogger.LogInfo(sb.ToString(), "GASPool");
+            GASLog.Info(sb.ToString());
         }
         
         /// <summary>

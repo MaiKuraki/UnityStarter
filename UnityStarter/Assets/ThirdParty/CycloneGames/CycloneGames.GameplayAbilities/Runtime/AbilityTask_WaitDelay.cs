@@ -44,6 +44,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         protected override void OnDestroy()
         {
             OnFinishDelay = null;
+            base.OnDestroy();
         }
     }
 }

@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using CycloneGames.Factory.Runtime;
 using CycloneGames.GameplayTags.Runtime;
-using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -13,41 +13,39 @@ namespace CycloneGames.GameplayAbilities.Runtime
         Minimal
     }
 
-    // Represents the unique key for a prediction event.
+    /// <summary>
+    /// Represents a unique key for client-side prediction events.
+    /// Thread-safe implementation using Interlocked operations.
+    /// </summary>
     public struct PredictionKey : IEquatable<PredictionKey>
     {
         public int Key { get; private set; }
-        private static int nextKey = 1;
+        private static int s_NextKey = 1;
 
         public bool IsValid() => Key != 0;
 
+        /// <summary>
+        /// Creates a new unique prediction key. Thread-safe.
+        /// </summary>
         public static PredictionKey NewKey()
         {
-            // Wraparound to prevent overflow during long sessions (skip 0 as it means invalid)
-            if (nextKey >= int.MaxValue - 1)
+            int key = Interlocked.Increment(ref s_NextKey);
+            // Wraparound to prevent overflow (skip 0 as it means invalid)
+            if (key >= int.MaxValue - 1)
             {
-                nextKey = 1;
+                Interlocked.Exchange(ref s_NextKey, 1);
             }
-            return new PredictionKey { Key = nextKey++ };
+            return new PredictionKey { Key = key };
         }
 
-        public bool Equals(PredictionKey other)
-        {
-            return Key == other.Key;
-        }
-
-        public override bool Equals(object obj)
-        {
-            return obj is PredictionKey other && Equals(other);
-        }
-
-        public override int GetHashCode()
-        {
-            return Key;
-        }
+        public bool Equals(PredictionKey other) => Key == other.Key;
+        public override bool Equals(object obj) => obj is PredictionKey other && Equals(other);
+        public override int GetHashCode() => Key;
+        public static bool operator ==(PredictionKey left, PredictionKey right) => left.Equals(right);
+        public static bool operator !=(PredictionKey left, PredictionKey right) => !left.Equals(right);
     }
 
-    public class AbilitySystemComponent : IDisposable
+    public partial class AbilitySystemComponent : IDisposable
     {
         public object OwnerActor { get; private set; }
         public object AvatarActor { get; private set; }
@@ -71,7 +69,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public IReadOnlyList<GameplayAbilitySpec> GetActivatableAbilities() => activatableAbilities.AsReadOnly();
 
         private readonly List<GameplayAbilitySpec> tickingAbilities = new List<GameplayAbilitySpec>(16);
-        private readonly Dictionary<ActiveGameplayEffect, List<GameplayAbilitySpec>> effectGrantedAbilities = new Dictionary<ActiveGameplayEffect, List<GameplayAbilitySpec>>(16);
+        
+        // Pre-allocated lists for granted abilities to avoid per-effect List allocations
+        private readonly Dictionary<ActiveGameplayEffect, int> effectGrantedAbilitiesStart = new Dictionary<ActiveGameplayEffect, int>(16);
+        private readonly Dictionary<ActiveGameplayEffect, int> effectGrantedAbilitiesCount = new Dictionary<ActiveGameplayEffect, int>(16);
+        private readonly List<GameplayAbilitySpec> grantedAbilitiesBuffer = new List<GameplayAbilitySpec>(32);
 
         private readonly List<GameplayAttribute> dirtyAttributes = new List<GameplayAttribute>(32);
 
@@ -153,7 +155,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     else
                     {
-                        CLogger.LogWarning($"Attribute '{attr.Name}' is already present. Duplicate attributes are not allowed.");
+                        GASLog.Warning($"Attribute '{attr.Name}' is already present. Duplicate attributes are not allowed.");
                     }
                 }
             }
@@ -301,7 +303,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (!predictionKey.IsValid()) return;
 
-            CLogger.LogWarning($"Client prediction failed for ability '{spec.Ability.Name}' with key {predictionKey.Key}. Rolling back.");
+            GASLog.Warning($"Client prediction failed for ability '{spec.Ability.Name}' with key {predictionKey.Key}. Rolling back.");
 
             // Find and remove all effects applied with this failed prediction key.
             using (CycloneGames.GameplayTags.Runtime.Pools.ListPool<ActiveGameplayEffect>.Get(out var toRemove))
@@ -400,7 +402,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 pendingPredictedEffects.Add(newActiveEffect);
             }
 
-            CLogger.LogInfo($"{OwnerActor} Apply GameplayEffect '{spec.Def.Name}' to self.");
+            GASLog.Info($"{OwnerActor} Apply GameplayEffect '{spec.Def.Name}' to self.");
             OnEffectApplied(newActiveEffect);
 
             if (spec.Def.Period <= 0)
@@ -440,7 +442,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 if (spec.Def.AssetTags.HasAny(ImmunityTags) || spec.Def.GrantedTags.HasAny(ImmunityTags))
                 {
-                    CLogger.LogInfo($"Apply GameplayEffect '{spec.Def.Name}' blocked: target has immunity to effect's tags.");
+                    GASLog.Debug($"Apply GameplayEffect '{spec.Def.Name}' blocked: target has immunity to effect's tags.");
                     return false;
                 }
             }
@@ -449,7 +451,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 if (!CombinedTags.HasAll(spec.Def.ApplicationTagRequirements.RequiredTags))
                 {
-                    CLogger.LogInfo($"Apply GameplayEffect '{spec.Def.Name}' failed: does not meet application tag requirements (Required).");
+                    GASLog.Debug($"Apply GameplayEffect '{spec.Def.Name}' failed: does not meet application tag requirements (Required).");
                     return false;
                 }
             }
@@ -457,7 +459,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 if (CombinedTags.HasAny(spec.Def.ApplicationTagRequirements.ForbiddenTags))
                 {
-                    CLogger.LogInfo($"Apply GameplayEffect '{spec.Def.Name}' failed: does not meet application tag requirements (Ignored).");
+                    GASLog.Debug($"Apply GameplayEffect '{spec.Def.Name}' failed: does not meet application tag requirements (Ignored).");
                     return false;
                 }
             }
@@ -541,6 +543,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
             activeEffects.RemoveAt(lastIndex);
         }
 
+        /// <summary>
+        /// Recalculates all dirty attributes using UE5-style aggregation formula.
+        /// Formula: ((BaseValue + Additive) * Multiplicative) / Division
+        /// Multiplicative uses bias-based summation: 1 + (Mod1 - 1) + (Mod2 - 1) + ...
+        /// Division uses same bias formula: 1 + (Mod1 - 1) + (Mod2 - 1) + ...
+        /// </summary>
         private void RecalculateDirtyAttributes()
         {
             for (int d = 0; d < dirtyAttributes.Count; d++)
@@ -549,10 +557,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 attr.IsDirty = false;
 
                 float baseValue = attr.OwningSet.GetBaseValue(attr);
-                float additive = 0;
-                float multiplicitive = 1.0f;
-                float division = 1.0f;
-                float overrideValue = 0;
+                float additive = 0f;
+                // UE5 uses bias of 1.0 for multiply/divide, meaning we sum (magnitude - 1)
+                float multiplicativeBiasSum = 0f;  // Will become: 1 + sum of (magnitude - 1)
+                float divisionBiasSum = 0f;        // Will become: 1 + sum of (magnitude - 1)
+                float overrideValue = 0f;
                 bool hasOverride = false;
 
                 var affectingEffects = attr.AffectingEffects;
@@ -580,10 +589,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
                                     additive += magnitude;
                                     break;
                                 case EAttributeModifierOperation.Multiply:
-                                    multiplicitive *= magnitude;
+                                    // UE5 bias formula: sum of (magnitude - bias), bias = 1.0
+                                    multiplicativeBiasSum += (magnitude - 1f);
                                     break;
                                 case EAttributeModifierOperation.Division:
-                                    if (magnitude != 0) division *= magnitude;
+                                    // Same bias formula for division
+                                    if (magnitude != 0f) divisionBiasSum += (magnitude - 1f);
                                     break;
                                 case EAttributeModifierOperation.Override:
                                     overrideValue = magnitude;
@@ -594,7 +605,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                 }
 
-                float finalValue = hasOverride ? overrideValue : ((baseValue + additive) * multiplicitive / (division == 0 ? 1.0f : division));
+                // Apply UE5 formula: ((Base + Additive) * Multiplicative) / Division
+                // Where Multiplicative = 1 + biasSum, Division = 1 + biasSum
+                float multiplicative = 1f + multiplicativeBiasSum;
+                float division = 1f + divisionBiasSum;
+                if (division == 0f) division = 1f;  // Prevent divide by zero
+                
+                float finalValue = hasOverride ? overrideValue : ((baseValue + additive) * multiplicative / division);
 
                 attr.OwningSet.PreAttributeChange(attr, ref finalValue);
                 attr.OwningSet.SetCurrentValue(attr, finalValue);
@@ -622,15 +639,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
+            // Grant abilities from effect using pre-allocated buffer (0 GC)
             if (effect.Spec.Def.GrantedAbilities.Count > 0)
             {
-                var grantedSpecs = new List<GameplayAbilitySpec>(effect.Spec.Def.GrantedAbilities.Count);
+                int startIndex = grantedAbilitiesBuffer.Count;
+                int count = 0;
                 foreach (var ability in effect.Spec.Def.GrantedAbilities)
                 {
                     var newSpec = GrantAbility(ability, effect.Spec.Level);
-                    grantedSpecs.Add(newSpec);
+                    grantedAbilitiesBuffer.Add(newSpec);
+                    count++;
                 }
-                effectGrantedAbilities[effect] = grantedSpecs;
+                effectGrantedAbilitiesStart[effect] = startIndex;
+                effectGrantedAbilitiesCount[effect] = count;
             }
 
             if (!effect.Spec.Def.GameplayCues.IsEmpty)
@@ -677,10 +698,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
-            if (effectGrantedAbilities.TryGetValue(effect, out var specsToRemove))
+            // Remove granted abilities using buffer indices (0 GC)
+            if (effectGrantedAbilitiesStart.TryGetValue(effect, out int startIndex) &&
+                effectGrantedAbilitiesCount.TryGetValue(effect, out int count))
             {
-                foreach (var spec in specsToRemove) ClearAbility(spec);
-                effectGrantedAbilities.Remove(effect);
+                // Clear abilities in reverse to maintain buffer integrity
+                for (int i = startIndex + count - 1; i >= startIndex && i < grantedAbilitiesBuffer.Count; i--)
+                {
+                    var spec = grantedAbilitiesBuffer[i];
+                    if (spec != null) ClearAbility(spec);
+                }
+                effectGrantedAbilitiesStart.Remove(effect);
+                effectGrantedAbilitiesCount.Remove(effect);
             }
 
             if (effect.Spec.Def.DurationPolicy != EDurationPolicy.Instant && !effect.Spec.Def.GameplayCues.IsEmpty)
@@ -717,7 +746,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             attributeSets.Clear();
             attributes.Clear();
             activatableAbilities.Clear();
-            effectGrantedAbilities.Clear();
+            grantedAbilitiesBuffer.Clear();
+            effectGrantedAbilitiesStart.Clear();
+            effectGrantedAbilitiesCount.Clear();
             looseTags.Clear();
             fromEffectsTags.Clear();
             CombinedTags.Clear();
@@ -761,7 +792,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         {
                             existingEffect.RefreshDurationAndPeriod();
                         }
-                        CLogger.LogInfo($"Stacking limit for {spec.Def.Name} reached.");
+                        GASLog.Debug($"Stacking limit for {spec.Def.Name} reached.");
                     }
                     else
                     {
@@ -790,7 +821,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (attribute == null)
             {
-                CLogger.LogWarning($"ApplyModifier failed: Attribute '{mod.AttributeName}' not found on ASC.");
+                GASLog.Warning($"ApplyModifier failed: Attribute '{mod.AttributeName}' not found on ASC.");
                 return;
             }
 

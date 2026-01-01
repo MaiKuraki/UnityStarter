@@ -11,11 +11,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
     {
         #region Configuration
         
-        // Pool configuration for memory safety on low-end devices
-        private const int kDefaultMaxCapacity = 128;
+        // Platform-adaptive pool configuration for memory safety
+#if UNITY_IOS || UNITY_ANDROID || UNITY_SWITCH
+        private const int kDefaultMaxCapacity = 64;    // Mobile/Switch: conservative memory
+        private const int kDefaultMinCapacity = 4;
+        private const int kShrinkCheckInterval = 16;
+        private const int kMaxShrinkPerCheck = 4;
+#elif UNITY_STANDALONE || UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+        private const int kDefaultMaxCapacity = 256;   // PC/Console: larger pools
+        private const int kDefaultMinCapacity = 16;
+        private const int kShrinkCheckInterval = 64;
+        private const int kMaxShrinkPerCheck = 8;
+#else
+        private const int kDefaultMaxCapacity = 128;   // Default fallback
         private const int kDefaultMinCapacity = 8;
         private const int kShrinkCheckInterval = 32;
         private const int kMaxShrinkPerCheck = 4;
+#endif
         private const float kBufferRatio = 1.25f;
         
         private static int s_MaxPoolCapacity = kDefaultMaxCapacity;
