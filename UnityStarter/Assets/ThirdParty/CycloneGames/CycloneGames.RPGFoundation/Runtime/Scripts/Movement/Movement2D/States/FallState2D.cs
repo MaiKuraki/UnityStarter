@@ -14,7 +14,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             float airControlSpeed = runSpeed * airControl;
             float horizontalVelocity = context.InputDirection.x * airControlSpeed;
 
+#if UNITY_6000_0_OR_NEWER
+            float verticalVelocity = context.Rigidbody.linearVelocity.y;
+#else
             float verticalVelocity = context.Rigidbody.velocity.y;
+#endif
             verticalVelocity = math.max(verticalVelocity, -context.Config.maxFallSpeed);
 
             velocity = new float2(horizontalVelocity, verticalVelocity);

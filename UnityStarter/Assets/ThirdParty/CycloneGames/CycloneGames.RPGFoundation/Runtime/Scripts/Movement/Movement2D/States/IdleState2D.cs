@@ -14,7 +14,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             float verticalVelocity = 0f;
             if (context.Config.movementType == MovementType2D.Platformer)
             {
+#if UNITY_6000_0_OR_NEWER
+                verticalVelocity = context.Rigidbody.linearVelocity.y;
+#else
                 verticalVelocity = context.Rigidbody.velocity.y;
+#endif
             }
 
             velocity = new float2(0, verticalVelocity);
