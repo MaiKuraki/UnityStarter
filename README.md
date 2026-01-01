@@ -5,8 +5,11 @@ A production-ready, modular Unity project template that provides a solid foundat
 <p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
 > [!NOTE]
+>
 > If you find this project helpful, please consider giving it a star ⭐. Thank you!
 
+![Unity](https://img.shields.io/badge/Unity-2022.3%20LTS+-black?logo=unity)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
 
 ## Table of Contents
@@ -82,6 +85,8 @@ Complete solution for updating games without app store resubmission:
 
 Pre-configured adapters for popular dependency injection frameworks:
 
+> [!NOTE]
+>
 > All **listed frameworks have been** tested in production environments.
 
 - [VContainer](https://github.com/hadashiA/VContainer) (Recommended)
