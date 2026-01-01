@@ -516,7 +516,7 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             var titleContainer = this.Q<VisualElement>("title");
             if (titleContainer == null) return;
-            
+
             _stateLabel = new Label
             {
                 name = "state-label",
@@ -525,13 +525,13 @@ namespace CycloneGames.BehaviorTree.Editor
             _stateLabel.AddToClassList("state-label");
             _stateLabel.style.display = DisplayStyle.None;
             titleContainer.Add(_stateLabel);
-            
+
             _infoContainer = new VisualElement
             {
                 name = "info-container"
             };
             _infoContainer.AddToClassList("info-container");
-            
+
             _infoLabel = new Label
             {
                 name = "info-label",
@@ -539,23 +539,73 @@ namespace CycloneGames.BehaviorTree.Editor
             };
             _infoLabel.AddToClassList("info-label");
             _infoContainer.Add(_infoLabel);
-            
-            if (_node is CompositeNode)
+
+            // Create progress bar for WaitNode
+            if (_node is WaitNode)
             {
-                if (outputContainer != null)
-                {
-                }
+                CreateProgressBar();
             }
-            else
+
+            // Add info container to appropriate location
+            var contents = this.Q<VisualElement>("contents");
+            if (contents != null)
             {
-                var contents = this.Q<VisualElement>("contents");
-                if (contents != null)
-                {
-                    contents.Add(_infoContainer);
-                }
+                contents.Add(_infoContainer);
             }
         }
-        
+
+        /// <summary>
+        /// Creates a stylish progress bar for WaitNode with background, fill, and label.
+        /// </summary>
+        private void CreateProgressBar()
+        {
+            _progressBarContainer = new VisualElement { name = "progress-bar-container" };
+            _progressBarContainer.style.height = 16;
+            _progressBarContainer.style.marginTop = 4;
+            _progressBarContainer.style.marginBottom = 4;
+            _progressBarContainer.style.marginLeft = 6;
+            _progressBarContainer.style.marginRight = 6;
+            _progressBarContainer.style.backgroundColor = new Color(0.15f, 0.15f, 0.15f, 1f);
+            _progressBarContainer.style.borderTopLeftRadius = 6;
+            _progressBarContainer.style.borderTopRightRadius = 6;
+            _progressBarContainer.style.borderBottomLeftRadius = 6;
+            _progressBarContainer.style.borderBottomRightRadius = 6;
+            _progressBarContainer.style.borderTopWidth = 1;
+            _progressBarContainer.style.borderBottomWidth = 1;
+            _progressBarContainer.style.borderLeftWidth = 1;
+            _progressBarContainer.style.borderRightWidth = 1;
+            _progressBarContainer.style.borderTopColor = new Color(0.3f, 0.3f, 0.3f, 1f);
+            _progressBarContainer.style.borderBottomColor = new Color(0.3f, 0.3f, 0.3f, 1f);
+            _progressBarContainer.style.borderLeftColor = new Color(0.3f, 0.3f, 0.3f, 1f);
+            _progressBarContainer.style.borderRightColor = new Color(0.3f, 0.3f, 0.3f, 1f);
+            _progressBarContainer.style.overflow = Overflow.Hidden;
+
+            _progressBarFill = new VisualElement { name = "progress-bar-fill" };
+            _progressBarFill.style.position = Position.Absolute;
+            _progressBarFill.style.left = 0;
+            _progressBarFill.style.top = 0;
+            _progressBarFill.style.bottom = 0;
+            _progressBarFill.style.width = new StyleLength(new Length(0, LengthUnit.Percent));
+            _progressBarFill.style.backgroundColor = new Color(0.27f, 0.56f, 0.29f, 1f); // Green
+            _progressBarFill.style.borderTopLeftRadius = 3;
+            _progressBarFill.style.borderBottomLeftRadius = 3;
+
+            _progressLabel = new Label { name = "progress-label", text = "0%" };
+            _progressLabel.style.position = Position.Absolute;
+            _progressLabel.style.left = 0;
+            _progressLabel.style.right = 0;
+            _progressLabel.style.top = 0;
+            _progressLabel.style.bottom = 0;
+            _progressLabel.style.unityTextAlign = TextAnchor.MiddleCenter;
+            _progressLabel.style.fontSize = 10;
+            _progressLabel.style.color = new Color(1f, 1f, 1f, 0.9f);
+            _progressLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+
+            _progressBarContainer.Add(_progressBarFill);
+            _progressBarContainer.Add(_progressLabel);
+            _infoContainer.Add(_progressBarContainer);
+        }
+
         /// <summary>
         /// Sets up the tooltip for the node using BTInfoAttribute if available.
         /// </summary>
