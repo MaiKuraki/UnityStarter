@@ -153,7 +153,7 @@ namespace CycloneGames.BehaviorTree.Editor
             name = name.Replace("#", "<br>");
             return name;
         }
-        
+
         public BTNodeView(BTNode node) : base(AssetDatabase.GetAssetPath(Resources.Load<VisualTreeAsset>("BT_Node_Layout")))
         {
             this._node = node;
@@ -167,7 +167,7 @@ namespace CycloneGames.BehaviorTree.Editor
             CreateInfoElements();
             SetupTooltip();
         }
-        
+
         public BTNodeView(BTNode node, Vector2 position) : base(AssetDatabase.GetAssetPath(Resources.Load<VisualTreeAsset>("BT_Node_Layout")))
         {
             this._node = node;
@@ -184,13 +184,13 @@ namespace CycloneGames.BehaviorTree.Editor
             CreateInfoElements();
             SetupTooltip();
         }
-        
+
         public override void OnSelected()
         {
             base.OnSelected();
             OnNodeSelected?.Invoke(this);
         }
-        
+
         /// <summary>
         /// Updates the node position and records it for undo/redo.
         /// </summary>
@@ -621,7 +621,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 this.tooltip = _node.GetType().Name;
             }
         }
-        
+
         /// <summary>
         /// Creates input port for child nodes (circular connector at top).
         /// </summary>
@@ -634,38 +634,45 @@ namespace CycloneGames.BehaviorTree.Editor
             if (InputPort != null)
             {
                 InputPort.portName = "";
-                InputPort.style.flexDirection = FlexDirection.Column;
+                //InputPort.style.flexDirection = FlexDirection.Column;
                 InputPort.style.alignItems = Align.Center;
                 InputPort.style.justifyContent = Justify.Center;
-                InputPort.style.width = 24;
-                InputPort.style.height = 24;
-                InputPort.style.minWidth = 24;
-                InputPort.style.minHeight = 24;
-                InputPort.style.maxWidth = 24;
-                InputPort.style.maxHeight = 24;
+                InputPort.style.marginLeft = StyleKeyword.Auto;
+                InputPort.style.marginRight = StyleKeyword.Auto;
+                InputPort.style.marginTop = StyleKeyword.Auto;
+                InputPort.style.marginBottom = StyleKeyword.Auto;
+                InputPort.style.width = 12;
+                InputPort.style.height = 12;
+                InputPort.style.minWidth = 12;
+                InputPort.style.minHeight = 12;
+                InputPort.style.maxWidth = 12;
+                InputPort.style.maxHeight = 12;
                 InputPort.style.flexShrink = 0;
-                
+
                 InputPort.AddToClassList("bt-port");
                 InputPort.AddToClassList("bt-input-port");
-                
+
+                //  Note: In uss file, there is a padding-left: 8px for center the Input point
                 var portElement = InputPort.Q("connector");
                 if (portElement != null)
                 {
-                    portElement.style.width = 14;
-                    portElement.style.height = 14;
-                    portElement.style.minWidth = 14;
-                    portElement.style.minHeight = 14;
-                    portElement.style.maxWidth = 14;
-                    portElement.style.maxHeight = 14;
-                    portElement.style.borderTopLeftRadius = 7;
-                    portElement.style.borderTopRightRadius = 7;
-                    portElement.style.borderBottomLeftRadius = 7;
-                    portElement.style.borderBottomRightRadius = 7;
+                    portElement.style.width = 8;
+                    portElement.style.height = 8;
+                    portElement.style.minWidth = 8;
+                    portElement.style.minHeight = 8;
+                    portElement.style.maxWidth = 8;
+                    portElement.style.maxHeight = 8;
+                    // portElement.style.borderTopLeftRadius = 4;
+                    // portElement.style.borderTopRightRadius = 4;
+                    // portElement.style.borderBottomLeftRadius = 4;
+                    // portElement.style.borderBottomRightRadius = 4;
                     portElement.style.alignSelf = Align.Center;
                     portElement.style.marginLeft = StyleKeyword.Auto;
                     portElement.style.marginRight = StyleKeyword.Auto;
+                    portElement.style.marginTop = StyleKeyword.Auto;
+                    portElement.style.marginBottom = StyleKeyword.Auto;
                 }
-                
+
                 inputContainer.Add(InputPort);
                 InputPort.RegisterCallback<AttachToPanelEvent>(evt => UpdatePortConnectionState());
             }
@@ -691,28 +698,36 @@ namespace CycloneGames.BehaviorTree.Editor
                 OutputPort.style.flexDirection = FlexDirection.ColumnReverse;
                 OutputPort.style.alignItems = Align.Center;
                 OutputPort.style.justifyContent = Justify.Center;
-                
+                OutputPort.style.width = 20;
+                OutputPort.style.height = 20;
+                OutputPort.style.minWidth = 20;
+                OutputPort.style.minHeight = 20;
+                OutputPort.style.maxWidth = 20;
+                OutputPort.style.maxHeight = 20;
+
                 OutputPort.AddToClassList("bt-port");
                 OutputPort.AddToClassList("bt-output-port");
-                
+
                 var portElement = OutputPort.Q("connector");
                 if (portElement != null)
                 {
-                    portElement.style.width = 28;
-                    portElement.style.height = 18;
-                    portElement.style.minWidth = 28;
-                    portElement.style.minHeight = 18;
-                    portElement.style.maxWidth = 28;
-                    portElement.style.maxHeight = 18;
-                    portElement.style.borderTopLeftRadius = 8;
-                    portElement.style.borderTopRightRadius = 8;
-                    portElement.style.borderBottomLeftRadius = 8;
-                    portElement.style.borderBottomRightRadius = 8;
+                    portElement.style.width = 8;
+                    portElement.style.height = 8;
+                    portElement.style.minWidth = 8;
+                    portElement.style.minHeight = 8;
+                    portElement.style.maxWidth = 8;
+                    portElement.style.maxHeight = 8;
+                    // portElement.style.borderTopLeftRadius = 4;
+                    // portElement.style.borderTopRightRadius = 4;
+                    // portElement.style.borderBottomLeftRadius = 4;
+                    // portElement.style.borderBottomRightRadius = 4;
                     portElement.style.alignSelf = Align.Center;
                     portElement.style.marginLeft = StyleKeyword.Auto;
                     portElement.style.marginRight = StyleKeyword.Auto;
+                    portElement.style.marginTop = StyleKeyword.Auto;
+                    portElement.style.marginBottom = StyleKeyword.Auto;
                 }
-                
+
                 if (_node is CompositeNode)
                 {
                     outputContainer.Add(OutputPort);
@@ -728,7 +743,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 OutputPort.RegisterCallback<AttachToPanelEvent>(evt => UpdatePortConnectionState());
             }
         }
-        
+
         /// <summary>
         /// Updates the visual state of ports to reflect their connection status.
         /// </summary>
@@ -746,7 +761,7 @@ namespace CycloneGames.BehaviorTree.Editor
                     InputPort.RemoveFromClassList("connected");
                 }
             }
-            
+
             if (OutputPort != null)
             {
                 bool isConnected = OutputPort.connections != null && OutputPort.connections.Count() > 0;
@@ -760,7 +775,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
             }
         }
-        
+
         /// <summary>
         /// Adds CSS classes to the node based on its type for styling.
         /// </summary>

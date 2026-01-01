@@ -8,158 +8,144 @@
     border-right-color: rgb(88, 88, 88);
     border-top-color: rgb(88, 88, 88);
     border-bottom-color: rgb(88, 88, 88);
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
-    border-bottom-right-radius: 5px;
-    border-bottom-left-radius: 5px;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    border-bottom-right-radius: 12px;
+    border-bottom-left-radius: 12px;
 }
 
 #input {
-    align-self: stretch;
     justify-content: center;
     align-items: center;
-    min-height: 24px;
-    padding-top: 4px;
+    min-height: 0;
+    padding-left: 8px;
+    padding-top: 2px;
+    padding-bottom: 2px;
 }
 
-/* Enhanced port visibility - circular for input, rounded rectangle for output */
+#output {
+    justify-content: center;
+    align-self: center;
+    min-height: 0px;
+    padding-left: 0px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    /* flex-wrap: wrap;
+    flex-direction: column-reverse; */
+}
+
 .bt-port {
-    min-width: 24px;
-    min-height: 24px;
+    min-width: 10px;
+    min-height: 10px;
 }
 
-/* Input ports (top of child nodes) - perfect circular */
 .bt-input-port {
-    width: 24px;
-    height: 24px;
-    min-width: 24px;
-    min-height: 24px;
-    max-width: 24px;
-    max-height: 24px;
-    padding: 0px;
+    width: 14px;
+    height: 14px;
+    min-width: 14px;
+    min-height: 14px;
+    max-width: 14px;
+    max-height: 14px;
+    padding: 0;
     flex-shrink: 0;
 }
 
-.bt-input-port .connector,
-.bt-input-port > .connector,
-.bt-input-port .port-connector {
-    width: 14px !important;
-    height: 14px !important;
-    min-width: 14px !important;
-    min-height: 14px !important;
-    max-width: 14px !important;
-    max-height: 14px !important;
-    /* Perfect circle - border-radius = 50% */
-    border-top-left-radius: 7px !important;
-    border-top-right-radius: 7px !important;
-    border-bottom-left-radius: 7px !important;
-    border-bottom-right-radius: 7px !important;
-    background-color: rgb(100, 100, 100) !important;
-    border-width: 2px !important;
-    border-color: rgb(200, 200, 200) !important;
-    margin: 0px;
+.bt-input-port .connector {
+    width: 10px;
+    height: 10px;
+    min-width: 10px;
+    min-height: 10px;
+    max-width: 10px;
+    max-height: 10px;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    border-bottom-left-radius: 5px;
+    border-bottom-right-radius: 5px;
+    background-color: rgb(80, 80, 80);
+    border-width: 1.5px;
+    border-color: rgb(180, 180, 180);
+    margin: 0;
     transition-property: width, height, background-color, border-color;
     transition-duration: 0.15s;
     transition-timing-function: ease-out;
 }
 
-.bt-input-port:hover .connector,
-.bt-input-port:hover > .connector,
-.bt-input-port:hover .port-connector {
-    width: 16px !important;
-    height: 16px !important;
-    min-width: 16px !important;
-    min-height: 16px !important;
-    max-width: 16px !important;
-    max-height: 16px !important;
-    /* Perfect circle on hover */
-    border-top-left-radius: 8px !important;
-    border-top-right-radius: 8px !important;
-    border-bottom-left-radius: 8px !important;
-    border-bottom-right-radius: 8px !important;
-    background-color: rgb(150, 150, 150) !important;
-    border-color: rgb(255, 255, 255) !important;
-    box-shadow: 0 0 8px rgba(255, 255, 255, 0.5) !important;
+.bt-input-port:hover .connector {
+    width: 12px;
+    height: 12px;
+    min-width: 12px;
+    min-height: 12px;
+    max-width: 12px;
+    max-height: 12px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+    background-color: rgb(120, 120, 120);
+    border-color: rgb(255, 255, 255);
 }
 
-.bt-input-port.connected .connector,
-.bt-input-port.connected > .connector,
-.bt-input-port.connected .port-connector {
-    background-color: rgb(70, 143, 73) !important;
-    border-color: rgb(144, 238, 144) !important;
+.bt-input-port.connected .connector {
+    background-color: rgb(70, 143, 73);
+    border-color: rgb(144, 238, 144);
 }
 
-.bt-input-port.connected:hover .connector,
-.bt-input-port.connected:hover > .connector,
-.bt-input-port.connected:hover .port-connector {
-    background-color: rgb(90, 163, 93) !important;
-    border-color: rgb(255, 255, 255) !important;
-    box-shadow: 0 0 10px rgba(144, 238, 144, 0.8) !important;
+.bt-input-port.connected:hover .connector {
+    background-color: rgb(90, 163, 93);
+    border-color: rgb(255, 255, 255);
+    box-shadow: 0 0 10px rgba(144, 238, 144, 0.8);
 }
 
-/* Output ports (bottom of parent nodes) - rounded rectangle */
 .bt-output-port {
-    min-width: 32px;
-    min-height: 24px;
-    padding: 4px;
+    min-width: 12px;
+    min-height: 12px;
 }
 
-.bt-output-port .connector,
-.bt-output-port > .connector,
-.bt-output-port .port-connector {
-    width: 28px !important;
-    height: 18px !important;
-    min-width: 28px !important;
-    min-height: 18px !important;
-    max-width: 28px !important;
-    max-height: 18px !important;
-    border-top-left-radius: 8px !important;
-    border-top-right-radius: 8px !important;
-    border-bottom-left-radius: 8px !important;
-    border-bottom-right-radius: 8px !important;
-    background-color: rgb(100, 100, 100) !important;
-    border-width: 2px !important;
-    border-color: rgb(200, 200, 200) !important;
-    margin: 0px;
+.bt-output-port .connector {
+    width: 10px;
+    height: 10px;
+    min-width: 10px;
+    min-height: 10px;
+    max-width: 10px;
+    max-height: 10px;
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    border-bottom-left-radius: 5px;
+    border-bottom-right-radius: 5px;
+    background-color: rgb(80, 80, 80);
+    border-width: 1.5px;
+    border-color: rgb(180, 180, 180);
+    margin: 0;
     transition-property: width, height, background-color, border-color;
     transition-duration: 0.15s;
     transition-timing-function: ease-out;
 }
 
-.bt-output-port:hover .connector,
-.bt-output-port:hover > .connector,
-.bt-output-port:hover .port-connector {
-    width: 32px !important;
-    height: 20px !important;
-    min-width: 32px !important;
-    min-height: 20px !important;
-    max-width: 32px !important;
-    max-height: 20px !important;
-    border-top-left-radius: 10px !important;
-    border-top-right-radius: 10px !important;
-    border-bottom-left-radius: 10px !important;
-    border-bottom-right-radius: 10px !important;
-    background-color: rgb(150, 150, 150) !important;
-    border-color: rgb(255, 255, 255) !important;
-    box-shadow: 0 0 8px rgba(255, 255, 255, 0.5) !important;
+.bt-output-port:hover .connector {
+    width: 12px;
+    height: 12px;
+    min-width: 12px;
+    min-height: 12px;
+    max-width: 12px;
+    max-height: 12px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+    background-color: rgb(120, 120, 120);
+    border-color: rgb(255, 255, 255);
 }
 
-.bt-output-port.connected .connector,
-.bt-output-port.connected > .connector,
-.bt-output-port.connected .port-connector {
-    background-color: rgb(70, 143, 73) !important;
-    border-color: rgb(144, 238, 144) !important;
+.bt-output-port.connected .connector {
+    background-color: rgb(70, 143, 73);
+    border-color: rgb(144, 238, 144);
 }
 
-.bt-output-port.connected:hover .connector,
-.bt-output-port.connected:hover > .connector,
-.bt-output-port.connected:hover .port-connector {
-    background-color: rgb(90, 163, 93) !important;
-    border-color: rgb(255, 255, 255) !important;
-    box-shadow: 0 0 10px rgba(144, 238, 144, 0.8) !important;
+.bt-output-port.connected:hover .connector {
+    background-color: rgb(90, 163, 93);
+    border-color: rgb(255, 255, 255);
 }
 
-/* Input port at top - ensure it's above info container and centered */
 .bt-input-port {
     z-index: 10;
     position: relative;
@@ -176,16 +162,15 @@
     pointer-events: auto;
 }
 
-/* Output port at bottom - ensure it's below info container but visible and centered */
 .bt-output-port {
     z-index: 10;
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
+    width: 24px;
     height: 24px;
-    min-width: 32px;
+    min-width: 24px;
     min-height: 24px;
     cursor: pointer;
 }
@@ -196,10 +181,11 @@
 }
 
 #title {
-    min-height: 50px;
+    min-height: 40px;
     align-self: stretch;
     justify-content: center;
     width: 100%;
+    position: relative;
 }
 
 #title-label {
@@ -213,15 +199,10 @@
     white-space: normal;
     text-overflow: ellipsis;
     align-self: stretch;
-}
-
-#output {
-    justify-content: center;
-    align-self: center;
-    flex-wrap: wrap;
-    flex-direction: column-reverse;
-    min-height: 24px;
-    padding-bottom: 4px;
+    padding-top: 26px;
+    padding-bottom: 2px;
+    padding-left: 4px;
+    padding-right: 4px;
 }
 
 #selection-border {
@@ -238,10 +219,10 @@
     top: 0;
     right: 0;
     bottom: 0;
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
-    border-bottom-right-radius: 5px;
-    border-bottom-left-radius: 5px;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    border-bottom-right-radius: 12px;
+    border-bottom-left-radius: 12px;
 }
 
 :hover > #selection-border {
@@ -297,10 +278,10 @@
     top: 0;
     right: 0;
     bottom: 0;
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
-    border-bottom-right-radius: 5px;
-    border-bottom-left-radius: 5px;
+    border-top-left-radius: 12px;
+    border-top-right-radius: 12px;
+    border-bottom-right-radius: 12px;
+    border-bottom-left-radius: 12px;
 }
 
 .running #node-border {
