@@ -11,17 +11,21 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
         {
             float speed = context.GetFinalSpeed(context.Config.walkSpeed, StateType);
             float horizontalVelocity = context.InputDirection.x * speed;
-            
+
             // For BeltScroll and TopDown modes, Y input controls depth/vertical movement
             float verticalVelocity = 0f;
-            if (context.Config.movementType == MovementType2D.BeltScroll || 
+            if (context.Config.movementType == MovementType2D.BeltScroll ||
                 context.Config.movementType == MovementType2D.TopDown)
             {
                 verticalVelocity = context.InputDirection.y * speed;
             }
             else
             {
+#if UNITY_6000_0_OR_NEWER
+                verticalVelocity = context.Rigidbody.linearVelocity.y;
+#else
                 verticalVelocity = context.Rigidbody.velocity.y;
+#endif
             }
 
             velocity = new float2(horizontalVelocity, verticalVelocity);

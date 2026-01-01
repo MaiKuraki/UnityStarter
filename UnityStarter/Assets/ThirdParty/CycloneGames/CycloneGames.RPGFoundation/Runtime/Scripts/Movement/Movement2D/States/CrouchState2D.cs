@@ -12,9 +12,17 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             float speed = context.GetFinalSpeed(context.Config.crouchSpeed, StateType);
             float horizontalVelocity = context.InputDirection.x * speed;
 
+#if UNITY_6000_0_OR_NEWER
+            velocity = new float2(horizontalVelocity, context.Rigidbody.linearVelocity.y);
+#else
             velocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
+#endif
             context.CurrentSpeed = math.abs(horizontalVelocity);
+#if UNITY_6000_0_OR_NEWER
+            context.CurrentVelocity = new float2(horizontalVelocity, context.Rigidbody.linearVelocity.y);
+#else
             context.CurrentVelocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
+#endif
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {

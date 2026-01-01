@@ -16,8 +16,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             }
 
             float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.jumpForce);
+#if UNITY_6000_0_OR_NEWER
+            float horizontalVelocity = context.Rigidbody.linearVelocity.x;
+#else
             float horizontalVelocity = context.Rigidbody.velocity.x;
+#endif
+#if UNITY_6000_0_OR_NEWER
+            context.Rigidbody.linearVelocity = new UnityEngine.Vector2(horizontalVelocity, jumpForce);
+#else
             context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, jumpForce);
+#endif
             context.JumpCount++;
             context.JumpPressed = false;
 
@@ -35,7 +43,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             float airControlSpeed = runSpeed * airControl;
             float horizontalVelocity = context.InputDirection.x * airControlSpeed;
 
+#if UNITY_6000_0_OR_NEWER
+            velocity = new float2(horizontalVelocity, context.Rigidbody.linearVelocity.y);
+#else
             velocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
+#endif
             context.CurrentSpeed = math.abs(horizontalVelocity);
             context.CurrentVelocity = velocity;
 
@@ -50,7 +62,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
         public override MovementStateBase2D EvaluateTransition(ref MovementContext2D context)
         {
+#if UNITY_6000_0_OR_NEWER
+            if (context.IsGrounded && context.Rigidbody.linearVelocity.y <= 0)
+#else
             if (context.IsGrounded && context.Rigidbody.velocity.y <= 0)
+#endif
             {
                 context.JumpCount = 0;
 
@@ -69,7 +85,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
             // Transition to FallState2D when reaching apex or descending
             // This must be checked BEFORE multi-jump to prevent extra jumps at apex
+#if UNITY_6000_0_OR_NEWER
+            if (context.Rigidbody.linearVelocity.y <= 0)
+#else
             if (context.Rigidbody.velocity.y <= 0)
+#endif
             {
                 return StatePool<MovementStateBase2D>.GetState<FallState2D>();
             }
@@ -78,8 +98,17 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             if (context.JumpPressed && context.Config != null && context.JumpCount < context.Config.maxJumpCount)
             {
                 float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.jumpForce);
+#if UNITY_6000_0_OR_NEWER
+                float horizontalVelocity = context.Rigidbody.linearVelocity.x;
+#else
                 float horizontalVelocity = context.Rigidbody.velocity.x;
+#endif
+# if UNITY_6000_0_OR_NEWER
+                context.Rigidbody.linearVelocity = new UnityEngine.Vector2(horizontalVelocity, jumpForce);
+#else
                 context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, jumpForce);
+#endif
+
                 context.JumpCount++;
                 context.JumpPressed = false;
 

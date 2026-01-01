@@ -42,7 +42,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             localRotation = Quaternion.Inverse(platformTransform.rotation) * characterTransform.rotation;
             lastPlatformPosition = platformTransform.position;
             lastPlatformRotation = platformTransform.rotation;
+#if UNITY_6000_0_OR_NEWER
+            platformVelocity = rb.linearVelocity;
+#else
             platformVelocity = rb.velocity;
+#endif
             isOnPlatform = true;
         }
 
@@ -60,7 +64,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
                 // Calculate character's world position based on local position
                 Vector3 lastCharacterWorldPos = lastPlatformRotation * localPosition + lastPlatformPosition;
                 Vector3 currentCharacterWorldPos = platformTransform.TransformPoint(localPosition);
-                
+
                 // Character's actual velocity = delta position / time
                 // This naturally includes both linear and tangential components
                 platformVelocity = (currentCharacterWorldPos - lastCharacterWorldPos) / deltaTime;
