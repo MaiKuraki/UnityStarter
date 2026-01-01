@@ -5,8 +5,11 @@
 <p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
 > [!NOTE]
+>
 > 如果你觉得这个项目对你有帮助，请点一个 Star ⭐，谢谢！
 
+![Unity](https://img.shields.io/badge/Unity-2022.3%20LTS+-black?logo=unity)
+![License](https://img.shields.io/badge/License-MIT-green.svg)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
 
 ## 目录
@@ -82,6 +85,8 @@
 
 为流行的依赖注入框架提供预配置适配器：
 
+> [!NOTE]
+> 
 > 以下 DI / IoC 框架均为作者在中国大陆的**大型商业游戏中验证使用过**，稳定性可以保证。
 
 - [VContainer](https://github.com/hadashiA/VContainer)（推荐）
