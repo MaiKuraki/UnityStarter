@@ -43,6 +43,50 @@ namespace CycloneGames.GameplayAbilities.Runtime
             public int MinCapacity;
             public int InitialCapacity;
             
+            // Platform-adaptive default presets
+#if UNITY_IOS || UNITY_ANDROID || UNITY_SWITCH
+            public static PoolConfig Default => new PoolConfig
+            {
+                MaxCapacity = 32,
+                MinCapacity = 2,
+                InitialCapacity = 0
+            };
+            
+            public static PoolConfig HighFrequency => new PoolConfig
+            {
+                MaxCapacity = 128,
+                MinCapacity = 16,
+                InitialCapacity = 16
+            };
+            
+            public static PoolConfig LowEnd => new PoolConfig
+            {
+                MaxCapacity = 8,
+                MinCapacity = 1,
+                InitialCapacity = 0
+            };
+#elif UNITY_STANDALONE || UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+            public static PoolConfig Default => new PoolConfig
+            {
+                MaxCapacity = 128,
+                MinCapacity = 8,
+                InitialCapacity = 0
+            };
+            
+            public static PoolConfig HighFrequency => new PoolConfig
+            {
+                MaxCapacity = 512,
+                MinCapacity = 64,
+                InitialCapacity = 64
+            };
+            
+            public static PoolConfig LowEnd => new PoolConfig
+            {
+                MaxCapacity = 32,
+                MinCapacity = 4,
+                InitialCapacity = 0
+            };
+#else
             public static PoolConfig Default => new PoolConfig
             {
                 MaxCapacity = 64,
@@ -63,6 +107,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 MinCapacity = 2,
                 InitialCapacity = 0
             };
+#endif
         }
         
         private static PoolConfig s_DefaultConfig = PoolConfig.Default;
@@ -419,7 +464,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 sb.AppendLine($"[{stat.AssetKey}] Pool:{stat.CurrentPoolSize} Active:{stat.ActiveCount} Peak:{stat.PeakActive} HitRate:{stat.HitRate:P1} Gets:{stat.TotalGets} Created:{stat.TotalCreated}");
             }
             
-            CLogger.LogInfo(sb.ToString(), "GameObjectPool");
+            GASLog.Info(sb.ToString());
         }
         
         /// <summary>

@@ -14,11 +14,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
         
         private static readonly Stack<ActiveGameplayEffect> pool = new Stack<ActiveGameplayEffect>(64);
         
-        // Pool configuration for memory safety on low-end devices
-        private const int kDefaultMaxCapacity = 512;
+        // Platform-adaptive pool configuration for memory safety
+#if UNITY_IOS || UNITY_ANDROID || UNITY_SWITCH
+        private const int kDefaultMaxCapacity = 256;   // Mobile/Switch: conservative memory
+        private const int kDefaultMinCapacity = 16;
+        private const int kShrinkCheckInterval = 32;
+        private const int kMaxShrinkPerCheck = 8;
+#elif UNITY_STANDALONE || UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+        private const int kDefaultMaxCapacity = 1024;  // PC/Console: larger pools for complex combat
+        private const int kDefaultMinCapacity = 64;
+        private const int kShrinkCheckInterval = 128;
+        private const int kMaxShrinkPerCheck = 16;
+#else
+        private const int kDefaultMaxCapacity = 512;   // Default fallback
         private const int kDefaultMinCapacity = 32;
         private const int kShrinkCheckInterval = 64;
         private const int kMaxShrinkPerCheck = 8;
+#endif
         private const float kBufferRatio = 1.25f;
         
         private static int s_MaxPoolCapacity = kDefaultMaxCapacity;

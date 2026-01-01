@@ -1,6 +1,5 @@
 ﻿using System.Collections.Generic;
 using CycloneGames.GameplayTags.Runtime;
-using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -227,7 +226,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public virtual void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            CLogger.LogWarning($"Base ActivateAbility called for '{Name}'. Did you forget to override it in your specific ability class?");
+            GASLog.Warning($"Base ActivateAbility called for '{Name}'. Did you forget to override it in your specific ability class?");
             CommitAbility(actorInfo, spec);
         }
 
@@ -246,7 +245,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             activeTasks.Clear();
 
             AbilitySystemComponent?.OnAbilityEnded(this);
-            CLogger.LogInfo($"Ability '{Name}' ended.");
+            GASLog.Debug($"Ability '{Name}' ended.");
         }
 
         internal void InternalOnEndAbility()
@@ -259,7 +258,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public virtual void CancelAbility()
         {
-            CLogger.LogInfo($"Ability '{Name}' was cancelled.");
+            GASLog.Debug($"Ability '{Name}' was cancelled.");
             EndAbility();
         }
 
@@ -310,7 +309,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 if (asc.CombinedTags.HasAny(CooldownEffectDefinition.GrantedTags))
                 {
-                    CLogger.LogInfo($"Ability '{Name}' failed: on cooldown.");
+                    GASLog.Debug($"Ability '{Name}' failed: on cooldown.");
                     return false;
                 }
             }
@@ -331,7 +330,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     float costMagnitude = mod.Magnitude.GetValueAtLevel(this.Spec.Level);
                     if (attr == null || attr.CurrentValue < -costMagnitude)
                     {
-                        CLogger.LogInfo($"Ability '{Name}' failed: insufficient {attr?.Name ?? "resource"}.");
+                        GASLog.Debug($"Ability '{Name}' failed: insufficient {attr?.Name ?? "resource"}.");
                         return false;
                     }
                 }

@@ -59,11 +59,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Called just before the task is returned to the pool.
         /// Subclasses must override this to clean up their delegates and other state to prevent memory leaks.
+        /// IMPORTANT: Always call base.OnDestroy() at the end of your override.
         /// </summary>
         protected virtual void OnDestroy()
         {
-            // Clean up base class delegates.
-            
+            // Clear reference to prevent memory leaks when pooled
+            Ability = null;
         }
 
         /// <summary>
@@ -74,7 +75,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (IsActive)
             {
                 IsActive = false;
-                Ability.OnTaskEnded(this);
+                Ability?.OnTaskEnded(this);
 
                 OnDestroy();
 
@@ -85,7 +86,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Explicitly cancels the task, preventing its completion delegates from firing.
         /// </summary>
-        public void CancelTask()
+        public virtual void CancelTask()
         {
             if (IsActive)
             {

@@ -1,6 +1,5 @@
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
-using CycloneGames.Logger;
 using UnityEngine;
 using CycloneGames.AssetManagement.Runtime;
 
@@ -22,7 +21,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             
             if (key is not string stringKey || string.IsNullOrEmpty(stringKey))
             {
-                CLogger.LogError($"[GAS AssetManagement] Invalid asset key: {key}, key must be a non-empty string.", "GAS");
+                GASLog.Error($"Invalid asset key: {key}, key must be a non-empty string.");
                 return null;
             }
 
@@ -39,7 +38,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (loadHandle.Asset == null)
             {
-                CLogger.LogError($"[GAS AssetManagement] Failed to load asset with key: {key}", "GAS");
+                GASLog.Error($"Failed to load asset with key: {key}");
                 loadHandle.Dispose();
                 loadedHandles.Remove(key);
                 return null;
