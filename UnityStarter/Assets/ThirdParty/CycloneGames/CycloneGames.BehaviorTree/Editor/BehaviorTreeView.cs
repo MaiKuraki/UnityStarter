@@ -371,6 +371,68 @@ namespace CycloneGames.BehaviorTree.Editor
                     nodeView.UpdateState();
                 }
             }
+            
+            // Update edge states based on connected node states
+            UpdateEdgeStates();
+        }
+
+        /// <summary>
+        /// Updates edge visual styles based on parent node state.
+        /// Running edges get a pulsing green glow, completed edges get success/failure colors.
+        /// </summary>
+        private void UpdateEdgeStates()
+        {
+            if (!Application.isPlaying) return;
+            
+            foreach (var element in graphElements)
+            {
+                if (element is Edge edge)
+                {
+                    if (edge.output?.node is BTNodeView parentView)
+                    {
+                        var runtimeNode = parentView.RuntimeNode;
+                        if (runtimeNode != null)
+                        {
+                            bool isRunning = runtimeNode.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running;
+                            
+                            // Toggle animation if it's an animated edge
+                            if (edge is BTAnimatedEdge animatedEdge)
+                            {
+                                animatedEdge.SetAnimating(isRunning);
+                            }
+                            
+                            // Clear previous state classes
+                            edge.RemoveFromClassList("running-edge");
+                            edge.RemoveFromClassList("success-edge");
+                            edge.RemoveFromClassList("failure-edge");
+                            
+                            // Apply state-based styling
+                            switch (runtimeNode.State)
+                            {
+                                case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running:
+                                    edge.AddToClassList("running-edge");
+                                    edge.edgeControl.inputColor = new Color(0.27f, 0.56f, 0.29f, 1f); // Green
+                                    edge.edgeControl.outputColor = new Color(0.27f, 0.56f, 0.29f, 1f);
+                                    break;
+                                case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success:
+                                    edge.AddToClassList("success-edge");
+                                    edge.edgeControl.inputColor = new Color(0.15f, 1f, 0f, 0.8f); // Bright Green
+                                    edge.edgeControl.outputColor = new Color(0.15f, 1f, 0f, 0.8f);
+                                    break;
+                                case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Failure:
+                                    edge.AddToClassList("failure-edge");
+                                    edge.edgeControl.inputColor = new Color(1f, 0f, 0f, 0.8f); // Red
+                                    edge.edgeControl.outputColor = new Color(1f, 0f, 0f, 0.8f);
+                                    break;
+                                default:
+                                    edge.edgeControl.inputColor = new Color(0.6f, 0.6f, 0.6f, 1f);
+                                    edge.edgeControl.outputColor = new Color(0.6f, 0.6f, 0.6f, 1f);
+                                    break;
+                            }
+                        }
+                    }
+                }
+            }
         }
         
         /// <summary>
@@ -614,7 +676,12 @@ namespace CycloneGames.BehaviorTree.Editor
                     
                     if (parentView.OutputPort != null && childView.InputPort != null)
                     {
-                        var edge = parentView.OutputPort.ConnectTo(childView.InputPort);
+                        // Use custom animated edge
+                        var edge = new BTAnimatedEdge();
+                        edge.output = parentView.OutputPort;
+                        edge.input = childView.InputPort;
+                        parentView.OutputPort.Connect(edge);
+                        childView.InputPort.Connect(edge);
                         AddElement(edge);
                         parentView.UpdatePortConnectionState();
                         childView.UpdatePortConnectionState();
