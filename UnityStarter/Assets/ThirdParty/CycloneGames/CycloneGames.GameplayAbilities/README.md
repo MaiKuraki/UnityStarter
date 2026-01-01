@@ -10,47 +10,49 @@ A powerful, data-driven Gameplay Ability System for Unity, inspired by Unreal En
 
 ## ✨ Key Features
 
-| Feature | Description |
-|---------|-------------|
-| 🎮 **Data-Driven Abilities** | Define abilities in ScriptableObjects, no code changes needed |
-| ⚡ **GameplayEffects** | Instant/Duration/Infinite effects with stacking & periodic ticks |
-| 🏷️ **Tag-Based System** | Decouple logic with GameplayTags for abilities, states, cooldowns |
-| 🎯 **Targeting System** | Built-in sphere overlap, line trace, and ground select actors |
-| 📊 **AttributeSets** | Flexible character stats with validation hooks |
-| 🎨 **GameplayCues** | Separate VFX/SFX from gameplay logic |
-| ⏱️ **AbilityTasks** | Async ability logic (delays, targeting, animations) |
-| 🔄 **Object Pooling** | Zero-GC operation with automatic pooling |
+| Feature                      | Description                                                       |
+| ---------------------------- | ----------------------------------------------------------------- |
+| 🎮 **Data-Driven Abilities** | Define abilities in ScriptableObjects, no code changes needed     |
+| ⚡ **GameplayEffects**       | Instant/Duration/Infinite effects with stacking & periodic ticks  |
+| 🏷️ **Tag-Based System**      | Decouple logic with GameplayTags for abilities, states, cooldowns |
+| 🎯 **Targeting System**      | Built-in sphere overlap, line trace, and ground select actors     |
+| 📊 **AttributeSets**         | Flexible character stats with validation hooks                    |
+| 🎨 **GameplayCues**          | Separate VFX/SFX from gameplay logic                              |
+| ⏱️ **AbilityTasks**          | Async ability logic (delays, targeting, animations)               |
+| 🔄 **Object Pooling**        | Zero-GC operation with automatic pooling                          |
 
 ---
 
 ## 📚 Table of Contents
 
 ### Getting Started
+
 1. [Why GAS?](#the-gas-philosophy-a-paradigm-shift-for-skill-systems) — Traditional vs GAS approach
 2. [Architecture](#architecture-deep-dive) — Core component diagrams
 3. [Quick Start](#comprehensive-quick-start-guide) — Build a Heal ability from scratch
 
 ### Core Concepts
+
 4. [GameplayTags](#gameplay-tags) — Universal language of GAS
 5. [GameplayEffects](#gameplay-effects) — Modifiers, duration, stacking
 6. [AttributeSets](#attribute-sets) — Character stats system
 7. [Ability Lifecycle](#ability-lifecycle) — Grant → Activate → Commit → End
 
 ### Advanced Features
+
 8. [AbilityTasks](#abilitytasks) — Async operations in abilities
 9. [Targeting System](#targeting-system-overview) — Find and select targets
 10. [GameplayCues](#gameplaycue-system) — VFX/SFX management
 11. [Execution Calculations](#execution-calculations) — Complex damage formulas
 
 ### Reference
+
 12. [Samples Walkthrough](#sample-walkthrough) — Fireball, Purify, Leveling
 13. [FAQ](#frequently-asked-questions-faq) — Common questions answered
 14. [Troubleshooting](#troubleshooting-guide) — Debug checklist
 15. [Performance](#performance-optimization) — Zero-GC tips
 
 ---
-
-
 
 ## The GAS Philosophy: A Paradigm Shift for Skill Systems
 
@@ -792,12 +794,16 @@ targetASC.RemoveActiveEffectsWithGrantedTags(poisonTag);
 Beyond simple identification, tags control powerful gameplay logic:
 
 #### ActivationOwnedTags (On Ability)
+
 Tags that are **automatically granted** to the ability owner while the ability is active.
+
 - **Use Case**: When casting "Meteor", grant `State.Casting`. This can be used to play animations or block other abilities.
 - **Duration**: Persists only as long as the ability is active.
 
 #### ImmunityTags (On AbilitySystemComponent)
+
 Tags that grant **total immunity** to specific GameplayEffects.
+
 - **How it works**: If the ASC has `ImmunityTags` (e.g., `State.DebuffImmune`), any incoming GameplayEffect with a matching **AssetTag** or **GrantedTag** (`State.Debuff.Poison`) will be **blocked** completely.
 - **Use Case**: A "Divine Shield" ability grants an immunity tag to preventing all negative status effects.
 
@@ -1944,6 +1950,54 @@ poolManager.Release(vfx); // Return to pool
 1. **Check GC Allocations**: Use Unity Profiler's GC Alloc column—should be zero during gameplay
 2. **Monitor Tag Updates**: `UpdateCombinedTags()` should only run when effects are applied/removed
 3. **Watch Effect Count**: Hundreds of active effects on one actor can slow recalculation; consider effect stacking limits
+
+### Pool Management with GASPoolUtility
+
+The system includes a centralized pool management utility with platform-adaptive defaults:
+
+```csharp
+// Configure pools for different scenarios
+GASPoolUtility.ConfigureForHighPerformance(); // Large battles, bullet hell
+GASPoolUtility.ConfigureForBalanced();        // Standard gameplay
+GASPoolUtility.ConfigureForLowEnd();          // Mobile, WebGL
+
+// Pre-warm pools during loading screens (reduces first-frame hitches)
+GASPoolUtility.WarmAllPools();                // Default counts
+GASPoolUtility.WarmAllPools(64, 128, 64);     // Custom counts
+
+// Scene transitions: release memory
+GASPoolUtility.AggressiveShrinkAll();         // Shrink to minimum capacity
+GASPoolUtility.ClearAllPools();               // Complete reset (use with caution)
+```
+
+### Pool Statistics and Health Monitoring
+
+Debug pool performance in development builds:
+
+```csharp
+// Log statistics for all pools
+GASPoolUtility.LogAllStatistics();
+
+// Check pool health (hit rate > 80% is healthy)
+if (!GASPoolUtility.CheckPoolHealth(out string report))
+{
+    Debug.LogWarning(report); // Suggests increasing MinCapacity or WarmPool count
+}
+
+// Individual pool statistics
+var stats = GameplayEffectSpec.GetStatistics();
+Debug.Log($"Pool: {stats.PoolSize}, Active: {stats.ActiveCount}, HitRate: {stats.HitRate:P1}");
+```
+
+### Platform-Adaptive Pool Limits
+
+Pools automatically configure optimal sizes based on platform:
+
+| Platform          | Max Capacity | Min Capacity | Rationale                 |
+| ----------------- | ------------ | ------------ | ------------------------- |
+| **Mobile/Switch** | Lower        | Lower        | Conservative memory usage |
+| **PC/Console**    | Higher       | Higher       | Better cache hit rates    |
+| **Default**       | Medium       | Medium       | Balanced fallback         |
 
 ### Best Practices Summary
 

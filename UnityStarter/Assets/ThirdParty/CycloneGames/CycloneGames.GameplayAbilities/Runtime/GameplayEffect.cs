@@ -1,6 +1,5 @@
 ﻿using System.Collections.Generic;
 using CycloneGames.GameplayTags.Runtime;
-using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -135,7 +134,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             
             if (DurationPolicy == EDurationPolicy.HasDuration && duration <= 0 && duration != GameplayEffectConstants.INFINITE_DURATION)
             {
-                CLogger.LogWarning($"GameplayEffect '{name}' has 'HasDuration' policy but an invalid duration of {duration}.");
+                GASLog.Warning($"GameplayEffect '{name}' has 'HasDuration' policy but an invalid duration of {duration}.");
             }
         }
     }

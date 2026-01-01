@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using CycloneGames.GameplayTags.Runtime;
 using UnityEngine;
 using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.Logger;
 using CycloneGames.GameplayAbilities.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -76,7 +75,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             poolManager = new GameObjectPoolManager(resourceLocator);
 
             isInitialized = true;
-            CLogger.LogInfo($"[GameplayCueManager] Initialized.");
+            GASLog.Info("GameplayCueManager initialized.");
         }
         
         // IGameplayCueManager.Initialize (generic object version for Core interface)
@@ -205,17 +204,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (target == null || !activeInstances.TryGetValue(target, out var instanceList)) return;
 
-            var toRemove = new List<ActiveCueInstance>();
-            foreach (var activeCue in instanceList)
+            // Use ListPool to avoid GC allocation
+            using (CycloneGames.GameplayTags.Runtime.Pools.ListPool<ActiveCueInstance>.Get(out var toRemove))
             {
-                if (activeCue.CueTag == tag) toRemove.Add(activeCue);
-            }
+                foreach (var activeCue in instanceList)
+                {
+                    if (activeCue.CueTag == tag) toRemove.Add(activeCue);
+                }
 
-            foreach (var itemToRemove in toRemove)
-            {
-                await persistentCue.OnRemovedAsync(itemToRemove.Instance, parameters);
-                poolManager.Release(itemToRemove.Instance);
-                instanceList.Remove(itemToRemove);
+                foreach (var itemToRemove in toRemove)
+                {
+                    await persistentCue.OnRemovedAsync(itemToRemove.Instance, parameters);
+                    poolManager.Release(itemToRemove.Instance);
+                    instanceList.Remove(itemToRemove);
+                }
             }
         }
 

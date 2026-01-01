@@ -6,9 +6,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     public abstract class AttributeSet
     {
-        // Static cache for attribute properties per AttributeSet subclass
-        private static readonly Dictionary<Type, List<PropertyInfo>> s_AttributePropertyCache = new Dictionary<Type, List<PropertyInfo>>();
+        #region Optimized Attribute Discovery
+        
+        /// <summary>
+        /// Cached compiled delegates for attribute getters per AttributeSet subclass.
+        /// </summary>
+        private static readonly Dictionary<Type, List<Func<AttributeSet, GameplayAttribute>>> s_AttributeGetterCache 
+            = new Dictionary<Type, List<Func<AttributeSet, GameplayAttribute>>>();
         private static readonly object s_CacheLock = new object();
+
+        #endregion
 
         private readonly Dictionary<string, GameplayAttribute> discoveredAttributes = new Dictionary<string, GameplayAttribute>();
 
@@ -22,33 +29,53 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void DiscoverAndInitAttributes()
         {
             Type setType = GetType();
-            List<PropertyInfo> properties;
+            List<Func<AttributeSet, GameplayAttribute>> getters;
 
             lock (s_CacheLock)
             {
-                if (!s_AttributePropertyCache.TryGetValue(setType, out properties))
+                if (!s_AttributeGetterCache.TryGetValue(setType, out getters))
                 {
-                    properties = new List<PropertyInfo>();
+                    getters = new List<Func<AttributeSet, GameplayAttribute>>();
+                    
+                    // Discover properties and compile getter delegates (only once per type)
                     foreach (var prop in setType.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                     {
                         if (prop.PropertyType == typeof(GameplayAttribute))
                         {
-                            properties.Add(prop);
+                            var getMethod = prop.GetGetMethod();
+                            if (getMethod != null)
+                            {
+                                var getter = CreateGetter(setType, getMethod);
+                                if (getter != null)
+                                {
+                                    getters.Add(getter);
+                                }
+                            }
                         }
                     }
-                    s_AttributePropertyCache[setType] = properties;
+                    s_AttributeGetterCache[setType] = getters;
                 }
             }
 
-            foreach (var prop in properties)
+            // Use cached delegates to get attribute values (no reflection, no boxing)
+            for (int i = 0; i < getters.Count; i++)
             {
-                var attr = prop.GetValue(this) as GameplayAttribute;
+                var attr = getters[i](this);
                 if (attr != null)
                 {
                     attr.OwningSet = this;
                     discoveredAttributes[attr.Name] = attr;
                 }
             }
+        }
+        
+        /// <summary>
+        /// Creates a getter function for a property.
+        /// Caches MethodInfo to avoid repeated GetGetMethod calls.
+        /// </summary>
+        private static Func<AttributeSet, GameplayAttribute> CreateGetter(Type declaringType, MethodInfo getMethod)
+        {
+            return (AttributeSet set) => getMethod.Invoke(set, null) as GameplayAttribute;
         }
 
         public IReadOnlyCollection<GameplayAttribute> GetAttributes() => discoveredAttributes.Values;
@@ -73,8 +100,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Retrieves an attribute by its name.
         /// </summary>
-        /// <param name="name">The name of the attribute to retrieve.</param>
-        /// <returns>The GameplayAttribute instance if found; otherwise, null.</returns>
         public GameplayAttribute GetAttribute(string name)
         {
             discoveredAttributes.TryGetValue(name, out var attribute);
@@ -106,29 +131,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Called after a GameplayEffect is executed on this AttributeSet. This is the main entry point for attribute modifications.
         /// It follows a Pre-Process, Default-Process, Post-Process flow.
         /// </summary>
-        /// <param name="data">The data associated with the gameplay effect modification.</param>
         public virtual void PostGameplayEffectExecute(GameplayEffectModCallbackData data)
         {
             // --- Pre-Process ---
-            // Give derived classes a chance to completely handle the effect and skip default logic.
             if (PreProcessInstantEffect(data))
             {
-                return; // The derived class handled it.
+                return;
             }
 
             // --- Default-Process ---
-            // If not handled by Pre-Process, run the default attribute modification.
             ApplyDefaultInstantEffectModification(data);
 
             // --- Post-Process ---
-            // Give derived classes a chance to react AFTER the default logic has run.
             PostProcessInstantEffect(data);
         }
 
         /// <summary>
-        /// This contains the standard calculation logic. It is now virtual.
-        /// Derived classes can override this method to provide a completely custom
-        /// calculation for a specific attribute, instead of using the simple switch statement.
+        /// This contains the standard calculation logic.
         /// </summary>
         protected virtual void ApplyDefaultInstantEffectModification(GameplayEffectModCallbackData data)
         {
