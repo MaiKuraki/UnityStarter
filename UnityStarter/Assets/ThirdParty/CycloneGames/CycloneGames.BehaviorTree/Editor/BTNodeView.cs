@@ -25,158 +25,78 @@ namespace CycloneGames.BehaviorTree.Editor
     public class BTNodeView : Node
     {
         public Action<BTNodeView> OnNodeSelected;
-        public BTNode Node => GetRuntimeNode();
+        public BTNode Node => _node;
         private BTNode _node;
         public Port InputPort;
         public Port OutputPort;
-        
+
         private BehaviorTreeView _treeView;
-        
+
         internal void SetTreeView(BehaviorTreeView treeView)
         {
             _treeView = treeView;
         }
-        
+
         /// <summary>
         /// Gets the runtime node instance if tree is cloned, otherwise returns the original node.
         /// Uses GUID-based matching to find the corresponding runtime node.
         /// </summary>
-        private BTNode GetRuntimeNode()
+        private CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode GetRuntimeNode()
         {
             if (_node == null) return null;
-            
-            if (!Application.isPlaying) return _node;
-            
-            string targetGUID = _node.GUID;
-            if (string.IsNullOrEmpty(targetGUID))
-            {
-                return TryFindByReference();
-            }
-            
-            if (_treeView != null && _treeView.Tree != null)
-            {
-                var treeViewTree = _treeView.Tree;
-                if (treeViewTree.IsCloned && treeViewTree.Nodes != null)
-                {
-                    var runtimeNode = FindNodeByGUID(treeViewTree, targetGUID);
-                    if (runtimeNode != null)
-                    {
-                        return runtimeNode;
-                    }
-                }
-            }
-            
-            var nodeTree = _node.Tree;
-            if (nodeTree != null && nodeTree.IsCloned && nodeTree.Nodes != null)
-            {
-                var runtimeNode = FindNodeByGUID(nodeTree, targetGUID);
-                if (runtimeNode != null)
-                {
-                    return runtimeNode;
-                }
-            }
-            
+
+            if (!Application.isPlaying) return null; // Editor mode doesn't have "RuntimeNode" unless debugging
+
+            // Try to find the runner
             var runners = UnityEngine.Object.FindObjectsOfType<BTRunnerComponent>();
             for (int i = 0; i < runners.Length; i++)
             {
                 var runner = runners[i];
-                if (runner != null && runner.Tree != null && runner.Tree.IsCloned)
+                if (runner != null && runner.RuntimeTree != null)
                 {
-                    var runtimeNode = FindNodeByGUID(runner.Tree, targetGUID);
-                    if (runtimeNode != null)
+                    // Check if this runner is running the tree we are editing
+                    // This matching logic might need improvement depending on if we are debugging a specific instance
+                    if (runner.Tree == _node.Tree || runner.Tree.name == _node.Tree.name)
                     {
-                        return runtimeNode;
+                        var runtimeNode = runner.RuntimeTree.GetNodeByGUID(_node.GUID);
+                        if (runtimeNode != null) return runtimeNode;
                     }
                 }
             }
-            
-            return TryFindByReference();
-        }
-        
-        /// <summary>
-        /// Attempts to find the runtime node by reference when GUID matching fails.
-        /// Used as fallback when GUID is not available.
-        /// </summary>
-        private BTNode TryFindByReference()
-        {
-            if (_node == null) return null;
-            
-            if (_treeView != null && _treeView.Tree != null)
-            {
-                var treeViewTree = _treeView.Tree;
-                if (treeViewTree.IsCloned && treeViewTree.Nodes != null)
-                {
-                    int nodeCount = treeViewTree.Nodes.Count;
-                    for (int i = 0; i < nodeCount; i++)
-                    {
-                        if (treeViewTree.Nodes[i] == _node)
-                        {
-                            return _node;
-                        }
-                    }
-                }
-            }
-            
-            var nodeTree = _node.Tree;
-            if (nodeTree != null && nodeTree.IsCloned && nodeTree.Nodes != null)
-            {
-                int nodeCount = nodeTree.Nodes.Count;
-                for (int i = 0; i < nodeCount; i++)
-                {
-                    if (nodeTree.Nodes[i] == _node)
-                    {
-                        return _node;
-                    }
-                }
-            }
-            
-            return _node;
-        }
-        
-        /// <summary>
-        /// Finds a node in the tree by its GUID.
-        /// </summary>
-        /// <param name="tree">Behavior tree to search</param>
-        /// <param name="guid">GUID of the node to find</param>
-        /// <returns>Found node or null</returns>
-        private BTNode FindNodeByGUID(Runtime.BehaviorTree tree, string guid)
-        {
-            if (tree == null || tree.Nodes == null || string.IsNullOrEmpty(guid))
-            {
-                return null;
-            }
-            
-            int nodeCount = tree.Nodes.Count;
-            for (int i = 0; i < nodeCount; i++)
-            {
-                var node = tree.Nodes[i];
-                if (node != null && node.GUID == guid)
-                {
-                    return node;
-                }
-            }
-            
+
             return null;
         }
-        
+
+        private CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode _runtimeNode;
+        public CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode RuntimeNode => GetRuntimeNode();
+
+        // Helper to avoid repeated lookups if we cache it per frame? 
+        // For now calling GetRuntimeNode() is safer as Runner might change.
+
+
         private Label _stateLabel;
         private Label _infoLabel;
         private VisualElement _infoContainer;
         private VisualElement _stateIndicator;
-        
+
+        // Progress bar elements for WaitNode and Sequencer/Selector
+        private VisualElement _progressBarContainer;
+        private VisualElement _progressBarFill;
+        private Label _progressLabel;
+
         /// <summary>
         /// Caches the last known final state (SUCCESS/FAILURE) to preserve node state
         /// even after BehaviorTree.Stop() resets all node states to NOT_ENTERED.
         /// </summary>
         private BTState _lastKnownState = BTState.NOT_ENTERED;
-        
+
         /// <summary>
         /// Tracks the previous runtime state to detect when CompositeNode restarts.
         /// </summary>
         private BTState _previousRuntimeState = BTState.NOT_ENTERED;
-        
+
         public BTState GetLastKnownState() => _lastKnownState;
-        
+
         /// <summary>
         /// Restores a cached final state. Only final states (SUCCESS/FAILURE) are restored
         /// to prevent overwriting completed node states.
@@ -188,20 +108,20 @@ namespace CycloneGames.BehaviorTree.Editor
                 _lastKnownState = state;
             }
         }
-        
+
         public void ClearStateCache()
         {
             _lastKnownState = BTState.NOT_ENTERED;
             _previousRuntimeState = BTState.NOT_ENTERED;
         }
-        
+
         /// <summary>
         /// Gets the last known state of a child node by finding its corresponding node view.
         /// </summary>
         private BTState GetChildLastKnownState(BTNode childNode)
         {
             if (childNode == null || _treeView == null) return BTState.NOT_ENTERED;
-            
+
             var nodeList = _treeView.nodes.ToList();
             int nodeCount = nodeList.Count;
             for (int i = 0; i < nodeCount; i++)
@@ -215,10 +135,10 @@ namespace CycloneGames.BehaviorTree.Editor
                     }
                 }
             }
-            
+
             return childNode.State;
         }
-        
+
         public static string ConvertToReadableName(string name)
         {
             name = name.Replace("Node", "").Replace("(Clone)", "").Replace("BT", "");
@@ -282,6 +202,17 @@ namespace CycloneGames.BehaviorTree.Editor
             EditorUtility.SetDirty(_node);
         }
 
+        private BTState ToBTState(CycloneGames.BehaviorTree.Runtime.Core.RuntimeState state)
+        {
+            switch (state)
+            {
+                case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success: return BTState.SUCCESS;
+                case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Failure: return BTState.FAILURE;
+                case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running: return BTState.RUNNING;
+                default: return BTState.NOT_ENTERED;
+            }
+        }
+
         /// <summary>
         /// Updates the visual state of the node based on runtime node state.
         /// Caches final states (SUCCESS/FAILURE) to preserve them after tree stops.
@@ -289,12 +220,12 @@ namespace CycloneGames.BehaviorTree.Editor
         public void UpdateState()
         {
             if (_node == null) return;
-            
+
             RemoveFromClassList("success");
             RemoveFromClassList("failure");
             RemoveFromClassList("running");
             RemoveFromClassList("not-entered");
-            
+
             if (!Application.isPlaying)
             {
                 if (_stateLabel != null)
@@ -308,37 +239,16 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
                 return;
             }
-            
+
             var runtimeNode = GetRuntimeNode();
             if (runtimeNode == null) return;
-            
-            BTState currentState = runtimeNode.State;
+
+            BTState currentState = ToBTState(runtimeNode.State);
             bool isStarted = runtimeNode.IsStarted;
-            
-            if (runtimeNode is CompositeNode composite)
-            {
-                bool nodeRestarted = (_previousRuntimeState == BTState.NOT_ENTERED || _previousRuntimeState == BTState.SUCCESS || _previousRuntimeState == BTState.FAILURE)
-                                     && currentState == BTState.RUNNING && isStarted;
-                
-                if (nodeRestarted && _treeView != null)
-                {
-                    int childrenCount = composite.Children.Count;
-                    for (int i = 0; i < childrenCount; i++)
-                    {
-                        var child = composite.Children[i];
-                        if (child == null) continue;
-                        
-                        var childView = _treeView.FindNodeView(child);
-                        if (childView != null)
-                        {
-                            childView.ClearStateCache();
-                        }
-                    }
-                }
-            }
-            
-            _previousRuntimeState = currentState;
-            
+
+            // Note: Composite restart detection logic simplified for now
+            // We focus on current state
+
             if (currentState == BTState.SUCCESS || currentState == BTState.FAILURE)
             {
                 _lastKnownState = currentState;
@@ -352,126 +262,11 @@ namespace CycloneGames.BehaviorTree.Editor
             }
             else if (currentState == BTState.NOT_ENTERED)
             {
-                if (_lastKnownState == BTState.SUCCESS || _lastKnownState == BTState.FAILURE)
-                {
-                    currentState = _lastKnownState;
-                }
-                else
-                {
-                    if (_lastKnownState != BTState.SUCCESS && _lastKnownState != BTState.FAILURE)
-                    {
-                        _lastKnownState = BTState.NOT_ENTERED;
-                    }
-                }
+                // Keep last known state if tree finished
             }
-            else if (currentState == BTState.RUNNING && !isStarted)
-            {
-                if (_lastKnownState == BTState.SUCCESS || _lastKnownState == BTState.FAILURE)
-                {
-                    currentState = _lastKnownState;
-                }
-                else
-                {
-                    currentState = BTState.NOT_ENTERED;
-                    if (_lastKnownState != BTState.SUCCESS && _lastKnownState != BTState.FAILURE)
-                    {
-                        _lastKnownState = BTState.NOT_ENTERED;
-                    }
-                }
-            }
-            
-            if (_treeView != null && _treeView.Tree != null)
-            {
-                var tree = _treeView.Tree;
-                bool treeCompleted = tree.TreeState == BTState.SUCCESS || tree.TreeState == BTState.FAILURE;
-                
-                if (treeCompleted && currentState == BTState.NOT_ENTERED && !isStarted)
-                {
-                    if (runtimeNode is BTRootNode)
-                    {
-                        _lastKnownState = tree.TreeState;
-                        currentState = tree.TreeState;
-                    }
-                else if (_lastKnownState == BTState.NOT_ENTERED || _lastKnownState == BTState.RUNNING)
-                {
-                    if (runtimeNode is CompositeNode compositeNode)
-                    {
-                        bool allChildrenSucceeded = true;
-                        bool hasChildren = false;
-                        int childrenCount = compositeNode.Children.Count;
-                        for (int i = 0; i < childrenCount; i++)
-                        {
-                            var child = compositeNode.Children[i];
-                            if (child == null) continue;
-                            hasChildren = true;
-                            
-                            BTState childState = child.State;
-                            BTState childLastKnown = GetChildLastKnownState(child);
-                            
-                            if (childState == BTState.FAILURE || childLastKnown == BTState.FAILURE)
-                            {
-                                allChildrenSucceeded = false;
-                                if (compositeNode is SequencerNode)
-                                {
-                                    break;
-                                }
-                            }
-                            else if (childState != BTState.SUCCESS && childLastKnown != BTState.SUCCESS)
-                            {
-                                if (i < childrenCount - 1)
-                                {
-                                    allChildrenSucceeded = false;
-                                }
-                            }
-                        }
-                        
-                        if (hasChildren)
-                        {
-                            if (compositeNode is SequencerNode)
-                            {
-                                if (allChildrenSucceeded && tree.TreeState == BTState.SUCCESS)
-                                {
-                                    _lastKnownState = BTState.SUCCESS;
-                                    currentState = BTState.SUCCESS;
-                                }
-                                else if (!allChildrenSucceeded)
-                                {
-                                    _lastKnownState = BTState.FAILURE;
-                                    currentState = BTState.FAILURE;
-                                }
-                            }
-                            else if (compositeNode is SelectorNode)
-                            {
-                                bool anyChildSucceeded = false;
-                                for (int i = 0; i < childrenCount; i++)
-                                {
-                                    var child = compositeNode.Children[i];
-                                    if (child == null) continue;
-                                    
-                                    BTState childState = child.State;
-                                    BTState childLastKnown = GetChildLastKnownState(child);
-                                    
-                                    if (childState == BTState.SUCCESS || childLastKnown == BTState.SUCCESS)
-                                    {
-                                        anyChildSucceeded = true;
-                                        break;
-                                    }
-                                }
-                                
-                                if (anyChildSucceeded && tree.TreeState == BTState.SUCCESS)
-                                {
-                                    _lastKnownState = BTState.SUCCESS;
-                                    currentState = BTState.SUCCESS;
-                                }
-                            }
-                        }
-                    }
-                }
-                }
-            }
-            
+
             UpdateInfoLabel();
-            
+
             string stateText = "";
             switch (currentState)
             {
@@ -489,27 +284,10 @@ namespace CycloneGames.BehaviorTree.Editor
                         AddToClassList("running");
                         stateText = "RUNNING";
                     }
-                    else
-                    {
-                        if (_lastKnownState == BTState.SUCCESS || _lastKnownState == BTState.FAILURE)
-                        {
-                            AddToClassList(_lastKnownState == BTState.SUCCESS ? "success" : "failure");
-                            stateText = _lastKnownState == BTState.SUCCESS ? "SUCCESS" : "FAILURE";
-                        }
-                        else
-                        {
-                            AddToClassList("not-entered");
-                            stateText = "NOT ENTERED";
-                        }
-                    }
-                    break;
-                case BTState.NOT_ENTERED:
-                default:
-                    if (_lastKnownState == BTState.SUCCESS || _lastKnownState == BTState.FAILURE)
+                    else if (_lastKnownState == BTState.SUCCESS || _lastKnownState == BTState.FAILURE)
                     {
                         AddToClassList(_lastKnownState == BTState.SUCCESS ? "success" : "failure");
                         stateText = _lastKnownState == BTState.SUCCESS ? "SUCCESS" : "FAILURE";
-                        currentState = _lastKnownState;
                     }
                     else
                     {
@@ -517,19 +295,23 @@ namespace CycloneGames.BehaviorTree.Editor
                         stateText = "NOT ENTERED";
                     }
                     break;
+                default:
+                    AddToClassList("not-entered");
+                    stateText = "NOT ENTERED";
+                    break;
             }
-            
+
             if (_stateLabel != null)
             {
                 _stateLabel.text = stateText;
                 _stateLabel.style.display = Application.isPlaying ? DisplayStyle.Flex : DisplayStyle.None;
             }
         }
-        
+
         private void UpdateInfoLabel()
         {
             if (_infoLabel == null) return;
-            
+
             string infoText = GetNodeSpecificInfo();
             if (!string.IsNullOrEmpty(infoText))
             {
@@ -540,159 +322,193 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 _infoLabel.style.display = DisplayStyle.None;
             }
+
+            // Update progress bar for WaitNode
+            UpdateProgressBar();
         }
-        
-        private static readonly Dictionary<string, FieldInfo> _fieldCache = new Dictionary<string, FieldInfo>(StringComparer.Ordinal);
-        
-        private static FieldInfo GetCachedField(Type type, string fieldName)
+
+        /// <summary>
+        /// Updates the progress bar fill and label for WaitNode during runtime.
+        /// </summary>
+        private void UpdateProgressBar()
         {
-            string cacheKey = $"{type.FullName}.{fieldName}";
-            if (!_fieldCache.TryGetValue(cacheKey, out var field))
+            if (_progressBarContainer == null || _progressBarFill == null || _progressLabel == null)
+                return;
+
+            if (!Application.isPlaying)
             {
-                field = type.GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
-                if (field != null)
+                // Show empty bar in editor mode
+                _progressBarFill.style.width = new StyleLength(new Length(0, LengthUnit.Percent));
+
+                // Get duration from WaitNode for display
+                if (_node is WaitNode waitNode)
                 {
-                    _fieldCache[cacheKey] = field;
+                    var durationField = typeof(WaitNode).GetField("_duration", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    var duration = durationField != null ? (float)durationField.GetValue(waitNode) : 0f;
+                    _progressLabel.text = $"{duration:F1}s";
+                    _progressBarContainer.style.display = DisplayStyle.Flex;
                 }
+                return;
             }
-            return field;
+
+            // Runtime mode - get progress from RuntimeWaitNode
+            var runtimeNode = GetRuntimeNode();
+            if (runtimeNode is CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeWaitNode waitRuntimeNode)
+            {
+                float duration = waitRuntimeNode.Duration;
+                float elapsed = Time.time - waitRuntimeNode.StartTime;
+                float progress = duration > 0 ? Mathf.Clamp01(elapsed / duration) : 0f;
+
+                // Set fill width
+                _progressBarFill.style.width = new StyleLength(new Length(progress * 100f, LengthUnit.Percent));
+
+                // Update colors based on state
+                var state = waitRuntimeNode.State;
+                if (state == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running)
+                {
+                    _progressBarFill.style.backgroundColor = new Color(0.15f, 0.35f, 0.17f, 0.9f); // Dark green 90% opacity
+                    float remaining = Mathf.Max(0f, duration - elapsed);
+                    _progressLabel.text = $"{remaining:F1}s / {duration:F1}s";
+                }
+                else if (state == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success)
+                {
+                    _progressBarFill.style.backgroundColor = new Color(0.12f, 0.6f, 0.12f, 0.9f); // Green 90% opacity
+                    _progressBarFill.style.width = new StyleLength(new Length(100, LengthUnit.Percent));
+                    _progressLabel.text = $"Done ({duration:F1}s)";
+                }
+                else
+                {
+                    _progressBarFill.style.width = new StyleLength(new Length(0, LengthUnit.Percent));
+                    _progressLabel.text = $"{duration:F1}s";
+                }
+
+                _progressBarContainer.style.display = DisplayStyle.Flex;
+            }
         }
-        
+
         /// <summary>
         /// Gets node-specific runtime information for display (e.g., WaitNode remaining time).
+        /// Also shows static configuration info when not in play mode.
         /// </summary>
         private string GetNodeSpecificInfo()
         {
-            var node = GetRuntimeNode();
-            if (node == null) return "";
-            
+            // Editor mode - show static configuration from BTNode (ScriptableObject)
             if (!Application.isPlaying)
             {
-                if (node is CompositeNode composite)
-                {
-                    return $"Children: {composite.Children.Count}";
-                }
-                if (node is DecoratorNode decorator)
-                {
-                    return decorator.Child != null ? "Has Child" : "No Child";
-                }
-                return "";
+                return GetEditorModeInfo();
             }
-            
-            switch (node)
+
+            // Runtime mode - show live runtime state from RuntimeNode
+            var runtimeNode = GetRuntimeNode();
+            if (runtimeNode == null)
             {
-                case WaitNode waitNode:
-                    var timeField = GetCachedField(typeof(WaitNode), "_time");
-                    var durationField = GetCachedField(typeof(WaitNode), "_duration");
-                    
-                    if (timeField != null && durationField != null)
-                    {
-                        try
-                        {
-                            object timeObj = timeField.GetValue(waitNode);
-                            object durationObj = durationField.GetValue(waitNode);
-                            
-                            float time = timeObj != null ? (float)timeObj : 0f;
-                            float runtimeDuration = durationObj != null ? (float)durationObj : 0f;
-                            float configuredDuration = waitNode.Duration;
-                            float actualDuration = runtimeDuration > 0f ? runtimeDuration : configuredDuration;
-                            
-                            if (actualDuration <= 0f)
-                            {
-                                actualDuration = 1f;
-                            }
-                            
-                            if (waitNode.State == BTState.RUNNING)
-                            {
-                                float remaining = Mathf.Max(0f, actualDuration - time);
-                                float progress = actualDuration > 0 ? Mathf.Clamp01(time / actualDuration) * 100f : 0f;
-                                return $"Remaining: {remaining:F2}s ({progress:F0}%)";
-                            }
-                            else if (waitNode.IsStarted)
-                            {
-                                float remaining = Mathf.Max(0f, actualDuration - time);
-                                float progress = actualDuration > 0 ? Mathf.Clamp01(time / actualDuration) * 100f : 0f;
-                                return $"Remaining: {remaining:F2}s ({progress:F0}%)";
-                            }
-                            else if (waitNode.State == BTState.SUCCESS)
-                            {
-                                return $"Completed: {actualDuration:F2}s";
-                            }
-                            else if (waitNode.State == BTState.FAILURE)
-                            {
-                                return "Failed";
-                            }
-                            else
-                            {
-                                return $"Duration: {configuredDuration:F2}s";
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            Debug.LogError($"[WaitNode] Reflection failed: {ex.Message}");
-                            return $"State: {waitNode.State}";
-                        }
-                    }
-                    break;
-                    
-                case SequencerNode sequencer:
-                    var currentField = GetCachedField(typeof(SequencerNode), "_current");
-                    if (currentField != null)
-                    {
-                        int current = (int)(currentField.GetValue(sequencer) ?? 0);
-                        int childrenCount = sequencer.Children.Count;
-                        return $"Current: {current + 1}/{childrenCount}";
-                    }
-                    break;
-                    
-                case SelectorNode selector:
-                    var selectorCurrentField = GetCachedField(typeof(SelectorNode), "_current");
-                    if (selectorCurrentField != null)
-                    {
-                        int selectorCurrent = (int)(selectorCurrentField.GetValue(selector) ?? 0);
-                        int selectorChildrenCount = selector.Children.Count;
-                        return $"Trying: {selectorCurrent + 1}/{selectorChildrenCount}";
-                    }
-                    break;
-                    
-                case ParallelNode parallel:
-                    int runningCount = 0;
-                    int parallelChildrenCount = parallel.Children.Count;
-                    for (int i = 0; i < parallelChildrenCount; i++)
-                    {
-                        if (parallel.Children[i]?.State == BTState.RUNNING) runningCount++;
-                    }
-                    return $"Running: {runningCount}/{parallelChildrenCount}";
-                    
-                case RepeatNode repeat:
-                    var repeatCountField = GetCachedField(typeof(RepeatNode), "_currentRepeatCount");
-                    var totalCountField = GetCachedField(typeof(RepeatNode), "_repeatCount");
-                    var useRandomField = GetCachedField(typeof(RepeatNode), "_useRandomRepeatCount");
-                    if (repeatCountField != null && totalCountField != null)
-                    {
-                        int currentRepeat = (int)(repeatCountField.GetValue(repeat) ?? 0);
-                        int totalRepeat = (int)(totalCountField.GetValue(repeat) ?? 1);
-                        bool useRandom = useRandomField != null && (bool)(useRandomField.GetValue(repeat) ?? false);
-                        
-                        if (repeat.RepeatForever)
-                        {
-                            return $"Loop: {currentRepeat} (∞)";
-                        }
-                        else if (useRandom)
-                        {
-                            return $"Loop: {currentRepeat}/{totalRepeat} (Random)";
-                        }
-                        else
-                        {
-                            return $"Loop: {currentRepeat}/{totalRepeat}";
-                        }
-                    }
-                    break;
+                // Fallback to editor info if runtime node not available
+                return GetEditorModeInfo();
             }
-            
+
+            return GetRuntimeModeInfo(runtimeNode);
+        }
+
+        private string GetEditorModeInfo()
+        {
+            if (_node == null) return "";
+
+            // Show static configuration based on node type
+            switch (_node)
+            {
+                case DebugLogNode logNode:
+                    // Access message via serialized field using reflection
+                    var msgField = typeof(DebugLogNode).GetField("_message", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    var msg = msgField?.GetValue(logNode) as string ?? "";
+                    return $"\"{TruncateText(msg, 20)}\"";
+
+                case WaitNode waitNode:
+                    var durationField = typeof(WaitNode).GetField("_duration", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    var duration = durationField != null ? (float)durationField.GetValue(waitNode) : 0f;
+                    return $"Duration: {duration:F2}s";
+
+                case Runtime.Nodes.Actions.BlackBoards.MessagePassNode passNode:
+                    var keyFieldP = typeof(Runtime.Nodes.Actions.BlackBoards.MessagePassNode).GetField("_key", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    var msgFieldP = typeof(Runtime.Nodes.Actions.BlackBoards.MessagePassNode).GetField("_message", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    var keyP = keyFieldP?.GetValue(passNode) as string ?? "";
+                    var msgP = msgFieldP?.GetValue(passNode) as string ?? "";
+                    return $"[{keyP}] = \"{TruncateText(msgP, 15)}\"";
+
+                case Runtime.Conditions.BlackBoards.MessageReceiveNode receiveNode:
+                    var keyFieldR = typeof(Runtime.Conditions.BlackBoards.MessageReceiveNode).GetField("_key", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    var msgFieldR = typeof(Runtime.Conditions.BlackBoards.MessageReceiveNode).GetField("_message", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    var keyR = keyFieldR?.GetValue(receiveNode) as string ?? "";
+                    var msgR = msgFieldR?.GetValue(receiveNode) as string ?? "";
+                    return $"[{keyR}] == \"{TruncateText(msgR, 15)}\"";
+
+                case RepeatNode repeatNode:
+                    if (repeatNode.RepeatForever)
+                        return "Repeat: Forever";
+                    else if (repeatNode.UseRandomRepeatCount)
+                        return "Repeat: Random";
+                    else
+                        return $"Repeat: (configured)";
+
+                case CompositeNode composite:
+                    return $"Children: {composite.Children.Count}";
+
+                case DecoratorNode decorator:
+                    return decorator.Child != null ? "Has Child" : "No Child";
+            }
+
             return "";
         }
-        
+
+        private string GetRuntimeModeInfo(CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode node)
+        {
+            switch (node)
+            {
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeWaitNode waitNode:
+                    float time = (Time.time - waitNode.StartTime);
+                    float actualDuration = waitNode.Duration;
+
+                    if (waitNode.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running)
+                    {
+                        float remaining = Mathf.Max(0f, actualDuration - time);
+                        float progress = actualDuration > 0 ? Mathf.Clamp01(time / actualDuration) * 100f : 0f;
+                        return $"Remaining: {remaining:F2}s ({progress:F0}%)";
+                    }
+                    else if (waitNode.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success)
+                    {
+                        return $"Completed: {actualDuration:F2}s";
+                    }
+                    return $"Duration: {actualDuration:F2}s";
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeDebugLogNode logNode:
+                    return $"\"{TruncateText(logNode.Message, 20)}\"";
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeMessagePassNode passNode:
+                    return $"[{passNode.KeyHash}] = \"{TruncateText(passNode.Message, 15)}\"";
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeRepeatNode repeatNode:
+                    if (repeatNode.RepeatForever)
+                        return $"Count: {repeatNode.CurrentRepeatCount}";
+                    else
+                        return $"{repeatNode.CurrentRepeatCount}/{repeatNode.RepeatCount}";
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeSequencer sequencer:
+                    return $"Current: {sequencer.CurrentIndex + 1}/{sequencer.Children.Count}";
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeSelector selector:
+                    return $"Trying: {selector.CurrentIndex + 1}/{selector.Children.Count}";
+            }
+
+            // Fallback to editor info for nodes without runtime-specific display
+            return GetEditorModeInfo();
+        }
+
+        private string TruncateText(string text, int maxLength)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            if (text.Length <= maxLength) return text;
+            return text.Substring(0, maxLength - 3) + "...";
+        }
+
         /// <summary>
         /// Creates visual elements for displaying node state and runtime information.
         /// </summary>

@@ -321,58 +321,50 @@
 .not-entered #node-state-border {
 }
 
-/* State Label Styles */
 .state-label {
     position: absolute;
     top: 2px;
-    right: 4px;
-    font-size: 9px;
+    left: 0;
+    right: 0;
+    font-size: 8px;
     font-weight: bold;
-    padding: 2px 4px;
-    border-radius: 3px;
-    background-color: rgba(0, 0, 0, 0.6);
+    padding: 1px 0;
+    background-color: transparent;
     color: rgb(255, 255, 255);
     z-index: 10;
     pointer-events: none;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.3px;
+    -unity-text-align: upper-center;
 }
 
 .running .state-label {
     color: rgb(144, 238, 144);
-    background-color: rgba(70, 143, 73, 0.8);
-    animation: pulse 1.5s ease-in-out infinite;
+    background-color: rgba(40, 100, 45, 0.9);
 }
 
 .success .state-label {
-    color: rgb(255, 255, 255);
-    background-color: rgba(39, 255, 0, 0.8);
+    color: rgb(200, 255, 200);
+    background-color: rgba(30, 150, 30, 0.9);
 }
 
 .failure .state-label {
-    color: rgb(255, 255, 255);
-    background-color: rgba(255, 0, 0, 0.8);
+    color: rgb(255, 200, 200);
+    background-color: rgba(150, 30, 30, 0.9);
 }
 
 .not-entered .state-label {
     color: rgb(180, 180, 180);
-    background-color: rgba(100, 100, 100, 0.6);
+    background-color: rgba(60, 60, 60, 0.9);
 }
 
-@keyframes pulse {
-    0%, 100% {
-        opacity: 1;
-    }
-    50% {
-        opacity: 0.6;
-    }
-}
-
-/* Info Container Styles - positioned to not block ports */
 .info-container {
-    margin-top: 4px;
+    margin-top: 2px;
     margin-bottom: 2px;
-    padding: 4px 6px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+    padding-left: 6px;
+    padding-right: 6px;
     background-color: rgba(0, 0, 0, 0.3);
     border-top-width: 1px;
     border-top-color: rgba(255, 255, 255, 0.1);
@@ -403,7 +395,6 @@
     color: rgb(255, 200, 200);
 }
 
-/* Enhanced State Border Styles */
 .running #node-state-border {
     background-color: rgba(70, 143, 73, 0.3);
     border-top-width: 2px;
@@ -423,18 +414,6 @@
     border-top-color: rgb(255, 0, 0);
 }
 
-@keyframes borderPulse {
-    0%, 100% {
-        border-top-width: 2px;
-        opacity: 1;
-    }
-    50% {
-        border-top-width: 3px;
-        opacity: 0.8;
-    }
-}
-
-/* Enhanced Node Border for Running State */
 .running #node-border {
     box-shadow: 0 0 8px rgba(70, 143, 73, 0.5);
 }
