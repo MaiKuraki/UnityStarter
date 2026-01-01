@@ -26,5 +26,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             base.OnStop(blackBoard);
             _blackBoard.Clear();
         }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeBlackboardNode();
+            node.GUID = GUID;
+            if (Child != null)
+            {
+                node.Child = Child.CreateRuntimeNode();
+            }
+            return node;
+        }
     }
 }

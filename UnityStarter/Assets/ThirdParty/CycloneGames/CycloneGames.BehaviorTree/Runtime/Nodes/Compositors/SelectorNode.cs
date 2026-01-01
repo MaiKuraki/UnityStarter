@@ -102,5 +102,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             }
             return _current >= Children.Count ? BTState.FAILURE : BTState.RUNNING;
         }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var runtimeNode = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeSelector();
+            runtimeNode.GUID = GUID;
+            foreach (var child in Children)
+            {
+                if (child != null)
+                {
+                    runtimeNode.AddChild(child.CreateRuntimeNode());
+                }
+            }
+            return runtimeNode;
+        }
     }
 }

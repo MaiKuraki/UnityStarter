@@ -62,5 +62,24 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             clone._randomRepeatCountRange = _randomRepeatCountRange;
             return clone;
         }
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeRepeatNode();
+            node.GUID = GUID;
+            node.RepeatForever = _repeatForever;
+            
+            int count = _repeatCount;
+            if (_useRandomRepeatCount)
+            {
+                count = Random.Range((int)_randomRepeatCountRange.x, (int)_randomRepeatCountRange.y + 1);
+            }
+            node.RepeatCount = count;
+            
+            if (Child != null)
+            {
+                node.Child = Child.CreateRuntimeNode();
+            }
+            return node;
+        }
     }
 }
