@@ -1,5 +1,4 @@
 using System;
-using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -20,7 +19,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (targetActorInstance == null)
             {
-                CLogger.LogError("WaitTargetData task failed: ITargetActor instance is null.");
+                GASLog.Error("WaitTargetData task failed: ITargetActor instance is null.");
                 EndTask();
                 return;
             }

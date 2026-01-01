@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using CycloneGames.GameplayTags.Runtime;
-using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -17,11 +16,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
         
         private static readonly Stack<GameplayEffectSpec> pool = new Stack<GameplayEffectSpec>(32);
         
-        // Pool configuration for memory safety on low-end devices
-        private const int kDefaultMaxCapacity = 256;
+        // Platform-adaptive pool configuration for memory safety
+#if UNITY_IOS || UNITY_ANDROID || UNITY_SWITCH
+        private const int kDefaultMaxCapacity = 128;   // Mobile/Switch: conservative memory
+        private const int kDefaultMinCapacity = 8;
+        private const int kShrinkCheckInterval = 32;
+        private const int kMaxShrinkPerCheck = 4;
+#elif UNITY_STANDALONE || UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+        private const int kDefaultMaxCapacity = 512;   // PC/Console: larger pools
+        private const int kDefaultMinCapacity = 32;
+        private const int kShrinkCheckInterval = 128;
+        private const int kMaxShrinkPerCheck = 16;
+#else
+        private const int kDefaultMaxCapacity = 256;   // Default fallback
         private const int kDefaultMinCapacity = 16;
         private const int kShrinkCheckInterval = 64;
         private const int kMaxShrinkPerCheck = 8;
+#endif
         private const float kBufferRatio = 1.25f;
         private const float kPeakDecayFactor = 0.5f;
         
@@ -139,7 +150,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public float[] ModifierMagnitudes = System.Array.Empty<float>();
         public GameplayAttribute[] TargetAttributes = System.Array.Empty<GameplayAttribute>();
 
+        // SetByCaller magnitude storage - dual key support (GameplayTag and string)
         private readonly Dictionary<GameplayTag, float> setByCallerMagnitudes = new Dictionary<GameplayTag, float>();
+        private readonly Dictionary<string, float> setByCallerMagnitudesByName = new Dictionary<string, float>(System.StringComparer.Ordinal);
 
         // Private constructor to enforce creation via the pooling system.
         private GameplayEffectSpec() { }
@@ -251,6 +264,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             System.Array.Clear(TargetAttributes, 0, TargetAttributes.Length);
 
             setByCallerMagnitudes.Clear();
+            setByCallerMagnitudesByName.Clear();
 
             // Enforce max capacity to prevent memory overflow on low-end devices
             if (s_MaxPoolCapacity > 0 && pool.Count >= s_MaxPoolCapacity)
@@ -325,12 +339,69 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (warnIfNotFound)
             {
-                // Consider using your CLogger here
-                CLogger.LogWarning($"GetSetByCallerMagnitude: Tag '{dataTag.Name}' not found in spec for effect '{Def?.Name}'. Returning default value.");
+                GASLog.Warning($"GetSetByCallerMagnitude: Tag '{dataTag.Name}' not found in spec for effect '{Def?.Name}'. Returning default value.");
             }
 
             return defaultValue;
         }
+
+        #region SetByCaller with String Key (FName equivalent)
+
+        /// <summary>
+        /// Sets a magnitude value associated with a string key (FName equivalent in UE5).
+        /// Useful when you don't want to define a GameplayTag for every SetByCaller value.
+        /// </summary>
+        /// <param name="dataName">The string key to use.</param>
+        /// <param name="magnitude">The float value to store.</param>
+        public void SetSetByCallerMagnitude(string dataName, float magnitude)
+        {
+            if (string.IsNullOrEmpty(dataName))
+            {
+                GASLog.Warning("SetSetByCallerMagnitude: dataName cannot be null or empty.");
+                return;
+            }
+            setByCallerMagnitudesByName[dataName] = magnitude;
+        }
+
+        /// <summary>
+        /// Retrieves a magnitude value associated with a string key.
+        /// </summary>
+        /// <param name="dataName">The string key to look up.</param>
+        /// <param name="warnIfNotFound">If true, logs a warning if the key is not found.</param>
+        /// <param name="defaultValue">The value to return if the key is not found.</param>
+        /// <returns>The stored magnitude or the default value.</returns>
+        public float GetSetByCallerMagnitude(string dataName, bool warnIfNotFound = true, float defaultValue = 0f)
+        {
+            if (setByCallerMagnitudesByName.TryGetValue(dataName, out float magnitude))
+            {
+                return magnitude;
+            }
+
+            if (warnIfNotFound)
+            {
+                GASLog.Warning($"GetSetByCallerMagnitude: Name '{dataName}' not found in spec for effect '{Def?.Name}'. Returning default value.");
+            }
+
+            return defaultValue;
+        }
+
+        /// <summary>
+        /// Checks if a SetByCaller magnitude exists for the given string key.
+        /// </summary>
+        public bool HasSetByCallerMagnitude(string dataName)
+        {
+            return !string.IsNullOrEmpty(dataName) && setByCallerMagnitudesByName.ContainsKey(dataName);
+        }
+
+        /// <summary>
+        /// Checks if a SetByCaller magnitude exists for the given GameplayTag.
+        /// </summary>
+        public bool HasSetByCallerMagnitude(GameplayTag dataTag)
+        {
+            return !dataTag.IsNone && setByCallerMagnitudes.ContainsKey(dataTag);
+        }
+
+        #endregion
 
         /// <summary>
         /// Retrieves the pre-calculated magnitude for a given modifier.

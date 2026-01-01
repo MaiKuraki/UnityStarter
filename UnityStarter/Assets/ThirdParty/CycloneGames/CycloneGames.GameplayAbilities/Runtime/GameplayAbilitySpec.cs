@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
@@ -6,7 +9,96 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class GameplayAbilitySpec
     {
-        private static readonly System.Collections.Generic.Stack<GameplayAbilitySpec> pool = new System.Collections.Generic.Stack<GameplayAbilitySpec>(16);
+        #region Pool Management
+        
+        private static readonly Stack<GameplayAbilitySpec> pool = new Stack<GameplayAbilitySpec>(16);
+        
+        // Platform-adaptive pool configuration
+#if UNITY_IOS || UNITY_ANDROID || UNITY_SWITCH
+        private const int kDefaultMaxCapacity = 64;
+        private const int kDefaultMinCapacity = 4;
+        private const int kShrinkCheckInterval = 16;
+        private const int kMaxShrinkPerCheck = 4;
+#elif UNITY_STANDALONE || UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+        private const int kDefaultMaxCapacity = 256;
+        private const int kDefaultMinCapacity = 16;
+        private const int kShrinkCheckInterval = 64;
+        private const int kMaxShrinkPerCheck = 8;
+#else
+        private const int kDefaultMaxCapacity = 128;
+        private const int kDefaultMinCapacity = 8;
+        private const int kShrinkCheckInterval = 32;
+        private const int kMaxShrinkPerCheck = 4;
+#endif
+        private const float kBufferRatio = 1.25f;
+        
+        private static int s_MaxPoolCapacity = kDefaultMaxCapacity;
+        private static int s_MinPoolCapacity = kDefaultMinCapacity;
+        private static int s_PeakActiveSinceLastCheck = 0;
+        private static int s_ActiveCount = 0;
+        private static int s_ReturnCounter = 0;
+        
+        // Statistics
+        private static long s_TotalGets = 0;
+        private static long s_TotalMisses = 0;
+        private static int s_PeakActive = 0;
+        
+        public static void SetMaxPoolCapacity(int maxCapacity) => s_MaxPoolCapacity = maxCapacity;
+        public static void SetMinPoolCapacity(int minCapacity) => s_MinPoolCapacity = minCapacity;
+        
+        public static void WarmPool(int count)
+        {
+            for (int i = 0; i < count && (s_MaxPoolCapacity < 0 || pool.Count < s_MaxPoolCapacity); i++)
+            {
+                pool.Push(new GameplayAbilitySpec());
+            }
+        }
+        
+        public static void ClearPool()
+        {
+            pool.Clear();
+            s_ActiveCount = 0;
+            s_PeakActiveSinceLastCheck = 0;
+            s_ReturnCounter = 0;
+        }
+        
+        public static void AggressiveShrink()
+        {
+            while (pool.Count > s_MinPoolCapacity)
+            {
+                pool.Pop();
+            }
+            s_PeakActiveSinceLastCheck = s_ActiveCount;
+        }
+        
+        public static (int PoolSize, int ActiveCount, int PeakActive, long TotalGets, long TotalMisses, float HitRate) GetStatistics()
+        {
+            float hitRate = s_TotalGets > 0 ? (float)(s_TotalGets - s_TotalMisses) / s_TotalGets : 0f;
+            return (pool.Count, s_ActiveCount, s_PeakActive, s_TotalGets, s_TotalMisses, hitRate);
+        }
+        
+        private static void PerformSmartShrink()
+        {
+            int targetCapacity = (int)(s_PeakActiveSinceLastCheck * kBufferRatio);
+            targetCapacity = Math.Max(targetCapacity, s_MinPoolCapacity);
+            
+            int currentTotal = s_ActiveCount + pool.Count;
+            if (currentTotal > targetCapacity && pool.Count > s_MinPoolCapacity)
+            {
+                int excess = currentTotal - targetCapacity;
+                int toRemove = Math.Min(excess, kMaxShrinkPerCheck);
+                toRemove = Math.Min(toRemove, pool.Count - s_MinPoolCapacity);
+                
+                for (int i = 0; i < toRemove && pool.Count > s_MinPoolCapacity; i++)
+                {
+                    pool.Pop();
+                }
+            }
+            
+            s_PeakActiveSinceLastCheck = Math.Max(s_ActiveCount, (int)(s_PeakActiveSinceLastCheck * 0.5f));
+        }
+        
+        #endregion
 
         /// <summary>
         /// The stateless definition of the ability. This is the template from which instances are created.
@@ -15,13 +107,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// A convenience accessor for the ability's Class Default Object (CDO).
-        /// This is the primary object for NonInstanced abilities.
         /// </summary>
         public GameplayAbility AbilityCDO => Ability;
 
         /// <summary>
         /// The live, stateful instance of the ability, if its instancing policy requires one.
-        /// This will be null for NonInstanced abilities.
         /// </summary>
         public GameplayAbility AbilityInstance { get; private set; }
 
@@ -44,7 +134,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public static GameplayAbilitySpec Create(GameplayAbility ability, int level = 1)
         {
-            var spec = pool.Count > 0 ? pool.Pop() : new GameplayAbilitySpec();
+            s_TotalGets++;
+            GameplayAbilitySpec spec;
+            
+            if (pool.Count > 0)
+            {
+                spec = pool.Pop();
+            }
+            else
+            {
+                spec = new GameplayAbilitySpec();
+                s_TotalMisses++;
+            }
+            
+            s_ActiveCount++;
+            if (s_ActiveCount > s_PeakActiveSinceLastCheck)
+            {
+                s_PeakActiveSinceLastCheck = s_ActiveCount;
+            }
+            if (s_ActiveCount > s_PeakActive)
+            {
+                s_PeakActive = s_ActiveCount;
+            }
+            
             spec.Ability = ability;
             spec.Level = level;
             spec.IsActive = false;
@@ -59,8 +171,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
-        /// Gets the primary object to execute logic on. Returns the live instance if it exists,
-        /// otherwise falls back to the Class Default Object (for NonInstanced abilities).
+        /// Gets the primary object to execute logic on.
         /// </summary>
         public GameplayAbility GetPrimaryInstance() => AbilityInstance ?? AbilityCDO;
 
@@ -77,7 +188,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
-        /// Clears the stateful instance of the ability, returning it to the pool if necessary.
+        /// Clears the stateful instance of the ability.
         /// </summary>
         internal void ClearInstance()
         {
@@ -94,7 +205,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
-        /// Called when the ability is being removed from the ASC. Ensures proper cleanup.
+        /// Called when the ability is being removed from the ASC.
         /// </summary>
         internal void OnRemoveSpec()
         {
@@ -103,19 +214,35 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (IsActive) AbilityInstance.CancelAbility();
                 if (Ability.InstancingPolicy != EGameplayAbilityInstancingPolicy.NonInstanced)
                 {
-                    // For PerActor instances, it's returned to pool on removal.
                     PoolManager.ReturnAbility(AbilityInstance);
                 }
                 AbilityInstance = null;
             }
             AbilityCDO?.OnRemoveAbility();
 
-            // Return self to pool
+            // Return self to pool with capacity management
+            if (s_ActiveCount > 0) s_ActiveCount--;
+            
             Ability = null;
             Owner = null;
             Level = 0;
             IsActive = false;
+            
+            // Enforce max capacity
+            if (s_MaxPoolCapacity > 0 && pool.Count >= s_MaxPoolCapacity)
+            {
+                return; // Discard
+            }
+            
             pool.Push(this);
+            
+            // Periodic smart shrink
+            s_ReturnCounter++;
+            if (s_ReturnCounter >= kShrinkCheckInterval)
+            {
+                s_ReturnCounter = 0;
+                PerformSmartShrink();
+            }
         }
     }
 }
