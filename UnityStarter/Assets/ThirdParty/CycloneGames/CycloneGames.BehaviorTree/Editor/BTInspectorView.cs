@@ -94,7 +94,7 @@ namespace CycloneGames.BehaviorTree.Editor
             _scrollView.Add(_currentContainer);
         }
         
-        internal void Clear()
+        internal void ClearInspector()
         {
             if (_editor != null)
             {

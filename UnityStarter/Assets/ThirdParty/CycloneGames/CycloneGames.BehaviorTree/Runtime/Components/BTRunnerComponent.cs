@@ -78,13 +78,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (_runtimeTree == null) return;
 
-            if (_tickMode == TickMode.Managed)
+            if (_tickMode == TickMode.Managed && BTTickManagerComponent.HasInstance)
             {
-                BTTickManagerComponent.Instance.Unregister(_runtimeTree);
+                BTTickManagerComponent.Instance?.Unregister(_runtimeTree);
             }
-            else if (_tickMode == TickMode.PriorityManaged)
+            else if (_tickMode == TickMode.PriorityManaged && BTPriorityTickManagerComponent.HasInstance)
             {
-                BTPriorityTickManagerComponent.Instance.Unregister(_runtimeTree);
+                BTPriorityTickManagerComponent.Instance?.Unregister(_runtimeTree);
             }
         }
 
