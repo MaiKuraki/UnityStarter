@@ -17,6 +17,52 @@
 
 该框架由几个关键组件构建而成，它们协同工作，提供了一套全面的 UI 管理解决方案。
 
+```mermaid
+flowchart TB
+    subgraph GameCode["🎮 游戏代码"]
+        GameLogic["游戏逻辑"]
+    end
+
+    subgraph Facade["📦 公共 API"]
+        UIService["UIService<br/>• OpenUIAsync()<br/>• CloseUIAsync()"]
+    end
+
+    subgraph Core["⚙️ 核心系统"]
+        UIManager["UIManager<br/>• 异步加载<br/>• LRU 缓存<br/>• 实例化节流"]
+    end
+
+    subgraph SceneHierarchy["🏗️ 场景层级"]
+        UIRoot["UIRoot"]
+        UILayerMenu["UILayer - 菜单"]
+        UILayerDialogue["UILayer - 对话"]
+        UILayerNotification["UILayer - 通知"]
+    end
+
+    subgraph Windows["🪟 UI 窗口"]
+        Window1["UIWindow"]
+        Window2["UIWindow"]
+    end
+
+    subgraph DataAssets["📋 ScriptableObjects"]
+        WindowConfig["UIWindowConfiguration"]
+        LayerConfig["UILayerConfiguration"]
+    end
+
+    GameLogic --> UIService
+    UIService --> UIManager
+    UIManager --> UIRoot
+    UIRoot --> UILayerMenu
+    UIRoot --> UILayerDialogue
+    UIRoot --> UILayerNotification
+    UILayerMenu --> Window1
+    UILayerDialogue --> Window2
+
+    WindowConfig -.->|配置| Window1
+    WindowConfig -.->|配置| Window2
+    LayerConfig -.->|配置| UILayerMenu
+    LayerConfig -.->|配置| UILayerDialogue
+```
+
 ### 1. `UIService` (门面)
 
 这是与 UI 系统交互的主要公共 API。游戏逻辑代码应通过 `UIService` 来打开和关闭窗口，从而将底层的复杂性抽象出来。它作为一个清晰的入口点，并负责 `UIManager` 的初始化。
@@ -38,6 +84,20 @@
 ### 4. `UIWindow` (UI 单元)
 
 所有 UI 面板、页面或弹窗的基类。每个 `UIWindow` 都是一个自包含的组件，拥有自己的行为和生命周期，由一个健壮的状态机管理：
+
+```mermaid
+stateDiagram-v2
+    [*] --> Opening: Open()
+
+    Opening --> Opened: 过渡完成
+    Opening --> Closing: 取消/Close()
+
+    Opened --> Closing: Close()
+
+    Closing --> Closed: 过渡完成
+
+    Closed --> [*]: 销毁
+```
 
 - **`Opening`**: 窗口正在被创建，其打开过渡动画正在播放。
 - **`Opened`**: 窗口完全可见并可交互。
