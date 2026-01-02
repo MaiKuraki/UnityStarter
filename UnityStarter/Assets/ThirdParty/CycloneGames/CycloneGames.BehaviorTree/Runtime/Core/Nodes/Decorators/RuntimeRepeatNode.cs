@@ -1,12 +1,10 @@
-using UnityEngine;
-
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 {
     public class RuntimeRepeatNode : RuntimeDecoratorNode
     {
         public bool RepeatForever { get; set; } = true;
         public int RepeatCount { get; set; } = 1;
-        
+
         private int _currentRepeatCount;
         public int CurrentRepeatCount => _currentRepeatCount; // Exposed for debug
 
@@ -18,7 +16,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
             if (Child == null) return RuntimeState.Success;
-            
+
             var state = Child.Run(blackboard);
 
             if (state == RuntimeState.Success || state == RuntimeState.Failure)
@@ -30,7 +28,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
                     // RuntimeNode.Run handles Start/Stop.
                     // If we return Running, the Runner calls us again next tick.
                     // But we need to reset the Child state to run it again!
-                    Child.Abort(blackboard); 
+                    Child.Abort(blackboard);
                     return RuntimeState.Running;
                 }
                 else

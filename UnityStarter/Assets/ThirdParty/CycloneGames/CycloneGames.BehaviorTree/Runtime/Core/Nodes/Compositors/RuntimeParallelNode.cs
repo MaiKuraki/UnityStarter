@@ -70,5 +70,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             }
             return RuntimeState.Running;
         }
+
+        protected override void OnStop(RuntimeBlackboard blackboard)
+        {
+            for (int i = 0; i < Children.Count; i++)
+            {
+                if (Children[i].IsStarted)
+                {
+                    Children[i].Abort(blackboard);
+                }
+            }
+        }
     }
 }

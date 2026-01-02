@@ -34,7 +34,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
         {
             var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeWaitNode();
             node.GUID = GUID;
-            node.Duration = Duration;
+            node.Duration = _useRandomBetweenTwoConstants ? Random.Range(_range.x, _range.y) : _duration;
             return node;
         }
         protected override BTState OnRun(IBlackBoard blackBoard)
