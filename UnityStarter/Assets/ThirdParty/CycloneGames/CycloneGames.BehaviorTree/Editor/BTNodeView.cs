@@ -1,10 +1,7 @@
 ﻿using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using CycloneGames.BehaviorTree.Runtime;
 using CycloneGames.BehaviorTree.Runtime.Attributes;
-using CycloneGames.BehaviorTree.Runtime.Components;
 using CycloneGames.BehaviorTree.Runtime.Conditions;
 using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
@@ -45,18 +42,41 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             if (_node == null) return null;
 
-            if (!Application.isPlaying) return null; // Editor mode doesn't have "RuntimeNode" unless debugging
+            if (!Application.isPlaying) return null;
 
-            // Try to find the runner
-            var runners = UnityEngine.Object.FindObjectsOfType<BTRunnerComponent>();
-            for (int i = 0; i < runners.Length; i++)
+            // Use cached runners to avoid FindObjectsOfType GC
+            var runners = BehaviorTreeView.GetCachedRunners();
+            int runnersCount = runners.Count;
+
+            // First, try to get from the tree view if it has a reference to the current runner
+            if (_treeView != null && _treeView.Tree != null)
+            {
+                for (int i = 0; i < runnersCount; i++)
+                {
+                    var runner = runners[i];
+                    if (runner == null || runner.RuntimeTree == null) continue;
+
+                    var runtimeNode = runner.RuntimeTree.GetNodeByGUID(_node.GUID);
+                    if (runtimeNode != null)
+                    {
+                        if (runner.Tree == _treeView.Tree ||
+                            (runner.Tree != null && _treeView.Tree != null &&
+                             runner.Tree.name == _treeView.Tree.name))
+                        {
+                            return runtimeNode;
+                        }
+                    }
+                }
+            }
+
+            // Fallback: Try finding by node tree reference directly
+            for (int i = 0; i < runnersCount; i++)
             {
                 var runner = runners[i];
                 if (runner != null && runner.RuntimeTree != null)
                 {
-                    // Check if this runner is running the tree we are editing
-                    // This matching logic might need improvement depending on if we are debugging a specific instance
-                    if (runner.Tree == _node.Tree || runner.Tree.name == _node.Tree.name)
+                    if (runner.Tree == _node.Tree ||
+                        (runner.Tree != null && _node.Tree != null && runner.Tree.name == _node.Tree.name))
                     {
                         var runtimeNode = runner.RuntimeTree.GetNodeByGUID(_node.GUID);
                         if (runtimeNode != null) return runtimeNode;
