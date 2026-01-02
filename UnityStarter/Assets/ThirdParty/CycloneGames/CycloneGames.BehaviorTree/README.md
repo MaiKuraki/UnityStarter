@@ -19,25 +19,19 @@ A high-performance, zero-GC behavior tree system for Unity AI with dual-layer ar
 
 The system uses a **dual-layer architecture** to achieve both ease of use and maximum runtime performance:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  Editor Time (Authoring)                    │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  ScriptableObject Layer (BTNode, CompositeNode...)   │   │
-│  │  • Visual editor drag-and-drop                       │   │
-│  │  • Serialized to .asset files                        │   │
-│  │  • Supports Undo/Redo                                │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                           ↓ Compile()                        │
-├─────────────────────────────────────────────────────────────┤
-│                     Runtime (Execution)                      │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  Pure C# Layer (RuntimeNode, RuntimeBlackboard...)   │   │
-│  │  • Zero GC allocations                               │   │
-│  │  • No Unity dependency (server-side capable)         │   │
-│  │  • Maximum performance                               │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Editor["Editor Time (Authoring)"]
+        SO["ScriptableObject Layer<br/>BTNode, CompositeNode..."]
+        SO_Features["• Visual editor drag-and-drop<br/>• Serialized to .asset files<br/>• Supports Undo/Redo"]
+    end
+    
+    subgraph Runtime["Runtime (Execution)"]
+        RT["Pure C# Layer<br/>RuntimeNode, RuntimeBlackboard..."]
+        RT_Features["• Zero GC allocations<br/>• No Unity dependency<br/>• Maximum performance"]
+    end
+    
+    SO --> |"Compile()"| RT
 ```
 
 ### Why Dual-Layer?
@@ -282,9 +276,122 @@ int health = blackboard.GetInt("Health");
 - No string allocations during runtime
 - `Animator.StringToHash` is cached internally
 
-## Creating Custom Nodes
+## Large-Scale AI (1000+ Agents)
 
-### Action Node Example
+For scenarios with hundreds or thousands of AI agents, use the **Priority-Based LOD System**.
+
+### Tick Modes
+
+| Mode | Use Case | Description |
+|------|----------|-------------|
+| `Self` | < 100 AIs | Default, each component ticks in Update() |
+| `Managed` | Simple batching | BTTickManager with round-robin |
+| `PriorityManaged` | 1000+ AIs | Distance LOD + priority buckets |
+| `Manual` | Custom control | User calls `ManualTick()` |
+
+### Setup Priority LOD
+
+**Step 1: Create LOD Config**
+
+```
+Project → Create → CycloneGames → AI → BT LOD Config
+```
+
+Configure LOD levels:
+```
+LOD 0:  0-10m   → Priority 0, Tick every 1 frame
+LOD 1: 10-30m   → Priority 1, Tick every 2 frames
+LOD 2: 30-50m   → Priority 2, Tick every 4 frames
+LOD 3: 50m+     → Priority 3, Tick every 8 frames
+```
+
+**Step 2: Add Priority Markers (0GC)**
+
+For AI types that should always have high priority (regardless of distance), use the built-in markers or implement `IBTPriorityMarker`:
+
+**Option A: Use Built-in Markers**
+
+| Component | Priority | Tick Interval |
+|-----------|----------|---------------|
+| `BossAIMarker` | 0 | 1 |
+| `EliteAIMarker` | 0 | 1 |
+| `VIPNPCMarker` | 1 | 2 |
+
+Just add the component to any GameObject with `BTRunnerComponent`.
+
+**Option B: Implement Interface**
+
+```csharp
+using CycloneGames.BehaviorTree.Runtime.Core;
+
+public class MyBossAI : MonoBehaviour, IBTPriorityMarker
+{
+    public int Priority => 0;      // Always highest
+    public int TickInterval => 1;  // Every frame
+}
+```
+
+**Option C: Dynamic Priority**
+
+```csharp
+public class AdaptiveAI : MonoBehaviour, IBTPriorityMarker
+{
+    private bool _inCombat;
+    
+    public int Priority => _inCombat ? 0 : 2;
+    public int TickInterval => _inCombat ? 1 : 4;
+}
+```
+
+**Step 3: Use in Code**
+
+```csharp
+// Switch to priority-managed mode
+runner.SetTickMode(TickMode.PriorityManaged);
+
+// Configure manager (auto-created singleton)
+BTPriorityTickManagerComponent.Instance.Config = lodConfig;
+BTPriorityTickManagerComponent.Instance.SetReferencePoint(playerTransform);
+
+// Event interrupt: boost priority when attacked
+runner.BoostPriority(2f);  // Use P0 for 2 seconds
+```
+
+### Auto Player Detection
+
+The system automatically finds the player by tag:
+
+```csharp
+// In BTPriorityTickManagerComponent Inspector:
+// - Auto Find Player: ✓
+// - Player Tag: "Player"
+```
+
+### Architecture
+
+```mermaid
+flowchart TB
+    Config["BTLODConfig (ScriptableObject)<br/>LOD Levels + Type Overrides + Priority Budgets"]
+    Manager["BTPriorityTickManagerComponent<br/>Auto player detection + LOD calculation"]
+    
+    Config --> Manager
+    
+    Manager --> P0["Priority 0<br/>100/frame"]
+    Manager --> P1["Priority 1<br/>50/frame"]
+    Manager --> P2["Priority 2<br/>30/frame"]
+    Manager --> P3["Priority 3<br/>20/frame"]
+```
+
+### Performance Comparison
+
+| Scale | Self Mode | PriorityManaged |
+|-------|-----------|-----------------|
+| 100 AIs | ✅ Fine | Overkill |
+| 500 AIs | ⚠️ Heavy | ✅ Recommended |
+| 1000+ AIs | ❌ Too slow | ✅ Required |
+| 5000+ AIs | ❌ Impossible | ✅ With LOD tuning |
+
+## Creating Custom Nodes
 
 ```csharp
 using CycloneGames.BehaviorTree.Runtime.Attributes;
