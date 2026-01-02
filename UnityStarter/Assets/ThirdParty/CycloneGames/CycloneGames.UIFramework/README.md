@@ -17,6 +17,52 @@ A simple, robust, and data-driven UI framework for Unity, designed for scalabili
 
 The framework is built upon several key components that work together to provide a comprehensive UI management solution.
 
+```mermaid
+flowchart TB
+    subgraph GameCode["🎮 Game Code"]
+        GameLogic["Game Logic"]
+    end
+
+    subgraph Facade["📦 Public API"]
+        UIService["UIService<br/>• OpenUIAsync()<br/>• CloseUIAsync()"]
+    end
+
+    subgraph Core["⚙️ Core System"]
+        UIManager["UIManager<br/>• Async Loading<br/>• LRU Cache<br/>• Throttling"]
+    end
+
+    subgraph SceneHierarchy["🏗️ Scene Hierarchy"]
+        UIRoot["UIRoot"]
+        UILayerMenu["UILayer - Menu"]
+        UILayerDialogue["UILayer - Dialogue"]
+        UILayerNotification["UILayer - Notification"]
+    end
+
+    subgraph Windows["🪟 UI Windows"]
+        Window1["UIWindow"]
+        Window2["UIWindow"]
+    end
+
+    subgraph DataAssets["📋 ScriptableObjects"]
+        WindowConfig["UIWindowConfiguration"]
+        LayerConfig["UILayerConfiguration"]
+    end
+
+    GameLogic --> UIService
+    UIService --> UIManager
+    UIManager --> UIRoot
+    UIRoot --> UILayerMenu
+    UIRoot --> UILayerDialogue
+    UIRoot --> UILayerNotification
+    UILayerMenu --> Window1
+    UILayerDialogue --> Window2
+
+    WindowConfig -.->|configures| Window1
+    WindowConfig -.->|configures| Window2
+    LayerConfig -.->|configures| UILayerMenu
+    LayerConfig -.->|configures| UILayerDialogue
+```
+
 ### 1. `UIService` (The Facade)
 
 This is the primary public API for interacting with the UI system. Game code should use the `UIService` to open and close windows, abstracting away the underlying complexity. It acts as a clean entry point and handles the initialization of the `UIManager`.
@@ -38,6 +84,20 @@ A persistent singleton that orchestrates the entire UI lifecycle. Its responsibi
 ### 4. `UIWindow` (The UI Unit)
 
 The base class for all UI panels, pages, or popups. Each `UIWindow` is a self-contained component with its own behavior and lifecycle, managed by a robust state machine:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Opening: Open()
+
+    Opening --> Opened: Transition Complete
+    Opening --> Closing: Cancel/Close()
+
+    Opened --> Closing: Close()
+
+    Closing --> Closed: Transition Complete
+
+    Closed --> [*]: Destroy
+```
 
 - **`Opening`**: The window is being created and its opening transition is playing.
 - **`Opened`**: The window is fully visible and interactive.

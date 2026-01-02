@@ -579,32 +579,89 @@ If things don't work:
 
 ### Component Hierarchy
 
-```
-World
-└── GameMode
-    └── PlayerController
-        ├── PlayerState (persistent)
-        ├── CameraManager
-        ├── SpectatorPawn (temporary)
-        └── Pawn (current controlled entity)
+```mermaid
+flowchart TB
+    subgraph WorldLayer["🌍 World Layer"]
+        World["World"]
+        GameMode["GameMode<br/>• Game Rules<br/>• Spawn Logic"]
+    end
+
+    subgraph PlayerLayer["🎮 Player Layer"]
+        PC["PlayerController<br/>• Input Handling"]
+        PS["PlayerState<br/>• Score, Inventory<br/>• Persistent Data"]
+        CM["CameraManager<br/>• Cinemachine"]
+    end
+
+    subgraph PawnLayer["🏃 Pawn Layer"]
+        Pawn["Pawn<br/>• Movement<br/>• Abilities"]
+        Spectator["SpectatorPawn<br/>• Non-Interactive"]
+    end
+
+    subgraph Config["📋 Configuration"]
+        WS["WorldSettings<br/>ScriptableObject"]
+        PSt["PlayerStart<br/>Spawn Points"]
+    end
+
+    World --> GameMode
+    GameMode --> PC
+    PC --> PS
+    PC --> CM
+    PC -.->|possesses| Pawn
+    PC -.->|possesses| Spectator
+
+    WS -.->|configures| GameMode
+    PSt -.->|spawn location| Pawn
 ```
 
 ### Lifecycle Flow
 
-1. **Bootstrap**: `GameBootstrap` creates `World` and `GameMode`
-2. **GameMode Initialization**: `GameMode.Initialize()` is called with spawner and settings
-3. **Launch**: `GameMode.LaunchGameModeAsync()` is called
-4. **PlayerController Spawn**: `GameMode` spawns `PlayerController`
-5. **PlayerController Initialization**:
-   - Spawns `PlayerState`
-   - Spawns `CameraManager`
-   - Spawns `SpectatorPawn`
-6. **Player Restart**: `GameMode.RestartPlayer()` is called
-7. **Pawn Spawn**: `GameMode` spawns `Pawn` at `PlayerStart`
-8. **Possession**: `PlayerController.Possess(Pawn)` is called
-9. **Gameplay**: Player can now control the `Pawn`
+```mermaid
+sequenceDiagram
+    participant Boot as GameBootstrap
+    participant World as World
+    participant GM as GameMode
+    participant PC as PlayerController
+    participant PS as PlayerState
+    participant Pawn as Pawn
+
+    Boot->>World: Create World
+    Boot->>GM: Spawn GameMode
+    Boot->>GM: Initialize(spawner, settings)
+    World->>GM: SetGameMode()
+    Boot->>GM: LaunchGameModeAsync()
+
+    GM->>PC: Spawn PlayerController
+    PC->>PS: Spawn PlayerState
+    PC->>PC: Spawn CameraManager
+    PC->>PC: Spawn SpectatorPawn
+
+    GM->>GM: RestartPlayer(PC)
+    GM->>GM: FindPlayerStart()
+    GM->>Pawn: Spawn Pawn at PlayerStart
+    PC->>Pawn: Possess(Pawn)
+
+    Note over Pawn: Player can now control Pawn
+```
 
 ### Data Flow
+
+```mermaid
+flowchart LR
+    subgraph Persistent["📦 Persistent - Survives Death"]
+        PS["PlayerState<br/>• Score<br/>• Inventory<br/>• Stats"]
+        PC["PlayerController<br/>• Input<br/>• Camera"]
+    end
+
+    subgraph Temporary["💀 Temporary - Destroyed on Death"]
+        Pawn["Pawn<br/>• Movement<br/>• Abilities<br/>• Visual"]
+    end
+
+    PC -->|"Possess()"| Pawn
+    PC <-->|linked| PS
+    Pawn -.->|"respawn via"| GM["GameMode"]
+    GM -->|"RestartPlayer()"| Pawn
+    PS -.->|"data persists"| PS
+```
 
 - **PlayerState**: Persists across Pawn respawns
   - Score, inventory, stats
