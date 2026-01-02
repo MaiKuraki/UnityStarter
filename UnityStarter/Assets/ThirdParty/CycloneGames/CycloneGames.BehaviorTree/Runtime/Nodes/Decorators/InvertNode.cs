@@ -37,6 +37,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             }
             return node;
         }
-        protected override void OnStop(IBlackBoard blackBoard) { }
     }
 }

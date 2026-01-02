@@ -1,5 +1,4 @@
 using System;
-using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -23,7 +22,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         public BehaviorTree Tree => behaviorTree;
         public BlackBoard BlackBoard => _blackBoard;
         public RuntimeBehaviorTree RuntimeTree => _runtimeTree;
-        
+
         public bool IsPaused => _isPaused;
         public bool IsStopped => _isStopped;
 
@@ -35,7 +34,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         private bool _isPaused = false;
         private bool _isStopped = false;
         private BehaviorTree _nextTree;
-        
+
         private RuntimeBehaviorTree _runtimeTree;
 
         private void Awake()
@@ -56,7 +55,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
             // Compile to Pure C# Runtime Tree
             _runtimeTree = behaviorTree.Compile(gameObject);
-            
+
             // Initialize Blackboard Data
             if (_runtimeTree != null && _runtimeTree.Blackboard != null)
             {
@@ -70,7 +69,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                         _runtimeTree.Blackboard.SetObject(Animator.StringToHash(data.Key), data.Value);
                     }
                 }
-                
+
                 // Transfer serialized blackboard data (if any standard way exists, or just rely on runtime set)
                 // Note: The original BlackBoard class might have data. We would need to copy it if it was populated.
                 // Assuming _blackBoard is mostly for serialization and runtime storage in the old system.
@@ -120,7 +119,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (string.IsNullOrEmpty(key)) return;
             if (_runtimeTree == null) return;
-            
+
             int hash = Animator.StringToHash(key);
             if (value is int i) _runtimeTree.Blackboard.SetInt(hash, i);
             else if (value is float f) _runtimeTree.Blackboard.SetFloat(hash, f);
@@ -130,8 +129,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void BTRemoveData(string key)
         {
-            // RuntimeBlackboard doesn't support Remove currently to simplify 0GC logic (Dictionary Remove is fine but rarely used)
-            // Can be added if needed.
+            if (string.IsNullOrEmpty(key)) return;
+            if (_runtimeTree == null) return;
+            _runtimeTree.Blackboard.Remove(key);
         }
 
         public void SetTree(BehaviorTree newTree)
@@ -161,7 +161,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             {
                 InitializeRuntimeTree();
             }
-            
+
             if (_runtimeTree == null) return;
 
             if (!_isStopped)
@@ -181,7 +181,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (_runtimeTree == null)
             {
-                 InitializeRuntimeTree();
+                InitializeRuntimeTree();
             }
             _isPaused = false;
         }

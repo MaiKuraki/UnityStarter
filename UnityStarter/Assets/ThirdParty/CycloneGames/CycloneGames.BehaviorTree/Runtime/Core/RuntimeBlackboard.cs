@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
@@ -12,11 +13,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private readonly Dictionary<int, float> _floatData = new Dictionary<int, float>();
         private readonly Dictionary<int, bool> _boolData = new Dictionary<int, bool>();
         private readonly Dictionary<int, object> _objectData = new Dictionary<int, object>();
-        // Using object for vectors to keep core pure C# referencing System.Numerics later if needed, 
-        // or we can add specific dictionary for Unity Vector if we decide to keep dependency for convenience.
-        // For now, storing Vectors in _objectData involves boxing, but we can optimize later with specific structs if needed.
-        // Or we can add:
-        // private readonly Dictionary<int, System.Numerics.Vector3> _vector3Data ...
 
         public RuntimeBlackboard Parent { get; private set; }
 
@@ -25,6 +21,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             Parent = parent;
         }
 
+        #region Int-Key Methods (0GC)
         public void SetInt(int key, int value) => _intData[key] = value;
         public int GetInt(int key, int defaultValue = 0)
         {
@@ -55,15 +52,41 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
             return Parent != null ? Parent.GetObject<T>(key) : default;
         }
-        
+
         public bool HasKey(int key)
         {
-            return _intData.ContainsKey(key) || 
-                   _floatData.ContainsKey(key) || 
-                   _boolData.ContainsKey(key) || 
+            return _intData.ContainsKey(key) ||
+                   _floatData.ContainsKey(key) ||
+                   _boolData.ContainsKey(key) ||
                    _objectData.ContainsKey(key) ||
                    (Parent != null && Parent.HasKey(key));
         }
+
+        public void Remove(int key)
+        {
+            _intData.Remove(key);
+            _floatData.Remove(key);
+            _boolData.Remove(key);
+            _objectData.Remove(key);
+        }
+        #endregion
+
+        #region String-Key Convenience Methods
+        public void SetInt(string key, int value) => SetInt(Animator.StringToHash(key), value);
+        public int GetInt(string key, int defaultValue = 0) => GetInt(Animator.StringToHash(key), defaultValue);
+
+        public void SetFloat(string key, float value) => SetFloat(Animator.StringToHash(key), value);
+        public float GetFloat(string key, float defaultValue = 0f) => GetFloat(Animator.StringToHash(key), defaultValue);
+
+        public void SetBool(string key, bool value) => SetBool(Animator.StringToHash(key), value);
+        public bool GetBool(string key, bool defaultValue = false) => GetBool(Animator.StringToHash(key), defaultValue);
+
+        public void SetObject(string key, object value) => SetObject(Animator.StringToHash(key), value);
+        public T GetObject<T>(string key) => GetObject<T>(Animator.StringToHash(key));
+
+        public bool HasKey(string key) => HasKey(Animator.StringToHash(key));
+        public void Remove(string key) => Remove(Animator.StringToHash(key));
+        #endregion
 
         public void Clear()
         {
