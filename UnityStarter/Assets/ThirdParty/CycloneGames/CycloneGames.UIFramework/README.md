@@ -33,19 +33,31 @@ flowchart TB
 
     subgraph SceneHierarchy["🏗️ Scene Hierarchy"]
         UIRoot["UIRoot"]
-        UILayerMenu["UILayer - Menu"]
-        UILayerDialogue["UILayer - Dialogue"]
-        UILayerNotification["UILayer - Notification"]
+        subgraph Layers["UILayers"]
+            UILayerMenu["UILayer<br/>Menu"]
+            UILayerDialogue["UILayer<br/>Dialogue"]
+        end
     end
 
     subgraph Windows["🪟 UI Windows"]
-        Window1["UIWindow"]
-        Window2["UIWindow"]
+        WindowA["UIWindowA<br/>Main Menu"]
+        WindowB["UIWindowB<br/>Settings"]
+        WindowC["UIWindowC<br/>Dialogue Box"]
     end
 
-    subgraph DataAssets["📋 ScriptableObjects"]
-        WindowConfig["UIWindowConfiguration"]
-        LayerConfig["UILayerConfiguration"]
+    subgraph Extensions["� Extensions"]
+        MVP["MVP Pattern<br/>UIPresenter + UIWindow"]
+    end
+
+    subgraph WindowConfigs["📋 Window Configs - 1 Config : 1 Window"]
+        ConfigA["Config A"]
+        ConfigB["Config B"]
+        ConfigC["Config C"]
+    end
+
+    subgraph LayerConfigs["📋 Layer Configs - 1 Config : 1 Layer"]
+        LayerConfigMenu["LayerConfig<br/>Menu"]
+        LayerConfigDialogue["LayerConfig<br/>Dialogue"]
     end
 
     GameLogic --> UIService
@@ -53,14 +65,17 @@ flowchart TB
     UIManager --> UIRoot
     UIRoot --> UILayerMenu
     UIRoot --> UILayerDialogue
-    UIRoot --> UILayerNotification
-    UILayerMenu --> Window1
-    UILayerDialogue --> Window2
+    UILayerMenu --> WindowA
+    UILayerMenu --> WindowB
+    UILayerDialogue --> WindowC
 
-    WindowConfig -.->|configures| Window1
-    WindowConfig -.->|configures| Window2
-    LayerConfig -.->|configures| UILayerMenu
-    LayerConfig -.->|configures| UILayerDialogue
+    ConfigA -.-> WindowA
+    ConfigB -.-> WindowB
+    ConfigC -.-> WindowC
+    LayerConfigMenu -.-> UILayerMenu
+    LayerConfigDialogue -.-> UILayerDialogue
+
+    MVP -.->|extends| Windows
 ```
 
 ### 1. `UIService` (The Facade)
