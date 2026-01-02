@@ -6,6 +6,14 @@ using CycloneGames.BehaviorTree.Runtime.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
+    public enum TickMode
+    {
+        Self,            // Component's Update() handles tick
+        Managed,         // BTTickManager handles tick (simple)
+        PriorityManaged, // BTPriorityTickManager with LOD (for 1000+ AIs)
+        Manual           // User calls ManualTick() directly (full control)
+    }
+
     public class BTRunnerComponent : MonoBehaviour
     {
         private const string MESSAGE_KEY = "Message";
@@ -22,11 +30,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         public BehaviorTree Tree => behaviorTree;
         public BlackBoard BlackBoard => _blackBoard;
         public RuntimeBehaviorTree RuntimeTree => _runtimeTree;
+        public TickMode TickMode => _tickMode;
 
         public bool IsPaused => _isPaused;
         public bool IsStopped => _isStopped;
 
         [SerializeField] protected bool _startOnAwake = true;
+        [SerializeField] protected TickMode _tickMode = TickMode.Self;
         [SerializeField] protected BehaviorTree behaviorTree;
         [SerializeField] private BlackBoardPassObject[] _initialObjects;
         [HideInInspector][SerializeField] BlackBoard _blackBoard = new BlackBoard();
@@ -47,6 +57,35 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (!_startOnAwake) return;
 
             InitializeRuntimeTree();
+            RegisterWithManager();
+        }
+
+        private void RegisterWithManager()
+        {
+            if (_runtimeTree == null) return;
+
+            if (_tickMode == TickMode.Managed)
+            {
+                BTTickManagerComponent.Instance.Register(_runtimeTree);
+            }
+            else if (_tickMode == TickMode.PriorityManaged)
+            {
+                BTPriorityTickManagerComponent.Instance.Register(_runtimeTree, transform);
+            }
+        }
+
+        private void UnregisterFromManager()
+        {
+            if (_runtimeTree == null) return;
+
+            if (_tickMode == TickMode.Managed)
+            {
+                BTTickManagerComponent.Instance.Unregister(_runtimeTree);
+            }
+            else if (_tickMode == TickMode.PriorityManaged)
+            {
+                BTPriorityTickManagerComponent.Instance.Unregister(_runtimeTree);
+            }
         }
 
         private void InitializeRuntimeTree()
@@ -78,6 +117,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private void Update()
         {
+            if (_tickMode != TickMode.Self) return;
             if (_runtimeTree == null) return;
             if (_isPaused) return;
 
@@ -86,6 +126,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             {
                 Stop();
             }
+        }
+
+        /// <summary>
+        /// Manual tick for Manual mode. Returns current tree state.
+        /// </summary>
+        public RuntimeState ManualTick()
+        {
+            if (_runtimeTree == null) return RuntimeState.NotEntered;
+            if (_isPaused) return _runtimeTree.State;
+
+            var state = _runtimeTree.Tick();
+            if (state == RuntimeState.Failure || state == RuntimeState.Success)
+            {
+                _isStopped = true;
+            }
+            return state;
         }
 
         private void LateUpdate()
@@ -102,6 +158,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private void OnDestroy()
         {
+            UnregisterFromManager();
             if (_runtimeTree != null)
             {
                 _runtimeTree.Stop();
@@ -142,6 +199,29 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 return;
             }
             _nextTree = newTree;
+        }
+
+        public void SetTickMode(TickMode mode)
+        {
+            if (_tickMode == mode) return;
+            UnregisterFromManager();
+            _tickMode = mode;
+            RegisterWithManager();
+        }
+
+        public void SetTickInterval(int interval)
+        {
+            if (_runtimeTree == null) return;
+            _runtimeTree.TickInterval = interval;
+        }
+
+        public void BoostPriority(float duration)
+        {
+            if (_runtimeTree == null) return;
+            if (_tickMode == TickMode.PriorityManaged)
+            {
+                BTPriorityTickManagerComponent.Instance.BoostPriority(_runtimeTree, duration);
+            }
         }
 
         public void Stop()
