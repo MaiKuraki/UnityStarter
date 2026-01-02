@@ -91,118 +91,139 @@ GAS 通过将能力和效果不视为函数，而是视为**数据**来解决这
 
 ## 架构深度解析
 
-### 核心交互概览
+### 系统架构总览
 
 ```mermaid
-classDiagram
-    direction TB
+flowchart TB
+    subgraph DataLayer["📦 数据资产层 - ScriptableObjects"]
+        GAbilitySO["GameplayAbilitySO"]
+        GEffectSO["GameplayEffectSO"]
+        GCueSO["GameplayCueSO"]
+    end
 
-    class AbilitySystemComponent {
-        %% 系统的中央枢纽
-    }
+    subgraph RuntimeCore["⚙️ 运行时核心"]
+        ASC["AbilitySystemComponent"]
+        AttrSet["AttributeSet"]
+        GAbility["GameplayAbility"]
+        GEffect["GameplayEffect"]
+    end
 
-    class GameplayAbilitySpec {
-        %% 一个被授予的技能实例
-    }
+    subgraph ActiveInstances["🎯 活动实例 - 对象池化"]
+        GSpec["GameplayAbilitySpec"]
+        GESpec["GameplayEffectSpec"]
+        ActiveGE["ActiveGameplayEffect"]
+    end
 
-    class ActiveGameplayEffect {
-        %% 一个已应用的效果实例
-    }
+    subgraph AsyncSystems["⏱️ 异步系统"]
+        AbilityTask["AbilityTask"]
+        TargetActor["ITargetActor"]
+    end
 
-    class AttributeSet {
-        %% 一套角色的数值属性
-    }
+    subgraph VFXLayer["🎨 VFX/SFX 层"]
+        CueManager["GameplayCueManager"]
+    end
 
-    note for AbilitySystemComponent "管理一个角色的所有游戏状态。"
+    GAbilitySO -->|创建技能| GAbility
+    GEffectSO -->|创建效果| GEffect
 
-    AbilitySystemComponent "1" *-- "many" GameplayAbilitySpec : "拥有/激活"
-    AbilitySystemComponent "1" *-- "many" ActiveGameplayEffect : "拥有/追踪"
-    AbilitySystemComponent "1" *-- "many" AttributeSet : "拥有/管理"
+    ASC -->|拥有| AttrSet
+    ASC -->|管理| GSpec
+    ASC -->|追踪| ActiveGE
+
+    GSpec -->|包装| GAbility
+    GAbility -->|生成| AbilityTask
+    AbilityTask -->|使用| TargetActor
+
+    GEffect -->|实例化为| GESpec
+    GESpec -->|应用为| ActiveGE
+    ActiveGE -->|修改| AttrSet
+    ActiveGE -->|触发| CueManager
+
+    GCueSO -.->|注册于| CueManager
 ```
 
-### Gameplay Effect 生命周期
+### GameplayEffect 生命周期
 
 ```mermaid
-classDiagram
-    direction LR
+flowchart LR
+    subgraph Definition["定义阶段"]
+        SO["GameplayEffectSO<br/>📋 数据资产"]
+        GE["GameplayEffect<br/>📝 无状态定义"]
+    end
 
-    class GameplayEffectSO {
-        <<ScriptableObject>>
-        +EffectName: string
-        +CreateGameplayEffect(): GameplayEffect
-    }
-    note for GameplayEffectSO "在 Unity 编辑器中用于定义效果的数据资产（SO）。"
+    subgraph Instantiation["实例化阶段"]
+        Spec["GameplayEffectSpec<br/>📦 池化实例<br/>• 来源 ASC<br/>• 等级<br/>• SetByCaller 数据"]
+    end
 
-    class GameplayEffect {
-        <<Stateless Definition>>
-        +Modifiers: List~ModifierInfo~
-        +DurationPolicy: EDurationPolicy
-    }
-    note for GameplayEffect "描述效果具体作用的无状态运行时定义。"
+    subgraph Application["应用阶段"]
+        Active["ActiveGameplayEffect<br/>⏱️ 目标上的活动实例<br/>• 剩余时间<br/>• 层数<br/>• 周期计时器"]
+    end
 
-    class GameplayEffectSpec {
-        <<Stateful Instance>>
-        +Def: GameplayEffect
-        +Source: AbilitySystemComponent
-        +Level: int
-    }
-    note for GameplayEffectSpec "一个已配置好的效果实例，可随时应用。它包含了来源、等级等上下文信息。"
+    subgraph Execution["执行类型"]
+        Instant["即时 ✅"]
+        Duration["持续 ⏳"]
+        Infinite["永久 ♾️"]
+    end
 
-    class ActiveGameplayEffect {
-        <<Applied Instance>>
-        +Spec: GameplayEffectSpec
-        +TimeRemaining: float
-        +StackCount: int
-    }
-    note for ActiveGameplayEffect "一个已在目标身上激活的效果，负责追踪其持续时间和层数。"
+    SO -->|"CreateGameplayEffect()"| GE
+    GE -->|"GameplayEffectSpec.Create()"| Spec
+    Spec -->|"ASC.ApplyGameplayEffectSpecToSelf()"| Active
 
-    GameplayEffectSO ..> GameplayEffect : "创建"
-    GameplayEffect --o GameplayEffectSpec : "是...的定义"
-    GameplayEffectSpec --o ActiveGameplayEffect : "是...的规格"
-    AbilitySystemComponent ..> GameplayEffectSpec : "应用"
-    AbilitySystemComponent "1" *-- "many" ActiveGameplayEffect : "追踪"
+    Active --> Instant
+    Active --> Duration
+    Active --> Infinite
+
+    Duration -->|"到期"| Pool["🔄 返回对象池"]
+    Infinite -->|"手动移除"| Pool
+    Spec -->|"使用后"| Pool
 ```
 
-### 能力激活与任务
+### 技能执行流程
 
 ```mermaid
-classDiagram
-    direction TB
+flowchart TB
+    subgraph Input["1️⃣ 输入"]
+        Trigger["玩家输入 / AI 决策"]
+    end
 
-    class AbilitySystemComponent {
-        +TryActivateAbility(spec): bool
-    }
+    subgraph Activation["2️⃣ 激活检查"]
+        TryActivate["TryActivateAbility()"]
+        CheckTags["检查标签<br/>• ActivationRequiredTags<br/>• ActivationBlockedTags"]
+        CheckCost["CheckCost()"]
+        CheckCooldown["CheckCooldown()"]
+    end
 
-    class GameplayAbilitySpec {
-        +Ability: GameplayAbility
-    }
+    subgraph Execution["3️⃣ 执行"]
+        Activate["ActivateAbility()"]
+        Tasks["AbilityTasks<br/>• WaitDelay<br/>• WaitTargetData<br/>• WaitGameplayEvent"]
+        Commit["CommitAbility()<br/>• 应用消耗效果<br/>• 应用冷却效果"]
+    end
 
-    class GameplayAbility {
-        <<abstract>>
-        +ActivateAbility(): void
-        +NewAbilityTask~T~(): T
-    }
+    subgraph Effects["4️⃣ 应用效果"]
+        ApplyGE["应用 GameplayEffects"]
+        TriggerCue["触发 GameplayCues<br/>🎨 VFX / 🔊 SFX"]
+    end
 
-    class AbilityTask {
-        <<abstract>>
-        +Activate(): void
-    }
-    note for AbilityTask "处理异步逻辑，例如延迟或等待玩家输入。"
+    subgraph Cleanup["5️⃣ 清理"]
+        EndAbility["EndAbility()"]
+        ReturnPool["🔄 返回对象池"]
+    end
 
-    class AbilityTask_WaitTargetData {
-        +OnValidData: Action~TargetData~
-    }
+    Trigger --> TryActivate
+    TryActivate --> CheckTags
+    CheckTags -->|通过| CheckCost
+    CheckTags -->|失败| Blocked["❌ 被阻止"]
+    CheckCost -->|通过| CheckCooldown
+    CheckCost -->|失败| NoCost["❌ 资源不足"]
+    CheckCooldown -->|通过| Activate
+    CheckCooldown -->|失败| OnCooldown["❌ 冷却中"]
 
-    class ITargetActor {
-        <<interface>>
-        +StartTargeting(): void
-    }
-
-    AbilitySystemComponent ..> GameplayAbilitySpec : "激活"
-    GameplayAbilitySpec o-- GameplayAbility
-    GameplayAbility "1" *-- "many" AbilityTask : "创建并拥有"
-    AbilityTask <|-- AbilityTask_WaitTargetData
-    AbilityTask_WaitTargetData o-- "1" ITargetActor : "使用"
+    Activate --> Tasks
+    Tasks --> Commit
+    Commit --> ApplyGE
+    ApplyGE --> TriggerCue
+    TriggerCue --> EndAbility
+    EndAbility --> ReturnPool
 ```
 
 ## 综合快速上手指南

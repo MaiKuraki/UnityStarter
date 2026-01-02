@@ -579,32 +579,89 @@ public class GameBootstrap : MonoBehaviour
 
 ### 组件层次结构
 
-```
-World
-└── GameMode
-    └── PlayerController
-        ├── PlayerState (持久)
-        ├── CameraManager
-        ├── SpectatorPawn (临时)
-        └── Pawn (当前控制的实体)
+```mermaid
+flowchart TB
+    subgraph WorldLayer["🌍 世界层"]
+        World["World"]
+        GameMode["GameMode<br/>• 游戏规则<br/>• 生成逻辑"]
+    end
+
+    subgraph PlayerLayer["🎮 玩家层"]
+        PC["PlayerController<br/>• 输入处理"]
+        PS["PlayerState<br/>• 分数、库存<br/>• 持久数据"]
+        CM["CameraManager<br/>• Cinemachine"]
+    end
+
+    subgraph PawnLayer["🏃 Pawn 层"]
+        Pawn["Pawn<br/>• 移动<br/>• 能力"]
+        Spectator["SpectatorPawn<br/>• 非交互式"]
+    end
+
+    subgraph Config["📋 配置"]
+        WS["WorldSettings<br/>ScriptableObject"]
+        PSt["PlayerStart<br/>生成点"]
+    end
+
+    World --> GameMode
+    GameMode --> PC
+    PC --> PS
+    PC --> CM
+    PC -.->|占有| Pawn
+    PC -.->|占有| Spectator
+
+    WS -.->|配置| GameMode
+    PSt -.->|生成位置| Pawn
 ```
 
 ### 生命周期流程
 
-1. **引导**: `GameBootstrap` 创建 `World` 和 `GameMode`
-2. **GameMode 初始化**: 使用生成器和设置调用 `GameMode.Initialize()`
-3. **启动**: 调用 `GameMode.LaunchGameModeAsync()`
-4. **PlayerController 生成**: `GameMode` 生成 `PlayerController`
-5. **PlayerController 初始化**：
-   - 生成 `PlayerState`
-   - 生成 `CameraManager`
-   - 生成 `SpectatorPawn`
-6. **玩家重启**: 调用 `GameMode.RestartPlayer()`
-7. **Pawn 生成**: `GameMode` 在 `PlayerStart` 处生成 `Pawn`
-8. **占有**: 调用 `PlayerController.Possess(Pawn)`
-9. **游戏**: 玩家现在可以控制 `Pawn`
+```mermaid
+sequenceDiagram
+    participant Boot as GameBootstrap
+    participant World as World
+    participant GM as GameMode
+    participant PC as PlayerController
+    participant PS as PlayerState
+    participant Pawn as Pawn
+
+    Boot->>World: 创建 World
+    Boot->>GM: 生成 GameMode
+    Boot->>GM: Initialize(spawner, settings)
+    World->>GM: SetGameMode()
+    Boot->>GM: LaunchGameModeAsync()
+
+    GM->>PC: 生成 PlayerController
+    PC->>PS: 生成 PlayerState
+    PC->>PC: 生成 CameraManager
+    PC->>PC: 生成 SpectatorPawn
+
+    GM->>GM: RestartPlayer(PC)
+    GM->>GM: FindPlayerStart()
+    GM->>Pawn: 在 PlayerStart 生成 Pawn
+    PC->>Pawn: Possess(Pawn)
+
+    Note over Pawn: 玩家现在可以控制 Pawn
+```
 
 ### 数据流
+
+```mermaid
+flowchart LR
+    subgraph Persistent["📦 持久 - 死亡后保留"]
+        PS["PlayerState<br/>• 分数<br/>• 库存<br/>• 属性"]
+        PC["PlayerController<br/>• 输入<br/>• 相机"]
+    end
+
+    subgraph Temporary["💀 临时 - 死亡时销毁"]
+        Pawn["Pawn<br/>• 移动<br/>• 能力<br/>• 视觉"]
+    end
+
+    PC -->|"Possess()"| Pawn
+    PC <-->|链接| PS
+    Pawn -.->|"重生通过"| GM["GameMode"]
+    GM -->|"RestartPlayer()"| Pawn
+    PS -.->|"数据持久"| PS
+```
 
 - **PlayerState**: 在 Pawn 重生后仍然存在
   - 分数、库存、属性
