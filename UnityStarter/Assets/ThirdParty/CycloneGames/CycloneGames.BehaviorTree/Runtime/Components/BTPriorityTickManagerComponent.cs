@@ -6,10 +6,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     public class BTPriorityTickManagerComponent : MonoBehaviour
     {
         private static BTPriorityTickManagerComponent _instance;
+        private static bool _isQuitting;
+        
         public static BTPriorityTickManagerComponent Instance
         {
             get
             {
+                if (_isQuitting) return null;
+                
                 if (_instance == null)
                 {
                     var go = new GameObject("[BTPriorityTickManager]");
@@ -74,6 +78,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
             _instance = this;
             Initialize();
+        }
+        
+        private void OnApplicationQuit()
+        {
+            _isQuitting = true;
         }
 
         private void Initialize()
