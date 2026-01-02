@@ -1,5 +1,7 @@
 # CycloneGames.AIPerception
 
+English | [简体中文](./README.SCH.md)
+
 High-performance AI perception system with Jobs/Burst optimization, 0GC design, and cross-platform support.
 
 ---
