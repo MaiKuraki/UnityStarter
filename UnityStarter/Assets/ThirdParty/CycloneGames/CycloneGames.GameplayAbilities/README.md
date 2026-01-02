@@ -91,118 +91,139 @@ This data-centric approach empowers designers, promotes reusability, simplifies 
 
 ## Architecture Deep Dive
 
-### Core Interaction Overview
+### System Architecture Overview
 
 ```mermaid
-classDiagram
-    direction TB
+flowchart TB
+    subgraph DataLayer["📦 Data Assets - ScriptableObjects"]
+        GAbilitySO["GameplayAbilitySO"]
+        GEffectSO["GameplayEffectSO"]
+        GCueSO["GameplayCueSO"]
+    end
 
-    class AbilitySystemComponent {
-        %% The central hub
-    }
+    subgraph RuntimeCore["⚙️ Runtime Core"]
+        ASC["AbilitySystemComponent"]
+        AttrSet["AttributeSet"]
+        GAbility["GameplayAbility"]
+        GEffect["GameplayEffect"]
+    end
 
-    class GameplayAbilitySpec {
-        %% A granted ability instance
-    }
+    subgraph ActiveInstances["🎯 Active Instances - Pooled"]
+        GSpec["GameplayAbilitySpec"]
+        GESpec["GameplayEffectSpec"]
+        ActiveGE["ActiveGameplayEffect"]
+    end
 
-    class ActiveGameplayEffect {
-        %% An applied effect instance
-    }
+    subgraph AsyncSystems["⏱️ Async Systems"]
+        AbilityTask["AbilityTask"]
+        TargetActor["ITargetActor"]
+    end
 
-    class AttributeSet {
-        %% A set of character stats
-    }
+    subgraph VFXLayer["🎨 VFX/SFX Layer"]
+        CueManager["GameplayCueManager"]
+    end
 
-    note for AbilitySystemComponent "Manages all gameplay states for an actor."
+    GAbilitySO -->|CreateAbility| GAbility
+    GEffectSO -->|CreateEffect| GEffect
 
-    AbilitySystemComponent "1" *-- "many" GameplayAbilitySpec : owns/activates
-    AbilitySystemComponent "1" *-- "many" ActiveGameplayEffect : owns/tracks
-    AbilitySystemComponent "1" *-- "many" AttributeSet : owns/manages
+    ASC -->|owns| AttrSet
+    ASC -->|manages| GSpec
+    ASC -->|tracks| ActiveGE
+
+    GSpec -->|wraps| GAbility
+    GAbility -->|spawns| AbilityTask
+    AbilityTask -->|uses| TargetActor
+
+    GEffect -->|instantiated as| GESpec
+    GESpec -->|applied as| ActiveGE
+    ActiveGE -->|modifies| AttrSet
+    ActiveGE -->|triggers| CueManager
+
+    GCueSO -.->|registered in| CueManager
 ```
 
-### Gameplay Effect Lifecycle
+### GameplayEffect Lifecycle
 
 ```mermaid
-classDiagram
-    direction LR
+flowchart LR
+    subgraph Definition["Definition Phase"]
+        SO["GameplayEffectSO<br/>📋 Data Asset"]
+        GE["GameplayEffect<br/>📝 Stateless Definition"]
+    end
 
-    class GameplayEffectSO {
-        <<ScriptableObject>>
-        +EffectName: string
-        +CreateGameplayEffect(): GameplayEffect
-    }
-    note for GameplayEffectSO "Data asset in Unity Editor for defining an effect."
+    subgraph Instantiation["Instantiation Phase"]
+        Spec["GameplayEffectSpec<br/>📦 Pooled Instance<br/>• Source ASC<br/>• Level<br/>• SetByCaller Data"]
+    end
 
-    class GameplayEffect {
-        <<Stateless Definition>>
-        +Modifiers: List~ModifierInfo~
-        +DurationPolicy: EDurationPolicy
-    }
-    note for GameplayEffect "Stateless runtime definition of what an effect does."
+    subgraph Application["Application Phase"]
+        Active["ActiveGameplayEffect<br/>⏱️ Active on Target<br/>• TimeRemaining<br/>• StackCount<br/>• PeriodTimer"]
+    end
 
-    class GameplayEffectSpec {
-        <<Stateful Instance>>
-        +Def: GameplayEffect
-        +Source: AbilitySystemComponent
-        +Level: int
-    }
-    note for GameplayEffectSpec "A configured instance of an effect, ready to be applied. Captures context like source and level."
+    subgraph Execution["Execution"]
+        Instant["Instant ✅"]
+        Duration["HasDuration ⏳"]
+        Infinite["Infinite ♾️"]
+    end
 
-    class ActiveGameplayEffect {
-        <<Applied Instance>>
-        +Spec: GameplayEffectSpec
-        +TimeRemaining: float
-        +StackCount: int
-    }
-    note for ActiveGameplayEffect "An effect that is actively applied to a target, tracking its duration and stacks."
+    SO -->|"CreateGameplayEffect()"| GE
+    GE -->|"GameplayEffectSpec.Create()"| Spec
+    Spec -->|"ASC.ApplyGameplayEffectSpecToSelf()"| Active
 
-    GameplayEffectSO ..> GameplayEffect : "creates"
-    GameplayEffect --o GameplayEffectSpec : "is definition for"
-    GameplayEffectSpec --o ActiveGameplayEffect : "is specification for"
-    AbilitySystemComponent ..> GameplayEffectSpec : "applies"
-    AbilitySystemComponent "1" *-- "many" ActiveGameplayEffect : "tracks"
+    Active --> Instant
+    Active --> Duration
+    Active --> Infinite
+
+    Duration -->|"Expired"| Pool["🔄 Return to Pool"]
+    Infinite -->|"Manually Removed"| Pool
+    Spec -->|"After Use"| Pool
 ```
 
-### Ability Activation & Tasks
+### Ability Execution Flow
 
 ```mermaid
-classDiagram
-    direction TB
+flowchart TB
+    subgraph Input["1️⃣ Input"]
+        Trigger["Player Input / AI Decision"]
+    end
 
-    class AbilitySystemComponent {
-        +TryActivateAbility(spec): bool
-    }
+    subgraph Activation["2️⃣ Activation Check"]
+        TryActivate["TryActivateAbility()"]
+        CheckTags["Check Tags<br/>• ActivationRequiredTags<br/>• ActivationBlockedTags"]
+        CheckCost["CheckCost()"]
+        CheckCooldown["CheckCooldown()"]
+    end
 
-    class GameplayAbilitySpec {
-        +Ability: GameplayAbility
-    }
+    subgraph Execution["3️⃣ Execution"]
+        Activate["ActivateAbility()"]
+        Tasks["AbilityTasks<br/>• WaitDelay<br/>• WaitTargetData<br/>• WaitGameplayEvent"]
+        Commit["CommitAbility()<br/>• Apply Cost Effect<br/>• Apply Cooldown Effect"]
+    end
 
-    class GameplayAbility {
-        <<abstract>>
-        +ActivateAbility(): void
-        +NewAbilityTask~T~(): T
-    }
+    subgraph Effects["4️⃣ Apply Effects"]
+        ApplyGE["Apply GameplayEffects"]
+        TriggerCue["Trigger GameplayCues<br/>🎨 VFX / 🔊 SFX"]
+    end
 
-    class AbilityTask {
-        <<abstract>>
-        +Activate(): void
-    }
-    note for AbilityTask "Handles asynchronous logic like delays or waiting for player input."
+    subgraph Cleanup["5️⃣ Cleanup"]
+        EndAbility["EndAbility()"]
+        ReturnPool["🔄 Return to Pool"]
+    end
 
-    class AbilityTask_WaitTargetData {
-        +OnValidData: Action~TargetData~
-    }
+    Trigger --> TryActivate
+    TryActivate --> CheckTags
+    CheckTags -->|Pass| CheckCost
+    CheckTags -->|Fail| Blocked["❌ Blocked"]
+    CheckCost -->|Pass| CheckCooldown
+    CheckCost -->|Fail| NoCost["❌ Insufficient Resource"]
+    CheckCooldown -->|Pass| Activate
+    CheckCooldown -->|Fail| OnCooldown["❌ On Cooldown"]
 
-    class ITargetActor {
-        <<interface>>
-        +StartTargeting(): void
-    }
-
-    AbilitySystemComponent ..> GameplayAbilitySpec : "activates"
-    GameplayAbilitySpec o-- GameplayAbility
-    GameplayAbility "1" *-- "many" AbilityTask : "creates & owns"
-    AbilityTask <|-- AbilityTask_WaitTargetData
-    AbilityTask_WaitTargetData o-- "1" ITargetActor : "uses"
+    Activate --> Tasks
+    Tasks --> Commit
+    Commit --> ApplyGE
+    ApplyGE --> TriggerCue
+    TriggerCue --> EndAbility
+    EndAbility --> ReturnPool
 ```
 
 ## Comprehensive Quick-Start Guide
