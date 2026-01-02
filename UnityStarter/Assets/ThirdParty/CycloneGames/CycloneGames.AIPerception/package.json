@@ -1,0 +1,24 @@
+{
+  "name": "com.cyclone-games.ai-perception",
+  "version": "1.0.0",
+  "displayName": "CycloneGames AI Perception",
+  "description": "High-performance AI perception system with 0GC design, Jobs/Burst optimization, and cross-platform support.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "author": {
+    "name": "CycloneGames"
+  },
+  "dependencies": {
+    "com.unity.burst": "1.8.0",
+    "com.unity.collections": "2.1.0",
+    "com.unity.mathematics": "1.3.1"
+  },
+  "keywords": [
+    "ai",
+    "perception",
+    "sensor",
+    "sight",
+    "hearing",
+    "detection"
+  ]
+}
