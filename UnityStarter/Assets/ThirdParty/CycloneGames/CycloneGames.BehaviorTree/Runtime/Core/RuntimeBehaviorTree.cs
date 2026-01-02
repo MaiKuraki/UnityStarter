@@ -7,9 +7,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public RuntimeNode Root { get; private set; }
         public RuntimeBlackboard Blackboard { get; private set; }
         public RuntimeState State { get; private set; } = RuntimeState.NotEntered;
-        
-        // Optional: Support for binding to a Unity GameObject if needed (kept generic as object)
         public object Owner { get; private set; }
+
+        public int TickInterval { get; set; } = 1;
+        private int _tickCounter = 0;
 
         public RuntimeBehaviorTree(RuntimeNode root, RuntimeBlackboard blackboard, object owner = null)
         {
@@ -21,9 +22,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 #endif
         }
 
+        public bool ShouldTick()
+        {
+            if (TickInterval <= 1) return true;
+            _tickCounter++;
+            if (_tickCounter >= TickInterval)
+            {
+                _tickCounter = 0;
+                return true;
+            }
+            return false;
+        }
+
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         private readonly Dictionary<string, RuntimeNode> _nodeMap = new Dictionary<string, RuntimeNode>();
-        
+
         public RuntimeNode GetNodeByGUID(string guid)
         {
             if (string.IsNullOrEmpty(guid)) return null;
@@ -47,13 +60,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                     BuildNodeMap(child);
                 }
             }
-            
+
             // Traverse Decorator child
             if (node is Nodes.Decorators.RuntimeDecoratorNode decorator)
             {
                 BuildNodeMap(decorator.Child);
             }
-            
+
             // Traverse RootNode child
             if (node is Nodes.RuntimeRootNode root)
             {
@@ -69,7 +82,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             State = Root.Run(Blackboard);
             return State;
         }
-        
+
         public void Stop()
         {
             if (Root != null && Root.IsStarted)

@@ -19,25 +19,19 @@ Unity AI 的高性能、零 GC 行为树系统，采用双层架构设计。
 
 系统采用**双层架构**，同时实现易用性和极致运行时性能：
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    编辑时 (Editor Time)                      │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  ScriptableObject 层 (BTNode, CompositeNode...)     │   │
-│  │  • 可视化编辑器拖拽配置                               │   │
-│  │  • 序列化到 .asset 文件                              │   │
-│  │  • 支持 Undo/Redo                                   │   │
-│  └──────────────────────────────────────────────────────┘   │
-│                           ↓ Compile()                        │
-├─────────────────────────────────────────────────────────────┤
-│                     运行时 (Runtime)                         │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  纯 C# 层 (RuntimeNode, RuntimeBlackboard...)       │   │
-│  │  • 零 GC 分配                                       │   │
-│  │  • 无 Unity 依赖（可用于服务器）                      │   │
-│  │  • 极致性能                                         │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Editor["编辑时 (Editor Time)"]
+        SO["ScriptableObject 层<br/>BTNode, CompositeNode..."]
+        SO_Features["• 可视化编辑器拖拽配置<br/>• 序列化到 .asset 文件<br/>• 支持 Undo/Redo"]
+    end
+    
+    subgraph Runtime["运行时 (Runtime)"]
+        RT["纯 C# 层<br/>RuntimeNode, RuntimeBlackboard..."]
+        RT_Features["• 零 GC 分配<br/>• 无 Unity 依赖<br/>• 极致性能"]
+    end
+    
+    SO --> |"Compile()"| RT
 ```
 
 ### 为什么要双层设计？
@@ -282,9 +276,122 @@ int health = blackboard.GetInt("Health");
 - 运行时无字符串分配
 - `Animator.StringToHash` 内部有缓存
 
-## 创建自定义节点
+## 大规模 AI（1000+ 智能体）
 
-### 动作节点示例
+对于数百或数千个 AI 智能体的场景，使用 **基于优先级的 LOD 系统**。
+
+### Tick 模式
+
+| 模式 | 适用场景 | 说明 |
+|------|----------|------|
+| `Self` | < 100 AI | 默认，每个组件在 Update() 中 tick |
+| `Managed` | 简单批处理 | BTTickManager 轮询分发 |
+| `PriorityManaged` | 1000+ AI | 距离 LOD + 优先级桶 |
+| `Manual` | 自定义控制 | 用户调用 `ManualTick()` |
+
+### 配置优先级 LOD
+
+**步骤 1：创建 LOD 配置**
+
+```
+Project → Create → CycloneGames → AI → BT LOD Config
+```
+
+配置 LOD 级别：
+```
+LOD 0:  0-10m   → Priority 0, 每帧 tick
+LOD 1: 10-30m   → Priority 1, 每 2 帧
+LOD 2: 30-50m   → Priority 2, 每 4 帧
+LOD 3: 50m+     → Priority 3, 每 8 帧
+```
+
+**步骤 2：添加优先级标记（0GC）**
+
+对于应始终保持高优先级的 AI 类型（无论距离），使用内置标记或实现 `IBTPriorityMarker`：
+
+**方式 A：使用内置标记**
+
+| 组件 | 优先级 | Tick 间隔 |
+|------|--------|-----------|
+| `BossAIMarker` | 0 | 1 |
+| `EliteAIMarker` | 0 | 1 |
+| `VIPNPCMarker` | 1 | 2 |
+
+只需将组件添加到带有 `BTRunnerComponent` 的 GameObject。
+
+**方式 B：实现接口**
+
+```csharp
+using CycloneGames.BehaviorTree.Runtime.Core;
+
+public class MyBossAI : MonoBehaviour, IBTPriorityMarker
+{
+    public int Priority => 0;      // 始终最高
+    public int TickInterval => 1;  // 每帧
+}
+```
+
+**方式 C：动态优先级**
+
+```csharp
+public class AdaptiveAI : MonoBehaviour, IBTPriorityMarker
+{
+    private bool _inCombat;
+    
+    public int Priority => _inCombat ? 0 : 2;
+    public int TickInterval => _inCombat ? 1 : 4;
+}
+```
+
+**步骤 3：代码使用**
+
+```csharp
+// 切换到优先级托管模式
+runner.SetTickMode(TickMode.PriorityManaged);
+
+// 配置管理器（自动创建单例）
+BTPriorityTickManagerComponent.Instance.Config = lodConfig;
+BTPriorityTickManagerComponent.Instance.SetReferencePoint(playerTransform);
+
+// 事件中断：被攻击时提升优先级
+runner.BoostPriority(2f);  // 2 秒内使用 P0
+```
+
+### 自动玩家检测
+
+系统自动通过 Tag 查找玩家：
+
+```csharp
+// 在 BTPriorityTickManagerComponent Inspector 中：
+// - Auto Find Player: ✓
+// - Player Tag: "Player"
+```
+
+### 架构
+
+```mermaid
+flowchart TB
+    Config["BTLODConfig (ScriptableObject)<br/>LOD 级别 + 类型覆盖 + 优先级预算"]
+    Manager["BTPriorityTickManagerComponent<br/>自动玩家检测 + LOD 计算"]
+    
+    Config --> Manager
+    
+    Manager --> P0["Priority 0<br/>100/帧"]
+    Manager --> P1["Priority 1<br/>50/帧"]
+    Manager --> P2["Priority 2<br/>30/帧"]
+    Manager --> P3["Priority 3<br/>20/帧"]
+```
+
+### 性能对比
+
+| 规模 | Self 模式 | PriorityManaged |
+|------|-----------|-----------------|
+| 100 AI | ✅ 正常 | 无需 |
+| 500 AI | ⚠️ 较重 | ✅ 推荐 |
+| 1000+ AI | ❌ 太慢 | ✅ 必需 |
+| 5000+ AI | ❌ 不可能 | ✅ 调优后可用 |
+
+## 创建自定义节点
 
 ```csharp
 using CycloneGames.BehaviorTree.Runtime.Attributes;
