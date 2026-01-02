@@ -1,5 +1,7 @@
 # CycloneGames.AIPerception
 
+[English](./README.md) | 简体中文
+
 高性能 AI 感知系统，集成 Jobs/Burst 优化、零 GC 设计和跨平台支持。
 
 ---
