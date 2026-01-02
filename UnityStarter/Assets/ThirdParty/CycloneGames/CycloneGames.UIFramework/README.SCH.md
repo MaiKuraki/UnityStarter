@@ -28,24 +28,36 @@ flowchart TB
     end
 
     subgraph Core["⚙️ 核心系统"]
-        UIManager["UIManager<br/>• 异步加载<br/>• LRU 缓存<br/>• 实例化节流"]
+        UIManager["UIManager<br/>• 异步加载<br/>• LRU 缓存<br/>• 分帧实例化"]
     end
 
     subgraph SceneHierarchy["🏗️ 场景层级"]
         UIRoot["UIRoot"]
-        UILayerMenu["UILayer - 菜单"]
-        UILayerDialogue["UILayer - 对话"]
-        UILayerNotification["UILayer - 通知"]
+        subgraph Layers["UILayers"]
+            UILayerMenu["UILayer<br/>菜单"]
+            UILayerDialogue["UILayer<br/>对话"]
+        end
     end
 
     subgraph Windows["🪟 UI 窗口"]
-        Window1["UIWindow"]
-        Window2["UIWindow"]
+        WindowA["UIWindowA<br/>主菜单"]
+        WindowB["UIWindowB<br/>设置"]
+        WindowC["UIWindowC<br/>对话框"]
     end
 
-    subgraph DataAssets["📋 ScriptableObjects"]
-        WindowConfig["UIWindowConfiguration"]
-        LayerConfig["UILayerConfiguration"]
+    subgraph Extensions["🔌 扩展"]
+        MVP["MVP 模式<br/>UIPresenter + UIWindow"]
+    end
+
+    subgraph WindowConfigs["📋 窗口配置 - 1配置 : 1窗口"]
+        ConfigA["Config A"]
+        ConfigB["Config B"]
+        ConfigC["Config C"]
+    end
+
+    subgraph LayerConfigs["📋 层级配置 - 1配置 : 1层级"]
+        LayerConfigMenu["LayerConfig<br/>菜单"]
+        LayerConfigDialogue["LayerConfig<br/>对话"]
     end
 
     GameLogic --> UIService
@@ -53,14 +65,17 @@ flowchart TB
     UIManager --> UIRoot
     UIRoot --> UILayerMenu
     UIRoot --> UILayerDialogue
-    UIRoot --> UILayerNotification
-    UILayerMenu --> Window1
-    UILayerDialogue --> Window2
+    UILayerMenu --> WindowA
+    UILayerMenu --> WindowB
+    UILayerDialogue --> WindowC
 
-    WindowConfig -.->|配置| Window1
-    WindowConfig -.->|配置| Window2
-    LayerConfig -.->|配置| UILayerMenu
-    LayerConfig -.->|配置| UILayerDialogue
+    ConfigA -.-> WindowA
+    ConfigB -.-> WindowB
+    ConfigC -.-> WindowC
+    LayerConfigMenu -.-> UILayerMenu
+    LayerConfigDialogue -.-> UILayerDialogue
+
+    MVP -.->|扩展| Windows
 ```
 
 ### 1. `UIService` (门面)
