@@ -1,15 +1,16 @@
 using System;
 using System.Text;
-using CycloneGames.BehaviorTree.Runtime;
 using CycloneGames.BehaviorTree.Runtime.Components;
 using UnityEditor;
 using UnityEditor.Callbacks;
 using UnityEngine;
 using UnityEngine.UIElements;
+
 namespace CycloneGames.BehaviorTree.Editor
 {
     public class BehaviorTreeEditor : EditorWindow
     {
+        private const string DEBUG_FLAG = "[BehaviorTreeEditor]";
         private BehaviorTreeView _behaviorTreeView;
         private BTInspectorView _inspectorView;
         [MenuItem("Window//Behavior Tree Editor")]
@@ -28,7 +29,7 @@ namespace CycloneGames.BehaviorTree.Editor
             }
             return false;
         }
-        
+
         public void CreateGUI()
         {
             VisualElement root = rootVisualElement;
@@ -49,10 +50,11 @@ namespace CycloneGames.BehaviorTree.Editor
             _behaviorTreeView.OnNodeSelectionChanged += OnNodeSelectionChange;
             OnSelectionChange();
         }
-        
+
         private void Save()
         {
             StringBuilder log = new StringBuilder();
+            log.Append(DEBUG_FLAG);
             log.AppendLine("Save Behavior Tree : " + _behaviorTreeView.Tree.name);
             log.AppendLine("Path : " + AssetDatabase.GetAssetPath(_behaviorTreeView.Tree));
             Debug.Log(log.ToString());
@@ -65,7 +67,7 @@ namespace CycloneGames.BehaviorTree.Editor
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
             EditorApplication.update += OnEditorUpdate;
         }
-        
+
         private void OnDisable()
         {
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
@@ -76,20 +78,24 @@ namespace CycloneGames.BehaviorTree.Editor
             switch (modeState)
             {
                 case PlayModeStateChange.EnteredEditMode:
+                    BehaviorTreeView.InvalidateRunnerCache();
                     OnSelectionChange();
                     break;
                 case PlayModeStateChange.EnteredPlayMode:
+                    BehaviorTreeView.InvalidateRunnerCache();
                     OnSelectionChange();
                     break;
                 default:
                     break;
             }
         }
+
         private Runtime.BehaviorTree _lastTree;
-        
+
         /// <summary>
         /// Handles selection changes to update the behavior tree view.
         /// Supports both asset selection and BTRunnerComponent selection in play mode.
+        /// In play mode, also tries to auto-find a BTRunnerComponent using the viewed tree.
         /// </summary>
         private void OnSelectionChange()
         {
@@ -118,19 +124,25 @@ namespace CycloneGames.BehaviorTree.Editor
                         {
                             _lastTree.SetEditorOwner(runner.gameObject);
                         }
-                        Debug.Log($"Selected BT Runner : {Selection.activeGameObject.name}");
+                        // Debug.Log($"Selected BT Runner : {Selection.activeGameObject.name}");
                     }
                 }
             }
 
             if (_behaviorTreeView == null) return;
-            
+
             if (Application.isPlaying)
             {
                 if (_lastTree)
                 {
                     Debug.Log($"Open Tree : " + _lastTree.name);
                     _behaviorTreeView.PopulateView(_lastTree);
+                }
+                else
+                {
+                    // In play mode without a tree selected, try to find any running BTRunner
+                    // that matches the previously viewed tree
+                    TryAutoSelectRunningTree();
                 }
             }
             else
@@ -142,23 +154,50 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
             }
         }
+
+        /// <summary>
+        /// Attempts to auto-select a running tree from active BTRunnerComponents.
+        /// </summary>
+        private void TryAutoSelectRunningTree()
+        {
+            if (!Application.isPlaying || _behaviorTreeView == null) return;
+
+            // If we already have a tree displayed, try to find a runner using it
+            if (_behaviorTreeView.Tree != null)
+            {
+                var runners = BehaviorTreeView.GetCachedRunners();
+                int count = runners.Count;
+                for (int i = 0; i < count; i++)
+                {
+                    var runner = runners[i];
+                    if (runner != null && runner.Tree != null && runner.RuntimeTree != null)
+                    {
+                        if (runner.Tree.name == _behaviorTreeView.Tree.name)
+                        {
+                            _lastTree = runner.Tree;
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         private void OnDestroy()
         {
             EditorApplication.update -= OnEditorUpdate;
-            
+
             if (_behaviorTreeView != null)
             {
                 _behaviorTreeView.OnNodeSelectionChanged -= OnNodeSelectionChange;
                 _behaviorTreeView.ClearView();
                 _behaviorTreeView = null;
             }
-            
+
             if (_inspectorView != null)
             {
                 _inspectorView.Clear();
                 _inspectorView = null;
             }
-            
+
             if (!Application.isPlaying && _lastTree != null)
             {
                 _lastTree.SetEditorOwner(null);
@@ -169,7 +208,7 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             _inspectorView.UpdateSelection(nodeView);
         }
-        
+
         /// <summary>
         /// Updates node states every frame in play mode to capture final states
         /// before BehaviorTree.Stop() resets them.
@@ -181,7 +220,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 _behaviorTreeView.UpdateNodeStates();
             }
         }
-        
+
         private void OnInspectorUpdate()
         {
             if (Application.isPlaying && _behaviorTreeView != null)
