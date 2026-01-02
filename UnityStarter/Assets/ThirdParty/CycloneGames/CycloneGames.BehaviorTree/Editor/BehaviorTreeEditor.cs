@@ -13,7 +13,7 @@ namespace CycloneGames.BehaviorTree.Editor
         private const string DEBUG_FLAG = "[BehaviorTreeEditor]";
         private BehaviorTreeView _behaviorTreeView;
         private BTInspectorView _inspectorView;
-        [MenuItem("Window//Behavior Tree Editor")]
+        [MenuItem("Tools/CycloneGames/Behavior Tree Editor")]
         public static void OpenWindow()
         {
             BehaviorTreeEditor wnd = GetWindow<BehaviorTreeEditor>();
@@ -194,7 +194,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
             if (_inspectorView != null)
             {
-                _inspectorView.Clear();
+                _inspectorView.ClearInspector();
                 _inspectorView = null;
             }
 
