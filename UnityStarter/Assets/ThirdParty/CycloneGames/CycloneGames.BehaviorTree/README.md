@@ -1,17 +1,55 @@
 # CycloneGames.BehaviorTree
 
-A high-performance, ScriptableObject-based behavior tree system for Unity AI. 
+A high-performance, zero-GC behavior tree system for Unity AI with dual-layer architecture.
 
 <p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
 ## Features
 
+- ✅ **Dual-Layer Architecture**: ScriptableObject authoring + Pure C# runtime for 0GC execution
 - ✅ **Component-Based Design**: Use `BTRunnerComponent` for easy setup and lifecycle management
 - ✅ **ScriptableObject Trees**: Visual tree authoring with Unity's built-in tools
 - ✅ **Hierarchical BlackBoard**: Type-safe data sharing between nodes with parent inheritance
 - ✅ **Rich Node Library**: Composite, Decorator, Condition, and Action nodes
 - ✅ **DI/IoC Ready**: Dependency injection support for seamless integration
 - ✅ **Editor Visualization**: Real-time tree visualization during Play mode
+- ✅ **Multi-Platform**: Windows, Mac, Linux, Android, iOS, WebGL, and server-side support
+
+## Architecture
+
+The system uses a **dual-layer architecture** to achieve both ease of use and maximum runtime performance:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                  Editor Time (Authoring)                    │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  ScriptableObject Layer (BTNode, CompositeNode...)   │   │
+│  │  • Visual editor drag-and-drop                       │   │
+│  │  • Serialized to .asset files                        │   │
+│  │  • Supports Undo/Redo                                │   │
+│  └──────────────────────────────────────────────────────┘   │
+│                           ↓ Compile()                        │
+├─────────────────────────────────────────────────────────────┤
+│                     Runtime (Execution)                      │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  Pure C# Layer (RuntimeNode, RuntimeBlackboard...)   │   │
+│  │  • Zero GC allocations                               │   │
+│  │  • No Unity dependency (server-side capable)         │   │
+│  │  • Maximum performance                               │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Why Dual-Layer?
+
+| Aspect | ScriptableObject Layer | Runtime Layer |
+|--------|------------------------|---------------|
+| **Purpose** | Editor authoring, serialization | Game execution |
+| **GC** | Acceptable (editor only) | **Zero allocations** |
+| **Unity Dependency** | Required | Optional |
+| **Performance** | Standard | **Optimized** |
+
+When you call `BTRunnerComponent.Play()`, the system **compiles** the ScriptableObject tree into an optimized pure C# runtime tree. This happens once at startup, then all execution uses the zero-GC runtime nodes.
 
 ## Installation
 
@@ -96,7 +134,7 @@ runner.BlackBoard.SetBool("IsAlive", true);
 The **recommended way** to use behavior trees. This MonoBehaviour component manages the lifecycle of a BehaviorTree ScriptableObject.
 
 **Key Features**:
-- Automatically clones the tree asset per instance (no shared state)
+- Automatically compiles tree to optimized runtime representation
 - Handles Update loop and tree execution
 - Manages BlackBoard data with Inspector support
 - Provides Play/Pause/Stop/Resume controls
@@ -120,6 +158,7 @@ runner.Stop();      // Stop and reset tree
 // Set BlackBoard data
 runner.BTSetData("Key", value);
 runner.BTSendMessage("EventName");
+runner.BTRemoveData("Key");  // Remove data from blackboard
 
 // Access tree/blackboard directly (advanced)
 BehaviorTree tree = runner.Tree;
@@ -128,20 +167,9 @@ BlackBoard bb = runner.BlackBoard;
 
 ### Behavior Tree (ScriptableObject)
 
-The tree asset created in the Project window. This is a **template** that gets cloned by `BT RunnerComponent` for each agent.
+The tree asset created in the Project window. This is a **template** that gets compiled by `BTRunnerComponent` into an optimized runtime tree.
 
 **Important**: While you *can* use `BehaviorTree` directly in code, it's **not recommended** for most use cases. Use `BTRunnerComponent` instead for automatic lifecycle management.
-
-**Direct Usage** (advanced, rarely needed):
-```csharp
-// Only needed for custom runners or special cases
-BehaviorTree clonedTree = treeAsset.CloneTree(gameObject);
-BlackBoard blackBoard = new BlackBoard();
-
-void Update() {
-    clonedTree.BTUpdate(blackBoard);
-}
-```
 
 ### BlackBoard
 
@@ -163,6 +191,12 @@ float speed = blackBoard.GetFloat("Speed", defaultValue: 1f);
 ```csharp
 blackBoard.Set("Target", targetTransform);
 Transform target = blackBoard.Get<Transform>("Target");
+```
+
+**Remove Data**:
+```csharp
+blackBoard.Remove("Key");  // Remove specific key
+blackBoard.Clear();        // Clear all data
 ```
 
 ### Node Types
@@ -194,6 +228,60 @@ Make decisions:
 - Return Success or Failure (never Running)
 - Used for branching logic
 
+## Runtime Core (Advanced)
+
+For users who need to understand the internal architecture or build custom runners.
+
+### RuntimeNode
+
+The base class for all runtime nodes. Designed for **zero-GC execution**.
+
+```csharp
+public abstract class RuntimeNode
+{
+    public RuntimeState State { get; protected set; }
+    public bool IsStarted { get; private set; }
+    public string GUID { get; set; }  // Maps back to BTNode for debugging
+
+    public RuntimeState Run(RuntimeBlackboard blackboard);
+    protected virtual void OnStart(RuntimeBlackboard blackboard);
+    protected abstract RuntimeState OnRun(RuntimeBlackboard blackboard);
+    protected virtual void OnStop(RuntimeBlackboard blackboard);
+    public void Abort(RuntimeBlackboard blackboard);
+}
+```
+
+**Key Design Points**:
+- State machine: `NotEntered → Running → Success/Failure`
+- Lifecycle hooks: `OnStart` / `OnRun` / `OnStop`
+- No allocations during execution
+
+### GUID Purpose
+
+Each node has a GUID that serves two purposes:
+1. **Editor Debugging**: Maps RuntimeNode back to BTNode for state visualization
+2. **Runtime Lookup**: `RuntimeBehaviorTree.GetNodeByGUID()` for programmatic access
+
+### RuntimeBlackboard
+
+Optimized blackboard using **int hash keys** instead of strings:
+
+```csharp
+// Int-key access (maximum performance, 0GC)
+int keyHash = Animator.StringToHash("Health");
+blackboard.SetInt(keyHash, 100);
+int health = blackboard.GetInt(keyHash);
+
+// String-key convenience (slightly slower, still 0GC)
+blackboard.SetInt("Health", 100);
+int health = blackboard.GetInt("Health");
+```
+
+**Why Int Keys?**
+- Dictionary lookup with int keys is faster than string keys
+- No string allocations during runtime
+- `Animator.StringToHash` is cached internally
+
 ## Creating Custom Nodes
 
 ### Action Node Example
@@ -205,14 +293,14 @@ using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using UnityEngine;
 
-[NodeDescriptor("Custom/Move To Target", "Moves agent toward target position")]
+[BTInfo("Custom/Move To Target", "Moves agent toward target position")]
 public class MoveToTargetNode : ActionNode
 {
     [SerializeField] private string targetKey = "TargetPosition";
     [SerializeField] private string speedKey = "Speed";
     [SerializeField] private float arrivalRadius = 0.5f;
 
-    protected override BTState OnUpdate(IBlackBoard blackBoard)
+    protected override BTState OnRun(IBlackBoard blackBoard)
     {
         Vector3 target = blackBoard.GetVector3(targetKey);
         float speed = blackBoard.GetFloat(speedKey, 1f);
@@ -233,43 +321,21 @@ public class MoveToTargetNode : ActionNode
 }
 ```
 
-### Async Action Node Example
-
-```csharp
-using Cysharp.Threading.Tasks;
-using CycloneGames.BehaviorTree.Runtime.Attributes;
-using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
-using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
-
-[NodeDescriptor("Custom/Wait", "Wait for specified duration")]
-public class WaitNode : ActionNode
-{
-    [SerializeField] private float duration = 1f;
-
-    protected override async UniTask<BTState> OnUpdateAsync(IBlackBoard blackBoard)
-    {
-        await UniTask.Delay(System.TimeSpan.FromSeconds(duration), cancellationToken: CancellationToken);
-        return BTState.SUCCESS;
-    }
-}
-```
-
 ### Condition Node Example
 
 ```csharp
 using CycloneGames.BehaviorTree.Runtime.Attributes;
 using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Interfaces;
-using CycloneGames.BehaviorTree.Runtime.Nodes.Conditions;
+using CycloneGames.BehaviorTree.Runtime.Conditions;
 
-[NodeDescriptor("Custom/Check Health", "Check if health is above threshold")]
+[BTInfo("Custom/Check Health", "Check if health is above threshold")]
 public class CheckHealthNode : ConditionNode
 {
     [SerializeField] private string healthKey = "Health";
     [SerializeField] private int threshold = 50;
 
-    protected override bool OnEvaluate(IBlackBoard blackBoard)
+    protected override bool Evaluate(IBlackBoard blackBoard)
     {
         int health = blackBoard.GetInt(healthKey);
         return health >= threshold;
@@ -278,6 +344,15 @@ public class CheckHealthNode : ConditionNode
 ```
 
 ## Performance Optimization
+
+### Zero-GC Guarantees
+
+| Operation | GC Allocation |
+|-----------|---------------|
+| Tree tick (per frame) | **0 bytes** |
+| BlackBoard typed access | **0 bytes** |
+| Node state transitions | **0 bytes** |
+| Tree compilation | One-time only |
 
 ### Best Practices
 
@@ -290,15 +365,8 @@ public class CheckHealthNode : ConditionNode
    int value = (int)blackBoard.Get("Key");
    ```
 
-2. **Clone trees per agent**:
+2. **Cache references in OnAwake/OnStart**:
    ```csharp
-   // Each agent gets its own tree instance
-   BehaviorTree agentTree = treePrefab.CloneTree(gameObject);
-   ```
-
-3. **Avoid allocations in nodes**:
-   ```csharp
-   // Cache references in OnAwake
    private Transform cachedTransform;
    
    protected override void OnAwake()
@@ -307,9 +375,10 @@ public class CheckHealthNode : ConditionNode
    }
    ```
 
-4. **Use async sparingly**:
-   - Prefer synchronous `OnUpdate` for simple logic
-   - Use `OnUpdateAsync` only when actually waiting for async operations
+3. **Avoid allocations in OnRun**:
+   - Don't create new objects
+   - Don't use LINQ
+   - Don't concatenate strings
 
 ## Dependency Injection
 
@@ -337,22 +406,6 @@ public class ServiceDependentNode : ActionNode
 
 ## API Reference
 
-### IBehaviorTree Interface
-
-```csharp
-public interface IBehaviorTree
-{
-    BTState TreeState { get; }
-    GameObject Owner { get; }
-    bool IsCloned { get; }
-    
-    BTState BTUpdate(IBlackBoard blackBoard);
-    void Stop();
-    void Inject(object container);
-    IBehaviorTree Clone(GameObject owner);
-}
-```
-
 ### BTState Enum
 
 ```csharp
@@ -362,6 +415,18 @@ public enum BTState
     FAILURE,    // Node failed
     RUNNING,    // Node is still executing
     NOT_ENTERED // Node hasn't started yet
+}
+```
+
+### RuntimeState Enum (Runtime Layer)
+
+```csharp
+public enum RuntimeState
+{
+    Success,
+    Failure,
+    Running,
+    NotEntered
 }
 ```
 
