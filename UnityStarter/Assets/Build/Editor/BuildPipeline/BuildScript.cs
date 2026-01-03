@@ -38,92 +38,113 @@ namespace Build.Pipeline.Editor
         [MenuItem("Build/Print Debug Info", priority = 10)]
         public static void PrintDebugInfo()
         {
-            Debug.Log($"{DEBUG_FLAG} ========== Build Configuration Debug Info ==========");
+            const string Separator = "-------------------------------------------------------------------------";
 
             // Load BuildData
             buildData = TryGetBuildData();
             if (buildData == null)
             {
                 Debug.LogError($"{DEBUG_FLAG} BuildData not found. Please create a BuildData asset.");
-                Debug.Log($"{DEBUG_FLAG} =================================================");
                 return;
             }
 
+            var sb = new System.Text.StringBuilder(2048);
+            var warnings = new System.Collections.Generic.List<string>();
+
+            sb.AppendLine();
+            sb.AppendLine("=======================================================");
+            sb.AppendLine("                             Build Configuration Debug Info");
+            sb.AppendLine("=======================================================");
+
             // Basic Build Info
-            Debug.Log($"{DEBUG_FLAG} --- Basic Build Configuration ---");
-            Debug.Log($"{DEBUG_FLAG} Application Version: {buildData.ApplicationVersion}");
-            Debug.Log($"{DEBUG_FLAG} Output Base Path: {buildData.OutputBasePath}");
-            Debug.Log($"{DEBUG_FLAG} Current Active Build Target: {EditorUserBuildSettings.activeBuildTarget}");
+            sb.AppendLine();
+            sb.AppendLine("[Basic Build Configuration]");
+            sb.AppendLine(Separator);
+            sb.AppendLine($"  Application Version\t\t{buildData.ApplicationVersion}");
+            sb.AppendLine($"  Output Base Path\t\t{buildData.OutputBasePath}");
+            sb.AppendLine($"  Active Build Target\t\t{EditorUserBuildSettings.activeBuildTarget}");
 
             // Scene Configuration
             var sceneList = GetBuildSceneList();
+            sb.AppendLine();
+            sb.AppendLine("[Build Scenes]");
+            sb.AppendLine(Separator);
             if (sceneList == null || sceneList.Length == 0)
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Invalid scene list, please check BuildData configuration.");
+                sb.AppendLine("  [!] No scenes configured");
+                warnings.Add("Invalid scene list, please check BuildData configuration.");
             }
             else
             {
-                Debug.Log($"{DEBUG_FLAG} Build Scenes ({sceneList.Length}):");
                 for (int i = 0; i < sceneList.Length; i++)
                 {
-                    Debug.Log($"{DEBUG_FLAG}   [{i + 1}] {sceneList[i]}");
+                    string sceneName = System.IO.Path.GetFileNameWithoutExtension(sceneList[i]);
+                    sb.AppendLine($"  [{i + 1}] {sceneName}");
                 }
             }
 
             // Buildalon Configuration
-            Debug.Log($"{DEBUG_FLAG} --- Buildalon Configuration ---");
-            Debug.Log($"{DEBUG_FLAG} Use Buildalon: {(buildData.UseBuildalon ? "✓ Enabled" : "✗ Disabled")}");
+            sb.AppendLine();
+            sb.AppendLine("[Buildalon Configuration]");
+            sb.AppendLine(Separator);
+            sb.AppendLine($"  Use Buildalon\t\t\t{(buildData.UseBuildalon ? "[Y] Enabled" : "[N] Disabled")}");
 
             // HybridCLR Configuration
-            Debug.Log($"{DEBUG_FLAG} --- HybridCLR Configuration ---");
             bool hybridCLREnabled = buildData.UseHybridCLR;
-            Debug.Log($"{DEBUG_FLAG} Use HybridCLR: {(hybridCLREnabled ? "✓ Enabled" : "✗ Disabled")}");
+            sb.AppendLine();
+            sb.AppendLine("[HybridCLR Configuration]");
+            sb.AppendLine(Separator);
+            sb.AppendLine($"  Use HybridCLR\t\t{(hybridCLREnabled ? "[Y] Enabled" : "[N] Disabled")}");
 
             if (hybridCLREnabled)
             {
                 HybridCLRBuildConfig hybridCLRConfig = BuildConfigHelper.GetHybridCLRConfig();
                 if (hybridCLRConfig != null)
                 {
-                    Debug.Log($"{DEBUG_FLAG}   HybridCLR Config Asset: Found");
-                    Debug.Log($"{DEBUG_FLAG}   Obfuz in HybridCLR: {(hybridCLRConfig.enableObfuz ? "✓ Enabled" : "✗ Disabled")}");
+                    sb.AppendLine($"  Config Asset\t\t\t[Y] Found");
+                    sb.AppendLine($"  Obfuz in HybridCLR\t\t{(hybridCLRConfig.enableObfuz ? "[Y] Enabled" : "[N] Disabled")}");
 
                     string aotDllOutputDir = hybridCLRConfig.GetAOTDllOutputDirectoryPath();
                     if (!string.IsNullOrEmpty(aotDllOutputDir))
                     {
-                        Debug.Log($"{DEBUG_FLAG}   AOT DLL Output Directory: {aotDllOutputDir}");
+                        sb.AppendLine($"  AOT DLL Output Dir\t\t{aotDllOutputDir}");
                     }
                     else
                     {
-                        Debug.LogWarning($"{DEBUG_FLAG}   AOT DLL Output Directory: ⚠ Not configured (required for HybridCLR)");
+                        sb.AppendLine($"  AOT DLL Output Dir\t\t[!] Not configured");
+                        warnings.Add("AOT DLL Output Directory not configured (required for HybridCLR)");
                     }
                 }
                 else
                 {
-                    Debug.LogWarning($"{DEBUG_FLAG}   HybridCLR Config Asset: ⚠ Not found (please create HybridCLRBuildConfig asset)");
+                    sb.AppendLine($"  Config Asset\t\t\t[!] Not found");
+                    warnings.Add("HybridCLR Config Asset not found (please create HybridCLRBuildConfig asset)");
                 }
             }
 
             // Obfuz Configuration
-            Debug.Log($"{DEBUG_FLAG} --- Obfuz Configuration ---");
             bool obfuzEnabledInBuildData = buildData.UseObfuz;
-            Debug.Log($"{DEBUG_FLAG} Use Obfuz (BuildData): {(obfuzEnabledInBuildData ? "✓ Enabled" : "✗ Disabled")}");
-
             bool baseObfuzAvailable = ObfuzIntegrator.IsBaseObfuzAvailable();
             bool hybridCLRObfuzAvailable = ObfuzIntegrator.IsHybridCLRObfuzAvailable();
-            Debug.Log($"{DEBUG_FLAG} Base Obfuz Package: {(baseObfuzAvailable ? "✓ Available" : "✗ Not Available")}");
-            Debug.Log($"{DEBUG_FLAG} Obfuz4HybridCLR Package: {(hybridCLRObfuzAvailable ? "✓ Available" : "✗ Not Available")}");
+
+            sb.AppendLine();
+            sb.AppendLine("[Obfuz Configuration]");
+            sb.AppendLine(Separator);
+            sb.AppendLine($"  Use Obfuz (BuildData)\t\t{(obfuzEnabledInBuildData ? "[Y] Enabled" : "[N] Disabled")}");
+            sb.AppendLine($"  Base Obfuz Package\t\t{(baseObfuzAvailable ? "[Y] Available" : "[N] Not Available")}");
+            sb.AppendLine($"  Obfuz4HybridCLR Pkg\t\t{(hybridCLRObfuzAvailable ? "[Y] Available" : "[N] Not Available")}");
 
             if (obfuzEnabledInBuildData && !baseObfuzAvailable)
             {
-                Debug.LogWarning($"{DEBUG_FLAG}   ⚠ Obfuz is enabled but base Obfuz package is not available!");
+                warnings.Add("Obfuz is enabled but base Obfuz package is not available!");
             }
 
             if (hybridCLREnabled && obfuzEnabledInBuildData && !hybridCLRObfuzAvailable)
             {
-                Debug.LogWarning($"{DEBUG_FLAG}   ⚠ HybridCLR + Obfuz enabled but Obfuz4HybridCLR package is not available!");
+                warnings.Add("HybridCLR + Obfuz enabled but Obfuz4HybridCLR package is not available!");
             }
 
-            // Determine effective Obfuz state (BuildData.UseObfuz takes priority over HybridCLRBuildConfig.enableObfuz)
+            // Determine effective Obfuz state
             bool effectiveObfuzEnabled = obfuzEnabledInBuildData;
             if (!effectiveObfuzEnabled && hybridCLREnabled)
             {
@@ -133,80 +154,99 @@ namespace Build.Pipeline.Editor
                     effectiveObfuzEnabled = hybridCLRConfig.enableObfuz;
                 }
             }
-            Debug.Log($"{DEBUG_FLAG} Effective Obfuz State: {(effectiveObfuzEnabled ? "✓ Enabled" : "✗ Disabled")} (BuildData.UseObfuz takes priority)");
+            sb.AppendLine($"  Effective Obfuz State\t\t{(effectiveObfuzEnabled ? "[Y] Enabled" : "[N] Disabled")}");
 
             // Asset Management Configuration
-            Debug.Log($"{DEBUG_FLAG} --- Asset Management Configuration ---");
             AssetManagementType assetManagementType = buildData.AssetManagementType;
-            Debug.Log($"{DEBUG_FLAG} Asset Management Type: {assetManagementType}");
+            sb.AppendLine();
+            sb.AppendLine("[Asset Management Configuration]");
+            sb.AppendLine(Separator);
+            sb.AppendLine($"  Asset Management Type\t{assetManagementType}");
 
             if (assetManagementType == AssetManagementType.YooAsset)
             {
-                Debug.Log($"{DEBUG_FLAG}   ✓ YooAsset: Enabled");
                 YooAssetBuildConfig yooAssetConfig = BuildConfigHelper.GetYooAssetConfig();
-                if (yooAssetConfig != null)
+                sb.AppendLine($"  YooAsset Config\t\t{(yooAssetConfig != null ? "[Y] Found" : "[!] Not found")}");
+                if (yooAssetConfig == null)
                 {
-                    Debug.Log($"{DEBUG_FLAG}   YooAsset Config Asset: Found");
-                }
-                else
-                {
-                    Debug.LogWarning($"{DEBUG_FLAG}   YooAsset Config Asset: ⚠ Not found (please create YooAssetBuildConfig asset)");
+                    warnings.Add("YooAsset Config Asset not found (please create YooAssetBuildConfig asset)");
                 }
             }
             else if (assetManagementType == AssetManagementType.Addressables)
             {
-                Debug.Log($"{DEBUG_FLAG}   ✓ Addressables: Enabled");
                 AddressablesBuildConfig addressablesConfig = BuildConfigHelper.GetAddressablesConfig();
-                if (addressablesConfig != null)
+                sb.AppendLine($"  Addressables Config\t\t{(addressablesConfig != null ? "[Y] Found" : "[!] Not found")}");
+                if (addressablesConfig == null)
                 {
-                    Debug.Log($"{DEBUG_FLAG}   Addressables Config Asset: Found");
-                }
-                else
-                {
-                    Debug.LogWarning($"{DEBUG_FLAG}   Addressables Config Asset: ⚠ Not found (please create AddressablesBuildConfig asset)");
+                    warnings.Add("Addressables Config Asset not found (please create AddressablesBuildConfig asset)");
                 }
             }
             else
             {
-                Debug.Log($"{DEBUG_FLAG}   ✗ None: No asset management system selected");
+                sb.AppendLine($"  Status\t\t\t\t[N] No asset management");
             }
 
             // Version Control Configuration
-            Debug.Log($"{DEBUG_FLAG} --- Version Control Configuration ---");
-            Debug.Log($"{DEBUG_FLAG} Default Version Control Type: {DefaultVersionControlType}");
+            string commitHash = INVALID_FLAG;
+            string commitCount = INVALID_FLAG;
+            string fullBuildVersion = INVALID_FLAG;
+            string vcStatus = "[Y] Available";
 
             try
             {
                 InitializeVersionControl(DefaultVersionControlType);
                 if (VersionControlProvider != null)
                 {
-                    string commitHash = VersionControlProvider.GetCommitHash();
-                    string commitCount = VersionControlProvider.GetCommitCount();
-                    Debug.Log($"{DEBUG_FLAG}   Current Commit Hash: {commitHash}");
-                    Debug.Log($"{DEBUG_FLAG}   Commit Count: {commitCount}");
-                    Debug.Log($"{DEBUG_FLAG}   Full Build Version: {buildData.ApplicationVersion}.{commitCount}");
+                    commitHash = VersionControlProvider.GetCommitHash();
+                    commitCount = VersionControlProvider.GetCommitCount();
+                    fullBuildVersion = $"{buildData.ApplicationVersion}.{commitCount}";
                 }
                 else
                 {
-                    Debug.LogWarning($"{DEBUG_FLAG}   Version Control Provider: ⚠ Not available");
+                    vcStatus = "[!] Not available";
+                    warnings.Add("Version Control Provider not available");
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"{DEBUG_FLAG}   Failed to get version control info: {ex.Message}");
+                vcStatus = "[!] Error";
+                warnings.Add($"Failed to get version control info: {ex.Message}");
             }
 
+            sb.AppendLine();
+            sb.AppendLine("[Version Control Configuration]");
+            sb.AppendLine(Separator);
+            sb.AppendLine($"  Version Control Type\t\t{DefaultVersionControlType}");
+            sb.AppendLine($"  VC Status\t\t\t{vcStatus}");
+            sb.AppendLine($"  Current Commit Hash\t\t{commitHash}");
+            sb.AppendLine($"  Commit Count\t\t\t{commitCount}");
+            sb.AppendLine($"  Full Build Version\t\t{fullBuildVersion}");
+
             // Build Target Configuration
-            Debug.Log($"{DEBUG_FLAG} --- Build Target Configuration ---");
             BuildTarget currentTarget = EditorUserBuildSettings.activeBuildTarget;
             NamedBuildTarget namedTarget = GetNamedBuildTargetFromBuildTarget(currentTarget);
             ScriptingImplementation scriptingBackend = PlayerSettings.GetScriptingBackend(namedTarget);
-            Debug.Log($"{DEBUG_FLAG} Current Build Target: {currentTarget}");
-            Debug.Log($"{DEBUG_FLAG} Scripting Backend: {scriptingBackend}");
-            Debug.Log($"{DEBUG_FLAG} API Compatibility Level: {PlayerSettings.GetApiCompatibilityLevel(namedTarget)}");
 
-            Debug.Log($"{DEBUG_FLAG} =================================================");
+            sb.AppendLine();
+            sb.AppendLine("[Build Target Configuration]");
+            sb.AppendLine(Separator);
+            sb.AppendLine($"  Current Build Target\t\t{currentTarget}");
+            sb.AppendLine($"  Scripting Backend\t\t{scriptingBackend}");
+            sb.AppendLine($"  API Compatibility\t\t{PlayerSettings.GetApiCompatibilityLevel(namedTarget)}");
+
+            sb.AppendLine();
+            sb.AppendLine("=======================================================");
+
+            // Output single log message
+            Debug.Log($"{DEBUG_FLAG}{sb}");
+
+            // Output warnings separately for visibility
+            foreach (var warning in warnings)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} [!] {warning}");
+            }
         }
+
 
         /// <summary>
         /// Gets NamedBuildTarget from BuildTarget.
