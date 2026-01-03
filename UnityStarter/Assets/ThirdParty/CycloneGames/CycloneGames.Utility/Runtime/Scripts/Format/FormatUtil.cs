@@ -6,51 +6,41 @@ namespace CycloneGames.Utility.Runtime
     {
         private static readonly string[] SizeSuffixes = { "B", "KB", "MB", "GB", "TB" };
 
+        // Pre-cached format strings to avoid interpolation allocation
+        private static readonly string[] DecimalFormats = { "F0", "F1", "F2", "F3", "F4", "F5" };
+
         /// <summary>
-        /// Formats byte size into human-readable string with zero heap allocations.
+        /// Formats byte size into human-readable string.
+        /// Note: Returns a new string allocation. Use AppendFormattedBytes for 0GC StringBuilder operations.
         /// </summary>
-        /// <param name="bytes">Size in bytes</param>
-        /// <param name="decimalPlaces">Number of decimal places (0-5)</param>
-        /// <returns>Formatted string without heap allocations</returns>
         public static string FormatBytes(long bytes, int decimalPlaces = 2)
         {
-            // ... (implementation delegated to Span-based logic if needed, but keeping original for now)
-            // Reusing the logic in a way that can be shared with StringBuilder would be better,
-            // but for now, we just add the StringBuilder overload.
-            
-            // Note: The original implementation allocates 'new string(...)'. 
-            // To be truly 0GC, one should use the StringBuilder overload below.
-            
             if (bytes <= 0) return "0 B";
 
-            // Clamp decimal places between 0 and 5 
             decimalPlaces = Math.Clamp(decimalPlaces, 0, 5);
 
             int suffixIndex = 0;
             double size = bytes;
 
-            // Calculate appropriate size unit 
             while (size >= 1024 && suffixIndex < SizeSuffixes.Length - 1)
             {
                 size /= 1024;
                 suffixIndex++;
             }
 
-            // Format number with stack-allocated buffer 
             Span<char> buffer = stackalloc char[32];
             int charsWritten = 0;
 
-            // Format numeric portion 
             if (decimalPlaces > 0)
             {
-                size.TryFormat(buffer, out charsWritten, $"F{decimalPlaces}");
+                size.TryFormat(buffer, out charsWritten, DecimalFormats[decimalPlaces]);
             }
             else
             {
                 ((long)size).TryFormat(buffer, out charsWritten);
             }
 
-            // Trim trailing zeros after decimal point 
+            // Trim trailing zeros after decimal point
             if (decimalPlaces > 0)
             {
                 int decimalIndex = buffer.Slice(0, charsWritten).IndexOf('.');
@@ -64,7 +54,6 @@ namespace CycloneGames.Utility.Runtime
                 }
             }
 
-            // Append unit suffix 
             buffer[charsWritten++] = ' ';
             SizeSuffixes[suffixIndex].AsSpan().CopyTo(buffer.Slice(charsWritten));
             charsWritten += SizeSuffixes[suffixIndex].Length;
@@ -94,15 +83,12 @@ namespace CycloneGames.Utility.Runtime
                 suffixIndex++;
             }
 
-            // We can't easily use TryFormat directly into StringBuilder without unsafe or .NET 8+ features (Append(Span)).
-            // Assuming Unity's .NET Standard 2.1, we can use a stack buffer and then append chars.
-            
             Span<char> buffer = stackalloc char[32];
             int charsWritten = 0;
 
             if (decimalPlaces > 0)
             {
-                size.TryFormat(buffer, out charsWritten, $"F{decimalPlaces}");
+                size.TryFormat(buffer, out charsWritten, DecimalFormats[decimalPlaces]);
             }
             else
             {
@@ -126,7 +112,7 @@ namespace CycloneGames.Utility.Runtime
             {
                 sb.Append(buffer[i]);
             }
-            
+
             sb.Append(' ');
             sb.Append(SizeSuffixes[suffixIndex]);
         }
