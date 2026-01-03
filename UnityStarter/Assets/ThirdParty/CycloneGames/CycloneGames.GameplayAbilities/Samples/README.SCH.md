@@ -33,30 +33,35 @@ Samples/
 
 ### 🟢 入门级
 
-| 脚本 | 说明 |
-|------|------|
-| `Character.cs` | 基础角色设置，ASC 初始化 |
-| `CharacterAttributeSet.cs` | 定义生命、法力、攻击、防御属性 |
-| `GASSampleTags.cs` | 使用常量集中定义 GameplayTag |
-| `AbilitySystemComponentHolder.cs` | ASC 的 MonoBehaviour 包装器 |
+| 脚本                              | 说明                           |
+| --------------------------------- | ------------------------------ |
+| `Character.cs`                    | 基础角色设置，ASC 初始化       |
+| `CharacterAttributeSet.cs`        | 定义生命、法力、攻击、防御属性 |
+| `GASSampleTags.cs`                | 使用常量集中定义 GameplayTag   |
+| `AbilitySystemComponentHolder.cs` | ASC 的 MonoBehaviour 包装器    |
+| `GASPoolInitializer.cs`           | 对象池配置与预热组件           |
 
 ### 🟡 中级
 
-| 脚本 | 说明 |
-|------|------|
-| `GA_Fireball_SO.cs` | 完整技能：消耗、冷却、伤害、持续伤害 |
-| `GA_Purify_SO.cs` | 通过 Tag 查询移除负面效果 |
-| `SampleCombatManager.cs` | 输入处理、UI 更新、按 Tag 激活技能 |
-| `GC_Fireball_Impact.cs` | 用于冲击 VFX/SFX 的 GameplayCue |
+| 脚本                     | 说明                                 |
+| ------------------------ | ------------------------------------ |
+| `GA_Fireball_SO.cs`      | 完整技能：消耗、冷却、伤害、持续伤害 |
+| `GA_Purify_SO.cs`        | 通过 Tag 查询移除负面效果            |
+| `GA_ArmorStack_SO.cs`    | 可堆叠护甲 Buff 演示                 |
+| `SampleCombatManager.cs` | 输入处理、UI 更新、按 Tag 激活技能   |
+| `GC_Fireball_Impact.cs`  | 用于冲击 VFX/SFX 的 GameplayCue      |
 
 ### 🔴 高级
 
-| 脚本 | 说明 |
-|------|------|
-| `GA_ChainLightning_SO.cs` | 多目标技能，伤害递减 |
-| `GA_Meteor_SO.cs` | 带地面选择的瞄准系统 |
-| `ExecCalc_Burn.cs` | DoT 的自定义执行计算 |
-| `GameplayAbilityTargetActor_GroundSelect.cs` | 交互式瞄准 Actor |
+| 脚本                                         | 说明                                      |
+| -------------------------------------------- | ----------------------------------------- |
+| `GA_ChainLightning_SO.cs`                    | 多目标技能，伤害递减                      |
+| `GA_Meteor_SO.cs`                            | 带地面选择的瞄准系统                      |
+| `GA_Berserk_SO.cs`                           | GrantedAbility 演示（狂暴时授予处决技能） |
+| `GA_Execute_SO.cs`                           | 被 Buff 临时授予的技能                    |
+| `GA_ShieldOfLight_SO.cs`                     | OngoingTagRequirements 条件激活效果       |
+| `ExecCalc_Burn.cs`                           | DoT 的自定义执行计算                      |
+| `GameplayAbilityTargetActor_GroundSelect.cs` | 交互式瞄准 Actor                          |
 
 ---
 
@@ -72,6 +77,12 @@ Tag 是 GAS 的通用语言。本示例使用了良好的层级组织：
 // 状态
 "State.Dead"
 "State.Burning"
+"State.Berserk"
+
+// Buff
+"Buff.ArmorStack"
+"Buff.Berserk"
+"Buff.ShieldOfLight"
 
 // 负面效果
 "Debuff.Burn"
@@ -82,6 +93,8 @@ Tag 是 GAS 的通用语言。本示例使用了良好的层级组织：
 
 // 技能
 "Ability.Fireball"
+"Ability.ArmorStack"
+"Ability.Berserk"
 
 // GameplayCue
 "GameplayCue.Fireball.Impact"
@@ -94,19 +107,34 @@ Tag 是 GAS 的通用语言。本示例使用了良好的层级组织：
 ## 🎯 学习路径
 
 ### 路径 1：理解 GameplayEffect
+
 1. 查看 `GE_BaseAttributes_Hero.asset`（初始属性）
 2. 查看 `Fireball/GE_Fireball_Damage.asset`（即时伤害）
 3. 查看 `DoT/GE_Burn_DoT.asset`（周期性伤害）
 
 ### 路径 2：构建 GameplayAbility
+
 1. 阅读 `GA_Fireball_SO.cs`（简单技能）
 2. 阅读 `GA_Purify_SO.cs`（效果移除）
 3. 阅读 `GA_ChainLightning_SO.cs`（复杂瞄准）
 
 ### 路径 3：角色设置
+
 1. 阅读 `Character.cs`（ASC 初始化）
 2. 阅读 `CharacterAttributeSet.cs`（属性定义）
 3. 阅读 `SampleCombatManager.cs`（技能激活）
+
+### 路径 4：高级机制
+
+1. 阅读 `GA_ArmorStack_SO.cs`（效果堆叠）
+2. 阅读 `GA_Berserk_SO.cs` + `GA_Execute_SO.cs`（授予技能）
+3. 阅读 `GA_ShieldOfLight_SO.cs`（通过 OngoingTagRequirements 实现条件效果）
+
+### 路径 5：性能优化
+
+1. 阅读 `GASPoolInitializer.cs`（配置池化层级）
+2. 使用 `GASPoolUtility.ConfigureXXX()` 进行初始化
+3. 在加载界面调用 `WarmAllPools()` 预热
 
 ---
 
@@ -117,3 +145,7 @@ Tag 是 GAS 的通用语言。本示例使用了良好的层级组织：
 - **正确的对象池**：`CreatePoolableInstance()` 模式
 - **伤害减免**：`PreProcessInstantEffect()` 重写
 - **升级系统**：使用 `PostGameplayEffectExecute()` 追踪经验值
+- **效果堆叠**：`EGameplayEffectStackingType.AggregateByTarget`
+- **授予技能**：通过 GameplayEffect 临时授予能力
+- **条件效果**：`OngoingTagRequirements` 实现状态相关 Buff
+- **池预热**：`GASPoolUtility.WarmAllPools()` 实现零 GC 运行时

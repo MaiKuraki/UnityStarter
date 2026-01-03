@@ -52,7 +52,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Defines how this effect interacts with other instances of the same effect on a target, including stacking rules and limits.
         /// </summary>
         public GameplayEffectStacking Stacking { get; }
-        
+
         /// <summary>
         /// A list of abilities to grant to the target for the duration of this effect.
         /// Only applicable to <c>HasDuration</c> and <c>Infinite</c> effects.
@@ -64,7 +64,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Cues are responsible for non-gameplay visuals and sounds (VFX, SFX).
         /// </summary>
         public GameplayTagContainer GameplayCues { get; }
-        
+
         /// <summary>
         /// Tags that describe the effect itself. These are NOT granted to the target.
         /// They serve as metadata for identifying the effect, e.g., for removal by other systems.
@@ -131,7 +131,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             OngoingTagRequirements = ongoingTagRequirements;
             RemoveGameplayEffectsWithTags = removeGameplayEffectsWithTags ?? new GameplayTagContainer();
             GameplayCues = gameplayCues ?? new GameplayTagContainer();
-            
+
             if (DurationPolicy == EDurationPolicy.HasDuration && duration <= 0 && duration != GameplayEffectConstants.INFINITE_DURATION)
             {
                 GASLog.Warning($"GameplayEffect '{name}' has 'HasDuration' policy but an invalid duration of {duration}.");
