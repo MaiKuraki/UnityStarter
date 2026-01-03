@@ -12,15 +12,15 @@ namespace CycloneGames.Utility.Runtime
         public enum Modes { Instant, MovingAverage, InstantAndMovingAverage }
         public enum ScreenPosition
         {
-            TopLeft,    // Top left corner
-            TopCenter,  // Top center
-            TopRight,   // Top right corner
-            MiddleLeft, // Middle left
-            MiddleRight, // Middle right
-            BottomLeft, // Bottom left corner
-            BottomCenter, // Bottom center
-            BottomRight, // Bottom right corner
-            Custom       // Custom position
+            TopLeft,        // Top left corner
+            TopCenter,      // Top center
+            TopRight,       // Top right corner
+            MiddleLeft,     // Middle left
+            MiddleRight,    // Middle right
+            BottomLeft,     // Bottom left corner
+            BottomCenter,   // Bottom center
+            BottomRight,    // Bottom right corner
+            Custom          // Custom position
         }
 
         // Struct to define FPS thresholds and corresponding colors
@@ -87,7 +87,8 @@ namespace CycloneGames.Utility.Runtime
         private int _currentFPS;
         private int _totalFrames = 0; // For calculating the cumulative average FPS
         private int _averageFPS;      // Cumulative average FPS
-        private readonly StringBuilder _displayedTextSB = new StringBuilder(16); // Initial capacity for "XXX / XXX"
+        private readonly StringBuilder _displayedTextSB = new StringBuilder(16);
+        private string _cachedDisplayText = string.Empty; // Cache to avoid OnGUI allocation when unchanged
         private Vector2 _labelPosition;
         private GUIStyle _style = new GUIStyle();
         private GUIContent _content = new GUIContent();
@@ -277,7 +278,12 @@ namespace CycloneGames.Utility.Runtime
             // This check can be more sophisticated if needed (e.g., cache Screen.width/height and only update on change)
             UpdateFontDetails();
 
-            _content.text = _displayedTextSB.ToString(); // This allocates a string, but only when text changes
+            // Only allocate new string if content changed
+            if (_displayedTextSB.Length != _cachedDisplayText.Length || _displayedTextSB.ToString() != _cachedDisplayText)
+            {
+                _cachedDisplayText = _displayedTextSB.ToString();
+                _content.text = _cachedDisplayText;
+            }
             Vector2 labelSize = _style.CalcSize(_content);
 
             _labelPosition = GetLabelPosition(labelSize);
@@ -312,8 +318,8 @@ namespace CycloneGames.Utility.Runtime
         // Calculates the screen position for the FPS counter label
         private Vector2 GetLabelPosition(Vector2 labelSize)
         {
-            // Start with the calculated adaptive safe area.
-            Rect safeArea = GetAdaptiveSafeArea();
+            // Use safe area if enabled, otherwise use full screen rect
+            Rect safeArea = AdjustForSafeArea ? GetAdaptiveSafeArea() : new Rect(0, 0, Screen.width, Screen.height);
 
             float xPos = 0, yPos = 0;
 
@@ -388,7 +394,7 @@ namespace CycloneGames.Utility.Runtime
                 bottomInset = Mathf.Max(bottomInset, topInset);
             }
             #endregion
-            
+
             if (enforceHorizontalSymmetry)
             {
                 float maxHorizontal = Mathf.Max(leftInset, rightInset);
