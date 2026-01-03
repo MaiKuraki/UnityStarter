@@ -1,60 +1,83 @@
 #if USING_FPS_COUNTER
-// if you are using the CycloneGames.Utility.Runtime.FPSCounter in your project, remove the #if USING_FPS_COUNTER to enable the FPSCounter manager.
-// You can use this script into your own debug tools, such as 'Unity Debug Sheet' or 'SRDebugger' or any other debug tool.
-
 using System;
 using System.Reflection;
 
+/// <summary>
+/// Utility class for toggling FPSCounter visibility via reflection.
+/// Enable by removing #if USING_FPS_COUNTER directive.
+/// </summary>
 public static class FPSCounterManager
 {
+    private static bool _isFPSVisible = false;
+    
+    private static Type _fpsCounterType;
+    private static FieldInfo _isVisibleField;
+    private static bool _reflectionInitialized;
+    private static bool _reflectionFailed;
+
     public static void ToggleFPSCounter()
     {
-        IsFPSVisible = !IsFPSVisible;
-        SetFPSVisibility(IsFPSVisible);
+        _isFPSVisible = !_isFPSVisible;
+        SetFPSVisibility(_isFPSVisible);
     }
-    
-    private static bool IsFPSVisible = false;
+
     private static void SetFPSVisibility(bool isVisible)
     {
+        if (_reflectionFailed) return;
+
         try
         {
-            Type fpsType = Type.GetType("CycloneGames.Utility.Runtime.FPSCounter, Assembly-CSharp");
-
-            if (fpsType == null)
+            if (!_reflectionInitialized)
             {
-                fpsType = Type.GetType("CycloneGames.Utility.Runtime.FPSCounter, CycloneGames.Utility.Runtime");
-
-                if (fpsType == null)
-                {
-                    UnityEngine.Debug.LogError("FPSCounter type not found");
-                    return;
-                }
+                InitializeReflectionCache();
+                if (_reflectionFailed) return;
             }
-            UnityEngine.Object[] fpsCounters = UnityEngine.Object.FindObjectsByType(fpsType, UnityEngine.FindObjectsSortMode.None);
+
+            var fpsCounters = UnityEngine.Object.FindObjectsByType(_fpsCounterType, UnityEngine.FindObjectsSortMode.None);
 
             if (fpsCounters.Length == 0)
             {
-                UnityEngine.Debug.LogWarning("No FPSCounter instances found");
+                UnityEngine.Debug.LogWarning("[FPSCounterManager] No FPSCounter instances found");
                 return;
             }
-            FieldInfo field = fpsType.GetField("IsVisible",
-                BindingFlags.Public | BindingFlags.Instance);
 
-            if (field == null)
-            {
-                UnityEngine.Debug.LogError("IsVisible field not found");
-                return;
-            }
             foreach (UnityEngine.Object counter in fpsCounters)
             {
-                field.SetValue(counter, isVisible);
+                _isVisibleField.SetValue(counter, isVisible);
             }
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
-            UnityEngine.Debug.LogError($"Reflection failed: {ex}");
+            UnityEngine.Debug.LogError($"[FPSCounterManager] Error setting visibility: {ex.Message}");
         }
     }
-}
 
+    private static void InitializeReflectionCache()
+    {
+        _fpsCounterType = Type.GetType("CycloneGames.Utility.Runtime.FPSCounter, CycloneGames.Utility.Runtime");
+        
+        if (_fpsCounterType == null)
+        {
+            _fpsCounterType = Type.GetType("CycloneGames.Utility.Runtime.FPSCounter, Assembly-CSharp");
+        }
+
+        if (_fpsCounterType == null)
+        {
+            UnityEngine.Debug.LogError("[FPSCounterManager] FPSCounter type not found");
+            _reflectionFailed = true;
+            return;
+        }
+
+        _isVisibleField = _fpsCounterType.GetField("IsVisible", BindingFlags.Public | BindingFlags.Instance);
+
+        if (_isVisibleField == null)
+        {
+            UnityEngine.Debug.LogError("[FPSCounterManager] IsVisible field not found");
+            _reflectionFailed = true;
+            return;
+        }
+
+        _reflectionInitialized = true;
+    }
+}
 #endif
