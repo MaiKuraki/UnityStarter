@@ -8,7 +8,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     public partial class AbilitySystemComponent
     {
         #region Cooldown Query API
-        
+
         /// <summary>
         /// Gets the remaining cooldown time for a specific ability.
         /// Returns 0 if the ability is not on cooldown.
@@ -29,7 +29,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             return maxRemaining;
         }
-        
+
         /// <summary>
         /// Gets detailed cooldown information for an ability.
         /// </summary>
@@ -41,7 +41,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             timeRemaining = 0f;
             totalDuration = 0f;
-            
+
             if (ability?.CooldownEffectDefinition?.GrantedTags == null || ability.CooldownEffectDefinition.GrantedTags.IsEmpty)
                 return false;
 
@@ -58,14 +58,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             return timeRemaining > 0f;
         }
-        
+
         /// <summary>
         /// Gets the remaining time of the cooldown effect that grants the specified tag.
         /// </summary>
         public float GetCooldownTimeRemainingByTag(GameplayTag cooldownTag)
         {
             if (cooldownTag.IsNone) return 0f;
-            
+
             foreach (var effect in activeEffects)
             {
                 if (effect.Spec.Def.GrantedTags.HasTag(cooldownTag))
@@ -73,7 +73,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             return 0f;
         }
-        
+
         /// <summary>
         /// Checks if the owner currently has a cooldown tag present.
         /// </summary>
@@ -81,7 +81,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             return !cooldownTag.IsNone && CombinedTags.HasTag(cooldownTag);
         }
-        
+
         /// <summary>
         /// Checks if an ability is currently on cooldown.
         /// </summary>
@@ -91,7 +91,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return false;
             return CombinedTags.HasAny(ability.CooldownEffectDefinition.GrantedTags);
         }
-        
+
         #endregion
     }
 }
