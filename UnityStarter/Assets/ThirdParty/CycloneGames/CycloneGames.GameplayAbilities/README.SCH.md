@@ -1974,17 +1974,20 @@ poolManager.Release(vfx); // 返回池
 
 ### 使用 GASPoolUtility 进行池管理
 
-系统包含一个集中式池管理工具类，带有平台自适应默认值：
+系统包含一个集中式池管理工具类，提供可扩展的分级预设：
 
 ```csharp
-// 针对不同场景配置池
-GASPoolUtility.ConfigureForHighPerformance(); // 大型战斗、弹幕游戏
-GASPoolUtility.ConfigureForBalanced();        // 标准游戏玩法
-GASPoolUtility.ConfigureForLowEnd();          // 移动端、WebGL
+// 根据不同的游戏规模配置对象池（在初始化时调用）
+GASPoolUtility.ConfigureUltra();     // 终极性能 / 弹幕游戏 (2000+ 活跃实体)
+GASPoolUtility.ConfigureHigh();      // 高性能 / 吸血鬼幸存者 (1000+ 实体)
+GASPoolUtility.ConfigureMedium();    // 中等 / ARPG (标准)
+GASPoolUtility.ConfigureLow();       // 低配 / 冒险游戏
+GASPoolUtility.ConfigureMinimal();    // 极简 / 极低内存占用
+GASPoolUtility.ConfigureMobile();    // 移动端优化默认值
 
 // 在加载界面预热池（减少首帧卡顿）
-GASPoolUtility.WarmAllPools();                // 默认数量
-GASPoolUtility.WarmAllPools(64, 128, 64);     // 自定义数量
+GASPoolUtility.WarmAllPools();                // 预热到目标容量
+GASPoolUtility.WarmAllPools(64, 128, 64);     // 自定义特定数量
 
 // 场景切换时：释放内存
 GASPoolUtility.AggressiveShrinkAll();         // 收缩到最小容量

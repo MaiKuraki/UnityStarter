@@ -18,7 +18,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public async UniTask<T> LoadAssetAsync<T>(object key) where T : Object
         {
             if (key == null) return null;
-            
+
             if (key is not string stringKey || string.IsNullOrEmpty(stringKey))
             {
                 GASLog.Error($"Invalid asset key: {key}, key must be a non-empty string.");

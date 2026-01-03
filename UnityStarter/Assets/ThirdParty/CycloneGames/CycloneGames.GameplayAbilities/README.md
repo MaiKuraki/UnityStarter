@@ -1974,17 +1974,20 @@ poolManager.Release(vfx); // Return to pool
 
 ### Pool Management with GASPoolUtility
 
-The system includes a centralized pool management utility with platform-adaptive defaults:
+The system includes a centralized pool management utility with scalable tier presets:
 
 ```csharp
-// Configure pools for different scenarios
-GASPoolUtility.ConfigureForHighPerformance(); // Large battles, bullet hell
-GASPoolUtility.ConfigureForBalanced();        // Standard gameplay
-GASPoolUtility.ConfigureForLowEnd();          // Mobile, WebGL
+// Configure pools for different game scales (call on initialization)
+GASPoolUtility.ConfigureUltra();     // Bullet Hell (2000+ active entities)
+GASPoolUtility.ConfigureHigh();      // Vampire Survivors / RTS (1000+ entities)
+GASPoolUtility.ConfigureMedium();    // Action RPG / Arena (Standard)
+GASPoolUtility.ConfigureLow();       // Adventure / Casual
+GASPoolUtility.ConfigureMinimal();    // Very low memory footprint
+GASPoolUtility.ConfigureMobile();    // Optimized specific defaults for mobile
 
 // Pre-warm pools during loading screens (reduces first-frame hitches)
-GASPoolUtility.WarmAllPools();                // Default counts
-GASPoolUtility.WarmAllPools(64, 128, 64);     // Custom counts
+GASPoolUtility.WarmAllPools();                // Warm to Target capacity
+GASPoolUtility.WarmAllPools(64, 128, 64);     // Custom specific counts
 
 // Scene transitions: release memory
 GASPoolUtility.AggressiveShrinkAll();         // Shrink to minimum capacity
