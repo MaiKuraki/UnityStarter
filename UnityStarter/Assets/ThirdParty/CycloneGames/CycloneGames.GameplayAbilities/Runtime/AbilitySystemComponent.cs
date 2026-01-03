@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
 using CycloneGames.Factory.Runtime;
 using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayAbilities.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -11,38 +11,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         Full,
         Mixed,
         Minimal
-    }
-
-    /// <summary>
-    /// Represents a unique key for client-side prediction events.
-    /// Thread-safe implementation using Interlocked operations.
-    /// </summary>
-    public struct PredictionKey : IEquatable<PredictionKey>
-    {
-        public int Key { get; private set; }
-        private static int s_NextKey = 1;
-
-        public bool IsValid() => Key != 0;
-
-        /// <summary>
-        /// Creates a new unique prediction key. Thread-safe.
-        /// </summary>
-        public static PredictionKey NewKey()
-        {
-            int key = Interlocked.Increment(ref s_NextKey);
-            // Wraparound to prevent overflow (skip 0 as it means invalid)
-            if (key >= int.MaxValue - 1)
-            {
-                Interlocked.Exchange(ref s_NextKey, 1);
-            }
-            return new PredictionKey { Key = key };
-        }
-
-        public bool Equals(PredictionKey other) => Key == other.Key;
-        public override bool Equals(object obj) => obj is PredictionKey other && Equals(other);
-        public override int GetHashCode() => Key;
-        public static bool operator ==(PredictionKey left, PredictionKey right) => left.Equals(right);
-        public static bool operator !=(PredictionKey left, PredictionKey right) => !left.Equals(right);
     }
 
     public partial class AbilitySystemComponent : IDisposable
@@ -54,7 +22,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GameplayTagCountContainer CombinedTags { get; } = new GameplayTagCountContainer();
         private readonly GameplayTagCountContainer looseTags = new GameplayTagCountContainer();
         private readonly GameplayTagCountContainer fromEffectsTags = new GameplayTagCountContainer();
-        
+
         /// <summary>
         /// Tags that grant immunity to effects. Effects with AssetTags or GrantedTags matching these will be blocked.
         /// </summary>
@@ -69,7 +37,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public IReadOnlyList<GameplayAbilitySpec> GetActivatableAbilities() => activatableAbilities.AsReadOnly();
 
         private readonly List<GameplayAbilitySpec> tickingAbilities = new List<GameplayAbilitySpec>(16);
-        
+
         // Pre-allocated lists for granted abilities to avoid per-effect List allocations
         private readonly Dictionary<ActiveGameplayEffect, int> effectGrantedAbilitiesStart = new Dictionary<ActiveGameplayEffect, int>(16);
         private readonly Dictionary<ActiveGameplayEffect, int> effectGrantedAbilitiesCount = new Dictionary<ActiveGameplayEffect, int>(16);
@@ -87,9 +55,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly List<ActiveGameplayEffect> pendingPredictedEffects = new List<ActiveGameplayEffect>();
 
         public IFactory<IGameplayEffectContext> EffectContextFactory { get; private set; }
-        
+
         #region Tag Event Convenience API
-        
+
         /// <summary>
         /// Registers a callback for when a specific tag is added or removed from this ASC.
         /// </summary>
@@ -97,7 +65,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CombinedTags.RegisterTagEventCallback(tag, eventType, callback);
         }
-        
+
         /// <summary>
         /// Removes a tag event callback.
         /// </summary>
@@ -105,7 +73,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CombinedTags.RemoveTagEventCallback(tag, eventType, callback);
         }
-        
+
         /// <summary>
         /// Adds an immunity tag. Effects matching this tag will be blocked.
         /// </summary>
@@ -116,7 +84,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 ImmunityTags.AddTag(tag);
             }
         }
-        
+
         /// <summary>
         /// Removes an immunity tag.
         /// </summary>
@@ -127,7 +95,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 ImmunityTags.RemoveTag(tag);
             }
         }
-        
+
         #endregion
 
         public AbilitySystemComponent(IFactory<IGameplayEffectContext> effectContextFactory)
@@ -270,7 +238,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             spec.IsActive = true;
             tickingAbilities.Add(spec);
-            
+
             // Apply ActivationOwnedTags - tags granted while ability is active
             if (ability.ActivationOwnedTags != null && !ability.ActivationOwnedTags.IsEmpty)
             {
@@ -338,7 +306,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     ability.Spec.IsActive = false;
                     tickingAbilities.Remove(ability.Spec);
-                    
+
                     // Remove ActivationOwnedTags when ability ends
                     if (ability.ActivationOwnedTags != null && !ability.ActivationOwnedTags.IsEmpty)
                     {
@@ -446,7 +414,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     return false;
                 }
             }
-            
+
             if (spec.Def.ApplicationTagRequirements.RequiredTags != null && !spec.Def.ApplicationTagRequirements.RequiredTags.IsEmpty)
             {
                 if (!CombinedTags.HasAll(spec.Def.ApplicationTagRequirements.RequiredTags))
@@ -610,7 +578,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 float multiplicative = 1f + multiplicativeBiasSum;
                 float division = 1f + divisionBiasSum;
                 if (division == 0f) division = 1f;  // Prevent divide by zero
-                
+
                 float finalValue = hasOverride ? overrideValue : ((baseValue + additive) * multiplicative / division);
 
                 attr.OwningSet.PreAttributeChange(attr, ref finalValue);

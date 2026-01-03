@@ -13,12 +13,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Fired when a matching GameplayEvent is received.
         /// </summary>
         public Action<GameplayEventData> OnEventReceived;
-        
+
         /// <summary>
         /// Fired if the wait is cancelled or the ability ends before receiving an event.
         /// </summary>
         public Action OnCancelled;
-        
+
         private GameplayTag eventTag;
         private bool onlyTriggerOnce;
         private OnTagCountChangedDelegate tagCallback;
@@ -49,8 +49,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Register for tag change events - use method reference to avoid closure allocation
             tagCallback = HandleTagCountChanged;
             Ability.AbilitySystemComponent.RegisterTagEventCallback(
-                eventTag, 
-                GameplayTagEventType.NewOrRemoved, 
+                eventTag,
+                GameplayTagEventType.NewOrRemoved,
                 tagCallback
             );
         }
@@ -58,7 +58,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void HandleTagCountChanged(GameplayTag tag, int newCount)
         {
             if (!IsActive || IsCancelled) return;
-            
+
             // Only trigger when tag is added (count increases from 0 to 1+)
             if (newCount > 0)
             {
@@ -68,9 +68,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     Instigator = Ability.AbilitySystemComponent,
                     Target = Ability.AbilitySystemComponent
                 };
-                
+
                 OnEventReceived?.Invoke(eventData);
-                
+
                 if (onlyTriggerOnce)
                 {
                     EndTask();
@@ -91,7 +91,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 Ability.AbilitySystemComponent.RemoveTagEventCallback(eventTag, GameplayTagEventType.NewOrRemoved, tagCallback);
             }
-            
+
             OnEventReceived = null;
             OnCancelled = null;
             tagCallback = null;
@@ -108,22 +108,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// The tag of the event that was triggered.
         /// </summary>
         public GameplayTag EventTag;
-        
+
         /// <summary>
         /// The AbilitySystemComponent that caused this event.
         /// </summary>
         public AbilitySystemComponent Instigator;
-        
+
         /// <summary>
         /// The AbilitySystemComponent that should receive this event.
         /// </summary>
         public AbilitySystemComponent Target;
-        
+
         /// <summary>
         /// Optional magnitude value associated with the event.
         /// </summary>
         public float EventMagnitude;
-        
+
         /// <summary>
         /// Optional context data (e.g., hit location, source ability).
         /// </summary>

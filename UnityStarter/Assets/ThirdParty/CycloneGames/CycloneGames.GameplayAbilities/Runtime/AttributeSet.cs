@@ -7,11 +7,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
     public abstract class AttributeSet
     {
         #region Optimized Attribute Discovery
-        
+
         /// <summary>
         /// Cached compiled delegates for attribute getters per AttributeSet subclass.
         /// </summary>
-        private static readonly Dictionary<Type, List<Func<AttributeSet, GameplayAttribute>>> s_AttributeGetterCache 
+        private static readonly Dictionary<Type, List<Func<AttributeSet, GameplayAttribute>>> s_AttributeGetterCache
             = new Dictionary<Type, List<Func<AttributeSet, GameplayAttribute>>>();
         private static readonly object s_CacheLock = new object();
 
@@ -36,7 +36,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (!s_AttributeGetterCache.TryGetValue(setType, out getters))
                 {
                     getters = new List<Func<AttributeSet, GameplayAttribute>>();
-                    
+
                     // Discover properties and compile getter delegates (only once per type)
                     foreach (var prop in setType.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                     {
@@ -68,14 +68,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
         }
-        
+
         /// <summary>
-        /// Creates a getter function for a property.
-        /// Caches MethodInfo to avoid repeated GetGetMethod calls.
+        /// Creates a compiled getter delegate for a property.
+        /// Uses Delegate.CreateDelegate for maximum performance (no boxing, no reflection invoke).
         /// </summary>
         private static Func<AttributeSet, GameplayAttribute> CreateGetter(Type declaringType, MethodInfo getMethod)
         {
-            return (AttributeSet set) => getMethod.Invoke(set, null) as GameplayAttribute;
+            try
+            {
+                return (Func<AttributeSet, GameplayAttribute>)Delegate.CreateDelegate(
+                    typeof(Func<AttributeSet, GameplayAttribute>), getMethod);
+            }
+            catch
+            {
+                // Fallback for virtual/override methods
+                return (AttributeSet set) => getMethod.Invoke(set, null) as GameplayAttribute;
+            }
         }
 
         public IReadOnlyCollection<GameplayAttribute> GetAttributes() => discoveredAttributes.Values;
