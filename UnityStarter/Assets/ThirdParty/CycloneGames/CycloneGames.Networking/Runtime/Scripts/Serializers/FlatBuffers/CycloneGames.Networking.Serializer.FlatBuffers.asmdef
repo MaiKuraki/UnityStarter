@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.Networking.Serializer.FlatBuffers",
+    "rootNamespace": "CycloneGames.Networking.Serializer.FlatBuffers",
+    "references": [
+        "CycloneGames.Networking.Runtime",
+        "FlatBuffers.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "FLATBUFFERS"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.google.flatbuffers",
+            "expression": "",
+            "define": "FLATBUFFERS"
+        }
+    ],
+    "noEngineReferences": false
+}
