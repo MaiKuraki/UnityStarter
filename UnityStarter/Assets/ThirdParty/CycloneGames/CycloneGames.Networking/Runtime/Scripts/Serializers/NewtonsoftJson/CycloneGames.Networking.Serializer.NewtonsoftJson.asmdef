@@ -1,0 +1,24 @@
+{
+    "name": "CycloneGames.Networking.Serializer.NewtonsoftJson",
+    "rootNamespace": "CycloneGames.Networking.Serializer.NewtonsoftJson",
+    "references": [
+        "CycloneGames.Networking.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "NEWTONSOFT_JSON"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.nuget.newtonsoft-json",
+            "expression": "",
+            "define": "NEWTONSOFT_JSON"
+        }
+    ],
+    "noEngineReferences": false
+}
