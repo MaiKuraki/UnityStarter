@@ -3,11 +3,12 @@
     "rootNamespace": "",
     "references": [
         "Mirror",
-        "CycloneGames.Networking.Runtime"
+        "CycloneGames.Networking.Runtime",
+        "CycloneGames.Logger"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
-    "allowUnsafeCode": false,
+    "allowUnsafeCode": true,
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,

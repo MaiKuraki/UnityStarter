@@ -1,3 +1,16 @@
 {
-	"name": "CycloneGames.Networking.Runtime"
+    "name": "CycloneGames.Networking.Runtime",
+    "rootNamespace": "CycloneGames.Networking",
+    "references": [
+        "CycloneGames.Logger"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
 }
