@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.Networking.Serializer.ProtoBuf",
+    "rootNamespace": "CycloneGames.Networking.Serializer.ProtoBuf",
+    "references": [
+        "CycloneGames.Networking.Runtime",
+        "Google.Protobuf"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "PROTOBUF"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.google.protobuf",
+            "expression": "",
+            "define": "PROTOBUF"
+        }
+    ],
+    "noEngineReferences": false
+}

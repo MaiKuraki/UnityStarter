@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.Networking.Serializer.MessagePack",
+    "rootNamespace": "CycloneGames.Networking.Serializer.MessagePack",
+    "references": [
+        "CycloneGames.Networking.Runtime",
+        "MessagePack.Unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "MESSAGEPACK"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.github.messagepack-csharp",
+            "expression": "",
+            "define": "MESSAGEPACK"
+        }
+    ],
+    "noEngineReferences": false
+}
