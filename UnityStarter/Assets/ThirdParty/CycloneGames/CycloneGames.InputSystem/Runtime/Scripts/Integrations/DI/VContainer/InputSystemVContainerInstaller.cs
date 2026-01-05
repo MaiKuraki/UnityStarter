@@ -3,6 +3,7 @@ using System;
 using VContainer;
 using VContainer.Unity;
 using CycloneGames.Utility.Runtime;
+using CycloneGames.AssetManagement.Runtime;
 using Cysharp.Threading.Tasks;
 using Unio;
 using Unity.Collections;
@@ -227,9 +228,14 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
             try
             {
-                dynamic packageDynamic = package;
+                var assetPackage = package as IAssetPackage;
+                if (assetPackage == null)
+                {
+                    CycloneGames.Logger.CLogger.LogError("[InputSystemInitializer] Package must implement IAssetPackage interface.");
+                    return;
+                }
                 var loader = InputSystemAssetManagementHelper.CreateConfigLoader(
-                    packageDynamic,
+                    assetPackage,
                     configLocation
                 );
 
