@@ -124,56 +124,17 @@ namespace Build.Pipeline.Editor
                     {
                         Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Saved version file to bundle directory: {versionFilePath}");
                         Debug.Log($"[AddressablesVersionBuildProcessor] Version: {contentVersion}");
-                        Debug.Log($"[AddressablesVersionBuildProcessor] Unity will copy this to StreamingAssets/aa/{buildTarget}/{versionFileName} during Player build.");
+                        Debug.Log($"[AddressablesVersionBuildProcessor] Unity will copy this to StreamingAssets automatically during Player build.");
                     }
                     else
                     {
-                        Debug.LogWarning($"[AddressablesVersionBuildProcessor] Version file was written but not found at: {versionFilePath}. Will create in StreamingAssets directly.");
+                        Debug.LogWarning($"[AddressablesVersionBuildProcessor] Version file was written but not found at: {versionFilePath}");
                     }
 
-                    // For Android and other platforms, we also need to ensure the version file
-                    // is in Assets/StreamingAssets/aa/{BuildTarget}/ before Unity packages the build.
-                    string streamingAssetsPath = Path.Combine(Application.dataPath, "StreamingAssets");
-                    string streamingAssetsVersionDir = Path.Combine(streamingAssetsPath, "aa", buildTarget.ToString());
-                    string streamingAssetsVersionPath = Path.Combine(streamingAssetsVersionDir, versionFileName);
-
-                    // Also try platform-specific path (e.g., Android instead of StandaloneAndroid)
-                    string platformPath = GetAddressablesPlatformPath(buildTarget);
-                    string streamingAssetsPlatformVersionDir = Path.Combine(streamingAssetsPath, "aa", platformPath);
-                    string streamingAssetsPlatformVersionPath = Path.Combine(streamingAssetsPlatformVersionDir, versionFileName);
-
-                    // Copy to both possible locations to ensure it's found
-                    bool copiedToStreamingAssets = false;
-                    if (Directory.Exists(streamingAssetsVersionDir) || Directory.Exists(Path.GetDirectoryName(streamingAssetsVersionDir)))
-                    {
-                        if (!Directory.Exists(streamingAssetsVersionDir))
-                        {
-                            Directory.CreateDirectory(streamingAssetsVersionDir);
-                        }
-                        File.Copy(versionFilePath, streamingAssetsVersionPath, true);
-                        copiedToStreamingAssets = true;
-                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Copied version file to StreamingAssets: {streamingAssetsVersionPath}");
-                    }
-
-                    if (Directory.Exists(streamingAssetsPlatformVersionDir) || Directory.Exists(Path.GetDirectoryName(streamingAssetsPlatformVersionDir)))
-                    {
-                        if (!Directory.Exists(streamingAssetsPlatformVersionDir))
-                        {
-                            Directory.CreateDirectory(streamingAssetsPlatformVersionDir);
-                        }
-                        File.Copy(versionFilePath, streamingAssetsPlatformVersionPath, true);
-                        copiedToStreamingAssets = true;
-                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Copied version file to StreamingAssets (platform path): {streamingAssetsPlatformVersionPath}");
-                    }
-
-                    if (!copiedToStreamingAssets)
-                    {
-                        // If directories don't exist yet, create them and copy anyway
-                        // Unity will copy these when it processes StreamingAssets
-                        Directory.CreateDirectory(streamingAssetsVersionDir);
-                        File.Copy(versionFilePath, streamingAssetsVersionPath, true);
-                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Created and copied version file to StreamingAssets: {streamingAssetsVersionPath}");
-                    }
+                    // NOTE: Do NOT copy to StreamingAssets here!
+                    // Unity's Addressables will automatically copy files from Library/com.unity.addressables/aa/
+                    // to StreamingAssets during BuildPlayer. If we copy here, it will cause a file conflict error:
+                    // "Callback provided streaming assets file conflicts with file already present in project"
                 }
                 catch (IOException ioEx)
                 {
@@ -241,51 +202,17 @@ namespace Build.Pipeline.Editor
                     Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Generated version file in build output: {buildVersionPath}");
                 }
 
-                // Ensure version file is in StreamingAssets (critical for Android)
-                string streamingAssetsPath = Path.Combine(Application.dataPath, "StreamingAssets");
-                string platformPath = GetAddressablesPlatformPath(buildTarget);
-
-                // Try both BuildTarget and platform-specific paths
-                string[] targetPaths = new string[] { buildTarget.ToString(), platformPath };
-
-                foreach (string targetPath in targetPaths)
-                {
-                    string streamingAssetsVersionDir = Path.Combine(streamingAssetsPath, "aa", targetPath);
-                    string streamingAssetsVersionPath = Path.Combine(streamingAssetsVersionDir, versionFileName);
-
-                    // Copy version file to StreamingAssets if it doesn't exist or is different
-                    bool needsCopy = true;
-                    if (File.Exists(streamingAssetsVersionPath))
-                    {
-                        try
-                        {
-                            string existingContent = File.ReadAllText(streamingAssetsVersionPath);
-                            string buildContent = File.ReadAllText(buildVersionPath);
-                            if (existingContent == buildContent)
-                            {
-                                needsCopy = false;
-                            }
-                        }
-                        catch
-                        {
-                            // If we can't compare, copy anyway
-                        }
-                    }
-
-                    if (needsCopy)
-                    {
-                        if (!Directory.Exists(streamingAssetsVersionDir))
-                        {
-                            Directory.CreateDirectory(streamingAssetsVersionDir);
-                        }
-                        File.Copy(buildVersionPath, streamingAssetsVersionPath, true);
-                        Debug.Log($"[AddressablesVersionBuildProcessor] ✓ Ensured version file in StreamingAssets: {streamingAssetsVersionPath}");
-                    }
-                }
+                // NOTE: Do NOT copy to StreamingAssets here!
+                // Unity's Addressables will automatically copy files from Library/com.unity.addressables/aa/
+                // to StreamingAssets during BuildPlayer. If we copy here, it will cause a file conflict error:
+                // "Callback provided streaming assets file conflicts with file already present in project"
+                //
+                // The version file is already in the build output (Library/com.unity.addressables/aa/...),
+                // so Unity will copy it to StreamingAssets automatically.
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[AddressablesVersionBuildProcessor] Failed to ensure version file in StreamingAssets during PreprocessBuild: {ex.Message}");
+                Debug.LogWarning($"[AddressablesVersionBuildProcessor] Failed to ensure version file in build output during PreprocessBuild: {ex.Message}");
             }
         }
 
