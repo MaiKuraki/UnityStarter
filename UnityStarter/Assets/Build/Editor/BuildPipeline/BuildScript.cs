@@ -1171,8 +1171,12 @@ namespace Build.Pipeline.Editor
                     }
                     else if (buildData.UseAddressables)
                     {
+                        // Clean up StreamingAssets/aa before build to prevent file conflicts
+                        // Unity's Addressables will copy files from Library to StreamingAssets during BuildPlayer,
+                        // so we need to ensure no stale files exist that would cause conflicts
                         AddressablesBuildConfig addressablesConfig = BuildConfigHelper.GetAddressablesConfig();
-                        AddressablesBuilder.Build(TargetPlatform, fullBuildVersion, addressablesConfig);
+                        AddressablesBuilder.CleanupStreamingAssetsAddressables();
+                        AddressablesBuilder.Build(TargetPlatform, fullBuildVersion, addressablesConfig);    
                     }
                 }
 
