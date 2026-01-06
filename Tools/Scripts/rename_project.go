@@ -15,6 +15,7 @@ import (
 
 // Directories to exclude when searching for the main project folder
 var excludedDirs = map[string]bool{
+	// Unity standard folders
 	"Build":                    true,
 	"ThirdParty":               true,
 	"Resources":                true,
@@ -24,6 +25,26 @@ var excludedDirs = map[string]bool{
 	"Editor Default Resources": true,
 	"Gizmos":                   true,
 	"Standard Assets":          true,
+
+	// HybridCLR related
+	"HybridCLRGenerate":     true,
+	"HybridCLRData":         true,
+	"CompiledDLLs":          true,
+
+	// Obfuscation related
+	"Obfuz":                 true,
+	"Obfuscator":            true,
+
+	// Asset management related
+	"AddressableAssetsData": true,
+	"YooAsset":              true,
+	"yoo":                   true,
+	"Bundles":               true,
+
+	// Common third-party or generated folders
+	"TextMesh Pro":          true,
+	"Demigiant":             true,
+	"DOTween":               true,
 }
 
 // findProjectRoot scans for a Unity project root directory in the current or immediate subdirectories.
