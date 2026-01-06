@@ -859,7 +859,7 @@ namespace Build.Pipeline.Editor
                     {
                         // Convert absolute path to relative path for AssetDatabase
                         string versionFileRelativePath = versionFilePath.Replace(Application.dataPath, "Assets").Replace('\\', '/');
-                        
+
                         // Delete version file using AssetDatabase (handles .meta automatically)
                         AssetDatabase.DeleteAsset(versionFileRelativePath);
                         Debug.Log($"{DEBUG_FLAG} Cleaned up version file: {versionFileRelativePath}");
@@ -872,6 +872,40 @@ namespace Build.Pipeline.Editor
             catch (Exception ex)
             {
                 Debug.LogWarning($"{DEBUG_FLAG} Failed to cleanup version files: {ex.Message}");
+            }
+        }
+
+
+        /// <summary>
+        /// Cleans up the StreamingAssets/aa folder before Addressables build.
+        /// This prevents file conflict errors when Unity's Addressables tries to copy files
+        /// from Library to StreamingAssets during BuildPlayer.
+        /// </summary>
+        public static void CleanupStreamingAssetsAddressables()
+        {
+            try
+            {
+                string streamingAssetsAA = Path.Combine(Application.dataPath, "StreamingAssets", "aa");
+
+                if (Directory.Exists(streamingAssetsAA))
+                {
+                    Debug.Log($"{DEBUG_FLAG} Cleaning up StreamingAssets/aa to prevent file conflicts...");
+                    Directory.Delete(streamingAssetsAA, true);
+
+                    // Also delete the .meta file if it exists
+                    string metaFile = streamingAssetsAA + ".meta";
+                    if (File.Exists(metaFile))
+                    {
+                        File.Delete(metaFile);
+                    }
+
+                    AssetDatabase.Refresh();
+                    Debug.Log($"{DEBUG_FLAG} ✓ StreamingAssets/aa cleaned up successfully.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to cleanup StreamingAssets/aa: {ex.Message}");
             }
         }
 
