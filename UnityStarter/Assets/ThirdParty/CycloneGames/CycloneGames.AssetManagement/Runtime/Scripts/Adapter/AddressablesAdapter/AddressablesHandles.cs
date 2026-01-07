@@ -257,7 +257,10 @@ namespace CycloneGames.AssetManagement.Runtime
             SetId(id);
             Raw = raw;
             ScenePath = raw.DebugName;
-            _task = raw.ToUniTask(cancellationToken: cancellationToken);
+            // NOTE: AsyncOperationHandle<SceneInstance>.ToUniTask() triggers a warning because
+            // "yield SceneInstance is not supported on await IEnumerator". 
+            // Use UniTask.WaitUntil to poll IsDone status instead.
+            _task = UniTask.WaitUntil(() => Raw.IsDone, cancellationToken: cancellationToken);
         }
 
         public static AddressableSceneHandle Create(int id, AsyncOperationHandle<SceneInstance> raw, CancellationToken cancellationToken)
