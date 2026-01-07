@@ -510,7 +510,11 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 if (sh.Raw.IsValid())
                 {
-                    await Addressables.UnloadSceneAsync(sh.Raw);
+                    // NOTE: AsyncOperationHandle<SceneInstance>.ToUniTask() triggers a warning because
+                    // "yield SceneInstance is not supported on await IEnumerator".
+                    // Use UniTask.WaitUntil to poll IsDone status instead.
+                    var unloadOp = Addressables.UnloadSceneAsync(sh.Raw);
+                    await UniTask.WaitUntil(() => unloadOp.IsDone);
                 }
                 // Return to pool manually since ISceneHandle is not IDisposable in this architecture
                 sh.ReturnToPool();
