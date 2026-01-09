@@ -1,9 +1,14 @@
+using System.Diagnostics;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
 
 namespace CycloneGames.Utility.Editor
 {
+    /// <summary>
+    /// Editor utility to open the Application.persistentDataPath in the system file explorer.
+    /// Supports Windows, macOS, and Linux.
+    /// </summary>
     public static class OpenPersistentDataPath
     {
         [MenuItem("Tools/CycloneGames/Open Persistent Data Path")]
@@ -21,19 +26,24 @@ namespace CycloneGames.Utility.Editor
                 Directory.CreateDirectory(path);
             }
 
-            if (Application.platform == RuntimePlatform.WindowsEditor || Application.platform == RuntimePlatform.WindowsPlayer)
+#if UNITY_EDITOR_WIN
+            path = path.Replace('/', '\\');
+            Process.Start("explorer.exe", path);
+#elif UNITY_EDITOR_OSX
+            Process.Start(new ProcessStartInfo
             {
-                path = path.Replace('/', '\\');
-                System.Diagnostics.Process.Start("explorer.exe", path);
-            }
-            else if (Application.platform == RuntimePlatform.OSXEditor || Application.platform == RuntimePlatform.OSXPlayer)
+                FileName = "open",
+                Arguments = $"\"{path}\"",
+                UseShellExecute = false
+            });
+#else // Linux
+            Process.Start(new ProcessStartInfo
             {
-                System.Diagnostics.Process.Start("open", path);
-            }
-            else // Linux and others
-            {
-                System.Diagnostics.Process.Start("xdg-open", path);
-            }
+                FileName = "xdg-open",
+                Arguments = $"\"{path}\"",
+                UseShellExecute = false
+            });
+#endif
         }
     }
 }
