@@ -20,6 +20,9 @@ English | [简体中文](./README.SCH.md)
 - **Intelligent Hot-Swapping**: Automatically pairs newly connected devices to the correct player _after_ the lobby phase.
 - **Active Device Detection**: `ActiveDeviceKind` property tracks whether the last input came from Keyboard/Mouse or a Gamepad.
 
+## SamplePreview
+<img src="./Documents~/Input_IntegrateSample.gif" alt="Input integrate preview" style="width: 100%; height: auto; max-width: 854px;" />
+
 ## Install
 
 - Unity 2022.3+
