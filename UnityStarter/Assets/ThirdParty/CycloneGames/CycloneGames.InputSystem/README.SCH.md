@@ -20,6 +20,9 @@
 - **智能热插拔**：在大厅阶段结束后，能自动将新连接的设备配对给正确的玩家。
 - **活动设备检测**：`ActiveDeviceKind` 属性可以实时追踪玩家最后一次使用的设备是键鼠还是手柄。
 
+## 实战示例
+<img src="./Documents~/Input_IntegrateSample.gif" alt="Input integrate preview" style="width: 100%; height: auto; max-width: 854px;" />
+
 ## 安装依赖
 
 - Unity 2022.3+
