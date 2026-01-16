@@ -139,14 +139,23 @@ namespace CycloneGames.Service.Runtime
         {
             try
             {
-                float aspect = Screen.height > 0 ? (float)Screen.width / Screen.height : 16f / 9f;
+                // Use Display.main.systemWidth/systemHeight to get the actual monitor resolution
+                // This is independent of the window's current size and correctly reflects the user's display
+                int displayWidth = Display.main.systemWidth;
+                int displayHeight = Display.main.systemHeight;
+                
+                // Fallback to 16:9 if display info is unavailable
+                float aspect = (displayWidth > 0 && displayHeight > 0)
+                    ? (float)displayWidth / displayHeight
+                    : 16f / 9f;
+                
                 var (w, h) = CalculateResolution(shortEdge, orientation, aspect);
                 _targetRenderResolution = new Vector2Int(w, h);
 
                 Screen.SetResolution(w, h, Screen.fullScreen);
                 await UniTask.Delay(100, DelayType.Realtime, PlayerLoopTiming.Update, ct);
 
-                CLogger.LogInfo($"{DEBUG_FLAG} Resolution changed to: {w}x{h}");
+                CLogger.LogInfo($"{DEBUG_FLAG} Resolution changed to: {w}x{h} (Display: {displayWidth}x{displayHeight}, Aspect: {aspect:F2})");
             }
             catch (OperationCanceledException) { }
             catch (Exception ex)
