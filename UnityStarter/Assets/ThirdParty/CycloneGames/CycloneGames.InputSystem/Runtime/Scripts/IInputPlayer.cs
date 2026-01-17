@@ -59,5 +59,23 @@ namespace CycloneGames.InputSystem.Runtime
 
         void BlockInput();
         void UnblockInput();
+
+        /// <summary>
+        /// Returns true if the left mouse button is currently pressed (polling).
+        /// Safe to call even if no mouse is present (returns false).
+        /// </summary>
+        bool IsLeftMouseButtonPressed { get; }
+
+        /// <summary>
+        /// Returns true if the right mouse button is currently pressed (polling).
+        /// Safe to call even if no mouse is present (returns false).
+        /// </summary>
+        bool IsRightMouseButtonPressed { get; }
+
+        /// <summary>
+        /// Returns true if the middle mouse button is currently pressed (polling).
+        /// Safe to call even if no mouse is present (returns false).
+        /// </summary>
+        bool IsMiddleMouseButtonPressed { get; }
     }
 }
