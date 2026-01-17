@@ -162,59 +162,130 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
         public async UniTask InitializeAsync(IObjectResolver resolver)
         {
             string yamlContent = null;
+            string defaultYamlContent = null;
             string userConfigFileName = _userConfigFileName ?? "user_input_settings.yaml";
             string userConfigUri = FilePathUtility.GetUnityWebRequestUri(userConfigFileName, UnityPathSource.PersistentData);
             bool loadedFromUserConfig = false;
+            bool userConfigCorrupted = false;
 
-            // Always try loading user config from PersistentData first
+            // Always load default config first for fallback
+            if (_defaultConfigLoader != null)
+            {
+                defaultYamlContent = await _defaultConfigLoader();
+                if (!string.IsNullOrEmpty(defaultYamlContent))
+                {
+                    CycloneGames.Logger.CLogger.LogInfo("[InputSystemInitializer] Loaded default config from custom loader.");
+                }
+            }
+            else if (!string.IsNullOrEmpty(_defaultConfigFileName))
+            {
+                var defaultUri = FilePathUtility.GetUnityWebRequestUri(_defaultConfigFileName, UnityPathSource.StreamingAssets);
+                (bool defaultSuccess, string defaultContent) = await LoadConfigFromUriAsync(defaultUri);
+                if (defaultSuccess && !string.IsNullOrEmpty(defaultContent))
+                {
+                    defaultYamlContent = defaultContent;
+                    CycloneGames.Logger.CLogger.LogInfo($"[InputSystemInitializer] Loaded default config from StreamingAssets: {_defaultConfigFileName}");
+                }
+            }
+
+            // Try loading user config from PersistentData
             (bool success, string content) = await LoadConfigFromUriAsync(userConfigUri);
             if (success && !string.IsNullOrEmpty(content))
             {
-                yamlContent = content;
-                loadedFromUserConfig = true;
-                CycloneGames.Logger.CLogger.LogInfo($"[InputSystemInitializer] Loaded user config from PersistentData: {userConfigFileName}");
+                // Validate user config before use
+                if (ValidateYamlContent(content))
+                {
+                    yamlContent = content;
+                    loadedFromUserConfig = true;
+                    CycloneGames.Logger.CLogger.LogInfo($"[InputSystemInitializer] Loaded and validated user config from PersistentData: {userConfigFileName}");
+                }
+                else
+                {
+                    CycloneGames.Logger.CLogger.LogWarning($"[InputSystemInitializer] User config is corrupted or invalid, will use default config. File: {userConfigFileName}");
+                    userConfigCorrupted = true;
+                    
+                    // Delete corrupted user config file
+                    TryDeleteCorruptedUserConfig(userConfigUri);
+                }
             }
 
-            // Fallback to default config if user config not found
+            // Fallback to default config if user config not found or corrupted
             if (string.IsNullOrEmpty(yamlContent))
             {
-                if (_defaultConfigLoader != null)
-                {
-                    yamlContent = await _defaultConfigLoader();
-                    if (!string.IsNullOrEmpty(yamlContent))
-                    {
-                        CycloneGames.Logger.CLogger.LogInfo("[InputSystemInitializer] Loaded default config from custom loader.");
-                    }
-                }
-                else if (!string.IsNullOrEmpty(_defaultConfigFileName))
-                {
-                    var defaultUri = FilePathUtility.GetUnityWebRequestUri(_defaultConfigFileName, UnityPathSource.StreamingAssets);
-                    (bool defaultSuccess, string defaultContent) = await LoadConfigFromUriAsync(defaultUri);
-                    if (defaultSuccess && !string.IsNullOrEmpty(defaultContent))
-                    {
-                        yamlContent = defaultContent;
-                        CycloneGames.Logger.CLogger.LogInfo($"[InputSystemInitializer] Loaded default config from StreamingAssets: {_defaultConfigFileName}");
-                    }
-                }
-
-                if (string.IsNullOrEmpty(yamlContent))
+                if (string.IsNullOrEmpty(defaultYamlContent))
                 {
                     CycloneGames.Logger.CLogger.LogError("[InputSystemInitializer] Failed to load input configuration from both default and user sources.");
                     return;
                 }
+                yamlContent = defaultYamlContent;
             }
 
             InputManager.Instance.Initialize(yamlContent, userConfigUri);
 
-            if (!loadedFromUserConfig)
+            // Save user config if: not loaded from user config OR user config was corrupted
+            if (!loadedFromUserConfig || userConfigCorrupted)
             {
                 await InputManager.Instance.SaveUserConfigurationAsync();
-                CycloneGames.Logger.CLogger.LogInfo($"[InputSystemInitializer] Saved default config to user config: {userConfigFileName}");
+                CycloneGames.Logger.CLogger.LogInfo($"[InputSystemInitializer] Saved fresh user config: {userConfigFileName}");
             }
 
             if (_postInitCallback != null)
             {
                 await _postInitCallback(resolver);
+            }
+        }
+
+        /// <summary>
+        /// Validates YAML content by attempting to parse it.
+        /// Returns true if valid, false if corrupted/invalid.
+        /// </summary>
+        private static bool ValidateYamlContent(string yamlContent)
+        {
+            if (string.IsNullOrEmpty(yamlContent)) return false;
+
+            try
+            {
+                // Normalize line endings to handle cross-platform issues (Windows CRLF vs Unix LF)
+                string normalizedContent = NormalizeLineEndings(yamlContent);
+                
+                // Try to parse the YAML
+                var config = VYaml.Serialization.YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(normalizedContent));
+                return config != null && config.PlayerSlots != null;
+            }
+            catch (System.Exception e)
+            {
+                CycloneGames.Logger.CLogger.LogWarning($"[InputSystemInitializer] YAML validation failed: {e.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Normalizes line endings to Unix-style (LF only) for cross-platform compatibility.
+        /// </summary>
+        private static string NormalizeLineEndings(string content)
+        {
+            if (string.IsNullOrEmpty(content)) return content;
+            // Replace CRLF with LF, then any remaining CR with LF
+            return content.Replace("\r\n", "\n").Replace("\r", "\n");
+        }
+
+        /// <summary>
+        /// Attempts to delete a corrupted user config file.
+        /// </summary>
+        private static void TryDeleteCorruptedUserConfig(string userConfigUri)
+        {
+            try
+            {
+                string filePath = new System.Uri(userConfigUri).LocalPath;
+                if (System.IO.File.Exists(filePath))
+                {
+                    System.IO.File.Delete(filePath);
+                    CycloneGames.Logger.CLogger.LogInfo($"[InputSystemInitializer] Deleted corrupted user config file: {filePath}");
+                }
+            }
+            catch (System.Exception e)
+            {
+                CycloneGames.Logger.CLogger.LogWarning($"[InputSystemInitializer] Failed to delete corrupted user config: {e.Message}");
             }
         }
 
