@@ -779,6 +779,11 @@ namespace CycloneGames.InputSystem.Runtime
         private void UpdateActiveDeviceKind(InputDevice device)
         {
             if (device == null) return;
+            if (device is Touchscreen)
+            {
+                _activeDeviceKind.Value = InputDeviceKind.Touchscreen;
+                return;
+            }
             if (device is Keyboard || device is Mouse)
             {
                 _activeDeviceKind.Value = InputDeviceKind.KeyboardMouse;
@@ -897,6 +902,17 @@ namespace CycloneGames.InputSystem.Runtime
                 }
             }
 
+            if (device is Touchscreen touchscreen)
+            {
+                foreach (var touch in touchscreen.touches)
+                {
+                    if (touch.press.isPressed || touch.press.wasPressedThisFrame)
+                    {
+                        return true;
+                    }
+                }
+            }
+
             return false;
         }
 
@@ -906,6 +922,7 @@ namespace CycloneGames.InputSystem.Runtime
         private InputDeviceKind GetDeviceKind(InputDevice device)
         {
             if (device == null) return InputDeviceKind.Unknown;
+            if (device is Touchscreen) return InputDeviceKind.Touchscreen;
             if (device is Keyboard || device is Mouse) return InputDeviceKind.KeyboardMouse;
             if (device is Gamepad) return InputDeviceKind.Gamepad;
             return InputDeviceKind.Other;

@@ -168,10 +168,10 @@ namespace CycloneGames.Service.Runtime
                 using var nativeBytes = new NativeArray<byte>(yamlBytes, Allocator.Temp);
                 NativeFile.WriteAllBytes(_tempFilePath, nativeBytes);
 
-                // Atomic replace: delete target, move temp to target
-                if (File.Exists(_filePath))
-                    File.Delete(_filePath);
-                File.Move(_tempFilePath, _filePath);
+                // Atomic replace: copy temp to target with overwrite, then delete temp
+                // Using Copy+Delete instead of Move because Move doesn't support overwrite in older .NET
+                File.Copy(_tempFilePath, _filePath, overwrite: true);
+                File.Delete(_tempFilePath);
             }
             catch (Exception ex)
             {
