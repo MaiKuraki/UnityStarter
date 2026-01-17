@@ -39,7 +39,9 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 try
                 {
-                    _configuration = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(yamlContent));
+                    // Normalize line endings for cross-platform compatibility
+                    string normalizedContent = NormalizeLineEndings(yamlContent);
+                    _configuration = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(normalizedContent));
                     _userConfigUri = userConfigUri;
                     _isInitialized = true;
                     CLogger.LogInfo($"{DEBUG_FLAG} Initialized successfully.");
@@ -47,6 +49,7 @@ namespace CycloneGames.InputSystem.Runtime
                 catch (Exception e) { CLogger.LogError($"{DEBUG_FLAG} Failed to parse YAML: {e.Message}"); }
             }
         }
+
 
         /// <summary>
         /// Reinitializes InputManager with new configuration. Allows reinitialization even if already initialized.
@@ -60,7 +63,9 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 try
                 {
-                    _configuration = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(yamlContent));
+                    // Normalize line endings for cross-platform compatibility
+                    string normalizedContent = NormalizeLineEndings(yamlContent);
+                    _configuration = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(normalizedContent));
                     _userConfigUri = userConfigUri;
                     _isInitialized = true;
                     CLogger.LogInfo($"{DEBUG_FLAG} Reinitialized successfully.");
@@ -69,6 +74,16 @@ namespace CycloneGames.InputSystem.Runtime
                 catch (Exception e) { CLogger.LogError($"{DEBUG_FLAG} Failed to reinitialize: {e.Message}"); }
             }
         }
+
+        /// <summary>
+        /// Normalizes line endings to Unix-style (LF only) for cross-platform compatibility.
+        /// </summary>
+        private static string NormalizeLineEndings(string content)
+        {
+            if (string.IsNullOrEmpty(content)) return content;
+            return content.Replace("\r\n", "\n").Replace("\r", "\n");
+        }
+
 
         /// <summary>
         /// Hot-reloads configuration at runtime. Existing players keep current config; new players use reloaded config.
@@ -169,6 +184,13 @@ namespace CycloneGames.InputSystem.Runtime
             try
             {
                 byte[] yamlBytes = YamlSerializer.Serialize(_configuration).ToArray();
+
+                // Normalize line endings to Unix-style (LF) for cross-platform compatibility
+                // This ensures configs saved on Windows work correctly on Linux/SteamDeck/macOS
+                string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
+                yamlContent = yamlContent.Replace("\r\n", "\n").Replace("\r", "\n");
+                yamlBytes = System.Text.Encoding.UTF8.GetBytes(yamlContent);
+
                 string filePath = new Uri(_userConfigUri).LocalPath;
 
                 string directory = System.IO.Path.GetDirectoryName(filePath);
