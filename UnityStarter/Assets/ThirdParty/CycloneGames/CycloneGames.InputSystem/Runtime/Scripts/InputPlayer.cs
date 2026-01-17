@@ -1054,5 +1054,31 @@ namespace CycloneGames.InputSystem.Runtime
             if (!string.IsNullOrEmpty(right)) composite.With("right", right);
             return true;
         }
+        public bool IsLeftMouseButtonPressed
+        {
+            get
+            {
+                var mouse = UnityEngine.InputSystem.Mouse.current;
+                return mouse != null && mouse.leftButton.isPressed;
+            }
+        }
+
+        public bool IsRightMouseButtonPressed
+        {
+            get
+            {
+                var mouse = UnityEngine.InputSystem.Mouse.current;
+                return mouse != null && mouse.rightButton.isPressed;
+            }
+        }
+
+        public bool IsMiddleMouseButtonPressed
+        {
+            get
+            {
+                var mouse = UnityEngine.InputSystem.Mouse.current;
+                return mouse != null && mouse.middleButton.isPressed;
+            }
+        }
     }
 }
