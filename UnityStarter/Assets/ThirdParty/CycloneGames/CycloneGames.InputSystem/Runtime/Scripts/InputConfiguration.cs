@@ -8,6 +8,7 @@ namespace CycloneGames.InputSystem.Runtime
         Unknown,
         KeyboardMouse,
         Gamepad,
+        Touchscreen,
         Other
     }
 
@@ -80,7 +81,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         [YamlMember("action")]
         public string ActionName { get; set; }
-        
+
         [YamlMember("deviceBindings")]
         public List<string> DeviceBindings { get; set; }
 
