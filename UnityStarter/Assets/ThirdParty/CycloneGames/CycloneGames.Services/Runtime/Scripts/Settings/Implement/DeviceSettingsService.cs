@@ -114,6 +114,12 @@ namespace CycloneGames.Service.Runtime
             {
                 using var nativeBytes = NativeFile.ReadAllBytes(_filePath);
                 byte[] fileBytes = nativeBytes.ToArray();
+
+                // Normalize line endings for cross-platform compatibility
+                string yamlContent = System.Text.Encoding.UTF8.GetString(fileBytes);
+                yamlContent = yamlContent.Replace("\r\n", "\n").Replace("\r", "\n");
+                fileBytes = System.Text.Encoding.UTF8.GetBytes(yamlContent);
+
                 var parser = new YamlParser(new ReadOnlySequence<byte>(fileBytes));
                 _settings = YamlSerializer.Deserialize<T>(ref parser, _serializerOptions);
             }
@@ -141,14 +147,28 @@ namespace CycloneGames.Service.Runtime
                     Directory.CreateDirectory(directory);
                 }
 
+                // Clean up any leftover temp file from previous failed save
+                if (File.Exists(_tempFilePath))
+                {
+                    try { File.Delete(_tempFilePath); }
+                    catch { /* Ignore cleanup errors */ }
+                }
+
                 var bufferWriter = new ArrayBufferWriter<byte>();
                 var emitter = new Utf8YamlEmitter(bufferWriter);
 
                 YamlSerializer.Serialize(ref emitter, _settings, _serializerOptions);
 
-                using var nativeBytes = new NativeArray<byte>(bufferWriter.WrittenSpan.ToArray(), Allocator.Temp);
+                // Normalize line endings for cross-platform compatibility
+                byte[] yamlBytes = bufferWriter.WrittenSpan.ToArray();
+                string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
+                yamlContent = yamlContent.Replace("\r\n", "\n").Replace("\r", "\n");
+                yamlBytes = System.Text.Encoding.UTF8.GetBytes(yamlContent);
+
+                using var nativeBytes = new NativeArray<byte>(yamlBytes, Allocator.Temp);
                 NativeFile.WriteAllBytes(_tempFilePath, nativeBytes);
 
+                // Atomic replace: delete target, move temp to target
                 if (File.Exists(_filePath))
                     File.Delete(_filePath);
                 File.Move(_tempFilePath, _filePath);
@@ -156,6 +176,13 @@ namespace CycloneGames.Service.Runtime
             catch (Exception ex)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to save '{_cachedTypeName}': {ex.Message}");
+
+                // Clean up temp file on error
+                if (File.Exists(_tempFilePath))
+                {
+                    try { File.Delete(_tempFilePath); }
+                    catch { /* Ignore cleanup errors */ }
+                }
             }
         }
     }
