@@ -384,6 +384,55 @@ _input.PushContext(ctxInspect); // 切换到 Inspect
 _input.PushContext(ctxCharge); // 切换到 Charge
 ```
 
+## 长按进度条（UI 进度显示）
+
+如果需要在长按期间显示进度条，可以使用 `GetLongPressProgressObservable()` 来获取持续的进度值（0~1）：
+
+**使用生成的常量（推荐，ZeroGC）：**
+
+```csharp
+using YourGame.Input.Generated; // 引入生成的常量
+
+// 将长按进度绑定到 UI 进度条
+var ctx = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
+    .AddBinding(
+        _input.GetLongPressProgressObservable(InputActions.Actions.Gameplay_Confirm),
+        new ScalarCommand(progress =>
+        {
+            if (progress < 0)
+            {
+                // 取消（在完成前松开）
+                progressBar.gameObject.SetActive(false);
+            }
+            else
+            {
+                // 显示并更新进度条 (0~1)
+                progressBar.gameObject.SetActive(true);
+                progressBar.fillAmount = progress;
+                
+                if (progress >= 1f)
+                {
+                    // 长按完成！
+                    OnLongPressComplete();
+                }
+            }
+        }));
+```
+
+**使用字符串 API：**
+
+```csharp
+_input.GetLongPressProgressObservable("PlayerActions", "Confirm")
+```
+
+**进度值说明：**
+
+| 值 | 含义 |
+|----|------|
+| `0~1` | 长按进度 (0% → 100%) |
+| `1.0` | 长按完成（**只触发一次**） |
+| `-1`  | 取消（在完成前松开） |
+
 ## 高级用法
 
 ### 多人游戏模式
@@ -735,6 +784,7 @@ public class SceneA : MonoBehaviour
 - `Observable<Vector2> GetVector2Observable(int actionId)`
 - `Observable<Unit> GetButtonObservable(int actionId)`
 - `Observable<Unit> GetLongPressObservable(int actionId)`
+- `Observable<float> GetLongPressProgressObservable(int actionId)` - 持续进度流（0~1），松开取消时发送-1。适用于进度条显示。
 - `Observable<bool> GetPressStateObservable(int actionId)` - 按下状态流（true=按下，false=释放）
 - `Observable<float> GetScalarObservable(int actionId)` - 标量值流（用于 Float 类型动作）
 

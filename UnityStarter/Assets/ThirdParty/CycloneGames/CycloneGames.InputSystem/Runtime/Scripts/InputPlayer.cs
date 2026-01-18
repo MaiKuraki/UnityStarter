@@ -43,6 +43,7 @@ namespace CycloneGames.InputSystem.Runtime
         // Event Subjects (Keyed by zero-garbage struct InputActionKey)
         private readonly Dictionary<InputActionKey, Subject<Unit>> _buttonSubjects = new();
         private readonly Dictionary<InputActionKey, Subject<Unit>> _longPressSubjects = new();
+        private readonly Dictionary<InputActionKey, Subject<float>> _longPressProgressSubjects = new();
         private readonly Dictionary<InputActionKey, BehaviorSubject<bool>> _pressStateSubjects = new();
         private readonly Dictionary<InputActionKey, Subject<Vector2>> _vector2Subjects = new();
         private readonly Dictionary<InputActionKey, Subject<float>> _scalarSubjects = new();
@@ -414,6 +415,28 @@ namespace CycloneGames.InputSystem.Runtime
             return _longPressSubjects.TryGetValue(key, out var subject) ? subject : EmptyObservables.Unit;
         }
 
+        public Observable<float> GetLongPressProgressObservable(string actionName)
+        {
+            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            if (mapName != null)
+            {
+                var key = new InputActionKey(mapName, actionName);
+                if (_longPressProgressSubjects.TryGetValue(key, out var subject)) return subject;
+            }
+            if (_actionNameToKey.TryGetValue(actionName, out var cachedKey) &&
+                _longPressProgressSubjects.TryGetValue(cachedKey, out var cachedSubject))
+            {
+                return cachedSubject;
+            }
+            return EmptyObservables.Float;
+        }
+
+        public Observable<float> GetLongPressProgressObservable(string actionMapName, string actionName)
+        {
+            var key = new InputActionKey(actionMapName, actionName);
+            return _longPressProgressSubjects.TryGetValue(key, out var subject) ? subject : EmptyObservables.Float;
+        }
+
         public Observable<float> GetScalarObservable(string actionMapName, string actionName)
         {
             var key = new InputActionKey(actionMapName, actionName);
@@ -430,6 +453,7 @@ namespace CycloneGames.InputSystem.Runtime
         public Observable<Vector2> GetVector2Observable(int actionId) => FindAction(actionId) is { } action ? GetVector2Observable(action.actionMap.name, action.name) : EmptyObservables.Vector2;
         public Observable<Unit> GetButtonObservable(int actionId) => FindAction(actionId) is { } action ? GetButtonObservable(action.actionMap.name, action.name) : EmptyObservables.Unit;
         public Observable<Unit> GetLongPressObservable(int actionId) => FindAction(actionId) is { } action ? GetLongPressObservable(action.actionMap.name, action.name) : EmptyObservables.Unit;
+        public Observable<float> GetLongPressProgressObservable(int actionId) => FindAction(actionId) is { } action ? GetLongPressProgressObservable(action.actionMap.name, action.name) : EmptyObservables.Float;
         public Observable<bool> GetPressStateObservable(int actionId) => FindAction(actionId) is { } action ? GetPressStateObservable(action.actionMap.name, action.name) : EmptyObservables.Bool;
         public Observable<float> GetScalarObservable(int actionId) => FindAction(actionId) is { } action ? GetScalarObservable(action.actionMap.name, action.name) : EmptyObservables.Float;
 
@@ -474,6 +498,7 @@ namespace CycloneGames.InputSystem.Runtime
 
             foreach (var s in _buttonSubjects.Values) s.Dispose();
             foreach (var s in _longPressSubjects.Values) s.Dispose();
+            foreach (var s in _longPressProgressSubjects.Values) s.Dispose();
             foreach (var s in _vector2Subjects.Values) s.Dispose();
             foreach (var s in _pressStateSubjects.Values) s.Dispose();
 
@@ -613,6 +638,7 @@ namespace CycloneGames.InputSystem.Runtime
                             if (inferredType == ActionValueType.Button && bindingConfig.LongPressMs > 0 && !_longPressSubjects.ContainsKey(key))
                             {
                                 WireLongPressDetection(existingAction, bindingConfig.LongPressMs, key, token);
+                                WireLongPressProgressDetection(existingAction, bindingConfig.LongPressMs, key, token);
                             }
                             continue;
                         }
@@ -768,6 +794,7 @@ namespace CycloneGames.InputSystem.Runtime
                             if (longPressMs > 0)
                             {
                                 WireLongPressDetection(action, longPressMs, key, token);
+                                WireLongPressProgressDetection(action, longPressMs, key, token);
                             }
                         }
                     }
@@ -971,6 +998,47 @@ namespace CycloneGames.InputSystem.Runtime
             }).AddTo(_actionWiringSubscriptions);
 
             _longPressSubjects[key] = longPressSubject;
+        }
+
+        /// <summary>
+        /// Wires long-press progress detection for button actions.
+        /// Emits continuous progress (0~1) while holding, and -1 when released before completion.
+        /// </summary>
+        private void WireLongPressProgressDetection(InputAction action, int longPressMs, InputActionKey key, CancellationToken token)
+        {
+            var progressSubject = new Subject<float>();
+            float thresholdSec = longPressMs / 1000f;
+
+            action.StartedAsObservable(token).Subscribe(_ =>
+            {
+                var startTime = Time.realtimeSinceStartup;
+                var ct = _cancellation.Token;
+                UniTask.Void(async () =>
+                {
+                    try
+                    {
+                        while (action.IsPressed())
+                        {
+                            float elapsed = Time.realtimeSinceStartup - startTime;
+                            float progress = Mathf.Clamp01(elapsed / thresholdSec);
+                            progressSubject.OnNext(progress);
+
+                            if (progress >= 1f) break; // Completed, stop emitting progress
+                            await UniTask.Yield(PlayerLoopTiming.Update, ct);
+                        }
+
+                        // Emit -1 if released before completion (cancelled)
+                        float finalElapsed = Time.realtimeSinceStartup - startTime;
+                        if (finalElapsed < thresholdSec)
+                        {
+                            progressSubject.OnNext(-1f);
+                        }
+                    }
+                    catch (OperationCanceledException) { }
+                });
+            }).AddTo(_actionWiringSubscriptions);
+
+            _longPressProgressSubjects[key] = progressSubject;
         }
 
         /// <summary>
