@@ -181,6 +181,7 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (!_isInitialized || string.IsNullOrEmpty(_userConfigUri)) return;
 
+            NativeArray<byte> nativeBytes = default;
             try
             {
                 byte[] yamlBytes = YamlSerializer.Serialize(_configuration).ToArray();
@@ -199,13 +200,20 @@ namespace CycloneGames.InputSystem.Runtime
                     System.IO.Directory.CreateDirectory(directory);
                 }
 
-                using var nativeBytes = new NativeArray<byte>(yamlBytes, Allocator.Temp);
+                nativeBytes = new NativeArray<byte>(yamlBytes, Allocator.Persistent);
                 await NativeFile.WriteAllBytesAsync(filePath, nativeBytes);
                 CLogger.LogInfo($"{DEBUG_FLAG} User configuration saved to: {filePath}");
             }
             catch (Exception e)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to save user configuration: {e.Message}");
+            }
+            finally
+            {
+                if (nativeBytes.IsCreated)
+                {
+                    nativeBytes.Dispose();
+                }
             }
         }
 
