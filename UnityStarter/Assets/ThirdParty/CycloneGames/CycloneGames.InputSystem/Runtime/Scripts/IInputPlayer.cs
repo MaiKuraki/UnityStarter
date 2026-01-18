@@ -35,6 +35,14 @@ namespace CycloneGames.InputSystem.Runtime
         Observable<Unit> GetLongPressObservable(int actionId);
 
         /// <summary>
+        /// Emits continuous progress (0~1) while holding button. Emits -1 when released before completion.
+        /// Useful for showing a progress bar during long press. Returns empty if not configured.
+        /// </summary>
+        Observable<float> GetLongPressProgressObservable(string actionName);
+        Observable<float> GetLongPressProgressObservable(string actionMapName, string actionName);
+        Observable<float> GetLongPressProgressObservable(int actionId);
+
+        /// <summary>
         /// Emits true on press start, false on release.
         /// </summary>
         Observable<bool> GetPressStateObservable(string actionName);
