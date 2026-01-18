@@ -528,6 +528,25 @@ Save the current configuration to the user configuration directory:
 await InputManager.Instance.SaveUserConfigurationAsync();
 ```
 
+### Reset to Default Configuration
+
+Reset user configuration to default (cross-platform compatible: Windows, macOS, Linux, Android, iOS, WebGL):
+
+```csharp
+using CycloneGames.Utility.Runtime;
+using CycloneGames.InputSystem.Runtime;
+
+var defaultUri = FilePathUtility.GetUnityWebRequestUri("input_config.yaml", UnityPathSource.StreamingAssets);
+var userUri = FilePathUtility.GetUnityWebRequestUri("user_input_settings.yaml", UnityPathSource.PersistentData);
+
+bool success = await InputSystemLoader.ResetToDefaultAsync(defaultUri, userUri);
+if (success)
+{
+    Debug.Log("Configuration reset to default");
+}
+```
+
+
 ### Event Callbacks
 
 ```csharp
