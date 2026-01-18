@@ -528,6 +528,24 @@ if (success)
 await InputManager.Instance.SaveUserConfigurationAsync();
 ```
 
+### 重置为默认配置
+
+将用户配置重置为默认配置（跨平台兼容：Windows、macOS、Linux、Android、iOS、WebGL）：
+
+```csharp
+using CycloneGames.Utility.Runtime;
+using CycloneGames.InputSystem.Runtime;
+
+var defaultUri = FilePathUtility.GetUnityWebRequestUri("input_config.yaml", UnityPathSource.StreamingAssets);
+var userUri = FilePathUtility.GetUnityWebRequestUri("user_input_settings.yaml", UnityPathSource.PersistentData);
+
+bool success = await InputSystemLoader.ResetToDefaultAsync(defaultUri, userUri);
+if (success)
+{
+    Debug.Log("配置已重置为默认值");
+}
+```
+
 ### 事件回调
 
 ```csharp
