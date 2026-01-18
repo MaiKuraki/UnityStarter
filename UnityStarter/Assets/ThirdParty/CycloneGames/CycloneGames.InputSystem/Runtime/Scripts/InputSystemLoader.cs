@@ -118,23 +118,128 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
+        /// Resets user configuration to default. Deletes user config file and reinitializes with default config.
+        /// Cross-platform compatible: Windows, macOS, Linux, Android, iOS, WebGL.
+        /// </summary>
+        /// <param name="defaultConfigUri">URI to default config (e.g., StreamingAssets)</param>
+        /// <param name="userConfigUri">URI to user config (e.g., PersistentData)</param>
+        /// <returns>True if reset was successful</returns>
+        public static async Task<bool> ResetToDefaultAsync(string defaultConfigUri, string userConfigUri)
+        {
+            if (string.IsNullOrEmpty(defaultConfigUri))
+            {
+                CLogger.LogError($"{DEBUG_FLAG} Cannot reset: defaultConfigUri is null or empty.");
+                return false;
+            }
+
+            bool deleteSuccess = TryDeleteUserConfigFile(userConfigUri);
+            if (!deleteSuccess)
+            {
+                CLogger.LogWarning($"{DEBUG_FLAG} Failed to delete user config, but will continue with reset.");
+            }
+
+            await InitializeAsync(defaultConfigUri, userConfigUri);
+            
+            CLogger.LogInfo($"{DEBUG_FLAG} Reset to default configuration completed.");
+            return true;
+        }
+
+        /// <summary>
+        /// Deletes user config file. Cross-platform compatible.
+        /// </summary>
+        /// <param name="userConfigUri">URI to user config file</param>
+        /// <returns>True if deletion was successful or file didn't exist</returns>
+        public static bool TryDeleteUserConfigFile(string userConfigUri)
+        {
+            if (string.IsNullOrEmpty(userConfigUri))
+            {
+                return true; // Nothing to delete
+            }
+
+            try
+            {
+#if UNITY_WEBGL && !UNITY_EDITOR
+                // WebGL: Use PlayerPrefs-based storage or IndexedDB
+                // Since we can't directly delete files in WebGL, we mark it for recreation
+                string key = GetPlayerPrefsKeyFromUri(userConfigUri);
+                if (UnityEngine.PlayerPrefs.HasKey(key))
+                {
+                    UnityEngine.PlayerPrefs.DeleteKey(key);
+                    UnityEngine.PlayerPrefs.Save();
+                    CLogger.LogInfo($"{DEBUG_FLAG} Deleted user config from PlayerPrefs: {key}");
+                }
+                return true;
+#else
+                // All other platforms: Standard file deletion
+                string filePath = GetFilePathFromUri(userConfigUri);
+                if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                    CLogger.LogInfo($"{DEBUG_FLAG} Deleted user config file: {filePath}");
+                }
+                return true;
+#endif
+            }
+            catch (Exception e)
+            {
+                CLogger.LogWarning($"{DEBUG_FLAG} Failed to delete user config: {e.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Extracts file path from URI. Handles different URI formats for cross-platform compatibility.
+        /// </summary>
+        private static string GetFilePathFromUri(string uri)
+        {
+            if (string.IsNullOrEmpty(uri)) return null;
+
+            try
+            {
+                // Handle file:// URIs
+                if (uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+                {
+                    return new Uri(uri).LocalPath;
+                }
+                
+                // Handle direct paths (Android, iOS, etc.)
+                if (uri.StartsWith("/") || (uri.Length > 1 && uri[1] == ':'))
+                {
+                    return uri;
+                }
+
+                // Try parsing as URI
+                if (Uri.TryCreate(uri, UriKind.Absolute, out Uri parsedUri))
+                {
+                    return parsedUri.LocalPath;
+                }
+
+                return uri;
+            }
+            catch (Exception e)
+            {
+                CLogger.LogWarning($"{DEBUG_FLAG} Failed to parse URI '{uri}': {e.Message}");
+                return null;
+            }
+        }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        /// <summary>
+        /// Generates a PlayerPrefs key from URI for WebGL storage.
+        /// </summary>
+        private static string GetPlayerPrefsKeyFromUri(string uri)
+        {
+            // Create a stable key from the URI
+            return $"InputConfig_{uri.GetHashCode():X8}";
+        }
+#endif
+
+        /// <summary>
         /// Attempts to delete a corrupted user config file.
         /// </summary>
         private static void TryDeleteCorruptedUserConfig(string userConfigUri)
         {
-            try
-            {
-                string filePath = new Uri(userConfigUri).LocalPath;
-                if (File.Exists(filePath))
-                {
-                    File.Delete(filePath);
-                    CLogger.LogInfo($"{DEBUG_FLAG} Deleted corrupted user config file: {filePath}");
-                }
-            }
-            catch (Exception e)
-            {
-                CLogger.LogWarning($"{DEBUG_FLAG} Failed to delete corrupted user config: {e.Message}");
-            }
+            TryDeleteUserConfigFile(userConfigUri);
         }
 
         private static async Task<(bool, string)> LoadConfigFromUriAsync(string uri)
