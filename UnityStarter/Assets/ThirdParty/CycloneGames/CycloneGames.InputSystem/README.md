@@ -384,6 +384,55 @@ _input.PushContext(ctxInspect); // Switch to Inspect
 _input.PushContext(ctxCharge); // Switch to Charge
 ```
 
+## Long Press Progress (UI Progress Bar)
+
+To display a progress bar during long press, use `GetLongPressProgressObservable()` which emits continuous progress values (0~1):
+
+**Using generated constants (recommended, ZeroGC):**
+
+```csharp
+using YourGame.Input.Generated; // Import generated constants
+
+// Bind long press progress to a UI progress bar
+var ctx = new InputContext(InputActions.ActionMaps.PlayerActions, InputActions.Contexts.Gameplay)
+    .AddBinding(
+        _input.GetLongPressProgressObservable(InputActions.Actions.Gameplay_Confirm),
+        new ScalarCommand(progress =>
+        {
+            if (progress < 0)
+            {
+                // Cancelled (released before completion)
+                progressBar.gameObject.SetActive(false);
+            }
+            else
+            {
+                // Show and update progress bar (0~1)
+                progressBar.gameObject.SetActive(true);
+                progressBar.fillAmount = progress;
+                
+                if (progress >= 1f)
+                {
+                    // Long press completed!
+                    OnLongPressComplete();
+                }
+            }
+        }));
+```
+
+**Using string-based API:**
+
+```csharp
+_input.GetLongPressProgressObservable("PlayerActions", "Confirm")
+```
+
+**Progress values:**
+
+| Value | Meaning |
+|-------|--------|
+| `0~1` | Progress (0% → 100%) |
+| `1.0` | Long press completed (emits exactly once) |
+| `-1`  | Cancelled (released before completion) |
+
 ## Advanced Usage
 
 ### Multi-Player Modes
@@ -735,6 +784,7 @@ Use generated constants to completely avoid runtime string operations:
 - `Observable<Vector2> GetVector2Observable(int actionId)`
 - `Observable<Unit> GetButtonObservable(int actionId)`
 - `Observable<Unit> GetLongPressObservable(int actionId)`
+- `Observable<float> GetLongPressProgressObservable(int actionId)` - Continuous progress stream (0~1) while holding, emits -1 when cancelled. Useful for progress bars.
 - `Observable<bool> GetPressStateObservable(int actionId)` - Press state stream (true=pressed, false=released)
 - `Observable<float> GetScalarObservable(int actionId)` - Scalar value stream (for Float type actions)
 
