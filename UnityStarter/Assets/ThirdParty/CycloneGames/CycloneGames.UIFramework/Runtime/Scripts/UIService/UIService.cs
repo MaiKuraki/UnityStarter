@@ -44,6 +44,12 @@ namespace CycloneGames.UIFramework.Runtime
 
         (float, float) GetRootCanvasSize();
 
+        /// <summary>
+        /// Gets the UI Camera from the UIRoot.
+        /// </summary>
+        /// <returns>The UI Camera if available, otherwise null.</returns>
+        UnityEngine.Camera GetUICamera();
+
         void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService);
         void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService, IAssetPackage package);
     }
@@ -270,6 +276,16 @@ namespace CycloneGames.UIFramework.Runtime
                 return (0, 0);
             }
             return uiManagerInstance.GetRootCanvasSize();
+        }
+
+        public UnityEngine.Camera GetUICamera()
+        {
+            if (!CheckInitialization())
+            {
+                CLogger.LogError($"{DEBUG_FLAG} UIService is not initialized. Operation aborted.");
+                return null;
+            }
+            return uiManagerInstance.GetUICamera();
         }
     }
 }
