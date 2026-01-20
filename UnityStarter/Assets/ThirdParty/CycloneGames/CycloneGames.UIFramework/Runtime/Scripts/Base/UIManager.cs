@@ -586,6 +586,11 @@ namespace CycloneGames.UIFramework.Runtime
             return TryGetUIRoot()?.GetRootCanvasSize() ?? default;
         }
 
+        public Camera GetUICamera()
+        {
+            return TryGetUIRoot()?.UICamera;
+        }
+
         protected void OnDestroy()
         {
             UnityEngine.Application.onBeforeRender -= ResetPerFrameBudget;
