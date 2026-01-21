@@ -4,11 +4,17 @@ using System.Threading;
 using CycloneGames.Logger;
 using UnityEngine;
 
+#if !UNITY_WEBGL || UNITY_EDITOR
+using System.Collections.Concurrent;
+using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
+#endif
+
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
     /// <summary>
     /// Production-grade Dynamic Atlas System with multi-page support, reference counting, and automatic page cleanup.
-    /// Thread-safe for concurrent access.
+    /// Thread-safe for concurrent access with platform-specific optimizations.
     /// </summary>
     public class DynamicAtlasService : IDynamicAtlas
     {
@@ -22,25 +28,68 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private readonly List<DynamicAtlasPage> _pages = new List<DynamicAtlasPage>();
         private readonly Dictionary<string, AtlasItem> _itemCache = new Dictionary<string, AtlasItem>();
-        private readonly Stack<AtlasItem> _itemPool = new Stack<AtlasItem>(64);
         private readonly ReaderWriterLockSlim _lock = new ReaderWriterLockSlim(LockRecursionPolicy.NoRecursion);
-        private const int MaxPoolSize = 128;
         private static int _spriteIdCounter = 0;
 
+        // Platform-specific object pool
+#if !UNITY_WEBGL || UNITY_EDITOR
+        private readonly ConcurrentQueue<AtlasItem> _itemPoolConcurrent = new ConcurrentQueue<AtlasItem>();
+#else
+        private readonly Stack<AtlasItem> _itemPoolStack = new Stack<AtlasItem>(64);
+#endif
+        private const int MaxPoolSize = 128;
+        private int _poolCount = 0;
+
+        // Configuration
         private readonly Func<string, Texture2D> _loadFunc;
         private readonly Action<string, Texture2D> _unloadFunc;
         private readonly int _pageSize;
+        private readonly int _padding;
+        private readonly TextureFormat _targetFormat;
         private readonly bool _autoScaleLargeTextures;
+        private readonly bool _enableBlockAlignment;
+        private readonly bool _enablePlatformOptimizations;
+        private readonly int _blockSize;
 
-        public DynamicAtlasService(int forceSize = 0, Func<string, Texture2D> loadFunc = null, Action<string, Texture2D> unloadFunc = null, bool autoScaleLargeTextures = true)
-        {
-            _loadFunc = loadFunc ?? Resources.Load<Texture2D>;
-            _unloadFunc = unloadFunc ?? ((path, tex) => Resources.UnloadAsset(tex));
-            _autoScaleLargeTextures = autoScaleLargeTextures;
+        // Scaling buffer (reusable, platform-specific)
+#if !UNITY_WEBGL || UNITY_EDITOR
+        private NativeArray<Color32> _scaleBuffer;
+        private readonly object _scaleBufferLock = new object();
+#endif
+        private Color32[] _managedScaleBuffer;
+        private int _managedScaleBufferCapacity;
 
-            if (forceSize > 0)
+        public DynamicAtlasService(
+            int forceSize = 0,
+            Func<string, Texture2D> loadFunc = null,
+            Action<string, Texture2D> unloadFunc = null,
+            bool autoScaleLargeTextures = true)
+            : this(new DynamicAtlasConfig
             {
-                _pageSize = forceSize;
+                pageSize = forceSize,
+                loadFunc = loadFunc,
+                unloadFunc = unloadFunc,
+                autoScaleLargeTextures = autoScaleLargeTextures
+            })
+        {
+        }
+
+        public DynamicAtlasService(DynamicAtlasConfig config)
+        {
+            config = config ?? new DynamicAtlasConfig();
+
+            _loadFunc = config.loadFunc ?? Resources.Load<Texture2D>;
+            _unloadFunc = config.unloadFunc ?? ((path, tex) => Resources.UnloadAsset(tex));
+            _autoScaleLargeTextures = config.autoScaleLargeTextures;
+            _targetFormat = config.targetFormat;
+            _enableBlockAlignment = config.enableBlockAlignment;
+            _enablePlatformOptimizations = config.enablePlatformOptimizations;
+            _padding = config.padding;
+            _blockSize = TextureFormatHelper.GetBlockSize(_targetFormat);
+
+            if (config.pageSize > 0)
+            {
+                _pageSize = config.pageSize;
             }
             else
             {
@@ -48,6 +97,12 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 long systemMemory = SystemInfo.systemMemorySize;
                 if (systemMemory < 3000 || maxTextureSize < 2048) _pageSize = 1024;
                 else _pageSize = 2048;
+            }
+
+            // Align page size to block size if needed
+            if (_blockSize > 1)
+            {
+                _pageSize = TextureFormatHelper.AlignToBlockSize(_pageSize, _blockSize);
             }
         }
 
@@ -136,12 +191,13 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             Texture2D source = _loadFunc(path);
             if (source == null)
             {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                 CLogger.LogError($"[DynamicAtlas] Failed to load: {path}");
+#endif
                 return null;
             }
 
-            const int padding = 2;
-            int availableSize = _pageSize - padding;
+            int availableSize = _pageSize - _padding;
             Texture2D processedTexture = source;
             bool needsDispose = false;
 
@@ -151,8 +207,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 if (processedTexture != null && processedTexture != source)
                 {
                     needsDispose = true;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                     CLogger.LogWarning($"[DynamicAtlas] Texture {path} ({source.width}x{source.height}) is too large. " +
                         $"Auto-scaled to {processedTexture.width}x{processedTexture.height} to fit page size ({_pageSize}x{_pageSize}, available: {availableSize}x{availableSize} with padding).");
+#endif
                 }
             }
 
@@ -178,6 +236,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     CreateNewPage();
                     if (!TryInsertIntoAnyPage(processedTexture, path, out item))
                     {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                         string errorDetails = $"Texture size: {processedTexture.width}x{processedTexture.height}, " +
                             $"Page size: {_pageSize}x{_pageSize}, " +
                             $"Format: {processedTexture.format}, " +
@@ -198,7 +257,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                         {
                             CLogger.LogError($"[DynamicAtlas] Critical Failure: Cannot insert {path} even after creating new page. {errorDetails}");
                         }
-
+#endif
                         _unloadFunc(path, source);
                         if (needsDispose && processedTexture != source)
                         {
@@ -233,7 +292,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         /// <summary>
         /// Scales texture to fit within the specified maximum size while maintaining aspect ratio.
-        /// Uses optimized CPU-based scaling for readable textures, falls back to RenderTexture for compressed formats.
+        /// Uses zero-GC NativeArray path on supported platforms, falls back to managed arrays on WebGL.
         /// </summary>
         private Texture2D ScaleTextureToFit(Texture2D source, int maxSize)
         {
@@ -242,8 +301,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             int sourceWidth = source.width;
             int sourceHeight = source.height;
 
-            const int padding = 2;
-            int availableSize = maxSize - padding;
+            int availableSize = maxSize - _padding;
 
             float scale = Mathf.Min((float)availableSize / sourceWidth, (float)availableSize / sourceHeight);
 
@@ -255,24 +313,17 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             int targetWidth = Mathf.Max(1, Mathf.RoundToInt(sourceWidth * scale));
             int targetHeight = Mathf.Max(1, Mathf.RoundToInt(sourceHeight * scale));
 
-            // Ensure even dimensions for better compression and alignment
-            if (targetWidth % 2 != 0 || targetHeight % 2 != 0)
+            // Align to block size if needed
+            if (_blockSize > 1)
             {
-                float aspectRatio = (float)sourceWidth / sourceHeight;
-                if (targetWidth % 2 != 0)
-                {
-                    targetWidth--;
-                    if (targetWidth < 1) targetWidth = 2;
-                    targetHeight = Mathf.RoundToInt(targetWidth / aspectRatio);
-                    if (targetHeight % 2 != 0) targetHeight--;
-                }
-                else if (targetHeight % 2 != 0)
-                {
-                    targetHeight--;
-                    if (targetHeight < 1) targetHeight = 2;
-                    targetWidth = Mathf.RoundToInt(targetHeight * aspectRatio);
-                    if (targetWidth % 2 != 0) targetWidth--;
-                }
+                targetWidth = TextureFormatHelper.AlignToBlockSize(targetWidth, _blockSize);
+                targetHeight = TextureFormatHelper.AlignToBlockSize(targetHeight, _blockSize);
+            }
+            else
+            {
+                // Ensure even dimensions for better compression and alignment
+                if (targetWidth % 2 != 0) targetWidth--;
+                if (targetHeight % 2 != 0) targetHeight--;
             }
 
             if (targetWidth < 1) targetWidth = 1;
@@ -284,14 +335,19 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 targetWidth = Mathf.RoundToInt(targetWidth * sizeScale);
                 targetHeight = Mathf.RoundToInt(targetHeight * sizeScale);
 
-                if (targetWidth % 2 != 0) targetWidth--;
-                if (targetHeight % 2 != 0) targetHeight--;
+                if (_blockSize > 1)
+                {
+                    targetWidth = TextureFormatHelper.AlignToBlockSize(Mathf.Max(1, targetWidth), _blockSize);
+                    targetHeight = TextureFormatHelper.AlignToBlockSize(Mathf.Max(1, targetHeight), _blockSize);
+                }
+
                 if (targetWidth < 1) targetWidth = 1;
                 if (targetHeight < 1) targetHeight = 1;
             }
 
             Texture2D scaled;
 
+            // Check if we can use the fast path
             bool canUseFastPath = source.isReadable &&
                 source.format != TextureFormat.DXT1 &&
                 source.format != TextureFormat.DXT5 &&
@@ -302,44 +358,133 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             if (canUseFastPath)
             {
-                Color32[] sourcePixels = source.GetPixels32();
-                Color32[] scaledPixels = new Color32[targetWidth * targetHeight];
-
-                float xRatio = (float)sourceWidth / targetWidth;
-                float yRatio = (float)sourceHeight / targetHeight;
-
-                for (int y = 0; y < targetHeight; y++)
+#if !UNITY_WEBGL || UNITY_EDITOR
+                if (_enablePlatformOptimizations && TextureFormatHelper.SupportsNativeArrays())
                 {
-                    for (int x = 0; x < targetWidth; x++)
-                    {
-                        int srcX = Mathf.FloorToInt(x * xRatio);
-                        int srcY = Mathf.FloorToInt(y * yRatio);
-                        srcX = Mathf.Clamp(srcX, 0, sourceWidth - 1);
-                        srcY = Mathf.Clamp(srcY, 0, sourceHeight - 1);
-
-                        scaledPixels[y * targetWidth + x] = sourcePixels[srcY * sourceWidth + srcX];
-                    }
+                    scaled = ScaleTextureNative(source, targetWidth, targetHeight);
+                    if (scaled != null) return scaled;
                 }
-
-                scaled = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
-                scaled.SetPixels32(scaledPixels);
-                scaled.Apply(false);
+#endif
+                scaled = ScaleTextureManaged(source, targetWidth, targetHeight);
             }
             else
             {
-                RenderTexture rt = RenderTexture.GetTemporary(targetWidth, targetHeight, 0, RenderTextureFormat.ARGB32);
-                Graphics.Blit(source, rt);
-
-                RenderTexture previous = RenderTexture.active;
-                RenderTexture.active = rt;
-
-                scaled = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
-                scaled.ReadPixels(new Rect(0, 0, targetWidth, targetHeight), 0, 0);
-                scaled.Apply(false);
-
-                RenderTexture.active = previous;
-                RenderTexture.ReleaseTemporary(rt);
+                // GPU fallback for compressed textures
+                scaled = ScaleTextureGPU(source, targetWidth, targetHeight);
             }
+
+            return scaled;
+        }
+
+#if !UNITY_WEBGL || UNITY_EDITOR
+        private Texture2D ScaleTextureNative(Texture2D source, int targetWidth, int targetHeight)
+        {
+            try
+            {
+                var srcData = source.GetRawTextureData<Color32>();
+                int srcWidth = source.width;
+                int srcHeight = source.height;
+                int targetSize = targetWidth * targetHeight;
+
+                // Use buffer pool for zero-GC
+                bool gotBuffer = DynamicAtlasBufferPool.Instance.TryGetNativeBuffer(targetSize, out var scaleBuffer);
+                if (!gotBuffer)
+                {
+                    return null;
+                }
+
+                try
+                {
+                    unsafe
+                    {
+                        Color32* srcPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(srcData);
+                        Color32* dstPtr = DynamicAtlasBufferPool.GetNativeBufferPtr(scaleBuffer);
+
+                        float xRatio = (float)srcWidth / targetWidth;
+                        float yRatio = (float)srcHeight / targetHeight;
+
+                        for (int y = 0; y < targetHeight; y++)
+                        {
+                            int srcY = Mathf.Min((int)(y * yRatio), srcHeight - 1);
+                            for (int x = 0; x < targetWidth; x++)
+                            {
+                                int srcX = Mathf.Min((int)(x * xRatio), srcWidth - 1);
+                                dstPtr[y * targetWidth + x] = srcPtr[srcY * srcWidth + srcX];
+                            }
+                        }
+                    }
+
+                    var scaled = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
+
+                    // Copy from native buffer to texture
+                    var texData = scaled.GetRawTextureData<Color32>();
+                    NativeArray<Color32>.Copy(scaleBuffer, 0, texData, 0, targetSize);
+
+                    scaled.Apply(false);
+                    return scaled;
+                }
+                finally
+                {
+                    DynamicAtlasBufferPool.Instance.ReturnNativeBuffer(scaleBuffer);
+                }
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+#endif
+
+        private Texture2D ScaleTextureManaged(Texture2D source, int targetWidth, int targetHeight)
+        {
+            int srcWidth = source.width;
+            int srcHeight = source.height;
+            int targetSize = targetWidth * targetHeight;
+
+            // Get source pixels (this does allocate, but we minimize by reusing target buffer)
+            Color32[] sourcePixels = source.GetPixels32();
+
+            // Get or resize managed buffer
+            if (_managedScaleBuffer == null || _managedScaleBufferCapacity < targetSize)
+            {
+                _managedScaleBufferCapacity = Mathf.Max(targetSize, _managedScaleBufferCapacity * 2, 4096);
+                _managedScaleBuffer = new Color32[_managedScaleBufferCapacity];
+            }
+
+            float xRatio = (float)srcWidth / targetWidth;
+            float yRatio = (float)srcHeight / targetHeight;
+
+            for (int y = 0; y < targetHeight; y++)
+            {
+                int srcY = Mathf.Min((int)(y * yRatio), srcHeight - 1);
+                for (int x = 0; x < targetWidth; x++)
+                {
+                    int srcX = Mathf.Min((int)(x * xRatio), srcWidth - 1);
+                    _managedScaleBuffer[y * targetWidth + x] = sourcePixels[srcY * srcWidth + srcX];
+                }
+            }
+
+            var scaled = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
+            scaled.SetPixels32(_managedScaleBuffer);
+            scaled.Apply(false);
+
+            return scaled;
+        }
+
+        private Texture2D ScaleTextureGPU(Texture2D source, int targetWidth, int targetHeight)
+        {
+            RenderTexture rt = RenderTexture.GetTemporary(targetWidth, targetHeight, 0, RenderTextureFormat.ARGB32);
+            Graphics.Blit(source, rt);
+
+            RenderTexture previous = RenderTexture.active;
+            RenderTexture.active = rt;
+
+            var scaled = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
+            scaled.ReadPixels(new Rect(0, 0, targetWidth, targetHeight), 0, 0);
+            scaled.Apply(false);
+
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(rt);
 
             return scaled;
         }
@@ -396,6 +541,181 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             }
         }
 
+        /// <summary>
+        /// Gets or creates a sprite from an existing Sprite (e.g., from a SpriteAtlas).
+        /// Copies the sprite's pixels into the dynamic atlas using zero-copy GPU path when available.
+        /// </summary>
+        /// <param name="sourceSprite">The source sprite to copy from (can be from SpriteAtlas)</param>
+        /// <param name="cacheKey">Optional cache key. If null, uses sourceSprite.name</param>
+        /// <returns>A new sprite referencing the dynamic atlas</returns>
+        public Sprite GetSpriteFromSprite(Sprite sourceSprite, string cacheKey = null)
+        {
+            if (sourceSprite == null) return null;
+
+            string key = cacheKey ?? sourceSprite.name;
+            if (string.IsNullOrEmpty(key)) key = sourceSprite.GetHashCode().ToString();
+
+            // Check cache first
+            _lock.EnterReadLock();
+            try
+            {
+                if (_itemCache.TryGetValue(key, out var cachedItem))
+                {
+                    if (cachedItem.Sprite != null && cachedItem.Sprite.texture != null)
+                    {
+                        Interlocked.Increment(ref cachedItem.RefCount);
+                        return cachedItem.Sprite;
+                    }
+                }
+            }
+            finally
+            {
+                _lock.ExitReadLock();
+            }
+
+            // Extract region from source sprite's texture
+            Texture2D sourceTexture = sourceSprite.texture;
+            Rect sourceRect = sourceSprite.rect;
+
+            return GetSpriteFromRegion(sourceTexture, sourceRect, key);
+        }
+
+        /// <summary>
+        /// Gets or creates a sprite from a Texture2D region.
+        /// Useful for extracting specific regions from larger textures or SpriteAtlas.
+        /// Uses GPU CopyTexture when available for zero-GC operation.
+        /// </summary>
+        /// <param name="sourceTexture">The source texture (e.g., SpriteAtlas texture)</param>
+        /// <param name="sourceRect">The region to extract (in pixels, bottom-left origin)</param>
+        /// <param name="cacheKey">Cache key for this region</param>
+        /// <returns>A new sprite referencing the dynamic atlas</returns>
+        public Sprite GetSpriteFromRegion(Texture2D sourceTexture, Rect sourceRect, string cacheKey)
+        {
+            if (sourceTexture == null || string.IsNullOrEmpty(cacheKey)) return null;
+
+            // Check cache first
+            _lock.EnterReadLock();
+            try
+            {
+                if (_itemCache.TryGetValue(cacheKey, out var cachedItem))
+                {
+                    if (cachedItem.Sprite != null && cachedItem.Sprite.texture != null)
+                    {
+                        Interlocked.Increment(ref cachedItem.RefCount);
+                        return cachedItem.Sprite;
+                    }
+                }
+            }
+            finally
+            {
+                _lock.ExitReadLock();
+            }
+
+            int regionWidth = Mathf.RoundToInt(sourceRect.width);
+            int regionHeight = Mathf.RoundToInt(sourceRect.height);
+            int availableSize = _pageSize - _padding;
+
+            // Check if region needs scaling
+            if (regionWidth > availableSize || regionHeight > availableSize)
+            {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                CLogger.LogWarning($"[DynamicAtlas] Region {cacheKey} ({regionWidth}x{regionHeight}) exceeds available size ({availableSize}). " +
+                    "Consider using smaller source sprites or increasing page size.");
+#endif
+                return null;
+            }
+
+            _lock.EnterWriteLock();
+            try
+            {
+                // Double-check cache
+                if (_itemCache.TryGetValue(cacheKey, out var existingItem))
+                {
+                    if (existingItem.Sprite != null && existingItem.Sprite.texture != null)
+                    {
+                        Interlocked.Increment(ref existingItem.RefCount);
+                        return existingItem.Sprite;
+                    }
+                }
+
+                // Try to insert into existing pages
+                if (!TryInsertRegionIntoAnyPage(sourceTexture, sourceRect, cacheKey, out var item))
+                {
+                    CreateNewPage();
+                    if (!TryInsertRegionIntoAnyPage(sourceTexture, sourceRect, cacheKey, out item))
+                    {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                        CLogger.LogError($"[DynamicAtlas] Failed to insert region {cacheKey}. " +
+                            $"Region size: {regionWidth}x{regionHeight}, Page size: {_pageSize}x{_pageSize}");
+#endif
+                        return null;
+                    }
+                }
+
+                if (item.Page != null)
+                {
+                    item.Page.ApplyIfNeeded();
+                }
+
+                item.RefCount = 1;
+                _itemCache[cacheKey] = item;
+
+                return item.Sprite;
+            }
+            finally
+            {
+                _lock.ExitWriteLock();
+            }
+        }
+
+        private bool TryInsertRegionIntoAnyPage(Texture2D sourceTexture, Rect sourceRect, string cacheKey, out AtlasItem item)
+        {
+            item = null;
+
+            int pageCount = _pages.Count;
+            for (int i = pageCount - 1; i >= 0; i--)
+            {
+                var page = _pages[i];
+                if (page.TryInsertFromRegion(sourceTexture, sourceRect, out Rect uvRect))
+                {
+                    item = CreateItemFromRegion(page, sourceRect, uvRect, cacheKey);
+                    return true;
+                }
+            }
+
+            if (_pages.Count == 0)
+            {
+                CreateNewPage();
+                return TryInsertRegionIntoAnyPage(sourceTexture, sourceRect, cacheKey, out item);
+            }
+
+            return false;
+        }
+
+        private AtlasItem CreateItemFromRegion(DynamicAtlasPage page, Rect sourceRect, Rect uvRect, string cacheKey)
+        {
+            int width = Mathf.RoundToInt(sourceRect.width);
+            int height = Mathf.RoundToInt(sourceRect.height);
+
+            Rect spriteRect = new Rect(uvRect.x * page.Width, uvRect.y * page.Height, width, height);
+            Vector2 pivot = new Vector2(0.5f, 0.5f);
+
+            Sprite newSprite = Sprite.Create(page.Texture, spriteRect, pivot, 100.0f, 0, SpriteMeshType.FullRect);
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            int spriteId = Interlocked.Increment(ref _spriteIdCounter);
+            newSprite.name = $"Atlas_Region_{cacheKey}_{page.PageId}_{spriteId}";
+#endif
+
+            AtlasItem item = GetItemFromPool();
+            item.Sprite = newSprite;
+            item.Page = page;
+            item.Path = cacheKey;
+            item.RefCount = 0;
+
+            return item;
+        }
+
         private bool TryInsertIntoAnyPage(Texture2D source, string path, out AtlasItem item)
         {
             item = null;
@@ -422,7 +742,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private void CreateNewPage()
         {
-            var page = new DynamicAtlasPage(_pageSize);
+            var page = new DynamicAtlasPage(_pageSize, _targetFormat, _padding, _enablePlatformOptimizations);
             _pages.Add(page);
         }
 
@@ -433,25 +753,27 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             Sprite newSprite = Sprite.Create(page.Texture, spriteRect, pivot, 100.0f, 0, SpriteMeshType.FullRect);
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             string fileName = ExtractFileName(path);
             int pathHash = path.GetHashCode();
-            int spriteId = System.Threading.Interlocked.Increment(ref _spriteIdCounter);
+            int spriteId = Interlocked.Increment(ref _spriteIdCounter);
             int pageId = page.PageId;
-
             newSprite.name = $"Atlas_{fileName}_{pathHash:X8}_{pageId}_{spriteId}";
+#endif
 
             AtlasItem item = GetItemFromPool();
             item.Sprite = newSprite;
             item.Page = page;
             item.Path = path;
-            item.RefCount = 0; // Will be set to 1 by caller
+            item.RefCount = 0;
 
             return item;
         }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
         /// <summary>
         /// Extracts and sanitizes the file name from a path for use in sprite names.
-        /// Limits length and removes invalid characters to ensure Unity compatibility.
+        /// Only compiled in editor/development builds to avoid GC in release.
         /// </summary>
         private static string ExtractFileName(string path)
         {
@@ -467,38 +789,33 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             }
 
             const int maxLength = 32;
-            char[] buffer = new char[maxLength];
-            int bufferIndex = 0;
-
-            foreach (char c in fileName)
+            if (fileName.Length > maxLength)
             {
-                if (bufferIndex >= maxLength) break;
-
-                if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                    (c >= '0' && c <= '9') || c == '_' || c == '-')
-                {
-                    buffer[bufferIndex++] = c;
-                }
-                else if (c == ' ' || c == '.')
-                {
-                    buffer[bufferIndex++] = '_';
-                }
+                fileName = fileName.Substring(0, maxLength);
             }
 
-            if (bufferIndex == 0)
-            {
-                return "Unknown";
-            }
-
-            return new string(buffer, 0, bufferIndex);
+            return fileName;
         }
+#endif
 
         private AtlasItem GetItemFromPool()
         {
-            if (_itemPool.Count > 0)
+#if !UNITY_WEBGL || UNITY_EDITOR
+            if (_itemPoolConcurrent.TryDequeue(out var item))
             {
-                return _itemPool.Pop();
+                Interlocked.Decrement(ref _poolCount);
+                return item;
             }
+#else
+            lock (_itemPoolStack)
+            {
+                if (_itemPoolStack.Count > 0)
+                {
+                    Interlocked.Decrement(ref _poolCount);
+                    return _itemPoolStack.Pop();
+                }
+            }
+#endif
             return new AtlasItem();
         }
 
@@ -509,10 +826,21 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             item.Path = null;
             item.RefCount = 0;
 
-            if (_itemPool.Count < MaxPoolSize)
+            if (_poolCount >= MaxPoolSize) return;
+
+#if !UNITY_WEBGL || UNITY_EDITOR
+            _itemPoolConcurrent.Enqueue(item);
+            Interlocked.Increment(ref _poolCount);
+#else
+            lock (_itemPoolStack)
             {
-                _itemPool.Push(item);
+                if (_poolCount < MaxPoolSize)
+                {
+                    _itemPoolStack.Push(item);
+                    Interlocked.Increment(ref _poolCount);
+                }
             }
+#endif
         }
 
         private void TryReleasePage(DynamicAtlasPage page)
@@ -536,7 +864,16 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 }
                 _pages.Clear();
                 _itemCache.Clear();
-                _itemPool.Clear();
+
+#if !UNITY_WEBGL || UNITY_EDITOR
+                while (_itemPoolConcurrent.TryDequeue(out _)) { }
+#else
+                lock (_itemPoolStack)
+                {
+                    _itemPoolStack.Clear();
+                }
+#endif
+                _poolCount = 0;
             }
             finally
             {
@@ -548,6 +885,18 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             Reset();
             _lock?.Dispose();
+
+#if !UNITY_WEBGL || UNITY_EDITOR
+            lock (_scaleBufferLock)
+            {
+                if (_scaleBuffer.IsCreated)
+                {
+                    _scaleBuffer.Dispose();
+                }
+            }
+#endif
+            _managedScaleBuffer = null;
+            _managedScaleBufferCapacity = 0;
         }
     }
 }
