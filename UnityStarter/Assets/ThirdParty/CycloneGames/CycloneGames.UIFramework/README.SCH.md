@@ -159,12 +159,10 @@ stateDiagram-v2
 `UILayer` 配置定义了 UI 窗口的渲染和输入层级。框架提供了几个默认层级，但您可以创建自定义的。
 
 1. **创建新的层级配置**:
-
    - 在项目窗口中，右键单击并选择 **Create > CycloneGames > UIFramework > UILayer Configuration**
    - 为其指定一个描述性的名称，例如 `UILayer_Menu`、`UILayer_Dialogue`、`UILayer_Notification`
 
 2. **配置层级**:
-
    - 在 Inspector 中打开 `UILayerConfiguration` 资产
    - 设置 `Layer Name`（例如 "Menu"、"Dialogue"）
    - 如果需要，调整 `Sorting Order`（数值越大，渲染越靠前）
@@ -191,12 +189,10 @@ UILayer_Notification (Sorting Order: 300)
 框架提供了一个便捷的编辑器工具，可以一次性创建所有必要的文件。
 
 1. **打开 UIWindow Creator**:
-
    - 在 Unity 菜单栏中，转到 **Tools > CycloneGames > UIWindow Creator**
    - 将打开一个包含所有创建选项的窗口
 
 2. **填写所需信息**:
-
    - **Window Name**: 输入描述性名称（例如 `MainMenuWindow`、`HUDWindow`）
    - **Namespace**（可选）: 如果您使用命名空间，请在此输入（例如 `MyGame.UI`）
    - **Script Save Path**: 拖入一个文件夹，C# 脚本将保存在此
@@ -268,7 +264,6 @@ UILayer_Notification (Sorting Order: 300)
    ```
 
 2. **创建预制体**:
-
    - 在场景中创建一个新的 UI `Canvas` 或 `Panel`
    - 将您的 `MainMenuWindow` 组件添加到根 `GameObject`
    - 设计您的 UI（添加按钮、文本、图像等）
@@ -870,7 +865,6 @@ protected override void OnDestroy()
 ```
 
 3. **使用适当的页面大小**:
-
    - **1024x1024**: 适用于低端设备或内存受限的情况
    - **2048x2048**: 推荐用于大多数情况（默认值）
    - **4096x4096**: 适用于内存充足的高端设备
@@ -885,7 +879,6 @@ protected override void OnDestroy()
 ```
 
 6. **纹理要求**:
-
    - 纹理必须是可读的（在纹理导入设置中启用 "Read/Write Enabled"）
    - 纹理应该是支持运行时修改的格式（RGBA32、ARGB32 等）
    - 压缩格式（DXT、ETC）可能需要转换
@@ -920,6 +913,115 @@ protected override void OnDestroy()
 - 确保来自图集的精灵在同一 Canvas 上
 - 检查精灵是否使用相同的材质/着色器
 - 验证 Unity 的批处理是否已启用
+
+### 步骤 6: 从 SpriteAtlas 加载精灵
+
+动态图集支持从现有的 Unity SpriteAtlas 资源复制精灵。这在您想要将静态图集与运行时批处理结合使用时非常有用。
+
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+using UnityEngine;
+using UnityEngine.U2D;
+
+public class SpriteAtlasExample : MonoBehaviour
+{
+    [SerializeField] private SpriteAtlas sourceAtlas;
+
+    void LoadFromAtlas()
+    {
+        // 从 SpriteAtlas 获取精灵
+        Sprite sourceSprite = sourceAtlas.GetSprite("icon_sword");
+
+        // 复制到动态图集（可用时使用 GPU CopyTexture）
+        Sprite dynamicSprite = DynamicAtlasManager.Instance.GetSpriteFromSprite(sourceSprite);
+
+        // 使用精灵...
+
+        // 使用完毕后释放
+        DynamicAtlasManager.Instance.ReleaseSprite(sourceSprite.name);
+    }
+
+    void LoadFromRegion()
+    {
+        // 从任意纹理复制特定区域
+        Texture2D texture = Resources.Load<Texture2D>("LargeTexture");
+        Rect region = new Rect(100, 100, 64, 64);
+
+        Sprite regionSprite = DynamicAtlasManager.Instance.GetSpriteFromRegion(
+            texture, region, "my_region_key"
+        );
+
+        // 使用完毕后释放
+        DynamicAtlasManager.Instance.ReleaseSprite("my_region_key");
+    }
+}
+```
+
+> **内存警告**: 从 SpriteAtlas 加载会将整个源图集保留在内存中，直到显式卸载。建议使用 Addressables 配合独立纹理以获得更好的内存控制。
+
+### 步骤 7: 压缩动态图集（高级）
+
+为了获得最高的内存效率，使用 `CompressedDynamicAtlasService`，它可以直接在 GPU 纹理之间复制压缩纹理块，无需解压缩。
+
+**关键要求：**
+
+- 源 SpriteAtlas 和动态图集必须使用**完全相同**的 TextureFormat
+- GPU CopyTexture 必须受支持（除 WebGL 外的所有平台）
+
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+using UnityEngine;
+using UnityEngine.U2D;
+
+public class CompressedAtlasExample : MonoBehaviour
+{
+    [SerializeField] private SpriteAtlas sourceAtlas; // 必须是 ASTC_4x4 格式
+    private CompressedDynamicAtlasService _atlas;
+
+    void Start()
+    {
+        // 使用与源相同的格式创建压缩图集
+        _atlas = new CompressedDynamicAtlasService(
+            format: TextureFormat.ASTC_4x4,  // 必须与源匹配！
+            pageSize: 2048
+        );
+    }
+
+    void LoadSprite()
+    {
+        Sprite source = sourceAtlas.GetSprite("icon");
+
+        // GPU 直接块复制 - 零 CPU，零 GC
+        Sprite compressed = _atlas.GetSpriteFromSprite(source);
+    }
+
+    void OnDestroy()
+    {
+        _atlas?.Dispose();
+    }
+}
+```
+
+**平台格式推荐：**
+
+| 平台              | 推荐格式                              |
+| ----------------- | ------------------------------------- |
+| iOS               | ASTC 4×4 或 ASTC 6×6                  |
+| Android           | ASTC 4×4（现代设备）或 ETC2（旧设备） |
+| Windows/Mac/Linux | BC7（高质量）或 DXT5（兼容性）        |
+| WebGL             | 不支持（使用未压缩格式）              |
+
+### 步骤 8: 编辑器工具
+
+框架包含一个编辑器工具来验证 SpriteAtlas 格式兼容性：
+
+**菜单**: `Tools > CycloneGames > Dynamic Atlas > Atlas Format Validator`
+
+此工具扫描您的 SpriteAtlas 资源并显示：
+
+- 每个平台的当前纹理格式
+- 与 CompressedDynamicAtlasService 的兼容性
+- 最佳格式设置建议
 
 ## 高级特性
 

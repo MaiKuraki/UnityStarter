@@ -1,7 +1,10 @@
+using UnityEngine;
+
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
     /// <summary>
     /// Factory implementation for creating Dynamic Atlas instances.
+    /// Supports platform-specific configurations and shared instances.
     /// </summary>
     public class DynamicAtlasFactory : IDynamicAtlasFactory
     {
@@ -16,12 +19,31 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             config = config ?? new DynamicAtlasConfig();
 
-            return new DynamicAtlasService(
-                forceSize: config.pageSize,
-                loadFunc: config.loadFunc,
-                unloadFunc: config.unloadFunc,
-                autoScaleLargeTextures: config.autoScaleLargeTextures
-            );
+            // Validate config before creating
+            if (!config.Validate(out string error))
+            {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                Debug.LogWarning($"[DynamicAtlasFactory] Config validation warning: {error}. Using defaults.");
+#endif
+                config = new DynamicAtlasConfig();
+            }
+
+            return new DynamicAtlasService(config);
+        }
+
+        /// <summary>
+        /// Creates a platform-optimized Dynamic Atlas service instance.
+        /// </summary>
+        /// <param name="loadFunc">Custom texture loader</param>
+        /// <param name="unloadFunc">Custom texture unloader</param>
+        /// <param name="useCompression">Whether to use compressed texture format</param>
+        public IDynamicAtlas CreatePlatformOptimized(
+            System.Func<string, Texture2D> loadFunc = null,
+            System.Action<string, Texture2D> unloadFunc = null,
+            bool useCompression = false)
+        {
+            var config = DynamicAtlasConfig.CreatePlatformOptimized(loadFunc, unloadFunc, useCompression);
+            return Create(config);
         }
 
         /// <summary>
@@ -77,6 +99,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             return a.pageSize == b.pageSize &&
                    a.autoScaleLargeTextures == b.autoScaleLargeTextures &&
+                   a.targetFormat == b.targetFormat &&
+                   a.enableBlockAlignment == b.enableBlockAlignment &&
+                   a.padding == b.padding &&
+                   a.enablePlatformOptimizations == b.enablePlatformOptimizations &&
                    a.loadFunc == b.loadFunc &&
                    a.unloadFunc == b.unloadFunc;
         }
