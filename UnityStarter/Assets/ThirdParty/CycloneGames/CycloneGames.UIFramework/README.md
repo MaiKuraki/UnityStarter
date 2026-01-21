@@ -159,12 +159,10 @@ The `UIFramework.prefab` is pre-configured with essential components, so you can
 `UILayer` configurations define the rendering and input layers for your UI windows. The framework comes with several default layers, but you can create custom ones.
 
 1. **Create a New Layer Configuration**:
-
    - In the Project window, right-click and select **Create > CycloneGames > UIFramework > UILayer Configuration**
    - Name it descriptively, e.g., `UILayer_Menu`, `UILayer_Dialogue`, `UILayer_Notification`
 
 2. **Configure the Layer**:
-
    - Open the `UILayerConfiguration` asset in the Inspector
    - Set the `Layer Name` (e.g., "Menu", "Dialogue")
    - Adjust the `Sorting Order` if needed (higher values render on top)
@@ -191,12 +189,10 @@ There are two ways to create a `UIWindow`: using the quick creation tool or manu
 The framework provides a convenient editor tool to create all necessary files at once.
 
 1. **Open the UIWindow Creator**:
-
    - Go to **Tools > CycloneGames > UIWindow Creator** in the Unity menu bar
    - A window will open with all the creation options
 
 2. **Fill in the Required Information**:
-
    - **Window Name**: Enter a descriptive name (e.g., `MainMenuWindow`, `HUDWindow`)
    - **Namespace** (Optional): If you use namespaces, enter it here (e.g., `MyGame.UI`)
    - **Script Save Path**: Drag a folder where the C# script will be saved
@@ -268,7 +264,6 @@ If you prefer to create files manually or need more control:
    ```
 
 2. **Create the Prefab**:
-
    - Create a new UI `Canvas` or `Panel` in your scene
    - Add your `MainMenuWindow` component to the root `GameObject`
    - Design your UI (add buttons, text, images, etc.)
@@ -870,7 +865,6 @@ protected override void OnDestroy()
 ```
 
 3. **Use Appropriate Page Size**:
-
    - **1024x1024**: For low-end devices or when memory is constrained
    - **2048x2048**: Recommended for most cases (default)
    - **4096x4096**: For high-end devices with plenty of memory
@@ -885,7 +879,6 @@ protected override void OnDestroy()
 ```
 
 6. **Texture Requirements**:
-
    - Textures must be readable (enable "Read/Write Enabled" in texture import settings)
    - Textures should be in a format that supports runtime modification (RGBA32, ARGB32, etc.)
    - Compressed formats (DXT, ETC) may need to be converted
@@ -920,6 +913,115 @@ protected override void OnDestroy()
 - Ensure sprites from the atlas are on the same Canvas
 - Check that sprites use the same material/shader
 - Verify that Unity's batching is enabled
+
+### Step 6: Loading Sprites from SpriteAtlas
+
+The Dynamic Atlas supports copying sprites from existing Unity SpriteAtlas assets. This is useful when you want to combine static atlases with runtime batching.
+
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+using UnityEngine;
+using UnityEngine.U2D;
+
+public class SpriteAtlasExample : MonoBehaviour
+{
+    [SerializeField] private SpriteAtlas sourceAtlas;
+
+    void LoadFromAtlas()
+    {
+        // Get a sprite from SpriteAtlas
+        Sprite sourceSprite = sourceAtlas.GetSprite("icon_sword");
+
+        // Copy to Dynamic Atlas (uses GPU CopyTexture when available)
+        Sprite dynamicSprite = DynamicAtlasManager.Instance.GetSpriteFromSprite(sourceSprite);
+
+        // Use the sprite...
+
+        // Release when done
+        DynamicAtlasManager.Instance.ReleaseSprite(sourceSprite.name);
+    }
+
+    void LoadFromRegion()
+    {
+        // Copy a specific region from any texture
+        Texture2D texture = Resources.Load<Texture2D>("LargeTexture");
+        Rect region = new Rect(100, 100, 64, 64);
+
+        Sprite regionSprite = DynamicAtlasManager.Instance.GetSpriteFromRegion(
+            texture, region, "my_region_key"
+        );
+
+        // Release when done
+        DynamicAtlasManager.Instance.ReleaseSprite("my_region_key");
+    }
+}
+```
+
+> **Memory Warning**: Loading from SpriteAtlas keeps the entire source atlas in memory until explicitly unloaded. Consider using individual textures with Addressables for better memory control.
+
+### Step 7: Compressed Dynamic Atlas (Advanced)
+
+For maximum memory efficiency, use `CompressedDynamicAtlasService` which copies compressed texture blocks directly between GPU textures without decompression.
+
+**Key Requirements:**
+
+- Source SpriteAtlas and Dynamic Atlas must use **exactly the same** TextureFormat
+- GPU CopyTexture must be supported (all platforms except WebGL)
+
+```csharp
+using CycloneGames.UIFramework.DynamicAtlas;
+using UnityEngine;
+using UnityEngine.U2D;
+
+public class CompressedAtlasExample : MonoBehaviour
+{
+    [SerializeField] private SpriteAtlas sourceAtlas; // Must be ASTC_4x4 format
+    private CompressedDynamicAtlasService _atlas;
+
+    void Start()
+    {
+        // Create compressed atlas with same format as source
+        _atlas = new CompressedDynamicAtlasService(
+            format: TextureFormat.ASTC_4x4,  // Must match source!
+            pageSize: 2048
+        );
+    }
+
+    void LoadSprite()
+    {
+        Sprite source = sourceAtlas.GetSprite("icon");
+
+        // GPU direct block copy - zero CPU, zero GC
+        Sprite compressed = _atlas.GetSpriteFromSprite(source);
+    }
+
+    void OnDestroy()
+    {
+        _atlas?.Dispose();
+    }
+}
+```
+
+**Platform Format Recommendations:**
+
+| Platform          | Recommended Format                    |
+| ----------------- | ------------------------------------- |
+| iOS               | ASTC 4×4 or ASTC 6×6                  |
+| Android           | ASTC 4×4 (modern) or ETC2 (legacy)    |
+| Windows/Mac/Linux | BC7 (quality) or DXT5 (compatibility) |
+| WebGL             | Not supported (use uncompressed)      |
+
+### Step 8: Editor Tools
+
+The framework includes an editor tool to validate SpriteAtlas format compatibility:
+
+**Menu**: `Tools > CycloneGames > Dynamic Atlas > Atlas Format Validator`
+
+This tool scans your SpriteAtlas assets and shows:
+
+- Current texture format per platform
+- Compatibility with CompressedDynamicAtlasService
+- Recommendations for optimal format settings
 
 ## Advanced Features
 
