@@ -10,6 +10,8 @@ using UnityEngine.InputSystem.Users;
 using VYaml.Serialization;
 using Unio;
 using Unity.Collections;
+using UnityEngine;
+using R3;
 
 namespace CycloneGames.InputSystem.Runtime
 {
@@ -29,6 +31,9 @@ namespace CycloneGames.InputSystem.Runtime
         private string _userConfigUri;
         private bool _isInitialized = false;
         private bool _isDeviceLockingOnJoinEnabled = false;
+
+        public bool ManageCursorVisibility { get; set; } = true;
+        public bool ResetCursorToCenter { get; set; } = false;
 
         public void Initialize(string yamlContent, string userConfigUri)
         {
@@ -542,9 +547,71 @@ namespace CycloneGames.InputSystem.Runtime
                 _registerPlayers[playerId] = inputPlayer;
                 string devices = user.pairedDevices.Count > 0 ? string.Join(", ", user.pairedDevices.Select(d => d.displayName)) : "All (Shared)";
                 CLogger.LogInfo($"{DEBUG_FLAG} Player {playerId} created with devices: [{devices}].");
+                
+                if (playerId == 0)
+                {
+                    SetupCursorControl(inputPlayer);
+                }
+
                 OnPlayerInputReady?.Invoke(inputPlayer);
                 return inputPlayer;
             }
+        }
+
+        private void SetupCursorControl(IInputPlayer player)
+        {
+            player.ActiveDeviceKind.Subscribe(OnDeviceChanged);
+            UpdateCursorState(player.ActiveDeviceKind.CurrentValue);
+        }
+
+        private void OnDeviceChanged(InputDeviceKind deviceKind)
+        {
+            if (ManageCursorVisibility)
+            {
+                UpdateCursorState(deviceKind);
+            }
+        }
+
+        private void UpdateCursorState(InputDeviceKind kind)
+        {
+            bool showCursor = kind == InputDeviceKind.KeyboardMouse;
+            
+            Cursor.visible = showCursor;
+            
+            if (showCursor)
+            {
+                Cursor.lockState = CursorLockMode.None;
+                
+                if (ResetCursorToCenter)
+                {
+                    WarpCursorToCenter();
+                }
+            }
+        }
+
+        private void WarpCursorToCenter()
+        {
+#if ENABLE_INPUT_SYSTEM
+            if (UnityEngine.InputSystem.Mouse.current != null)
+            {
+                var center = new UnityEngine.Vector2(UnityEngine.Screen.width / 2f, UnityEngine.Screen.height / 2f);
+                UnityEngine.InputSystem.Mouse.current.WarpCursorPosition(center);
+            }
+#endif
+        }
+
+        public static UnityEngine.Vector2 GetMousePosition()
+        {
+            UnityEngine.Vector2 mousePos = UnityEngine.Vector2.zero;
+#if ENABLE_INPUT_SYSTEM
+            if (UnityEngine.InputSystem.Mouse.current != null)
+                mousePos = UnityEngine.InputSystem.Mouse.current.position.ReadValue();
+            else
+                mousePos = UnityEngine.Input.mousePosition;
+#else
+            mousePos = UnityEngine.Input.mousePosition;
+#endif
+            return mousePos;
         }
 
         private HashSet<string> GetRequiredLayoutsForConfig(PlayerSlotConfig config)
