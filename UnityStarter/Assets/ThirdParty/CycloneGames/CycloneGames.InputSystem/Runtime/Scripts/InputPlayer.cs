@@ -19,6 +19,23 @@ namespace CycloneGames.InputSystem.Runtime
     {
         private const string DEBUG_FLAG = "[InputPlayer]";
 
+        /// <summary>
+        /// Safely retrieves InputDevice from CallbackContext. Guards against stale controlIndex after device hot-swap or action state changes.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        private static InputDevice TryGetControlDevice(in InputAction.CallbackContext ctx)
+        {
+            try
+            {
+                return ctx.control?.device;
+            }
+            catch (IndexOutOfRangeException)
+            {
+                // controlIndex is stale (device removed/action state changed between callback queuing and execution)
+                return null;
+            }
+        }
+
         // Reactive Properties
         public ReadOnlyReactiveProperty<string> ActiveContextName { get; private set; }
         public ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind { get; private set; }
@@ -625,7 +642,11 @@ namespace CycloneGames.InputSystem.Runtime
                         if (inferredType == ActionValueType.Button)
                         {
                             bool looksVector2 = bindingConfig.DeviceBindings.Any(b =>
-                                b.Contains("2DVector") || b.Contains("leftStick") || b.Contains("rightStick") || b.Contains("dpad") || b.EndsWith("/delta"));
+                                b.Contains("2DVector") || 
+                                (b.Contains("leftStick") && !b.Contains("leftStick/")) || 
+                                (b.Contains("rightStick") && !b.Contains("rightStick/")) || 
+                                (b.Contains("dpad") && !b.Contains("dpad/")) || 
+                                b.EndsWith("/delta"));
                             bool looksFloat = !looksVector2 && bindingConfig.DeviceBindings.Any(b => b.Contains("Trigger"));
                             if (looksVector2) inferredType = ActionValueType.Vector2;
                             else if (looksFloat) inferredType = ActionValueType.Float;
@@ -723,7 +744,7 @@ namespace CycloneGames.InputSystem.Runtime
                                     .Subscribe(ctx =>
                                     {
                                         var v = ctx.ReadValue<Vector2>();
-                                        var device = ctx.control.device;
+                                        var device = TryGetControlDevice(ctx);
 
                                         // Anti-jitter: Ignore small mouse movements when using Gamepad
                                         if (device is UnityEngine.InputSystem.Mouse && _activeDeviceKind.Value == InputDeviceKind.Gamepad)
@@ -746,7 +767,7 @@ namespace CycloneGames.InputSystem.Runtime
                             {
                                 if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
                                 {
-                                    UpdateActiveDeviceKind(ctx.control?.device);
+                                    UpdateActiveDeviceKind(TryGetControlDevice(ctx));
                                 }
                             }).AddTo(_actionWiringSubscriptions);
                             _vector2Subjects[key] = subject;
@@ -759,7 +780,7 @@ namespace CycloneGames.InputSystem.Runtime
                             {
                                 if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
                                 {
-                                    UpdateActiveDeviceKind(ctx.control?.device);
+                                    UpdateActiveDeviceKind(TryGetControlDevice(ctx));
                                 }
                             }).AddTo(_actionWiringSubscriptions);
                             action.CanceledAsObservable(token).Select(_ => 0f).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
@@ -780,7 +801,7 @@ namespace CycloneGames.InputSystem.Runtime
                             {
                                 if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
                                 {
-                                    UpdateActiveDeviceKind(ctx.control?.device);
+                                    UpdateActiveDeviceKind(TryGetControlDevice(ctx));
                                 }
                             }).AddTo(_actionWiringSubscriptions);
                             _buttonSubjects[key] = subject;
