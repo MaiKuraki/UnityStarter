@@ -42,6 +42,13 @@ namespace CycloneGames.Service.Runtime
                 return;
             }
 
+            // Ensure the camera is set to Overlay, as required by URP Camera Stacking
+            var cameraData = inCamera.GetUniversalAdditionalCameraData();
+            if (cameraData != null)
+            {
+                cameraData.renderType = CameraRenderType.Overlay;
+            }
+
             if (!_urpCameraData.cameraStack.Contains(inCamera))
             {
                 _urpCameraData.cameraStack.Insert(index, inCamera);
