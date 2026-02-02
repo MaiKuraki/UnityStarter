@@ -2,6 +2,7 @@
     "name": "CycloneGames.RPGFoundation.Editor",
     "rootNamespace": "",
     "references": [
+        "UniTask",
         "CycloneGames.RPGFoundation.Runtime"
     ],
     "includePlatforms": [
