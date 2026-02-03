@@ -6,11 +6,50 @@ using R3;
 
 namespace CycloneGames.InputSystem.Runtime
 {
+    /// <summary>
+    /// Per-item Slider configuration for MenuNavigator. Allows different sliders to have
+    /// different step sizes, confirm-to-edit behaviors, and value change callbacks.
+    /// </summary>
+    public struct SliderConfig
+    {
+        /// <summary>
+        /// Value increment per left/right navigation input (Step Mode).
+        /// Ignored when Slider.wholeNumbers is true (uses 1).
+        /// Set to 0 to disable step mode and use only smooth mode.
+        /// </summary>
+        public float Step;
+
+        /// <summary>
+        /// Speed of continuous value change per second (Smooth Mode).
+        /// When > 0, holding left/right will continuously adjust the slider value.
+        /// Set to 0 to disable smooth mode and use only step mode.
+        /// Both Step and SmoothSpeed can be enabled simultaneously.
+        /// </summary>
+        public float SmoothSpeed;
+
+        /// <summary>When true, user must press Confirm to enter slider edit mode before left/right adjusts value.</summary>
+        public bool RequireConfirmToEdit;
+
+        /// <summary>Optional callback invoked when slider value changes via navigation input.</summary>
+        public Action<float> OnValueChanged;
+
+        /// <summary>Default config: Step=0.1, SmoothSpeed=0 (step mode only)</summary>
+        public static SliderConfig Default => new SliderConfig { Step = 0.1f, SmoothSpeed = 0f, RequireConfirmToEdit = false, OnValueChanged = null };
+
+        /// <summary>Smooth config: Step=0, SmoothSpeed=1.0 (smooth mode only)</summary>
+        public static SliderConfig Smooth => new SliderConfig { Step = 0f, SmoothSpeed = 1f, RequireConfirmToEdit = false, OnValueChanged = null };
+
+        /// <summary>Hybrid config: Step=0.1, SmoothSpeed=0.5 (initial step + smooth when held)</summary>
+        public static SliderConfig Hybrid => new SliderConfig { Step = 0.1f, SmoothSpeed = 0.5f, RequireConfirmToEdit = false, OnValueChanged = null };
+    }
+
     public struct NavigableItemSetup
     {
         public Button Button;
         public Toggle Toggle;
         public Slider Slider;
+        /// <summary>Per-item Slider configuration. Use SliderConfig.Default for standard behavior.</summary>
+        public SliderConfig SliderConfig;
         /// <summary>
         /// Optional custom Transform for non-Selectable navigable items (e.g., SelectionSwitcher).
         /// When set, this Transform is used instead of Button/Toggle/Slider for focus management.
@@ -31,6 +70,7 @@ namespace CycloneGames.InputSystem.Runtime
             public Button Button;
             public Toggle Toggle;
             public Slider Slider;
+            public SliderConfig CachedSliderConfig;
             public Transform CustomTransform;
             public Action OnConfirm;
             public Action OnNavigateLeft;
@@ -102,10 +142,10 @@ namespace CycloneGames.InputSystem.Runtime
         private int _currentFocusIndex = -1;
         private bool _isInitialized;
 
-        [SerializeField] private bool _requireConfirmToEditSliders = false;
-        [SerializeField] private float _sliderStep = 0.1f;
-
         private bool _isEditingSlider;
+
+        // Smooth slider control state
+        private int _smoothSliderDirection; // -1=left, 0=none, 1=right
 
         private const float NAVIGATION_THRESHOLD = 0.5f;
 
@@ -169,11 +209,17 @@ namespace CycloneGames.InputSystem.Runtime
             for (int i = 0; i < count; i++)
             {
                 var itemSetup = setupData[i];
+                // Use provided SliderConfig or fallback to Default if Slider exists but no config specified
+                SliderConfig resolvedSliderConfig = itemSetup.SliderConfig.Step > 0f
+                    ? itemSetup.SliderConfig
+                    : (itemSetup.Slider != null ? SliderConfig.Default : default);
+
                 var item = new InternalNavItem
                 {
                     Button = itemSetup.Button,
                     Toggle = itemSetup.Toggle,
                     Slider = itemSetup.Slider,
+                    CachedSliderConfig = resolvedSliderConfig,
                     CustomTransform = itemSetup.CustomTransform,
                     OnConfirm = itemSetup.OnConfirm,
                     OnNavigateLeft = itemSetup.OnNavigateLeft,
@@ -229,7 +275,7 @@ namespace CycloneGames.InputSystem.Runtime
                         }
                         buttonPointerHandler.Initialize(this, index, true, _inputPlayer);
                     }
-                    
+
                     // Toggle pointer handler (no onValueChanged subscription needed - 
                     // PointerHandler intercepts clicks and prevents automatic isOn changes)
                     if (itemSetup.Toggle != null && itemSetup.Toggle.gameObject != null)
@@ -263,7 +309,7 @@ namespace CycloneGames.InputSystem.Runtime
                 // This ensures correct initial visual state when UI elements default to focused appearance
                 int targetFocusIndex = -1;
                 int itemCount = _navigableItems.Count;
-                
+
                 if (IsItemSelectable(defaultFocusIndex))
                 {
                     targetFocusIndex = defaultFocusIndex;
@@ -318,7 +364,7 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 _isInitialized = false;
             }
-            
+
             // Setup device kind subscription for touch confirmation gate
             // Must be called after Cleanup() and after _isInitialized is set
             SetupDeviceKindSubscription();
@@ -363,7 +409,7 @@ namespace CycloneGames.InputSystem.Runtime
 
             var item = _navigableItems[_currentFocusIndex];
 
-            if (_requireConfirmToEditSliders && !_isEditingSlider && item.Slider != null)
+            if (item.CachedSliderConfig.RequireConfirmToEdit && !_isEditingSlider && item.Slider != null)
             {
                 _isEditingSlider = true;
                 return;
@@ -394,6 +440,7 @@ namespace CycloneGames.InputSystem.Runtime
         private void MoveSelection(int direction)
         {
             _isEditingSlider = false;
+            StopSmoothSlider();
 
             int count = _navigableItems.Count;
             if (count < 2) return;
@@ -444,12 +491,26 @@ namespace CycloneGames.InputSystem.Runtime
 
             var item = _navigableItems[_currentFocusIndex];
 
-            bool canEditSlider = item.Slider != null && item.Slider.gameObject != null && (!_requireConfirmToEditSliders || _isEditingSlider);
+            bool canEditSlider = item.Slider != null && item.Slider.gameObject != null &&
+                                 (!item.CachedSliderConfig.RequireConfirmToEdit || _isEditingSlider);
 
             if (canEditSlider)
             {
-                float step = item.Slider.wholeNumbers ? 1f : _sliderStep;
-                item.Slider.value += isRight ? step : -step;
+                int direction = isRight ? 1 : -1;
+
+                // Step mode: apply discrete step on input
+                if (item.CachedSliderConfig.Step > 0f)
+                {
+                    float step = item.Slider.wholeNumbers ? 1f : item.CachedSliderConfig.Step;
+                    item.Slider.value += direction * step;
+                    InvokeSliderCallback(item);
+                }
+
+                // Smooth mode: start continuous adjustment
+                if (item.CachedSliderConfig.SmoothSpeed > 0f)
+                {
+                    _smoothSliderDirection = direction;
+                }
                 return;
             }
 
@@ -459,6 +520,58 @@ namespace CycloneGames.InputSystem.Runtime
                 try
                 {
                     action.Invoke();
+                }
+                catch
+                {
+                }
+            }
+        }
+
+        /// <summary>
+        /// Call this every frame with current navigation input to update smooth slider.
+        /// Pass Vector2.zero or call StopSmoothSlider() when input is released.
+        /// </summary>
+        public void UpdateSmoothSlider(Vector2 direction)
+        {
+            if (!_isInitialized || _smoothSliderDirection == 0) return;
+            if (!IsItemSelectable(_currentFocusIndex)) { StopSmoothSlider(); return; }
+
+            var item = _navigableItems[_currentFocusIndex];
+            if (item.Slider == null || item.Slider.gameObject == null || item.CachedSliderConfig.SmoothSpeed <= 0f)
+            {
+                StopSmoothSlider();
+                return;
+            }
+
+            // Check if input is still held in the same direction
+            float absX = direction.x >= 0 ? direction.x : -direction.x;
+            bool stillHeld = absX > NAVIGATION_THRESHOLD &&
+                             ((_smoothSliderDirection > 0 && direction.x > 0) || (_smoothSliderDirection < 0 && direction.x < 0));
+
+            if (!stillHeld)
+            {
+                StopSmoothSlider();
+                return;
+            }
+
+            // Apply smooth adjustment
+            float delta = item.CachedSliderConfig.SmoothSpeed * Time.unscaledDeltaTime * _smoothSliderDirection;
+            item.Slider.value += delta;
+            InvokeSliderCallback(item);
+        }
+
+        public void StopSmoothSlider()
+        {
+            _smoothSliderDirection = 0;
+        }
+
+        private void InvokeSliderCallback(InternalNavItem item)
+        {
+            if (item.CachedSliderConfig.OnValueChanged != null)
+            {
+                try
+                {
+                    item.CachedSliderConfig.OnValueChanged.Invoke(item.Slider.value);
                 }
                 catch
                 {
@@ -478,7 +591,7 @@ namespace CycloneGames.InputSystem.Runtime
                     ResetTouchConfirmationGate();
                     return;
                 }
-                
+
                 // Normal behavior: focus and confirm
                 SetFocus(index);
                 ConfirmSelection();
@@ -499,13 +612,13 @@ namespace CycloneGames.InputSystem.Runtime
             _touchConfirmationRequired = false;
 
             _previousDeviceKind = _inputPlayer.ActiveDeviceKind.CurrentValue;
-            
+
             // If starting in Gamepad mode, first pointer click should be blocked
             if (_previousDeviceKind == InputDeviceKind.Gamepad)
             {
                 _touchConfirmationRequired = true;
             }
-            
+
             _deviceKindSubscription = _inputPlayer.ActiveDeviceKind.Subscribe(OnDeviceKindChanged);
         }
 
@@ -521,7 +634,7 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 _touchConfirmationRequired = false;
             }
-            
+
             _previousDeviceKind = newKind;
         }
 
@@ -529,7 +642,7 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (_inputPlayer == null) return false;
             if (!_touchConfirmationRequired) return false;
-            
+
             // Block if gate is set and current input is a pointer device (mouse or touch)
             var currentKind = _inputPlayer.ActiveDeviceKind.CurrentValue;
             return currentKind == InputDeviceKind.Touchscreen || currentKind == InputDeviceKind.KeyboardMouse;
@@ -547,6 +660,7 @@ namespace CycloneGames.InputSystem.Runtime
             if (_currentFocusIndex == index) return;
             if (!IsItemSelectable(index)) return;
 
+            StopSmoothSlider();
             int previousIndex = _currentFocusIndex;
             if (previousIndex >= 0 && IsValidIndex(previousIndex))
             {
@@ -675,6 +789,7 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (!_isInitialized) return;
 
+            StopSmoothSlider();
             _deviceKindSubscription?.Dispose();
             _deviceKindSubscription = null;
 
@@ -726,7 +841,5 @@ namespace CycloneGames.InputSystem.Runtime
                 Cleanup();
             }
         }
-
-
     }
 }
