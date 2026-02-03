@@ -968,3 +968,404 @@ public class PlayerController
     private void OnConfirm() { /* ... */ }
 }
 ```
+
+---
+
+## UGUI 集成：ItemNavigator
+
+`ItemNavigator` 是一套零 GC、生产级的 UGUI 导航组件，专为手柄和键盘导航设计，同时完美支持鼠标和触控交互。
+
+### 核心特性
+
+- **零 GC 分配**：所有操作在运行时不产生垃圾回收
+- **多控件支持**：Button、Toggle、Slider、自定义 Transform
+- **双向导航**：MenuNavigatorVertical（垂直）和 MenuNavigatorHorizontal（水平）
+- **智能焦点管理**：可移动的焦点指示器、自动跳过禁用项
+- **触控确认门**：手柄切换到触控时，首次点击仅聚焦，二次点击确认
+- **Slider 灵活配置**：支持步进模式、平滑模式、混合模式
+- **统一事件处理**：无需额外绑定 UGUI 的 OnClick 等事件
+
+### 无需绑定 UGUI 原生事件
+
+使用 `MenuNavigator` 后，**您不需要额外绑定 UGUI 的 OnClick、onValueChanged 等事件**。所有交互（手柄确认键、键盘回车、鼠标点击、触控点击）都会统一通过 `NavigableItemSetup.OnConfirm` 回调处理：
+
+```csharp
+// ❌ 不需要这样做
+myButton.onClick.AddListener(() => DoSomething());
+
+// ✅ 使用 MenuNavigator 的统一回调
+new NavigableItemSetup
+{
+    Button = myButton,
+    OnConfirm = () => DoSomething()  // 处理所有输入方式
+}
+```
+
+#### 各控件类型的事件处理
+
+| 控件类型 | UGUI 原生事件 | MenuNavigator 处理方式 |
+|----------|---------------|------------------------|
+| **Button** | ~~onClick~~ | `OnConfirm` 回调 |
+| **Toggle** | ~~onValueChanged~~ | `OnConfirm` 回调（需手动控制 `isOn`） |
+| **Slider** | ~~onValueChanged~~ | `SliderConfig.OnValueChanged` 或直接读取 `slider.value` |
+| **CustomTransform** | 无 | `OnConfirm` 回调 |
+
+#### Toggle 的特殊处理
+
+`MenuNavigatorPointerHandler` 会**拦截** Toggle 的自动 `isOn` 变化，让您在 `OnConfirm` 回调中手动控制状态。这确保了手柄和鼠标行为的一致性：
+
+```csharp
+new NavigableItemSetup
+{
+    Toggle = fullscreenToggle,
+    OnConfirm = () => {
+        // 手动切换 Toggle 状态
+        fullscreenToggle.isOn = !fullscreenToggle.isOn;
+        ApplyFullscreen(fullscreenToggle.isOn);
+    }
+}
+```
+
+### 快速上手：垂直导航
+
+#### 步骤 1：创建 UI 层级
+
+在 Canvas 下创建垂直布局的 UI 元素：
+
+```
+Canvas
+├── SettingsPanel
+│   ├── VolumeSlider (Slider)
+│   ├── BrightnessSlider (Slider)
+│   ├── FullscreenToggle (Toggle)
+│   └── BackButton (Button)
+└── FocusIndicator (Image) ← 可选的焦点指示器
+```
+
+#### 步骤 2：添加 MenuNavigatorVertical 组件
+
+```csharp
+using UnityEngine;
+using UnityEngine.UI;
+using CycloneGames.InputSystem.Runtime;
+using R3;
+
+public class SettingsMenu : MonoBehaviour
+{
+    [SerializeField] private Slider _volumeSlider;
+    [SerializeField] private Slider _brightnessSlider;
+    [SerializeField] private Toggle _fullscreenToggle;
+    [SerializeField] private Button _backButton;
+    [SerializeField] private Transform _focusIndicator;
+    
+    private MenuNavigatorVertical _navigator;
+    private IInputPlayer _input;
+    private InputContext _context;
+    
+    private void Start()
+    {
+        _navigator = gameObject.AddComponent<MenuNavigatorVertical>();
+        _input = InputManager.Instance.GetInputPlayer(0);
+        
+        // 初始化导航器
+        _navigator.Initialize(
+            setupData: new NavigableItemSetup[]
+            {
+                new NavigableItemSetup
+                {
+                    Slider = _volumeSlider,
+                    SliderConfig = SliderConfig.Default,  // Step=0.1
+                    OnFocused = t => Debug.Log("音量聚焦"),
+                    OnConfirm = () => Debug.Log("音量确认")
+                },
+                new NavigableItemSetup
+                {
+                    Slider = _brightnessSlider,
+                    SliderConfig = new SliderConfig { Step = 0.05f },  // 更精细的步进
+                    OnFocused = t => Debug.Log("亮度聚焦")
+                },
+                new NavigableItemSetup
+                {
+                    Toggle = _fullscreenToggle,
+                    OnConfirm = () => ToggleFullscreen()
+                },
+                new NavigableItemSetup
+                {
+                    Button = _backButton,
+                    OnConfirm = () => CloseMenu()
+                }
+            },
+            focusIndicator: _focusIndicator,
+            defaultFocusIndex: 0,
+            allowLooping: true,
+            focusIndicatorOnTop: true,
+            inputPlayer: _input  // 启用触控确认门
+        );
+        
+        // 绑定输入
+        _context = new InputContext("UIActions", "Settings")
+            .AddBinding(_input.GetVector2Observable("UIActions", "Navigate"), 
+                new MoveCommand(dir => _navigator.Navigate(dir)))
+            .AddBinding(_input.GetButtonObservable("UIActions", "Confirm"), 
+                new ActionCommand(() => _navigator.ConfirmSelection()))
+            .AddBinding(_input.GetButtonObservable("UIActions", "Cancel"), 
+                new ActionCommand(() => _navigator.TryCancelEdit()));
+        
+        _context.AddTo(this);
+        _input.PushContext(_context);
+    }
+    
+    private void Update()
+    {
+        // 平滑 Slider 支持（如果使用 SmoothSpeed）
+        Vector2 navDir = _input.GetVector2("UIActions", "Navigate").CurrentValue;
+        _navigator.UpdateSmoothSlider(navDir);
+    }
+    
+    private void ToggleFullscreen() { /* ... */ }
+    private void CloseMenu() { /* ... */ }
+}
+```
+
+### SliderConfig 详解
+
+`SliderConfig` 结构体允许为每个 Slider 单独配置控制行为：
+
+#### 三种控制模式
+
+| 模式 | Step | SmoothSpeed | 行为描述 |
+|------|------|-------------|----------|
+| **Step（默认）** | 0.1 | 0 | 按方向键 = 离散步进 ±0.1 |
+| **Smooth** | 0 | 1.0 | 按住方向键 = 持续变化 ±1.0/秒 |
+| **Hybrid** | 0.1 | 0.5 | 按一次 = ±0.1，按住 = 持续 ±0.5/秒 |
+
+#### 使用预设配置
+
+```csharp
+// 步进模式（默认，最常用）
+SliderConfig.Default   // Step=0.1, SmoothSpeed=0
+
+// 平滑模式（适合进度条、时间轴）
+SliderConfig.Smooth    // Step=0, SmoothSpeed=1.0
+
+// 混合模式（推荐用于音量等需要精细微调的场景）
+SliderConfig.Hybrid    // Step=0.1, SmoothSpeed=0.5
+```
+
+#### 自定义配置
+
+```csharp
+new NavigableItemSetup
+{
+    Slider = sensitivitySlider,
+    SliderConfig = new SliderConfig
+    {
+        Step = 0.05f,                    // 精细步进
+        SmoothSpeed = 2f,                // 快速平滑
+        RequireConfirmToEdit = true,     // 需要按确认键才能编辑
+        OnValueChanged = v => ApplySensitivity(v)  // 值变化回调
+    }
+}
+```
+
+#### RequireConfirmToEdit 模式
+
+当设置为 `true` 时，Slider 需要两步操作：
+
+1. **聚焦**：方向键上下移动到 Slider
+2. **进入编辑**：按确认键进入编辑模式
+3. **调整值**：方向键左右调整值
+4. **退出编辑**：按取消键或移动到其他项
+
+```csharp
+// 需要确认才能编辑的 Slider（防止误操作）
+new NavigableItemSetup
+{
+    Slider = masterVolumeSlider,
+    SliderConfig = new SliderConfig
+    {
+        Step = 0.1f,
+        RequireConfirmToEdit = true
+    },
+    OnConfirm = () => Debug.Log("进入 Slider 编辑模式")
+}
+
+// 处理取消
+_input.GetButtonObservable("UIActions", "Cancel")
+    .Subscribe(_ => {
+        if (!_navigator.TryCancelEdit())
+        {
+            // 没有在编辑 Slider，执行其他取消逻辑
+            CloseMenu();
+        }
+    });
+```
+
+### 水平导航：MenuNavigatorHorizontal
+
+用于水平排列的选项卡、分页器等：
+
+```csharp
+using UnityEngine;
+using UnityEngine.UI;
+using CycloneGames.InputSystem.Runtime;
+
+public class TabBar : MonoBehaviour
+{
+    [SerializeField] private Button[] _tabButtons;
+    [SerializeField] private Transform _tabIndicator;
+    
+    private MenuNavigatorHorizontal _navigator;
+    
+    private void Start()
+    {
+        _navigator = gameObject.AddComponent<MenuNavigatorHorizontal>();
+        
+        var setupList = new HorizontalNavItemSetup[_tabButtons.Length];
+        for (int i = 0; i < _tabButtons.Length; i++)
+        {
+            int tabIndex = i;  // 闭包捕获
+            setupList[i] = new HorizontalNavItemSetup
+            {
+                Button = _tabButtons[i],
+                OnConfirm = () => SwitchToTab(tabIndex),
+                OnFocused = t => Debug.Log($"Tab {tabIndex} 聚焦"),
+                OnNavigateUp = () => Debug.Log("向上导航到其他区域"),
+                OnNavigateDown = () => Debug.Log("向下导航到内容区")
+            };
+        }
+        
+        _navigator.Initialize(
+            setupData: setupList,
+            focusIndicator: _tabIndicator,
+            defaultFocusIndex: 0,
+            allowLooping: true,
+            inputPlayer: InputManager.Instance.GetInputPlayer(0)
+        );
+    }
+    
+    private void SwitchToTab(int index) { /* ... */ }
+}
+```
+
+### 自定义 Transform 导航
+
+对于非 Selectable 的自定义组件（如 SelectionSwitcher），使用 `CustomTransform`：
+
+```csharp
+new NavigableItemSetup
+{
+    CustomTransform = customComponent.transform,  // 用于焦点指示器定位
+    OnConfirm = () => customComponent.Confirm(),
+    OnNavigateLeft = () => customComponent.Previous(),
+    OnNavigateRight = () => customComponent.Next(),
+    OnFocused = t => customComponent.OnFocus(),
+    OnUnfocused = t => customComponent.OnUnfocus()
+}
+```
+
+### 焦点指示器
+
+焦点指示器会自动移动到当前聚焦项，并调整大小匹配目标：
+
+```csharp
+// 基本用法
+_navigator.Initialize(
+    setupData: items,
+    focusIndicator: focusIndicatorTransform,  // 会自动设置 parent 和 sizeDelta
+    focusIndicatorOnTop: true  // true = 最后渲染（在最上层）
+);
+
+// 自定义焦点指示器动画（需自行实现）
+// 焦点指示器的 position 和 sizeDelta 会被自动设置
+// 您可以在其上添加 Animator 或 DOTween 动画
+```
+
+### 触控确认门（Touch Confirmation Gate）
+
+当玩家从手柄切换到触控/鼠标时，首次点击仅聚焦，需要二次点击才能确认。这防止了意外触发：
+
+```csharp
+// 启用触控确认门：传入 inputPlayer 参数
+_navigator.Initialize(
+    setupData: items,
+    inputPlayer: InputManager.Instance.GetInputPlayer(0)  // 启用
+);
+
+// 禁用触控确认门：不传入 inputPlayer 参数
+_navigator.Initialize(
+    setupData: items,
+    inputPlayer: null  // 禁用（默认）
+);
+```
+
+### 动态更新导航项
+
+```csharp
+// 刷新当前焦点（当项目状态变化时）
+_navigator.RefreshFocus();
+
+// 手动设置焦点
+_navigator.SetFocusByIndex(2);
+
+// 清理（OnDestroy 时自动调用）
+// 如果需要手动重新初始化，先调用 OnDisable 或让组件自然销毁
+```
+
+### API 参考
+
+#### SliderConfig
+
+| 属性 | 类型 | 描述 |
+|------|------|------|
+| `Step` | float | 离散步进值（0 = 禁用步进模式） |
+| `SmoothSpeed` | float | 平滑速度/秒（0 = 禁用平滑模式） |
+| `RequireConfirmToEdit` | bool | 是否需要确认键进入编辑模式 |
+| `OnValueChanged` | Action\<float\> | 值变化回调 |
+
+#### NavigableItemSetup
+
+| 属性 | 类型 | 描述 |
+|------|------|------|
+| `Button` | Button | 按钮控件 |
+| `Toggle` | Toggle | 开关控件 |
+| `Slider` | Slider | 滑块控件 |
+| `CustomTransform` | Transform | 自定义组件的 Transform |
+| `SliderConfig` | SliderConfig | Slider 的控制配置 |
+| `OnConfirm` | Action | 确认回调 |
+| `OnNavigateLeft` | Action | 左导航回调 |
+| `OnNavigateRight` | Action | 右导航回调 |
+| `OnFocused` | Action\<Transform\> | 聚焦回调 |
+| `OnUnfocused` | Action\<Transform\> | 失焦回调 |
+
+#### MenuNavigatorVertical
+
+| 方法 | 描述 |
+|------|------|
+| `Initialize(...)` | 初始化导航器 |
+| `Navigate(Vector2)` | 处理导航输入 |
+| `ConfirmSelection()` | 确认当前选择 |
+| `TryCancelEdit()` | 尝试退出 Slider 编辑模式 |
+| `UpdateSmoothSlider(Vector2)` | 更新平滑 Slider（每帧调用） |
+| `StopSmoothSlider()` | 停止平滑调整 |
+| `SetFocusByIndex(int)` | 设置焦点索引 |
+| `RefreshFocus()` | 刷新当前焦点 |
+
+#### MenuNavigatorHorizontal
+
+| 方法 | 描述 |
+|------|------|
+| `Initialize(...)` | 初始化导航器 |
+| `Navigate(Vector2)` | 处理导航输入 |
+| `ConfirmSelection()` | 确认当前选择 |
+| `SetFocusByIndex(int)` | 设置焦点索引 |
+| `RefreshFocus()` | 刷新当前焦点 |
+
+### 最佳实践
+
+1. **优先使用 SliderConfig.Default**：大多数场景下步进模式足够
+2. **平滑模式需要每帧调用**：别忘记在 Update 中调用 `UpdateSmoothSlider()`
+3. **启用触控确认门**：防止手柄用户切换到触控时误触
+4. **使用 AllowLooping**：提升用户体验，允许循环导航
+5. **自定义焦点样式**：焦点指示器可以是任何 UI 元素，添加动画效果更佳
+

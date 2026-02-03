@@ -969,3 +969,404 @@ public class PlayerController
     private void OnConfirm() { /* ... */ }
 }
 ```
+
+---
+
+## UGUI Integration: ItemNavigator
+
+`ItemNavigator` is a production-grade, zero-GC UGUI navigation component set designed specifically for gamepad and keyboard navigation, while also providing seamless support for mouse and touch interactions.
+
+### Core Features
+
+- **Zero GC Allocation**: All runtime operations are garbage-free
+- **Multi-Control Support**: Button, Toggle, Slider, custom Transform
+- **Bidirectional Navigation**: MenuNavigatorVertical and MenuNavigatorHorizontal
+- **Smart Focus Management**: Movable focus indicator, auto-skip disabled items
+- **Touch Confirmation Gate**: First touch after switching from gamepad only focuses, second touch confirms
+- **Flexible Slider Configuration**: Step mode, smooth mode, and hybrid mode
+- **Unified Event Handling**: No need to separately bind UGUI's OnClick, etc.
+
+### No Need to Bind UGUI Native Events
+
+When using `MenuNavigator`, **you don't need to separately bind UGUI's OnClick, onValueChanged, or other events**. All interactions (gamepad confirm, keyboard enter, mouse click, touch tap) are unified through the `NavigableItemSetup.OnConfirm` callback:
+
+```csharp
+// ❌ Don't do this
+myButton.onClick.AddListener(() => DoSomething());
+
+// ✅ Use MenuNavigator's unified callback
+new NavigableItemSetup
+{
+    Button = myButton,
+    OnConfirm = () => DoSomething()  // Handles all input methods
+}
+```
+
+#### Event Handling by Control Type
+
+| Control Type | UGUI Native Event | MenuNavigator Handling |
+|--------------|-------------------|------------------------|
+| **Button** | ~~onClick~~ | `OnConfirm` callback |
+| **Toggle** | ~~onValueChanged~~ | `OnConfirm` callback (manually control `isOn`) |
+| **Slider** | ~~onValueChanged~~ | `SliderConfig.OnValueChanged` or read `slider.value` directly |
+| **CustomTransform** | None | `OnConfirm` callback |
+
+#### Toggle Special Handling
+
+`MenuNavigatorPointerHandler` **intercepts** Toggle's automatic `isOn` changes, allowing you to manually control the state in the `OnConfirm` callback. This ensures consistent behavior between gamepad and mouse:
+
+```csharp
+new NavigableItemSetup
+{
+    Toggle = fullscreenToggle,
+    OnConfirm = () => {
+        // Manually toggle the state
+        fullscreenToggle.isOn = !fullscreenToggle.isOn;
+        ApplyFullscreen(fullscreenToggle.isOn);
+    }
+}
+```
+
+### Quick Start: Vertical Navigation
+
+#### Step 1: Create UI Hierarchy
+
+Create vertically arranged UI elements under a Canvas:
+
+```
+Canvas
+├── SettingsPanel
+│   ├── VolumeSlider (Slider)
+│   ├── BrightnessSlider (Slider)
+│   ├── FullscreenToggle (Toggle)
+│   └── BackButton (Button)
+└── FocusIndicator (Image) ← Optional focus indicator
+```
+
+#### Step 2: Add MenuNavigatorVertical Component
+
+```csharp
+using UnityEngine;
+using UnityEngine.UI;
+using CycloneGames.InputSystem.Runtime;
+using R3;
+
+public class SettingsMenu : MonoBehaviour
+{
+    [SerializeField] private Slider _volumeSlider;
+    [SerializeField] private Slider _brightnessSlider;
+    [SerializeField] private Toggle _fullscreenToggle;
+    [SerializeField] private Button _backButton;
+    [SerializeField] private Transform _focusIndicator;
+    
+    private MenuNavigatorVertical _navigator;
+    private IInputPlayer _input;
+    private InputContext _context;
+    
+    private void Start()
+    {
+        _navigator = gameObject.AddComponent<MenuNavigatorVertical>();
+        _input = InputManager.Instance.GetInputPlayer(0);
+        
+        // Initialize the navigator
+        _navigator.Initialize(
+            setupData: new NavigableItemSetup[]
+            {
+                new NavigableItemSetup
+                {
+                    Slider = _volumeSlider,
+                    SliderConfig = SliderConfig.Default,  // Step=0.1
+                    OnFocused = t => Debug.Log("Volume focused"),
+                    OnConfirm = () => Debug.Log("Volume confirmed")
+                },
+                new NavigableItemSetup
+                {
+                    Slider = _brightnessSlider,
+                    SliderConfig = new SliderConfig { Step = 0.05f },  // Finer step
+                    OnFocused = t => Debug.Log("Brightness focused")
+                },
+                new NavigableItemSetup
+                {
+                    Toggle = _fullscreenToggle,
+                    OnConfirm = () => ToggleFullscreen()
+                },
+                new NavigableItemSetup
+                {
+                    Button = _backButton,
+                    OnConfirm = () => CloseMenu()
+                }
+            },
+            focusIndicator: _focusIndicator,
+            defaultFocusIndex: 0,
+            allowLooping: true,
+            focusIndicatorOnTop: true,
+            inputPlayer: _input  // Enable touch confirmation gate
+        );
+        
+        // Bind input
+        _context = new InputContext("UIActions", "Settings")
+            .AddBinding(_input.GetVector2Observable("UIActions", "Navigate"), 
+                new MoveCommand(dir => _navigator.Navigate(dir)))
+            .AddBinding(_input.GetButtonObservable("UIActions", "Confirm"), 
+                new ActionCommand(() => _navigator.ConfirmSelection()))
+            .AddBinding(_input.GetButtonObservable("UIActions", "Cancel"), 
+                new ActionCommand(() => _navigator.TryCancelEdit()));
+        
+        _context.AddTo(this);
+        _input.PushContext(_context);
+    }
+    
+    private void Update()
+    {
+        // Smooth Slider support (if using SmoothSpeed)
+        Vector2 navDir = _input.GetVector2("UIActions", "Navigate").CurrentValue;
+        _navigator.UpdateSmoothSlider(navDir);
+    }
+    
+    private void ToggleFullscreen() { /* ... */ }
+    private void CloseMenu() { /* ... */ }
+}
+```
+
+### SliderConfig In-Depth
+
+The `SliderConfig` struct allows per-item configuration of Slider control behavior:
+
+#### Three Control Modes
+
+| Mode | Step | SmoothSpeed | Behavior |
+|------|------|-------------|----------|
+| **Step (Default)** | 0.1 | 0 | Press direction = discrete step ±0.1 |
+| **Smooth** | 0 | 1.0 | Hold direction = continuous ±1.0/sec |
+| **Hybrid** | 0.1 | 0.5 | Press = ±0.1, Hold = continuous ±0.5/sec |
+
+#### Using Preset Configurations
+
+```csharp
+// Step mode (default, most common)
+SliderConfig.Default   // Step=0.1, SmoothSpeed=0
+
+// Smooth mode (ideal for progress bars, timelines)
+SliderConfig.Smooth    // Step=0, SmoothSpeed=1.0
+
+// Hybrid mode (recommended for volume and fine-tuning scenarios)
+SliderConfig.Hybrid    // Step=0.1, SmoothSpeed=0.5
+```
+
+#### Custom Configuration
+
+```csharp
+new NavigableItemSetup
+{
+    Slider = sensitivitySlider,
+    SliderConfig = new SliderConfig
+    {
+        Step = 0.05f,                    // Fine step
+        SmoothSpeed = 2f,                // Fast smooth
+        RequireConfirmToEdit = true,     // Require confirm to enter edit mode
+        OnValueChanged = v => ApplySensitivity(v)  // Value change callback
+    }
+}
+```
+
+#### RequireConfirmToEdit Mode
+
+When set to `true`, the Slider requires a two-step operation:
+
+1. **Focus**: Navigate up/down to the Slider
+2. **Enter Edit Mode**: Press confirm to enter edit mode
+3. **Adjust Value**: Navigate left/right to adjust value
+4. **Exit Edit Mode**: Press cancel or navigate to another item
+
+```csharp
+// Slider requiring confirmation to edit (prevents accidental changes)
+new NavigableItemSetup
+{
+    Slider = masterVolumeSlider,
+    SliderConfig = new SliderConfig
+    {
+        Step = 0.1f,
+        RequireConfirmToEdit = true
+    },
+    OnConfirm = () => Debug.Log("Entered Slider edit mode")
+}
+
+// Handle cancel
+_input.GetButtonObservable("UIActions", "Cancel")
+    .Subscribe(_ => {
+        if (!_navigator.TryCancelEdit())
+        {
+            // Not editing a Slider, perform other cancel logic
+            CloseMenu();
+        }
+    });
+```
+
+### Horizontal Navigation: MenuNavigatorHorizontal
+
+For horizontally arranged tabs, pagination, etc.:
+
+```csharp
+using UnityEngine;
+using UnityEngine.UI;
+using CycloneGames.InputSystem.Runtime;
+
+public class TabBar : MonoBehaviour
+{
+    [SerializeField] private Button[] _tabButtons;
+    [SerializeField] private Transform _tabIndicator;
+    
+    private MenuNavigatorHorizontal _navigator;
+    
+    private void Start()
+    {
+        _navigator = gameObject.AddComponent<MenuNavigatorHorizontal>();
+        
+        var setupList = new HorizontalNavItemSetup[_tabButtons.Length];
+        for (int i = 0; i < _tabButtons.Length; i++)
+        {
+            int tabIndex = i;  // Closure capture
+            setupList[i] = new HorizontalNavItemSetup
+            {
+                Button = _tabButtons[i],
+                OnConfirm = () => SwitchToTab(tabIndex),
+                OnFocused = t => Debug.Log($"Tab {tabIndex} focused"),
+                OnNavigateUp = () => Debug.Log("Navigate up to another area"),
+                OnNavigateDown = () => Debug.Log("Navigate down to content area")
+            };
+        }
+        
+        _navigator.Initialize(
+            setupData: setupList,
+            focusIndicator: _tabIndicator,
+            defaultFocusIndex: 0,
+            allowLooping: true,
+            inputPlayer: InputManager.Instance.GetInputPlayer(0)
+        );
+    }
+    
+    private void SwitchToTab(int index) { /* ... */ }
+}
+```
+
+### Custom Transform Navigation
+
+For non-Selectable custom components (e.g., SelectionSwitcher), use `CustomTransform`:
+
+```csharp
+new NavigableItemSetup
+{
+    CustomTransform = customComponent.transform,  // For focus indicator positioning
+    OnConfirm = () => customComponent.Confirm(),
+    OnNavigateLeft = () => customComponent.Previous(),
+    OnNavigateRight = () => customComponent.Next(),
+    OnFocused = t => customComponent.OnFocus(),
+    OnUnfocused = t => customComponent.OnUnfocus()
+}
+```
+
+### Focus Indicator
+
+The focus indicator automatically moves to the currently focused item and resizes to match:
+
+```csharp
+// Basic usage
+_navigator.Initialize(
+    setupData: items,
+    focusIndicator: focusIndicatorTransform,  // parent and sizeDelta are set automatically
+    focusIndicatorOnTop: true  // true = render last (on top)
+);
+
+// Custom focus indicator animation (implement yourself)
+// The focus indicator's position and sizeDelta are set automatically
+// You can add Animator or DOTween animations on top
+```
+
+### Touch Confirmation Gate
+
+When switching from gamepad to touch/mouse, the first click only focuses, and a second click is required to confirm. This prevents accidental triggers:
+
+```csharp
+// Enable touch confirmation gate: pass inputPlayer parameter
+_navigator.Initialize(
+    setupData: items,
+    inputPlayer: InputManager.Instance.GetInputPlayer(0)  // Enabled
+);
+
+// Disable touch confirmation gate: don't pass inputPlayer parameter
+_navigator.Initialize(
+    setupData: items,
+    inputPlayer: null  // Disabled (default)
+);
+```
+
+### Dynamic Navigation Item Updates
+
+```csharp
+// Refresh current focus (when item state changes)
+_navigator.RefreshFocus();
+
+// Manually set focus
+_navigator.SetFocusByIndex(2);
+
+// Cleanup (called automatically in OnDestroy)
+// If you need to reinitialize manually, call OnDisable first or let the component be destroyed naturally
+```
+
+### API Reference
+
+#### SliderConfig
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Step` | float | Discrete step value (0 = disable step mode) |
+| `SmoothSpeed` | float | Smooth speed per second (0 = disable smooth mode) |
+| `RequireConfirmToEdit` | bool | Whether confirm is required to enter edit mode |
+| `OnValueChanged` | Action\<float\> | Value change callback |
+
+#### NavigableItemSetup
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `Button` | Button | Button control |
+| `Toggle` | Toggle | Toggle control |
+| `Slider` | Slider | Slider control |
+| `CustomTransform` | Transform | Transform for custom components |
+| `SliderConfig` | SliderConfig | Slider control configuration |
+| `OnConfirm` | Action | Confirm callback |
+| `OnNavigateLeft` | Action | Left navigation callback |
+| `OnNavigateRight` | Action | Right navigation callback |
+| `OnFocused` | Action\<Transform\> | Focus callback |
+| `OnUnfocused` | Action\<Transform\> | Unfocus callback |
+
+#### MenuNavigatorVertical
+
+| Method | Description |
+|--------|-------------|
+| `Initialize(...)` | Initialize the navigator |
+| `Navigate(Vector2)` | Handle navigation input |
+| `ConfirmSelection()` | Confirm current selection |
+| `TryCancelEdit()` | Try to exit Slider edit mode |
+| `UpdateSmoothSlider(Vector2)` | Update smooth Slider (call every frame) |
+| `StopSmoothSlider()` | Stop smooth adjustment |
+| `SetFocusByIndex(int)` | Set focus index |
+| `RefreshFocus()` | Refresh current focus |
+
+#### MenuNavigatorHorizontal
+
+| Method | Description |
+|--------|-------------|
+| `Initialize(...)` | Initialize the navigator |
+| `Navigate(Vector2)` | Handle navigation input |
+| `ConfirmSelection()` | Confirm current selection |
+| `SetFocusByIndex(int)` | Set focus index |
+| `RefreshFocus()` | Refresh current focus |
+
+### Best Practices
+
+1. **Prefer SliderConfig.Default**: Step mode is sufficient for most scenarios
+2. **Smooth mode requires per-frame updates**: Don't forget to call `UpdateSmoothSlider()` in Update
+3. **Enable touch confirmation gate**: Prevents accidental triggers when gamepad users switch to touch
+4. **Use AllowLooping**: Improves UX by allowing circular navigation
+5. **Customize focus styling**: Focus indicator can be any UI element, add animations for better UX
+
