@@ -245,25 +245,72 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return null;
             }
 
-            //  To teleport a CharacterController, we should disable it first, move the transform, and then re-enable it.
-            //  This forces the controller to re-synchronize its internal state with the new transform data.
-            var characterController = p.GetComponent<CharacterController>();
-            if (characterController)
-            {
-                characterController.enabled = false;
-            }
-
-            p.transform.position = SpawnTransform.position;
-            p.transform.localScale = Vector3.one;
-            p.transform.rotation = SpawnTransform.rotation;
-
-            if (characterController)
-            {
-                characterController.enabled = true;
-            }
-
+            TeleportPawn(p, SpawnTransform.position, SpawnTransform.rotation);
             p.NotifyInitialRotation(SpawnTransform.rotation);
             return p;
+        }
+
+        /// <summary>
+        /// Teleports a pawn to the specified position and rotation.
+        /// Handles different movement systems: CharacterController, Rigidbody, or pure Transform.
+        /// </summary>
+        protected virtual void TeleportPawn(Pawn pawn, Vector3 position, Quaternion rotation)
+        {
+            if (pawn == null) return;
+
+            #region Unity Simple Character Controller
+            // CharacterController teleport (always available, Unity built-in component)
+            var characterController = pawn.GetComponent<CharacterController>();
+            if (characterController != null)
+            {
+                // CharacterController requires disable/enable cycle to sync internal state
+                characterController.enabled = false;
+                pawn.transform.position = position;
+                pawn.transform.localScale = Vector3.one;
+                pawn.transform.rotation = rotation;
+                characterController.enabled = true;
+                return;
+            }
+            #endregion
+
+            #region Physics (Rigidbody)
+            var rigidbody = pawn.GetComponent<Rigidbody>();
+            CLogger.LogInfo($"{DEBUG_FLAG} Teleporting {pawn.name} to {position}");
+            if (rigidbody != null)
+            {
+                if (rigidbody.isKinematic)
+                {
+                    // Kinematic: Set transform directly, then sync with MovePosition
+                    pawn.transform.position = position;
+                    pawn.transform.localScale = Vector3.one;
+                    pawn.transform.rotation = rotation;
+                    rigidbody.MovePosition(position);
+                    rigidbody.MoveRotation(rotation);
+                }
+                else
+                {
+                    // Dynamic: Reset velocities before teleporting
+#if UNITY_6000_0_OR_NEWER
+                    rigidbody.linearVelocity = Vector3.zero;
+                    rigidbody.angularVelocity = Vector3.zero;
+#else
+                    rigidbody.velocity = Vector3.zero;
+                    rigidbody.angularVelocity = Vector3.zero;
+#endif
+                    pawn.transform.position = position;
+                    pawn.transform.localScale = Vector3.one;
+                    pawn.transform.rotation = rotation;
+                }
+                
+                Physics.SyncTransforms();
+                return;
+            }
+            #endregion
+
+            // Fallback: Pure Transform teleport (no physics components)
+            pawn.transform.position = position;
+            pawn.transform.localScale = Vector3.one;
+            pawn.transform.rotation = rotation;
         }
 
         Pawn SpawnDefaultPawnAtLocation(Controller NewPlayer, Vector3 NewLocation)
