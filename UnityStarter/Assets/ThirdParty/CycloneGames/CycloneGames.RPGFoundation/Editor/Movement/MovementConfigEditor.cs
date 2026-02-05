@@ -22,8 +22,10 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
         private SerializedProperty _airControlMultiplier;
         private SerializedProperty _groundedCheckDistance;
         private SerializedProperty _groundLayer;
+        private SerializedProperty _collisionLayer;
         private SerializedProperty _slopeLimit;
         private SerializedProperty _stepHeight;
+        private SerializedProperty _minAirborneTimeForFall;
         private SerializedProperty _rotationSpeed;
         private SerializedProperty _animationSystem;
         private SerializedProperty _animancerParameterMode;
@@ -100,8 +102,10 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             _airControlMultiplier = serializedObject.FindProperty("airControlMultiplier");
             _groundedCheckDistance = serializedObject.FindProperty("groundedCheckDistance");
             _groundLayer = serializedObject.FindProperty("groundLayer");
+            _collisionLayer = serializedObject.FindProperty("collisionLayer");
             _slopeLimit = serializedObject.FindProperty("slopeLimit");
             _stepHeight = serializedObject.FindProperty("stepHeight");
+            _minAirborneTimeForFall = serializedObject.FindProperty("minAirborneTimeForFall");
             _rotationSpeed = serializedObject.FindProperty("rotationSpeed");
             _animationSystem = serializedObject.FindProperty("animationSystem");
             _animancerParameterMode = serializedObject.FindProperty("animancerParameterMode");
@@ -236,6 +240,11 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                 "Ground Layer",
                 "LayerMask for what counts as 'ground'.\n" +
                 "Set this to your ground/platform layers to avoid false ground detection."));
+            EditorGUILayout.PropertyField(_collisionLayer, new GUIContent(
+                "Collision Layer",
+                "LayerMask for collision detection during movement.\n" +
+                "If empty (0), uses Ground Layer instead.\n" +
+                "Use this to specify separate layers for movement collision (e.g., include walls but exclude triggers)."));
             EditorGUILayout.PropertyField(_slopeLimit, new GUIContent(
                 "Slope Limit",
                 "Maximum angle (in degrees) the character can walk up.\n" +
@@ -244,6 +253,13 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                 "Step Height",
                 "Maximum height the character can step up.\n" +
                 "Allows walking up small obstacles without jumping"));
+            EditorGUILayout.PropertyField(_minAirborneTimeForFall, new GUIContent(
+                "Min Airborne Time for Fall",
+                "Minimum time (seconds) character must be airborne before triggering fall animation.\n" +
+                "Prevents false fall animation triggers when climbing stairs or stepping up.\n" +
+                "• 0.05-0.08: Responsive, but may trigger on stairs\n" +
+                "• 0.1: Balanced (recommended)\n" +
+                "• 0.15-0.2: Conservative, avoids false triggers"));
 
             EditorGUILayout.Space(3);
             EditorGUI.indentLevel++;
@@ -277,7 +293,10 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                     "  - Typical: 30-45 degrees\n" +
                     "• Step Height: Maximum step-up height\n" +
                     "  - Allows smooth walking over small obstacles\n" +
-                    "  - Typical: 0.2-0.4",
+                    "  - Typical: 0.2-0.4\n" +
+                    "• Min Airborne Time for Fall: Delay before fall animation\n" +
+                    "  - Prevents false triggers on stairs\n" +
+                    "  - Higher values = more conservative",
                     MessageType.Info);
                 EditorGUI.indentLevel--;
             }

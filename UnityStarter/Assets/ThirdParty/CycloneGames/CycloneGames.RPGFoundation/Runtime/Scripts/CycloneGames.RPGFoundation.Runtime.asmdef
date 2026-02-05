@@ -62,6 +62,11 @@
             "name": "com.arongranberg.astar",
             "expression": "",
             "define": "ALINE_PRESENT"
+        },
+        {
+            "name": "com.unity.modules.terrainphysics",
+            "expression": "",
+            "define": "UNITY_TERRAIN_PHYSICS"
         }
     ],
     "noEngineReferences": false
