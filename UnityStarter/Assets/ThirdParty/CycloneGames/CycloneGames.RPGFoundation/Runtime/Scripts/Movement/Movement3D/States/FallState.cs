@@ -1,4 +1,5 @@
 using Unity.Mathematics;
+using UnityEngine;
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 {
@@ -10,19 +11,46 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
         {
             float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.runSpeed);
             float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.airControlMultiplier);
-            float speed = runSpeed * airControl;
+            float maxSpeed = runSpeed * airControl;
+
             float3 worldInputDirection = context.GetWorldInputDirection();
-            float3 movement = worldInputDirection * speed;
+            float inputMagnitude = context.InputMagnitude;
+
+            float actualSpeed = maxSpeed * inputMagnitude;
+            float3 desiredVelocity = worldInputDirection * actualSpeed;
 
             float gravity = context.GetAttributeValue(MovementAttribute.Gravity, context.Config.gravity);
-            context.VerticalVelocity += gravity * context.DeltaTime;
+            float3 worldUp = context.WorldUp;
 
-            float3 horizontal = movement * context.DeltaTime;
-            float3 vertical = context.WorldUp * context.VerticalVelocity * context.DeltaTime;
+            // Handle non-walkable slope sliding
+            if (context.IsOnNonWalkableSlope)
+            {
+                float3 groundNormal = context.GroundNormal;
+
+                // If moving into the slope, limit contribution
+                if (math.dot(desiredVelocity, groundNormal) < 0f)
+                {
+                    // Allow movement parallel to the slope, but not into it
+                    float3 groundNormal2D = math.normalize((float3)Vector3.ProjectOnPlane(groundNormal, worldUp));
+                    desiredVelocity = (float3)Vector3.ProjectOnPlane(desiredVelocity, groundNormal2D);
+                }
+
+                // Make velocity calculations planar by projecting up vector onto non-walkable surface
+                // This causes the character to slide down the slope
+                worldUp = math.normalize((float3)Vector3.ProjectOnPlane(worldUp, groundNormal));
+            }
+
+            // Separate velocity into vertical and lateral components
+            float3 verticalVelocity = worldUp * context.VerticalVelocity;
+            context.VerticalVelocity += gravity * context.DeltaTime;
+            verticalVelocity = worldUp * context.VerticalVelocity;
+
+            float3 horizontal = desiredVelocity * context.DeltaTime;
+            float3 vertical = verticalVelocity * context.DeltaTime;
             displacement = horizontal + vertical;
 
-            context.CurrentSpeed = math.length(movement);
-            context.CurrentVelocity = movement;
+            context.CurrentSpeed = math.length(desiredVelocity);
+            context.CurrentVelocity = desiredVelocity;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {

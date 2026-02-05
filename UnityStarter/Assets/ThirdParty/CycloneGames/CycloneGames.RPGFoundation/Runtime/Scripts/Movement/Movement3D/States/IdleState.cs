@@ -29,7 +29,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
         {
-            if (!context.IsGrounded)
+            // Fall when not grounded OR on non-walkable slope
+            if (!context.IsGrounded || context.IsOnNonWalkableSlope)
             {
                 return StatePool<MovementStateBase>.GetState<FallState>();
             }

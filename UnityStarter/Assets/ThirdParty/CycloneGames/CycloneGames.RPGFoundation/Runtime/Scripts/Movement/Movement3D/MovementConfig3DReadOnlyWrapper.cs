@@ -39,6 +39,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         public LayerMask groundLayer => _config.groundLayer;
         public float slopeLimit => _config.slopeLimit;
         public float stepHeight => _config.stepHeight;
+        public float minAirborneTimeForFall => _config.minAirborneTimeForFall;
         public float rotationSpeed => _config.rotationSpeed;
         public string rollTrigger => _config.rollTrigger;
     }

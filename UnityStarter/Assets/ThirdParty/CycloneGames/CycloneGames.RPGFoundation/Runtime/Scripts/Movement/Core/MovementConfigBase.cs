@@ -27,13 +27,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
     public abstract class MovementConfigBase : ScriptableObject
     {
         // Ground Movement - displayed in Custom Editor
-        public float walkSpeed = 3f;
-        public float runSpeed = 5f;
-        public float sprintSpeed = 8f;
-        public float crouchSpeed = 1.5f;
+        public float walkSpeed = 1.5f;
+        public float runSpeed = 3f;
+        public float sprintSpeed = 6f;
+        public float crouchSpeed = 1f;
 
         // Jump - displayed in Custom Editor
-        public float jumpForce = 8f;
+        public float jumpForce = 6f;
         public int maxJumpCount = 1;
 
         // Animation System Configuration - displayed in Custom Editor
