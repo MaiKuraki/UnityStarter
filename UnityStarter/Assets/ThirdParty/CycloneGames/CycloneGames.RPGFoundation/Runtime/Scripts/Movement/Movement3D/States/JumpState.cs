@@ -30,9 +30,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
         {
             float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.runSpeed);
             float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.airControlMultiplier);
-            float speed = runSpeed * airControl;
+            float maxSpeed = runSpeed * airControl;
+            
             float3 worldInputDirection = context.GetWorldInputDirection();
-            float3 movement = worldInputDirection * speed;
+            float inputMagnitude = context.InputMagnitude;
+            
+            float actualSpeed = maxSpeed * inputMagnitude;
+            float3 movement = worldInputDirection * actualSpeed;
 
             float gravity = context.GetAttributeValue(MovementAttribute.Gravity, context.Config.gravity);
             context.VerticalVelocity += gravity * context.DeltaTime;

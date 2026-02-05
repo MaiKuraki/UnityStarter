@@ -12,12 +12,17 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         public float flySpeed = 6f;
 
         // Physics - displayed in Custom Editor
-        public float gravity = -25f;
+        public float gravity = -20f;
         public float airControlMultiplier = 0.5f;
         public float groundedCheckDistance = 0.025f;
         public LayerMask groundLayer = 1;
+        [Tooltip("Layer mask for collision detection during movement. If empty, uses groundLayer.")]
+        public LayerMask collisionLayer = 0;
         public float slopeLimit = 45f;
         public float stepHeight = 0.3f;
+        [Tooltip("Minimum time (seconds) character must be airborne before triggering fall animation. Prevents false triggers on stairs.")]
+        [Range(0.05f, 0.3f)]
+        public float minAirborneTimeForFall = 0.1f;
 
         // Moving Platform - displayed in Custom Editor
         [Tooltip("Enable moving platform support. Character will move with platforms.")]
@@ -39,9 +44,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         [Tooltip("Enable gap bridging to auto-jump across small gaps while running.")]
         public bool enableGapBridging = true;
         [Tooltip("Minimum speed required to trigger gap bridging (m/s).")]
-        public float minSpeedForGapBridge = 4f;
+        public float minSpeedForGapBridge = 3f;
         [Tooltip("Maximum gap distance that can be bridged (m).")]
-        public float maxGapDistance = 1.5f;
+        public float maxGapDistance = 0.5f;
         [Tooltip("Maximum height difference allowed for gap bridging (m).")]
         public float maxGapHeightDiff = 0.3f;
 

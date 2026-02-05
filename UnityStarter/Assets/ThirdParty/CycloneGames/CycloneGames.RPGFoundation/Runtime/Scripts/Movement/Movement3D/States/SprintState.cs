@@ -8,15 +8,18 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
-            float speed = context.GetFinalSpeed(context.Config.sprintSpeed, StateType);
+            float maxSpeed = context.GetFinalSpeed(context.Config.sprintSpeed, StateType);
             float3 worldInputDirection = context.GetWorldInputDirection();
-            float3 movement = worldInputDirection * speed;
+            float inputMagnitude = context.InputMagnitude;
+
+            float actualSpeed = maxSpeed * inputMagnitude;
+            float3 movement = worldInputDirection * actualSpeed;
 
             float3 horizontal = movement * context.DeltaTime;
             float3 vertical = context.WorldUp * context.VerticalVelocity * context.DeltaTime;
             displacement = horizontal + vertical;
 
-            context.CurrentSpeed = speed;
+            context.CurrentSpeed = actualSpeed;
             context.CurrentVelocity = movement;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
@@ -28,7 +31,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override MovementStateBase EvaluateTransition(ref MovementContext context)
         {
-            if (!context.IsGrounded)
+            // Fall when not grounded OR on non-walkable slope
+            if (!context.IsGrounded || context.IsOnNonWalkableSlope)
             {
                 return StatePool<MovementStateBase>.GetState<FallState>();
             }
