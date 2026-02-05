@@ -17,6 +17,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         UnityEngine.LayerMask groundLayer { get; }
         float slopeLimit { get; }
         float stepHeight { get; }
+        float minAirborneTimeForFall { get; }
         float rotationSpeed { get; }
         string rollTrigger { get; }
     }

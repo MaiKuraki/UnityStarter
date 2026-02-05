@@ -4,20 +4,23 @@ using UnityEngine;
 namespace CycloneGames.RPGFoundation.Runtime.Movement
 {
     /// <summary>
-    /// Context struct passed between movement states. 
+    /// Context struct passed between movement states.
     /// </summary>
     public struct MovementContext
     {
-        public CharacterController CharacterController;
+        public Rigidbody Rigidbody;
+        public CapsuleCollider CapsuleCollider;
         public IAnimationController AnimationController;
         public Transform Transform;
         public MovementConfig Config;
 
-        public float3 InputDirection; // Local space direction (relative to character's forward/right)
+        public float3 InputDirection;
         public float3 WorldUp;
         public float DeltaTime;
 
         public bool IsGrounded;
+        public bool WasGrounded;
+        public bool IsOnNonWalkableSlope;
         public float SlopeAngle;
         public float3 GroundNormal;
         public float VerticalVelocity;
@@ -34,7 +37,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
         public bool UseRootMotion;
 
-        // Wall Jump state
         public bool IsWallJumping;
         public Vector3 WallJumpDirection;
         public Vector3 LastWallNormal;
@@ -44,7 +46,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
         /// <summary>
         /// Converts InputDirection from local space to world space, projecting onto plane perpendicular to WorldUp.
-        /// Supports wall/ceiling walking by using dynamic WorldUp.
+        /// Returns a normalized direction vector. Use InputMagnitude to get the input strength.
         /// </summary>
         public float3 GetWorldInputDirection()
         {
@@ -55,12 +57,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             Vector3 worldDirection = Transform.TransformDirection(localInput);
 
             float3 projected = (float3)worldDirection - math.dot((float3)worldDirection, WorldUp) * WorldUp;
-            float originalMagnitude = math.length(InputDirection);
             float projectedSqrLen = math.lengthsq(projected);
 
             if (projectedSqrLen > 0.0001f)
             {
-                return math.normalize(projected) * originalMagnitude;
+                // Always return normalized direction - magnitude is handled separately
+                return math.normalize(projected);
             }
             else
             {
@@ -69,16 +71,15 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         }
 
         /// <summary>
-        /// Gets final value for an attribute after applying modifiers.
+        /// Gets the input magnitude, clamped to [0, 1] range.
         /// </summary>
+        public float InputMagnitude => math.clamp(math.length(InputDirection), 0f, 1f);
+
         public float GetAttributeValue(MovementAttribute attribute, float configValue)
         {
             return MovementAttributeHelper.GetFinalValue(attribute, configValue, MovementAuthority);
         }
 
-        /// <summary>
-        /// Gets final speed for a movement state. Kept for backward compatibility.
-        /// </summary>
         public float GetFinalSpeed(float baseSpeed, MovementStateType stateType)
         {
             MovementAttribute attr = stateType switch
