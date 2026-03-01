@@ -46,8 +46,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly List<GameplayAttribute> dirtyAttributes = new List<GameplayAttribute>(32);
 
         [ThreadStatic]
-        private static List<ActiveGameplayEffect> expiredEffectsScratchPad;
-        [ThreadStatic]
         private static List<ModifierInfo> executionOutputScratchPad;
 
         // --- Prediction ---
@@ -262,7 +260,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 var predicted = pendingPredictedEffects[i];
                 if (predicted.Spec.Context.PredictionKey.Equals(predictionKey))
                 {
-                    pendingPredictedEffects.RemoveAt(i);
+                    int lastIndex = pendingPredictedEffects.Count - 1;
+                    if (i != lastIndex)
+                    {
+                        pendingPredictedEffects[i] = pendingPredictedEffects[lastIndex];
+                    }
+                    pendingPredictedEffects.RemoveAt(lastIndex);
                 }
             }
         }
@@ -391,7 +394,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     bool shouldRemove = effect.Spec.Def.GrantedTags.HasAny(tags) || effect.Spec.Def.AssetTags.HasAny(tags);
                     if (shouldRemove)
                     {
-                        activeEffects.RemoveAt(i);
+                        RemoveActiveEffectAtIndex(i);
                         removedEffects.Add(effect);
                     }
                 }
@@ -660,7 +663,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     if (index >= 0)
                     {
                         int lastIndex = attribute.AffectingEffects.Count - 1;
-                        attribute.AffectingEffects[index] = attribute.AffectingEffects[lastIndex];
+                        if (index != lastIndex)
+                        {
+                            attribute.AffectingEffects[index] = attribute.AffectingEffects[lastIndex];
+                        }
                         attribute.AffectingEffects.RemoveAt(lastIndex);
                     }
                 }
