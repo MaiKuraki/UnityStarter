@@ -177,6 +177,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         #endregion
 
         private readonly List<AbilityTask> activeTasks = new List<AbilityTask>();
+        private readonly List<IAbilityTaskTick> tickableTasks = new List<IAbilityTaskTick>();
         private bool isEnding = false;
 
         protected GameplayAbility() { }
@@ -211,6 +212,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.AbilitySystemComponent = spec.Owner;
             this.isEnding = false;
             this.activeTasks.Clear();
+            this.tickableTasks.Clear();
         }
 
         /// <summary>
@@ -244,6 +246,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 activeTasks[i].CancelTask();
             }
             activeTasks.Clear();
+            tickableTasks.Clear();
 
             AbilitySystemComponent?.OnAbilityEnded(this);
             GASLog.Debug($"Ability '{Name}' ended.");
@@ -271,19 +274,46 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var task = PoolManager.GetTask<T>();
             task.InitTask(this);
             activeTasks.Add(task);
+            if (task is IAbilityTaskTick tickable)
+            {
+                tickableTasks.Add(tickable);
+            }
             return task;
         }
 
-        internal void OnTaskEnded(AbilityTask task) => activeTasks.Remove(task);
+        internal void OnTaskEnded(AbilityTask task)
+        {
+            int index = activeTasks.IndexOf(task);
+            if (index >= 0)
+            {
+                int lastIndex = activeTasks.Count - 1;
+                if (index != lastIndex)
+                {
+                    activeTasks[index] = activeTasks[lastIndex];
+                }
+                activeTasks.RemoveAt(lastIndex);
+            }
+
+            if (task is IAbilityTaskTick tickable)
+            {
+                int tickIndex = tickableTasks.IndexOf(tickable);
+                if (tickIndex >= 0)
+                {
+                    int lastTickIndex = tickableTasks.Count - 1;
+                    if (tickIndex != lastTickIndex)
+                    {
+                        tickableTasks[tickIndex] = tickableTasks[lastTickIndex];
+                    }
+                    tickableTasks.RemoveAt(lastTickIndex);
+                }
+            }
+        }
 
         public void TickTasks(float deltaTime)
         {
-            for (int i = activeTasks.Count - 1; i >= 0; i--)
+            for (int i = tickableTasks.Count - 1; i >= 0; i--)
             {
-                if (activeTasks[i] is IAbilityTaskTick tickableTask)
-                {
-                    tickableTask.Tick(deltaTime);
-                }
+                tickableTasks[i].Tick(deltaTime);
             }
         }
 
@@ -377,6 +407,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.AbilitySystemComponent = null;
             this.isEnding = false;
             this.activeTasks.Clear();
+            this.tickableTasks.Clear();
         }
     }
 }
