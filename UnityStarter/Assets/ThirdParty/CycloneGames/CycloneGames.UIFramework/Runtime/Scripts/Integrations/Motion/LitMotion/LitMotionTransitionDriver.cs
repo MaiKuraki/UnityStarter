@@ -176,14 +176,14 @@ namespace CycloneGames.UIFramework.Runtime
         protected virtual async UniTask AnimateComposite(TransitionContext ctx, CompositeConfig config, bool isOpen, Ease ease, CancellationToken ct)
         {
             var tasks = new System.Collections.Generic.List<UniTask>(3);
-            
+
             if (config.UseFade)
                 tasks.Add(AnimateFade(ctx, config.Duration, isOpen, ease, ct));
             if (config.Scale != null)
                 tasks.Add(AnimateScale(ctx, config.Scale, isOpen, ease, ct));
             if (config.Slide != null)
                 tasks.Add(AnimateSlide(ctx, config.Slide, isOpen, ease, ct));
-            
+
             if (tasks.Count > 0)
                 await UniTask.WhenAll(tasks);
         }

@@ -37,6 +37,7 @@ namespace CycloneGames.UIFramework.Runtime
         private CancellationTokenSource openCts;
         private CancellationTokenSource closeCts;
         private IUIWindowTransitionDriver _transitionDriver; // Optional external transition driver
+        internal IUIWindowBinder[] _binders; // Injected by UIManager for lifecycle hooks
 
         // Shared state instances to avoid per-open allocations
         private static readonly OpeningState OpeningStateShared = new OpeningState();
@@ -154,12 +155,20 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (_isDestroying) return;
             ChangeState(OpeningStateShared);
+            if (_binders != null)
+            {
+                for (int i = 0; i < _binders.Length; i++) _binders[i].OnWindowStateChanged(this, WindowStateCallbackType.OnStartOpen);
+            }
         }
 
         protected virtual void OnFinishedOpen()
         {
             if (_isDestroying) return;
             ChangeState(OpenedStateShared);
+            if (_binders != null)
+            {
+                for (int i = 0; i < _binders.Length; i++) _binders[i].OnWindowStateChanged(this, WindowStateCallbackType.OnFinishedOpen);
+            }
         }
 
         protected virtual void OnStartClose()
@@ -171,6 +180,10 @@ namespace CycloneGames.UIFramework.Runtime
                 return;
             }
             ChangeState(ClosingStateShared);
+            if (_binders != null)
+            {
+                for (int i = 0; i < _binders.Length; i++) _binders[i].OnWindowStateChanged(this, WindowStateCallbackType.OnStartClose);
+            }
         }
 
         protected virtual void OnFinishedClose()
@@ -181,6 +194,10 @@ namespace CycloneGames.UIFramework.Runtime
             _isDestroying = true; // Mark that destruction process has started from logical close
 
             ChangeState(ClosedStateShared);
+            if (_binders != null)
+            {
+                for (int i = 0; i < _binders.Length; i++) _binders[i].OnWindowStateChanged(this, WindowStateCallbackType.OnFinishedClose);
+            }
 
             // The window is responsible for destroying its GameObject.
             // UILayer will be notified via this window's OnDestroy method.
