@@ -44,6 +44,10 @@ namespace CycloneGames.UIFramework.Runtime
         // Tracks active windows for quick access and management
         private Dictionary<string, UIWindow> activeWindows = new Dictionary<string, UIWindow>();
 
+        // Window binders for custom initialization/MVP decoupling
+        private List<IUIWindowBinder> windowBinders = new List<IUIWindowBinder>(4);
+        private IUIWindowBinder[] _windowBindersCache = null;
+
 
         /// <summary>
         /// Initializes the UIManager with necessary services. Attempts to resolve the asset package from locator if not provided.
@@ -141,6 +145,30 @@ namespace CycloneGames.UIFramework.Runtime
             if (uiRoot == null || uiRoot.gameObject.scene == scene)
             {
                 CleanupAllWindows();
+            }
+        }
+
+        /// <summary>
+        /// Registers a window binder for global integration hooks (like MVP Presenter creation).
+        /// </summary>
+        public void RegisterWindowBinder(IUIWindowBinder binder)
+        {
+            if (binder != null && !windowBinders.Contains(binder))
+            {
+                windowBinders.Add(binder);
+                _windowBindersCache = windowBinders.ToArray();
+            }
+        }
+
+        /// <summary>
+        /// Unregisters a window binder.
+        /// </summary>
+        public void UnregisterWindowBinder(IUIWindowBinder binder)
+        {
+            if (binder != null)
+            {
+                windowBinders.Remove(binder);
+                _windowBindersCache = windowBinders.ToArray();
             }
         }
 
@@ -446,8 +474,22 @@ namespace CycloneGames.UIFramework.Runtime
 
             uiWindowInstance.SetWindowName(windowName);
             uiWindowInstance.SetConfiguration(windowConfig);
+            uiWindowInstance._binders = _windowBindersCache;
             uiLayer.AddWindow(uiWindowInstance);
             activeWindows[windowName] = uiWindowInstance;
+
+            // Trigger window binders (e.g., MVP integration) before open
+            for (int i = 0; i < windowBinders.Count; i++)
+            {
+                try
+                {
+                    windowBinders[i].OnWindowCreated(uiWindowInstance);
+                }
+                catch (System.Exception ex)
+                {
+                    CLogger.LogError($"{DEBUG_FLAG} WindowBinder {windowBinders[i].GetType().Name} failed during OnWindowCreated for {windowName}: {ex.Message}");
+                }
+            }
 
             // Yield once before opening to spread work across frames if needed
             await UniTask.Yield(cancellationToken);
@@ -501,6 +543,19 @@ namespace CycloneGames.UIFramework.Runtime
 
                 CLogger.LogInfo($"{DEBUG_FLAG} Attempting to close UI: {windowName}");
                 UILayer layer = windowToClose.ParentLayer;
+
+                // Trigger window binders for destruction cleanup
+                for (int i = 0; i < windowBinders.Count; i++)
+                {
+                    try
+                    {
+                        windowBinders[i].OnWindowDestroying(windowToClose);
+                    }
+                    catch (System.Exception ex)
+                    {
+                        CLogger.LogError($"{DEBUG_FLAG} WindowBinder {windowBinders[i].GetType().Name} failed during OnWindowDestroying for {windowName}: {ex.Message}");
+                    }
+                }
 
                 if (layer != null)
                 {
