@@ -22,6 +22,14 @@ namespace CycloneGames.UIFramework.Runtime
     /// 2. Call OnWindowCreated() after instantiation in OpenUIAsync()
     /// 3. Call OnWindowDestroying() before destruction in CloseUIAsync()
     /// </summary>
+    public enum WindowStateCallbackType
+    {
+        OnStartOpen,
+        OnFinishedOpen,
+        OnStartClose,
+        OnFinishedClose
+    }
+
     public interface IUIWindowBinder
     {
         /// <summary>
@@ -29,11 +37,16 @@ namespace CycloneGames.UIFramework.Runtime
         /// Use for dependency injection, presenter binding, or custom initialization.
         /// </summary>
         void OnWindowCreated(UIWindow window);
-        
+
         /// <summary>
         /// Called when a window is about to be destroyed.
         /// Use for cleanup, releasing resources, or notifying DI containers.
         /// </summary>
         void OnWindowDestroying(UIWindow window);
+
+        /// <summary>
+        /// Called when the Window transitions state.
+        /// </summary>
+        void OnWindowStateChanged(UIWindow window, WindowStateCallbackType state);
     }
 }

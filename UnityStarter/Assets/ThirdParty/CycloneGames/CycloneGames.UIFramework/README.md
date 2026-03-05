@@ -1250,12 +1250,12 @@ CycloneGames.UIFramework provides **optional** MVP (Model-View-Presenter) suppor
 
 ### Usage Levels
 
-| Level  | Pattern                                          | Use Case                  |
-| ------ | ------------------------------------------------ | ------------------------- |
-| **L0** | `class MyUI : UIWindow`                          | Simple windows, beginners |
-| **L1** | `class MyUI : UIWindow` + manual Presenter       | Manual control            |
-| **L2** | `class MyUI : UIWindow<TPresenter>`              | Auto-binding, no DI       |
-| **L3** | `class MyUI : UIWindow<TPresenter>` + VContainer | Full DI integration       |
+| Level  | Pattern                                                    | Use Case                  |
+| ------ | ---------------------------------------------------------- | ------------------------- |
+| **L0** | `class MyUI : UIWindow`                                    | Simple windows, beginners |
+| **L1** | `class MyUI : UIWindow` + manual Presenter                 | Manual control            |
+| **L2** | `class MyUI : UIWindow` + `[UIPresenterBind]`              | Auto-binding, no DI       |
+| **L3** | `class MyUI : UIWindow` + `[UIPresenterBind]` + VContainer | Full DI integration       |
 
 ---
 
@@ -1280,7 +1280,7 @@ public class UIWindowSimple : UIWindow
 
 ### Level 2: Auto-Binding (No DI Framework Required)
 
-Use `UIWindow<TPresenter>` to automatically create and manage Presenters.
+Use `[UIPresenterBind]` to automatically create and manage Presenters entirely decoupled from Views.
 
 #### Step 1: Define View Interface
 
@@ -1299,7 +1299,7 @@ using CycloneGames.UIFramework.Runtime;
 using UnityEngine;
 using UnityEngine.UI;
 
-public class UIWindowInventory : UIWindow<InventoryPresenter>, IInventoryView
+public class UIWindowInventory : UIWindow, IInventoryView
 {
     [SerializeField] private Text goldText;
     [SerializeField] private Text itemCountText;
@@ -1314,6 +1314,8 @@ public class UIWindowInventory : UIWindow<InventoryPresenter>, IInventoryView
 ```csharp
 using CycloneGames.UIFramework.Runtime;
 
+[UIPresenterBind("UIWindow_Inventory")]
+// Or use strongly typed binding: [UIPresenterBind(typeof(UIWindowInventory))]
 public class InventoryPresenter : UIPresenter<IInventoryView>
 {
     // Auto-injected from UIServiceLocator (no DI framework needed)
@@ -1646,14 +1648,10 @@ public class GameController
         _uiService = uiService;
     }
 
-    public async void OpenInventory()
+    public void OpenInventory()
     {
-        var window = await _uiService.OpenUIAsync("UIWindow_Inventory");
-
-        if (window is UIWindow<InventoryPresenter> inventoryWindow)
-        {
-            inventoryWindow.Presenter.RefreshData();
-        }
+        _uiService.OpenUI("UIWindow_Inventory");
+        // Business logic is handled purely by the InventoryPresenter automatically!
     }
 
     public void CloseInventory()
@@ -1681,10 +1679,10 @@ public class GameController
 >     ▼
 > Runtime: uiService.OpenUIAsync("UIWindow_Inventory")
 >     │  - UIManager loads prefab
->     │  - Instantiates UIWindow<InventoryPresenter>
->     ▼
-> UIWindow.Awake()
->     │  - UIPresenterFactory.Create<InventoryPresenter>()
+>     │  - Instantiates UIWindow
+>     │  - UIManager triggers OnWindowCreated on binders
+>     │  - VContainerWindowBinder matches [UIPresenterBind("UIWindow_Inventory")]
+>     │  - UIPresenterFactory.Create() instantiates InventoryPresenter
 >     ├─ VContainer registered → Constructor injection
 >     └─ VContainer not registered → Activator + [UIInject] injection
 > ```
@@ -1699,7 +1697,7 @@ We chose the **View-First** approach specifically for the Unity engine environme
 
 1.  **Unity-Native Workflow**: In Unity, UI starts with Prefabs. The "Entry Point" is naturally the `UIWindow` component on a GameObject.
 2.  **Lifecycle Safety**: The Presenter's lifecycle is perfectly bound to the View (`Awake` to `OnDestroy`). You never have "Zombie Presenters" running without a View, which avoids many common null reference errors.
-3.  **Zero Glue Code**: `UIWindow<T>` handles the binding automatically. You don't need separate "ScreenManager" or "Router" scripts just to wire things up.
+3.  **Zero Glue Code**: `[UIPresenterBind]` handles the binding automatically without the View ever knowing. You don't need separate "ScreenManager" or "Router" scripts just to wire things up.
 4.  **DI Compatible**: Even though the View initiates creation, the `UIPresenterFactory` serves as an indirection layer. This allows full DI frameworks (like VContainer) to intervene and inject dependencies, giving you the best of both worlds: **View-driven lifecycle + DI-driven logic**.
 
 ---
