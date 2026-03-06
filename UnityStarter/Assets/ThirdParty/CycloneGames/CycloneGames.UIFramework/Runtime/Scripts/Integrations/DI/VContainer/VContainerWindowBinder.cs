@@ -56,6 +56,10 @@ namespace CycloneGames.UIFramework.Runtime.Integrations
         {
         }
 
+        public void OnWindowStateChanged(UIWindow window, WindowStateCallbackType state)
+        {
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
