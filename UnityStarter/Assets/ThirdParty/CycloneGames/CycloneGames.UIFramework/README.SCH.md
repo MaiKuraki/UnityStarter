@@ -1689,16 +1689,15 @@ public class GameController
 
 ---
 
-### 设计理念：为何选择 View-First MVP？
+### 设计理念：彻底解耦的 Binder 架构
 
-您可能会问：_“为什么是 View 创建 Presenter，而不是 Presenter 创建 View？”_
+您可能会问：_“为什么框架选择了 `[UIPresenterBind]` 而不是传统的 Presenter 创建 View 流程？”_
 
-我们针对 Unity 引擎特性专门选择了 **View-First**（视图驱动）模式：
+我们针对 Unity 引擎特性专门选择了 **Binder 驱动**模式：
 
-1.  **符合 Unity 原生工作流**: 在 Unity 中，UI 始于 Prefab。`UIWindow` 组件是天然的逻辑入口，符合拖拽使用的直觉。
-2.  **生命周期安全**: Presenter 的生命周期与 GameObject 完美绑定（`Awake` 到 `OnDestroy`）。永远不会出现“View 销毁了但 Presenter 还在跑”的僵尸状态，避免了大量空引用异常。
-3.  **零胶水代码**: `[UIPresenterBind]` 自动处理了绑定并且做到真正的视图解耦。您不需要编写额外的“Router”或“Manager”脚本仅仅为了把 View 和 Presenter 连起来。
-4.  **兼容依赖注入**: 虽然是 View 发起创建，但通过 `UIPresenterFactory` 层作为中介，真正的对象创建和依赖注入依然可以由 DI 框架（如 VContainer）接管。这实现了 **View 驱动生命周期 + DI 驱动业务逻辑** 的完美平衡。
+1.  **符合 Unity 原生工作流**: 在 Unity 中，UI 始于 Prefab。`UIWindow` 组件是天然的界面入口，完全符合日常开发中拖拽预制体的直觉。
+2.  **生命周期安全**: Presenter 的创建与销毁完全被底层的 Binder 同步管理（`OnWindowCreated` 到 `OnWindowDestroying`）。永远不会出现“View 销毁了但 Presenter 还在跑”的僵尸状态，避免了空引用与内存泄漏。
+3.  **兼容依赖注入**: 虽然是窗口生命周期触发了装配，但通过 `UIPresenterBinder` 作为中介隔离，真正的对象组装和依赖注入依然可以由 DI 框架（如 VContainer）接管。这实现了 **Unity 驱动生命周期 + DI 驱动业务逻辑** 的完美平衡。
 
 ---
 
