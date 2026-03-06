@@ -1689,16 +1689,15 @@ public class GameController
 
 ---
 
-### Design Philosophy: View-First MVP
+### Design Philosophy: Decoupled Binder Architecture
 
-You might ask: _"Why does the View (UIWindow) create the Presenter, instead of the Presenter creating the View?"_
+You might ask: _"Why does the framework use `[UIPresenterBind]` instead of the Presenter creating the View?"_
 
-We chose the **View-First** approach specifically for the Unity engine environment:
+We chose the **Binder-Driven** approach specifically for the Unity engine environment:
 
 1.  **Unity-Native Workflow**: In Unity, UI starts with Prefabs. The "Entry Point" is naturally the `UIWindow` component on a GameObject.
-2.  **Lifecycle Safety**: The Presenter's lifecycle is perfectly bound to the View (`Awake` to `OnDestroy`). You never have "Zombie Presenters" running without a View, which avoids many common null reference errors.
-3.  **Zero Glue Code**: `[UIPresenterBind]` handles the binding automatically without the View ever knowing. You don't need separate "ScreenManager" or "Router" scripts just to wire things up.
-4.  **DI Compatible**: Even though the View initiates creation, the `UIPresenterFactory` serves as an indirection layer. This allows full DI frameworks (like VContainer) to intervene and inject dependencies, giving you the best of both worlds: **View-driven lifecycle + DI-driven logic**.
+2.  **Lifecycle Safety**: The Presenter's lifecycle is perfectly bound to the View (`OnWindowCreated` to `OnWindowDestroying`). You never have "Zombie Presenters" running without a View, which avoids many common memory leak errors.
+3.  **DI Compatible**: Even though the Window lifecycle initiates creation, the `UIPresenterBinder` serves as an indirection layer. This allows full DI frameworks (like VContainer) to intervene and inject dependencies, giving you the best of both worlds: **Unity-driven lifecycle + pure DI-driven logic**.
 
 ---
 
