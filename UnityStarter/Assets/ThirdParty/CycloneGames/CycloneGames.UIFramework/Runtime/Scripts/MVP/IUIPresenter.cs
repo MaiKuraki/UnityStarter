@@ -10,7 +10,7 @@ namespace CycloneGames.UIFramework.Runtime
     public interface IUIPresenter : IDisposable
     {
         /// <summary>
-        /// Sets the view reference. Called automatically during UIWindow.Awake().
+        /// Sets the view reference. Called automatically by the IUIWindowBinder.
         /// </summary>
         void SetView(UIWindow view);
 

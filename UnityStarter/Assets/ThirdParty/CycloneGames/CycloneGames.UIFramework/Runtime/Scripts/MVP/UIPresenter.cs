@@ -29,7 +29,7 @@ namespace CycloneGames.UIFramework.Runtime
 
         /// <summary>
         /// Called immediately after the view is bound. Override for early initialization.
-        /// This is called during UIWindow.Awake(), before the window is opened.
+        /// This is called by the IUIWindowBinder before the window starts opening.
         /// </summary>
         protected virtual void OnViewBound() { }
 
