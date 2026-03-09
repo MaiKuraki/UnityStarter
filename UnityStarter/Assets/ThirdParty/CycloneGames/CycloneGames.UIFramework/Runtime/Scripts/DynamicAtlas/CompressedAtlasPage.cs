@@ -39,6 +39,14 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private int _currentBlockY;
         private int _maxBlockYInRow;
 
+#if UNITY_EDITOR
+        public int Padding => _padding;
+        public int CurrentBlockX => _currentBlockX;
+        public int CurrentBlockY => _currentBlockY;
+        public int MaxBlockYInRow => _maxBlockYInRow;
+        public int BlockSize => _blockSize;
+#endif
+
         /// <summary>
         /// Creates a compressed atlas page with pre-allocated texture.
         /// </summary>

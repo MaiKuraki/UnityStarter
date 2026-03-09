@@ -24,6 +24,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         public bool IsFull { get; private set; }
         public TextureFormat Format => _format;
 
+#if UNITY_EDITOR
+        public int Padding => _padding;
+#endif
+
         private int _activeSpriteCount;
         public int ActiveSpriteCount => _activeSpriteCount;
 
@@ -39,14 +43,16 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         public int PageId => _pageId;
 
+#if UNITY_EDITOR
+        public int CurrentX => _currentX;
+        public int CurrentY => _currentY;
+        public int MaxYInRow => _maxYInRow;
+#endif
+
         // Shelf packing state
         private int _currentX;
         private int _currentY;
         private int _maxYInRow;
-
-        // Reusable conversion buffer (for format conversion path)
-        private Color32[] _conversionBuffer;
-        private int _conversionBufferCapacity;
 
         public DynamicAtlasPage(int size) : this(size, TextureFormat.RGBA32, 2, true)
         {
@@ -296,98 +302,33 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             if (gpuCopySuccess) return true;
 
-            // CPU fallback - need readable texture
-            if (!source.isReadable)
-            {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                CLogger.LogError($"[DynamicAtlasPage] Insert from region failed. GPU CopyTexture failed " +
-                    $"(Supported: {useCopyTexture}, Format Match: {source.format == _format}) " +
-                    $"and Source is NOT Readable. Consider enabling Read/Write on the source texture.");
-#endif
-                return false;
-            }
+            if (gpuCopySuccess) return true;
 
-#if !UNITY_WEBGL || UNITY_EDITOR
-            // Try zero-GC path using NativeArray (non-WebGL platforms)
-            if (_enablePlatformOptimizations && TextureFormatHelper.SupportsNativeArrays() &&
-                source.format == TextureFormat.RGBA32 && _format == TextureFormat.RGBA32)
-            {
-                if (TryCopyPixelsFromRegionNative(source, srcX, srcY, dstX, dstY, w, h))
-                {
-                    return true;
-                }
-            }
-#endif
-
-            // Managed fallback
-            return CopyPixelsFromRegionManaged(source, srcX, srcY, dstX, dstY, w, h);
+            // GPU Fallback via RT Bridge (always works regardless of readability)
+            return CopyPixelsFromRegionViaRT(source, srcX, srcY, dstX, dstY, w, h);
         }
 
-#if !UNITY_WEBGL || UNITY_EDITOR
-        private bool TryCopyPixelsFromRegionNative(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
+        private bool CopyPixelsFromRegionViaRT(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
         {
-            try
-            {
-                var srcData = source.GetRawTextureData<Color32>();
-                var dstData = Texture.GetRawTextureData<Color32>();
+            // Create a temporary RT of the exact region size
+            RenderTexture rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
+            
+            // Blit using scale and offset to extract just the region
+            Vector2 scale = new Vector2((float)w / source.width, (float)h / source.height);
+            Vector2 offset = new Vector2((float)srcX / source.width, (float)srcY / source.height);
+            Graphics.Blit(source, rt, scale, offset);
 
-                unsafe
-                {
-                    Color32* srcPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(srcData);
-                    Color32* dstPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafePtr(dstData);
+            RenderTexture previous = RenderTexture.active;
+            RenderTexture.active = rt;
 
-                    int srcWidth = source.width;
-                    int dstWidth = _width;
-                    int rowSize = w * UnsafeUtility.SizeOf<Color32>();
-
-                    for (int row = 0; row < h; row++)
-                    {
-                        Color32* srcRowPtr = srcPtr + ((srcY + row) * srcWidth + srcX);
-                        Color32* dstRowPtr = dstPtr + ((dstY + row) * dstWidth + dstX);
-                        UnsafeUtility.MemCpy(dstRowPtr, srcRowPtr, rowSize);
-                    }
-                }
-
-                _needsApply = true;
-                return true;
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-#endif
-
-        private bool CopyPixelsFromRegionManaged(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
-        {
-            int requiredCapacity = w * h;
-            if (_conversionBuffer == null || _conversionBufferCapacity < requiredCapacity)
-            {
-                _conversionBufferCapacity = Mathf.Max(requiredCapacity, _conversionBufferCapacity * 2, 4096);
-                _conversionBuffer = new Color32[_conversionBufferCapacity];
-            }
-
-            // Get pixels from the specific region
-            var regionPixels = source.GetPixels32(0);
-            int srcWidth = source.width;
-
-            // Copy region pixels to buffer
-            for (int row = 0; row < h; row++)
-            {
-                for (int col = 0; col < w; col++)
-                {
-                    int srcIndex = (srcY + row) * srcWidth + (srcX + col);
-                    int dstIndex = row * w + col;
-                    _conversionBuffer[dstIndex] = regionPixels[srcIndex];
-                }
-            }
-
-            // Create a properly sized array for SetPixels32
-            var destPixels = new Color32[w * h];
-            Array.Copy(_conversionBuffer, destPixels, w * h);
-
-            Texture.SetPixels32(dstX, dstY, w, h, destPixels);
+            // Read directly into our Texture2D (CPU side)
+            Texture.ReadPixels(new Rect(0, 0, w, h), dstX, dstY);
             _needsApply = true;
+
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(rt);
+
+            RenderTexture.ReleaseTemporary(rt);
 
             return true;
         }
@@ -426,89 +367,24 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             if (gpuCopySuccess) return true;
 
-            // CPU fallback paths
-            if (!source.isReadable)
-            {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                CLogger.LogError($"[DynamicAtlasPage] Insert failed. GPU CopyTexture failed " +
-                    $"(Supported: {useCopyTexture}, Format Match: {source.format == _format}) " +
-                    $"and Source is NOT Readable.");
-#endif
-                return false;
-            }
-
-#if !UNITY_WEBGL || UNITY_EDITOR
-            // Try zero-GC path using NativeArray (non-WebGL platforms)
-            if (_enablePlatformOptimizations && TextureFormatHelper.SupportsNativeArrays() &&
-                source.format == TextureFormat.RGBA32 && _format == TextureFormat.RGBA32)
-            {
-                if (TryCopyPixelsNative(source, x, y, w, h))
-                {
-                    return true;
-                }
-            }
-#endif
-
-            // Managed fallback with buffer reuse
-            return CopyPixelsManaged(source, x, y, w, h);
+            // GPU Fallback via RT Bridge (always works regardless of readability)
+            return CopyPixelsViaRT(source, x, y, w, h);
         }
 
-#if !UNITY_WEBGL || UNITY_EDITOR
-        private bool TryCopyPixelsNative(Texture2D source, int x, int y, int w, int h)
+        private bool CopyPixelsViaRT(Texture2D source, int x, int y, int w, int h)
         {
-            try
-            {
-                var srcData = source.GetRawTextureData<Color32>();
-                var dstData = Texture.GetRawTextureData<Color32>();
+            RenderTexture rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
+            Graphics.Blit(source, rt);
 
-                unsafe
-                {
-                    Color32* srcPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafePtr(srcData);
-                    Color32* dstPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafePtr(dstData);
+            RenderTexture previous = RenderTexture.active;
+            RenderTexture.active = rt;
 
-                    int srcWidth = source.width;
-                    int dstWidth = _width;
-                    int rowSize = w * UnsafeUtility.SizeOf<Color32>();
-
-                    for (int row = 0; row < h; row++)
-                    {
-                        Color32* srcRowPtr = srcPtr + (row * srcWidth);
-                        Color32* dstRowPtr = dstPtr + ((y + row) * dstWidth + x);
-                        UnsafeUtility.MemCpy(dstRowPtr, srcRowPtr, rowSize);
-                    }
-                }
-
-                _needsApply = true;
-                return true;
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-        }
-#endif
-
-        private bool CopyPixelsManaged(Texture2D source, int x, int y, int w, int h)
-        {
-            // Get or resize conversion buffer
-            int requiredCapacity = w * h;
-            if (_conversionBuffer == null || _conversionBufferCapacity < requiredCapacity)
-            {
-                // Allocate with some headroom to reduce future allocations
-                _conversionBufferCapacity = Mathf.Max(requiredCapacity, _conversionBufferCapacity * 2, 4096);
-                _conversionBuffer = new Color32[_conversionBufferCapacity];
-            }
-
-            // Get pixels into buffer
-            var sourcePixels = source.GetPixels32();
-
-            // Copy only required pixels
-            int copyLength = Mathf.Min(sourcePixels.Length, requiredCapacity);
-            Array.Copy(sourcePixels, 0, _conversionBuffer, 0, copyLength);
-
-            // SetPixels32 with x,y offset
-            Texture.SetPixels32(x, y, w, h, sourcePixels);
+            // Read directly into our Texture2D (CPU side)
+            Texture.ReadPixels(new Rect(0, 0, w, h), x, y);
             _needsApply = true;
+
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(rt);
 
             return true;
         }
@@ -531,9 +407,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 UnityEngine.Object.Destroy(Texture);
                 Texture = null;
             }
-
-            _conversionBuffer = null;
-            _conversionBufferCapacity = 0;
         }
     }
 }
