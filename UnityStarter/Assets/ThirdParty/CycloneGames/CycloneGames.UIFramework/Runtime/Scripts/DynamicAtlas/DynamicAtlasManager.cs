@@ -14,6 +14,12 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private static readonly object _lock = new object();
 
         /// <summary>
+        /// Fires when a heavily fragmented page is repacked and a new Sprite replaces the old one.
+        /// UI Frameworks or Image components should subscribe to this to hot-swap their sprite reference seamlessly.
+        /// </summary>
+        public event Action<string, Sprite> OnSpriteRepacked;
+
+        /// <summary>
         /// Singleton instance.
         /// </summary>
         public static DynamicAtlasManager Instance
@@ -81,10 +87,12 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             {
                 if (_atlasService != null && _atlasService != _injectedService)
                 {
+                    UnbindServiceEvents(_atlasService);
                     _atlasService.Dispose();
                 }
                 _injectedService = service;
                 _atlasService = service;
+                BindServiceEvents(_atlasService);
             }
         }
 
@@ -98,6 +106,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 _factory = factory;
                 if (_atlasService != null && _atlasService != _injectedService)
                 {
+                    UnbindServiceEvents(_atlasService);
                     _atlasService.Dispose();
                 }
                 _atlasService = null;
@@ -114,6 +123,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 if (_atlasService != null && _atlasService != _injectedService)
                 {
                     CLogger.LogWarning("[DynamicAtlasManager] Re-configuring atlas service. Resetting existing service.");
+                    UnbindServiceEvents(_atlasService);
                     _atlasService.Dispose();
                     _atlasService = null;
                 }
@@ -137,6 +147,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 if (_atlasService != null && _atlasService != _injectedService)
                 {
                     CLogger.LogWarning("[DynamicAtlasManager] Re-configuring atlas service. Resetting existing service.");
+                    UnbindServiceEvents(_atlasService);
                     _atlasService.Dispose();
                     _atlasService = null;
                 }
@@ -187,6 +198,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                             {
                                 var config = BuildConfig();
                                 _atlasService = _factory.Create(config);
+                                BindServiceEvents(_atlasService);
                             }
                         }
                     }
@@ -201,6 +213,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                         {
                             var config = BuildConfig();
                             _atlasService = new DynamicAtlasService(config);
+                            BindServiceEvents(_atlasService);
                         }
                     }
                 }
@@ -279,8 +292,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             lock (_serviceLock)
             {
-                if (_atlasService != null && _atlasService != _injectedService)
+                if (_atlasService != null)
                 {
+                    UnbindServiceEvents(_atlasService);
                     _atlasService.Dispose();
                     _atlasService = null;
                 }
@@ -296,6 +310,36 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     }
                 }
             }
+        }
+
+        private void BindServiceEvents(IDynamicAtlas service)
+        {
+            if (service != null)
+            {
+                service.OnSpriteRepacked -= NotifySpriteRepacked;
+                service.OnSpriteRepacked += NotifySpriteRepacked;
+            }
+        }
+        
+        private void UnbindServiceEvents(IDynamicAtlas service)
+        {
+            if (service != null)
+            {
+                service.OnSpriteRepacked -= NotifySpriteRepacked;
+            }
+        }
+
+        /// <summary>
+        /// Performs a double-buffering defragmentation of heavily fragmented atlas pages via the underlying service.
+        /// </summary>
+        public int Defragment(float fragmentationThreshold = 0.5f)
+        {
+            return Service?.Defragment(fragmentationThreshold) ?? 0;
+        }
+
+        internal void NotifySpriteRepacked(string path, Sprite newSprite)
+        {
+            OnSpriteRepacked?.Invoke(path, newSprite);
         }
     }
 }

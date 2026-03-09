@@ -13,7 +13,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 {
     /// <summary>
     /// Specialized Dynamic Atlas Service for compressed textures (ASTC/ETC2/BC).
-    /// Uses GPU CopyTexture for zero-GC, zero-CPU direct block copy.
     /// 
     /// CRITICAL CONSTRAINTS:
     /// 1. Source textures MUST have the same TextureFormat as the atlas
@@ -44,6 +43,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 #endif
         private const int MaxPoolSize = 128;
         private int _poolCount = 0;
+
+        public event Action<string, Sprite> OnSpriteRepacked;
 
         // Configuration
         private readonly int _pageSize;
@@ -289,7 +290,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
                         if (item.Page != null)
                         {
-                            item.Page.DecrementActiveCount();
+                            item.Page.DecrementActiveCount(Mathf.RoundToInt(item.Sprite.rect.width), Mathf.RoundToInt(item.Sprite.rect.height));
                             TryReleasePage(item.Page);
                         }
 
@@ -386,6 +387,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             item.CacheKey = cacheKey;
             item.RefCount = 0;
 
+            page.IncrementActiveCount(width, height);
+
             return item;
         }
 
@@ -440,6 +443,89 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             {
                 page.Dispose();
                 _pages.Remove(page);
+            }
+        }
+
+        public int Defragment(float fragmentationThreshold = 0.5f)
+        {
+            _lock.EnterWriteLock();
+            try
+            {
+                int reclaimedPagesCount = 0;
+                List<CompressedAtlasPage> targets = new List<CompressedAtlasPage>();
+                foreach (var page in _pages)
+                {
+                    if (!page.IsEmpty && page.FragmentationRatio >= fragmentationThreshold)
+                    {
+                        targets.Add(page);
+                    }
+                }
+
+                if (targets.Count == 0) return 0;
+
+                foreach (var oldPage in targets)
+                {
+                    List<KeyValuePair<string, AtlasItem>> itemsToMove = new List<KeyValuePair<string, AtlasItem>>();
+                    foreach (var kvp in _itemCache)
+                    {
+                        if (kvp.Value.Page == oldPage && kvp.Value.RefCount > 0 && kvp.Value.Sprite != null)
+                        {
+                            itemsToMove.Add(kvp);
+                        }
+                    }
+
+                    var newPage = new CompressedAtlasPage(_pageSize, _format, _blockPadding);
+                    _pages.Add(newPage);
+
+                    bool allMovedSuccessfully = true;
+
+                    foreach (var kvp in itemsToMove)
+                    {
+                        AtlasItem oldItem = kvp.Value;
+                        Sprite oldSprite = oldItem.Sprite;
+
+                        Rect oldRect = oldSprite.textureRect;
+
+                        if (newPage.TryInsertFromRegion(oldPage.Texture, oldRect, out Rect newUvRect))
+                        {
+                            int w = Mathf.RoundToInt(oldRect.width);
+                            int h = Mathf.RoundToInt(oldRect.height);
+                            Rect newSpriteRect = new Rect(newUvRect.x * newPage.Width, newUvRect.y * newPage.Height, w, h);
+
+                            Sprite newSprite = Sprite.Create(newPage.Texture, newSpriteRect, new Vector2(0.5f, 0.5f), 100.0f, 0, SpriteMeshType.FullRect);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                            newSprite.name = oldSprite.name + "_Defrag";
+#endif
+
+                            oldItem.Sprite = newSprite;
+                            oldItem.Page = newPage;
+
+                            newPage.IncrementActiveCount(w, h);
+
+                            OnSpriteRepacked?.Invoke(oldItem.CacheKey, newSprite);
+
+                            UnityEngine.Object.Destroy(oldSprite);
+                        }
+                        else
+                        {
+                            allMovedSuccessfully = false;
+                            break;
+                        }
+                    }
+
+                    if (allMovedSuccessfully)
+                    {
+                        oldPage.Dispose();
+                        _pages.Remove(oldPage);
+                        reclaimedPagesCount++;
+                    }
+                }
+
+                return reclaimedPagesCount;
+            }
+            finally
+            {
+                _lock.ExitWriteLock();
             }
         }
 

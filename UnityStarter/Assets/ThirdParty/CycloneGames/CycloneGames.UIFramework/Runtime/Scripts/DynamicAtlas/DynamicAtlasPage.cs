@@ -31,6 +31,14 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private int _activeSpriteCount;
         public int ActiveSpriteCount => _activeSpriteCount;
 
+        private long _usedPixelArea;
+        public long UsedPixelArea => _usedPixelArea;
+
+        /// <summary>
+        /// Returns a value between 0 and 1, where 1 means completely empty/fragmented and 0 means optimally packed.
+        /// </summary>
+        public float FragmentationRatio => 1.0f - (float)_usedPixelArea / (_width * _height);
+
         private readonly int _width;
         private readonly int _height;
         private readonly int _padding;
@@ -312,7 +320,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             // Create a temporary RT of the exact region size
             RenderTexture rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
-            
+
             // Blit using scale and offset to extract just the region
             Vector2 scale = new Vector2((float)w / source.width, (float)h / source.height);
             Vector2 offset = new Vector2((float)srcX / source.width, (float)srcY / source.height);
@@ -389,12 +397,23 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             return true;
         }
 
-        public void DecrementActiveCount()
+        public void IncrementActiveCount(int width, int height)
+        {
+            System.Threading.Interlocked.Increment(ref _activeSpriteCount);
+            System.Threading.Interlocked.Add(ref _usedPixelArea, width * height);
+        }
+
+        public void DecrementActiveCount(int width, int height)
         {
             int newCount = System.Threading.Interlocked.Decrement(ref _activeSpriteCount);
             if (newCount < 0)
             {
                 System.Threading.Interlocked.CompareExchange(ref _activeSpriteCount, 0, newCount);
+            }
+            System.Threading.Interlocked.Add(ref _usedPixelArea, -(width * height));
+            if (_usedPixelArea < 0)
+            {
+                System.Threading.Interlocked.Exchange(ref _usedPixelArea, 0);
             }
         }
 
