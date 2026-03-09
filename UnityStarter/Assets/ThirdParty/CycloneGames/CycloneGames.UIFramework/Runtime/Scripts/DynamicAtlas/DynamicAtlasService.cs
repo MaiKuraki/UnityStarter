@@ -89,6 +89,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private const int MaxPoolSize = 128;
         private int _poolCount = 0;
 
+        public event Action<string, Sprite> OnSpriteRepacked;
+
         // Configuration
         private readonly Func<string, Texture2D> _loadFunc;
         private readonly Action<string, Texture2D> _unloadFunc;
@@ -440,7 +442,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
                             if (item.Page != null)
                             {
-                                item.Page.DecrementActiveCount();
+                                item.Page.DecrementActiveCount(Mathf.RoundToInt(item.Sprite.rect.width), Mathf.RoundToInt(item.Sprite.rect.height));
                                 TryReleasePage(item.Page);
                             }
 
@@ -632,6 +634,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             item.Path = cacheKey;
             item.RefCount = 0;
 
+            page.IncrementActiveCount(width, height);
+
             return item;
         }
 
@@ -685,6 +689,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             item.Page = page;
             item.Path = path;
             item.RefCount = 0;
+
+            page.IncrementActiveCount(source.width, source.height);
 
             return item;
         }
@@ -768,6 +774,103 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             {
                 page.Dispose();
                 _pages.Remove(page);
+            }
+        }
+
+        /// <summary>
+        /// Performs a double-buffering defragmentation of heavily fragmented atlas pages.
+        /// Warning: Existing UI components holding a strong reference to old Sprite objects will 
+        /// NOT automatically update their texture pointers. Call this method during loading screens 
+        /// or scene transitions when UI is rebuilt, or manually refresh Image.sprite properties.
+        /// </summary>
+        /// <param name="fragmentationThreshold">The minimum ratio of wasted space (0.0 to 1.0) to trigger a repack on a page. default is 0.5 (50% wasted).</param>
+        /// <returns>The number of pages successfully destroyed and reclaimed.</returns>
+        public int Defragment(float fragmentationThreshold = 0.5f)
+        {
+            _lock.EnterWriteLock();
+            try
+            {
+                int reclaimedPagesCount = 0;
+
+                // Identify target pages (we loop backwards so we can safely remove or modify)
+                List<DynamicAtlasPage> targets = new List<DynamicAtlasPage>();
+                foreach (var page in _pages)
+                {
+                    if (!page.IsEmpty && page.FragmentationRatio >= fragmentationThreshold)
+                    {
+                        targets.Add(page);
+                    }
+                }
+
+                if (targets.Count == 0) return 0;
+
+                foreach (var oldPage in targets)
+                {
+                    // Find all active sprites currently living on this old page
+                    List<KeyValuePair<string, AtlasItem>> itemsToMove = new List<KeyValuePair<string, AtlasItem>>();
+                    foreach (var kvp in _itemCache)
+                    {
+                        if (kvp.Value.Page == oldPage && kvp.Value.RefCount > 0 && kvp.Value.Sprite != null)
+                        {
+                            itemsToMove.Add(kvp);
+                        }
+                    }
+
+                    // Create a pristine new page matching the config
+                    var newPage = new DynamicAtlasPage(_pageSize, _targetFormat, _padding, _enablePlatformOptimizations);
+                    _pages.Add(newPage);
+
+                    bool allMovedSuccessfully = true;
+
+                    foreach (var kvp in itemsToMove)
+                    {
+                        AtlasItem oldItem = kvp.Value;
+                        Sprite oldSprite = oldItem.Sprite;
+
+                        Rect oldRect = oldSprite.textureRect;
+
+                        if (newPage.TryInsertFromRegion(oldPage.Texture, oldRect, out Rect newUvRect))
+                        {
+                            int w = Mathf.RoundToInt(oldRect.width);
+                            int h = Mathf.RoundToInt(oldRect.height);
+                            Rect newSpriteRect = new Rect(newUvRect.x * newPage.Width, newUvRect.y * newPage.Height, w, h);
+
+                            Sprite newSprite = Sprite.Create(newPage.Texture, newSpriteRect, new Vector2(0.5f, 0.5f), 100.0f, 0, SpriteMeshType.FullRect);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                            newSprite.name = oldSprite.name + "_Defrag";
+#endif
+
+                            oldItem.Sprite = newSprite;
+                            oldItem.Page = newPage;
+
+                            newPage.IncrementActiveCount(w, h);
+
+                            OnSpriteRepacked?.Invoke(oldItem.Path, newSprite);
+
+                            // Explicitly destroy the old sprite shell
+                            UnityEngine.Object.Destroy(oldSprite);
+                        }
+                        else
+                        {
+                            allMovedSuccessfully = false;
+                            break;
+                        }
+                    }
+
+                    if (allMovedSuccessfully)
+                    {
+                        // The old page is now effectively useless and stripped of its inhabitants
+                        oldPage.Dispose();
+                        _pages.Remove(oldPage);
+                        reclaimedPagesCount++;
+                    }
+                }
+
+                return reclaimedPagesCount;
+            }
+            finally
+            {
+                _lock.ExitWriteLock();
             }
         }
 

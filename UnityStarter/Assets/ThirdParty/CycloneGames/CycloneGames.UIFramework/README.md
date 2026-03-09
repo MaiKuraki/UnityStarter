@@ -1023,6 +1023,26 @@ This tool scans your SpriteAtlas assets and shows:
 - Compatibility with CompressedDynamicAtlasService
 - Recommendations for optimal format settings
 
+### Advanced Architecture & Memory Management
+
+#### Memory & GC Strategy
+- **Zero-GC Copying:** The system exclusively relies on GPU-to-GPU copying (`Graphics.CopyTexture` and `Graphics.Blit`) to transfer texture data. Legacy CPU-bound methods (`Texture2D.SetPixels`, `GetRawTextureData`) that cause heavy GC spikes have been completely eliminated. Once the system is initialized, loading and packing sprites generates **0 Bytes of Garbage Collection**.
+- **Draw Call Reduction:** By packing discrete icons into large 2048x2048 or 4096x4096 pages, Unity can batch hundreds of different UI elements into a single Draw Call, significantly alleviating CPU pipeline pressure.
+- **Reference Counting:** Every sprite generated increments an `ActiveSpriteCount` and a `UsedPixelArea` tracker. When an icon is no longer rendered and released, the system automatically decrements its reference count. Once a page's `ActiveSpriteCount` drops to 0, the entire page (`Texture2D`) is immediately destroyed, returning the VRAM back to the system.
+
+#### Block Alignment for Compressed Formats
+When using `CompressedDynamicAtlasService`, hardware texture compression (ASTC, ETC2, BC7) is employed. However, compressed textures are not stored pixel-by-pixel, but in discrete blocks (e.g., 4x4, 6x6, 8x8 pixels per block).
+- **Format Parity Requirement:** The source sprites and the atlas page MUST share the exact same compression format.
+- **Block Padding & Alignment:** To prevent block artifacts from bleeding across sprite boundaries, the system automatically queries `TextureFormatHelper.GetBlockSize()`. If you push an 11x11 pixel icon into an ASTC 4x4 atlas, the internal shelf-packing algorithm will automatically allocate a 12x12 (aligned to 4) footprint in the VRAM. This guarantees that GPU block samplers will not accidentally read neighbor pixels, ensuring crisp visuals even with high compression.
+
+#### Memory Defragmentation (Seamless Repacking)
+Over time, as UI windows open and close, atlas pages can become "Swiss cheese"—fragmented with empty gaps holding unreleased, scattered sprites. To reclaim VRAM without causing frame stutters, the framework implements a **Double-Buffering Defragmentation Strategy**:
+1. **Trigger:** Call `DynamicAtlasManager.Instance.Defragment(0.5f)`. This targets pages that are at least 50% empty (`FragmentationRatio > 0.5f`).
+2. **Double Buffering:** The system silently allocates a new pristine Page in the background.
+3. **GPU Blit:** Using zero-GC `CopyTexture`, it tightly repacks all currently active sprites from the fragmented old page into the new page.
+4. **Seamless Pointer Swapping:** Existing C# `Sprite` wrapper objects in the cache are remapped.
+5. **Event Notification:** The system broadcasts `DynamicAtlasManager.Instance.OnSpriteRepacked` with the new Sprite reference. Subscribed UI Image components can catch this event to instantly swap their `.sprite` property gracefully.
+
 ## Advanced Features
 
 ### Custom Transition Drivers
