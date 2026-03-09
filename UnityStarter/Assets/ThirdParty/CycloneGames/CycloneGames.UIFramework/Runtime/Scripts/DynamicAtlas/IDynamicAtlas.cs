@@ -30,6 +30,19 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         Sprite GetSpriteFromRegion(Texture2D sourceTexture, Rect sourceRect, string cacheKey);
 
         /// <summary>
+        /// Fires when a heavily fragmented page is repacked and a new Sprite replaces the old one.
+        /// UI Frameworks or Image components should subscribe to this to hot-swap their sprite reference seamlessly.
+        /// </summary>
+        event Action<string, Sprite> OnSpriteRepacked;
+
+        /// <summary>
+        /// Performs a double-buffering defragmentation of heavily fragmented atlas pages.
+        /// </summary>
+        /// <param name="fragmentationThreshold">The minimum ratio of wasted space (0.0 to 1.0) to trigger a repack on a page. default is 0.5 (50% wasted).</param>
+        /// <returns>The number of pages successfully destroyed and reclaimed.</returns>
+        int Defragment(float fragmentationThreshold = 0.5f);
+
+        /// <summary>
         /// Release a sprite by cache key. Decrements reference count.
         /// If count reaches 0, the sprite might be freed immediately.
         /// </summary>
