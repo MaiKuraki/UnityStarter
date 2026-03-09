@@ -26,7 +26,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             public bool CanAutoFix;
         }
 
-        [MenuItem("Tools/GameJam/Interaction Validator", false, 101)]
+        [MenuItem("Tools/CycloneGames/Interaction/Interaction Validator", false)]
         public static void ShowWindow()
         {
             var window = GetWindow<InteractionValidatorWindow>();
