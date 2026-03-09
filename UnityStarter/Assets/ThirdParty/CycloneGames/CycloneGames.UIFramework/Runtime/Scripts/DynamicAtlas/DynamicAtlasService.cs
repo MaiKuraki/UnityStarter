@@ -31,6 +31,55 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private readonly ReaderWriterLockSlim _lock = new ReaderWriterLockSlim(LockRecursionPolicy.NoRecursion);
         private static int _spriteIdCounter = 0;
 
+#if UNITY_EDITOR
+        public class EditorAtlasItem
+        {
+            public Sprite Sprite { get; }
+            public DynamicAtlasPage Page { get; }
+            public int RefCount { get; }
+            public string Path { get; }
+
+            public EditorAtlasItem(Sprite sprite, DynamicAtlasPage page, int refCount, string path)
+            {
+                Sprite = sprite;
+                Page = page;
+                RefCount = refCount;
+                Path = path;
+            }
+        }
+
+        public IReadOnlyList<DynamicAtlasPage> EditorGetPages()
+        {
+            _lock.EnterReadLock();
+            try
+            {
+                return new List<DynamicAtlasPage>(_pages);
+            }
+            finally
+            {
+                _lock.ExitReadLock();
+            }
+        }
+
+        public IReadOnlyList<EditorAtlasItem> EditorGetCachedItems()
+        {
+            _lock.EnterReadLock();
+            try
+            {
+                var list = new List<EditorAtlasItem>(_itemCache.Count);
+                foreach (var kvp in _itemCache)
+                {
+                    list.Add(new EditorAtlasItem(kvp.Value.Sprite, kvp.Value.Page, kvp.Value.RefCount, kvp.Value.Path));
+                }
+                return list;
+            }
+            finally
+            {
+                _lock.ExitReadLock();
+            }
+        }
+#endif
+
         // Platform-specific object pool
 #if !UNITY_WEBGL || UNITY_EDITOR
         private readonly ConcurrentQueue<AtlasItem> _itemPoolConcurrent = new ConcurrentQueue<AtlasItem>();
@@ -50,14 +99,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private readonly bool _enableBlockAlignment;
         private readonly bool _enablePlatformOptimizations;
         private readonly int _blockSize;
-
-        // Scaling buffer (reusable, platform-specific)
-#if !UNITY_WEBGL || UNITY_EDITOR
-        private NativeArray<Color32> _scaleBuffer;
-        private readonly object _scaleBufferLock = new object();
-#endif
-        private Color32[] _managedScaleBuffer;
-        private int _managedScaleBufferCapacity;
 
         public DynamicAtlasService(
             int forceSize = 0,
@@ -292,7 +333,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         /// <summary>
         /// Scales texture to fit within the specified maximum size while maintaining aspect ratio.
-        /// Uses zero-GC NativeArray path on supported platforms, falls back to managed arrays on WebGL.
+        /// Uses zero-GC GPU path (Graphics.Blit). CPU native/managed paths have been removed.
         /// </summary>
         private Texture2D ScaleTextureToFit(Texture2D source, int maxSize)
         {
@@ -345,130 +386,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 if (targetHeight < 1) targetHeight = 1;
             }
 
-            Texture2D scaled;
-
-            // Check if we can use the fast path
-            bool canUseFastPath = source.isReadable &&
-                source.format != TextureFormat.DXT1 &&
-                source.format != TextureFormat.DXT5 &&
-                source.format != TextureFormat.BC4 &&
-                source.format != TextureFormat.BC5 &&
-                source.format != TextureFormat.BC6H &&
-                source.format != TextureFormat.BC7;
-
-            if (canUseFastPath)
-            {
-#if !UNITY_WEBGL || UNITY_EDITOR
-                if (_enablePlatformOptimizations && TextureFormatHelper.SupportsNativeArrays())
-                {
-                    scaled = ScaleTextureNative(source, targetWidth, targetHeight);
-                    if (scaled != null) return scaled;
-                }
-#endif
-                scaled = ScaleTextureManaged(source, targetWidth, targetHeight);
-            }
-            else
-            {
-                // GPU fallback for compressed textures
-                scaled = ScaleTextureGPU(source, targetWidth, targetHeight);
-            }
-
-            return scaled;
-        }
-
-#if !UNITY_WEBGL || UNITY_EDITOR
-        private Texture2D ScaleTextureNative(Texture2D source, int targetWidth, int targetHeight)
-        {
-            try
-            {
-                var srcData = source.GetRawTextureData<Color32>();
-                int srcWidth = source.width;
-                int srcHeight = source.height;
-                int targetSize = targetWidth * targetHeight;
-
-                // Use buffer pool for zero-GC
-                bool gotBuffer = DynamicAtlasBufferPool.Instance.TryGetNativeBuffer(targetSize, out var scaleBuffer);
-                if (!gotBuffer)
-                {
-                    return null;
-                }
-
-                try
-                {
-                    unsafe
-                    {
-                        Color32* srcPtr = (Color32*)NativeArrayUnsafeUtility.GetUnsafeReadOnlyPtr(srcData);
-                        Color32* dstPtr = DynamicAtlasBufferPool.GetNativeBufferPtr(scaleBuffer);
-
-                        float xRatio = (float)srcWidth / targetWidth;
-                        float yRatio = (float)srcHeight / targetHeight;
-
-                        for (int y = 0; y < targetHeight; y++)
-                        {
-                            int srcY = Mathf.Min((int)(y * yRatio), srcHeight - 1);
-                            for (int x = 0; x < targetWidth; x++)
-                            {
-                                int srcX = Mathf.Min((int)(x * xRatio), srcWidth - 1);
-                                dstPtr[y * targetWidth + x] = srcPtr[srcY * srcWidth + srcX];
-                            }
-                        }
-                    }
-
-                    var scaled = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
-
-                    // Copy from native buffer to texture
-                    var texData = scaled.GetRawTextureData<Color32>();
-                    NativeArray<Color32>.Copy(scaleBuffer, 0, texData, 0, targetSize);
-
-                    scaled.Apply(false);
-                    return scaled;
-                }
-                finally
-                {
-                    DynamicAtlasBufferPool.Instance.ReturnNativeBuffer(scaleBuffer);
-                }
-            }
-            catch (Exception)
-            {
-                return null;
-            }
-        }
-#endif
-
-        private Texture2D ScaleTextureManaged(Texture2D source, int targetWidth, int targetHeight)
-        {
-            int srcWidth = source.width;
-            int srcHeight = source.height;
-            int targetSize = targetWidth * targetHeight;
-
-            // Get source pixels (this does allocate, but we minimize by reusing target buffer)
-            Color32[] sourcePixels = source.GetPixels32();
-
-            // Get or resize managed buffer
-            if (_managedScaleBuffer == null || _managedScaleBufferCapacity < targetSize)
-            {
-                _managedScaleBufferCapacity = Mathf.Max(targetSize, _managedScaleBufferCapacity * 2, 4096);
-                _managedScaleBuffer = new Color32[_managedScaleBufferCapacity];
-            }
-
-            float xRatio = (float)srcWidth / targetWidth;
-            float yRatio = (float)srcHeight / targetHeight;
-
-            for (int y = 0; y < targetHeight; y++)
-            {
-                int srcY = Mathf.Min((int)(y * yRatio), srcHeight - 1);
-                for (int x = 0; x < targetWidth; x++)
-                {
-                    int srcX = Mathf.Min((int)(x * xRatio), srcWidth - 1);
-                    _managedScaleBuffer[y * targetWidth + x] = sourcePixels[srcY * srcWidth + srcX];
-                }
-            }
-
-            var scaled = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
-            scaled.SetPixels32(_managedScaleBuffer);
-            scaled.Apply(false);
-
-            return scaled;
+            // Strictly use GPU scaling path
+            return ScaleTextureGPU(source, targetWidth, targetHeight);
         }
 
         private Texture2D ScaleTextureGPU(Texture2D source, int targetWidth, int targetHeight)
@@ -885,18 +804,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             Reset();
             _lock?.Dispose();
-
-#if !UNITY_WEBGL || UNITY_EDITOR
-            lock (_scaleBufferLock)
-            {
-                if (_scaleBuffer.IsCreated)
-                {
-                    _scaleBuffer.Dispose();
-                }
-            }
-#endif
-            _managedScaleBuffer = null;
-            _managedScaleBufferCapacity = 0;
         }
     }
 }

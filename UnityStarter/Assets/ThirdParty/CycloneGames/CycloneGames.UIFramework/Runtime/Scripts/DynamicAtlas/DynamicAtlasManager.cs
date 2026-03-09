@@ -46,6 +46,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private IDynamicAtlas _atlasService;
         private readonly object _serviceLock = new object();
 
+#if UNITY_EDITOR
+        public IDynamicAtlas EditorAtlasService => _atlasService ?? _injectedService;
+#endif
+
         // Configuration state
         private DynamicAtlasConfig _config;
         private Func<string, Texture2D> _loadDelegate;
@@ -292,9 +296,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     }
                 }
             }
-
-            // Clear buffer pool when manager is destroyed
-            DynamicAtlasBufferPool.ResetInstance();
         }
     }
 }
