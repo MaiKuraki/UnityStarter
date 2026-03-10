@@ -163,7 +163,7 @@ Modules are designed to be:
 | ------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | **Factory**         | `CycloneGames.Factory`         | High-performance object pooling. Thread-safe, auto-scaling pools with O(1) operations. Zero-GC allocation.     | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.md)         |
 | **Logger**          | `CycloneGames.Logger`          | Zero-GC logging system. Multi-threaded, file rotation, cross-platform (including WebGL). Pluggable processors. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.md)          |
-| **AssetManagement** | `CycloneGames.AssetManagement` | DI-first asset loading abstraction. YooAsset integration, Addressables compatibility, version management.      | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md) |
+| **AssetManagement** | `CycloneGames.AssetManagement` | DI-first asset loading abstraction with W-TinyLFU cache, And seamless YooAsset/Addressables integration.       | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md) |
 | **Audio**           | `CycloneGames.Audio`           | High-performance audio management. Wwise-like API, low-GC, advanced features using Unity native audio.         | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.md)           |
 
 ### 🎯 Input & UI
