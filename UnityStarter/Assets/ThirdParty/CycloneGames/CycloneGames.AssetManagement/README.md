@@ -4,6 +4,8 @@ English | [简体中文](./README.SCH.md)
 
 A DI-first, interface-driven, unified asset management abstraction layer for Unity. It decouples your game logic from the underlying asset system (YooAsset, Addressables, or Resources), enabling cleaner, more portable, and high-performance code.
 
+Built on a **W-TinyLFU** inspired caching architecture, it provides deterministic memory management, fine-grained resource tracking (via Tag/Owner metadata), and comes with powerful editor debugging tools (Cache Debugger and Handle Tracker) to guarantee leak-free memory operations.
+
 ## Table of Contents
 
 - [Requirements](#requirements)
