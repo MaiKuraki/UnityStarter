@@ -15,7 +15,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.assetPackage = assetPackage;
         }
 
-        public async UniTask<T> LoadAssetAsync<T>(object key) where T : Object
+        public async UniTask<T> LoadAssetAsync<T>(object key, string cacheTag = null, string cacheOwner = null) where T : Object
         {
             if (key == null) return null;
 
@@ -31,7 +31,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return handle.Asset as T;
             }
 
-            var loadHandle = assetPackage.LoadAssetAsync<T>(stringKey);
+            var loadHandle = assetPackage.LoadAssetAsync<T>(stringKey, tag: cacheTag, owner: cacheOwner);
             loadedHandles[key] = loadHandle;
 
             await UniTask.RunOnThreadPool(() => loadHandle.WaitForAsyncComplete());
