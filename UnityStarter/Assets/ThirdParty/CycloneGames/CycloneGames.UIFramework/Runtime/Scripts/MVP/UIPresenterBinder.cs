@@ -19,10 +19,20 @@ namespace CycloneGames.UIFramework.Runtime
     {
         private readonly Dictionary<string, Type> _presenterMap = new Dictionary<string, Type>(32);
         private readonly Dictionary<UIWindow, IUIPresenter> _activePresenters = new Dictionary<UIWindow, IUIPresenter>(16);
+        private IUIService _uiService;
 
         public UIPresenterBinder()
         {
             InitializeMap();
+        }
+
+        /// <summary>
+        /// Provides the IUIService reference to presenters so they can use NavigateTo / NavigateBack.
+        /// Call this once after UIService is initialized.
+        /// </summary>
+        public void SetUIService(IUIService uiService)
+        {
+            _uiService = uiService;
         }
 
         /// <summary>
@@ -87,6 +97,7 @@ namespace CycloneGames.UIFramework.Runtime
                     
                     // Bind the view
                     presenter.SetView(window);
+                    presenter.SetUIService(_uiService);
                     
                     // Hook into lifecycle manually or passively if UIWindow exposes events.
                     // For now, UIWindow doesn't expose public events for opening/closing, 

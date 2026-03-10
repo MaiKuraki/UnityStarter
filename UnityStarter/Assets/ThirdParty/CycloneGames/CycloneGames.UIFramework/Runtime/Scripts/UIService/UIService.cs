@@ -52,6 +52,17 @@ namespace CycloneGames.UIFramework.Runtime
 
         void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService);
         void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService, IAssetPackage package);
+
+        /// <summary>
+        /// Returns the active navigation service, or null if none has been set.
+        /// </summary>
+        IUINavigationService NavigationService { get; }
+
+        /// <summary>
+        /// Attaches an IUINavigationService. The service will be notified automatically
+        /// when any window opens or closes through this UIService.
+        /// </summary>
+        void SetNavigationService(IUINavigationService nav);
     }
 
     public class UIService : IDisposable, IUIService
@@ -286,6 +297,16 @@ namespace CycloneGames.UIFramework.Runtime
                 return null;
             }
             return uiManagerInstance.GetUICamera();
+        }
+
+        public IUINavigationService NavigationService => _navigationService;
+        private IUINavigationService _navigationService;
+
+        public void SetNavigationService(IUINavigationService nav)
+        {
+            _navigationService = nav;
+            if (uiManagerInstance != null)
+                uiManagerInstance.SetNavigationService(nav);
         }
     }
 }
