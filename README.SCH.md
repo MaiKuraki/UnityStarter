@@ -87,7 +87,7 @@
 为流行的依赖注入框架提供预配置适配器：
 
 > [!NOTE]
-> 
+>
 > 以下 DI / IoC 框架均为作者在中国大陆的**大型商业游戏中验证使用过**，稳定性可以保证。
 
 - [VContainer](https://github.com/hadashiA/VContainer)（推荐）
@@ -159,12 +159,12 @@
 
 ### 🏗️ 核心基础设施
 
-| 模块                | 路径                           | 描述                                                                      | 文档                                                                                                    |
-| ------------------- | ------------------------------ | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **Factory**         | `CycloneGames.Factory`         | 高性能对象池。线程安全、自动扩缩容池，O(1) 操作复杂度。零 GC 分配。       | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.SCH.md)         |
-| **Logger**          | `CycloneGames.Logger`          | 零 GC 日志系统。多线程、文件轮转、跨平台（包括 WebGL）。可插拔处理器。    | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.SCH.md)          |
-| **AssetManagement** | `CycloneGames.AssetManagement` | DI 优先的资源加载抽象层。YooAsset 集成、Addressables 兼容、版本管理。     | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
-| **Audio**           | `CycloneGames.Audio`           | 高性能音频管理。类似 Wwise 的 API、低 GC、使用 Unity 原生音频的高级功能。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)           |
+| 模块                | 路径                           | 描述                                                                                | 文档                                                                                                    |
+| ------------------- | ------------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Factory**         | `CycloneGames.Factory`         | 高性能对象池。线程安全、自动扩缩容池，O(1) 操作复杂度。零 GC 分配。                 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.SCH.md)         |
+| **Logger**          | `CycloneGames.Logger`          | 零 GC 日志系统。多线程、文件轮转、跨平台（包括 WebGL）。可插拔处理器。              | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.SCH.md)          |
+| **AssetManagement** | `CycloneGames.AssetManagement` | DI 优先的资源加载抽象层（基于 W-TinyLFU 缓存），并无缝集成 YooAsset / Addressables。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
+| **Audio**           | `CycloneGames.Audio`           | 高性能音频管理。类似 Wwise 的 API、低 GC、使用 Unity 原生音频的高级功能。           | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)           |
 
 ### 🎯 输入与界面
 
