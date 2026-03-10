@@ -204,7 +204,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         #region Core Pool Operations
         
-        public async UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null)
+        public async UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null, string cacheTag = null, string cacheOwner = null)
         {
             if (assetRef is not string assetKey || string.IsNullOrEmpty(assetKey)) return null;
 
@@ -229,7 +229,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             else
             {
                 // Pool miss - create new instance
-                var prefab = await resourceLocator.LoadAssetAsync<GameObject>(assetKey);
+                var prefab = await resourceLocator.LoadAssetAsync<GameObject>(assetKey, cacheTag, cacheOwner);
                 if (prefab == null) return null;
                 
                 instance = UnityEngine.Object.Instantiate(prefab, position, rotation, parent);
@@ -288,10 +288,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         #region Pre-warming
         
-        public async UniTask PrewarmPoolAsync(object assetRef, int count)
+        public async UniTask PrewarmPoolAsync(object assetRef, int count, string cacheTag = null, string cacheOwner = null)
         {
             if (assetRef is not string assetKey || string.IsNullOrEmpty(assetKey)) return;
-            var prefab = await resourceLocator.LoadAssetAsync<GameObject>(assetKey);
+            var prefab = await resourceLocator.LoadAssetAsync<GameObject>(assetKey, cacheTag, cacheOwner);
             if (prefab == null) return;
 
             var poolData = GetOrCreatePoolData(assetKey);
