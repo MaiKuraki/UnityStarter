@@ -40,7 +40,7 @@
 
 | 特性               | 说明                                                                                     |
 | ------------------ | ---------------------------------------------------------------------------------------- |
-| **双 LRU 缓存**    | 预制体句柄与配置资产分别维护独立 LRU 缓存，首次加载后按策略淘汰                          |
+| **资产生命周期委托** | `UIManager` 每个资产持有一个 `IAssetHandle<T>`，生命周期（RefCount、驱逐）完全由 `AssetCacheService`（W-TinyLFU）管理 |
 | **逐帧实例化节流** | 将密集实例化分散到多帧，避免帧峰值                                                       |
 | **动态图集系统**   | 运行时在窗口打开时将精灵打包到单张 GPU 纹理，大幅减少图标密集型 UI 的 DrawCall           |
 | **压缩图集变体**   | `CompressedDynamicAtlasService` 使用 ASTC/DXT/ETC 压缩格式降低 VRAM 占用，针对移动端优化 |
@@ -138,7 +138,7 @@ flowchart TB
 协调完整的窗口生命周期：
 
 - **异步加载**：通过 `CycloneGames.AssetManagement` 加载配置和预制体。
-- **双 LRU 缓存**：预制体句柄和配置资产分别维护独立缓存，容量可配，按 LRU 策略自动淘汰。
+- **句柄直接持有**：直接的 `IAssetHandle<T>` 字典取代了原来的 LRU 缓存。每个唯一资产路径持有一个句柄；调用 `Dispose()` 通知 `AssetCacheService`（W-TinyLFU）递减 RefCount，让闲置资产从 Active → Trial → Main 池流转直至被驱逐。
 - **实例化节流**：限制每帧实例化次数，避免帧峰值。
 - **silentOpen 路径**：`OpenSilentAsync()` 将窗口加载到就绪状态但不播放动画，由 `CoordinatedNavigateAsync` 调用，让协调器在同一帧驱动双窗口动画。
 
@@ -186,6 +186,36 @@ stateDiagram-v2
 - `com.cyclone-games.factory`
 - `com.cyclone-games.logger`
 - `com.cyclone-games.service`
+
+## 资产管理与内存管理策略
+
+UIFramework 对 `CycloneGames.AssetManagement` 有**一级依赖**，自身**不维护独立的驱逐缓存**——所有资产生命周期决策完全委托给 `AssetCacheService`。
+
+### 运作原理
+
+```
+OpenUI("MyWindow")
+  └─ assetPackage.LoadAssetAsync<UIWindowConfiguration>(path, bucket: "UIFramework")
+       └─ AssetCacheService: 缓存命中 → Retain()（RefCount ↑）
+            OR 缓存未命中 → 加载，注册节点，RefCount = 1
+       └─ UIManager 存储 IAssetHandle<T> 引用
+
+CloseUI("MyWindow")
+  └─ UIManager: configHandle.Dispose()   → AssetCacheService: RefCount ↓
+  └─ UIManager: prefabHandle.Dispose()   → 若无其他窗口使用同一预制体
+       └─ RefCount → 0 → 资产进入闲置池（Trial/Main，由 W-TinyLFU 管理）
+       └─ W-TinyLFU 根据访问频率决定是驱逐还是晋升
+```
+
+### 设计关键属性
+
+| 属性 | 说明 |
+|---|---|
+| **唯一 RefCount 体系** | UIManager 内部无私有计数器，`AssetCacheService` 是唯一权威 |
+| **`"UIFramework"` Bucket** | 所有 UI 资产统一打标签，可在 Cache Debugger 的 Buckets 标签页中隔离查看 |
+| **预制体共享** | 使用同一预制体路径的多个窗口共享同一句柄，最后一个窗口关闭时才释放 |
+| **Config 句柄** | 每个窗口名对应一个句柄（windowName → config 路径），`CloseUI` 时释放 |
+| **场景卸载零泄漏** | `CleanupAllWindows()` 批量 `Dispose()` 全部持有句柄，正确排空 AssetCacheService RefCount |
 
 ## 快速上手指南
 
