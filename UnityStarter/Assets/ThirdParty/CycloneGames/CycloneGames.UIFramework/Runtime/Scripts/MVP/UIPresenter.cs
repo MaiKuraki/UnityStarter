@@ -11,6 +11,7 @@ namespace CycloneGames.UIFramework.Runtime
     public abstract class UIPresenter<TView> : IUIPresenter where TView : class
     {
         private TView _view;
+        private IUIService _uiService;
 
         /// <summary>
         /// The view this presenter is bound to. Null until SetView is called.
@@ -26,6 +27,13 @@ namespace CycloneGames.UIFramework.Runtime
             }
             OnViewBound();
         }
+
+        void IUIPresenter.SetUIService(IUIService uiService)
+        {
+            _uiService = uiService;
+        }
+
+        // ── Lifecycle ─────────────────────────────────────────────────────────
 
         /// <summary>
         /// Called immediately after the view is bound. Override for early initialization.
@@ -60,7 +68,7 @@ namespace CycloneGames.UIFramework.Runtime
         /// <summary>
         /// Cleanup resources. Called when the window is destroyed (OnDestroy).
         /// Always call base.Dispose() when overriding.
-        /// 
+        ///
         /// IMPORTANT: Unsubscribe from all events here to prevent memory leaks.
         /// Example:
         /// <code>
@@ -74,6 +82,57 @@ namespace CycloneGames.UIFramework.Runtime
         public virtual void Dispose()
         {
             _view = null;
+            _uiService = null;
+        }
+
+        // ── Navigation helpers ────────────────────────────────────────────────
+
+        /// <summary>
+        /// Provides access to the navigation graph for read-only queries (ancestors, context, etc.).
+        /// Returns null when no navigation service has been configured.
+        /// </summary>
+        protected IUINavigationService NavigationService => _uiService?.NavigationService;
+
+        /// <summary>
+        /// Opens <paramref name="targetWindow"/> and records this window as its opener in the navigation graph.
+        /// The optional <paramref name="context"/> payload can be retrieved in the target window via
+        /// <c>NavigationService.GetContext(windowName)</c>.
+        /// </summary>
+        protected void NavigateTo(string targetWindow, object context = null)
+        {
+            if (_uiService == null)
+            {
+                CLogger.LogError("[UIPresenter] Cannot navigate: IUIService is not set. Ensure UIPresenterBinder.SetUIService() was called.");
+                return;
+            }
+
+            string myWindow = (_view as UIWindow)?.WindowName;
+            // Pre-register so the navigation entry exists before UIManager fires its own register callback.
+            _uiService.NavigationService?.Register(targetWindow, myWindow, context);
+            _uiService.OpenUI(targetWindow);
+        }
+
+        /// <summary>
+        /// Resolves the nearest alive ancestor and opens it, then closes this window.
+        /// <paramref name="policy"/> controls what happens to any children of this window.
+        /// </summary>
+        protected void NavigateBack(ChildClosePolicy policy = ChildClosePolicy.Reparent)
+        {
+            if (_uiService == null)
+            {
+                CLogger.LogError("[UIPresenter] Cannot navigate back: IUIService is not set.");
+                return;
+            }
+
+            string myWindow = (_view as UIWindow)?.WindowName;
+            if (string.IsNullOrEmpty(myWindow)) return;
+
+            string backTarget = _uiService.NavigationService?.ResolveBackTarget(myWindow);
+            if (!string.IsNullOrEmpty(backTarget))
+                _uiService.OpenUI(backTarget);
+
+            _uiService.NavigationService?.Unregister(myWindow, policy);
+            _uiService.CloseUI(myWindow);
         }
     }
 }
