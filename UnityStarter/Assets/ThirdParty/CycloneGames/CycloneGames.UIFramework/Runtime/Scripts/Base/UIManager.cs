@@ -48,6 +48,9 @@ namespace CycloneGames.UIFramework.Runtime
         private List<IUIWindowBinder> windowBinders = new List<IUIWindowBinder>(4);
         private IUIWindowBinder[] _windowBindersCache = null;
 
+        // Optional navigation service — set via SetNavigationService()
+        private IUINavigationService _navigationService;
+
 
         /// <summary>
         /// Initializes the UIManager with necessary services. Attempts to resolve the asset package from locator if not provided.
@@ -172,6 +175,15 @@ namespace CycloneGames.UIFramework.Runtime
             }
         }
 
+        /// <summary>
+        /// Attaches an IUINavigationService that will be automatically notified whenever
+        /// a window opens or closes. Pass null to detach.
+        /// </summary>
+        public void SetNavigationService(IUINavigationService nav)
+        {
+            _navigationService = nav;
+        }
+
         private void CleanupAllWindows()
         {
             CLogger.LogInfo($"{DEBUG_FLAG} Cleaning up all active windows due to scene unload.");
@@ -188,6 +200,7 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             activeWindows.Clear();
+            _navigationService?.Clear();
 
             foreach (var kv in uiOpenTCS)
             {
@@ -477,6 +490,7 @@ namespace CycloneGames.UIFramework.Runtime
             uiWindowInstance._binders = _windowBindersCache;
             uiLayer.AddWindow(uiWindowInstance);
             activeWindows[windowName] = uiWindowInstance;
+            _navigationService?.Register(windowName);
 
             // Trigger window binders (e.g., MVP integration) before open
             for (int i = 0; i < windowBinders.Count; i++)
@@ -569,6 +583,7 @@ namespace CycloneGames.UIFramework.Runtime
                 }
 
                 activeWindows.Remove(windowName);
+                _navigationService?.Unregister(windowName);
                 uiOpenTCS.Remove(windowName);
 
                 // Release the configuration asset loaded for this window

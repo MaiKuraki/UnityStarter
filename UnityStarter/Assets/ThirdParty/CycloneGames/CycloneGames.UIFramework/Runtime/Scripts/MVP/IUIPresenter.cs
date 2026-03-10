@@ -15,6 +15,11 @@ namespace CycloneGames.UIFramework.Runtime
         void SetView(UIWindow view);
 
         /// <summary>
+        /// Injects the IUIService reference for navigation helpers. Called by the IUIWindowBinder.
+        /// </summary>
+        void SetUIService(IUIService uiService);
+
+        /// <summary>
         /// Called when the window starts opening (before transition animation).
         /// Corresponds to UIWindow.OnStartOpen().
         /// </summary>

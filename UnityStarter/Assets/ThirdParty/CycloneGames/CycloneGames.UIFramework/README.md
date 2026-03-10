@@ -453,6 +453,147 @@ public class MyWindow : UIWindow
 }
 ```
 
+## UI Navigation System Tutorial
+
+After your windows are running, you may want the framework to remember **how the user got here** — so that pressing "Back" always returns to the right screen regardless of the entry path.
+
+The **UI Navigation System** records a live directed graph of window-opener relationships. Unlike a simple stack, it supports non-linear flows: e.g. you can close a middle window while its children remain alive, and "Back" will still resolve correctly.
+
+### Core Concepts
+
+| Term | Meaning |
+|---|---|
+| **Node** | A record for one window: who opened it, what payload it carried, when it was registered |
+| **Opener** | The window that triggered this window to open |
+| **Ancestor chain** | The full causal path: `MainMenu → Shop → Detail → Checkout` |
+| **ChildClosePolicy** | What happens to children when their parent window closes |
+
+**ChildClosePolicy options:**
+
+| Policy | Effect |
+|---|---|
+| `Reparent` *(default)* | Surviving children are re-attached to the closing window's own opener |
+| `Cascade` | All children (and their descendants) are force-closed |
+| `Detach` | Children survive but lose their "back" target (become roots) |
+
+### Step 1: Setting Up the Navigation Service
+
+Create a `UINavigationService` instance and attach it to your `IUIService` **once** during app startup:
+
+```csharp
+// Non-DI setup (e.g., in a bootstrap MonoBehaviour)
+var navService = new UINavigationService();
+uiService.SetNavigationService(navService);
+
+// Tell your PresenterBinder about the UIService so Presenters can navigate
+presenterBinder.SetUIService(uiService);
+```
+
+With DI (VContainer example):
+
+```csharp
+// In your VContainer LifetimeScope
+builder.Register<UINavigationService>(Lifetime.Singleton).AsImplementedInterfaces();
+// UIService accepts it via IUIService.SetNavigationService
+```
+
+### Step 2: Navigating Between Windows (from a Presenter)
+
+`UIPresenter<TView>` exposes two built-in helpers:
+
+```csharp
+[UIPresenterBind("UIWindow_Shop")]
+public class ShopPresenter : UIPresenter<IShopView>
+{
+    public void OnClickItemDetail(int itemId)
+    {
+        // Opens UIWindow_ItemDetail and registers ShopPresenter's window as its opener.
+        // The itemId context can be read by ItemDetailPresenter.
+        NavigateTo("UIWindow_ItemDetail", new ItemContext { ItemId = itemId });
+    }
+
+    public void OnClickBack()
+    {
+        // Closes this window and opens the nearest still-alive ancestor.
+        NavigateBack();
+    }
+}
+```
+
+### Step 3: Reading the Context in the Target Window
+
+```csharp
+[UIPresenterBind("UIWindow_ItemDetail")]
+public class ItemDetailPresenter : UIPresenter<IItemDetailView>
+{
+    public override void OnViewOpened()
+    {
+        // Retrieve the payload passed by the opener
+        var ctx = NavigationService?.GetContext("UIWindow_ItemDetail") as ItemContext;
+        if (ctx != null)
+            View.SetItem(ctx.ItemId);
+    }
+}
+```
+
+### Step 4: Non-Linear Flow — Closing a Middle Window
+
+The default `Reparent` policy handles this automatically. Given the path `A → B → C`:
+
+```csharp
+// Close B while C is still open
+uiService.CloseUI("UIWindow_B");
+// C's opener is now automatically re-parented to A.
+// NavigateBack() in C will correctly open A.
+```
+
+If B should drag C down with it (e.g., a modal wizard), use `Cascade`:
+
+```csharp
+uiService.NavigationService?.Unregister("UIWindow_B", ChildClosePolicy.Cascade);
+uiService.CloseUI("UIWindow_B");
+```
+
+### Step 5: Querying the Navigation Graph
+
+```csharp
+IUINavigationService nav = uiService.NavigationService;
+
+// Who is currently on top?
+string current = nav.CurrentWindow;
+
+// What is the full path that led here?
+List<string> path = nav.GetAncestors("UIWindow_Checkout");
+// → ["UIWindow_MainMenu", "UIWindow_Shop", "UIWindow_ItemDetail"]
+
+// Which windows did Shop open?
+List<string> children = nav.GetChildren("UIWindow_Shop");
+
+// Full ordered history (oldest first)
+List<UINavigationEntry> history = nav.GetHistory();
+
+// Where would Back go?
+string backTarget = nav.ResolveBackTarget("UIWindow_ItemDetail");
+```
+
+### API Reference
+
+| Method / Property | Description |
+|---|---|
+| `CurrentWindow` | Topmost registered window (most recently opened that's still alive) |
+| `CanNavigateBack` | Whether a back-navigation target exists for the current window |
+| `Register(name, opener, ctx)` | Record a new window node (called automatically by UIManager) |
+| `Unregister(name, policy)` | Remove a window node (called automatically by UIManager on close) |
+| `Clear()` | Wipe the entire graph (e.g., on game restart) |
+| `GetOpener(name)` | Who opened this window |
+| `GetContext(name)` | Payload object passed when this window was opened |
+| `GetAncestors(name)` | Full causal chain, oldest opener first |
+| `GetChildren(name)` | Immediate live children |
+| `ResolveBackTarget(name)` | Nearest alive ancestor |
+| `GetHistory()` | Snapshot of all registered windows in insertion order |
+
+> **Thread Safety**: `Register`, `Unregister`, `Clear` must be called on the main thread. All query methods (`GetAncestors`, `GetHistory`, etc.) are safe from any thread.
+
 ## Dynamic Atlas System Tutorial
 
 After mastering the basics of creating and opening UI windows, you can optimize your UI performance using the **Dynamic Atlas System**. This system reduces draw calls by combining multiple UI textures into a single atlas at runtime.
