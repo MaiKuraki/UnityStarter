@@ -2,66 +2,114 @@
 
 <div align="left"><a href="./README.md">English</a> | 简体中文</div>
 
-一个为 Unity 设计的简洁、健壮且数据驱动的 UI 框架，旨在实现可扩展性和易用性。它为管理 UI 窗口、层级和过渡动画提供了清晰的架构，并利用了异步加载和解耦的动画系统。
+一个面向**Unity**的生产级 UI 框架。除基础窗口管理外，还提供完整的导航上下文图、协调多窗口过渡动画、MVP 自动绑定、LRU 资产缓存、动态图集纹理合批，以及控制反转 DI/IoC 支持，所有功能均建立在零 GC、线程安全的运行时核心之上。
 
 ## 特性
 
-- **原生异步**: 所有资源加载和实例化操作都使用 `UniTask` 完全异步执行，确保流畅、无阻塞的用户体验。
-- **数据驱动**: 使用 `ScriptableObject` 资产配置窗口和层级，以实现最大的灵活性和设计师友好性。
-- **健壮的状态管理**: 通过正式的状态机管理每个 `UIWindow` 的生命周期，防止常见的错误和竞态条件。
-- **可扩展的动画系统**: 轻松为窗口创建和分配自定义的过渡动画。
-- **面向服务的架构**: 与 `AssetManagement`, `Factory`, `Logger` 等其他服务无缝集成，接口编程可以完美兼容各 DI/IoC 框架。
-- **注重性能**: 包含预制体缓存、实例化节流和动态图集系统等功能，以保持高性能。
+### 🏗️ 架构与可扩展性
+
+| 特性             | 说明                                                                                                                                      |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **MVP 自动绑定** | 用 `[UIPresenterBind("窗口名")]` 装饰 Presenter，绑定、生命周期转发和注入自动完成，零样板代码                                             |
+| **DI / IoC**     | 所有公共契约均为接口（`IUIService`、`IUINavigationService`、`IUITransitionCoordinator` 等），原生兼容 VContainer、Zenject 及任何 IoC 容器 |
+| **数据驱动配置** | 每个窗口和层级通过 `ScriptableObject` 配置，设计师无需碰代码即可完全控制                                                                  |
+| **服务门面模式** | `IUIService` 是唯一的公共 API，内部 `UIManager` 复杂性完全封装                                                                            |
+
+### 🧭 导航上下文图（非线性堆栈）
+
+| 特性                     | 说明                                                                                                                  |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| **有向图（而非线性栈）** | 窗口可有多个打开者，支持非线性关闭；"返回"始终解析到最近存活的祖先                                                    |
+| **上下文 Payload**       | 打开窗口时传入任意类型对象，目标窗口随时通过 `NavigationService.GetContext()` 读取                                    |
+| **子节点关闭策略**       | `Reparent`（过继给祖父节点）、`Cascade`（级联强制关闭）、`Detach`（成为根节点）                                       |
+| **零 GC 查询**           | 导航图读取（`GetAncestors`、`ResolveBackTarget`、`GetHistory`）通过 `ReaderWriterLockSlim` 线程安全；写操作限定主线程 |
+| **不可变条目结构体**     | `UINavigationEntry` 是 `readonly struct`，每条记录零堆分配                                                            |
+
+### 🎬 过渡协调器（同步与堆叠动画）
+
+| 特性                | 说明                                                                                                  |
+| ------------------- | ----------------------------------------------------------------------------------------------------- |
+| **双窗口协调过渡**  | `NavigateToAsync()` 在**同一帧**同时触发退出和进入动画，窗口间零视觉间隙                              |
+| **堆叠 / 级联打开** | 在 `OnViewOpening()` 中调用 `NavigateTo()` 可在 B 动画播放时就启动 C，形成流畅的分层入场感            |
+| **内置协调器**      | 开箱即用：`SlideTransitionCoordinator`（方向性翻页）和 `CrossFadeTransitionCoordinator`（透明度溶解） |
+| **自定义协调器**    | 实现 `IUITransitionCoordinator` 即可支持任意效果：缩放、弹性、模糊——动画库无关                        |
+| **自动降级**        | 未注册协调器时，`NavigateToAsync()` 静默退化为串行 `NavigateTo()`，零 breaking change                 |
+| **独立弹窗动画**    | 非协调窗口（弹窗、提示）使用自身 `IUIWindowTransitionDriver`，完全不受影响                            |
+
+### ⚡ 性能
+
+| 特性               | 说明                                                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------- |
+| **双 LRU 缓存**    | 预制体句柄与配置资产分别维护独立 LRU 缓存，首次加载后按策略淘汰                          |
+| **逐帧实例化节流** | 将密集实例化分散到多帧，避免帧峰值                                                       |
+| **动态图集系统**   | 运行时在窗口打开时将精灵打包到单张 GPU 纹理，大幅减少图标密集型 UI 的 DrawCall           |
+| **压缩图集变体**   | `CompressedDynamicAtlasService` 使用 ASTC/DXT/ETC 压缩格式降低 VRAM 占用，针对移动端优化 |
+| **原生异步设计**   | 所有加载、实例化、打开操作均基于 `UniTask`，永不阻塞主线程                               |
+
+### 🔒 可靠性与安全性
+
+| 特性                       | 说明                                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------------- |
+| **正式窗口状态机**         | `Opening → Opened → Closing → Closed` 防止重复打开、重复关闭和竞态条件                  |
+| **内存安全生命周期**       | `OnReleaseAssetReference` 回调确保 Addressable 句柄精确释放一次，即使在取消操作下也如此 |
+| **CancellationToken 传播** | 所有异步路径接受 `CancellationToken`，取消时干净退出，无泄漏或孤立 GameObject           |
+| **线程安全导航**           | 导航图读操作可从任意线程安全调用；写操作受主线程保护                                    |
 
 ## 核心架构
-
-该框架由几个关键组件构建而成，它们协同工作，提供了一套全面的 UI 管理解决方案。
 
 ```mermaid
 flowchart TB
     subgraph GameCode["🎮 游戏代码"]
-        GameLogic["游戏逻辑"]
+        GameLogic["游戏逻辑 / Presenter"]
     end
 
     subgraph Facade["📦 公共 API"]
-        UIService["UIService<br/>• OpenUIAsync()<br/>• CloseUIAsync()"]
+        UIService["IUIService<br/>• OpenUI / CloseUI<br/>• NavigationService<br/>• TransitionCoordinator"]
+    end
+
+    subgraph NavSystem["🧭 导航系统"]
+        NavService["IUINavigationService<br/>• 上下文图<br/>• ResolveBackTarget<br/>• ChildClosePolicy"]
+        Coordinator["IUITransitionCoordinator<br/>• SlideTransitionCoordinator<br/>• CrossFadeTransitionCoordinator<br/>• 自定义实现"]
     end
 
     subgraph Core["⚙️ 核心系统"]
-        UIManager["UIManager<br/>• 异步加载<br/>• LRU 缓存<br/>• 分帧实例化"]
+        UIManager["UIManager<br/>• 异步加载<br/>• 双 LRU 缓存<br/>• 分帧节流<br/>• silentOpen 路径"]
     end
 
-    subgraph SceneHierarchy["🏗️ 场景层级"]
+    subgraph MVP["🔌 MVP 层"]
+        Binder["UIPresenterBinder<br/>[UIPresenterBind] 自动发现"]
+        Presenter["UIPresenter<TView><br/>• NavigateTo / NavigateToAsync<br/>• NavigateBack<br/>• NavigationService"]
+    end
+
+    subgraph LayerConfigs["📋 LayerConfigs (1:1)"]
+        LayerConfigMenu["LayerConfig<br/>菜单"]
+        LayerConfigDialogue["LayerConfig<br/>对话"]
+    end
+
+    subgraph WindowConfigs["📋 WindowConfigs (1:1)"]
+        ConfigA["UIConfig A"]
+        ConfigB["UIConfig B"]
+        ConfigC["UIConfig C"]
+    end
+
+    subgraph Scene["🏗️ 场景层级"]
         UIRoot["UIRoot"]
         subgraph Layers["UILayers"]
             UILayerMenu["UILayer<br/>菜单"]
             UILayerDialogue["UILayer<br/>对话"]
         end
-    end
-
-    subgraph Windows["🪟 UI 窗口"]
-        WindowA["UIWindowA<br/>主菜单"]
-        WindowB["UIWindowB<br/>设置"]
-        WindowC["UIWindowC<br/>对话框"]
-    end
-
-    subgraph Extensions["🔌 扩展"]
-        MVP["MVP 模式<br/>UIPresenter + UIWindow"]
-    end
-
-    subgraph WindowConfigs["📋 窗口配置 - 1配置 : 1窗口"]
-        ConfigA["Config A"]
-        ConfigB["Config B"]
-        ConfigC["Config C"]
-    end
-
-    subgraph LayerConfigs["📋 层级配置 - 1配置 : 1层级"]
-        LayerConfigMenu["LayerConfig<br/>菜单"]
-        LayerConfigDialogue["LayerConfig<br/>对话"]
+        subgraph Windows["🪟 UI 窗口"]
+            WindowA["UIWindowA<br/>主菜单"]
+            WindowB["UIWindowB<br/>设置"]
+            WindowC["UIWindowC<br/>对话框"]
+        end
     end
 
     GameLogic --> UIService
     UIService --> UIManager
+    UIService --> NavService
+    UIService --> Coordinator
+
     UIManager --> UIRoot
     UIRoot --> UILayerMenu
     UIRoot --> UILayerDialogue
@@ -69,40 +117,43 @@ flowchart TB
     UILayerMenu --> WindowB
     UILayerDialogue --> WindowC
 
-    ConfigA -.-> WindowA
-    ConfigB -.-> WindowB
-    ConfigC -.-> WindowC
-    LayerConfigMenu -.-> UILayerMenu
-    LayerConfigDialogue -.-> UILayerDialogue
+    LayerConfigMenu -.->|定义| UILayerMenu
+    LayerConfigDialogue -.->|定义| UILayerDialogue
+    ConfigA -.->|定义| WindowA
+    ConfigB -.->|定义| WindowB
+    ConfigC -.->|定义| WindowC
 
-    MVP -.->|扩展| Windows
+    Binder -.->|注入| Presenter
+    Presenter -->|NavigateToAsync| Coordinator
+    Coordinator -->|同帧触发| UIManager
+    UIManager -->|注册/注销| NavService
 ```
 
-### 1. `UIService` (门面)
+### 1. `UIService`（门面）
 
-这是与 UI 系统交互的主要公共 API。游戏逻辑代码应通过 `UIService` 来打开和关闭窗口，从而将底层的复杂性抽象出来。它作为一个清晰的入口点，并负责 `UIManager` 的初始化。
+唯一公共 API 入口。所有游戏逻辑和 Presenter 只通过 `IUIService` 交互，内部 `UIManager` 的复杂性完全封装。DI 环境中将 `IUIService` 注册为单例即可从任何地方注入，同时获得 `NavigationService` 和 `TransitionCoordinator` 的访问权限。
 
-### 2. `UIManager` (核心)
+### 2. `UIManager`（核心）
 
-一个持久化的单例，负责协调整个 UI 的生命周期。其职责包括：
+协调完整的窗口生命周期：
 
-- **异步加载**: 使用 `CycloneGames.AssetManagement` 异步加载 `UIWindowConfiguration` 和 UI 预制体。
-- **生命周期管理**: 管理 `UIWindow` 实例的创建、销毁和状态转换。
-- **资源缓存**: 实现了一个 LRU (最近最少使用) 缓存来存储 UI 预制体，以优化重开常用窗口时的性能。
-- **实例化节流**: 限制每帧实例化的 UI 元素数量，以防止性能峰值。
+- **异步加载**：通过 `CycloneGames.AssetManagement` 加载配置和预制体。
+- **双 LRU 缓存**：预制体句柄和配置资产分别维护独立缓存，容量可配，按 LRU 策略自动淘汰。
+- **实例化节流**：限制每帧实例化次数，避免帧峰值。
+- **silentOpen 路径**：`OpenSilentAsync()` 将窗口加载到就绪状态但不播放动画，由 `CoordinatedNavigateAsync` 调用，让协调器在同一帧驱动双窗口动画。
 
-### 3. `UIRoot` & `UILayer` (场景层级)
+### 3. `UIRoot` & `UILayer`（场景层级）
 
-- **`UIRoot`**: 场景中必需的组件，作为所有 UI 元素的根节点。它包含 UI 相机并管理所有的 `UILayer`。
-- **`UILayer`**: 代表一个独立的渲染和输入层级（例如 `Menu`, `Dialogue`, `Notification`）。窗口被添加到特定的层级中，由层级控制其排序顺序和分组。`UILayer` 通过 `ScriptableObject` 资产进行配置。
+- **`UIRoot`**：所有 UI 的根锚点，管理 UI 相机和所有层级。
+- **`UILayer`**：命名排序层（如 `Menu`、`Dialogue`、`HUD`、`Overlay`），每个窗口属于唯一一层，控制渲染顺序和输入优先级。
 
-### 4. `UIWindow` (UI 单元)
+### 4. `UIWindow`（UI 单元）
 
-所有 UI 面板、页面或弹窗的基类。每个 `UIWindow` 都是一个自包含的组件，拥有自己的行为和生命周期，由一个健壮的状态机管理：
+所有面板、页面和弹窗的基类：
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Opening: Open()
+    [*] --> Opening: Open() / OpenSilentAsync()
 
     Opening --> Opened: 过渡完成
     Opening --> Closing: 取消/Close()
@@ -114,21 +165,19 @@ stateDiagram-v2
     Closed --> [*]: 销毁
 ```
 
-- **`Opening`**: 窗口正在被创建，其打开过渡动画正在播放。
-- **`Opened`**: 窗口完全可见并可交互。
-- **`Closing`**: 窗口的关闭过渡动画正在播放。
-- **`Closed`**: 窗口已隐藏并准备被销毁。
+`OpenSilentAsync()` 推进状态机并通知 Binder，但**不播放**过渡动画——专供过渡协调器同步双窗口动画使用。
 
-### 5. `UIWindowConfiguration` (数据驱动配置)
+### 5. `UIWindowConfiguration`（数据驱动配置）
 
-一个 `ScriptableObject`，用于定义 `UIWindow` 的属性。这种数据驱动的方法将配置与代码解耦，使设计师能够轻松修改 UI 行为而无需接触脚本。关键属性包括：
+定义预制体来源、目标层级及可选覆盖参数的 `ScriptableObject`。设计师无需修改代码即可配置窗口行为。
 
-- 需要实例化的 UI 预制体。
-- 窗口所属的 `UILayer`。
+### 6. `IUIWindowTransitionDriver`（单窗口动画）
 
-### 6. `IUIWindowTransitionDriver` (解耦的动画)
+控制**单个**窗口的开关动画。适用于弹窗、提示、Toast 等各自独立的效果，与过渡协调器并行工作互不干扰。
 
-一个接口，定义了窗口在打开和关闭时的动画方式。这个强大的抽象允许您使用任何动画系统（如 Unity Animator, LitMotion, DOTween）来实现过渡逻辑，并将其应用于窗口，而无需修改其核心逻辑。
+### 7. `IUITransitionCoordinator`（双窗口协调动画）
+
+同时驱动**两个**窗口的动画。注册到 `IUIService` 后，所有 `NavigateToAsync()` 调用都将使用它实现无缝翻页、交叉淡入或任何自定义效果。实现这个接口只需约 10 行代码，可接入 DOTween、LitMotion 或任何动画库。
 
 ## 依赖项
 
@@ -461,20 +510,20 @@ public class MyWindow : UIWindow
 
 ### 核心概念
 
-| 术语 | 含义 |
-|---|---|
-| **节点 (Node)** | 一条窗口记录：谁打开的我、传了什么数据、什么时候注册的 |
-| **打开者 (Opener)** | 触发本窗口打开的那个窗口 |
-| **祖先链 (Ancestor chain)** | 完整来源路径，如 `主界面 → 商店 → 详情 → 结算` |
-| **子节点关闭策略 (ChildClosePolicy)** | 父窗口关闭时，其子窗口的处理方式 |
+| 术语                                  | 含义                                                   |
+| ------------------------------------- | ------------------------------------------------------ |
+| **节点 (Node)**                       | 一条窗口记录：谁打开的我、传了什么数据、什么时候注册的 |
+| **打开者 (Opener)**                   | 触发本窗口打开的那个窗口                               |
+| **祖先链 (Ancestor chain)**           | 完整来源路径，如 `主界面 → 商店 → 详情 → 结算`         |
+| **子节点关闭策略 (ChildClosePolicy)** | 父窗口关闭时，其子窗口的处理方式                       |
 
 **ChildClosePolicy 可选项：**
 
-| 策略 | 效果 |
-|---|---|
-| `Reparent`（默认） | 子窗口存活，并被自动"过继"给被关闭窗口的上一级 |
-| `Cascade` | 所有子窗口（及其后代）一并强制关闭 |
-| `Detach` | 子窗口存活，但与来源关系断开，成为无返回目标的根节点 |
+| 策略               | 效果                                                 |
+| ------------------ | ---------------------------------------------------- |
+| `Reparent`（默认） | 子窗口存活，并被自动"过继"给被关闭窗口的上一级       |
+| `Cascade`          | 所有子窗口（及其后代）一并强制关闭                   |
+| `Detach`           | 子窗口存活，但与来源关系断开，成为无返回目标的根节点 |
 
 ### 第一步：初始化导航服务
 
@@ -578,21 +627,118 @@ string backTarget = nav.ResolveBackTarget("UIWindow_ItemDetail");
 
 ### API 速查
 
-| 方法 / 属性 | 说明 |
-|---|---|
-| `CurrentWindow` | 最近注册且仍存活的窗口名 |
-| `CanNavigateBack` | 当前窗口是否有可用的返回目标 |
+| 方法 / 属性                   | 说明                                         |
+| ----------------------------- | -------------------------------------------- |
+| `CurrentWindow`               | 最近注册且仍存活的窗口名                     |
+| `CanNavigateBack`             | 当前窗口是否有可用的返回目标                 |
 | `Register(name, opener, ctx)` | 注册一个窗口节点（UIManager 开窗时自动调用） |
-| `Unregister(name, policy)` | 注销一个窗口节点（UIManager 关窗时自动调用） |
-| `Clear()` | 清空整张图（如重启游戏时） |
-| `GetOpener(name)` | 谁打开了这个窗口 |
-| `GetContext(name)` | 该窗口被打开时携带的 payload 数据 |
-| `GetAncestors(name)` | 完整来源链，从最旧的打开者开始 |
-| `GetChildren(name)` | 该窗口直接打开的所有还活着的子窗口 |
-| `ResolveBackTarget(name)` | 最近还活着的祖先窗口名 |
-| `GetHistory()` | 按注册顺序的快照列表 |
+| `Unregister(name, policy)`    | 注销一个窗口节点（UIManager 关窗时自动调用） |
+| `Clear()`                     | 清空整张图（如重启游戏时）                   |
+| `GetOpener(name)`             | 谁打开了这个窗口                             |
+| `GetContext(name)`            | 该窗口被打开时携带的 payload 数据            |
+| `GetAncestors(name)`          | 完整来源链，从最旧的打开者开始               |
+| `GetChildren(name)`           | 该窗口直接打开的所有还活着的子窗口           |
+| `ResolveBackTarget(name)`     | 最近还活着的祖先窗口名                       |
+| `GetHistory()`                | 按注册顺序的快照列表                         |
 
 > **线程安全**：`Register`、`Unregister`、`Clear` 必须在主线程调用。所有查询方法（`GetAncestors`、`GetHistory` 等）支持从任意线程安全调用。
+
+## UI 过渡协调器教程
+
+默认情况下，调用 `NavigateTo()` 时，每个窗口各自播放自己的开关动画——一个结束后另一个才开始。**过渡协调器（Transition Coordinator）** 系统让两个窗口**在同一时刻同步播放动画**，实现无缝的页面切换效果。
+
+### 什么时候用哪种方式
+
+| 场景                                          | 选择                                                    |
+| --------------------------------------------- | ------------------------------------------------------- |
+| 弹窗从中心淡入叠加在背景上（各自独立）        | `NavigateTo()` + 弹窗自身的 `IUIWindowTransitionDriver` |
+| 页面 A 向左滑出 + 页面 B 从右滑入（同步协调） | `NavigateToAsync()` + `IUITransitionCoordinator`        |
+| 两个全屏界面之间交叉淡入淡出                  | `NavigateToAsync()` + `CrossFadeTransitionCoordinator`  |
+
+### 第一步：在启动时注册协调器
+
+```csharp
+// 不注册 = 默认串行模式，各窗口独立动画（无需配置）
+
+// 滑动过渡（翻页感）
+var slideCoordinator = new SlideTransitionCoordinator(duration: 0.35f);
+uiService.SetTransitionCoordinator(slideCoordinator);
+
+// 交叉淡入淡出
+var fadeCoordinator = new CrossFadeTransitionCoordinator(duration: 0.25f);
+uiService.SetTransitionCoordinator(fadeCoordinator);
+```
+
+### 第二步：在 Presenter 中发起协调导航
+
+```csharp
+[UIPresenterBind("UIWindow_Shop")]
+public class ShopPresenter : UIPresenter<IShopView>
+{
+    // 同步动画：A 退出的同时 B 进入
+    public async void OnClickDetail(int itemId)
+    {
+        await NavigateToAsync(
+            "UIWindow_ItemDetail",
+            context: new ItemContext { ItemId = itemId },
+            direction: NavigationDirection.Forward);
+    }
+
+    // 返回时方向相反
+    public async void OnClickBack()
+    {
+        await NavigateToAsync(
+            NavigationService?.ResolveBackTarget(/* myWindowName */) ?? "",
+            direction: NavigationDirection.Backward);
+        NavigateBack();
+    }
+
+    // 没有注册协调器时，NavigateToAsync() 自动退化为 NavigateTo() 的串行行为
+}
+```
+
+### 第三步：实现自定义协调器
+
+只需实现 `IUITransitionCoordinator` 接口，动画方式完全自由：
+
+```csharp
+// 示例：缩放 + 淡入组合，适合模态弹窗
+public class ZoomFadeCoordinator : IUITransitionCoordinator
+{
+    public async UniTask TransitionAsync(UIWindow leaving, UIWindow entering,
+        NavigationDirection direction, CancellationToken ct)
+    {
+        var leavingCg  = leaving.GetComponent<CanvasGroup>();
+        var enteringCg = entering.GetComponent<CanvasGroup>();
+        var enteringRt = entering.GetComponent<RectTransform>();
+
+        float elapsed = 0f;
+        const float duration = 0.3f;
+        while (elapsed < duration && !ct.IsCancellationRequested)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(elapsed / duration);
+            if (leavingCg  != null) leavingCg.alpha  = 1f - t;
+            if (enteringCg != null) enteringCg.alpha = t;
+            if (enteringRt != null) enteringRt.localScale = Vector3.LerpUnclamped(Vector3.one * 0.85f, Vector3.one, t);
+            await UniTask.Yield(PlayerLoopTiming.Update, ct);
+        }
+    }
+}
+
+// 注册
+uiService.SetTransitionCoordinator(new ZoomFadeCoordinator());
+```
+
+### NavigationDirection（导航方向）
+
+| 值         | 使用时机                                               |
+| ---------- | ------------------------------------------------------ |
+| `Forward`  | 进入子界面（Push）。滑动：当前左移退出，新窗口从右进入 |
+| `Backward` | 返回上级（Pop）。滑动：当前右移退出，新窗口从左进入    |
+| `Replace`  | 无方向感的替换（如交叉淡入淡出）                       |
+
+> **注意**：如果没有注册协调器，`NavigateToAsync` 会自动退化为与 `NavigateTo` 相同的串行行为，不会影响任何现有代码。
 
 ## 动态图集系统教程
 

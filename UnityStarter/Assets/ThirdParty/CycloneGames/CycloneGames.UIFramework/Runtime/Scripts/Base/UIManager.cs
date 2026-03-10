@@ -184,6 +184,17 @@ namespace CycloneGames.UIFramework.Runtime
             _navigationService = nav;
         }
 
+        // Optional coordinator: when set, NavigateToAsync() uses it to fire both
+        // window animations simultaneously instead of sequentially.
+        private IUITransitionCoordinator _transitionCoordinator;
+
+        public void SetTransitionCoordinator(IUITransitionCoordinator coordinator)
+        {
+            _transitionCoordinator = coordinator;
+        }
+
+        public IUITransitionCoordinator TransitionCoordinator => _transitionCoordinator;
+
         private void CleanupAllWindows()
         {
             CLogger.LogInfo($"{DEBUG_FLAG} Cleaning up all active windows due to scene unload.");
@@ -247,7 +258,7 @@ namespace CycloneGames.UIFramework.Runtime
             CloseUIAsync(windowName).Forget(); // Fire and forget UniTask
         }
 
-        internal async UniTask<UIWindow> OpenUIAsync(string windowName, System.Action<UIWindow> onUIWindowCreated = null, System.Threading.CancellationToken cancellationToken = default)
+        internal async UniTask<UIWindow> OpenUIAsync(string windowName, System.Action<UIWindow> onUIWindowCreated = null, System.Threading.CancellationToken cancellationToken = default, bool silentOpen = false)
         {
             if (string.IsNullOrEmpty(windowName))
             {
@@ -505,11 +516,13 @@ namespace CycloneGames.UIFramework.Runtime
                 }
             }
 
-            // Yield once before opening to spread work across frames if needed
+            // Yield once before opening to allow binders to settle
             await UniTask.Yield(cancellationToken);
-            // The Open method itself might not be cancellable without modification,
-            // but the preceding heavy operations (loading, instantiation) are now cancellable.
-            await uiWindowInstance.Open();
+
+            if (silentOpen)
+                await uiWindowInstance.OpenSilentAsync(cancellationToken);
+            else
+                await uiWindowInstance.Open();
 
             onUIWindowCreated?.Invoke(uiWindowInstance);
             tcs.TrySetResult(uiWindowInstance);
@@ -520,6 +533,53 @@ namespace CycloneGames.UIFramework.Runtime
         internal UniTask<UIWindow> OpenUIAndWait(string windowName, System.Threading.CancellationToken cancellationToken = default)
         {
             return OpenUIAsync(windowName, null, cancellationToken);
+        }
+
+        // Loads, instantiates, and initialises the window (including binders/MVP), but
+        // calls OpenSilentAsync instead of Open() so no entry animation plays yet.
+        // The window is ready for the coordinator to animate both sides simultaneously.
+        internal async UniTask<UIWindow> OpenUIReadyAsync(string windowName, System.Threading.CancellationToken ct = default)
+        {
+            UIWindow window = await OpenUIAsync(windowName, null, ct, silentOpen: true);
+            return window;
+        }
+
+        // Coordinates a simultaneous transition: loads 'toWindow' silently, fires both
+        // CloseAsync (leaving) and the coordinator's TransitionAsync (entering) at the same time,
+        // then tears down the leaving window after both complete.
+        internal async UniTask CoordinatedNavigateAsync(
+            string fromName, string toName,
+            NavigationDirection direction,
+            IUITransitionCoordinator coordinator,
+            System.Threading.CancellationToken ct = default)
+        {
+            if (coordinator == null)
+            {
+                OpenUI(toName);
+                return;
+            }
+
+            activeWindows.TryGetValue(fromName, out UIWindow leaving);
+
+            // Load and initialise the entering window without playing its animation
+            UIWindow entering = await OpenUIReadyAsync(toName, ct);
+            if (ct.IsCancellationRequested || entering == null) return;
+
+            // Fire both animations simultaneously
+            await UniTask.WhenAll(
+                coordinator.TransitionAsync(leaving, entering, direction, ct),
+                leaving != null ? leaving.CloseAsync(ct) : UniTask.CompletedTask
+            );
+
+            // Cleanup: leaving window was animated out — remove it if still tracked
+            if (leaving != null && activeWindows.ContainsKey(fromName))
+            {
+                _navigationService?.Unregister(fromName);
+                activeWindows.Remove(fromName);
+                uiOpenTCS.Remove(fromName);
+                ReleaseConfigAsset(fromName);
+                // CloseAsync already called OnFinishedClose which destroys the GameObject
+            }
         }
 
         internal async UniTask CloseUIAsync(string windowName, System.Threading.CancellationToken cancellationToken = default)
