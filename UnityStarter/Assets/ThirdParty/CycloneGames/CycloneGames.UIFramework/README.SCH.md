@@ -453,6 +453,147 @@ public class MyWindow : UIWindow
 }
 ```
 
+## UI 导航上下文系统教程
+
+当你的窗口系统运转起来之后，你可能希望框架能够**记录用户的来源路径**——这样不管玩家是从哪个入口进来的，按"返回"时都能正确跳回上一个界面。
+
+**UI 导航上下文系统**维护着一张实时有向图，记录每个窗口的"打开者"关系。不同于简单的线性堆栈，它支持**非线性流程**：比如关掉中间的窗口 B，窗口 C 仍然存活，按返回时 C 也能正确跳回 A。
+
+### 核心概念
+
+| 术语 | 含义 |
+|---|---|
+| **节点 (Node)** | 一条窗口记录：谁打开的我、传了什么数据、什么时候注册的 |
+| **打开者 (Opener)** | 触发本窗口打开的那个窗口 |
+| **祖先链 (Ancestor chain)** | 完整来源路径，如 `主界面 → 商店 → 详情 → 结算` |
+| **子节点关闭策略 (ChildClosePolicy)** | 父窗口关闭时，其子窗口的处理方式 |
+
+**ChildClosePolicy 可选项：**
+
+| 策略 | 效果 |
+|---|---|
+| `Reparent`（默认） | 子窗口存活，并被自动"过继"给被关闭窗口的上一级 |
+| `Cascade` | 所有子窗口（及其后代）一并强制关闭 |
+| `Detach` | 子窗口存活，但与来源关系断开，成为无返回目标的根节点 |
+
+### 第一步：初始化导航服务
+
+在启动逻辑中创建一次 `UINavigationService` 并挂载到 `IUIService`：
+
+```csharp
+// 非 DI 启动时
+var navService = new UINavigationService();
+uiService.SetNavigationService(navService);
+
+// 让 PresenterBinder 知道 IUIService，从而让各 Presenter 都能调用导航
+presenterBinder.SetUIService(uiService);
+```
+
+DI 方式（VContainer 示例）：
+
+```csharp
+// 在 LifetimeScope 中
+builder.Register<UINavigationService>(Lifetime.Singleton).AsImplementedInterfaces();
+// 然后通过 IUIService.SetNavigationService(nav) 注入
+```
+
+### 第二步：从 Presenter 发起导航
+
+`UIPresenter<TView>` 基类内置了两个导航辅助方法：
+
+```csharp
+[UIPresenterBind("UIWindow_Shop")]
+public class ShopPresenter : UIPresenter<IShopView>
+{
+    public void OnClickItemDetail(int itemId)
+    {
+        // 打开详情窗口，并将商店窗口记为其 Opener
+        // itemId 可在目标 Presenter 中通过 NavigationService.GetContext() 取回
+        NavigateTo("UIWindow_ItemDetail", new ItemContext { ItemId = itemId });
+    }
+
+    public void OnClickBack()
+    {
+        // 关闭当前窗口，并自动跳转到最近还活着的祖先窗口
+        NavigateBack();
+    }
+}
+```
+
+### 第三步：在目标窗口中读取上下文
+
+```csharp
+[UIPresenterBind("UIWindow_ItemDetail")]
+public class ItemDetailPresenter : UIPresenter<IItemDetailView>
+{
+    public override void OnViewOpened()
+    {
+        // 取出 Shop 传来的 context 数据
+        var ctx = NavigationService?.GetContext("UIWindow_ItemDetail") as ItemContext;
+        if (ctx != null)
+            View.SetItem(ctx.ItemId);
+    }
+}
+```
+
+### 第四步：非线性流程——关掉中间窗口
+
+默认的 `Reparent` 策略会自动处理这个场景。假设路径为 `A → B → C`：
+
+```csharp
+// 关掉 B，C 仍然存活
+uiService.CloseUI("UIWindow_B");
+// 框架自动将 C 的 Opener 改为 A
+// C 按返回键时，NavigateBack() 会正确跳到 A
+```
+
+如果 B 关闭时需要连带关闭 C（比如模态向导流程），使用 `Cascade`：
+
+```csharp
+uiService.NavigationService?.Unregister("UIWindow_B", ChildClosePolicy.Cascade);
+uiService.CloseUI("UIWindow_B");
+```
+
+### 第五步：查询导航图
+
+```csharp
+IUINavigationService nav = uiService.NavigationService;
+
+// 当前最顶层的活跃窗口
+string current = nav.CurrentWindow;
+
+// 当前窗口的完整来源路径（从最早的打开者到最新的）
+List<string> path = nav.GetAncestors("UIWindow_Checkout");
+// → ["UIWindow_MainMenu", "UIWindow_Shop", "UIWindow_ItemDetail"]
+
+// Shop 窗口打开了哪些子窗口？
+List<string> children = nav.GetChildren("UIWindow_Shop");
+
+// 完整历史记录（按注册时间从旧到新）
+List<UINavigationEntry> history = nav.GetHistory();
+
+// 按"返回"会去哪？
+string backTarget = nav.ResolveBackTarget("UIWindow_ItemDetail");
+```
+
+### API 速查
+
+| 方法 / 属性 | 说明 |
+|---|---|
+| `CurrentWindow` | 最近注册且仍存活的窗口名 |
+| `CanNavigateBack` | 当前窗口是否有可用的返回目标 |
+| `Register(name, opener, ctx)` | 注册一个窗口节点（UIManager 开窗时自动调用） |
+| `Unregister(name, policy)` | 注销一个窗口节点（UIManager 关窗时自动调用） |
+| `Clear()` | 清空整张图（如重启游戏时） |
+| `GetOpener(name)` | 谁打开了这个窗口 |
+| `GetContext(name)` | 该窗口被打开时携带的 payload 数据 |
+| `GetAncestors(name)` | 完整来源链，从最旧的打开者开始 |
+| `GetChildren(name)` | 该窗口直接打开的所有还活着的子窗口 |
+| `ResolveBackTarget(name)` | 最近还活着的祖先窗口名 |
+| `GetHistory()` | 按注册顺序的快照列表 |
+
+> **线程安全**：`Register`、`Unregister`、`Clear` 必须在主线程调用。所有查询方法（`GetAncestors`、`GetHistory` 等）支持从任意线程安全调用。
+
 ## 动态图集系统教程
 
 在掌握了创建和打开 UI 窗口的基础知识后，您可以使用**动态图集系统**来优化 UI 性能。该系统通过在运行时将多个 UI 纹理合并到单个图集中来减少 Draw Call。
