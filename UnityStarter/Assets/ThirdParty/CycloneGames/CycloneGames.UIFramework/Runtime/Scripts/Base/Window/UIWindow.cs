@@ -326,6 +326,25 @@ namespace CycloneGames.UIFramework.Runtime
             await UniTask.CompletedTask;
         }
 
+        // Opens the window through its full state lifecycle and notifies binders, but skips
+        // any transition driver animation. Used by the coordinated transition path so the
+        // entering window is ready and positioned before both animations fire simultaneously.
+        internal async UniTask OpenSilentAsync(CancellationToken ct)
+        {
+            closeCts?.Cancel();
+            closeCts?.Dispose();
+            closeCts = null;
+            openCts?.Dispose();
+            openCts = ct == CancellationToken.None
+                ? new CancellationTokenSource()
+                : CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+            OnStartOpen();
+            if (openCts.Token.IsCancellationRequested) return;
+            OnFinishedOpen(); // Immediately mark as open — animator will take over from coordinator
+            await UniTask.CompletedTask;
+        }
+
         protected virtual void Update()
         {
             if (!_isDestroying) // Don't update if being destroyed

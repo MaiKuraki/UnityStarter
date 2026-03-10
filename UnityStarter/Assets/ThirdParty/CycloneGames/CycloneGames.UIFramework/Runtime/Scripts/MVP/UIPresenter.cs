@@ -94,22 +94,59 @@ namespace CycloneGames.UIFramework.Runtime
         protected IUINavigationService NavigationService => _uiService?.NavigationService;
 
         /// <summary>
-        /// Opens <paramref name="targetWindow"/> and records this window as its opener in the navigation graph.
-        /// The optional <paramref name="context"/> payload can be retrieved in the target window via
-        /// <c>NavigationService.GetContext(windowName)</c>.
+        /// Opens a new window and records it as opened by this presenter's window.
+        /// Uses a sequential (fire-and-forget) open — the new window plays its own
+        /// configured transition driver animation independently.
         /// </summary>
+        /// <param name="targetWindow">Name of the window to open.</param>
+        /// <param name="context">Optional payload for the target window to query via NavigationService.GetContext().</param>
         protected void NavigateTo(string targetWindow, object context = null)
         {
             if (_uiService == null)
             {
-                CLogger.LogError("[UIPresenter] Cannot navigate: IUIService is not set. Ensure UIPresenterBinder.SetUIService() was called.");
+                CLogger.LogError("[UIPresenter] Cannot navigate: IUIService is not set.");
                 return;
             }
 
             string myWindow = (_view as UIWindow)?.WindowName;
-            // Pre-register so the navigation entry exists before UIManager fires its own register callback.
             _uiService.NavigationService?.Register(targetWindow, myWindow, context);
             _uiService.OpenUI(targetWindow);
+        }
+
+        /// <summary>
+        /// Opens a new window using the active IUITransitionCoordinator so that this window's
+        /// exit animation plays simultaneously with the new window's entry animation.
+        /// Falls back to sequential NavigateTo when no coordinator is configured.
+        /// </summary>
+        /// <param name="targetWindow">Name of the window to open.</param>
+        /// <param name="context">Optional payload for the target window to query via NavigationService.GetContext().</param>
+        /// <param name="direction">Semantic direction that the coordinator uses to pick the right animation.</param>
+        /// <param name="ct">Cancellation token propagated to both the load and animation tasks.</param>
+        protected async Cysharp.Threading.Tasks.UniTask NavigateToAsync(
+            string targetWindow,
+            object context = null,
+            NavigationDirection direction = NavigationDirection.Forward,
+            System.Threading.CancellationToken ct = default)
+        {
+            if (_uiService == null)
+            {
+                CLogger.LogError("[UIPresenter] Cannot navigate: IUIService is not set.");
+                return;
+            }
+
+            string myWindow = (_view as UIWindow)?.WindowName;
+
+            if (_uiService.TransitionCoordinator == null)
+            {
+                // No coordinator — fall back to sequential open (independent animations)
+                _uiService.NavigationService?.Register(targetWindow, myWindow, context);
+                _uiService.OpenUI(targetWindow);
+                return;
+            }
+
+            // Register in nav graph before coordinated navigate so context is available
+            _uiService.NavigationService?.Register(targetWindow, myWindow, context);
+            await _uiService.CoordinatedNavigateAsync(myWindow, targetWindow, direction, ct);
         }
 
         /// <summary>

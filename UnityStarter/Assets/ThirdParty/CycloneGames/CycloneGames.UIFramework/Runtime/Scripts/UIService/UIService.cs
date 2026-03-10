@@ -63,6 +63,24 @@ namespace CycloneGames.UIFramework.Runtime
         /// when any window opens or closes through this UIService.
         /// </summary>
         void SetNavigationService(IUINavigationService nav);
+
+        /// <summary>Returns the active transition coordinator, or null if none.</summary>
+        IUITransitionCoordinator TransitionCoordinator { get; }
+
+        /// <summary>
+        /// Attaches a coordinator for simultaneous two-window transitions.
+        /// Pass null to fall back to sequential (independent) animations.
+        /// </summary>
+        void SetTransitionCoordinator(IUITransitionCoordinator coordinator);
+
+        /// <summary>
+        /// Navigates from <paramref name="fromWindow"/> to <paramref name="toWindow"/> using the
+        /// active IUITransitionCoordinator. Falls back to sequential OpenUI when no coordinator is set.
+        /// </summary>
+        Cysharp.Threading.Tasks.UniTask CoordinatedNavigateAsync(
+            string fromWindow, string toWindow,
+            NavigationDirection direction = NavigationDirection.Forward,
+            System.Threading.CancellationToken ct = default);
     }
 
     public class UIService : IDisposable, IUIService
@@ -307,6 +325,25 @@ namespace CycloneGames.UIFramework.Runtime
             _navigationService = nav;
             if (uiManagerInstance != null)
                 uiManagerInstance.SetNavigationService(nav);
+        }
+
+        public IUITransitionCoordinator TransitionCoordinator => _transitionCoordinator;
+        private IUITransitionCoordinator _transitionCoordinator;
+
+        public void SetTransitionCoordinator(IUITransitionCoordinator coordinator)
+        {
+            _transitionCoordinator = coordinator;
+            if (uiManagerInstance != null)
+                uiManagerInstance.SetTransitionCoordinator(coordinator);
+        }
+
+        public async Cysharp.Threading.Tasks.UniTask CoordinatedNavigateAsync(
+            string fromWindow, string toWindow,
+            NavigationDirection direction = NavigationDirection.Forward,
+            System.Threading.CancellationToken ct = default)
+        {
+            if (!CheckInitialization()) return;
+            await uiManagerInstance.CoordinatedNavigateAsync(fromWindow, toWindow, direction, _transitionCoordinator, ct);
         }
     }
 }
