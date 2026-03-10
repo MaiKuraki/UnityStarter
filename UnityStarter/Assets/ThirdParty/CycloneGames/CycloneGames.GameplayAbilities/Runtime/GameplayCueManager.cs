@@ -227,7 +227,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (loadedStaticCues.TryGetValue(address, out var cue)) return cue;
 
-            var loadedAsset = await resourceLocator.LoadAssetAsync<GameplayCueSO>(address);
+            var loadedAsset = await resourceLocator.LoadAssetAsync<GameplayCueSO>(address, cacheTag: "GameplayCue", cacheOwner: cueTag.ToString());
             if (loadedAsset) loadedStaticCues[address] = loadedAsset;
             return loadedAsset;
         }
