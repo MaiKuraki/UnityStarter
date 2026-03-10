@@ -476,7 +476,7 @@ This makes it instantly clear in the debugger which UI is holding onto memory.
 
 ### Advanced Editor Debugging Tools
 
-We provide powerful, best-in-class editor windows to visualize cache health and identify memory leaks without guessing.
+`CycloneGames.AssetManagement` provide a powerful, best-in-class editor windows to visualize cache health and identify memory leaks without guessing.
 
 #### 1. Asset Cache Debugger Window (`Tools/CycloneGames/AssetManagement/Asset Cache Debugger`)
 

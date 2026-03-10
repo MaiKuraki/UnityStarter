@@ -476,7 +476,7 @@ var handle = package.LoadAssetAsync<GameObject>("Prefabs/Hero",
 
 ### 高级编辑器调试工具
 
-我们提供了业界一流的编辑器窗口，帮助你可视化缓存健康度并精准定位内存泄漏。
+`CycloneGames.AssetManagement` 提供了开发者友好的编辑器窗口，帮助你可视化缓存健康度并精准定位内存泄漏。
 
 #### 1. 资源缓存调试器 (Asset Cache Debugger)
 
