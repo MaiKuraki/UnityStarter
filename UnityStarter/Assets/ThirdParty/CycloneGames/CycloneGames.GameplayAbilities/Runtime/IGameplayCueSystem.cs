@@ -10,7 +10,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public interface IResourceLocator
     {
-        UniTask<T> LoadAssetAsync<T>(object key) where T : Object;
+        UniTask<T> LoadAssetAsync<T>(object key, string cacheTag = null, string cacheOwner = null) where T : Object;
         void ReleaseAsset(object key);
         void ReleaseAll();
     }
@@ -20,7 +20,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public interface IGameObjectPoolManager
     {
-        UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null);
+        UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null, string cacheTag = null, string cacheOwner = null);
         void Release(GameObject instance);
         void Shutdown();
     }
