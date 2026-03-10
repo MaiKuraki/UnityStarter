@@ -17,21 +17,15 @@ namespace CycloneGames.UIFramework.Runtime
         private IAssetPackage assetPackage; // Generic asset package for loading configs/prefabs
         private IUIWindowTransitionDriver transitionDriver; // Optional transition driver applied to spawned windows
         private UIRoot uiRoot;
-        private class AssetCacheEntry<T> where T : UnityEngine.Object
-        {
-            public IAssetHandle<T> Handle;
-            public int RefCount;
-        }
-
-        // Prefab Cache (GameObject)
-        private readonly Dictionary<string, AssetCacheEntry<GameObject>> prefabHandleCache = new Dictionary<string, AssetCacheEntry<GameObject>>(16);
-        private readonly List<string> prefabHandleLru = new List<string>(16);
-        private const int PrefabHandleCacheMax = 16;
-
-        // Config Cache (UIWindowConfiguration)
-        private readonly Dictionary<string, AssetCacheEntry<UIWindowConfiguration>> configHandleCache = new Dictionary<string, AssetCacheEntry<UIWindowConfiguration>>(16);
-        private readonly List<string> configHandleLru = new List<string>(16);
-        private const int ConfigHandleCacheMax = 16;
+        // Direct handle ownership: UIManager holds exactly one IAssetHandle<T> per asset.
+        // Lifecycle is fully delegated to AssetCacheService (W-TinyLFU + RefCount).
+        // Calling handle.Dispose() decrements the AssetCacheService RefCount, allowing
+        // idle assets to be promoted to the trial/main pool and eventually evicted.
+        private readonly Dictionary<string, IAssetHandle<UIWindowConfiguration>> _configHandles = new Dictionary<string, IAssetHandle<UIWindowConfiguration>>(16);
+        // Prefab handles: keyed by PrefabLocation, shared across windows showing the same prefab.
+        private readonly Dictionary<string, IAssetHandle<GameObject>> _prefabHandles = new Dictionary<string, IAssetHandle<GameObject>>(16);
+        // Track per-window prefab location so we can release when the window closes.
+        private readonly Dictionary<string, string> _windowToPrefabLocation = new Dictionary<string, string>(16);
 
         // Throttling instantiate per frame
         private int maxInstantiatesPerFrame = 2;
@@ -199,24 +193,17 @@ namespace CycloneGames.UIFramework.Runtime
         {
             CLogger.LogInfo($"{DEBUG_FLAG} Cleaning up all active windows due to scene unload.");
 
-            // Config Cache Cleanup: Dispose all handles
-            if (configHandleCache != null)
-            {
-                foreach (var kv in configHandleCache)
-                {
-                    kv.Value.Handle?.Dispose();
-                }
-                configHandleCache.Clear();
-                configHandleLru.Clear();
-            }
+            foreach (var kv in _configHandles) kv.Value?.Dispose();
+            _configHandles.Clear();
+
+            foreach (var kv in _prefabHandles) kv.Value?.Dispose();
+            _prefabHandles.Clear();
+            _windowToPrefabLocation.Clear();
 
             activeWindows.Clear();
             _navigationService?.Clear();
 
-            foreach (var kv in uiOpenTCS)
-            {
-                kv.Value.TrySetCanceled();
-            }
+            foreach (var kv in uiOpenTCS) kv.Value.TrySetCanceled();
             uiOpenTCS.Clear();
             uiRoot = null;
         }
@@ -307,48 +294,36 @@ namespace CycloneGames.UIFramework.Runtime
                     throw new System.InvalidOperationException("IAssetPackage is not available.");
                 }
 
-                AssetCacheEntry<UIWindowConfiguration> configEntry;
-                if (!configHandleCache.TryGetValue(windowName, out configEntry))
+                if (!_configHandles.TryGetValue(windowName, out var configHandle))
                 {
-                    var windowConfigHandle = assetPackage.LoadAssetAsync<UIWindowConfiguration>(configPath);
-                    while (!windowConfigHandle.IsDone)
+                    // Cache miss: load from package, tagged under 'UIFramework' bucket.
+                    configHandle = assetPackage.LoadAssetAsync<UIWindowConfiguration>(configPath, "UIFramework");
+                    while (!configHandle.IsDone)
                     {
                         await UniTask.Yield(cancellationToken);
                     }
 
-                    if (!string.IsNullOrEmpty(windowConfigHandle.Error) || windowConfigHandle.Asset == null)
+                    if (!string.IsNullOrEmpty(configHandle.Error) || configHandle.Asset == null)
                     {
-                        CLogger.LogError($"{DEBUG_FLAG} Failed to load UIWindowConfiguration at path: {configPath} for WindowName: {windowName}. Error: {windowConfigHandle.Error}");
-                        windowConfigHandle.Dispose();
-                        uiOpenTCS.Remove(windowName); // Clean up
+                        CLogger.LogError($"{DEBUG_FLAG} Failed to load UIWindowConfiguration at path: {configPath} for WindowName: {windowName}. Error: {configHandle.Error}");
+                        configHandle.Dispose();
+                        uiOpenTCS.Remove(windowName);
                         tcs.TrySetException(new System.Exception($"Failed to load UIWindowConfiguration for {windowName}"));
                         onUIWindowCreated?.Invoke(null);
                         return null;
                     }
 
-                    configEntry = new AssetCacheEntry<UIWindowConfiguration> { Handle = windowConfigHandle, RefCount = 0 };
-                    configHandleCache[windowName] = configEntry;
-                    configHandleLru.Add(windowName); // Add to end (MRU)
-
-                    // Enforce Config Cache Limit
-                    EnforceConfigCacheSize();
-                }
-                else
-                {
-                    TouchConfigCache(windowName);
+                    // UIManager owns exactly one handle reference; AssetCacheService RefCount = 1.
+                    _configHandles[windowName] = configHandle;
                 }
 
-                // Increment RefCount
-                configEntry.RefCount++;
-                windowConfig = configEntry.Handle.Asset;
+                windowConfig = configHandle.Asset;
 
                 if (windowConfig.Source == UIWindowConfiguration.PrefabSource.PrefabReference && windowConfig.WindowPrefab == null)
                 {
                     CLogger.LogError($"{DEBUG_FLAG} WindowPrefab is null in WindowConfig for: {windowName}");
-                    uiOpenTCS.Remove(windowName); // Clean up
-                    // We need to decrement RefCount if we fail here
-                    ReleaseConfigAsset(windowName);
-
+                    uiOpenTCS.Remove(windowName);
+                    ReleaseConfigHandle(windowName);
                     tcs.TrySetException(new System.NullReferenceException($"WindowPrefab null for {windowName}"));
                     onUIWindowCreated?.Invoke(null);
                     return null;
@@ -418,48 +393,32 @@ namespace CycloneGames.UIFramework.Runtime
                     {
                         throw new System.InvalidOperationException("Prefab source is 'Location' but PrefabLocation or AssetPackage is not available.");
                     }
-                    // Try cache first
-                    AssetCacheEntry<GameObject> cacheEntry;
-                    if (!prefabHandleCache.TryGetValue(windowConfig.PrefabLocation, out cacheEntry))
+                    if (!_prefabHandles.TryGetValue(windowConfig.PrefabLocation, out var prefabHandle))
                     {
-                        var prefabLoadHandle = assetPackage.LoadAssetAsync<GameObject>(windowConfig.PrefabLocation);
-                        while (!prefabLoadHandle.IsDone)
+                        prefabHandle = assetPackage.LoadAssetAsync<GameObject>(windowConfig.PrefabLocation, "UIFramework");
+                        while (!prefabHandle.IsDone)
                         {
                             await UniTask.Yield(cancellationToken);
                         }
 
-                        if (!string.IsNullOrEmpty(prefabLoadHandle.Error) || prefabLoadHandle.Asset == null)
+                        if (!string.IsNullOrEmpty(prefabHandle.Error) || prefabHandle.Asset == null)
                         {
-                            prefabLoadHandle.Dispose();
-                            throw new System.Exception($"Failed to load UI prefab at '{windowConfig.PrefabLocation}': {prefabLoadHandle?.Error}");
+                            prefabHandle.Dispose();
+                            throw new System.Exception($"Failed to load UI prefab at '{windowConfig.PrefabLocation}': {prefabHandle?.Error}");
                         }
 
-                        cacheEntry = new AssetCacheEntry<GameObject> { Handle = prefabLoadHandle, RefCount = 0 };
-                        prefabHandleCache[windowConfig.PrefabLocation] = cacheEntry;
-                        prefabHandleLru.Add(windowConfig.PrefabLocation); // Add to end (MRU)
-
-                        // Ensure cache constraints (eviction)
-                        EnforcePrefabCacheSize();
-                    }
-                    else
-                    {
-                        // Refresh LRU
-                        TouchPrefabCache(windowConfig.PrefabLocation);
+                        _prefabHandles[windowConfig.PrefabLocation] = prefabHandle;
                     }
 
-                    // Increment RefCount for this usage
-                    cacheEntry.RefCount++;
-
-                    var go = cacheEntry.Handle.Asset;
-                    // Spawn instance via spawner to allow pooling or custom instantiation
+                    var go = prefabHandle.Asset;
                     await ThrottleInstantiate(cancellationToken);
                     var spawnedGo = objectSpawner.Create(go);
                     uiWindowInstance = spawnedGo != null ? spawnedGo.GetComponent<UIWindow>() : null;
 
                     if (uiWindowInstance != null)
                     {
-                        uiWindowInstance.SetSourceAssetPath(windowConfig.PrefabLocation);
-                        uiWindowInstance.OnReleaseAssetReference = ReleaseWindowAsset;
+                        // Track which prefab this window uses so we can release on close.
+                        _windowToPrefabLocation[windowName] = windowConfig.PrefabLocation;
                     }
                 }
                 else // PrefabReference
@@ -577,8 +536,8 @@ namespace CycloneGames.UIFramework.Runtime
                 _navigationService?.Unregister(fromName);
                 activeWindows.Remove(fromName);
                 uiOpenTCS.Remove(fromName);
-                ReleaseConfigAsset(fromName);
-                // CloseAsync already called OnFinishedClose which destroys the GameObject
+                ReleaseConfigHandle(fromName);
+                ReleaseWindowAsset(fromName);
             }
         }
 
@@ -646,8 +605,8 @@ namespace CycloneGames.UIFramework.Runtime
                 _navigationService?.Unregister(windowName);
                 uiOpenTCS.Remove(windowName);
 
-                // Release the configuration asset loaded for this window
-                ReleaseConfigAsset(windowName);
+                ReleaseConfigHandle(windowName);
+                ReleaseWindowAsset(windowName);
             }
             catch (System.OperationCanceledException)
             {
@@ -724,146 +683,50 @@ namespace CycloneGames.UIFramework.Runtime
         protected void OnDestroy()
         {
             UnityEngine.Application.onBeforeRender -= ResetPerFrameBudget;
-            // Dispose cached prefab handles
-            if (prefabHandleCache != null)
-            {
-                foreach (var kv in prefabHandleCache)
-                {
-                    kv.Value.Handle?.Dispose();
-                }
-                prefabHandleCache.Clear();
-                prefabHandleLru.Clear();
-            }
-            // Clean up any remaining handles if the UIManager itself is destroyed.
-            // This is a fallback; ideally, handles are released when windows are closed.
-            if (configHandleCache != null)
-            {
-                foreach (var kv in configHandleCache)
-                {
-                    kv.Value.Handle?.Dispose();
-                }
-                configHandleCache.Clear();
-                configHandleLru.Clear();
-            }
 
-            // Clear other collections
+            foreach (var kv in _configHandles) kv.Value?.Dispose();
+            _configHandles.Clear();
+
+            foreach (var kv in _prefabHandles) kv.Value?.Dispose();
+            _prefabHandles.Clear();
+            _windowToPrefabLocation.Clear();
+
             activeWindows.Clear();
             uiOpenTCS.Clear();
 
             CLogger.LogInfo($"{DEBUG_FLAG} UIManager is being destroyed.");
         }
 
-        public void ReleaseWindowAsset(string assetPath)
-        {
-            if (string.IsNullOrEmpty(assetPath)) return;
-
-            if (prefabHandleCache.TryGetValue(assetPath, out var entry))
-            {
-                entry.RefCount--;
-                if (entry.RefCount < 0)
-                {
-                    CLogger.LogWarning($"{DEBUG_FLAG} RefCount for {assetPath} dropped below zero. Check logic.");
-                    entry.RefCount = 0;
-                }
-                // We don't dispose immediately. LRU EnforcePrefabCacheSize handles cleanup when cache fills.
-            }
-        }
-
-        private void ReleaseConfigAsset(string windowName)
+        // Called by UIWindow.OnFinishedClose via the OnReleaseAssetReference callback.
+        // Releases the prefab handle when no window is using this prefab location anymore.
+        public void ReleaseWindowAsset(string windowName)
         {
             if (string.IsNullOrEmpty(windowName)) return;
 
-            if (configHandleCache.TryGetValue(windowName, out var entry))
+            if (!_windowToPrefabLocation.TryGetValue(windowName, out var prefabLocation)) return;
+            _windowToPrefabLocation.Remove(windowName);
+
+            // Check if any other open window shares the same prefab before disposing.
+            bool stillInUse = false;
+            foreach (var kv in _windowToPrefabLocation)
             {
-                entry.RefCount--;
-                if (entry.RefCount < 0)
-                {
-                    CLogger.LogWarning($"{DEBUG_FLAG} Config RefCount for {windowName} dropped below zero.");
-                    entry.RefCount = 0;
-                }
+                if (kv.Value == prefabLocation) { stillInUse = true; break; }
+            }
+
+            if (!stillInUse && _prefabHandles.TryGetValue(prefabLocation, out var handle))
+            {
+                handle.Dispose(); // RefCount → 0 in AssetCacheService → enters idle pool.
+                _prefabHandles.Remove(prefabLocation);
             }
         }
 
-        private void TouchPrefabCache(string key)
+        private void ReleaseConfigHandle(string windowName)
         {
-            // Move accessed key to end (MRU)
-            if (prefabHandleLru.Remove(key))
+            if (string.IsNullOrEmpty(windowName)) return;
+            if (_configHandles.TryGetValue(windowName, out var handle))
             {
-                prefabHandleLru.Add(key);
-            }
-        }
-
-        private void TouchConfigCache(string key)
-        {
-            if (configHandleLru.Remove(key))
-            {
-                configHandleLru.Add(key);
-            }
-        }
-
-        private void EnforcePrefabCacheSize()
-        {
-            // Try to reduce size to Max by evicting unused items (RefCount == 0) from the front (LRU)
-            while (prefabHandleCache.Count > PrefabHandleCacheMax)
-            {
-                bool evictedAny = false;
-
-                for (int i = 0; i < prefabHandleLru.Count; i++)
-                {
-                    string key = prefabHandleLru[i];
-                    if (prefabHandleCache.TryGetValue(key, out var entry))
-                    {
-                        if (entry.RefCount <= 0)
-                        {
-                            // Safe to evict
-                            entry.Handle?.Dispose();
-                            prefabHandleCache.Remove(key);
-                            prefabHandleLru.RemoveAt(i);
-                            evictedAny = true;
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        prefabHandleLru.RemoveAt(i);
-                        evictedAny = true;
-                        break;
-                    }
-                }
-
-                if (!evictedAny) break;
-            }
-        }
-
-        private void EnforceConfigCacheSize()
-        {
-            while (configHandleCache.Count > ConfigHandleCacheMax)
-            {
-                bool evictedAny = false;
-
-                for (int i = 0; i < configHandleLru.Count; i++)
-                {
-                    string key = configHandleLru[i];
-                    if (configHandleCache.TryGetValue(key, out var entry))
-                    {
-                        if (entry.RefCount <= 0)
-                        {
-                            entry.Handle?.Dispose();
-                            configHandleCache.Remove(key);
-                            configHandleLru.RemoveAt(i);
-                            evictedAny = true;
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        configHandleLru.RemoveAt(i);
-                        evictedAny = true;
-                        break;
-                    }
-                }
-
-                if (!evictedAny) break;
+                handle.Dispose();
+                _configHandles.Remove(windowName);
             }
         }
 

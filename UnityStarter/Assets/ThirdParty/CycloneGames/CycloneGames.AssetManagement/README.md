@@ -23,14 +23,14 @@ A DI-first, interface-driven, unified asset management abstraction layer for Uni
 
 ## Requirements
 
-| Dependency | Required | Description |
-|------------|----------|-------------|
-| Unity | 2022.3+ | Minimum Unity version |
-| UniTask | Yes | `com.cysharp.unitask` - Async/await support |
-| YooAsset | Optional | `com.tuyoogame.yooasset` - Recommended provider |
+| Dependency   | Required | Description                                     |
+| ------------ | -------- | ----------------------------------------------- |
+| Unity        | 2022.3+  | Minimum Unity version                           |
+| UniTask      | Yes      | `com.cysharp.unitask` - Async/await support     |
+| YooAsset     | Optional | `com.tuyoogame.yooasset` - Recommended provider |
 | Addressables | Optional | `com.unity.addressables` - Alternative provider |
-| VContainer | Optional | `jp.hadashikick.vcontainer` - DI integration |
-| R3 | Optional | `com.cysharp.r3` - For `IPatchService` events |
+| VContainer   | Optional | `jp.hadashikick.vcontainer` - DI integration    |
+| R3           | Optional | `com.cysharp.r3` - For `IPatchService` events   |
 
 ## Installation
 
@@ -55,7 +55,7 @@ public class GameBootstrap
 {
     // Store the module reference for later access
     public static IAssetModule AssetModule { get; private set; }
-    
+
     public async UniTask Initialize()
     {
         // Create and initialize the module (do this once)
@@ -64,12 +64,12 @@ public class GameBootstrap
 
         // Create and initialize a package (do this once per package)
         var package = AssetModule.CreatePackage("DefaultPackage");
-        
+
         var initOptions = new AssetPackageInitOptions(
             AssetPlayMode.Offline,
             new OfflinePlayModeParameters()
         );
-        
+
         await package.InitializeAsync(initOptions);
     }
 }
@@ -86,12 +86,12 @@ public class PlayerSpawner
     {
         // Get the existing package (don't create it again!)
         var package = GameBootstrap.AssetModule.GetPackage("DefaultPackage");
-        
+
         // Load and use the asset
         using (var handle = package.LoadAssetAsync<GameObject>("Prefabs/Player"))
         {
             await handle.Task;
-            
+
             if (handle.Asset != null)
             {
                 GameObject player = package.InstantiateSync(handle);
@@ -103,6 +103,7 @@ public class PlayerSpawner
 
 > [!TIP]
 > **CreatePackage vs GetPackage**
+>
 > - `CreatePackage(name)` - Call once during initialization to create a new package
 > - `GetPackage(name)` - Call anywhere else to retrieve an existing package
 
@@ -131,12 +132,12 @@ Asset Loading / Instantiation / Scene Management
 
 ### Key Interfaces
 
-| Interface | Purpose |
-|-----------|---------|
-| `IAssetModule` | Entry point for the asset system. Creates and manages packages. |
-| `IAssetPackage` | Handles all asset operations: loading, instantiation, scenes. |
-| `IAssetHandle<T>` | Represents a loaded asset. Disposable for memory management. |
-| `IPatchService` | High-level hot update workflow (YooAsset only). |
+| Interface         | Purpose                                                         |
+| ----------------- | --------------------------------------------------------------- |
+| `IAssetModule`    | Entry point for the asset system. Creates and manages packages. |
+| `IAssetPackage`   | Handles all asset operations: loading, instantiation, scenes.   |
+| `IAssetHandle<T>` | Represents a loaded asset. Disposable for memory management.    |
+| `IPatchService`   | High-level hot update workflow (YooAsset only).                 |
 
 ### Handle Lifecycle
 
@@ -162,14 +163,14 @@ handle.Dispose(); // Don't forget this!
 
 ## Provider Comparison
 
-| Feature | YooAsset | Addressables | Resources |
-|---------|----------|--------------|-----------|
-| Sync Loading | Yes | No | Yes |
-| Async Loading | Yes | Yes | Yes |
-| Hot Update | Yes | Limited | No |
-| Scene Loading | Yes | Yes | No |
-| Raw File Loading | Yes | No | No |
-| Recommended For | Production | Existing Projects | Prototyping |
+| Feature          | YooAsset   | Addressables      | Resources   |
+| ---------------- | ---------- | ----------------- | ----------- |
+| Sync Loading     | Yes        | No                | Yes         |
+| Async Loading    | Yes        | Yes               | Yes         |
+| Hot Update       | Yes        | Limited           | No          |
+| Scene Loading    | Yes        | Yes               | No          |
+| Raw File Loading | Yes        | No                | No          |
+| Recommended For  | Production | Existing Projects | Prototyping |
 
 ---
 
@@ -196,7 +197,7 @@ public async UniTask InitializeOffline()
         AssetPlayMode.Offline,
         new OfflinePlayModeParameters()
     );
-    
+
     await package.InitializeAsync(initOptions);
 
     // 4. Load assets
@@ -258,6 +259,7 @@ public async UniTask UseAddressables()
 
 > [!NOTE]
 > Addressables limitations:
+>
 > - No synchronous operations
 > - No `IPatchService` support
 > - No raw file loading
@@ -287,6 +289,7 @@ public async UniTask UseResources()
 
 > [!WARNING]
 > Resources limitations:
+>
 > - Cannot load scenes
 > - No hot update support
 > - Assets cannot be individually unloaded
@@ -310,7 +313,7 @@ public async UniTask RunPatchFlow()
     patchService.PatchEvents.Subscribe(evt =>
     {
         var (eventType, args) = evt;
-        
+
         switch (eventType)
         {
             case PatchEvent.FoundNewVersion:
@@ -319,16 +322,16 @@ public async UniTask RunPatchFlow()
                 // Show confirmation dialog, then call:
                 // patchService.Download();
                 break;
-                
+
             case PatchEvent.DownloadProgress:
                 var progressArgs = (DownloadProgressEventArgs)args;
                 Debug.Log($"Progress: {progressArgs.Progress:P0}");
                 break;
-                
+
             case PatchEvent.PatchDone:
                 Debug.Log("Update complete!");
                 break;
-                
+
             case PatchEvent.PatchFailed:
                 Debug.LogError("Update failed!");
                 break;
@@ -430,38 +433,72 @@ async UniTask TrackProgress(GroupOperation op)
 }
 ```
 
-### LRU Cache
+### High-Performance Asset Cache (W-TinyLFU inspired)
 
-Automatic caching with LRU eviction:
+The asset management system features a zero-GC, three-tier caching architecture (Active, Trial, and Main pools) to maximize cache hit rates and deterministic memory management without adding runtime overhead:
 
-```csharp
-using CycloneGames.AssetManagement.Runtime.Cache;
+- **Active Pool**: Assets currently explicitly referenced by game logic (Refs > 0).
+- **Trial Pool (LRU)**: A probation area for recently released assets.
+- **Main Pool (LFU/LRU)**: A hot cache for frequently accessed assets that have survived the Trial pool.
 
-var cache = new AssetCacheService(package, maxEntries: 100);
-
-// Get from cache (loads if not cached)
-var sprite = cache.Get<Sprite>("Icons/Coin");
-
-// Release specific item
-cache.TryRelease("Icons/Coin");
-
-// Clear all
-cache.Clear();
-```
-
-### Handle Tracking (Debug)
-
-Track active handles to detect leaks:
+Cache capacity and deterministic eviction can be controlled via **Buckets**:
 
 ```csharp
-// Enable tracking (do this before loading assets)
-HandleTracker.Enabled = true;
-HandleTracker.EnableStackTrace = true; // For detailed leak analysis
+// Load an asset and assign it to the "UI" bucket
+using (var handle = package.LoadAssetAsync<GameObject>("Prefabs/MainMenu", bucket: "UI"))
+{
+    // ...
+}
 
-// Later, check for leaks
-var report = HandleTracker.GetActiveHandlesReport();
-Debug.Log(report);
+// Later, clear only assets in the "UI" bucket to forcefully free memory
+package.UnloadUnusedAssets(bucket: "UI");
 ```
+
+### Resource Tracking & Metadata
+
+To make runtime resource tracking effortless, loading APIs support zero-GC `tag` and `owner` metadata parameters. This enables fine-grained tracking of exactly _who_ loaded an asset and _what_ it is used for.
+
+```csharp
+// Load an asset with tracing metadata
+var handle = package.LoadAssetAsync<GameObject>("Prefabs/Hero",
+    tag: "Character",
+    owner: "PlayerSpawner"
+);
+```
+
+**Case Study: UIFramework Integration**
+`CycloneGames.UIFramework` seamlessly integrates this feature. When opening a UI window, it automatically tags loaded assets:
+
+- `owner`: The specific UI window's name (e.g., `HomeUI`)
+- `tag`: The asset category (e.g., `UIConfig` or `UIPrefab`)
+
+This makes it instantly clear in the debugger which UI is holding onto memory.
+
+### Advanced Editor Debugging Tools
+
+We provide powerful, best-in-class editor windows to visualize cache health and identify memory leaks without guessing.
+
+#### 1. Asset Cache Debugger Window (`Tools/CycloneGames/AssetManagement/Asset Cache Debugger`)
+
+A comprehensive view of the entire W-TinyLFU cache.
+
+- **Tier Visualization**: Instantly see if assets are Active, in Trial, or in the Main hot cache.
+- **Metadata Columns**: Sort and filter by `Tag`, `Owner`, and `Bucket`.
+- **Ref-count Anomalies**: Automatically highlights active assets with unusually high reference counts (> 8), warning you of potential missing `Dispose()` calls.
+- **Summary Breakdowns**: Statistical distribution of assets by Provider, Tag, and Owner.
+
+#### 2. Handle Tracker Window (`Tools/CycloneGames/AssetManagement/Asset Handle Tracker`)
+
+A microscopic view of every active handle allocation, cross-referenced against the cache.
+
+- **Smart Status Identification**: Detects whether an active handle (Refs=0) is safely sitting in the idle cache (`Cached`), or if it is a genuine memory leak (`Leaked`).
+- **Stack Trace Expansion**: Click any leaked handle to instantly reveal the exact C# stack trace where it was allocated.
+
+<img src="./Documents~/Doc_01.png" style="width: 100%; height: auto; max-width: 900px;" />
+<img src="./Documents~/Doc_02.png" style="width: 100%; height: auto; max-width: 900px;" />
+<img src="./Documents~/Doc_03.png" style="width: 100%; height: auto; max-width: 900px;" />
+<img src="./Documents~/Doc_04.png" style="width: 100%; height: auto; max-width: 900px;" />
+<img src="./Documents~/Doc_05.png" style="width: 100%; height: auto; max-width: 900px;" />
 
 ---
 
@@ -469,40 +506,40 @@ Debug.Log(report);
 
 ### IAssetModule
 
-| Method | Description |
-|--------|-------------|
-| `InitializeAsync(options)` | Initialize the asset system |
-| `Destroy()` | Cleanup and release resources |
-| `CreatePackage(name)` | Create a new asset package |
-| `GetPackage(name)` | Get an existing package |
-| `RemovePackageAsync(name)` | Remove and destroy a package |
+| Method                     | Description                            |
+| -------------------------- | -------------------------------------- |
+| `InitializeAsync(options)` | Initialize the asset system            |
+| `Destroy()`                | Cleanup and release resources          |
+| `CreatePackage(name)`      | Create a new asset package             |
+| `GetPackage(name)`         | Get an existing package                |
+| `RemovePackageAsync(name)` | Remove and destroy a package           |
 | `CreatePatchService(name)` | Create a patch service (YooAsset only) |
 
 ### IAssetPackage
 
-| Method | Description |
-|--------|-------------|
-| `InitializeAsync(options)` | Initialize the package |
-| `DestroyAsync()` | Destroy the package |
-| `LoadAssetAsync<T>(location)` | Load an asset asynchronously |
-| `LoadAssetSync<T>(location)` | Load an asset synchronously |
-| `LoadAllAssetsAsync<T>(location)` | Load all assets at location |
-| `InstantiateAsync(handle)` | Instantiate a loaded prefab |
-| `InstantiateSync(handle)` | Sync instantiate (zero-GC) |
-| `LoadSceneAsync(location)` | Load a scene |
-| `UnloadSceneAsync(handle)` | Unload a scene |
-| `LoadRawFileAsync(location)` | Load a raw file |
-| `UnloadUnusedAssets()` | Unload unused assets |
+| Method                       | Description                                           |
+| ---------------------------- | ----------------------------------------------------- |
+| `InitializeAsync(options)`   | Initialize the package                                |
+| `DestroyAsync()`             | Destroy the package                                   |
+| `LoadAssetAsync<T>(...)`     | Load an asset asynchronously (supports `tag`/`owner`) |
+| `LoadAssetSync<T>(...)`      | Load an asset synchronously (supports `tag`/`owner`)  |
+| `LoadAllAssetsAsync<T>(...)` | Load all assets at location (supports `tag`/`owner`)  |
+| `InstantiateAsync(handle)`   | Instantiate a loaded prefab                           |
+| `InstantiateSync(handle)`    | Sync instantiate (zero-GC)                            |
+| `LoadSceneAsync(location)`   | Load a scene                                          |
+| `UnloadSceneAsync(handle)`   | Unload a scene                                        |
+| `LoadRawFileAsync(location)` | Load a raw file                                       |
+| `UnloadUnusedAssets()`       | Unload unused assets                                  |
 
 ### Scripting Define Symbols
 
 These symbols are automatically defined based on installed packages:
 
-| Symbol | When Defined |
-|--------|--------------|
-| `YOOASSET_PRESENT` | YooAsset package is installed |
+| Symbol                 | When Defined                      |
+| ---------------------- | --------------------------------- |
+| `YOOASSET_PRESENT`     | YooAsset package is installed     |
 | `ADDRESSABLES_PRESENT` | Addressables package is installed |
-| `VCONTAINER_PRESENT` | VContainer package is installed |
+| `VCONTAINER_PRESENT`   | VContainer package is installed   |
 
 ---
 

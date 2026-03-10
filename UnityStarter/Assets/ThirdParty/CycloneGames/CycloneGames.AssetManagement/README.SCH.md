@@ -23,14 +23,14 @@
 
 ## 环境要求
 
-| 依赖项 | 必需 | 说明 |
-|--------|------|------|
-| Unity | 2022.3+ | 最低版本要求 |
-| UniTask | 是 | `com.cysharp.unitask` - 异步支持 |
-| YooAsset | 可选 | `com.tuyoogame.yooasset` - 推荐的提供器 |
-| Addressables | 可选 | `com.unity.addressables` - 备选提供器 |
-| VContainer | 可选 | `jp.hadashikick.vcontainer` - DI 集成 |
-| R3 | 可选 | `com.cysharp.r3` - 用于 `IPatchService` 事件 |
+| 依赖项       | 必需    | 说明                                         |
+| ------------ | ------- | -------------------------------------------- |
+| Unity        | 2022.3+ | 最低版本要求                                 |
+| UniTask      | 是      | `com.cysharp.unitask` - 异步支持             |
+| YooAsset     | 可选    | `com.tuyoogame.yooasset` - 推荐的提供器      |
+| Addressables | 可选    | `com.unity.addressables` - 备选提供器        |
+| VContainer   | 可选    | `jp.hadashikick.vcontainer` - DI 集成        |
+| R3           | 可选    | `com.cysharp.r3` - 用于 `IPatchService` 事件 |
 
 ## 安装
 
@@ -55,7 +55,7 @@ public class GameBootstrap
 {
     // 存储模块引用以便后续访问
     public static IAssetModule AssetModule { get; private set; }
-    
+
     public async UniTask Initialize()
     {
         // 创建并初始化模块（只执行一次）
@@ -64,12 +64,12 @@ public class GameBootstrap
 
         // 创建并初始化资源包（每个包只执行一次）
         var package = AssetModule.CreatePackage("DefaultPackage");
-        
+
         var initOptions = new AssetPackageInitOptions(
             AssetPlayMode.Offline,
             new OfflinePlayModeParameters()
         );
-        
+
         await package.InitializeAsync(initOptions);
     }
 }
@@ -86,12 +86,12 @@ public class PlayerSpawner
     {
         // 获取已存在的资源包（不要重复创建！）
         var package = GameBootstrap.AssetModule.GetPackage("DefaultPackage");
-        
+
         // 加载并使用资源
         using (var handle = package.LoadAssetAsync<GameObject>("Prefabs/Player"))
         {
             await handle.Task;
-            
+
             if (handle.Asset != null)
             {
                 GameObject player = package.InstantiateSync(handle);
@@ -103,6 +103,7 @@ public class PlayerSpawner
 
 > [!TIP]
 > **CreatePackage 与 GetPackage 的区别**
+>
 > - `CreatePackage(name)` - 初始化时调用一次，创建新资源包
 > - `GetPackage(name)` - 在其他任意位置调用，获取已存在的资源包
 
@@ -131,12 +132,12 @@ IAssetPackage（接口）
 
 ### 关键接口
 
-| 接口 | 用途 |
-|------|------|
-| `IAssetModule` | 资源系统入口，创建和管理资源包 |
-| `IAssetPackage` | 处理所有资源操作：加载、实例化、场景 |
-| `IAssetHandle<T>` | 表示已加载的资源，可释放以管理内存 |
-| `IPatchService` | 高层热更新工作流（仅 YooAsset） |
+| 接口              | 用途                                 |
+| ----------------- | ------------------------------------ |
+| `IAssetModule`    | 资源系统入口，创建和管理资源包       |
+| `IAssetPackage`   | 处理所有资源操作：加载、实例化、场景 |
+| `IAssetHandle<T>` | 表示已加载的资源，可释放以管理内存   |
+| `IPatchService`   | 高层热更新工作流（仅 YooAsset）      |
 
 ### 句柄生命周期
 
@@ -162,14 +163,14 @@ handle.Dispose(); // 不要忘记这一步！
 
 ## 提供器对比
 
-| 功能 | YooAsset | Addressables | Resources |
-|------|----------|--------------|-----------|
-| 同步加载 | 支持 | 不支持 | 支持 |
-| 异步加载 | 支持 | 支持 | 支持 |
-| 热更新 | 支持 | 有限 | 不支持 |
-| 场景加载 | 支持 | 支持 | 不支持 |
-| 原生文件加载 | 支持 | 不支持 | 不支持 |
-| 推荐用途 | 正式项目 | 已有项目 | 原型开发 |
+| 功能         | YooAsset | Addressables | Resources |
+| ------------ | -------- | ------------ | --------- |
+| 同步加载     | 支持     | 不支持       | 支持      |
+| 异步加载     | 支持     | 支持         | 支持      |
+| 热更新       | 支持     | 有限         | 不支持    |
+| 场景加载     | 支持     | 支持         | 不支持    |
+| 原生文件加载 | 支持     | 不支持       | 不支持    |
+| 推荐用途     | 正式项目 | 已有项目     | 原型开发  |
 
 ---
 
@@ -196,7 +197,7 @@ public async UniTask InitializeOffline()
         AssetPlayMode.Offline,
         new OfflinePlayModeParameters()
     );
-    
+
     await package.InitializeAsync(initOptions);
 
     // 4. 加载资源
@@ -258,6 +259,7 @@ public async UniTask UseAddressables()
 
 > [!NOTE]
 > Addressables 的限制：
+>
 > - 不支持同步操作
 > - 不支持 `IPatchService`
 > - 不支持原生文件加载
@@ -287,6 +289,7 @@ public async UniTask UseResources()
 
 > [!WARNING]
 > Resources 的限制：
+>
 > - 无法加载场景
 > - 不支持热更新
 > - 资源无法单独卸载
@@ -310,7 +313,7 @@ public async UniTask RunPatchFlow()
     patchService.PatchEvents.Subscribe(evt =>
     {
         var (eventType, args) = evt;
-        
+
         switch (eventType)
         {
             case PatchEvent.FoundNewVersion:
@@ -319,16 +322,16 @@ public async UniTask RunPatchFlow()
                 // 显示确认对话框，然后调用：
                 // patchService.Download();
                 break;
-                
+
             case PatchEvent.DownloadProgress:
                 var progressArgs = (DownloadProgressEventArgs)args;
                 Debug.Log($"进度：{progressArgs.Progress:P0}");
                 break;
-                
+
             case PatchEvent.PatchDone:
                 Debug.Log("更新完成！");
                 break;
-                
+
             case PatchEvent.PatchFailed:
                 Debug.LogError("更新失败！");
                 break;
@@ -430,38 +433,72 @@ async UniTask TrackProgress(GroupOperation op)
 }
 ```
 
-### LRU 缓存
+### 高性能资源缓存 (W-TinyLFU 架构)
 
-带 LRU 淘汰策略的自动缓存：
+资源管理系统内置了零 GC、三级分层（Active、Trial、Main）的缓存架构，最大化缓存命中率，同时提供确定性的内存管理策略，且没有任何运行时开销：
 
-```csharp
-using CycloneGames.AssetManagement.Runtime.Cache;
+- **Active (活跃池)**: 当前被游戏逻辑显式引用的资源（Refs > 0）。
+- **Trial (试用池 - LRU)**: 被释放资产的观察期缓存池。
+- **Main (主池 - LFU/LRU)**: 经过试用期且被频繁访问的"热"资源缓存。
 
-var cache = new AssetCacheService(package, maxEntries: 100);
-
-// 从缓存获取（未缓存时自动加载）
-var sprite = cache.Get<Sprite>("Icons/Coin");
-
-// 释放特定项
-cache.TryRelease("Icons/Coin");
-
-// 清空全部
-cache.Clear();
-```
-
-### 句柄追踪（调试）
-
-追踪活动句柄以检测泄漏：
+你可以通过 **Bucket (内存桶)** 来控制特定的缓存容量及实现确定性的内存释放：
 
 ```csharp
-// 启用追踪（在加载资源前执行）
-HandleTracker.Enabled = true;
-HandleTracker.EnableStackTrace = true; // 用于详细泄漏分析
+// 加载资源并将其分配到 "UI" 桶中
+using (var handle = package.LoadAssetAsync<GameObject>("Prefabs/MainMenu", bucket: "UI"))
+{
+    // ...
+}
 
-// 稍后检查泄漏
-var report = HandleTracker.GetActiveHandlesReport();
-Debug.Log(report);
+// 稍后，仅清理 "UI" 桶中的资源来强制释放内存
+package.UnloadUnusedAssets(bucket: "UI");
 ```
+
+### 资源追踪与元数据 (Metadata Tracking)
+
+为了让运行时资源的追踪变得极其简单，所有加载 API 均支持零 GC 的 `tag` 和 `owner` 参数。这让你能够细粒度地追踪**是谁**加载了该资源，以及该资源的**用途**。
+
+```csharp
+// 加载资源并加上追踪标记
+var handle = package.LoadAssetAsync<GameObject>("Prefabs/Hero",
+    tag: "Character",
+    owner: "PlayerSpawner"
+);
+```
+
+**应用案例：UIFramework 集成**
+`CycloneGames.UIFramework` 完美地应用了此设计。当打开 UI 窗口时，底层会自动为加载的资源打上标签：
+
+- `owner`: 具体的 UI 窗口名称（如 `HomeUI`）
+- `tag`: 资源分类（如 `UIConfig` 或 `UIPrefab`）
+
+这样在调试器中，你可以一眼看出是哪个 UI 占用了内存。
+
+### 高级编辑器调试工具
+
+我们提供了业界一流的编辑器窗口，帮助你可视化缓存健康度并精准定位内存泄漏。
+
+#### 1. 资源缓存调试器 (Asset Cache Debugger)
+
+提供对整个 W-TinyLFU 缓存系统全局的透视。(`Tools/CycloneGames/AssetManagement/Asset Cache Debugger`)
+
+- **层级 (Tier) 可视化**: 直观显示资源当前是处于 Active 状态、Trial 试用池，还是 Main 热缓存区。
+- **元数据显示**: 直接显示和过滤 `Tag`、`Owner` 以及 `Bucket`。
+- **引用计数异常警告**: 自动高亮显示引用计数异常偏高（> 8）的资源，警告你可能遗漏了 `Dispose()` 调用。
+- **智能汇总**: 按资源提供者、Tag 和 Owner 统计内存分布。
+
+#### 2. 句柄泄漏追踪追踪器 (Handle Tracker)
+
+微观级别监控每一个活动句柄的分配，并自动与缓存系统交叉比对。(`Tools/CycloneGames/AssetManagement/Asset Handle Tracker`)
+
+- **智能状态识别**: 自动判断引用计数为 0 的句柄是安全驻留在空闲缓存中 (`Cached`)，还是真正的内存泄漏 (`Leaked`)。
+- **内存泄漏堆栈**: 点击展开任何泄露的句柄，直接跳转到分配该句柄的精准 C# 代码行。
+
+<img src="./Documents~/Doc_01.png" style="width: 100%; height: auto; max-width: 900px;" />
+<img src="./Documents~/Doc_02.png" style="width: 100%; height: auto; max-width: 900px;" />
+<img src="./Documents~/Doc_03.png" style="width: 100%; height: auto; max-width: 900px;" />
+<img src="./Documents~/Doc_04.png" style="width: 100%; height: auto; max-width: 900px;" />
+<img src="./Documents~/Doc_05.png" style="width: 100%; height: auto; max-width: 900px;" />
 
 ---
 
@@ -469,40 +506,40 @@ Debug.Log(report);
 
 ### IAssetModule
 
-| 方法 | 说明 |
-|------|------|
-| `InitializeAsync(options)` | 初始化资源系统 |
-| `Destroy()` | 清理并释放资源 |
-| `CreatePackage(name)` | 创建新的资源包 |
-| `GetPackage(name)` | 获取已存在的资源包 |
-| `RemovePackageAsync(name)` | 移除并销毁资源包 |
+| 方法                       | 说明                        |
+| -------------------------- | --------------------------- |
+| `InitializeAsync(options)` | 初始化资源系统              |
+| `Destroy()`                | 清理并释放资源              |
+| `CreatePackage(name)`      | 创建新的资源包              |
+| `GetPackage(name)`         | 获取已存在的资源包          |
+| `RemovePackageAsync(name)` | 移除并销毁资源包            |
 | `CreatePatchService(name)` | 创建补丁服务（仅 YooAsset） |
 
 ### IAssetPackage
 
-| 方法 | 说明 |
-|------|------|
-| `InitializeAsync(options)` | 初始化资源包 |
-| `DestroyAsync()` | 销毁资源包 |
-| `LoadAssetAsync<T>(location)` | 异步加载资源 |
-| `LoadAssetSync<T>(location)` | 同步加载资源 |
-| `LoadAllAssetsAsync<T>(location)` | 加载指定位置的所有资源 |
-| `InstantiateAsync(handle)` | 异步实例化预制体 |
-| `InstantiateSync(handle)` | 同步实例化（零 GC） |
-| `LoadSceneAsync(location)` | 加载场景 |
-| `UnloadSceneAsync(handle)` | 卸载场景 |
-| `LoadRawFileAsync(location)` | 加载原生文件 |
-| `UnloadUnusedAssets()` | 卸载未使用的资源 |
+| 方法                         | 说明                                        |
+| ---------------------------- | ------------------------------------------- |
+| `InitializeAsync(options)`   | 初始化资源包                                |
+| `DestroyAsync()`             | 销毁资源包                                  |
+| `LoadAssetAsync<T>(...)`     | 异步加载资源 (支持 `tag`/`owner`)           |
+| `LoadAssetSync<T>(...)`      | 同步加载资源 (支持 `tag`/`owner`)           |
+| `LoadAllAssetsAsync<T>(...)` | 加载指定位置的所有资源 (支持 `tag`/`owner`) |
+| `InstantiateAsync(handle)`   | 异步实例化预制体                            |
+| `InstantiateSync(handle)`    | 同步实例化（零 GC）                         |
+| `LoadSceneAsync(location)`   | 加载场景                                    |
+| `UnloadSceneAsync(handle)`   | 卸载场景                                    |
+| `LoadRawFileAsync(location)` | 加载原生文件                                |
+| `UnloadUnusedAssets()`       | 卸载未使用的资源                            |
 
 ### 脚本定义符号
 
 这些符号会根据已安装的包自动定义：
 
-| 符号 | 定义时机 |
-|------|----------|
-| `YOOASSET_PRESENT` | 已安装 YooAsset 包 |
+| 符号                   | 定义时机               |
+| ---------------------- | ---------------------- |
+| `YOOASSET_PRESENT`     | 已安装 YooAsset 包     |
 | `ADDRESSABLES_PRESENT` | 已安装 Addressables 包 |
-| `VCONTAINER_PRESENT` | 已安装 VContainer 包 |
+| `VCONTAINER_PRESENT`   | 已安装 VContainer 包   |
 
 ---
 
