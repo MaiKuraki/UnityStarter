@@ -2,66 +2,114 @@
 
 <div align="left">English | <a href="./README.SCH.md">简体中文</a></div>
 
-A simple, robust, and data-driven UI framework for Unity, designed for scalability and ease of use. It provides a clear architecture for managing UI windows, layers, and transitions, leveraging asynchronous loading and a decoupled animation system.
+**UI framework** for Unity designed for large-scale commercial projects. Beyond basic window management, it offers a complete navigation context graph, coordinated multi-window transitions, an MVP auto-binding system, LRU asset caching, Dynamic Atlas texture batching, and first-class DI/IoC support, all built around a zero-GC, thread-safe runtime core.
 
 ## Features
 
-- **Asynchronous by Design**: All resource loading and instantiation operations are fully asynchronous using `UniTask`, ensuring a smooth, non-blocking user experience.
-- **Data-Driven**: Configure windows and layers with `ScriptableObject` assets for maximum flexibility and designer-friendliness.
-- **Robust State Management**: A formal state machine manages the lifecycle of each `UIWindow`, preventing common bugs and race conditions.
-- **Extensible Animation System**: Easily create and assign custom transition animations for windows.
-- **Service-Based Architecture**: Integrates seamlessly with other services like `AssetManagement`, `Factory`, and `Logger`. Perfectly compatible with DI/IoC.
-- **Performance-Minded**: Includes features like prefab caching, instantiation throttling, and a Dynamic Atlas system to maintain high performance.
+### 🏗️ Architecture & Scalability
+
+| Feature                     | Detail                                                                                                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **MVP Auto-Binding**        | Decorate a Presenter with `[UIPresenterBind("WindowName")]` — binding, lifecycle forwarding, and injection happen automatically with zero boilerplate                    |
+| **DI / IoC**                | All contracts are interfaces (`IUIService`, `IUINavigationService`, `IUITransitionCoordinator`, etc.). Drop-in compatible with VContainer, Zenject, or any IoC container |
+| **Data-Driven Config**      | Every window and layer is configured via `ScriptableObject`, giving designers full control without touching code                                                         |
+| **Service-Oriented Facade** | `IUIService` is the single public API; internal `UIManager` complexity stays hidden                                                                                      |
+
+### 🧭 Navigation Context Graph
+
+| Feature                          | Detail                                                                                                                                       |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Directed Graph (not a stack)** | Windows can have multiple openers and survive non-linear closures; "Back" always resolves the nearest alive ancestor                         |
+| **Context Payload**              | Pass any typed object when opening; the target retrieves it any time via `NavigationService.GetContext()`                                    |
+| **Child-Close Policies**         | `Reparent` (re-attach to grandparent), `Cascade` (force-close descendants), or `Detach` (become a root)                                      |
+| **Zero-GC Queries**              | Navigation reads (`GetAncestors`, `ResolveBackTarget`, `GetHistory`) are thread-safe via `ReaderWriterLockSlim`; writes are main-thread only |
+| **Immutable Entry Structs**      | `UINavigationEntry` is a `readonly struct` — no heap allocation per record                                                                   |
+
+### 🎬 Transition Coordinator (Simultaneous & Stacked Animations)
+
+| Feature                               | Detail                                                                                                                        |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **Coordinated Two-Window Transition** | `NavigateToAsync()` fires both exit and entry animations on the **same frame** — no visible gap between windows               |
+| **Stacked / Cascading Opens**         | Call `NavigateTo()` from `OnViewOpening()` to start window C while B is still animating — creates cascading layered entrances |
+| **Built-in Coordinators**             | `SlideTransitionCoordinator` (directional page-flip) and `CrossFadeTransitionCoordinator` (alpha dissolve) included           |
+| **Custom Coordinators**               | Implement `IUITransitionCoordinator` for any effect: zoom, elastic, blur — animation-library agnostic                         |
+| **Automatic Fallback**                | No coordinator? `NavigateToAsync()` silently degrades to sequential `NavigateTo()` — zero breaking changes                    |
+| **Independent Popup Animations**      | Non-coordinated windows use their own `IUIWindowTransitionDriver` and are completely unaffected                               |
+
+### ⚡ Performance
+
+| Feature                              | Detail                                                                                                            |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| **Dual LRU Caches**                  | Separate LRU caches for prefab handles and config assets; cold loads only happen on first use or eviction         |
+| **Per-Frame Instantiation Throttle** | Spread heavy instantiation across frames to avoid spikes                                                          |
+| **Dynamic Atlas System**             | Packs runtime sprites into a single GPU texture at open-time, dramatically reducing draw-calls for icon-heavy UIs |
+| **Compressed Atlas Variant**         | `CompressedDynamicAtlasService` uses ASTC/DXT/ETC to reduce VRAM footprint for mobile targets                     |
+| **Async by Design**                  | Every load, instantiate, and open operation is `UniTask`-based — never blocks the main thread                     |
+
+### 🔒 Reliability & Safety
+
+| Feature                           | Detail                                                                                                   |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Formal Window State Machine**   | `Opening → Opened → Closing → Closed` prevents duplicate opens, double-closes, and race conditions       |
+| **Memory-Safe Lifecycle**         | `OnReleaseAssetReference` ensures Addressable handles are released exactly once, even under cancellation |
+| **CancellationToken Propagation** | All async paths accept `CancellationToken`; cancel cleanly without leaks or orphaned GameObjects         |
+| **Thread-Safe Navigation**        | Navigation graph reads are safe from any thread; mutations are guarded to the main thread                |
 
 ## Core Architecture
-
-The framework is built upon several key components that work together to provide a comprehensive UI management solution.
 
 ```mermaid
 flowchart TB
     subgraph GameCode["🎮 Game Code"]
-        GameLogic["Game Logic"]
+        GameLogic["Game Logic / Presenter"]
     end
 
     subgraph Facade["📦 Public API"]
-        UIService["UIService<br/>• OpenUIAsync()<br/>• CloseUIAsync()"]
+        UIService["IUIService<br/>• OpenUI / CloseUI<br/>• NavigationService<br/>• TransitionCoordinator"]
+    end
+
+    subgraph NavSystem["🧭 Navigation System"]
+        NavService["IUINavigationService<br/>• Context Graph<br/>• ResolveBackTarget<br/>• ChildClosePolicy"]
+        Coordinator["IUITransitionCoordinator<br/>• SlideTransitionCoordinator<br/>• CrossFadeTransitionCoordinator<br/>• Custom implementations"]
     end
 
     subgraph Core["⚙️ Core System"]
-        UIManager["UIManager<br/>• Async Loading<br/>• LRU Cache<br/>• Throttling"]
+        UIManager["UIManager<br/>• Async Loading<br/>• LRU Cache (Prefab + Config)<br/>• Frame Throttle<br/>• silentOpen path"]
     end
 
-    subgraph SceneHierarchy["🏗️ Scene Hierarchy"]
+    subgraph MVP["🔌 MVP Layer"]
+        Binder["UIPresenterBinder<br/>[UIPresenterBind] auto-discover"]
+        Presenter["UIPresenter<TView><br/>• NavigateTo / NavigateToAsync<br/>• NavigateBack<br/>• NavigationService"]
+    end
+
+    subgraph LayerConfigs["📋 LayerConfigs (1:1)"]
+        LayerConfigMenu["LayerConfig<br/>Menu"]
+        LayerConfigDialogue["LayerConfig<br/>Dialogue"]
+    end
+
+    subgraph WindowConfigs["📋 WindowConfigs (1:1)"]
+        ConfigA["UIConfig A"]
+        ConfigB["UIConfig B"]
+        ConfigC["UIConfig C"]
+    end
+
+    subgraph Scene["🏗️ Scene Hierarchy"]
         UIRoot["UIRoot"]
         subgraph Layers["UILayers"]
             UILayerMenu["UILayer<br/>Menu"]
             UILayerDialogue["UILayer<br/>Dialogue"]
         end
-    end
-
-    subgraph Windows["🪟 UI Windows"]
-        WindowA["UIWindowA<br/>Main Menu"]
-        WindowB["UIWindowB<br/>Settings"]
-        WindowC["UIWindowC<br/>Dialogue Box"]
-    end
-
-    subgraph Extensions["� Extensions"]
-        MVP["MVP Pattern<br/>UIPresenter + UIWindow"]
-    end
-
-    subgraph WindowConfigs["📋 Window Configs - 1 Config : 1 Window"]
-        ConfigA["Config A"]
-        ConfigB["Config B"]
-        ConfigC["Config C"]
-    end
-
-    subgraph LayerConfigs["📋 Layer Configs - 1 Config : 1 Layer"]
-        LayerConfigMenu["LayerConfig<br/>Menu"]
-        LayerConfigDialogue["LayerConfig<br/>Dialogue"]
+        subgraph Windows["🪟 UI Windows"]
+            WindowA["UIWindowA<br/>Main Menu"]
+            WindowB["UIWindowB<br/>Settings"]
+            WindowC["UIWindowC<br/>Popup"]
+        end
     end
 
     GameLogic --> UIService
     UIService --> UIManager
+    UIService --> NavService
+    UIService --> Coordinator
+
     UIManager --> UIRoot
     UIRoot --> UILayerMenu
     UIRoot --> UILayerDialogue
@@ -69,40 +117,43 @@ flowchart TB
     UILayerMenu --> WindowB
     UILayerDialogue --> WindowC
 
-    ConfigA -.-> WindowA
-    ConfigB -.-> WindowB
-    ConfigC -.-> WindowC
-    LayerConfigMenu -.-> UILayerMenu
-    LayerConfigDialogue -.-> UILayerDialogue
+    LayerConfigMenu -.->|defines| UILayerMenu
+    LayerConfigDialogue -.->|defines| UILayerDialogue
+    ConfigA -.->|defines| WindowA
+    ConfigB -.->|defines| WindowB
+    ConfigC -.->|defines| WindowC
 
-    MVP -.->|extends| Windows
+    Binder -.->|inject| Presenter
+    Presenter -->|NavigateToAsync| Coordinator
+    Coordinator -->|fire simultaneously| UIManager
+    UIManager -->|Register/Unregister| NavService
 ```
 
 ### 1. `UIService` (The Facade)
 
-This is the primary public API for interacting with the UI system. Game code should use the `UIService` to open and close windows, abstracting away the underlying complexity. It acts as a clean entry point and handles the initialization of the `UIManager`.
+The primary public API. All game code and presenters interact exclusively through `IUIService`, keeping the internal `UIManager` fully encapsulated. In DI environments, bind `IUIService` as a singleton and inject it anywhere. It also owns `NavigationService` and `TransitionCoordinator` references, making the full advanced feature set accessible from a single injection point.
 
 ### 2. `UIManager` (The Core)
 
-A persistent singleton that orchestrates the entire UI lifecycle. Its responsibilities include:
+Orchestrates the full window lifecycle:
 
-- **Asynchronous Loading**: Loads `UIWindowConfiguration` and UI prefabs using `CycloneGames.AssetManagement`.
-- **Lifecycle Management**: Manages the creation, destruction, and state transitions of `UIWindow` instances.
-- **Resource Caching**: Implements an LRU cache for UI prefabs to optimize performance when reopening frequently used windows.
-- **Instantiation Throttling**: Limits the number of UI elements instantiated per frame to prevent performance spikes.
+- **Async Loading**: Loads configs and prefabs via `CycloneGames.AssetManagement`.
+- **Dual LRU Caches**: Separate caches for prefab handles and config assets, each with configurable capacity and automatic eviction.
+- **Instantiation Throttling**: Caps per-frame instantiations to smooth out spikes.
+- **silentOpen path**: `OpenSilentAsync()` loads a window into the ready state without animation — used by `CoordinatedNavigateAsync` so the coordinator drives both windows simultaneously from the same frame.
 
 ### 3. `UIRoot` & `UILayer` (Scene Hierarchy)
 
-- **`UIRoot`**: A required component in your scene that acts as the root for all UI elements. It contains the UI Camera and manages all `UILayer`s.
-- **`UILayer`**: Represents a distinct rendering and input layer (e.g., `Menu`, `Dialogue`, `Notification`). Windows are added to specific layers, which control their sorting order and grouping. `UILayer`s are configured via `ScriptableObject` assets.
+- **`UIRoot`**: Root anchor for all UI, owns the UI Camera and all layers.
+- **`UILayer`**: A named sorting layer (e.g. `Menu`, `Dialogue`, `HUD`, `Overlay`). Each window belongs to exactly one layer, controlling render order and input priority.
 
 ### 4. `UIWindow` (The UI Unit)
 
-The base class for all UI panels, pages, or popups. Each `UIWindow` is a self-contained component with its own behavior and lifecycle, managed by a robust state machine:
+Base class for every panel, page, or popup:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Opening: Open()
+    [*] --> Opening: Open() / OpenSilentAsync()
 
     Opening --> Opened: Transition Complete
     Opening --> Closing: Cancel/Close()
@@ -114,21 +165,19 @@ stateDiagram-v2
     Closed --> [*]: Destroy
 ```
 
-- **`Opening`**: The window is being created and its opening transition is playing.
-- **`Opened`**: The window is fully visible and interactive.
-- **`Closing`**: The window's closing transition is playing.
-- **`Closed`**: The window is hidden and ready to be destroyed.
+`OpenSilentAsync()` advances the state machine and notifies binders **without** playing the transition animation — enabling the Transition Coordinator to synchronise two-window animations.
 
 ### 5. `UIWindowConfiguration` (Data-Driven Configuration)
 
-A `ScriptableObject` that defines the properties of a `UIWindow`. This data-driven approach decouples configuration from code, allowing designers to easily modify UI behavior without touching scripts. Key properties include:
+A `ScriptableObject` defining the prefab source, target layer, and optional per-window overrides. Designers configure windows without touching code.
 
-- The UI prefab to instantiate.
-- The `UILayer` the window belongs to.
+### 6. `IUIWindowTransitionDriver` (Per-Window Animation)
 
-### 6. `IUIWindowTransitionDriver` (Decoupled Animations)
+Controls a **single** window's open/close animation. Use this for per-window effects: popups, tooltips, toast notifications. Works independently of and alongside the Transition Coordinator.
 
-An interface that defines how a window animates when opening and closing. This powerful abstraction allows you to implement transition logic using any animation system (e.g., Unity Animator, LitMotion, DOTween) and apply it to windows without modifying their core logic.
+### 7. `IUITransitionCoordinator` (Two-Window Coordinated Animation)
+
+Drives **two** windows simultaneously. When registered on `IUIService`, all `NavigateToAsync()` calls use it to create seamless page-flip, cross-fade, or any custom effect. Implement the 3-line interface to bring in DOTween, LitMotion, or any animation system.
 
 ## Dependencies
 
@@ -461,20 +510,20 @@ The **UI Navigation System** records a live directed graph of window-opener rela
 
 ### Core Concepts
 
-| Term | Meaning |
-|---|---|
-| **Node** | A record for one window: who opened it, what payload it carried, when it was registered |
-| **Opener** | The window that triggered this window to open |
-| **Ancestor chain** | The full causal path: `MainMenu → Shop → Detail → Checkout` |
-| **ChildClosePolicy** | What happens to children when their parent window closes |
+| Term                 | Meaning                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------- |
+| **Node**             | A record for one window: who opened it, what payload it carried, when it was registered |
+| **Opener**           | The window that triggered this window to open                                           |
+| **Ancestor chain**   | The full causal path: `MainMenu → Shop → Detail → Checkout`                             |
+| **ChildClosePolicy** | What happens to children when their parent window closes                                |
 
 **ChildClosePolicy options:**
 
-| Policy | Effect |
-|---|---|
-| `Reparent` *(default)* | Surviving children are re-attached to the closing window's own opener |
-| `Cascade` | All children (and their descendants) are force-closed |
-| `Detach` | Children survive but lose their "back" target (become roots) |
+| Policy                 | Effect                                                                |
+| ---------------------- | --------------------------------------------------------------------- |
+| `Reparent` _(default)_ | Surviving children are re-attached to the closing window's own opener |
+| `Cascade`              | All children (and their descendants) are force-closed                 |
+| `Detach`               | Children survive but lose their "back" target (become roots)          |
 
 ### Step 1: Setting Up the Navigation Service
 
@@ -578,21 +627,121 @@ string backTarget = nav.ResolveBackTarget("UIWindow_ItemDetail");
 
 ### API Reference
 
-| Method / Property | Description |
-|---|---|
-| `CurrentWindow` | Topmost registered window (most recently opened that's still alive) |
-| `CanNavigateBack` | Whether a back-navigation target exists for the current window |
-| `Register(name, opener, ctx)` | Record a new window node (called automatically by UIManager) |
-| `Unregister(name, policy)` | Remove a window node (called automatically by UIManager on close) |
-| `Clear()` | Wipe the entire graph (e.g., on game restart) |
-| `GetOpener(name)` | Who opened this window |
-| `GetContext(name)` | Payload object passed when this window was opened |
-| `GetAncestors(name)` | Full causal chain, oldest opener first |
-| `GetChildren(name)` | Immediate live children |
-| `ResolveBackTarget(name)` | Nearest alive ancestor |
-| `GetHistory()` | Snapshot of all registered windows in insertion order |
+| Method / Property             | Description                                                         |
+| ----------------------------- | ------------------------------------------------------------------- |
+| `CurrentWindow`               | Topmost registered window (most recently opened that's still alive) |
+| `CanNavigateBack`             | Whether a back-navigation target exists for the current window      |
+| `Register(name, opener, ctx)` | Record a new window node (called automatically by UIManager)        |
+| `Unregister(name, policy)`    | Remove a window node (called automatically by UIManager on close)   |
+| `Clear()`                     | Wipe the entire graph (e.g., on game restart)                       |
+| `GetOpener(name)`             | Who opened this window                                              |
+| `GetContext(name)`            | Payload object passed when this window was opened                   |
+| `GetAncestors(name)`          | Full causal chain, oldest opener first                              |
+| `GetChildren(name)`           | Immediate live children                                             |
+| `ResolveBackTarget(name)`     | Nearest alive ancestor                                              |
+| `GetHistory()`                | Snapshot of all registered windows in insertion order               |
 
 > **Thread Safety**: `Register`, `Unregister`, `Clear` must be called on the main thread. All query methods (`GetAncestors`, `GetHistory`, etc.) are safe from any thread.
+
+## UI Transition Coordinator Tutorial
+
+By default, when you call `NavigateTo()`, each window plays its own open/close animation independently — one finishes before the other starts. The **Transition Coordinator** system lets two windows animate _simultaneously_, creating seamless page-turn effects.
+
+### When to Use Which Approach
+
+| Scenario                                                | Use                                                       |
+| ------------------------------------------------------- | --------------------------------------------------------- |
+| Popup fades in over background (independent)            | `NavigateTo()` + `IUIWindowTransitionDriver` on the popup |
+| Page A slides out while Page B slides in (synchronised) | `NavigateToAsync()` + `IUITransitionCoordinator`          |
+| Cross-fade between two full-screen scenes               | `NavigateToAsync()` + `CrossFadeTransitionCoordinator`    |
+
+### Step 1: Register a Coordinator at Startup
+
+```csharp
+// Sequential: no coordinator, windows animate independently
+// (this is the default, no setup needed)
+
+// Coordinated slide (page-flip feel):
+var slideCoordinator = new SlideTransitionCoordinator(duration: 0.35f);
+uiService.SetTransitionCoordinator(slideCoordinator);
+
+// Coordinated cross-fade:
+var fadeCoordinator = new CrossFadeTransitionCoordinator(duration: 0.25f);
+uiService.SetTransitionCoordinator(fadeCoordinator);
+```
+
+### Step 2: Navigate With Coordinated Animation (from a Presenter)
+
+```csharp
+[UIPresenterBind("UIWindow_Shop")]
+public class ShopPresenter : UIPresenter<IShopView>
+{
+    // Simultaneous animation — A exits while B enters
+    public async void OnClickDetail(int itemId)
+    {
+        await NavigateToAsync(
+            "UIWindow_ItemDetail",
+            context: new ItemContext { ItemId = itemId },
+            direction: NavigationDirection.Forward);
+    }
+
+    // Going back
+    public async void OnClickBack()
+    {
+        await NavigateToAsync(
+            NavigationService?.ResolveBackTarget(/* myWindowName */) ?? "",
+            direction: NavigationDirection.Backward);
+        NavigateBack();
+    }
+
+    // No coordinator set? NavigateToAsync() silently falls back to NavigateTo()
+}
+```
+
+### Step 3: Implement a Custom Coordinator
+
+Any animation style is possible by implementing `IUITransitionCoordinator`:
+
+```csharp
+// Example: zoom + fade combo for modal dialogs
+public class ZoomFadeCoordinator : IUITransitionCoordinator
+{
+    public async UniTask TransitionAsync(UIWindow leaving, UIWindow entering,
+        NavigationDirection direction, CancellationToken ct)
+    {
+        // leaving: quick alpha fade out
+        // entering: scale 0.8 → 1.0 + alpha 0 → 1
+        var leavingCg  = leaving.GetComponent<CanvasGroup>();
+        var enteringCg = entering.GetComponent<CanvasGroup>();
+        var enteringRt = entering.GetComponent<RectTransform>();
+
+        float elapsed = 0f;
+        const float duration = 0.3f;
+        while (elapsed < duration && !ct.IsCancellationRequested)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float t = Mathf.Clamp01(elapsed / duration);
+            if (leavingCg  != null) leavingCg.alpha  = 1f - t;
+            if (enteringCg != null) enteringCg.alpha = t;
+            if (enteringRt != null) enteringRt.localScale = Vector3.LerpUnclamped(Vector3.one * 0.85f, Vector3.one, t);
+            await UniTask.Yield(PlayerLoopTiming.Update, ct);
+        }
+    }
+}
+
+// Register:
+uiService.SetTransitionCoordinator(new ZoomFadeCoordinator());
+```
+
+### NavigationDirection
+
+| Value      | When to Use                                                            |
+| ---------- | ---------------------------------------------------------------------- |
+| `Forward`  | Navigating to a new sub-screen (push). Slide: left exit / right entry. |
+| `Backward` | Going back (pop). Slide: right exit / left entry.                      |
+| `Replace`  | Replacing current without directional bias (cross-fade).               |
+
+> **Note**: If no coordinator is registered, `NavigateToAsync` automatically falls back to the same behaviour as `NavigateTo` (fire-and-forget, sequential). Existing code never breaks.
 
 ## Dynamic Atlas System Tutorial
 
@@ -1167,17 +1316,22 @@ This tool scans your SpriteAtlas assets and shows:
 ### Advanced Architecture & Memory Management
 
 #### Memory & GC Strategy
+
 - **Zero-GC Copying:** The system exclusively relies on GPU-to-GPU copying (`Graphics.CopyTexture` and `Graphics.Blit`) to transfer texture data. Legacy CPU-bound methods (`Texture2D.SetPixels`, `GetRawTextureData`) that cause heavy GC spikes have been completely eliminated. Once the system is initialized, loading and packing sprites generates **0 Bytes of Garbage Collection**.
 - **Draw Call Reduction:** By packing discrete icons into large 2048x2048 or 4096x4096 pages, Unity can batch hundreds of different UI elements into a single Draw Call, significantly alleviating CPU pipeline pressure.
 - **Reference Counting:** Every sprite generated increments an `ActiveSpriteCount` and a `UsedPixelArea` tracker. When an icon is no longer rendered and released, the system automatically decrements its reference count. Once a page's `ActiveSpriteCount` drops to 0, the entire page (`Texture2D`) is immediately destroyed, returning the VRAM back to the system.
 
 #### Block Alignment for Compressed Formats
+
 When using `CompressedDynamicAtlasService`, hardware texture compression (ASTC, ETC2, BC7) is employed. However, compressed textures are not stored pixel-by-pixel, but in discrete blocks (e.g., 4x4, 6x6, 8x8 pixels per block).
+
 - **Format Parity Requirement:** The source sprites and the atlas page MUST share the exact same compression format.
 - **Block Padding & Alignment:** To prevent block artifacts from bleeding across sprite boundaries, the system automatically queries `TextureFormatHelper.GetBlockSize()`. If you push an 11x11 pixel icon into an ASTC 4x4 atlas, the internal shelf-packing algorithm will automatically allocate a 12x12 (aligned to 4) footprint in the VRAM. This guarantees that GPU block samplers will not accidentally read neighbor pixels, ensuring crisp visuals even with high compression.
 
 #### Memory Defragmentation (Seamless Repacking)
+
 Over time, as UI windows open and close, atlas pages can become "Swiss cheese"—fragmented with empty gaps holding unreleased, scattered sprites. To reclaim VRAM without causing frame stutters, the framework implements a **Double-Buffering Defragmentation Strategy**:
+
 1. **Trigger:** Call `DynamicAtlasManager.Instance.Defragment(0.5f)`. This targets pages that are at least 50% empty (`FragmentationRatio > 0.5f`).
 2. **Double Buffering:** The system silently allocates a new pristine Page in the background.
 3. **GPU Blit:** Using zero-GC `CopyTexture`, it tightly repacks all currently active sprites from the fragmented old page into the new page.
