@@ -52,6 +52,30 @@ namespace CycloneGames.AssetManagement.Runtime
 	}
 
 	/// <summary>
+	/// Base interface for handles supporting explicit Automatic Reference Counting (ARC).
+	/// Required for sharing resources safely between multiple consumers (e.g. UI layers, Object Pools).
+	/// </summary>
+	public interface IReferenceCounted : IDisposable
+	{
+		int RefCount { get; }
+		
+		/// <summary>
+		/// Increments the reference count securely.
+		/// </summary>
+		void Retain();
+		
+		/// <summary>
+		/// Decrements the reference count. If RefCount reaches 0, the handle is released (to a cache or destroyed).
+		/// </summary>
+		void Release();
+	}
+
+	internal interface IInternalCacheable
+	{
+		void ForceDispose();
+	}
+
+	/// <summary>
 	/// Abstraction of a package (catalog + bundles). Provider specific implementation should be zero-GC in hot paths.
 	/// </summary>
 	public interface IAssetPackage
@@ -85,25 +109,25 @@ namespace CycloneGames.AssetManagement.Runtime
 		UniTask<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default);
 
 		// --- Asset Loading ---
-		IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object;
-		IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object;
+		IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string bucket = null, string tag = null, string owner = null) where TAsset : UnityEngine.Object;
+		IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object;
 
 		/// <summary>
 		/// Loads all sub-assets for a location (e.g., sprites in an atlas).
 		/// </summary>
-		IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object;
+		IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object;
 
 		/// <summary>
 		/// Loads a raw file synchronously. Returns null on error.
 		/// Raw files are not compressed and suitable for JSON, text files, binary data, etc.
 		/// </summary>
-		IRawFileHandle LoadRawFileSync(string location);
+		IRawFileHandle LoadRawFileSync(string location, string bucket = null, string tag = null, string owner = null);
 
 		/// <summary>
 		/// Loads a raw file asynchronously.
 		/// Raw files are not compressed and suitable for JSON, text files, binary data, etc.
 		/// </summary>
-		IRawFileHandle LoadRawFileAsync(string location, CancellationToken cancellationToken = default);
+		IRawFileHandle LoadRawFileAsync(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default);
 
 		/// <summary>
 		/// Instantiates a prefab synchronously using a previously loaded handle. Returns null on error.
@@ -116,12 +140,18 @@ namespace CycloneGames.AssetManagement.Runtime
 		IInstantiateHandle InstantiateAsync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false, bool setActive = true);
 
 		// --- Scene Loading ---
-		ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single);
-		ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100);
+		ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, string bucket = null);
+		ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100, string bucket = null);
 		UniTask UnloadSceneAsync(ISceneHandle sceneHandle);
 
 		// --- Maintenance ---
 		UniTask UnloadUnusedAssetsAsync();
+
+		/// <summary>
+		/// Forces the evaluation and clearing of handles associated with a specific logical bucket group. 
+		/// Handles belonging to this bucket that have RefCount == 0 will be immediately purged, bypassing LRU delays.
+		/// </summary>
+		void ClearBucket(string bucket);
 	}
 
 	public interface IDownloader
@@ -152,23 +182,23 @@ namespace CycloneGames.AssetManagement.Runtime
 		void WaitForAsyncComplete();
 	}
 
-	public interface IAssetHandle<out TAsset> : IOperation, IDisposable where TAsset : UnityEngine.Object
+	public interface IAssetHandle<out TAsset> : IOperation, IReferenceCounted where TAsset : UnityEngine.Object
 	{
 		TAsset Asset { get; }
 		UnityEngine.Object AssetObject { get; }
 	}
 
-	public interface IAllAssetsHandle<out TAsset> : IOperation, IDisposable where TAsset : UnityEngine.Object
+	public interface IAllAssetsHandle<out TAsset> : IOperation, IReferenceCounted where TAsset : UnityEngine.Object
 	{
 		IReadOnlyList<TAsset> Assets { get; }
 	}
 
-	public interface IInstantiateHandle : IOperation, IDisposable
+	public interface IInstantiateHandle : IOperation, IReferenceCounted
 	{
 		GameObject Instance { get; }
 	}
 
-	public interface ISceneHandle : IOperation
+	public interface ISceneHandle : IOperation, IReferenceCounted
 	{
 		string ScenePath { get; }
 		Scene Scene { get; }
@@ -178,7 +208,7 @@ namespace CycloneGames.AssetManagement.Runtime
 	/// Handle for raw file operations. Raw files are non-compressed files suitable for JSON, text, binary data, etc.
 	/// Thread-safe for read operations after loading completes. Dispose must be called on the main thread.
 	/// </summary>
-	public interface IRawFileHandle : IOperation, IDisposable
+	public interface IRawFileHandle : IOperation, IReferenceCounted
 	{
 		/// <summary>
 		/// Gets the file path. Returns empty string if not available.

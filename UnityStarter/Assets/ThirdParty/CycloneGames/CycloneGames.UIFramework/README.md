@@ -40,7 +40,7 @@
 
 | Feature                              | Detail                                                                                                            |
 | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| **Dual LRU Caches**                  | Separate LRU caches for prefab handles and config assets; cold loads only happen on first use or eviction         |
+| **Asset Lifecycle Delegation** | `UIManager` holds one `IAssetHandle<T>` per asset; lifecycle (RefCount, eviction) is fully owned by `AssetCacheService` (W-TinyLFU) | 
 | **Per-Frame Instantiation Throttle** | Spread heavy instantiation across frames to avoid spikes                                                          |
 | **Dynamic Atlas System**             | Packs runtime sprites into a single GPU texture at open-time, dramatically reducing draw-calls for icon-heavy UIs |
 | **Compressed Atlas Variant**         | `CompressedDynamicAtlasService` uses ASTC/DXT/ETC to reduce VRAM footprint for mobile targets                     |
@@ -138,7 +138,7 @@ The primary public API. All game code and presenters interact exclusively throug
 Orchestrates the full window lifecycle:
 
 - **Async Loading**: Loads configs and prefabs via `CycloneGames.AssetManagement`.
-- **Dual LRU Caches**: Separate caches for prefab handles and config assets, each with configurable capacity and automatic eviction.
+- **Handle Ownership**: Direct `IAssetHandle<T>` dictionaries replace the former LRU cache. Each unique asset path owns exactly one handle; `Dispose()` signals `AssetCacheService` (W-TinyLFU) to decrement the RefCount, allowing idle assets to flow from Active → Trial → Main pools and eventually be evicted.
 - **Instantiation Throttling**: Caps per-frame instantiations to smooth out spikes.
 - **silentOpen path**: `OpenSilentAsync()` loads a window into the ready state without animation — used by `CoordinatedNavigateAsync` so the coordinator drives both windows simultaneously from the same frame.
 
@@ -186,6 +186,36 @@ Drives **two** windows simultaneously. When registered on `IUIService`, all `Nav
 - `com.cyclone-games.factory`
 - `com.cyclone-games.logger`
 - `com.cyclone-games.service`
+
+## Asset Management & Memory Strategy
+
+UIFramework has a **first-class dependency** on `CycloneGames.AssetManagement`. It does **not** manage its own eviction cache — all asset lifecycle decisions are delegated entirely to `AssetCacheService`.
+
+### How it works
+
+```
+OpenUI("MyWindow")
+  └─ assetPackage.LoadAssetAsync<UIWindowConfiguration>(path, bucket: "UIFramework")
+       └─ AssetCacheService: cache hit → Retain() (RefCount ↑)
+            OR cache miss → load, register node, RefCount = 1
+       └─ UIManager stores the IAssetHandle<T> reference
+
+CloseUI("MyWindow")
+  └─ UIManager: configHandle.Dispose()   → AssetCacheService: RefCount ↓
+  └─ UIManager: prefabHandle.Dispose()   → if no other window uses same prefab
+       └─ RefCount → 0 → asset enters idle pool (Trial/Main via W-TinyLFU)
+       └─ W-TinyLFU decides eviction vs. promotion based on access frequency
+```
+
+### Key design properties
+
+| Property | Detail |
+|---|---|
+| **Single RefCount system** | No private counter in UIManager — AssetCacheService is the sole authority |
+| **`"UIFramework"` bucket** | All UI assets are tagged; visible in Cache Debugger under Buckets tab |
+| **Prefab sharing** | Multiple windows using the same prefab path share one handle; disposed only when the last window closes |
+| **Config handles** | One handle per window name (windowName → config path), released on `CloseUI` |
+| **Zero leak on scene unload** | `CleanupAllWindows()` `Dispose()`s every held handle, correctly draining AssetCacheService RefCounts |
 
 ## Quick Start Guide
 

@@ -13,9 +13,12 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public string Name => packageName;
 
+        private readonly Cache.AssetCacheService _cacheService;
+
         public ResourcesAssetPackage(string name)
         {
             packageName = name;
+            _cacheService = new Cache.AssetCacheService(this);
         }
 
         public UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
@@ -25,6 +28,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public UniTask DestroyAsync()
         {
+            _cacheService.Dispose();
             return UniTask.CompletedTask;
         }
 
@@ -73,39 +77,51 @@ namespace CycloneGames.AssetManagement.Runtime
             return UniTask.FromException<IDownloader>(new NotSupportedException("Resources does not support pre-downloading."));
         }
 
-        public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object
+        public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string bucket = null, string tag = null, string owner = null) where TAsset : UnityEngine.Object
         {
+            var cached = _cacheService.Get(location, bucket, tag, owner);
+            if (cached != null) return (IAssetHandle<TAsset>)cached;
+
             var asset = Resources.Load<TAsset>(location);
             var id = RegisterHandle();
-            var handle = ResourcesAssetHandle<TAsset>.Create(id, asset);
+            var handle = ResourcesAssetHandle<TAsset>.Create(id, location, asset, _cacheService.OnHandleReleased);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetSync {typeof(TAsset).Name} : {location}");
+            _cacheService.RegisterNew(location, bucket, tag, owner, handle);
             return handle;
         }
 
-        public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
+        public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
+            var cached = _cacheService.Get(location, bucket, tag, owner);
+            if (cached != null) return (IAssetHandle<TAsset>)cached;
+
             var request = Resources.LoadAsync<TAsset>(location);
             var id = RegisterHandle();
-            var handle = ResourcesAssetHandle<TAsset>.Create(id, request, cancellationToken);
+            var handle = ResourcesAssetHandle<TAsset>.Create(id, location, request, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
+            _cacheService.RegisterNew(location, bucket, tag, owner, handle);
             return handle;
         }
 
-        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
+        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
+            var cached = _cacheService.Get(location, bucket, tag, owner);
+            if (cached != null) return (IAllAssetsHandle<TAsset>)cached;
+
             var assets = Resources.LoadAll<TAsset>(location);
             var id = RegisterHandle();
-            var handle = ResourcesAllAssetsHandle<TAsset>.Create(id, assets);
+            var handle = ResourcesAllAssetsHandle<TAsset>.Create(id, location, assets, _cacheService.OnHandleReleased);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
+            _cacheService.RegisterNew(location, bucket, tag, owner, handle);
             return handle;
         }
 
-        public IRawFileHandle LoadRawFileSync(string location)
+        public IRawFileHandle LoadRawFileSync(string location, string bucket = null, string tag = null, string owner = null)
         {
             throw new NotSupportedException("Resources does not support RawFile loading. Use LoadAssetAsync<TextAsset> for text files.");
         }
 
-        public IRawFileHandle LoadRawFileAsync(string location, CancellationToken cancellationToken = default)
+        public IRawFileHandle LoadRawFileAsync(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException("Resources does not support RawFile loading. Use LoadAssetAsync<TextAsset> for text files.");
         }
@@ -128,17 +144,18 @@ namespace CycloneGames.AssetManagement.Runtime
                 if (instance != null) instance.SetActive(setActive);
             }
             var id = RegisterHandle();
-            var wrapped = ResourcesInstantiateHandle.Create(id, instance);
+            // InstantiateHandle is not cached; pass null key.
+            var wrapped = ResourcesInstantiateHandle.Create(id, instance, (_, h) => ((ResourcesInstantiateHandle)h).DisposeInternal());
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle?.AssetObject?.name ?? "null"}");
             return wrapped;
         }
 
-        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100)
+        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100, string bucket = null)
         {
             throw new NotSupportedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
         }
 
-        public ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single)
+        public ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, string bucket = null)
         {
             throw new NotSupportedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
         }
@@ -150,8 +167,14 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public UniTask UnloadUnusedAssetsAsync()
         {
+            _cacheService.ClearAll();
             Debug.LogWarning("[ResourcesAssetPackage] UnloadUnusedAssetsAsync is not recommended for Resources. Assets loaded from Resources cannot be unloaded individually and this call can cause performance hitches.");
             return UniTask.CompletedTask;
+        }
+
+        public void ClearBucket(string bucket)
+        {
+            _cacheService.ClearBucket(bucket);
         }
 
         private int RegisterHandle()
