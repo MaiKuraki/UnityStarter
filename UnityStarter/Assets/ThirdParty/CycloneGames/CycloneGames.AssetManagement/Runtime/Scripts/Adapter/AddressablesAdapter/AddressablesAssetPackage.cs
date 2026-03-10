@@ -20,9 +20,12 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public string Name => packageName;
 
+        private readonly Cache.AssetCacheService _cacheService;
+
         public AddressablesAssetPackage(string name)
         {
             packageName = name;
+            _cacheService = new Cache.AssetCacheService(this);
         }
 
         public UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
@@ -34,6 +37,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public UniTask DestroyAsync()
         {
             // Addressables does not have a package-level destroy concept.
+            _cacheService.Dispose();
             return UniTask.CompletedTask;
         }
 
@@ -435,35 +439,43 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         [Obsolete("Synchronous asset loading is deprecated and can cause performance issues. Use LoadAssetAsync instead.", true)]
-        public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location) where TAsset : UnityEngine.Object
+        public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string bucket = null, string tag = null, string owner = null) where TAsset : UnityEngine.Object
         {
             throw new NotSupportedException("Synchronous asset loading is not supported by the Addressables provider.");
         }
 
-        public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
+        public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
+            var cached = _cacheService.Get(location, bucket, tag, owner);
+            if (cached != null) return (IAssetHandle<TAsset>)cached;
+
             var handle = Addressables.LoadAssetAsync<TAsset>(location);
             var id = RegisterHandle();
-            var wrapped = AddressableAssetHandle<TAsset>.Create(id, handle, cancellationToken);
+            var wrapped = AddressableAssetHandle<TAsset>.Create(id, location, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
+            _cacheService.RegisterNew(location, bucket, tag, owner, wrapped);
             return wrapped;
         }
 
-        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
+        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
+            var cached = _cacheService.Get(location, bucket, tag, owner);
+            if (cached != null) return (IAllAssetsHandle<TAsset>)cached;
+
             var handle = Addressables.LoadAssetsAsync<TAsset>(location, null);
             var id = RegisterHandle();
-            var wrapped = AddressableAllAssetsHandle<TAsset>.Create(id, handle, cancellationToken);
+            var wrapped = AddressableAllAssetsHandle<TAsset>.Create(id, location, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
+            _cacheService.RegisterNew(location, bucket, tag, owner, wrapped);
             return wrapped;
         }
 
-        public IRawFileHandle LoadRawFileSync(string location)
+        public IRawFileHandle LoadRawFileSync(string location, string bucket = null, string tag = null, string owner = null)
         {
             throw new NotSupportedException("Addressables does not support synchronous RawFile loading. Use LoadRawFileAsync instead.");
         }
 
-        public IRawFileHandle LoadRawFileAsync(string location, CancellationToken cancellationToken = default)
+        public IRawFileHandle LoadRawFileAsync(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException("Addressables provider does not currently support RawFile loading. Use LoadAssetAsync<TextAsset> for text files.");
         }
@@ -483,23 +495,24 @@ namespace CycloneGames.AssetManagement.Runtime
 
             var op = Addressables.InstantiateAsync(handle.AssetObject, parent, worldPositionStays, setActive);
             var id = RegisterHandle();
-            // Pass CancellationToken.None as instantiation cancellation is typically handled by releasing the handle, which Addressables does automatically.
-            var wrapped = AddressableInstantiateHandle.Create(id, op, CancellationToken.None);
+            // InstantiateHandle is not cached; pass null key. Cancellation deferred to handle release.
+            var wrapped = AddressableInstantiateHandle.Create(id, op, (_, h) => ((AddressableInstantiateHandle)h).DisposeInternal(), CancellationToken.None);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle.AssetObject.name}");
             return wrapped;
         }
 
-        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100)
+        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100, string bucket = null)
         {
             var op = Addressables.LoadSceneAsync(sceneLocation, loadMode, activateOnLoad, priority);
             var id = RegisterHandle();
-            var h = AddressableSceneHandle.Create(id, op, CancellationToken.None); // Scene loading cancellation is handled by unloading.
+            // SceneHandle is not cached; pass null key.
+            var h = AddressableSceneHandle.Create(id, op, (_, h2) => ((AddressableSceneHandle)h2).DisposeInternal(), CancellationToken.None);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"SceneAsync : {sceneLocation}");
             return h;
         }
 
         [Obsolete("Synchronous scene loading is deprecated and can cause performance issues. Use LoadSceneAsync instead.", true)]
-        public ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single)
+        public ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, string bucket = null)
         {
             throw new NotSupportedException("Synchronous scene loading is not supported by the Addressables provider.");
         }
@@ -513,18 +526,24 @@ namespace CycloneGames.AssetManagement.Runtime
                     // NOTE: AsyncOperationHandle<SceneInstance>.ToUniTask() triggers a warning because
                     // "yield SceneInstance is not supported on await IEnumerator".
                     // Use UniTask.WaitUntil to poll IsDone status instead.
-                    var unloadOp = Addressables.UnloadSceneAsync(sh.Raw);
+                    var unloadOp = Addressables.UnloadSceneAsync(sh.Raw, false);
                     await UniTask.WaitUntil(() => unloadOp.IsDone);
                 }
-                // Return to pool manually since ISceneHandle is not IDisposable in this architecture
-                sh.ReturnToPool();
+                // Dispose internal explicitly to release handle from Pool
+                sh.DisposeInternal();
             }
         }
 
         public UniTask UnloadUnusedAssetsAsync()
         {
+            _cacheService.ClearAll();
             Debug.LogWarning("[AddressablesAssetPackage] UnloadUnusedAssetsAsync is not recommended. Please release individual asset handles via Dispose() for precise memory management.");
             return UniTask.CompletedTask;
+        }
+
+        public void ClearBucket(string bucket)
+        {
+            _cacheService.ClearBucket(bucket);
         }
 
         private int RegisterHandle()
