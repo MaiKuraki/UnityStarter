@@ -5,14 +5,21 @@ using UnityEngine;
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
+    /// Represents a loaded asset handle that must be disposed when no longer needed.
+    /// This allows the underlying asset management system to properly track and evict unused assets.
+    /// </summary>
+    public interface IResourceHandle<T> : System.IDisposable where T : Object
+    {
+        T Asset { get; }
+    }
+
+    /// <summary>
     /// Defines the contract for a system that can asynchronously load assets.
     /// This decouples the rest of the system from a specific implementation like Addressables.
     /// </summary>
     public interface IResourceLocator
     {
-        UniTask<T> LoadAssetAsync<T>(object key, string cacheTag = null, string cacheOwner = null) where T : Object;
-        void ReleaseAsset(object key);
-        void ReleaseAll();
+        UniTask<IResourceHandle<T>> LoadAssetAsync<T>(object key, string cacheTag = null, string cacheOwner = null) where T : Object;
     }
 
     /// <summary>
