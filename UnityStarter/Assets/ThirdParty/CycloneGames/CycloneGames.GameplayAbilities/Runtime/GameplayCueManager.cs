@@ -57,7 +57,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // Registry for asset-based cues, discovered at startup. Key is the tag (from the address).
         private readonly Dictionary<GameplayTag, string> staticCueAddressRegistry = new Dictionary<GameplayTag, string>();
         // Cache for loaded cue assets to prevent redundant loading.
-        private readonly Dictionary<string, GameplayCueSO> loadedStaticCues = new Dictionary<string, GameplayCueSO>();
+        private readonly Dictionary<string, IResourceHandle<GameplayCueSO>> loadedStaticCues = new Dictionary<string, IResourceHandle<GameplayCueSO>>();
 
         // Registry for dynamically added cue handlers at runtime.
         private readonly Dictionary<GameplayTag, List<IGameplayCueHandler>> runtimeCueHandlers = new Dictionary<GameplayTag, List<IGameplayCueHandler>>();
@@ -225,11 +225,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (!staticCueAddressRegistry.TryGetValue(cueTag, out var address)) return null;
 
-            if (loadedStaticCues.TryGetValue(address, out var cue)) return cue;
+            if (loadedStaticCues.TryGetValue(address, out var cueHandle)) return cueHandle.Asset;
 
-            var loadedAsset = await resourceLocator.LoadAssetAsync<GameplayCueSO>(address, cacheTag: "GameplayCue", cacheOwner: cueTag.ToString());
-            if (loadedAsset) loadedStaticCues[address] = loadedAsset;
-            return loadedAsset;
+            var loadedHandle = await resourceLocator.LoadAssetAsync<GameplayCueSO>(address, cacheTag: "GameplayCue", cacheOwner: cueTag.ToString());
+            if (loadedHandle != null && loadedHandle.Asset != null) 
+            {
+                loadedStaticCues[address] = loadedHandle;
+                return loadedHandle.Asset;
+            }
+            return null;
         }
 
         /// <summary>
@@ -238,8 +242,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void Shutdown()
         {
             poolManager?.Shutdown();
-            resourceLocator?.ReleaseAll();
             staticCueAddressRegistry.Clear();
+            foreach (var kvp in loadedStaticCues)
+            {
+                kvp.Value?.Dispose();
+            }
             loadedStaticCues.Clear();
             runtimeCueHandlers.Clear();
             activeInstances.Clear();

@@ -128,6 +128,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         
         private class PoolData
         {
+            public IResourceHandle<GameObject> Handle;
             public Stack<GameObject> Pool = new Stack<GameObject>();
             public PoolConfig Config;
             public int ActiveCount;
@@ -229,10 +230,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             else
             {
                 // Pool miss - create new instance
-                var prefab = await resourceLocator.LoadAssetAsync<GameObject>(assetKey, cacheTag, cacheOwner);
-                if (prefab == null) return null;
+                if (poolData.Handle == null)
+                {
+                    poolData.Handle = await resourceLocator.LoadAssetAsync<GameObject>(assetKey, cacheTag, cacheOwner);
+                    if (poolData.Handle == null || poolData.Handle.Asset == null) return null;
+                }
                 
-                instance = UnityEngine.Object.Instantiate(prefab, position, rotation, parent);
+                instance = UnityEngine.Object.Instantiate(poolData.Handle.Asset, position, rotation, parent);
                 instance.AddComponent<PooledObjectComponent>().AssetRef = assetKey;
                 poolData.TotalCreated++;
             }
@@ -282,6 +286,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 poolData.ReturnCounter = 0;
                 PerformSmartShrink(poolData);
             }
+
+            CheckForPoolEmpty(poolData);
         }
         
         #endregion
@@ -291,17 +297,21 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public async UniTask PrewarmPoolAsync(object assetRef, int count, string cacheTag = null, string cacheOwner = null)
         {
             if (assetRef is not string assetKey || string.IsNullOrEmpty(assetKey)) return;
-            var prefab = await resourceLocator.LoadAssetAsync<GameObject>(assetKey, cacheTag, cacheOwner);
-            if (prefab == null) return;
 
             var poolData = GetOrCreatePoolData(assetKey);
+            if (poolData.Handle == null)
+            {
+                poolData.Handle = await resourceLocator.LoadAssetAsync<GameObject>(assetKey, cacheTag, cacheOwner);
+                if (poolData.Handle == null || poolData.Handle.Asset == null) return;
+            }
+
             int maxToCreate = poolData.Config.MaxCapacity > 0 
                 ? Math.Min(count, poolData.Config.MaxCapacity) 
                 : count;
 
             while (poolData.Pool.Count < maxToCreate)
             {
-                var instance = UnityEngine.Object.Instantiate(prefab, poolRoot);
+                var instance = UnityEngine.Object.Instantiate(poolData.Handle.Asset, poolRoot);
                 instance.AddComponent<PooledObjectComponent>().AssetRef = assetKey;
                 instance.SetActive(false);
                 poolData.Pool.Push(instance);
@@ -342,6 +352,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 poolData.ActiveCount, 
                 (int)(poolData.PeakActiveSinceLastCheck * kPeakDecayFactor)
             );
+
+            CheckForPoolEmpty(poolData);
         }
         
         /// <summary>
@@ -367,6 +379,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 
                 // Reset peak tracker
                 poolData.PeakActiveSinceLastCheck = poolData.ActiveCount;
+                CheckForPoolEmpty(poolData);
             }
         }
         
@@ -388,6 +401,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
             poolData.PeakActiveSinceLastCheck = poolData.ActiveCount;
+            CheckForPoolEmpty(poolData);
         }
         
         /// <summary>
@@ -407,8 +421,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     poolData.TotalDestroyed++;
                 }
             }
+            CheckForPoolEmpty(poolData);
         }
         
+        private void CheckForPoolEmpty(PoolData poolData)
+        {
+            if (poolData.ActiveCount == 0 && poolData.Pool.Count == 0 && poolData.Handle != null)
+            {
+                poolData.Handle.Dispose();
+                poolData.Handle = null;
+            }
+        }
+
         #endregion
 
         #region Statistics API
@@ -494,6 +518,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     if (item != null) UnityEngine.Object.Destroy(item);
                 }
+                poolData.Handle?.Dispose();
+                poolData.Handle = null;
             }
             poolRegistry.Clear();
             customConfigs.Clear();

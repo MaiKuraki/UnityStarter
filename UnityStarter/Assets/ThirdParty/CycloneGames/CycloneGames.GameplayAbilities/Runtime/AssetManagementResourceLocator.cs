@@ -7,15 +7,30 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     public class AssetManagementResourceLocator : IResourceLocator
     {
+        private class AssetManagementHandleWrapper<T> : IResourceHandle<T> where T : Object
+        {
+            private readonly IAssetHandle<T> underlyingHandle;
+            public T Asset => underlyingHandle.Asset;
+
+            public AssetManagementHandleWrapper(IAssetHandle<T> handle)
+            {
+                underlyingHandle = handle;
+            }
+
+            public void Dispose()
+            {
+                underlyingHandle?.Dispose();
+            }
+        }
+
         private readonly IAssetPackage assetPackage;
-        private readonly Dictionary<object, IAssetHandle<Object>> loadedHandles = new Dictionary<object, IAssetHandle<Object>>();
 
         public AssetManagementResourceLocator(IAssetPackage assetPackage)
         {
             this.assetPackage = assetPackage;
         }
 
-        public async UniTask<T> LoadAssetAsync<T>(object key, string cacheTag = null, string cacheOwner = null) where T : Object
+        public async UniTask<IResourceHandle<T>> LoadAssetAsync<T>(object key, string cacheTag = null, string cacheOwner = null) where T : Object
         {
             if (key == null) return null;
 
@@ -25,43 +40,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return null;
             }
 
-            if (loadedHandles.TryGetValue(key, out var handle))
-            {
-                await UniTask.RunOnThreadPool(() => handle.WaitForAsyncComplete());
-                return handle.Asset as T;
-            }
-
             var loadHandle = assetPackage.LoadAssetAsync<T>(stringKey, tag: cacheTag, owner: cacheOwner);
-            loadedHandles[key] = loadHandle;
-
             await UniTask.RunOnThreadPool(() => loadHandle.WaitForAsyncComplete());
 
             if (loadHandle.Asset == null)
             {
                 GASLog.Error($"Failed to load asset with key: {key}");
                 loadHandle.Dispose();
-                loadedHandles.Remove(key);
                 return null;
             }
-            return loadHandle.Asset;
-        }
 
-        public void ReleaseAsset(object key)
-        {
-            if (key != null && loadedHandles.TryGetValue(key, out var handle))
-            {
-                loadedHandles.Remove(key);
-                handle.Dispose();
-            }
-        }
-
-        public void ReleaseAll()
-        {
-            foreach (var handle in loadedHandles.Values)
-            {
-                handle.Dispose();
-            }
-            loadedHandles.Clear();
+            return new AssetManagementHandleWrapper<T>(loadHandle);
         }
     }
 }
