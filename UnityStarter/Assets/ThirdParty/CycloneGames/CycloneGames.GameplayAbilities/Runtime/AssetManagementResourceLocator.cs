@@ -9,10 +9,27 @@ namespace CycloneGames.GameplayAbilities.Runtime
     {
         private class AssetManagementHandleWrapper<T> : IResourceHandle<T> where T : Object
         {
-            private readonly IAssetHandle<T> underlyingHandle;
+            private IAssetHandle<T> underlyingHandle;
             public T Asset => underlyingHandle.Asset;
 
-            public AssetManagementHandleWrapper(IAssetHandle<T> handle)
+            private static readonly Stack<AssetManagementHandleWrapper<T>> _pool = new Stack<AssetManagementHandleWrapper<T>>(32);
+            private static readonly object _poolLock = new object();
+
+            public static AssetManagementHandleWrapper<T> Get(IAssetHandle<T> handle)
+            {
+                lock (_poolLock)
+                {
+                    if (_pool.Count > 0)
+                    {
+                        var wrapper = _pool.Pop();
+                        wrapper.underlyingHandle = handle;
+                        return wrapper;
+                    }
+                }
+                return new AssetManagementHandleWrapper<T>(handle);
+            }
+
+            private AssetManagementHandleWrapper(IAssetHandle<T> handle)
             {
                 underlyingHandle = handle;
             }
@@ -20,6 +37,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             public void Dispose()
             {
                 underlyingHandle?.Dispose();
+                underlyingHandle = null;
+
+                lock (_poolLock)
+                {
+                    if (_pool.Count < 256)
+                    {
+                        _pool.Push(this);
+                    }
+                }
             }
         }
 
@@ -41,7 +67,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             var loadHandle = assetPackage.LoadAssetAsync<T>(stringKey, tag: cacheTag, owner: cacheOwner);
-            await UniTask.RunOnThreadPool(() => loadHandle.WaitForAsyncComplete());
+
+            while (!loadHandle.IsDone)
+            {
+                await UniTask.Yield();
+            }
 
             if (loadHandle.Asset == null)
             {
@@ -50,7 +80,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return null;
             }
 
-            return new AssetManagementHandleWrapper<T>(loadHandle);
+            return AssetManagementHandleWrapper<T>.Get(loadHandle);
         }
     }
 }
