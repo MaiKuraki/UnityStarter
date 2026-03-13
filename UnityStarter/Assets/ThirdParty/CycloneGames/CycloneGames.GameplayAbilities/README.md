@@ -1928,6 +1928,22 @@ source.ApplyGameplayEffectSpecToSelf(spec); // Returned to pool automatically
 var spec = new GameplayEffectSpec(); // Bypasses pool, creates garbage!
 ```
 
+### Advanced GameObject Pooling & W-TinyLFU Integration
+
+The `GameObjectPoolManager` features advanced memory management tied to the underlying Asset Management system (like W-TinyLFU LRU cache).
+
+#### `IdleExpirationTime` and Object Lifecycles
+
+You can define how long a pool stays in memory before it completely deconstructs itself and passes the underlying asset handle back to the Cache Service for eviction.
+
+1. **Short-lived Pools (Exploration/Dungeons):**
+   - Configure `IdleExpirationTime = 60f` (or similar).
+   - If the pool is completely inactive for 60 seconds (e.g., you traveled to a new area and left a specific enemy type behind), the pool **breaks the `MinCapacity` constraint** and fully destroys all cached GameObjects. The underlying Asset Handle is `Dispose()`d, allowing W-TinyLFU to evict the asset from RAM entirely.
+
+2. **Immortal Pools (Core Hero Abilities):**
+   - Configure `IdleExpirationTime = -1f` (or any `<= 0` value).
+   - Core hero abilities (like the main gun's muzzle flash or standard bullets) should **never** auto-decay. This guarantees absolute 0-GC, 0-hitch response times when you fire your weapon after 30 minutes of quiet exploration. The pool will only ever shrink down to `MinCapacity` upon explicit `AggressiveShrink()` calls.
+
 ### Tag Lookup Optimization
 
 - Tags use hash-based lookups (O(1) average case)
