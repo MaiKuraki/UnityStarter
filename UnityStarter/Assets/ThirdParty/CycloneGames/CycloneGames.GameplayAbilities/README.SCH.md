@@ -1928,6 +1928,22 @@ source.ApplyGameplayEffectSpecToSelf(spec); // 自动返回池
 var spec = new GameplayEffectSpec(); // 绕过池，产生垃圾！
 ```
 
+### 高级 GameObject 池与 W-TinyLFU 缓存整合
+
+`GameObjectPoolManager` 提供与底层资源管理系统 (如 W-TinyLFU LRU 缓存) 深度绑定的高级内存管理特性。
+
+#### `IdleExpirationTime` (空闲过期时间) 与对象生命周期
+
+你可以定义一个对象池在内存中驻留的最长时间。如果超出了这一时间，池子会彻底解构自身，并将底层资源句柄交还给缓存服务 (Cache Service) 以供逐出。
+
+1. **短生命周期池 (地牢探索/流转场景)：**
+   - 配置 `IdleExpirationTime = 60f` (或类似值)。
+   - 如果池子完全空闲了 60 秒 (例如，你离开了一个区域，把一种特定怪物抛在了身后)，池子将**破坏 `MinCapacity` (最小容量) 约束**，强制销毁所有缓存的 GameObject，并对底层资产 Handle 执行 `Dispose()`。这将允许 W-TinyLFU 将该冷门资产从内存中彻底逐出，回收运存。
+
+2. **不朽池 / 长驻池 (主角核心能力)：**
+   - 配置 `IdleExpirationTime = -1f` (或任何 `<= 0` 的值)。
+   - 诸如主角的默认开火特效、子弹等核心能力**绝不应该**自动衰减。配置为 -1 可以保证 0-GC 和绝对的 0-卡顿。即使主角在迷宫探索了 30 分钟未开火，下一次射击也是瞬间响应。此类池子仅在显式调用 `AggressiveShrink()` (如过场加载) 时才会缩减到 `MinCapacity`。
+
 ### 标签查找优化
 
 - 标签使用基于哈希的查找（平均 O(1)）
