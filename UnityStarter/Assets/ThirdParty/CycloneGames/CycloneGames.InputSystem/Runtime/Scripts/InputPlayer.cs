@@ -517,7 +517,10 @@ namespace CycloneGames.InputSystem.Runtime
             foreach (var s in _longPressSubjects.Values) s.Dispose();
             foreach (var s in _longPressProgressSubjects.Values) s.Dispose();
             foreach (var s in _vector2Subjects.Values) s.Dispose();
+            foreach (var s in _scalarSubjects.Values) s.Dispose();
             foreach (var s in _pressStateSubjects.Values) s.Dispose();
+            _activeContextName.Dispose();
+            _activeDeviceKind.Dispose();
 
             // Guard: Check if User is still valid before cleanup (may have been removed externally)
             if (User != null && User.valid)

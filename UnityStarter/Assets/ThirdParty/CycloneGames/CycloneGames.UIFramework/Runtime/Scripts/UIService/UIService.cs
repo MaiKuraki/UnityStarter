@@ -87,6 +87,7 @@ namespace CycloneGames.UIFramework.Runtime
     {
         private const string DEBUG_FLAG = "[UIService]";
         private UIManager uiManagerInstance;
+        private bool _ownsUIManager; // true when UIService created the UIManager (DontDestroyOnLoad)
 
         // Dependencies
         private IAssetPathBuilderFactory assetPathBuilderFactory;
@@ -196,6 +197,7 @@ namespace CycloneGames.UIFramework.Runtime
                 UnityEngine.GameObject managerObject = new UnityEngine.GameObject("UIManager_RuntimeInstance");
                 uiManagerInstance = managerObject.AddComponent<UIManager>();
                 UnityEngine.Object.DontDestroyOnLoad(managerObject); // Make it persist across scene loads
+                _ownsUIManager = true;
                 CLogger.LogInfo($"{DEBUG_FLAG} UIManager instance created and marked DontDestroyOnLoad.");
             }
             else
@@ -288,10 +290,10 @@ namespace CycloneGames.UIFramework.Runtime
             CLogger.LogInfo($"{DEBUG_FLAG} Disposing UIService.");
             if (uiManagerInstance != null)
             {
-                // Decide if UIService disposing should destroy the UIManager GameObject.
-                // If UIManager is a persistent singleton, maybe not.
-                // If UIManager is tied to this UIService instance's lifetime, then yes.
-                // UnityEngine.Object.Destroy(uiManagerInstance.gameObject);
+                if (_ownsUIManager)
+                {
+                    UnityEngine.Object.Destroy(uiManagerInstance.gameObject);
+                }
                 uiManagerInstance = null;
             }
             isInitialized = false;

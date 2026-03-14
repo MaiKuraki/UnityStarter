@@ -116,19 +116,23 @@ CLogger.LogInfo("Connected", "Net");
 CLogger.LogWarning("Low HP", "Gameplay");
 ```
 
-### Builder 重载（零 GC）
+### Builder 重载（低 GC）
 
 ```csharp
 CLogger.LogDebug(sb => { sb.Append("PlayerId="); sb.Append(playerId); }, "Net");
 CLogger.LogError(sb => { sb.Append("Err="); sb.Append(code); }, "Net");
 ```
 
-### 带状态 Builder（高级，避免闭包分配）
+> **注意**：如果 lambda 捕获了外部变量（例如 `playerId`），每次调用都会分配一个闭包对象。如需真正的零 GC，请使用下方的带状态 Builder。
+
+### 带状态 Builder（零 GC，热路径推荐）
 
 ```csharp
-CLogger.LogInfo(player, (p, sb) =>
+CLogger.LogInfo(player, static (p, sb) =>
     sb.Append("玩家 ").Append(p.name).Append(" HP: ").Append(p.hp), "Combat");
 ```
+
+`static` 关键字阻止编译器捕获任何外部变量，确保零闭包分配。
 
 ## 对象池监控
 
@@ -141,19 +145,20 @@ var msgStats = LogMessagePool.GetStatistics();
 
 Debug.Log($@"
 StringBuilder Pool - 当前: {sbStats.CurrentSize}, 峰值: {sbStats.PeakSize}
-  命中率: {sbStats.HitRate:P}, 丢弃率: {sbStats.DiscardRate:P}
+  命中率: {sbStats.HitRate:P}, 未命中: {sbStats.TotalMisses}, 丢弃率: {sbStats.DiscardRate:P}
 
 LogMessage Pool - 当前: {msgStats.CurrentSize}, 峰值: {msgStats.PeakSize}
-  命中率: {msgStats.HitRate:P}, 丢弃率: {msgStats.DiscardRate:P}
+  命中率: {msgStats.HitRate:P}, 未命中: {msgStats.TotalMisses}, 丢弃率: {msgStats.DiscardRate:P}
 ");
 #endif
 ```
 
 **关键指标**：
 
+- **HitRate**：应约为 100%（从池中获取 vs 新分配）
+- **TotalMisses**：因池空而执行 `new` 分配的次数；预热后应约为 0
 - **PeakSize**：达到的最大池大小（应远低于 Max 容量）
 - **DiscardRate**：应约为 0%以获得最佳性能
-- **HitRate**：应约为 100%（从池中获取 vs 新分配）
 - **TrimCount**：池自动收缩次数（验证收缩机制）
 
 ## WebGL 与 Pump()
@@ -186,12 +191,16 @@ var options = new FileLoggerOptions
     MaintenanceMode = FileMaintenanceMode.Rotate, // 或 WarnOnly
     MaxFileBytes = 10 * 1024 * 1024,              // 10 MB
     MaxArchiveFiles = 5,                           // 保留最新5个
-    ArchiveTimestampFormat = "yyyyMMdd_HHmmss"
+    ArchiveTimestampFormat = "yyyyMMdd_HHmmss",
+    FlushBatchSize = 64,                           // 每 N 次写入刷盘
+    FlushIntervalMs = 1000                         // 或每 1 秒刷盘
 };
 
 var path = System.IO.Path.Combine(Application.persistentDataPath, "App.log");
 CLogger.Instance.AddLoggerUnique(new FileLogger(path, options));
 ```
+
+刷盘策略：写入会被批量处理以提高 I/O 吞吐量。Error/Fatal 级别的消息始终立即刷盘，不受批量设置影响。
 
 注意：
 

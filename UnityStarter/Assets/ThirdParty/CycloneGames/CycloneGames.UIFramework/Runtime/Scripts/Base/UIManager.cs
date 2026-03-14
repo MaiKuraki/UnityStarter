@@ -297,11 +297,8 @@ namespace CycloneGames.UIFramework.Runtime
                 if (!_configHandles.TryGetValue(windowName, out var configHandle))
                 {
                     // Cache miss: load from package, tagged under 'UIFramework' bucket.
-                    configHandle = assetPackage.LoadAssetAsync<UIWindowConfiguration>(configPath, "UIFramework");
-                    while (!configHandle.IsDone)
-                    {
-                        await UniTask.Yield(cancellationToken);
-                    }
+                    configHandle = assetPackage.LoadAssetAsync<UIWindowConfiguration>(configPath, "UIFramework", cancellationToken: cancellationToken);
+                    await configHandle.Task;
 
                     if (!string.IsNullOrEmpty(configHandle.Error) || configHandle.Asset == null)
                     {
@@ -395,11 +392,8 @@ namespace CycloneGames.UIFramework.Runtime
                     }
                     if (!_prefabHandles.TryGetValue(windowConfig.PrefabLocation, out var prefabHandle))
                     {
-                        prefabHandle = assetPackage.LoadAssetAsync<GameObject>(windowConfig.PrefabLocation, "UIFramework");
-                        while (!prefabHandle.IsDone)
-                        {
-                            await UniTask.Yield(cancellationToken);
-                        }
+                        prefabHandle = assetPackage.LoadAssetAsync<GameObject>(windowConfig.PrefabLocation, "UIFramework", cancellationToken: cancellationToken);
+                        await prefabHandle.Task;
 
                         if (!string.IsNullOrEmpty(prefabHandle.Error) || prefabHandle.Asset == null)
                         {

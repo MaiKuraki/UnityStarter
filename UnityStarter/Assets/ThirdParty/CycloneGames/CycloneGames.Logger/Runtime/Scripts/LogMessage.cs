@@ -71,16 +71,11 @@ namespace CycloneGames.Logger
                 MessageBuilder = null;
             }
 
-            // Reset reference types to null to release references and allow GC if necessary.
+            // Only null reference types to release GC roots; value types are overwritten by Initialize().
             OriginalMessage = null;
             Category = null;
             FilePath = null;
             MemberName = null;
-
-            // Reset value types to default.
-            Timestamp = default;
-            Level = default;
-            LineNumber = 0;
         }
     }
 }
