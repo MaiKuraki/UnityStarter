@@ -18,5 +18,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Conditions
             clone._on = _on;
             return clone;
         }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions.RuntimeOnOffNode();
+            node.GUID = GUID;
+            node.IsOn = _on;
+            return node;
+        }
     }
 }

@@ -6,7 +6,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     {
         private static BTTickManagerComponent _instance;
         private static bool _isQuitting;
-        
+
         public static bool HasInstance => _instance != null;
 
         public static BTTickManagerComponent Instance
@@ -14,7 +14,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             get
             {
                 if (_isQuitting) return null;
-                
+
                 if (_instance == null)
                 {
                     var go = new GameObject("[BTTickManager]");
@@ -44,7 +44,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
             _instance = this;
         }
-        
+
         private void OnApplicationQuit()
         {
             _isQuitting = true;

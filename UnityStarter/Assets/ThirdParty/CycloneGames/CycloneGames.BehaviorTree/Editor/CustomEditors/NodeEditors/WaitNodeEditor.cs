@@ -11,13 +11,13 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors.NodeEditors
         {
             var waitNode = (WaitNode)target;
             serializedObject.Update();
-            
+
             var useRandomProp = serializedObject.FindProperty("_useRandomBetweenTwoConstants");
             var rangeProp = serializedObject.FindProperty("_range");
             var durationProp = serializedObject.FindProperty("_duration");
-            
+
             EditorGUILayout.PropertyField(useRandomProp, new GUIContent("Use Random Between Two", "Enable random duration between two values"));
-            
+
             if (waitNode.UseRandomBetweenTwoConstants)
             {
                 EditorGUILayout.PropertyField(rangeProp, new GUIContent("Range", "Min and max duration values"));
@@ -26,7 +26,7 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors.NodeEditors
             {
                 EditorGUILayout.PropertyField(durationProp, new GUIContent("Duration", "Wait duration in seconds"));
             }
-            
+
             serializedObject.ApplyModifiedProperties();
         }
     }

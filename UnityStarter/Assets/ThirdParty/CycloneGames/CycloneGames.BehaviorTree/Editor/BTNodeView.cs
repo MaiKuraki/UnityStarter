@@ -44,6 +44,15 @@ namespace CycloneGames.BehaviorTree.Editor
 
             if (!Application.isPlaying) return null;
 
+            if (_treeView != null)
+            {
+                var runtimeNode = _treeView.GetRuntimeNodeByGuid(_node.GUID);
+                if (runtimeNode != null)
+                {
+                    return runtimeNode;
+                }
+            }
+
             // Use cached runners to avoid FindObjectsOfType GC
             var runners = BehaviorTreeView.GetCachedRunners();
             int runnersCount = runners.Count;
@@ -59,9 +68,7 @@ namespace CycloneGames.BehaviorTree.Editor
                     var runtimeNode = runner.RuntimeTree.GetNodeByGUID(_node.GUID);
                     if (runtimeNode != null)
                     {
-                        if (runner.Tree == _treeView.Tree ||
-                            (runner.Tree != null && _treeView.Tree != null &&
-                             runner.Tree.name == _treeView.Tree.name))
+                        if (BehaviorTreeView.AreSameTreeAsset(runner.Tree, _treeView.Tree))
                         {
                             return runtimeNode;
                         }
@@ -75,8 +82,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 var runner = runners[i];
                 if (runner != null && runner.RuntimeTree != null)
                 {
-                    if (runner.Tree == _node.Tree ||
-                        (runner.Tree != null && _node.Tree != null && runner.Tree.name == _node.Tree.name))
+                    if (BehaviorTreeView.AreSameTreeAsset(runner.Tree, _node.Tree))
                     {
                         var runtimeNode = runner.RuntimeTree.GetNodeByGUID(_node.GUID);
                         if (runtimeNode != null) return runtimeNode;
@@ -86,8 +92,6 @@ namespace CycloneGames.BehaviorTree.Editor
 
             return null;
         }
-
-        private CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode _runtimeNode;
         public CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode RuntimeNode => GetRuntimeNode();
 
         // Helper to avoid repeated lookups if we cache it per frame? 
@@ -97,7 +101,6 @@ namespace CycloneGames.BehaviorTree.Editor
         private Label _stateLabel;
         private Label _infoLabel;
         private VisualElement _infoContainer;
-        private VisualElement _stateIndicator;
 
         // Progress bar elements for WaitNode and Sequencer/Selector
         private VisualElement _progressBarContainer;
@@ -109,11 +112,6 @@ namespace CycloneGames.BehaviorTree.Editor
         /// even after BehaviorTree.Stop() resets all node states to NOT_ENTERED.
         /// </summary>
         private BTState _lastKnownState = BTState.NOT_ENTERED;
-
-        /// <summary>
-        /// Tracks the previous runtime state to detect when CompositeNode restarts.
-        /// </summary>
-        private BTState _previousRuntimeState = BTState.NOT_ENTERED;
 
         public BTState GetLastKnownState() => _lastKnownState;
 
@@ -132,7 +130,6 @@ namespace CycloneGames.BehaviorTree.Editor
         public void ClearStateCache()
         {
             _lastKnownState = BTState.NOT_ENTERED;
-            _previousRuntimeState = BTState.NOT_ENTERED;
         }
 
         /// <summary>
@@ -484,8 +481,9 @@ namespace CycloneGames.BehaviorTree.Editor
             switch (node)
             {
                 case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeWaitNode waitNode:
-                    float time = (Time.time - waitNode.StartTime);
-                    float actualDuration = waitNode.Duration;
+                    float currentTime = waitNode.UseUnscaledTime ? Time.unscaledTime : Time.time;
+                    float time = (currentTime - waitNode.StartTime);
+                    float actualDuration = waitNode.ActualDuration;
 
                     if (waitNode.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running)
                     {
@@ -511,11 +509,14 @@ namespace CycloneGames.BehaviorTree.Editor
                     else
                         return $"{repeatNode.CurrentRepeatCount}/{repeatNode.RepeatCount}";
 
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeWaitSuccessNode waitSuccessNode:
+                    return $"Fail After: {waitSuccessNode.ActualWaitTime:F2}s";
+
                 case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeSequencer sequencer:
-                    return $"Current: {sequencer.CurrentIndex + 1}/{sequencer.Children.Count}";
+                    return $"Current: {sequencer.CurrentIndex + 1}/{sequencer.ChildCount}";
 
                 case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeSelector selector:
-                    return $"Trying: {selector.CurrentIndex + 1}/{selector.Children.Count}";
+                    return $"Trying: {selector.CurrentIndex + 1}/{selector.ChildCount}";
             }
 
             // Fallback to editor info for nodes without runtime-specific display

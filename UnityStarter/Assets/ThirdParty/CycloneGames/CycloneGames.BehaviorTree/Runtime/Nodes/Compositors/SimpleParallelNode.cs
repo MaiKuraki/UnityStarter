@@ -31,5 +31,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             }
             return BTState.SUCCESS;
         }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeParallelNode();
+            node.GUID = GUID;
+            node.Mode = CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeParallelMode.Default;
+            node.AbortType = (CycloneGames.BehaviorTree.Runtime.Core.RuntimeAbortType)(int)AbortType;
+            foreach (var child in Children)
+            {
+                if (child != null)
+                {
+                    node.AddChild(child.CreateRuntimeNode());
+                }
+            }
+            return node;
+        }
     }
 }

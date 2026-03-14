@@ -13,7 +13,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
             if (!string.IsNullOrEmpty(_message)) Debug.Log("BT Log : " + _message);
 #endif
         }
-        
+
         protected override BTState OnRun(IBlackBoard blackBoard)
         {
             return BTState.SUCCESS;

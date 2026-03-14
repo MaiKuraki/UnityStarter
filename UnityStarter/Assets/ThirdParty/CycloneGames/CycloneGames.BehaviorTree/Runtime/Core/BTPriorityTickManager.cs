@@ -4,17 +4,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 {
     /// <summary>
     /// Priority-based tick manager for large-scale AI (1000+ agents).
-    /// Supports LOD, priority buckets, and event-driven priority boost.
+    /// Uses swap-remove for O(1) unregistration, HashSet for O(1) duplicate detection.
     /// </summary>
     public class BTPriorityTickManager
     {
         private const int DEFAULT_CAPACITY = 256;
         private const int MAX_PRIORITY_LEVELS = 8;
 
-        // Priority buckets: each bucket is a list of trees at that priority level
         private readonly List<RuntimeBehaviorTree>[] _buckets;
         private readonly int[] _bucketIndices;
         private readonly int[] _budgets;
+
+        // O(1) lookup to find which bucket a tree is in, avoiding linear scan
+        private readonly Dictionary<RuntimeBehaviorTree, int> _treeBucketMap;
 
         private int _priorityLevelCount;
 
@@ -24,6 +26,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             _buckets = new List<RuntimeBehaviorTree>[MAX_PRIORITY_LEVELS];
             _bucketIndices = new int[MAX_PRIORITY_LEVELS];
             _budgets = budgets ?? new int[] { 100, 50, 30, 20, 15, 10, 5, 5 };
+            _treeBucketMap = new Dictionary<RuntimeBehaviorTree, int>(DEFAULT_CAPACITY);
 
             for (int i = 0; i < MAX_PRIORITY_LEVELS; i++)
             {
@@ -46,34 +49,24 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (tree == null) return;
             priority = ClampPriority(priority);
 
-            // Check if already registered in any bucket
-            for (int i = 0; i < _priorityLevelCount; i++)
+            if (_treeBucketMap.TryGetValue(tree, out int existingBucket))
             {
-                if (_buckets[i].Contains(tree))
-                {
-                    if (i == priority) return;
-                    _buckets[i].Remove(tree);
-                    break;
-                }
+                if (existingBucket == priority) return;
+                SwapRemoveFromBucket(existingBucket, tree);
             }
 
             _buckets[priority].Add(tree);
+            _treeBucketMap[tree] = priority;
         }
 
         public void Unregister(RuntimeBehaviorTree tree)
         {
             if (tree == null) return;
 
-            for (int i = 0; i < _priorityLevelCount; i++)
+            if (_treeBucketMap.TryGetValue(tree, out int bucket))
             {
-                if (_buckets[i].Remove(tree))
-                {
-                    if (_bucketIndices[i] >= _buckets[i].Count && _buckets[i].Count > 0)
-                    {
-                        _bucketIndices[i] = 0;
-                    }
-                    return;
-                }
+                SwapRemoveFromBucket(bucket, tree);
+                _treeBucketMap.Remove(tree);
             }
         }
 
@@ -82,9 +75,30 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             Register(tree, newPriority);
         }
 
+        // O(1) swap-remove: swap target with last element, then remove last
+        private void SwapRemoveFromBucket(int bucketIdx, RuntimeBehaviorTree tree)
+        {
+            var bucket = _buckets[bucketIdx];
+            int count = bucket.Count;
+            for (int i = 0; i < count; i++)
+            {
+                if (bucket[i] == tree)
+                {
+                    int last = count - 1;
+                    bucket[i] = bucket[last];
+                    bucket.RemoveAt(last);
+
+                    if (_bucketIndices[bucketIdx] >= bucket.Count && bucket.Count > 0)
+                    {
+                        _bucketIndices[bucketIdx] = 0;
+                    }
+                    return;
+                }
+            }
+        }
+
         public void Tick()
         {
-            // Tick each priority level with its budget
             for (int priority = 0; priority < _priorityLevelCount; priority++)
             {
                 var bucket = _buckets[priority];
@@ -117,6 +131,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 _buckets[i].Clear();
                 _bucketIndices[i] = 0;
             }
+            _treeBucketMap.Clear();
         }
 
         public int GetTreeCount(int priority)
