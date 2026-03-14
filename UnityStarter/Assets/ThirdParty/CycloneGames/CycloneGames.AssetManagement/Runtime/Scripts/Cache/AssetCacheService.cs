@@ -44,13 +44,13 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             public static void Release(CacheNode node)
             {
                 node.Location = null;
-                node.Bucket   = null;
-                node.Tag      = null;
-                node.Owner    = null;
-                node.Handle   = null;
-                node.Next     = null;
-                node.Prev     = null;
-                node.AccessCount  = 0;
+                node.Bucket = null;
+                node.Tag = null;
+                node.Owner = null;
+                node.Handle = null;
+                node.Next = null;
+                node.Prev = null;
+                node.AccessCount = 0;
                 node.IsInMainPool = false;
 
                 lock (_lock)
@@ -97,16 +97,16 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             {
                 // Adaptive sizing: scale cache to available device RAM.
                 int ramMB = SystemInfo.systemMemorySize;
-                if (ramMB >= 4096)       { maxTrialEntries = 64;  maxMainEntries = 512; }
-                else if (ramMB >= 2048)  { maxTrialEntries = 32;  maxMainEntries = 256; }
-                else                     { maxTrialEntries = 16;  maxMainEntries = 128; }
+                if (ramMB >= 4096) { maxTrialEntries = 64; maxMainEntries = 512; }
+                else if (ramMB >= 2048) { maxTrialEntries = 32; maxMainEntries = 256; }
+                else { maxTrialEntries = 16; maxMainEntries = 128; }
             }
 
             _maxTrialEntries = Math.Max(1, maxTrialEntries);
-            _maxMainEntries  = Math.Max(1, maxMainEntries);
+            _maxMainEntries = Math.Max(1, maxMainEntries);
 
             _activeMap = new Dictionary<string, CacheNode>(128, StringComparer.Ordinal);
-            _idleMap   = new Dictionary<string, CacheNode>(_maxTrialEntries + _maxMainEntries, StringComparer.Ordinal);
+            _idleMap = new Dictionary<string, CacheNode>(_maxTrialEntries + _maxMainEntries, StringComparer.Ordinal);
 
 #if UNITY_EDITOR
             lock (_globalInstancesLock) { GlobalInstances.Add(this); }
@@ -123,14 +123,24 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             _rwLock.EnterWriteLock();
             try
             {
-                _activeMap.Remove(location);
+                if (_idleMap.Remove(location, out var oldIdle))
+                {
+                    RemoveFromLru(oldIdle);
+                    ForceDisposeHandle(oldIdle.Handle);
+                    NodePool.Release(oldIdle);
+                }
+
+                if (_activeMap.Remove(location, out var oldActive))
+                {
+                    NodePool.Release(oldActive);
+                }
 
                 var node = NodePool.Get();
-                node.Location    = location;
-                node.Bucket      = bucket;
-                node.Tag         = tag;
-                node.Owner       = owner;
-                node.Handle      = handle;
+                node.Location = location;
+                node.Bucket = bucket;
+                node.Tag = tag;
+                node.Owner = owner;
+                node.Handle = handle;
                 node.AccessCount = 1;
 
                 _activeMap[location] = node;
@@ -155,7 +165,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 {
                     activeNode.Handle.Retain();
                     activeNode.AccessCount++;
-                    if (!string.IsNullOrEmpty(tag))   activeNode.Tag   = tag;
+                    if (!string.IsNullOrEmpty(tag)) activeNode.Tag = tag;
                     if (!string.IsNullOrEmpty(owner)) activeNode.Owner = owner;
                     return activeNode.Handle;
                 }
@@ -174,8 +184,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                             idleNode.Handle.Retain();
 
                             if (!string.IsNullOrEmpty(bucket)) idleNode.Bucket = bucket;
-                            if (!string.IsNullOrEmpty(tag))    idleNode.Tag    = tag;
-                            if (!string.IsNullOrEmpty(owner))  idleNode.Owner  = owner;
+                            if (!string.IsNullOrEmpty(tag)) idleNode.Tag = tag;
+                            if (!string.IsNullOrEmpty(owner)) idleNode.Owner = owner;
 
                             _activeMap[location] = idleNode;
                             return idleNode.Handle;
@@ -218,12 +228,13 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             _rwLock.EnterWriteLock();
             try
             {
-                if (!_activeMap.Remove(location, out var node))
+                if (!_activeMap.TryGetValue(location, out var node) || node.Handle != handle)
                 {
                     ForceDisposeHandle(handle);
                     return;
                 }
 
+                _activeMap.Remove(location);
                 _idleMap[location] = node;
 
                 // Promotion: multiple-access or previously-promoted → main pool; first-time idle → trial pool.
@@ -302,12 +313,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
                 _idleMap.Clear();
 
-                _trialHead  = null;
-                _trialTail  = null;
+                _trialHead = null;
+                _trialTail = null;
                 _trialCount = 0;
 
-                _mainHead  = null;
-                _mainTail  = null;
+                _mainHead = null;
+                _mainTail = null;
                 _mainCount = 0;
             }
             finally
@@ -448,12 +459,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     {
                         active.Add(new CacheDiagnosticEntry
                         {
-                            Location     = kvp.Value.Location,
-                            Bucket       = kvp.Value.Bucket,
-                            Tag          = kvp.Value.Tag,
-                            Owner        = kvp.Value.Owner,
-                            RefCount     = kvp.Value.Handle.RefCount,
-                            AccessCount  = kvp.Value.AccessCount,
+                            Location = kvp.Value.Location,
+                            Bucket = kvp.Value.Bucket,
+                            Tag = kvp.Value.Tag,
+                            Owner = kvp.Value.Owner,
+                            RefCount = kvp.Value.Handle.RefCount,
+                            AccessCount = kvp.Value.AccessCount,
                             ProviderType = GetProviderType(kvp.Value.Handle)
                         });
                     }
@@ -466,12 +477,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     {
                         trial.Add(new CacheDiagnosticEntry
                         {
-                            Location     = node.Location,
-                            Bucket       = node.Bucket,
-                            Tag          = node.Tag,
-                            Owner        = node.Owner,
-                            RefCount     = node.Handle?.RefCount ?? 0,
-                            AccessCount  = node.AccessCount,
+                            Location = node.Location,
+                            Bucket = node.Bucket,
+                            Tag = node.Tag,
+                            Owner = node.Owner,
+                            RefCount = node.Handle?.RefCount ?? 0,
+                            AccessCount = node.AccessCount,
                             ProviderType = GetProviderType(node.Handle)
                         });
                         node = node.Next;
@@ -485,12 +496,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     {
                         main.Add(new CacheDiagnosticEntry
                         {
-                            Location     = node.Location,
-                            Bucket       = node.Bucket,
-                            Tag          = node.Tag,
-                            Owner        = node.Owner,
-                            RefCount     = node.Handle?.RefCount ?? 0,
-                            AccessCount  = node.AccessCount,
+                            Location = node.Location,
+                            Bucket = node.Bucket,
+                            Tag = node.Tag,
+                            Owner = node.Owner,
+                            RefCount = node.Handle?.RefCount ?? 0,
+                            AccessCount = node.AccessCount,
                             ProviderType = GetProviderType(node.Handle)
                         });
                         node = node.Next;
@@ -507,9 +518,9 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         {
             if (handle == null) return "Unknown";
             var name = handle.GetType().Name;
-            if (name.StartsWith("Yoo"))         return "YooAsset";
-            if (name.StartsWith("Addressable"))  return "Addressables";
-            if (name.StartsWith("Resources"))    return "Resources";
+            if (name.StartsWith("Yoo")) return "YooAsset";
+            if (name.StartsWith("Addressable")) return "Addressables";
+            if (name.StartsWith("Resources")) return "Resources";
             return name;
         }
 #endif
