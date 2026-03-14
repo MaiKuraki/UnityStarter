@@ -10,6 +10,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         [SerializeField] private bool _useRandomBetweenTwoConstants = false;
         [SerializeField] private Vector2 _waitTimeRange = new Vector2(1f, 2f);
         [SerializeField] private float _waitTime = 1f;
+        [SerializeField] private bool _useUnscaledTime = false;
         private float _timer = 0f;
 
         protected override void OnStart(IBlackBoard blackBoard)
@@ -38,7 +39,24 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             clone._waitTime = _waitTime;
             clone._useRandomBetweenTwoConstants = _useRandomBetweenTwoConstants;
             clone._waitTimeRange = _waitTimeRange;
+            clone._useUnscaledTime = _useUnscaledTime;
             return clone;
+        }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeWaitSuccessNode();
+            node.GUID = GUID;
+            node.WaitTime = _waitTime;
+            node.UseRandomRange = _useRandomBetweenTwoConstants;
+            node.RangeMin = _waitTimeRange.x;
+            node.RangeMax = _waitTimeRange.y;
+            node.UseUnscaledTime = _useUnscaledTime;
+            if (Child != null)
+            {
+                node.Child = Child.CreateRuntimeNode();
+            }
+            return node;
         }
     }
 }

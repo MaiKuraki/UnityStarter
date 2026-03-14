@@ -1,7 +1,5 @@
-using System;
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Decorators;
@@ -15,68 +13,14 @@ using UnityEngine;
 namespace CycloneGames.BehaviorTree.Runtime
 {
     [CreateAssetMenu(fileName = "BehaviorTree", menuName = "CycloneGames/AI/BehaviorTree")]
-    public class BehaviorTree : ScriptableObject, IBehaviorTree
+    public class BehaviorTree : ScriptableObject
     {
-        #region Static Parts
-        private static event Action<BTNode> NodeModifier;
-
-        public static void AddNodeModifier(Action<BTNode> modifier)
-        {
-            if (modifier == null)
-                return;
-            NodeModifier += modifier;
-        }
-
-        public static void RemoveNodeModifier(Action<BTNode> modifier)
-        {
-            if (modifier == null)
-                return;
-            NodeModifier -= modifier;
-        }
-        #endregion
-
-        public bool IsCloned => _isCloned;
         public GameObject Owner { get; private set; } = null;
         public BTNode Root;
-        public BTState TreeState { get; private set; } = BTState.RUNNING;
         public List<BTNode> Nodes = new List<BTNode>();
 
-        private IBlackBoard _lastBlackBoard = new BlackBoard();
-        private bool _isCloned = false;
-
         private readonly List<BTNode> _childrenCache = new List<BTNode>(8);
-        private readonly Stack<BTNode> _traverseStack = new Stack<BTNode>(16);
 
-        /// <summary>
-        /// Updates the behavior tree execution. Called every frame by BTRunnerComponent.
-        /// </summary>
-        public BTState BTUpdate(IBlackBoard blackBoard)
-        {
-            if (Root == null)
-            {
-                TreeState = BTState.FAILURE;
-                return TreeState;
-            }
-
-            _lastBlackBoard = blackBoard;
-            if (Root.State == BTState.RUNNING || Root.State == BTState.NOT_ENTERED)
-            {
-                TreeState = Root.Run(_lastBlackBoard);
-            }
-            return TreeState;
-        }
-
-        public void Inject(object container)
-        {
-            for (int i = 0; i < Nodes.Count; i++)
-            {
-                Nodes[i]?.Inject(container);
-            }
-        }
-
-        /// <summary>
-        /// Gets all children of a node. Returns a cached list - do not store the reference.
-        /// </summary>
         public List<BTNode> GetChildren(BTNode parent)
         {
             _childrenCache.Clear();
@@ -105,42 +49,6 @@ namespace CycloneGames.BehaviorTree.Runtime
         }
 
         /// <summary>
-        /// Clones the behavior tree for runtime execution.
-        /// </summary>
-        public IBehaviorTree Clone(GameObject owner)
-        {
-            return CloneTree(owner);
-        }
-
-        /// <summary>
-        /// Creates a deep copy of the behavior tree for runtime use.
-        /// </summary>
-        public BehaviorTree CloneTree(GameObject owner)
-        {
-            if (Root == null)
-            {
-                Debug.LogError("[BehaviorTree] Cannot clone tree: Root is null.");
-                return null;
-            }
-
-            var tree = Instantiate(this);
-            tree.Owner = owner;
-            tree.Root = Root.Clone();
-            if (tree.Root == null)
-            {
-                Debug.LogError("[BehaviorTree] Failed to clone root node.");
-                return null;
-            }
-
-            tree.Nodes.Clear();
-            tree._isCloned = true;
-
-            Traverse(tree.Root, tree);
-
-            return tree;
-        }
-
-        /// <summary>
         /// Validates the behavior tree structure and removes null nodes.
         /// </summary>
         public void OnValidate()
@@ -160,69 +68,6 @@ namespace CycloneGames.BehaviorTree.Runtime
         }
 
         /// <summary>
-        /// Traverses the tree using an iterative stack-based approach to avoid recursion.
-        /// Collects all nodes and sets their tree reference during cloning.
-        /// </summary>
-        /// <param name="node">Root node to start traversal from</param>
-        /// <param name="tree">Target tree instance for cloned nodes</param>
-        private void Traverse(BTNode node, BehaviorTree tree)
-        {
-            if (node == null) return;
-
-            _traverseStack.Clear();
-            _traverseStack.Push(node);
-
-            while (_traverseStack.Count > 0)
-            {
-                var current = _traverseStack.Pop();
-                if (current == null) continue;
-
-                current.Tree = tree;
-                tree.Nodes.Add(current);
-                NodeModifier?.Invoke(current);
-
-                var children = GetChildren(current);
-                for (int i = children.Count - 1; i >= 0; i--)
-                {
-                    var child = children[i];
-                    if (child != null)
-                    {
-                        _traverseStack.Push(child);
-                    }
-                }
-            }
-        }
-
-        /// <summary>
-        /// Calls OnAwake on all nodes when the behavior tree is initialized.
-        /// </summary>
-        public void OnAwake()
-        {
-            for (int i = 0; i < Nodes.Count; i++)
-            {
-                Nodes[i]?.OnAwake();
-            }
-        }
-
-        /// <summary>
-        /// Stops the behavior tree execution and resets all node states to NOT_ENTERED.
-        /// </summary>
-        public void Stop()
-        {
-            if (Root != null)
-            {
-                Root.BTStop(_lastBlackBoard);
-            }
-            for (int i = 0; i < Nodes.Count; i++)
-            {
-                if (Nodes[i] != null)
-                {
-                    Nodes[i].State = BTState.NOT_ENTERED;
-                }
-            }
-        }
-
-        /// <summary>
         /// Calls OnDrawGizmos on all nodes for scene view visualization.
         /// </summary>
         public void OnDrawGizmos()
@@ -237,9 +82,16 @@ namespace CycloneGames.BehaviorTree.Runtime
         /// Compiles the ScriptableObject-based behavior tree into a pure C# runtime instance.
         /// This method is 0GC at runtime after the initial compilation.
         /// </summary>
-        /// <param name="owner">Optional owner object</param>
         /// <returns>A new RuntimeBehaviorTree instance</returns>
-        public CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree Compile(object owner = null)
+        public CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree Compile()
+        {
+            return Compile(new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBTContext());
+        }
+
+        /// <summary>
+        /// Compiles using a strongly-typed runtime context (owner + services).
+        /// </summary>
+        public CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree Compile(CycloneGames.BehaviorTree.Runtime.Core.RuntimeBTContext context)
         {
             if (Root == null)
             {
@@ -247,9 +99,22 @@ namespace CycloneGames.BehaviorTree.Runtime
                 return null;
             }
 
+            var validationErrors = new List<string>(4);
+            ValidateRuntimeSupport(Root, "Root", validationErrors);
+            if (validationErrors.Count > 0)
+            {
+                Debug.LogError("[BehaviorTree] Runtime compile failed:\n" + string.Join("\n", validationErrors));
+                return null;
+            }
+
+            context ??= new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBTContext();
+
             // Create optimized runtime blackboard
-            var blackboard = new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBlackboard();
-            
+            var blackboard = new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBlackboard
+            {
+                Context = context
+            };
+
             // Generate runtime node hierarchy
             var runtimeRoot = Root.CreateRuntimeNode();
             if (runtimeRoot == null)
@@ -258,11 +123,45 @@ namespace CycloneGames.BehaviorTree.Runtime
                 Debug.LogError($"[BehaviorTree] Root node {Root.GetType().Name} returned null for runtime creation. Ensure CreateRuntimeNode is implemented.");
                 return null;
             }
-            
+
             runtimeRoot.OnAwake();
 
             // Create runtime tree container
-            return new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree(runtimeRoot, blackboard, owner);
+            return new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree(runtimeRoot, blackboard, context);
+        }
+
+        // Convenience overload: compile with a GameObject owner and no service resolver.
+        public CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree Compile(UnityEngine.GameObject owner)
+        {
+            return Compile(new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBTContext(owner));
+        }
+
+        private void ValidateRuntimeSupport(BTNode node, string path, List<string> errors)
+        {
+            if (node == null)
+            {
+                errors.Add($"- {path}: null node reference.");
+                return;
+            }
+
+            var createRuntimeMethod = node.GetType().GetMethod(nameof(BTNode.CreateRuntimeNode));
+            if (createRuntimeMethod == null || createRuntimeMethod.DeclaringType == typeof(BTNode))
+            {
+                errors.Add($"- {path}: {node.GetType().Name} has no runtime implementation.");
+            }
+
+            // Snapshot children because GetChildren() returns a shared cache list.
+            var children = GetChildren(node);
+            var childSnapshot = new List<BTNode>(children.Count);
+            for (int i = 0; i < children.Count; i++)
+            {
+                childSnapshot.Add(children[i]);
+            }
+
+            for (int i = 0; i < childSnapshot.Count; i++)
+            {
+                ValidateRuntimeSupport(childSnapshot[i], $"{path}/{childSnapshot[i]?.GetType().Name ?? "NullChild"}[{i}]", errors);
+            }
         }
 
         #region Editor Methods

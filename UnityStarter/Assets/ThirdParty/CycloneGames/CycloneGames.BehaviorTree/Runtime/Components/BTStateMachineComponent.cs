@@ -30,7 +30,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
             if (targetState != null)
             {
-                SetTree(targetState.GetTree(gameObject));
+                SetTree(targetState.GetTree());
             }
         }
     }

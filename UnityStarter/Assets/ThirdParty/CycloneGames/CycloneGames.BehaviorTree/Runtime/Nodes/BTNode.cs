@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes
 {
-    public abstract class BTNode : ScriptableObject, IBTNode
+    public abstract class BTNode : ScriptableObject
     {
         [HideInInspector] public BTState State { get; set; } = BTState.NOT_ENTERED;
         [HideInInspector] public string GUID;
@@ -44,19 +44,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         private bool _isInitialized = false;
         private bool _isStarted = false;
 
-        string IBTNode.GUID => GUID;
-
         private void Awake() { }
-
-        /// <summary>
-        /// Called when the behavior tree runner is initialized.
-        /// </summary>
-        public virtual void OnAwake() { }
-
-        /// <summary>
-        /// Injects dependencies into the node for DI framework integration.
-        /// </summary>
-        public virtual void Inject(object container) { }
 
         /// <summary>
         /// Executes the node and returns its state.
@@ -81,7 +69,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             OnStart(blackBoard);
             _isStarted = true;
         }
-        
+
         /// <summary>
         /// Stops the node execution and calls OnStop.
         /// </summary>
@@ -91,7 +79,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             OnStop(blackBoard);
             _isStarted = false;
         }
-        
+
         private void Initialize(IBlackBoard blackBoard)
         {
             if (_isInitialized) return;
@@ -113,7 +101,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         /// Called when the node stops execution.
         /// </summary>
         protected virtual void OnStop(IBlackBoard blackBoard) { }
-        
+
         /// <summary>
         /// Called once when the behavior tree is initialized.
         /// </summary>
@@ -165,8 +153,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         /// Factory method to create the optimized runtime node execution instance.
         /// </summary>
         /// <returns>A new instance of RuntimeNode</returns>
-        public virtual CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode() 
-        { 
+        public virtual CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
             return null; // Base implementation returns null or throws 
         }
     }

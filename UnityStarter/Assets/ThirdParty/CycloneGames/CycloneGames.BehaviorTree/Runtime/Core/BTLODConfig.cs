@@ -3,9 +3,6 @@ using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
-    /// <summary>
-    /// Interface for AI priority markers. Implement this on marker components.
-    /// </summary>
     public interface IBTPriorityMarker
     {
         int Priority { get; }
@@ -49,6 +46,30 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         [Tooltip("Tick interval when boosted")]
         public int BoostedTickInterval = 1;
 
+        // Pre-squared distances for 0GC LOD checks
+        private float[] _sqrDistances;
+
+        private void OnEnable()
+        {
+            RebuildSqrDistances();
+        }
+
+        private void OnValidate()
+        {
+            RebuildSqrDistances();
+        }
+
+        private void RebuildSqrDistances()
+        {
+            if (Levels == null) return;
+            _sqrDistances = new float[Levels.Length];
+            for (int i = 0; i < Levels.Length; i++)
+            {
+                float d = Levels[i].MaxDistance;
+                _sqrDistances[i] = (d >= float.MaxValue / 2f) ? float.MaxValue : d * d;
+            }
+        }
+
         public int GetLODLevel(float distance)
         {
             for (int i = 0; i < Levels.Length; i++)
@@ -59,9 +80,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return Levels.Length - 1;
         }
 
-        /// <summary>
-        /// 0GC priority marker detection using interface instead of reflection.
-        /// </summary>
+        // sqrMagnitude-based LOD check avoids sqrt per agent per LOD update
+        public int GetLODLevelSqr(float sqrDistance)
+        {
+            if (_sqrDistances == null) RebuildSqrDistances();
+            for (int i = 0; i < _sqrDistances.Length; i++)
+            {
+                if (sqrDistance <= _sqrDistances[i])
+                    return i;
+            }
+            return Levels.Length - 1;
+        }
+
         public bool TryGetPriorityMarker(GameObject owner, out int priority, out int tickInterval)
         {
             priority = -1;
@@ -69,7 +99,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
             if (owner == null) return false;
 
-            // GetComponent<T> is cached by Unity and faster than GetComponent(string)
             var marker = owner.GetComponent<IBTPriorityMarker>();
             if (marker != null)
             {

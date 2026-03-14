@@ -107,6 +107,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
         {
             var runtimeNode = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeSelector();
             runtimeNode.GUID = GUID;
+            runtimeNode.AbortType = (CycloneGames.BehaviorTree.Runtime.Core.RuntimeAbortType)(int)AbortType;
             foreach (var child in Children)
             {
                 if (child != null)

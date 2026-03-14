@@ -29,5 +29,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             clone._key = _key;
             return clone;
         }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeBlackboardConditionNode();
+            node.GUID = GUID;
+            node.KeyHash = UnityEngine.Animator.StringToHash(_key);
+            if (Child != null)
+            {
+                node.Child = Child.CreateRuntimeNode();
+            }
+            return node;
+        }
     }
 }

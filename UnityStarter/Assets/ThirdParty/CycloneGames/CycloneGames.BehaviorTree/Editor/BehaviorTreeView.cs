@@ -37,10 +37,23 @@ namespace CycloneGames.BehaviorTree.Editor
             if (currentTime - _lastRunnerCacheTime > RUNNER_CACHE_INTERVAL || _cachedRunners.Count == 0)
             {
                 _cachedRunners.Clear();
-                var runners = UnityEngine.Object.FindObjectsOfType<Runtime.Components.BTRunnerComponent>();
-                for (int i = 0; i < runners.Length; i++)
+                var runners = Runtime.Components.BTRunnerComponent.ActiveRunners;
+                for (int i = 0; i < runners.Count; i++)
                 {
-                    _cachedRunners.Add(runners[i]);
+                    if (runners[i] != null)
+                    {
+                        _cachedRunners.Add(runners[i]);
+                    }
+                }
+
+                // Fallback for editor edge-cases (domain reload/scene reload timing).
+                if (_cachedRunners.Count == 0)
+                {
+                    var foundRunners = UnityEngine.Object.FindObjectsOfType<Runtime.Components.BTRunnerComponent>();
+                    for (int i = 0; i < foundRunners.Length; i++)
+                    {
+                        _cachedRunners.Add(foundRunners[i]);
+                    }
                 }
                 _lastRunnerCacheTime = currentTime;
             }
@@ -56,14 +69,83 @@ namespace CycloneGames.BehaviorTree.Editor
             _cachedRunners.Clear();
         }
 
+        public static bool AreSameTreeAsset(Runtime.BehaviorTree a, Runtime.BehaviorTree b)
+        {
+            if (ReferenceEquals(a, b)) return true;
+            if (a == null || b == null) return false;
+
+            string pathA = AssetDatabase.GetAssetPath(a);
+            string pathB = AssetDatabase.GetAssetPath(b);
+            return !string.IsNullOrEmpty(pathA) && pathA == pathB;
+        }
+
         public new class UxmlFactory : UxmlFactory<BehaviorTreeView, GraphView.UxmlTraits> { }
         public Runtime.BehaviorTree Tree => _tree;
         public Action<BTNodeView> OnNodeSelectionChanged;
         private Runtime.BehaviorTree _tree;
+        private Runtime.Components.BTRunnerComponent _boundRunner;
+        private double _lastBoundRunnerRefreshTime;
+        private const double BOUND_RUNNER_REFRESH_INTERVAL = 0.2;
         private List<BTNode> _copiedNodes = new List<BTNode>();
         private Vector2 _copiedTreePosition;
 
         private BTState _lastTreeState = BTState.NOT_ENTERED;
+
+        /// <summary>
+        /// Gets the actual tree state from the matched RuntimeBehaviorTree via BTRunnerComponent.
+        /// </summary>
+        private BTState GetRuntimeTreeState()
+        {
+            var runner = GetBoundRunner();
+            if (runner == null || runner.RuntimeTree == null) return BTState.NOT_ENTERED;
+
+            switch (runner.RuntimeTree.State)
+            {
+                case Runtime.Core.RuntimeState.Success: return BTState.SUCCESS;
+                case Runtime.Core.RuntimeState.Failure: return BTState.FAILURE;
+                case Runtime.Core.RuntimeState.Running: return BTState.RUNNING;
+                default: return BTState.NOT_ENTERED;
+            }
+        }
+
+        public Runtime.Components.BTRunnerComponent GetBoundRunner()
+        {
+            if (!Application.isPlaying || _tree == null) return null;
+
+            double now = EditorApplication.timeSinceStartup;
+            bool shouldRefresh = (now - _lastBoundRunnerRefreshTime) > BOUND_RUNNER_REFRESH_INTERVAL;
+
+            if (!shouldRefresh && _boundRunner != null && _boundRunner.RuntimeTree != null && AreSameTreeAsset(_boundRunner.Tree, _tree))
+            {
+                return _boundRunner;
+            }
+
+            _boundRunner = null;
+            var runners = GetCachedRunners();
+            for (int i = 0; i < runners.Count; i++)
+            {
+                var candidate = runners[i];
+                if (candidate == null || candidate.RuntimeTree == null) continue;
+                if (AreSameTreeAsset(candidate.Tree, _tree))
+                {
+                    _boundRunner = candidate;
+                    break;
+                }
+            }
+
+            _lastBoundRunnerRefreshTime = now;
+            return _boundRunner;
+        }
+
+        public Runtime.Core.RuntimeNode GetRuntimeNodeByGuid(string guid)
+        {
+            if (string.IsNullOrEmpty(guid)) return null;
+
+            var runner = GetBoundRunner();
+            if (runner == null || runner.RuntimeTree == null) return null;
+            return runner.RuntimeTree.GetNodeByGUID(guid);
+        }
+
         public BehaviorTreeView()
         {
             Insert(0, new GridBackground());
@@ -218,6 +300,8 @@ namespace CycloneGames.BehaviorTree.Editor
 
             SaveStateCache();
             this._tree = tree;
+            _boundRunner = null;
+            _lastBoundRunnerRefreshTime = 0;
             _lastTreeState = BTState.NOT_ENTERED;
             DrawGraph();
             RestoreStateCache();
@@ -281,7 +365,7 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             if (!Application.isPlaying || _tree == null || _tree.Nodes == null) return;
 
-            BTState currentTreeState = _tree.TreeState;
+            BTState currentTreeState = GetRuntimeTreeState();
             bool treeRestarted = (_lastTreeState == BTState.SUCCESS || _lastTreeState == BTState.FAILURE)
                                  && currentTreeState == BTState.RUNNING;
 
@@ -328,11 +412,11 @@ namespace CycloneGames.BehaviorTree.Editor
                                     {
                                         if (treeNode is BTRootNode)
                                         {
-                                            nodeView.RestoreLastKnownState(_tree.TreeState);
+                                            nodeView.RestoreLastKnownState(currentTreeState);
                                         }
                                         else if (treeNode is CompositeNode composite)
                                         {
-                                            BTState inferredState = InferCompositeNodeState(composite, _tree.TreeState, nodeList, nodeCount);
+                                            BTState inferredState = InferCompositeNodeState(composite, currentTreeState, nodeList, nodeCount);
                                             if (inferredState == BTState.SUCCESS || inferredState == BTState.FAILURE)
                                             {
                                                 nodeView.RestoreLastKnownState(inferredState);
@@ -340,7 +424,7 @@ namespace CycloneGames.BehaviorTree.Editor
                                         }
                                         else if (cachedState == BTState.NOT_ENTERED || cachedState == BTState.RUNNING)
                                         {
-                                            BTState inferredState = InferLeafNodeState(treeNode, nodeList, nodeCount);
+                                            BTState inferredState = InferLeafNodeState(treeNode, currentTreeState, nodeList, nodeCount);
                                             if (inferredState == BTState.SUCCESS || inferredState == BTState.FAILURE)
                                             {
                                                 nodeView.RestoreLastKnownState(inferredState);
@@ -370,11 +454,11 @@ namespace CycloneGames.BehaviorTree.Editor
                         {
                             if (runtimeNode is BTRootNode)
                             {
-                                nodeView.RestoreLastKnownState(_tree.TreeState);
+                                nodeView.RestoreLastKnownState(currentTreeState);
                             }
                             else if (runtimeNode is CompositeNode composite)
                             {
-                                BTState inferredState = InferCompositeNodeState(composite, _tree.TreeState, nodeList, nodeCount);
+                                BTState inferredState = InferCompositeNodeState(composite, currentTreeState, nodeList, nodeCount);
                                 if (inferredState == BTState.SUCCESS || inferredState == BTState.FAILURE)
                                 {
                                     nodeView.RestoreLastKnownState(inferredState);
@@ -385,7 +469,7 @@ namespace CycloneGames.BehaviorTree.Editor
                                 BTState cachedState = nodeView.GetLastKnownState();
                                 if (cachedState == BTState.NOT_ENTERED || cachedState == BTState.RUNNING)
                                 {
-                                    BTState inferredState = InferLeafNodeState(runtimeNode, nodeList, nodeCount);
+                                    BTState inferredState = InferLeafNodeState(runtimeNode, currentTreeState, nodeList, nodeCount);
                                     if (inferredState == BTState.SUCCESS || inferredState == BTState.FAILURE)
                                     {
                                         nodeView.RestoreLastKnownState(inferredState);
@@ -548,7 +632,7 @@ namespace CycloneGames.BehaviorTree.Editor
         /// <summary>
         /// Infers the final state of a leaf node based on its parent's state.
         /// </summary>
-        private BTState InferLeafNodeState(BTNode leafNode, List<UnityEditor.Experimental.GraphView.Node> nodeList, int nodeCount)
+        private BTState InferLeafNodeState(BTNode leafNode, BTState treeState, List<UnityEditor.Experimental.GraphView.Node> nodeList, int nodeCount)
         {
             if (leafNode == null || _tree == null || _tree.Nodes == null) return BTState.NOT_ENTERED;
 
@@ -571,7 +655,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
                             if (composite is SequencerNode)
                             {
-                                if ((parentState == BTState.SUCCESS || parentLastKnown == BTState.SUCCESS) && _tree.TreeState == BTState.SUCCESS)
+                                if ((parentState == BTState.SUCCESS || parentLastKnown == BTState.SUCCESS) && treeState == BTState.SUCCESS)
                                 {
                                     bool isLastChild = (j == childrenCount - 1);
                                     if (isLastChild)

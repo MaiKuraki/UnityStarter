@@ -14,11 +14,40 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private readonly Dictionary<int, bool> _boolData = new Dictionary<int, bool>();
         private readonly Dictionary<int, object> _objectData = new Dictionary<int, object>();
 
-        public RuntimeBlackboard Parent { get; private set; }
+        public RuntimeBlackboard Parent { get; set; }
+        public IRuntimeBTContext Context { get; set; }
 
         public RuntimeBlackboard(RuntimeBlackboard parent = null)
         {
             Parent = parent;
+        }
+
+        public T GetContextOwner<T>() where T : class
+        {
+            if (Context != null)
+            {
+                var ownerFromContext = Context.GetOwner<T>();
+                if (ownerFromContext != null)
+                {
+                    return ownerFromContext;
+                }
+            }
+
+            return Parent != null ? Parent.GetContextOwner<T>() : null;
+        }
+
+        public T GetService<T>() where T : class
+        {
+            if (Context != null)
+            {
+                var serviceFromContext = Context.GetService<T>();
+                if (serviceFromContext != null)
+                {
+                    return serviceFromContext;
+                }
+            }
+
+            return Parent != null ? Parent.GetService<T>() : null;
         }
 
         #region Int-Key Methods (0GC)
@@ -95,5 +124,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             _boolData.Clear();
             _objectData.Clear();
         }
+
+#if UNITY_EDITOR
+        public Dictionary<int, int> DebugIntData => _intData;
+        public Dictionary<int, float> DebugFloatData => _floatData;
+        public Dictionary<int, bool> DebugBoolData => _boolData;
+        public Dictionary<int, object> DebugObjectData => _objectData;
+#endif
     }
 }

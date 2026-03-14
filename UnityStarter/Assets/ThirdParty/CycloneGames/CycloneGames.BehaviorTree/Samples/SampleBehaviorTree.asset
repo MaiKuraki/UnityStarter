@@ -71,6 +71,7 @@ MonoBehaviour:
   _useRandomBetweenTwoConstants: 0
   _range: {x: 1, y: 2}
   _duration: 2
+  _useUnscaledTime: 0
 --- !u!114 &-4473983968243724602
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -182,6 +183,7 @@ MonoBehaviour:
   _useRandomBetweenTwoConstants: 0
   _range: {x: 1, y: 2}
   _duration: 3
+  _useUnscaledTime: 0
 --- !u!114 &4225789004679498484
 MonoBehaviour:
   m_ObjectHideFlags: 0

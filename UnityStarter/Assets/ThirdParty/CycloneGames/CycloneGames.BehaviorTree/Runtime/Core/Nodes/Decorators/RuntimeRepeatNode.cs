@@ -4,6 +4,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
     {
         public bool RepeatForever { get; set; } = true;
         public int RepeatCount { get; set; } = 1;
+        public bool UseRandomRepeatCount { get; set; }
+        public int RandomRangeMin { get; set; }
+        public int RandomRangeMax { get; set; }
 
         private int _currentRepeatCount;
         public int CurrentRepeatCount => _currentRepeatCount; // Exposed for debug
@@ -11,6 +14,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
             _currentRepeatCount = 0;
+            if (!RepeatForever && UseRandomRepeatCount)
+            {
+                RepeatCount = UnityEngine.Random.Range(RandomRangeMin, RandomRangeMax + 1);
+            }
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)

@@ -1,5 +1,3 @@
-using CycloneGames.BehaviorTree.Runtime.Components;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.State
@@ -7,16 +5,20 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.State
     public class BTChangeNode : ActionNode
     {
         [SerializeField] private string _stateId;
-        private BTStateMachineComponent _stateMachine;
-        public override void OnAwake()
+
+        public override BTNode Clone()
         {
-            _stateMachine = Tree.Owner.GetComponent<BTStateMachineComponent>();
+            var clone = (BTChangeNode)base.Clone();
+            clone._stateId = _stateId;
+            return clone;
         }
-        protected override void OnStart(IBlackBoard blackBoard)
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
         {
-            if (_stateMachine == null) return;
-            if (string.IsNullOrEmpty(_stateId)) return;
-            _stateMachine.SetState(_stateId);
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.State.RuntimeBTChangeNode();
+            node.GUID = GUID;
+            node.StateId = _stateId;
+            return node;
         }
     }
 }

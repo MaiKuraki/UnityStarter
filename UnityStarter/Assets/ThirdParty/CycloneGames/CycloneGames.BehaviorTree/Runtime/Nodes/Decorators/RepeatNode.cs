@@ -67,14 +67,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeRepeatNode();
             node.GUID = GUID;
             node.RepeatForever = _repeatForever;
-            
-            int count = _repeatCount;
-            if (_useRandomRepeatCount)
-            {
-                count = Random.Range((int)_randomRepeatCountRange.x, (int)_randomRepeatCountRange.y + 1);
-            }
-            node.RepeatCount = count;
-            
+            node.RepeatCount = _repeatCount;
+            node.UseRandomRepeatCount = _useRandomRepeatCount;
+            node.RandomRangeMin = (int)_randomRepeatCountRange.x;
+            node.RandomRangeMax = (int)_randomRepeatCountRange.y;
+
             if (Child != null)
             {
                 node.Child = Child.CreateRuntimeNode();
