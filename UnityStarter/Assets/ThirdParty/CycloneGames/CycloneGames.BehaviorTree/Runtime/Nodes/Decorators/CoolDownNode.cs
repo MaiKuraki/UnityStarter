@@ -53,5 +53,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             clone._coolDown = _coolDown;
             return clone;
         }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeCoolDownNode();
+            node.GUID = GUID;
+            node.CoolDown = _coolDown;
+            node.ResetOnSuccess = _resetOnSuccess;
+            if (Child != null)
+            {
+                node.Child = Child.CreateRuntimeNode();
+            }
+            return node;
+        }
     }
 }

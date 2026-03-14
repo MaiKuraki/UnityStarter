@@ -17,7 +17,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes
             if (Child == null) return RuntimeState.Failure;
             return Child.Run(blackboard);
         }
-        
+
         protected override void OnStop(RuntimeBlackboard blackboard)
         {
             if (Child != null && Child.IsStarted)

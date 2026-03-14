@@ -11,6 +11,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private readonly Dictionary<RuntimeBehaviorTree, TreeLODData> _treeData = new Dictionary<RuntimeBehaviorTree, TreeLODData>();
 
+        // 0GC iteration buffer: reused each UpdateAllLOD call
+        private readonly List<RuntimeBehaviorTree> _iterBuffer = new List<RuntimeBehaviorTree>();
+
         private struct TreeLODData
         {
             public Transform Transform;
@@ -56,7 +59,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 HasTypeOverride = false
             };
 
-            // Check for priority marker (0GC, no reflection)
             if (_config != null && treeTransform != null)
             {
                 var go = treeTransform.gameObject;
@@ -80,11 +82,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (!_treeData.TryGetValue(tree, out var data)) return 0;
 
-            // Boost takes precedence
             if (Time.time < data.BoostEndTime && _config != null)
                 return _config.BoostedPriority;
 
-            // Type override takes precedence over distance
             if (data.HasTypeOverride && data.TypePriority >= 0)
                 return data.TypePriority;
 
@@ -95,11 +95,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (!_treeData.TryGetValue(tree, out var data)) return 1;
 
-            // Boost takes precedence
             if (Time.time < data.BoostEndTime && _config != null)
                 return _config.BoostedTickInterval;
 
-            // Type override takes precedence over distance
             if (data.HasTypeOverride && data.TypeTickInterval >= 0)
                 return data.TypeTickInterval;
 
@@ -120,8 +118,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (!_treeData.TryGetValue(tree, out var data)) return;
             if (data.Transform == null) return;
 
-            float distance = Vector3.Distance(_referencePoint.position, data.Transform.position);
-            int lodLevel = _config.GetLODLevel(distance);
+            float sqrDist = (_referencePoint.position - data.Transform.position).sqrMagnitude;
+            int lodLevel = _config.GetLODLevelSqr(sqrDist);
 
             if (lodLevel >= 0 && lodLevel < _config.Levels.Length)
             {
@@ -135,11 +133,25 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (_config == null || _referencePoint == null) return;
 
-            var keys = new List<RuntimeBehaviorTree>(_treeData.Keys);
-            for (int i = 0; i < keys.Count; i++)
+            _iterBuffer.Clear();
+            foreach (var kvp in _treeData)
             {
-                UpdateLOD(keys[i]);
+                _iterBuffer.Add(kvp.Key);
             }
+            for (int i = 0; i < _iterBuffer.Count; i++)
+            {
+                UpdateLOD(_iterBuffer[i]);
+            }
+        }
+
+        public List<RuntimeBehaviorTree> GetTreeBuffer()
+        {
+            _iterBuffer.Clear();
+            foreach (var kvp in _treeData)
+            {
+                _iterBuffer.Add(kvp.Key);
+            }
+            return _iterBuffer;
         }
     }
 }

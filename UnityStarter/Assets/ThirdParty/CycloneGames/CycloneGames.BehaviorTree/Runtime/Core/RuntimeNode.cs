@@ -20,6 +20,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public bool IsStarted { get; private set; } = false;
         public string GUID { get; set; }
 
+        /// <summary>
+        /// Whether this node can be re-evaluated without running (condition check only).
+        /// Override in condition nodes / decorators wrapping conditions.
+        /// </summary>
+        public virtual bool CanEvaluate => false;
+
+        /// <summary>
+        /// Evaluates the node's condition without executing it.
+        /// Returns true if the condition passes, false otherwise.
+        /// Only meaningful when CanEvaluate is true.
+        /// </summary>
+        public virtual bool Evaluate(RuntimeBlackboard blackboard) => true;
+
         public virtual void OnAwake() { }
 
         public RuntimeState Run(RuntimeBlackboard blackboard)

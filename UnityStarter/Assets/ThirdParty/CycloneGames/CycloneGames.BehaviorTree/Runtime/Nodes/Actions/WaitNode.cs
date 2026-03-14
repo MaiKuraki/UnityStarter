@@ -10,6 +10,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
         [SerializeField] private bool _useRandomBetweenTwoConstants = false;
         [SerializeField] private Vector2 _range = new Vector2(1f, 2f);
         [SerializeField] private float _duration = 1f;
+        [SerializeField] private bool _useUnscaledTime = false;
 
         public float Duration { get => _duration; set => _duration = value; }
 
@@ -34,7 +35,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
         {
             var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeWaitNode();
             node.GUID = GUID;
-            node.Duration = _useRandomBetweenTwoConstants ? Random.Range(_range.x, _range.y) : _duration;
+            node.Duration = _duration;
+            node.UseUnscaledTime = _useUnscaledTime;
+            node.UseRandomRange = _useRandomBetweenTwoConstants;
+            node.RangeMin = _range.x;
+            node.RangeMax = _range.y;
             return node;
         }
         protected override BTState OnRun(IBlackBoard blackBoard)

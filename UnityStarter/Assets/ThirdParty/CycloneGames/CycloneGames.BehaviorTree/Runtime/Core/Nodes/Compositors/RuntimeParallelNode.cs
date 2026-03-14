@@ -31,18 +31,20 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 
         private RuntimeState RunDefault(RuntimeBlackboard blackboard)
         {
-            for (int i = 0; i < Children.Count; i++)
+            var children = Children;
+            for (int i = 0; i < children.Length; i++)
             {
-                Children[i].Run(blackboard);
+                children[i].Run(blackboard);
             }
             return RuntimeState.Running;
         }
 
         private RuntimeState RunUntilAnyComplete(RuntimeBlackboard blackboard)
         {
-            for (int i = 0; i < Children.Count; i++)
+            var children = Children;
+            for (int i = 0; i < children.Length; i++)
             {
-                var state = Children[i].Run(blackboard);
+                var state = children[i].Run(blackboard);
                 if (state == RuntimeState.Success || state == RuntimeState.Failure)
                 {
                     return RuntimeState.Success;
@@ -53,9 +55,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 
         private RuntimeState RunUntilAnyFailure(RuntimeBlackboard blackboard)
         {
-            for (int i = 0; i < Children.Count; i++)
+            var children = Children;
+            for (int i = 0; i < children.Length; i++)
             {
-                var state = Children[i].Run(blackboard);
+                var state = children[i].Run(blackboard);
                 if (state == RuntimeState.Failure) return RuntimeState.Success;
             }
             return RuntimeState.Running;
@@ -63,9 +66,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 
         private RuntimeState RunUntilAnySuccess(RuntimeBlackboard blackboard)
         {
-            for (int i = 0; i < Children.Count; i++)
+            var children = Children;
+            for (int i = 0; i < children.Length; i++)
             {
-                var state = Children[i].Run(blackboard);
+                var state = children[i].Run(blackboard);
                 if (state == RuntimeState.Success) return RuntimeState.Success;
             }
             return RuntimeState.Running;
@@ -73,11 +77,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 
         protected override void OnStop(RuntimeBlackboard blackboard)
         {
-            for (int i = 0; i < Children.Count; i++)
+            var children = Children;
+            for (int i = 0; i < children.Length; i++)
             {
-                if (Children[i].IsStarted)
+                if (children[i].IsStarted)
                 {
-                    Children[i].Abort(blackboard);
+                    children[i].Abort(blackboard);
                 }
             }
         }

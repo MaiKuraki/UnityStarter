@@ -68,11 +68,31 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             {
                 _probabilities.Add(1f);
             }
-            //remove over children
             if (_probabilities.Count > Children.Count)
             {
                 _probabilities.RemoveRange(Children.Count, _probabilities.Count - Children.Count);
             }
+        }
+
+        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        {
+            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeProbabilityBranch();
+            node.GUID = GUID;
+
+            // Pass weights so runtime can re-select each activation
+            float[] weights = new float[_probabilities.Count];
+            for (int i = 0; i < _probabilities.Count; i++)
+                weights[i] = _probabilities[i];
+            node.SetWeights(weights);
+
+            foreach (var child in Children)
+            {
+                if (child != null)
+                {
+                    node.AddChild(child.CreateRuntimeNode());
+                }
+            }
+            return node;
         }
     }
 }

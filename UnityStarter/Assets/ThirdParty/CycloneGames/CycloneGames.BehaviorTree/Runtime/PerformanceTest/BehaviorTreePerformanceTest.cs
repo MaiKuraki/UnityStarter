@@ -1,4 +1,5 @@
 using CycloneGames.BehaviorTree.Runtime;
+using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
@@ -13,7 +14,7 @@ public class BehaviorTreePerformanceTest : MonoBehaviour
 #if UNITY_EDITOR // Full class just run in Editor
 
         public BehaviorTree Tree;
-        private BlackBoard _blackBoard;
+        private RuntimeBehaviorTree _runtimeTree;
 
         private void Start()
         {
@@ -31,42 +32,33 @@ public class BehaviorTreePerformanceTest : MonoBehaviour
                         // Add some dummy nodes
                         for (int i = 0; i < 10; i++)
                         {
-                                var action = ScriptableObject.CreateInstance<WaitNode>(); // Assuming WaitNode exists or similar
+                                var action = ScriptableObject.CreateInstance<WaitNode>();
                                 action.Duration = 0.1f;
                                 Tree.AddNode(action);
                                 Tree.AddChild(selector, action);
                         }
                 }
 
-                Tree = (BehaviorTree)Tree.Clone(this.gameObject);
-                _blackBoard = new BlackBoard();
+                _runtimeTree = Tree.Compile(gameObject);
 
                 // Pre-warm
-                Tree.BTUpdate(_blackBoard);
+                _runtimeTree?.Tick();
         }
 
         private void Update()
         {
-                if (Tree == null) return;
-#if UNITY_EDITOR
-                Profiler.BeginSample("BehaviorTree.Update");
-#endif
-                Tree.BTUpdate(_blackBoard);
-#if UNITY_EDITOR
+                if (_runtimeTree == null) return;
+
+                Profiler.BeginSample("BehaviorTree.RuntimeTick");
+                _runtimeTree.Tick();
                 Profiler.EndSample();
-#endif
 
-#if UNITY_EDITOR
-                // Test Typed Blackboard Access
-                Profiler.BeginSample("BlackBoard.TypedAccess");
-#endif
-                _blackBoard.SetInt("TestInt", Time.frameCount);
-                int val = _blackBoard.GetInt("TestInt");
-#if UNITY_EDITOR
+                // Test Runtime Blackboard Access
+                Profiler.BeginSample("RuntimeBlackboard.TypedAccess");
+                int testKey = Animator.StringToHash("TestInt");
+                _runtimeTree.Blackboard.SetInt(testKey, Time.frameCount);
+                int val = _runtimeTree.Blackboard.GetInt(testKey);
                 Profiler.EndSample();
-#endif
-
-
         }
 #endif
 }
