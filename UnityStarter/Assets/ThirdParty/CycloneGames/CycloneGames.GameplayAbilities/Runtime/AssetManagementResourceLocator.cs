@@ -1,5 +1,6 @@
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 using CycloneGames.AssetManagement.Runtime;
 
@@ -56,7 +57,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.assetPackage = assetPackage;
         }
 
-        public async UniTask<IResourceHandle<T>> LoadAssetAsync<T>(object key, string cacheTag = null, string cacheOwner = null) where T : Object
+        public async UniTask<IResourceHandle<T>> LoadAssetAsync<T>(object key, string bucket = null, string cacheTag = null, string cacheOwner = null, CancellationToken cancellationToken = default) where T : Object
         {
             if (key == null) return null;
 
@@ -66,12 +67,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return null;
             }
 
-            var loadHandle = assetPackage.LoadAssetAsync<T>(stringKey, tag: cacheTag, owner: cacheOwner);
+            var loadHandle = assetPackage.LoadAssetAsync<T>(stringKey, bucket: bucket, tag: cacheTag, owner: cacheOwner, cancellationToken: cancellationToken);
 
-            while (!loadHandle.IsDone)
-            {
-                await UniTask.Yield();
-            }
+            await loadHandle.Task;
 
             if (loadHandle.Asset == null)
             {
