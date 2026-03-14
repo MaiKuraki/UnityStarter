@@ -1,9 +1,11 @@
 #if ADDRESSABLES_PRESENT
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine.ResourceManagement.AsyncOperations;
 using Cysharp.Threading.Tasks;
 using UnityEngine.AddressableAssets;
+using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -15,6 +17,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private volatile bool _initialized;
         private AsyncOperationHandle _initializationHandle;
         private volatile List<string> _packageNamesCache;
+        private readonly SemaphoreSlim _initSemaphore = new SemaphoreSlim(1, 1);
 
         public bool Initialized => _initialized;
 
@@ -22,70 +25,80 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (_initialized) return;
 
+            await _initSemaphore.WaitAsync();
             try
             {
-                var resourceLocators = Addressables.ResourceLocators;
-                if (resourceLocators != null)
-                {
-                    _initialized = true;
-                    UnityEngine.Debug.Log($"{DEBUG_FLAG} Addressables already initialized, skipping initialization.");
-                    return;
-                }
-            }
-            catch
-            {
-                // ResourceLocators access failed, need to initialize
-            }
+                if (_initialized) return;
 
-            try
-            {
-                _initializationHandle = Addressables.InitializeAsync();
-
-                if (!_initializationHandle.IsValid())
-                {
-                    _initialized = true;
-                    UnityEngine.Debug.Log($"{DEBUG_FLAG} Addressables initialization handle invalid, assuming already initialized.");
-                    return;
-                }
-
-                await _initializationHandle;
-
-                if (_initializationHandle.IsValid())
-                {
-                    if (_initializationHandle.Status == AsyncOperationStatus.Succeeded)
-                    {
-                        _initialized = true;
-                    }
-                    else
-                    {
-                        UnityEngine.Debug.LogError($"{DEBUG_FLAG} Initialization failed. Status: {_initializationHandle.Status}, Exception: {_initializationHandle.OperationException}");
-                    }
-                }
-                else
-                {
-                    _initialized = true;
-                    UnityEngine.Debug.Log($"{DEBUG_FLAG} Initialization handle became invalid after await, assuming initialization succeeded.");
-                }
-            }
-            catch (Exception ex)
-            {
                 try
                 {
                     var resourceLocators = Addressables.ResourceLocators;
                     if (resourceLocators != null)
                     {
                         _initialized = true;
-                        UnityEngine.Debug.Log($"{DEBUG_FLAG} Initialization exception caught but Addressables appears initialized: {ex.Message}");
-                    }
-                    else
-                    {
-                        UnityEngine.Debug.LogError($"{DEBUG_FLAG} Initialization exception: {ex.Message}");
+                        CLogger.LogInfo($"{DEBUG_FLAG} Addressables already initialized, skipping initialization.");
+                        return;
                     }
                 }
                 catch
                 {
-                    UnityEngine.Debug.LogError($"{DEBUG_FLAG} Initialization exception and cannot verify status: {ex.Message}");
+                    // ResourceLocators access failed, need to initialize
                 }
+
+                try
+                {
+                    _initializationHandle = Addressables.InitializeAsync();
+
+                    if (!_initializationHandle.IsValid())
+                    {
+                        _initialized = true;
+                        CLogger.LogInfo($"{DEBUG_FLAG} Addressables initialization handle invalid, assuming already initialized.");
+                        return;
+                    }
+
+                    await _initializationHandle;
+
+                    if (_initializationHandle.IsValid())
+                    {
+                        if (_initializationHandle.Status == AsyncOperationStatus.Succeeded)
+                        {
+                            _initialized = true;
+                        }
+                        else
+                        {
+                            CLogger.LogError($"{DEBUG_FLAG} Initialization failed. Status: {_initializationHandle.Status}, Exception: {_initializationHandle.OperationException}");
+                        }
+                    }
+                    else
+                    {
+                        _initialized = true;
+                        CLogger.LogInfo($"{DEBUG_FLAG} Initialization handle became invalid after await, assuming initialization succeeded.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    try
+                    {
+                        var resourceLocators = Addressables.ResourceLocators;
+                        if (resourceLocators != null)
+                        {
+                            _initialized = true;
+                            CLogger.LogInfo($"{DEBUG_FLAG} Initialization exception caught but Addressables appears initialized: {ex.Message}");
+                        }
+                        else
+                        {
+                            CLogger.LogError($"{DEBUG_FLAG} Initialization exception: {ex.Message}");
+                        }
+                    }
+                    catch
+                    {
+                        CLogger.LogError($"{DEBUG_FLAG} Initialization exception and cannot verify status: {ex.Message}");
+                    }
+                }
+            }
+            finally
+            {
+                _initSemaphore.Release();
             }
         }
 

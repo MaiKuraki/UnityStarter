@@ -1,3 +1,4 @@
+using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
 using System;
 using System.Threading;
@@ -79,40 +80,43 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string bucket = null, string tag = null, string owner = null) where TAsset : UnityEngine.Object
         {
-            var cached = _cacheService.Get(location, bucket, tag, owner);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAssetHandle<TAsset>)cached;
 
             var asset = Resources.Load<TAsset>(location);
             var id = RegisterHandle();
-            var handle = ResourcesAssetHandle<TAsset>.Create(id, location, asset, _cacheService.OnHandleReleased);
+            var handle = ResourcesAssetHandle<TAsset>.Create(id, cacheKey, asset, _cacheService.OnHandleReleased);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetSync {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(location, bucket, tag, owner, handle);
+            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
             return handle;
         }
 
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cached = _cacheService.Get(location, bucket, tag, owner);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAssetHandle<TAsset>)cached;
 
             var request = Resources.LoadAsync<TAsset>(location);
             var id = RegisterHandle();
-            var handle = ResourcesAssetHandle<TAsset>.Create(id, location, request, _cacheService.OnHandleReleased, cancellationToken);
+            var handle = ResourcesAssetHandle<TAsset>.Create(id, cacheKey, request, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(location, bucket, tag, owner, handle);
+            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
             return handle;
         }
 
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cached = _cacheService.Get(location, bucket, tag, owner);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAllAssetsHandle<TAsset>)cached;
 
             var assets = Resources.LoadAll<TAsset>(location);
             var id = RegisterHandle();
-            var handle = ResourcesAllAssetsHandle<TAsset>.Create(id, location, assets, _cacheService.OnHandleReleased);
+            var handle = ResourcesAllAssetsHandle<TAsset>.Create(id, cacheKey, assets, _cacheService.OnHandleReleased);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(location, bucket, tag, owner, handle);
+            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
             return handle;
         }
 
@@ -168,7 +172,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public UniTask UnloadUnusedAssetsAsync()
         {
             _cacheService.ClearAll();
-            Debug.LogWarning("[ResourcesAssetPackage] UnloadUnusedAssetsAsync is not recommended for Resources. Assets loaded from Resources cannot be unloaded individually and this call can cause performance hitches.");
+            CLogger.LogWarning("[ResourcesAssetPackage] UnloadUnusedAssetsAsync is not recommended for Resources. Assets loaded from Resources cannot be unloaded individually and this call can cause performance hitches.");
             return UniTask.CompletedTask;
         }
 

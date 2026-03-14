@@ -8,6 +8,7 @@ using UnityEngine.SceneManagement;
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
 using UnityEngine.ResourceManagement.ResourceProviders;
+using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -116,6 +117,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public UnityEngine.Object AssetObject => Raw.Result;
 
         private int _refCount;
+        private volatile bool _disposed;
         // Stores the cache key so OnHandleReleased can be O(1) without scanning the active map.
         private string _cacheKey;
         private Action<string, IReferenceCounted> _onReleaseToCache;
@@ -129,6 +131,7 @@ namespace CycloneGames.AssetManagement.Runtime
             Raw = raw;
             _task = raw.ToUniTask(cancellationToken: cancellationToken);
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -143,11 +146,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[AddressableAssetHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount); // restore
+                CLogger.LogError("[AddressableAssetHandle] Release called more times than Retain. Ignoring extra release.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(_cacheKey, this);
                 else DisposeInternal();
@@ -158,6 +172,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             if (Raw.IsValid()) Addressables.Release(Raw);
             Raw = default;
@@ -183,6 +198,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public IReadOnlyList<TAsset> Assets => (IReadOnlyList<TAsset>)raw.Result;
 
         private int _refCount;
+        private volatile bool _disposed;
         private string _cacheKey;
         private Action<string, IReferenceCounted> _onReleaseToCache;
 
@@ -195,6 +211,7 @@ namespace CycloneGames.AssetManagement.Runtime
             this.raw = raw;
             _task = raw.ToUniTask(cancellationToken: cancellationToken);
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -209,11 +226,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[AddressableAllAssetsHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[AddressableAllAssetsHandle] Release called more times than Retain. Ignoring extra release.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(_cacheKey, this);
                 else DisposeInternal();
@@ -224,6 +252,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             if (raw.IsValid()) Addressables.Release(raw);
             this.raw = default;
@@ -249,6 +278,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public GameObject Instance => raw.Result;
 
         private int _refCount;
+        private volatile bool _disposed;
         private Action<string, IReferenceCounted> _onReleaseToCache;
 
         public AddressableInstantiateHandle() { }
@@ -259,6 +289,7 @@ namespace CycloneGames.AssetManagement.Runtime
             this.raw = raw;
             _task = raw.ToUniTask(cancellationToken: cancellationToken);
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -273,11 +304,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[AddressableInstantiateHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[AddressableInstantiateHandle] Release called more times than Retain. Ignoring extra release.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(null, this);
                 else DisposeInternal();
@@ -288,6 +330,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             if (raw.IsValid()) Addressables.Release(raw);
             this.raw = default;
@@ -329,6 +372,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public Scene Scene => Raw.Result.Scene;
 
         private int _refCount;
+        private volatile bool _disposed;
         private Action<string, IReferenceCounted> _onReleaseToCache;
 
         public AddressableSceneHandle() { }
@@ -342,6 +386,7 @@ namespace CycloneGames.AssetManagement.Runtime
             // is not supported on await IEnumerator"). Poll IsDone instead.
             _task = UniTask.WaitUntil(() => Raw.IsDone, cancellationToken: cancellationToken);
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -356,11 +401,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[AddressableSceneHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[AddressableSceneHandle] Release called more times than Retain. Ignoring extra release.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(null, this);
                 else DisposeInternal();
@@ -371,6 +427,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             if (Raw.IsValid()) Addressables.Release(Raw);
             Raw = default;
@@ -386,26 +443,29 @@ namespace CycloneGames.AssetManagement.Runtime
     internal sealed class AddressableDownloader : IDownloader
     {
         private AsyncOperationHandle raw;
-        public bool IsDone => raw.IsDone;
-        public bool Succeed => raw.Status == AsyncOperationStatus.Succeeded;
-        public float Progress => raw.PercentComplete;
+        private bool _cancelled;
+        public bool IsDone => _cancelled || raw.IsDone;
+        public bool Succeed => !_cancelled && raw.Status == AsyncOperationStatus.Succeeded;
+        public float Progress => _cancelled ? 0f : raw.PercentComplete;
         public int TotalDownloadCount => 0;
         public int CurrentDownloadCount => 0;
-        public long TotalDownloadBytes => raw.GetDownloadStatus().TotalBytes;
-        public long CurrentDownloadBytes => raw.GetDownloadStatus().DownloadedBytes;
-        public string Error => raw.OperationException?.Message;
+        public long TotalDownloadBytes => _cancelled ? 0 : raw.GetDownloadStatus().TotalBytes;
+        public long CurrentDownloadBytes => _cancelled ? 0 : raw.GetDownloadStatus().DownloadedBytes;
+        public string Error => _cancelled ? "Cancelled" : raw.OperationException?.Message;
 
         public AddressableDownloader(AsyncOperationHandle raw) { this.raw = raw; }
 
         public void Begin() { }
         public UniTask StartAsync(CancellationToken cancellationToken = default) => raw.ToUniTask(cancellationToken: cancellationToken);
-        public void Pause() => Debug.LogWarning("[AddressableDownloader] Pause is not supported by Addressables.");
-        public void Resume() => Debug.LogWarning("[AddressableDownloader] Resume is not supported by Addressables.");
+        public void Pause() => CLogger.LogWarning("[AddressableDownloader] Pause is not supported by Addressables.");
+        public void Resume() => CLogger.LogWarning("[AddressableDownloader] Resume is not supported by Addressables.");
         public void Cancel()
         {
-            if (raw.IsValid()) Addressables.Release(raw);
+            if (!_cancelled && raw.IsValid()) Addressables.Release(raw);
+            raw = default;
+            _cancelled = true;
         }
-        public void Combine(IDownloader other) => Debug.LogWarning("[AddressableDownloader] Combine is not supported by Addressables.");
+        public void Combine(IDownloader other) => CLogger.LogWarning("[AddressableDownloader] Combine is not supported by Addressables.");
     }
 }
 #endif
