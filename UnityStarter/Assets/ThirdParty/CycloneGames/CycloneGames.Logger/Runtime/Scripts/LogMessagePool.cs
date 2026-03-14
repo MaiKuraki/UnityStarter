@@ -13,17 +13,18 @@ namespace CycloneGames.Logger
     public static class LogMessagePool
     {
         private static readonly ConcurrentQueue<LogMessage> Pool = new();
-        
+
         private const int TargetPoolSize = 256;
         private const int PeakPoolSize = 4096;
         private const int MaxPoolSize = 8192;
-        
+
         private static int _poolSize = 0;
         private static int _isTrimming = 0;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         private static long _totalGets = 0;
         private static long _totalReturns = 0;
+        private static long _totalMisses = 0;
         private static long _totalDiscards = 0;
         private static long _trimCount = 0;
         private static int _peakSize = 0;
@@ -39,6 +40,9 @@ namespace CycloneGames.Logger
                 Interlocked.Decrement(ref _poolSize);
                 return message;
             }
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Interlocked.Increment(ref _totalMisses);
+#endif
             return new LogMessage();
         }
 
@@ -51,7 +55,7 @@ namespace CycloneGames.Logger
 #endif
 
             int currentSize = Volatile.Read(ref _poolSize);
-            
+
             // Hard limit: discard only when exceeding absolute maximum
             if (currentSize >= MaxPoolSize)
             {
@@ -89,7 +93,7 @@ namespace CycloneGames.Logger
             count = Math.Min(Math.Max(count, 0), PeakPoolSize);
             int current = Volatile.Read(ref _poolSize);
             int toAdd = Math.Min(count - current, PeakPoolSize - current);
-            
+
             for (int i = 0; i < toAdd; i++)
             {
                 Pool.Enqueue(new LogMessage());
@@ -133,6 +137,7 @@ namespace CycloneGames.Logger
                 PeakSize = Volatile.Read(ref _peakSize),
                 TotalGets = Interlocked.Read(ref _totalGets),
                 TotalReturns = Interlocked.Read(ref _totalReturns),
+                TotalMisses = Interlocked.Read(ref _totalMisses),
                 TotalDiscards = Interlocked.Read(ref _totalDiscards),
                 TrimCount = Interlocked.Read(ref _trimCount)
             };
@@ -142,6 +147,7 @@ namespace CycloneGames.Logger
         {
             Interlocked.Exchange(ref _totalGets, 0);
             Interlocked.Exchange(ref _totalReturns, 0);
+            Interlocked.Exchange(ref _totalMisses, 0);
             Interlocked.Exchange(ref _totalDiscards, 0);
             Interlocked.Exchange(ref _trimCount, 0);
             Interlocked.Exchange(ref _peakSize, 0);
@@ -153,11 +159,12 @@ namespace CycloneGames.Logger
             public int PeakSize;
             public long TotalGets;
             public long TotalReturns;
+            public long TotalMisses;
             public long TotalDiscards;
             public long TrimCount;
-            
-            public double HitRate => TotalGets > 0 ? (TotalGets - TotalReturns + CurrentSize) / (double)TotalGets : 0;
-            public double DiscardRate => TotalReturns > 0 ? TotalDiscards / (double)TotalReturns : 0;
+
+            public double HitRate => TotalGets > 0 ? 1.0 - (double)TotalMisses / TotalGets : 1.0;
+            public double DiscardRate => TotalReturns > 0 ? (double)TotalDiscards / TotalReturns : 0;
         }
 #endif
     }

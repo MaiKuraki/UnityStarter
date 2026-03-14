@@ -12,12 +12,13 @@ namespace CycloneGames.Logger
         private static LoggerUpdater _instance;
         private static readonly ConcurrentQueue<LogEntry> UnityLogQueue = new();
 
+        // Reuse to avoid params object[] allocation in Debug.LogFormat; safe because LogToUnity runs on main thread only.
+        private static readonly object[] _logFormatArgs = new object[1];
+
         internal struct LogEntry
         {
             public LogLevel Level;
             public string Message;
-            public string FilePath;
-            public int LineNumber;
         }
 
         internal static void EnsureInstance()
@@ -30,14 +31,12 @@ namespace CycloneGames.Logger
             _instance = go.AddComponent<LoggerUpdater>();
         }
 
-        internal static void EnqueueUnityLog(LogLevel level, string message, string filePath, int lineNumber)
+        internal static void EnqueueUnityLog(LogLevel level, string message)
         {
             UnityLogQueue.Enqueue(new LogEntry
             {
                 Level = level,
-                Message = message,
-                FilePath = filePath,
-                LineNumber = lineNumber
+                Message = message
             });
         }
 
@@ -61,8 +60,6 @@ namespace CycloneGames.Logger
 
         private static void LogToUnity(LogEntry entry)
         {
-            // Use ILogger.Log with custom context to enable double-click navigation.
-            // Format message with embedded location for hyperlink support.
             var logType = entry.Level switch
             {
                 LogLevel.Warning => UnityEngine.LogType.Warning,
@@ -70,9 +67,10 @@ namespace CycloneGames.Logger
                 _ => UnityEngine.LogType.Log
             };
 
-            // LogFormat with NoStacktrace prevents Unity's auto stack trace.
-            // The message already contains clickable hyperlink and source location.
-            Debug.LogFormat(logType, LogOption.NoStacktrace, null, "{0}", entry.Message);
+            // Pass pre-allocated object[] to avoid params array allocation.
+            _logFormatArgs[0] = entry.Message;
+            Debug.LogFormat(logType, LogOption.NoStacktrace, null, "{0}", _logFormatArgs);
+            _logFormatArgs[0] = null; // Release string reference
         }
 
         private void OnDestroy()

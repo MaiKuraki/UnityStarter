@@ -7,33 +7,30 @@ namespace CycloneGames.Logger
 {
     /// <summary>
     /// Logs messages to standard console output and error streams.
-    /// Uses a shared lock to avoid interleaved writes across threads.
+    /// Zero-alloc output path: formats into a pooled StringBuilder, then writes
+    /// through a shared char buffer under a static lock to avoid both interleaving and ToString() allocation.
     /// </summary>
     public sealed class ConsoleLogger : ILogger
     {
         private static readonly object _consoleLock = new();
+        private static readonly char[] _charBuffer = new char[1024];
 
-        public void LogTrace(LogMessage logMessage) => LogInternal("TRACE", logMessage, Console.Out);
-        public void LogDebug(LogMessage logMessage) => LogInternal("DEBUG", logMessage, Console.Out);
-        public void LogInfo(LogMessage logMessage) => LogInternal("INFO", logMessage, Console.Out);
-        public void LogWarning(LogMessage logMessage) => LogInternal("WARNING", logMessage, Console.Out);
-        public void LogError(LogMessage logMessage) => LogInternal("ERROR", logMessage, Console.Error);
-        public void LogFatal(LogMessage logMessage) => LogInternal("FATAL", logMessage, Console.Error);
-
-        private static void LogInternal(string levelString, LogMessage logMessage, TextWriter writer)
+        public void Log(LogMessage logMessage)
         {
+            TextWriter writer = logMessage.Level >= LogLevel.Error ? Console.Error : Console.Out;
+
             StringBuilder sb = StringBuilderPool.Get();
             try
             {
-                sb.Append(levelString);
+                sb.Append(LogLevelStrings.Get(logMessage.Level));
                 sb.Append(": ");
                 if (!string.IsNullOrEmpty(logMessage.Category))
                 {
-                    sb.Append("[");
+                    sb.Append('[');
                     sb.Append(logMessage.Category);
                     sb.Append("] ");
                 }
-                
+
                 if (logMessage.MessageBuilder != null)
                 {
                     var mb = logMessage.MessageBuilder;
@@ -46,7 +43,7 @@ namespace CycloneGames.Logger
                 {
                     sb.Append(logMessage.OriginalMessage);
                 }
-                
+
                 if (!string.IsNullOrEmpty(logMessage.FilePath))
                 {
                     sb.Append(" (at ");
@@ -63,7 +60,16 @@ namespace CycloneGames.Logger
 
                 lock (_consoleLock)
                 {
-                    writer.WriteLine(sb.ToString());
+                    int length = sb.Length;
+                    int offset = 0;
+                    while (offset < length)
+                    {
+                        int count = Math.Min(_charBuffer.Length, length - offset);
+                        sb.CopyTo(offset, _charBuffer, 0, count);
+                        writer.Write(_charBuffer, 0, count);
+                        offset += count;
+                    }
+                    writer.WriteLine();
                 }
             }
             finally
@@ -72,6 +78,6 @@ namespace CycloneGames.Logger
             }
         }
 
-        public void Dispose() { /* No unmanaged resources to dispose for ConsoleLogger. */ }
+        public void Dispose() { }
     }
 }

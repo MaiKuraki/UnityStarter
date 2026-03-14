@@ -61,13 +61,13 @@ public class LoggerPoolMonitor : MonoBehaviour
 === Object Pool Statistics ===
 [StringBuilder Pool]
   Current: {sbStats.CurrentSize} | Peak: {sbStats.PeakSize}
-  Gets: {sbStats.TotalGets} | Returns: {sbStats.TotalReturns}
+  Gets: {sbStats.TotalGets} | Returns: {sbStats.TotalReturns} | Misses: {sbStats.TotalMisses}
   Discards: {sbStats.TotalDiscards} | Trims: {sbStats.TrimCount}
   Hit Rate: {sbStats.HitRate:P1} | Discard Rate: {sbStats.DiscardRate:P1}
 
 [LogMessage Pool]
   Current: {msgStats.CurrentSize} | Peak: {msgStats.PeakSize}
-  Gets: {msgStats.TotalGets} | Returns: {msgStats.TotalReturns}
+  Gets: {msgStats.TotalGets} | Returns: {msgStats.TotalReturns} | Misses: {msgStats.TotalMisses}
   Discards: {msgStats.TotalDiscards} | Trims: {msgStats.TrimCount}
   Hit Rate: {msgStats.HitRate:P1} | Discard Rate: {msgStats.DiscardRate:P1}
 ==============================
@@ -94,13 +94,13 @@ public class LoggerPoolMonitor : MonoBehaviour
 === Burst Test Results ({burstLogCount} logs) ===
 [StringBuilder Pool]
   Peak Growth: {sbStatsBefore.PeakSize} → {sbStatsAfter.PeakSize} (+{sbStatsAfter.PeakSize - sbStatsBefore.PeakSize})
-  Discards: {sbStatsAfter.TotalDiscards - sbStatsBefore.TotalDiscards} (Should be 0!)
+  Misses: {sbStatsAfter.TotalMisses - sbStatsBefore.TotalMisses} (Should be 0 when warm!)
+  Discards: {sbStatsAfter.TotalDiscards - sbStatsBefore.TotalDiscards}
   
 [LogMessage Pool]
   Peak Growth: {msgStatsBefore.PeakSize} → {msgStatsAfter.PeakSize} (+{msgStatsAfter.PeakSize - msgStatsBefore.PeakSize})
-  Discards: {msgStatsAfter.TotalDiscards - msgStatsBefore.TotalDiscards} (Should be 0!)
-  
-✓ Zero discards = Perfect three-tier capacity management!
+  Misses: {msgStatsAfter.TotalMisses - msgStatsBefore.TotalMisses} (Should be 0 when warm!)
+  Discards: {msgStatsAfter.TotalDiscards - msgStatsBefore.TotalDiscards}
 ============================================
 ");
     }

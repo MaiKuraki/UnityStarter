@@ -35,7 +35,7 @@ public class LoggerPerformanceTest : MonoBehaviour
     void Update()
     {
         CLogger.Instance.Pump(8192);
-        
+
         if (logCount < MaxLogCount)
         {
             CLogger.LogTrace(sb => { sb.Append("Trace log message "); sb.Append(logCount); }, "PerformanceTest");
@@ -69,9 +69,8 @@ public class LoggerPerformanceTest : MonoBehaviour
 
         Debug.Log($@"
 === Performance Test Results ===
-StringBuilder Pool: Peak={sbStats.PeakSize}, Discards={sbStats.TotalDiscards}
-LogMessage Pool: Peak={msgStats.PeakSize}, Discards={msgStats.TotalDiscards}
-Note: Discards should be 0 for optimal performance!
+StringBuilder Pool: Peak={sbStats.PeakSize}, Misses={sbStats.TotalMisses}, Discards={sbStats.TotalDiscards}, HitRate={sbStats.HitRate:P1}
+LogMessage Pool: Peak={msgStats.PeakSize}, Misses={msgStats.TotalMisses}, Discards={msgStats.TotalDiscards}, HitRate={msgStats.HitRate:P1}
 ");
     }
 #endif
