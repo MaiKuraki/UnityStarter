@@ -284,7 +284,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             uvRect.width = srcPixelW * invWidth;
             uvRect.height = srcPixelH * invHeight;
 
-            System.Threading.Interlocked.Increment(ref _activeSpriteCount);
             return true;
         }
 

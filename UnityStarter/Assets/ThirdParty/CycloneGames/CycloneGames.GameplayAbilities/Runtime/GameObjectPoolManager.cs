@@ -225,7 +225,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         #region Core Pool Operations
 
-        public async UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null, string cacheTag = null, string cacheOwner = null)
+        public async UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null, string bucket = null, string cacheTag = null, string cacheOwner = null)
         {
             TickDecay();
 
@@ -244,7 +244,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 // Validate instance (Unity may have destroyed it)
                 if (instance == null)
                 {
-                    return await GetAsync(assetRef, position, rotation, parent, cacheTag, cacheOwner);
+                    return await GetAsync(assetRef, position, rotation, parent, bucket, cacheTag, cacheOwner);
                 }
 
                 instance.transform.SetParent(parent, false);
@@ -255,7 +255,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 // Pool miss - create new instance
                 if (poolData.Handle == null)
                 {
-                    poolData.Handle = await resourceLocator.LoadAssetAsync<GameObject>(assetKey, cacheTag, cacheOwner);
+                    poolData.Handle = await resourceLocator.LoadAssetAsync<GameObject>(assetKey, bucket, cacheTag, cacheOwner);
                     if (poolData.Handle == null || poolData.Handle.Asset == null) return null;
                 }
 
@@ -318,7 +318,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         #region Pre-warming
 
-        public async UniTask PrewarmPoolAsync(object assetRef, int count, string cacheTag = null, string cacheOwner = null)
+        public async UniTask PrewarmPoolAsync(object assetRef, int count, string bucket = null, string cacheTag = null, string cacheOwner = null)
         {
             if (assetRef is not string assetKey || string.IsNullOrEmpty(assetKey)) return;
 
@@ -327,7 +327,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (poolData.Handle == null)
             {
-                poolData.Handle = await resourceLocator.LoadAssetAsync<GameObject>(assetKey, cacheTag, cacheOwner);
+                poolData.Handle = await resourceLocator.LoadAssetAsync<GameObject>(assetKey, bucket, cacheTag, cacheOwner);
                 if (poolData.Handle == null || poolData.Handle.Asset == null) return;
             }
 

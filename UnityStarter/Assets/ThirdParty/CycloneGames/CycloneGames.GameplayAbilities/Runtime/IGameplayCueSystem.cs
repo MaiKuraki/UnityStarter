@@ -1,3 +1,4 @@
+using System.Threading;
 using CycloneGames.GameplayTags.Runtime;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -19,7 +20,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public interface IResourceLocator
     {
-        UniTask<IResourceHandle<T>> LoadAssetAsync<T>(object key, string cacheTag = null, string cacheOwner = null) where T : Object;
+        UniTask<IResourceHandle<T>> LoadAssetAsync<T>(object key, string bucket = null, string cacheTag = null, string cacheOwner = null, CancellationToken cancellationToken = default) where T : Object;
     }
 
     /// <summary>
@@ -27,7 +28,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public interface IGameObjectPoolManager
     {
-        UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null, string cacheTag = null, string cacheOwner = null);
+        UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null, string bucket = null, string cacheTag = null, string cacheOwner = null);
         void Release(GameObject instance);
         void Shutdown();
     }

@@ -16,19 +16,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
     {
         private static GameplayCueManager s_DefaultInstance;
         private static IGameplayCueManager s_CustomInstance;
-        
+
         /// <summary>
         /// Gets the default concrete GameplayCueManager instance.
         /// Use this for internal Runtime assembly code that needs the full API.
         /// </summary>
         public static GameplayCueManager Default => s_DefaultInstance ??= new GameplayCueManager();
-        
+
         /// <summary>
         /// Gets the current GameplayCue manager instance (interface).
         /// Returns custom DI instance if set, otherwise returns Default.
         /// </summary>
         public static IGameplayCueManager Instance => s_CustomInstance ?? Default;
-        
+
         /// <summary>
         /// Sets the GameplayCue manager instance. Call this during DI container setup.
         /// Also updates the GASServices.CueManager for cross-assembly access.
@@ -38,7 +38,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             s_CustomInstance = instance;
             GASServices.CueManager = instance;
         }
-        
+
         /// <summary>
         /// Resets the instance to null. Call during test teardown or game shutdown.
         /// </summary>
@@ -64,7 +64,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private class ActiveCueInstance { public GameplayTag CueTag; public GameObject Instance; }
         private readonly Dictionary<AbilitySystemComponent, List<ActiveCueInstance>> activeInstances = new Dictionary<AbilitySystemComponent, List<ActiveCueInstance>>();
-        
+
         public GameplayCueManager() { }
 
         public void Initialize(IAssetPackage assetPackage)
@@ -77,7 +77,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             isInitialized = true;
             GASLog.Info("GameplayCueManager initialized.");
         }
-        
+
         // IGameplayCueManager.Initialize (generic object version for Core interface)
         void IGameplayCueManager.Initialize(object assetPackage)
         {
@@ -227,8 +227,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (loadedStaticCues.TryGetValue(address, out var cueHandle)) return cueHandle.Asset;
 
-            var loadedHandle = await resourceLocator.LoadAssetAsync<GameplayCueSO>(address, cacheTag: "GameplayCue", cacheOwner: cueTag.ToString());
-            if (loadedHandle != null && loadedHandle.Asset != null) 
+            var loadedHandle = await resourceLocator.LoadAssetAsync<GameplayCueSO>(address, bucket: "GameplayCue", cacheTag: "GameplayCue", cacheOwner: cueTag.ToString());
+            if (loadedHandle != null && loadedHandle.Asset != null)
             {
                 loadedStaticCues[address] = loadedHandle;
                 return loadedHandle.Asset;
@@ -252,9 +252,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             activeInstances.Clear();
             isInitialized = false;
         }
-        
+
         #region IGameplayCueManager Interface Implementation
-        
+
         /// <summary>
         /// Interface method - handles cue via Core interface (uses object types).
         /// </summary>
@@ -267,7 +267,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 HandleCue(cueTag, runtimeEventType, spec).Forget();
             }
         }
-        
+
         /// <summary>
         /// Interface method - removes all cues for a specific ASC.
         /// </summary>
@@ -285,7 +285,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 instances.Clear();
             }
         }
-        
+
         #endregion
     }
 }

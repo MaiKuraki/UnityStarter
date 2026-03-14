@@ -12,7 +12,6 @@ namespace CycloneGames.Logger
     {
         private readonly CLogger _owner;
         private readonly BlockingCollection<LogMessage> _queue = new(new ConcurrentQueue<LogMessage>());
-        private readonly CancellationTokenSource _cts = new();
         private readonly Thread _workerThread;
 
         public ThreadedLogProcessor(CLogger owner)
@@ -31,7 +30,7 @@ namespace CycloneGames.Logger
         {
             if (!_queue.IsAddingCompleted)
             {
-                try { _queue.Add(message); } 
+                try { _queue.Add(message); }
                 catch (InvalidOperationException) { /* shutting down */ }
             }
         }
@@ -42,7 +41,8 @@ namespace CycloneGames.Logger
         {
             try
             {
-                foreach (var msg in _queue.GetConsumingEnumerable(_cts.Token))
+                // GetConsumingEnumerable blocks when empty, completes when CompleteAdding() is called and queue is drained.
+                foreach (var msg in _queue.GetConsumingEnumerable())
                 {
                     _owner.DispatchToLoggers(msg);
                     LogMessagePool.Return(msg);
@@ -57,15 +57,14 @@ namespace CycloneGames.Logger
 
         public void Dispose()
         {
+            // Signal no more items; worker will drain remaining messages then exit naturally.
             _queue.CompleteAdding();
-            _cts.Cancel();
-            
-            if (!_workerThread.Join(TimeSpan.FromSeconds(2)))
+
+            if (!_workerThread.Join(TimeSpan.FromSeconds(5)))
             {
                 Console.Error.WriteLine("[WARNING] ThreadedLogProcessor: Worker thread did not exit gracefully.");
             }
-            
-            _cts.Dispose();
+
             _queue.Dispose();
         }
     }

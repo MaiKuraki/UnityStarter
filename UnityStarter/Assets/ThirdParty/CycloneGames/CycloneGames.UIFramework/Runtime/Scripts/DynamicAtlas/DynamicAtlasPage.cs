@@ -205,7 +205,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
                 allocatedSize = new Vector2Int(allocWidth, allocHeight);
 
-                System.Threading.Interlocked.Increment(ref _activeSpriteCount);
                 return true;
             }
 
@@ -282,7 +281,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 uvRect.width = sourceWidth * invWidth;
                 uvRect.height = sourceHeight * invHeight;
 
-                System.Threading.Interlocked.Increment(ref _activeSpriteCount);
                 return true;
             }
 
@@ -310,8 +308,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             if (gpuCopySuccess) return true;
 
-            if (gpuCopySuccess) return true;
-
             // GPU Fallback via RT Bridge (always works regardless of readability)
             return CopyPixelsFromRegionViaRT(source, srcX, srcY, dstX, dstY, w, h);
         }
@@ -334,8 +330,6 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _needsApply = true;
 
             RenderTexture.active = previous;
-            RenderTexture.ReleaseTemporary(rt);
-
             RenderTexture.ReleaseTemporary(rt);
 
             return true;

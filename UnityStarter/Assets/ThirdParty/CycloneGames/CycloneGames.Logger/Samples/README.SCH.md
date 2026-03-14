@@ -4,23 +4,26 @@
 
 ## 核心特性
 
-- **三级容量管理** - 自动扩充和收缩池容量  
-- **零GC日志** - Builder API消除热路径内存分配  
-- **对象池监控** - Debug/Development版本统计功能  
+- **三级容量管理** - 自动扩充和收缩池容量
+- **零GC日志** - Builder API消除热路径内存分配
+- **对象池监控** - Debug/Development版本统计功能
 - **跨平台支持** - 支持Windows、macOS、Linux、Android、iOS、WebGL及主机平台
 
 ## 示例脚本
 
 ### LoggerPoolMonitor.cs
+
 **交互式对象池监控和容量验证**
 
 功能：
+
 - 实时显示对象池统计数据
 - 突发负载测试，验证零GC行为
 - 演示三级容量管理（Target/Peak/Max）
 - Context Menu快捷命令
 
 使用方法：
+
 ```csharp
 // 添加到GameObject并运行
 // 在Inspector右键查看Context Menu：
@@ -30,21 +33,26 @@
 ```
 
 ### LoggerBenchmark.cs
+
 **性能对比与GC追踪**
 
 测试内容：
-- Unity Debug.Log vs CLogger String API vs Builder API
+
+- Unity Debug.Log vs CLogger String API vs Builder（闭包）vs Builder（泛型/static）
 - 测量执行时间和GC分配
 - 测试后显示对象池统计
 
 预期结果：
-- Builder API：**最小GC分配**（包含Unity框架开销；生产环境接近零GC）
+
+- Builder 泛型（static lambda）：**接近零GC**（无闭包，无字符串分配）
+- Builder 闭包：较低GC分配（每次调用分配闭包对象）
 - String API：中等GC分配
 - Unity Debug.Log：高GC分配
 
 注意：GC测量包含Unity测试环境开销和冷启动池分配。关键指标是100%归还率和0%丢弃率，这验证了生产环境下的零GC行为。
 
 ### LoggerPerformanceTest.cs
+
 **大容量日志压力测试**
 
 - 记录10,000条不同级别的日志
@@ -52,6 +60,7 @@
 - 报告峰值池大小和丢弃计数
 
 ### LoggerSample.cs
+
 **基础使用示例**
 
 简单演示Logger的设置和基本日志记录。
@@ -84,9 +93,11 @@ Max (2048/8192)   <- 防止内存泄漏的硬上限
 ## 处理策略
 
 ### ThreadedLogProcessor（默认）
+
 在支持线程的平台上使用后台线程（`BelowNormal`优先级），提供最佳性能。
 
 ### SingleThreadLogProcessor
+
 用于不支持线程的平台（WebGL）。需要每帧调用`Pump()`。
 
 ```csharp
@@ -102,22 +113,25 @@ Max (2048/8192)   <- 防止内存泄漏的硬上限
 ## 零GC日志
 
 ### String API（便捷）
+
 ```csharp
 CLogger.LogInfo($"玩家HP: {hp}", "Combat");
 // 字符串插值会产生少量GC
 ```
 
-### Builder API（零GC）[推荐]
+### Builder API（低GC）
+
 ```csharp
 CLogger.LogInfo(sb => sb.Append("玩家HP: ").Append(hp), "Combat");
-// 零GC - StringBuilder使用对象池
+// StringBuilder使用对象池，但捕获 `hp` 会分配闭包对象
 ```
 
-### 带状态Builder（高级）
+### 带状态Builder（零GC）[推荐]
+
 ```csharp
-CLogger.LogInfo(player, (p, sb) => 
+CLogger.LogInfo(player, static (p, sb) =>
     sb.Append("玩家 ").Append(p.name).Append(" HP: ").Append(p.hp), "Combat");
-// 零GC + 避免闭包分配
+// 零GC：static 关键字防止闭包分配
 ```
 
 ---
@@ -132,26 +146,30 @@ var stats = StringBuilderPool.GetStatistics();
 Debug.Log($@"
 StringBuilder Pool:
   当前大小: {stats.CurrentSize} | 峰值: {stats.PeakSize}
-  命中率: {stats.HitRate:P} | 丢弃率: {stats.DiscardRate:P}
+  命中率: {stats.HitRate:P} | 未命中: {stats.TotalMisses} | 丢弃率: {stats.DiscardRate:P}
 ");
 #endif
 ```
 
 **关键指标**：
+
+- **HitRate**：应约为100%（从池中获取 vs 新创建）
+- **TotalMisses**：因池空而执行 `new` 分配的次数；预热后应约为 0
 - **PeakSize**：达到的最大池大小（应低于Max）
 - **DiscardRate**：应约为0%以获得最佳性能
-- **HitRate**：应约为100%（从池中获取 vs 新创建）
 
 ---
 
 ## 集中配置
 
 ### 方式1：LoggerSettings资源（推荐）
+
 1. 创建：`Assets -> Create -> CycloneGames -> Logger -> LoggerSettings`
 2. 移动到：`Assets/Resources/CycloneGames.Logger/LoggerSettings.asset`
 3. 配置：处理模式、Logger、日志级别等
 
 ### 方式2：自定义Bootstrap
+
 ```csharp
 [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
 static void Initialize()
@@ -163,7 +181,7 @@ static void Initialize()
     #endif
 
     CLogger.Instance.AddLoggerUnique(new UnityLogger());
-    
+
     #if !UNITY_WEBGL || UNITY_EDITOR
     var path = Path.Combine(Application.persistentDataPath, "App.log");
     CLogger.Instance.AddLoggerUnique(new FileLogger(path));
@@ -178,17 +196,20 @@ static void Initialize()
 ## 最佳实践
 
 **性能方面：**
-- 在性能关键代码中使用**Builder API**  
-- 在开发版本中监控**DiscardRate**  
-- 设置适当的**LogLevel**过滤不必要的日志  
+
+- 在性能关键代码中使用**Builder API**
+- 在开发版本中监控**DiscardRate**
+- 设置适当的**LogLevel**过滤不必要的日志
 
 **平台方面：**
-- WebGL版本在Update中调用**Pump()**  
-- 使用**分类**进行细粒度过滤  
+
+- WebGL版本在Update中调用**Pump()**
+- 使用**分类**进行细粒度过滤
 
 **质量方面：**
-- 集中配置Logger  
-- 避免重复注册Logger  
+
+- 集中配置Logger
+- 避免重复注册Logger
 
 ---
 

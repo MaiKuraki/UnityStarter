@@ -58,7 +58,7 @@ namespace CycloneGames.Logger
             {
                 _processor = new SingleThreadLogProcessor(this);
             }
-            
+
             LogMessagePool.Prewarm();
             Util.StringBuilderPool.Prewarm();
         }
@@ -343,22 +343,13 @@ namespace CycloneGames.Logger
             {
                 for (int i = 0; i < _loggers.Count; i++)
                 {
-                    var logger = _loggers[i];
                     try
                     {
-                        switch (logMessage.Level)
-                        {
-                            case LogLevel.Trace: logger.LogTrace(logMessage); break;
-                            case LogLevel.Debug: logger.LogDebug(logMessage); break;
-                            case LogLevel.Info: logger.LogInfo(logMessage); break;
-                            case LogLevel.Warning: logger.LogWarning(logMessage); break;
-                            case LogLevel.Error: logger.LogError(logMessage); break;
-                            case LogLevel.Fatal: logger.LogFatal(logMessage); break;
-                        }
+                        _loggers[i].Log(logMessage);
                     }
                     catch (Exception ex)
                     {
-                        Console.Error.WriteLine($"[CRITICAL] CLogger: Logger {logger.GetType().Name} failed. {ex.Message}");
+                        Console.Error.WriteLine($"[CRITICAL] CLogger: Logger {_loggers[i].GetType().Name} failed. {ex.Message}");
                     }
                 }
             }

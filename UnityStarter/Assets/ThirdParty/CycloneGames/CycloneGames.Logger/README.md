@@ -116,19 +116,23 @@ CLogger.LogInfo("Connected", "Net");
 CLogger.LogWarning("Low HP", "Gameplay");
 ```
 
-### Builder overloads (zero-GC)
+### Builder overloads (low-GC)
 
 ```csharp
 CLogger.LogDebug(sb => { sb.Append("PlayerId="); sb.Append(playerId); }, "Net");
 CLogger.LogError(sb => { sb.Append("Err="); sb.Append(code); }, "Net");
 ```
 
-### Stateful builder (advanced, avoids closure allocation)
+> **Note**: If the lambda captures external variables (e.g., `playerId`), a closure object is allocated per call. For true zero-GC, use the stateful builder below.
+
+### Stateful builder (zero-GC, recommended for hot paths)
 
 ```csharp
-CLogger.LogInfo(player, (p, sb) =>
+CLogger.LogInfo(player, static (p, sb) =>
     sb.Append("Player ").Append(p.name).Append(" HP: ").Append(p.hp), "Combat");
 ```
+
+The `static` keyword prevents the compiler from capturing any outer variables, guaranteeing zero closure allocation.
 
 ## Object Pool Monitoring
 
@@ -141,19 +145,20 @@ var msgStats = LogMessagePool.GetStatistics();
 
 Debug.Log($@"
 StringBuilder Pool - Current: {sbStats.CurrentSize}, Peak: {sbStats.PeakSize}
-  Hit Rate: {sbStats.HitRate:P}, Discard Rate: {sbStats.DiscardRate:P}
+  Hit Rate: {sbStats.HitRate:P}, Misses: {sbStats.TotalMisses}, Discard Rate: {sbStats.DiscardRate:P}
 
 LogMessage Pool - Current: {msgStats.CurrentSize}, Peak: {msgStats.PeakSize}
-  Hit Rate: {msgStats.HitRate:P}, Discard Rate: {msgStats.DiscardRate:P}
+  Hit Rate: {msgStats.HitRate:P}, Misses: {msgStats.TotalMisses}, Discard Rate: {msgStats.DiscardRate:P}
 ");
 #endif
 ```
 
 **Key Metrics**:
 
+- **HitRate**: Should be ~100% (objects retrieved from pool vs newly allocated)
+- **TotalMisses**: Number of times a `new` allocation was required (pool empty); should be ~0 when warm
 - **PeakSize**: Maximum pool size reached (should stay well below Max capacity)
 - **DiscardRate**: Should be ~0% for optimal performance
-- **HitRate**: Should be ~100% (objects from pool vs newly allocated)
 - **TrimCount**: Number of times pool auto-contracted (validates trim mechanism)
 
 ## WebGL and Pump()
@@ -186,12 +191,16 @@ var options = new FileLoggerOptions
     MaintenanceMode = FileMaintenanceMode.Rotate, // or WarnOnly
     MaxFileBytes = 10 * 1024 * 1024,              // 10 MB
     MaxArchiveFiles = 5,                           // keep latest 5
-    ArchiveTimestampFormat = "yyyyMMdd_HHmmss"
+    ArchiveTimestampFormat = "yyyyMMdd_HHmmss",
+    FlushBatchSize = 64,                           // flush every N writes
+    FlushIntervalMs = 1000                         // or every 1 second
 };
 
 var path = System.IO.Path.Combine(Application.persistentDataPath, "App.log");
 CLogger.Instance.AddLoggerUnique(new FileLogger(path, options));
 ```
+
+Flush strategy: writes are batched for I/O throughput. Error/Fatal messages are always flushed immediately regardless of batch settings.
 
 Notes:
 
