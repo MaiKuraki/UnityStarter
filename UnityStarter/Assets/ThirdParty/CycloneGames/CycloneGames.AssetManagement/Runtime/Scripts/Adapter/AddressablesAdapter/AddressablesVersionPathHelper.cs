@@ -156,7 +156,17 @@ namespace CycloneGames.AssetManagement.Runtime
 #endif
         }
 
+        private static string _platformNameCache;
+
         private static string GetPlatformName()
+        {
+            if (_platformNameCache != null) return _platformNameCache;
+
+            _platformNameCache = ResolvePlatformName();
+            return _platformNameCache;
+        }
+
+        private static string ResolvePlatformName()
         {
             // Use Unity Addressables' PlatformMappingService to get the correct platform path
             // This ensures consistency between build-time and runtime paths
