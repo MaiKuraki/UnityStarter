@@ -17,6 +17,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     public class BTRunnerComponent : MonoBehaviour
     {
         private const string MESSAGE_KEY = "Message";
+        private static readonly System.Collections.Generic.List<BTRunnerComponent> _activeRunners = new System.Collections.Generic.List<BTRunnerComponent>(64);
+
+        public static System.Collections.Generic.IReadOnlyList<BTRunnerComponent> ActiveRunners => _activeRunners;
 
         public event Action OnTreeStopped;
 
@@ -28,7 +31,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         }
 
         public BehaviorTree Tree => behaviorTree;
-        public BlackBoard BlackBoard => _blackBoard;
         public RuntimeBehaviorTree RuntimeTree => _runtimeTree;
         public TickMode TickMode => _tickMode;
 
@@ -39,13 +41,26 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         [SerializeField] protected TickMode _tickMode = TickMode.Self;
         [SerializeField] protected BehaviorTree behaviorTree;
         [SerializeField] private BlackBoardPassObject[] _initialObjects;
-        [HideInInspector][SerializeField] BlackBoard _blackBoard = new BlackBoard();
 
         private bool _isPaused = false;
         private bool _isStopped = false;
         private BehaviorTree _nextTree;
+        private RuntimeBTContext _context;
 
         private RuntimeBehaviorTree _runtimeTree;
+
+        private void OnEnable()
+        {
+            if (!_activeRunners.Contains(this))
+            {
+                _activeRunners.Add(this);
+            }
+        }
+
+        private void OnDisable()
+        {
+            _activeRunners.Remove(this);
+        }
 
         private void Awake()
         {
@@ -92,10 +107,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (behaviorTree == null) return;
 
-            // Compile to Pure C# Runtime Tree
-            _runtimeTree = behaviorTree.Compile(gameObject);
+            _context ??= new RuntimeBTContext();
+            _context.OwnerGameObject = gameObject;
 
-            // Initialize Blackboard Data
+            // Compile to Pure C# Runtime Tree
+            _runtimeTree = behaviorTree.Compile(_context);
+
             if (_runtimeTree != null && _runtimeTree.Blackboard != null)
             {
                 // Transfer initial objects
@@ -108,10 +125,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                         _runtimeTree.Blackboard.SetObject(Animator.StringToHash(data.Key), data.Value);
                     }
                 }
-
-                // Transfer serialized blackboard data (if any standard way exists, or just rely on runtime set)
-                // Note: The original BlackBoard class might have data. We would need to copy it if it was populated.
-                // Assuming _blackBoard is mostly for serialization and runtime storage in the old system.
             }
         }
 
@@ -158,6 +171,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private void OnDestroy()
         {
+            _activeRunners.Remove(this);
             UnregisterFromManager();
             if (_runtimeTree != null)
             {
@@ -199,6 +213,32 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 return;
             }
             _nextTree = newTree;
+        }
+
+        public void SetContext(RuntimeBTContext context)
+        {
+            _context = context;
+            if (_context != null)
+            {
+                _context.OwnerGameObject = gameObject;
+            }
+
+            if (_runtimeTree != null && _runtimeTree.Blackboard != null)
+            {
+                _runtimeTree.Blackboard.Context = _context;
+            }
+        }
+
+        public void SetServiceResolver(IRuntimeBTServiceResolver resolver)
+        {
+            _context ??= new RuntimeBTContext();
+            _context.OwnerGameObject = gameObject;
+            _context.ServiceResolver = resolver;
+
+            if (_runtimeTree != null && _runtimeTree.Blackboard != null)
+            {
+                _runtimeTree.Blackboard.Context = _context;
+            }
         }
 
         public void SetTickMode(TickMode mode)

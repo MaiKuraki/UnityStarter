@@ -1,25 +1,45 @@
 using System.Collections.Generic;
+using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
-    public class RuntimeBehaviorTree
+    public class RuntimeBehaviorTree : IRuntimeBTContext
     {
         public RuntimeNode Root { get; private set; }
         public RuntimeBlackboard Blackboard { get; private set; }
         public RuntimeState State { get; private set; } = RuntimeState.NotEntered;
-        public object Owner { get; private set; }
+
+        public RuntimeBTContext Context { get; private set; }
+
+        public GameObject OwnerGameObject => Context?.OwnerGameObject;
+        public IRuntimeBTServiceResolver ServiceResolver => Context?.ServiceResolver;
 
         public int TickInterval { get; set; } = 1;
         private int _tickCounter = 0;
 
-        public RuntimeBehaviorTree(RuntimeNode root, RuntimeBlackboard blackboard, object owner = null)
+        public RuntimeBehaviorTree(RuntimeNode root, RuntimeBlackboard blackboard, RuntimeBTContext context = null)
         {
             Root = root;
             Blackboard = blackboard;
-            Owner = owner;
+            Context = context ?? new RuntimeBTContext();
+
+            if (Blackboard != null)
+            {
+                Blackboard.Context = Context;
+            }
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             BuildNodeMap(Root);
 #endif
+        }
+
+        public T GetOwner<T>() where T : class
+        {
+            return Context != null ? Context.GetOwner<T>() : null;
+        }
+
+        public T GetService<T>() where T : class
+        {
+            return Context != null ? Context.GetService<T>() : null;
         }
 
         public bool ShouldTick()
@@ -52,12 +72,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 _nodeMap[node.GUID] = node;
             }
 
-            // Traverse Composite children
             if (node is RuntimeCompositeNode composite)
             {
-                foreach (var child in composite.Children)
+                var children = composite.Children;
+                if (children != null)
                 {
-                    BuildNodeMap(child);
+                    for (int i = 0; i < children.Length; i++)
+                    {
+                        BuildNodeMap(children[i]);
+                    }
                 }
             }
 

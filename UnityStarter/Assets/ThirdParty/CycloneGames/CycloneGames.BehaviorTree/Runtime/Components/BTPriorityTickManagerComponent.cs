@@ -7,13 +7,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     {
         private static BTPriorityTickManagerComponent _instance;
         private static bool _isQuitting;
-        
+
         public static BTPriorityTickManagerComponent Instance
         {
             get
             {
                 if (_isQuitting) return null;
-                
+
                 if (_instance == null)
                 {
                     var go = new GameObject("[BTPriorityTickManager]");
@@ -79,7 +79,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             _instance = this;
             Initialize();
         }
-        
+
         private void OnApplicationQuit()
         {
             _isQuitting = true;
@@ -146,8 +146,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 if (_lodProvider != null)
                 {
                     _lodProvider.UpdateAllLOD();
+                    UpdateAllPriorities();
                 }
-                UpdateAllPriorities();
                 _lastLODUpdateTime = currentTime;
 
 #if UNITY_EDITOR
@@ -209,8 +209,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private void UpdateAllPriorities()
         {
-            // Redistribute trees based on updated LOD values
-            // This is called periodically to handle moving AIs
+            if (_lodProvider == null || _manager == null) return;
+
+            var trees = _lodProvider.GetTreeBuffer();
+            for (int i = 0; i < trees.Count; i++)
+            {
+                var tree = trees[i];
+                int priority = _lodProvider.GetPriority(tree);
+                int interval = _lodProvider.GetTickInterval(tree);
+                _manager.UpdatePriority(tree, priority);
+                tree.TickInterval = interval;
+            }
         }
 
         public int GetPriorityTreeCount(int priority)

@@ -12,17 +12,32 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-            for (int i = _current; i < Children.Count; i++)
+            var children = Children;
+
+            // Self / Both: re-evaluate conditions of previously completed children
+            if (_current > 0 && (AbortType == RuntimeAbortType.Self || AbortType == RuntimeAbortType.Both))
             {
-                var child = Children[i];
-                var state = child.Run(blackboard);
+                for (int i = 0; i < _current; i++)
+                {
+                    if (children[i].CanEvaluate && !children[i].Evaluate(blackboard))
+                    {
+                        if (children[_current].IsStarted)
+                            children[_current].Abort(blackboard);
+                        return RuntimeState.Failure;
+                    }
+                }
+            }
+
+            for (int i = _current; i < children.Length; i++)
+            {
+                var state = children[i].Run(blackboard);
 
                 if (state == RuntimeState.Running)
                 {
                     _current = i;
                     return RuntimeState.Running;
                 }
-                
+
                 if (state == RuntimeState.Failure)
                 {
                     return RuntimeState.Failure;
@@ -31,17 +46,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 
             return RuntimeState.Success;
         }
-        
+
         protected override void OnStop(RuntimeBlackboard blackboard)
         {
-            // Abort current running child if any
-             if (_current < Children.Count)
-             {
-                 if (Children[_current].State == RuntimeState.Running)
-                 {
-                     Children[_current].Abort(blackboard);
-                 }
-             }
+            if (_current < Children.Length && Children[_current].IsStarted)
+            {
+                Children[_current].Abort(blackboard);
+            }
         }
     }
 }

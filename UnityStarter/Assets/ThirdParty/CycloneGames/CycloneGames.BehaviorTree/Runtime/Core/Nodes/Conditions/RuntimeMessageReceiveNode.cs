@@ -5,11 +5,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions
         public int KeyHash { get; set; }
         public string ExpectedMessage { get; set; }
 
-        protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
+        public override bool CanEvaluate => true;
+
+        public override bool Evaluate(RuntimeBlackboard blackboard)
         {
             var message = blackboard.GetObject<string>(KeyHash);
-            if (message == null) return RuntimeState.Failure;
-            return message.Equals(ExpectedMessage) ? RuntimeState.Success : RuntimeState.Failure;
+            if (message == null) return false;
+            return message.Equals(ExpectedMessage);
+        }
+
+        protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
+        {
+            return Evaluate(blackboard) ? RuntimeState.Success : RuntimeState.Failure;
         }
     }
 }
