@@ -11,19 +11,15 @@ namespace CycloneGames.Logger
     /// </summary>
     public sealed class UnityLogger : ILogger
     {
-        private void LogToUnity(LogMessage logMessage)
+        public void Log(LogMessage logMessage)
         {
             StringBuilder sb = StringBuilderPool.Get();
             string unityMessage;
             try
             {
-                // Optional: Prepend level string for Trace/Debug if Unity's icons aren't enough.
-                // if (logMessage.Level == LogLevel.Trace) sb.Append("[TRACE] ");
-                // else if (logMessage.Level == LogLevel.Debug) sb.Append("[DEBUG] ");
-
                 if (!string.IsNullOrEmpty(logMessage.Category))
                 {
-                    sb.Append("[");
+                    sb.Append('[');
                     sb.Append(logMessage.Category);
                     sb.Append("] ");
                 }
@@ -52,8 +48,6 @@ namespace CycloneGames.Logger
                     int startIndex = assetsIndex >= 0 ? assetsIndex + 1 : 0;
 
 #if UNITY_EDITOR
-                    // Editor: use clickable hyperlink with custom attributes
-                    // Extra newline hides the hyperlink from Console single-line preview
                     sb.Append("\n\n<a path=\"");
                     for (int i = startIndex; i < sourcePath.Length; i++)
                     {
@@ -70,7 +64,6 @@ namespace CycloneGames.Logger
                     sb.Append(logMessage.LineNumber);
                     sb.Append(")</a>");
 #else
-                    // Runtime: plain text without rich text tags
                     sb.Append("\n(at ");
                     for (int i = startIndex; i < sourcePath.Length; i++)
                     {
@@ -81,6 +74,7 @@ namespace CycloneGames.Logger
                     sb.Append(')');
 #endif
                 }
+                // ToString() allocation is unavoidable here — Debug.LogFormat requires a string argument.
                 unityMessage = sb.ToString();
             }
             finally
@@ -88,29 +82,8 @@ namespace CycloneGames.Logger
                 StringBuilderPool.Return(sb);
             }
 
-            switch (logMessage.Level)
-            {
-                case LogLevel.Trace:
-                case LogLevel.Debug:
-                case LogLevel.Info:
-                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage, logMessage.FilePath, logMessage.LineNumber);
-                    break;
-                case LogLevel.Warning:
-                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage, logMessage.FilePath, logMessage.LineNumber);
-                    break;
-                case LogLevel.Error:
-                case LogLevel.Fatal:
-                    LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage, logMessage.FilePath, logMessage.LineNumber);
-                    break;
-            }
+            LoggerUpdater.EnqueueUnityLog(logMessage.Level, unityMessage);
         }
-
-        public void LogTrace(LogMessage logMessage) => LogToUnity(logMessage);
-        public void LogDebug(LogMessage logMessage) => LogToUnity(logMessage);
-        public void LogInfo(LogMessage logMessage) => LogToUnity(logMessage);
-        public void LogWarning(LogMessage logMessage) => LogToUnity(logMessage);
-        public void LogError(LogMessage logMessage) => LogToUnity(logMessage);
-        public void LogFatal(LogMessage logMessage) => LogToUnity(logMessage);
 
         public void Dispose() { }
     }

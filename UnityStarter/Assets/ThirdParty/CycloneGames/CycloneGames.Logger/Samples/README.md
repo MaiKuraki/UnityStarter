@@ -4,23 +4,26 @@ High-performance, zero-GC logging system with three-tier adaptive capacity manag
 
 ## Key Features
 
-- **Three-Tier Capacity Management** - Automatic pool expansion & contraction  
-- **Zero-GC Logging** - Builder API eliminates allocations in hot paths  
-- **Object Pool Monitoring** - Debug/Development build statistics  
+- **Three-Tier Capacity Management** - Automatic pool expansion & contraction
+- **Zero-GC Logging** - Builder API eliminates allocations in hot paths
+- **Object Pool Monitoring** - Debug/Development build statistics
 - **Cross-Platform** - Supports Windows, macOS, Linux, Android, iOS, WebGL, and consoles
 
 ## Sample Scripts
 
 ### LoggerPoolMonitor.cs
+
 **Interactive pool monitoring and capacity validation**
 
 Features:
+
 - Real-time pool statistics display
 - Burst test to validate zero-GC behavior
 - Demonstrates three-tier capacity management (Target/Peak/Max)
 - Context menu commands for easy testing
 
 Usage:
+
 ```csharp
 // Add to a GameObject and play
 // Right-click in Inspector for context menu:
@@ -30,21 +33,26 @@ Usage:
 ```
 
 ### LoggerBenchmark.cs
+
 **Performance comparison with GC tracking**
 
 Tests:
-- Unity Debug.Log vs CLogger String API vs Builder API
+
+- Unity Debug.Log vs CLogger String API vs Builder (closure) vs Builder (generic/static)
 - Measures execution time and GC allocations
 - Displays object pool statistics after tests
 
 Expected Results:
-- Builder API: **Minimal GC allocation** (includes Unity framework overhead; production GC is near-zero)
+
+- Builder generic (static lambda): **Near-zero GC** (no closure, no string allocation)
+- Builder closure: Low GC allocation (closure object per call)
 - String API: Medium GC allocation
 - Unity Debug.Log: High GC allocation
 
 Note: GC measurements include Unity test environment overhead and cold-start pool allocation. The key indicators are 100% Return Rate and 0% Discard Rate, which validate zero-GC behavior in production.
 
 ### LoggerPerformanceTest.cs
+
 **High-volume logging stress test**
 
 - Logs 10,000 messages across all severity levels
@@ -52,6 +60,7 @@ Note: GC measurements include Unity test environment overhead and cold-start poo
 - Reports peak pool size and discard count
 
 ### LoggerSample.cs
+
 **Basic usage example**
 
 Simple demonstration of logger setup and basic logging.
@@ -84,9 +93,11 @@ Max (2048/8192)   <- Hard limit to prevent memory leaks
 ## Processing Strategies
 
 ### ThreadedLogProcessor (Default)
+
 Uses a background thread with `BelowNormal` priority for maximum performance on platforms with threading support.
 
 ### SingleThreadLogProcessor
+
 For platforms without threads (WebGL). Requires calling `Pump()` each frame.
 
 ```csharp
@@ -102,22 +113,25 @@ For platforms without threads (WebGL). Requires calling `Pump()` each frame.
 ## Zero-GC Logging
 
 ### String API (Convenient)
+
 ```csharp
 CLogger.LogInfo($"Player HP: {hp}", "Combat");
 // Small GC from string interpolation
 ```
 
-### Builder API (Zero-GC) [推荐]
+### Builder API (Low-GC)
+
 ```csharp
 CLogger.LogInfo(sb => sb.Append("Player HP: ").Append(hp), "Combat");
-// Zero GC - StringBuilder is pooled
+// StringBuilder is pooled, but capturing `hp` allocates a closure object
 ```
 
-### Stateful Builder (Advanced)
+### Stateful Builder (Zero-GC) [Recommended]
+
 ```csharp
-CLogger.LogInfo(player, (p, sb) => 
+CLogger.LogInfo(player, static (p, sb) =>
     sb.Append("Player ").Append(p.name).Append(" HP: ").Append(p.hp), "Combat");
-// Zero GC + avoids closure allocation
+// Zero GC: static keyword prevents closure allocation
 ```
 
 ---
@@ -132,26 +146,30 @@ var stats = StringBuilderPool.GetStatistics();
 Debug.Log($@"
 StringBuilder Pool:
   Current: {stats.CurrentSize} | Peak: {stats.PeakSize}
-  Hit Rate: {stats.HitRate:P} | Discard Rate: {stats.DiscardRate:P}
+  Hit Rate: {stats.HitRate:P} | Misses: {stats.TotalMisses} | Discard Rate: {stats.DiscardRate:P}
 ");
 #endif
 ```
 
 **Key Metrics**:
+
+- **HitRate**: Should be ~100% (objects retrieved from pool vs created)
+- **TotalMisses**: Number of `new` allocations when pool was empty; should be ~0 when warm
 - **PeakSize**: Maximum pool size reached (should be below Max)
 - **DiscardRate**: Should be ~0% for optimal performance
-- **HitRate**: Should be ~100% (objects retrieved from pool vs created)
 
 ---
 
 ## Centralized Setup
 
 ### Option 1: LoggerSettings Asset (Recommended)
+
 1. Create via `Assets -> Create -> CycloneGames -> Logger -> LoggerSettings`
 2. Move to `Assets/Resources/CycloneGames.Logger/LoggerSettings.asset`
 3. Configure: processing mode, loggers, log level, etc.
 
 ### Option 2: Custom Bootstrap
+
 ```csharp
 [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
 static void Initialize()
@@ -163,7 +181,7 @@ static void Initialize()
     #endif
 
     CLogger.Instance.AddLoggerUnique(new UnityLogger());
-    
+
     #if !UNITY_WEBGL || UNITY_EDITOR
     var path = Path.Combine(Application.persistentDataPath, "App.log");
     CLogger.Instance.AddLoggerUnique(new FileLogger(path));
@@ -178,17 +196,20 @@ static void Initialize()
 ## Best Practices
 
 **Performance:**
-- Use **Builder API** in performance-critical code  
-- Monitor **DiscardRate** in development builds  
-- Set appropriate **LogLevel** to filter unnecessary logs  
+
+- Use **Builder API** in performance-critical code
+- Monitor **DiscardRate** in development builds
+- Set appropriate **LogLevel** to filter unnecessary logs
 
 **Platform:**
-- Call **Pump()** in Update for WebGL builds  
-- Use **categories** for fine-grained filtering  
+
+- Call **Pump()** in Update for WebGL builds
+- Use **categories** for fine-grained filtering
 
 **Quality:**
-- Centralize logger configuration  
-- Avoid duplicate logger registration  
+
+- Centralize logger configuration
+- Avoid duplicate logger registration
 
 ---
 
