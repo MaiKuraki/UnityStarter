@@ -174,7 +174,17 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (sceneHandle is YooSceneHandle yooHandle)
             {
-                await yooHandle.Raw.UnloadAsync();
+                var raw = yooHandle.Raw;
+                // Null out Raw BEFORE awaiting to prevent DisposeInternal from calling UnloadAsync a second time.
+                yooHandle.Raw = null;
+                if (raw != null)
+                {
+                    await raw.UnloadAsync();
+                    // Release the YooAsset provider reference after the scene is fully unloaded.
+                    // Without this, Provider.RefCount never reaches 0, preventing YooAsset's
+                    // ResourceManager from destroying the provider and releasing its bundles.
+                    if (raw.IsValid) raw.Dispose();
+                }
                 yooHandle.DisposeInternal();
             }
         }

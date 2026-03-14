@@ -358,10 +358,15 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
-            // UnloadAsync is fire-and-forget here since DisposeInternal is called from release paths.
-            // Callers that need to await unload (e.g. UnloadSceneAsync) must do so before calling this.
-            Raw?.UnloadAsync();
-            Raw = null;
+            if (Raw != null)
+            {
+                if (Raw.IsValid)
+                {
+                    Raw.UnloadAsync();
+                    Raw.Dispose();
+                }
+                Raw = null;
+            }
             _onReleaseToCache = null;
             if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
             AdaptiveHandlePool<YooSceneHandle>.Release(this);
