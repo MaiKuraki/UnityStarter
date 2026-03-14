@@ -2,6 +2,7 @@
 using System;
 using UnityEngine;
 using YooAsset;
+using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -107,7 +108,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
             if (parameters == null)
             {
-                Debug.LogWarning($"[YooAssetParamsFactory] Unsupported PlayMode {playMode} for platform {Application.platform}. Defaulting to Offline.");
+                CLogger.LogWarning($"[YooAssetParamsFactory] Unsupported PlayMode {playMode} for platform {Application.platform}. Defaulting to Offline.");
                 var offlineParams = new OfflinePlayModeParameters();
                 offlineParams.BuildinFileSystemParameters = FileSystemParameters.CreateDefaultBuildinFileSystemParameters(standardDecryption);
                 parameters = offlineParams;

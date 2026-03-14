@@ -1,5 +1,6 @@
 using Cysharp.Threading.Tasks;
 using System.Threading;
+using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -26,21 +27,21 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (module == null)
             {
-                UnityEngine.Debug.LogError($"{DEBUG_FLAG} Invalid AssetModule");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid AssetModule");
                 return null;
             }
 
             var package = module.CreatePackage(packageName);
             if (package == null)
             {
-                UnityEngine.Debug.LogError($"{DEBUG_FLAG} Invalid Package");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid Package");
                 return null;
             }
 
             bool success = await package.InitializeAsync(options, cancellationToken);
             if (!success)
             {
-                UnityEngine.Debug.LogError($"{DEBUG_FLAG} Initialize asset package failed, package name: {package.Name}");
+                CLogger.LogError($"{DEBUG_FLAG} Initialize asset package failed, package name: {package.Name}");
                 await module.RemovePackageAsync(packageName);
                 return null;
             }

@@ -5,6 +5,7 @@ using System.Threading;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using YooAsset;
+using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -26,7 +27,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (options.ProviderOptions is not InitializeParameters yooOptions)
             {
-                Debug.LogError("[YooAssetPackage] Invalid provider options provided for initialization.");
+                CLogger.LogError("[YooAssetPackage] Invalid provider options provided for initialization.");
                 return false;
             }
             var op = _rawPackage.InitializeAsync(yooOptions);
@@ -73,7 +74,7 @@ namespace CycloneGames.AssetManagement.Runtime
                     }
                     else
                     {
-                        Debug.LogError("[YooAssetPackage] ClearByTags requires a string array or List<string> parameter.");
+                        CLogger.LogError("[YooAssetPackage] ClearByTags requires a string array or List<string> parameter.");
                         return false;
                     }
                     break;
@@ -87,66 +88,71 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string bucket = null, string tag = null, string owner = null) where TAsset : UnityEngine.Object
         {
-            var cached = _cacheService.Get(location, bucket, tag, owner);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAssetHandle<TAsset>)cached;
 
             var handle = _rawPackage.LoadAssetSync<TAsset>(location);
             var id = RegisterHandle();
-            var wrapped = YooAssetHandle<TAsset>.Create(id, location, handle, _cacheService.OnHandleReleased, CancellationToken.None);
+            var wrapped = YooAssetHandle<TAsset>.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, CancellationToken.None);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"AssetSync {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(location, bucket, tag, owner, wrapped);
+            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
             return wrapped;
         }
 
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cached = _cacheService.Get(location, bucket, tag, owner);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAssetHandle<TAsset>)cached;
 
             var handle = _rawPackage.LoadAssetAsync<TAsset>(location);
             var id = RegisterHandle();
-            var wrapped = YooAssetHandle<TAsset>.Create(id, location, handle, _cacheService.OnHandleReleased, cancellationToken);
+            var wrapped = YooAssetHandle<TAsset>.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"AssetAsync {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(location, bucket, tag, owner, wrapped);
+            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
             return wrapped;
         }
 
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cached = _cacheService.Get(location, bucket, tag, owner);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAllAssetsHandle<TAsset>)cached;
 
             var handle = _rawPackage.LoadAllAssetsAsync<TAsset>(location);
             var id = RegisterHandle();
-            var wrapped = YooAllAssetsHandle<TAsset>.Create(id, location, handle, _cacheService.OnHandleReleased, cancellationToken);
+            var wrapped = YooAllAssetsHandle<TAsset>.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"AllAssets {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(location, bucket, tag, owner, wrapped);
+            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
             return wrapped;
         }
 
         public IRawFileHandle LoadRawFileSync(string location, string bucket = null, string tag = null, string owner = null)
         {
-            var cached = _cacheService.Get(location, bucket, tag, owner);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, null);
+            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IRawFileHandle)cached;
 
             var handle = _rawPackage.LoadRawFileSync(location);
             var id = RegisterHandle();
-            var wrapped = YooRawFileHandle.Create(id, location, handle, _cacheService.OnHandleReleased, CancellationToken.None);
+            var wrapped = YooRawFileHandle.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, CancellationToken.None);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"RawFileSync : {location}");
-            _cacheService.RegisterNew(location, bucket, tag, owner, wrapped);
+            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
             return wrapped;
         }
 
         public IRawFileHandle LoadRawFileAsync(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default)
         {
-            var cached = _cacheService.Get(location, bucket, tag, owner);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, null);
+            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IRawFileHandle)cached;
 
             var handle = _rawPackage.LoadRawFileAsync(location);
             var id = RegisterHandle();
-            var wrapped = YooRawFileHandle.Create(id, location, handle, _cacheService.OnHandleReleased, cancellationToken);
+            var wrapped = YooRawFileHandle.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"RawFileAsync : {location}");
-            _cacheService.RegisterNew(location, bucket, tag, owner, wrapped);
+            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
             return wrapped;
         }
 
@@ -212,7 +218,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
             if (updateOp.Status != EOperationStatus.Succeed)
             {
-                Debug.LogError($"[YooAssetPackage] Failed to update manifest for pre-downloading version {packageVersion}. Error: {updateOp.Error}");
+                CLogger.LogError($"[YooAssetPackage] Failed to update manifest for pre-downloading version {packageVersion}. Error: {updateOp.Error}");
                 return null;
             }
 
@@ -244,14 +250,14 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 return yooHandle.Raw.InstantiateSync(parent, worldPositionStays);
             }
-            Debug.LogError("[YooAssetPackage] InstantiateSync failed: Handle is not valid or not complete.");
+            CLogger.LogError("[YooAssetPackage] InstantiateSync failed: Handle is not valid or not complete.");
             return null;
         }
         public IInstantiateHandle InstantiateAsync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false, bool setActive = true)
         {
             if (handle is not YooAssetHandle<GameObject> yooHandle)
             {
-                Debug.LogError("[YooAssetPackage] Invalid handle type passed to InstantiateAsync.");
+                CLogger.LogError("[YooAssetPackage] Invalid handle type passed to InstantiateAsync.");
                 return null;
             }
 

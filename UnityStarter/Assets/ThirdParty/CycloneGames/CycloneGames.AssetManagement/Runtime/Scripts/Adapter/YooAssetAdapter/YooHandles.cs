@@ -6,6 +6,7 @@ using System.Threading;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using YooAsset;
+using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -94,6 +95,7 @@ namespace CycloneGames.AssetManagement.Runtime
         internal AssetHandle Raw;
         private UniTask _task;
         private int _refCount;
+        private volatile bool _disposed;
         private string _cacheKey;
         private Action<string, IReferenceCounted> _onReleaseToCache;
 
@@ -106,6 +108,7 @@ namespace CycloneGames.AssetManagement.Runtime
             Raw = raw;
             _onReleaseToCache = onReleaseToCache;
             _task = raw.ToUniTask(cancellationToken: cancellationToken);
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -127,11 +130,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[YooAssetHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[YooAssetHandle] Release called more times than Retain. Ignoring extra release.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(_cacheKey, this);
                 else DisposeInternal();
@@ -142,6 +156,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             Raw?.Dispose();
             Raw = null;
             _cacheKey = null;
@@ -180,6 +195,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly ReadOnlyListAdapter _listAdapter = new ReadOnlyListAdapter();
         private UniTask _task;
         private int _refCount;
+        private volatile bool _disposed;
         private string _cacheKey;
         private Action<string, IReferenceCounted> _onReleaseToCache;
 
@@ -193,6 +209,7 @@ namespace CycloneGames.AssetManagement.Runtime
             _task = raw.ToUniTask(cancellationToken: cancellationToken);
             _listAdapter.Clear();
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -222,11 +239,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[YooAllAssetsHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[YooAllAssetsHandle] Release called more times than Retain. Ignoring extra release.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(_cacheKey, this);
                 else DisposeInternal();
@@ -237,6 +265,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             Raw?.Dispose();
             Raw = null;
             _listAdapter.Clear();
@@ -255,6 +284,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private int _id;
         internal InstantiateOperation Raw;
         private int _refCount;
+        private volatile bool _disposed;
         private Action<string, IReferenceCounted> _onReleaseToCache;
 
         public YooInstantiateHandle() { }
@@ -264,6 +294,7 @@ namespace CycloneGames.AssetManagement.Runtime
             _id = id;
             Raw = raw;
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -284,11 +315,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[YooInstantiateHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[YooInstantiateHandle] Release called more times than Retain. Ignoring extra release.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(null, this);
                 else DisposeInternal();
@@ -299,6 +341,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             Raw = null;
             _onReleaseToCache = null;
             if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
@@ -313,6 +356,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private int _id;
         public YooAsset.SceneHandle Raw;
         private int _refCount;
+        private volatile bool _disposed;
         private Action<string, IReferenceCounted> _onReleaseToCache;
 
         public YooSceneHandle() { }
@@ -322,6 +366,7 @@ namespace CycloneGames.AssetManagement.Runtime
             _id = id;
             Raw = raw;
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -343,11 +388,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[YooSceneHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[YooSceneHandle] Release called more times than Retain. Ignoring extra release.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(null, this);
                 else DisposeInternal();
@@ -358,6 +414,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             if (Raw != null)
             {
                 if (Raw.IsValid)
@@ -383,6 +440,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private int _refCount;
         private string _cacheKey;
         private Action<string, IReferenceCounted> _onReleaseToCache;
+        private volatile bool _disposed;
 
         public YooRawFileHandle() { }
 
@@ -393,6 +451,7 @@ namespace CycloneGames.AssetManagement.Runtime
             _raw = raw;
             _task = raw.ToUniTask(cancellationToken: cancellationToken);
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -425,11 +484,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[YooRawFileHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[YooRawFileHandle] Release called more times than Retain. Refcount underflow prevented.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(_cacheKey, this);
                 else DisposeInternal();
@@ -440,6 +510,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             _raw?.Dispose();
             _raw = null;
             _cacheKey = null;

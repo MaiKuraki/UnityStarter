@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "VContainer",
+        "UniTask",
         "CycloneGames.AssetManagement.Runtime"
     ],
     "includePlatforms": [],
@@ -17,6 +18,21 @@
             "name": "jp.hadashikick.vcontainer",
             "expression": "",
             "define": "VCONTAINER_PRESENT"
+        },
+        {
+            "name": "com.unity.addressables",
+            "expression": "",
+            "define": "ADDRESSABLES_PRESENT"
+        },
+        {
+            "name": "com.tuyoogame.yooasset",
+            "expression": "",
+            "define": "YOOASSET_PRESENT"
+        },
+        {
+            "name": "com.cysharp.unitask",
+            "expression": "",
+            "define": "VCONTAINER_UNITASK_INTEGRATION"
         }
     ],
     "noEngineReferences": false
