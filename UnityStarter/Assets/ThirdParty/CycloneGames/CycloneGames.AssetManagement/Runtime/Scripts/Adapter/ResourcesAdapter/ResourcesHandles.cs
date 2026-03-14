@@ -1,3 +1,4 @@
+using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
@@ -58,6 +59,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private int _refCount;
         private string _cacheKey;
         private Action<string, IReferenceCounted> _onReleaseToCache;
+        private volatile bool _disposed;
 
         public ResourcesAssetHandle() { }
 
@@ -69,6 +71,7 @@ namespace CycloneGames.AssetManagement.Runtime
             _syncAsset = null;
             _task = request.ToUniTask(cancellationToken: cancellationToken);
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -80,6 +83,7 @@ namespace CycloneGames.AssetManagement.Runtime
             _syncAsset = asset;
             _task = UniTask.CompletedTask;
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -99,11 +103,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[ResourcesAssetHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[ResourcesAssetHandle] Release called more times than Retain. Refcount underflow prevented.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(_cacheKey, this);
                 else DisposeInternal();
@@ -114,6 +129,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             // Resources assets cannot be unloaded individually; only Resources.UnloadUnusedAssets() can reclaim them.
             _request = null;
@@ -140,6 +156,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private int _refCount;
         private string _cacheKey;
         private Action<string, IReferenceCounted> _onReleaseToCache;
+        private volatile bool _disposed;
 
         public ResourcesAllAssetsHandle() { }
 
@@ -150,6 +167,7 @@ namespace CycloneGames.AssetManagement.Runtime
             Assets = assets;
             _task = SimulateAsync();
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -164,11 +182,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[ResourcesAllAssetsHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[ResourcesAllAssetsHandle] Release called more times than Retain. Refcount underflow prevented.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(_cacheKey, this);
                 else DisposeInternal();
@@ -179,6 +208,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             Assets = null;
             _task = default;
@@ -196,6 +226,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private int _refCount;
         private Action<string, IReferenceCounted> _onReleaseToCache;
+        private volatile bool _disposed;
 
         public ResourcesInstantiateHandle() { }
 
@@ -204,6 +235,7 @@ namespace CycloneGames.AssetManagement.Runtime
             SetId(id);
             Instance = instance;
             _onReleaseToCache = onReleaseToCache;
+            _disposed = false;
             _refCount = 1;
         }
 
@@ -216,11 +248,22 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (_disposed) { CLogger.LogError("[ResourcesInstantiateHandle] Retain called on a disposed handle."); return; }
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Interlocked.Decrement(ref _refCount) == 0)
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[ResourcesInstantiateHandle] Release called more times than Retain. Refcount underflow prevented.");
+                return;
+            }
+            if (newCount == 0)
             {
                 if (_onReleaseToCache != null) _onReleaseToCache(null, this);
                 else DisposeInternal();
@@ -231,6 +274,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         internal void DisposeInternal()
         {
+            _disposed = true;
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             Instance = null;
             _onReleaseToCache = null;

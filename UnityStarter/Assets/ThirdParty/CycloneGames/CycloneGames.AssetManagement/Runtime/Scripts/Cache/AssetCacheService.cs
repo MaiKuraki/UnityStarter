@@ -114,36 +114,51 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         }
 
         /// <summary>
-        /// Registers a freshly-loaded handle (RefCount == 1) into the active map.
+        /// Builds a cache key that includes type information to prevent cross-type collisions.
+        /// E.g. LoadAssetAsync<Texture2D>("atlas") and LoadAssetAsync<Sprite>("atlas")
+        /// must map to different cache entries.
         /// </summary>
-        internal void RegisterNew(string location, string bucket, string tag, string owner, IReferenceCounted handle)
+        internal static string BuildCacheKey(string location, System.Type assetType)
         {
-            if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(location)) return;
+            // For the common single-type case, avoid allocation by returning location directly
+            // when the caller passes null (e.g. RawFile which has no type ambiguity).
+            if (assetType == null) return location;
+            return string.Concat(location, "|", assetType.FullName);
+        }
+
+        /// <summary>
+        /// Registers a freshly-loaded handle (RefCount == 1) into the active map.
+        /// The cacheKey must be built via <see cref="BuildCacheKey"/> by the caller.
+        /// </summary>
+        internal void RegisterNew(string cacheKey, string bucket, string tag, string owner, IReferenceCounted handle)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(cacheKey)) return;
 
             _rwLock.EnterWriteLock();
             try
             {
-                if (_idleMap.Remove(location, out var oldIdle))
+                if (_idleMap.Remove(cacheKey, out var oldIdle))
                 {
                     RemoveFromLru(oldIdle);
                     ForceDisposeHandle(oldIdle.Handle);
                     NodePool.Release(oldIdle);
                 }
 
-                if (_activeMap.Remove(location, out var oldActive))
+                if (_activeMap.Remove(cacheKey, out var oldActive))
                 {
+                    ForceDisposeHandle(oldActive.Handle);
                     NodePool.Release(oldActive);
                 }
 
                 var node = NodePool.Get();
-                node.Location = location;
+                node.Location = cacheKey;
                 node.Bucket = bucket;
                 node.Tag = tag;
                 node.Owner = owner;
                 node.Handle = handle;
                 node.AccessCount = 1;
 
-                _activeMap[location] = node;
+                _activeMap[cacheKey] = node;
             }
             finally
             {
@@ -153,15 +168,16 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
         /// <summary>
         /// Returns an existing handle, auto-retaining it. Returns null on cache miss.
+        /// The cacheKey must be built via <see cref="BuildCacheKey"/> by the caller.
         /// </summary>
-        internal IReferenceCounted Get(string location, string bucket, string tag, string owner)
+        internal IReferenceCounted Get(string cacheKey, string bucket, string tag, string owner)
         {
-            if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(location)) return null;
+            if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(cacheKey)) return null;
 
             _rwLock.EnterUpgradeableReadLock();
             try
             {
-                if (_activeMap.TryGetValue(location, out var activeNode))
+                if (_activeMap.TryGetValue(cacheKey, out var activeNode))
                 {
                     activeNode.Handle.Retain();
                     activeNode.AccessCount++;
@@ -170,14 +186,14 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     return activeNode.Handle;
                 }
 
-                if (_idleMap.TryGetValue(location, out _))
+                if (_idleMap.TryGetValue(cacheKey, out _))
                 {
                     _rwLock.EnterWriteLock();
                     try
                     {
-                        if (_idleMap.TryGetValue(location, out var idleNode))
+                        if (_idleMap.TryGetValue(cacheKey, out var idleNode))
                         {
-                            _idleMap.Remove(location);
+                            _idleMap.Remove(cacheKey);
                             RemoveFromLru(idleNode);
 
                             idleNode.AccessCount++;
@@ -187,7 +203,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                             if (!string.IsNullOrEmpty(tag)) idleNode.Tag = tag;
                             if (!string.IsNullOrEmpty(owner)) idleNode.Owner = owner;
 
-                            _activeMap[location] = idleNode;
+                            _activeMap[cacheKey] = idleNode;
                             return idleNode.Handle;
                         }
                     }
@@ -209,7 +225,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         /// Called via the keyed release callback when a handle's RefCount reaches zero.
         /// O(1): the key is passed directly by the handle, eliminating the previous O(N) scan.
         /// </summary>
-        internal void OnHandleReleased(string location, IReferenceCounted handle)
+        internal void OnHandleReleased(string cacheKey, IReferenceCounted handle)
         {
             if (Volatile.Read(ref _disposed) != 0)
             {
@@ -218,8 +234,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             }
 
             // Handles that are not registered in the cache (e.g. Scene, Instantiate) pass null as
-            // location. They must be disposed directly — no map lookup needed.
-            if (string.IsNullOrEmpty(location))
+            // cacheKey. They must be disposed directly — no map lookup needed.
+            if (string.IsNullOrEmpty(cacheKey))
             {
                 ForceDisposeHandle(handle);
                 return;
@@ -228,14 +244,14 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             _rwLock.EnterWriteLock();
             try
             {
-                if (!_activeMap.TryGetValue(location, out var node) || node.Handle != handle)
+                if (!_activeMap.TryGetValue(cacheKey, out var node) || node.Handle != handle)
                 {
                     ForceDisposeHandle(handle);
                     return;
                 }
 
-                _activeMap.Remove(location);
-                _idleMap[location] = node;
+                _activeMap.Remove(cacheKey);
+                _idleMap[cacheKey] = node;
 
                 // Promotion: multiple-access or previously-promoted → main pool; first-time idle → trial pool.
                 if (node.AccessCount > 1 || node.IsInMainPool)
@@ -435,13 +451,45 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
         public struct CacheDiagnosticEntry
         {
+            /// <summary>Clean asset path for display (without type suffix).</summary>
             public string Location;
+            /// <summary>Short asset type name (e.g. "Texture2D"), or null for typeless entries.</summary>
+            public string AssetType;
+            /// <summary>Composite cache key for internal matching across tiers.</summary>
+            public string CacheKey;
             public string Bucket;
             public string Tag;
             public string Owner;
             public int RefCount;
             public int AccessCount;
             public string ProviderType;
+        }
+
+        /// <summary>
+        /// Splits a composite cache key ("location|TypeFullName") into a clean location and short type name.
+        /// </summary>
+        internal static void ParseCacheKey(string cacheKey, out string location, out string assetTypeName)
+        {
+            if (string.IsNullOrEmpty(cacheKey))
+            {
+                location = cacheKey;
+                assetTypeName = null;
+                return;
+            }
+
+            int sep = cacheKey.LastIndexOf('|');
+            if (sep < 0)
+            {
+                location = cacheKey;
+                assetTypeName = null;
+            }
+            else
+            {
+                location = cacheKey.Substring(0, sep);
+                string fullName = cacheKey.Substring(sep + 1);
+                int dot = fullName.LastIndexOf('.');
+                assetTypeName = dot >= 0 ? fullName.Substring(dot + 1) : fullName;
+            }
         }
 
         public void GetDiagnostics(List<CacheDiagnosticEntry> active, List<CacheDiagnosticEntry> trial, List<CacheDiagnosticEntry> main)
@@ -457,9 +505,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 {
                     foreach (var kvp in _activeMap)
                     {
+                        ParseCacheKey(kvp.Value.Location, out var loc, out var typeName);
                         active.Add(new CacheDiagnosticEntry
                         {
-                            Location = kvp.Value.Location,
+                            Location = loc,
+                            AssetType = typeName,
+                            CacheKey = kvp.Value.Location,
                             Bucket = kvp.Value.Bucket,
                             Tag = kvp.Value.Tag,
                             Owner = kvp.Value.Owner,
@@ -475,9 +526,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     var node = _trialHead;
                     while (node != null)
                     {
+                        ParseCacheKey(node.Location, out var loc, out var typeName);
                         trial.Add(new CacheDiagnosticEntry
                         {
-                            Location = node.Location,
+                            Location = loc,
+                            AssetType = typeName,
+                            CacheKey = node.Location,
                             Bucket = node.Bucket,
                             Tag = node.Tag,
                             Owner = node.Owner,
@@ -494,9 +548,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     var node = _mainHead;
                     while (node != null)
                     {
+                        ParseCacheKey(node.Location, out var loc, out var typeName);
                         main.Add(new CacheDiagnosticEntry
                         {
-                            Location = node.Location,
+                            Location = loc,
+                            AssetType = typeName,
+                            CacheKey = node.Location,
                             Bucket = node.Bucket,
                             Tag = node.Tag,
                             Owner = node.Owner,

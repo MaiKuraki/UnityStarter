@@ -9,14 +9,14 @@ namespace CycloneGames.AssetManagement.Editor
     public class AssetCacheDebuggerWindow : EditorWindow
     {
         // ── Layout constants ────────────────────────────────────────────────────
-        private const float REFS_W     = 38f;
-        private const float HITS_W     = 38f;
+        private const float REFS_W = 38f;
+        private const float HITS_W = 38f;
         private const float PROVIDER_W = 90f;
-        private const float BUCKET_W   = 100f;
-        private const float TAG_W      = 74f;
-        private const float OWNER_W    = 90f;
-        private const float TIER_W     = 54f;
-        private const float MIN_LOC_W  = 80f;
+        private const float BUCKET_W = 100f;
+        private const float TAG_W = 74f;
+        private const float OWNER_W = 90f;
+        private const float TIER_W = 54f;
+        private const float MIN_LOC_W = 80f;
         private float LocationWidth => Mathf.Max(MIN_LOC_W,
             position.width - REFS_W - HITS_W - PROVIDER_W - BUCKET_W - TAG_W - OWNER_W - TIER_W - 34f);
 
@@ -58,6 +58,7 @@ namespace CycloneGames.AssetManagement.Editor
         private GUIStyle _headerStyle;
         private GUIStyle _pillStyle;
         private GUIStyle _monoStyle;
+        private GUIStyle _typeBadgeStyle;
         private bool _stylesBuilt;
 
         [MenuItem("Tools/CycloneGames/AssetManagement/Asset Cache Debugger")]
@@ -112,6 +113,14 @@ namespace CycloneGames.AssetManagement.Editor
                 font = EditorStyles.miniFont,
                 clipping = TextClipping.Clip,
                 padding = new RectOffset(4, 4, 2, 2)
+            };
+
+            _typeBadgeStyle = new GUIStyle(EditorStyles.miniLabel)
+            {
+                alignment = TextAnchor.MiddleLeft,
+                fontStyle = FontStyle.Italic,
+                padding = new RectOffset(2, 4, 2, 2),
+                clipping = TextClipping.Clip
             };
         }
 
@@ -222,13 +231,13 @@ namespace CycloneGames.AssetManagement.Editor
             using (new EditorGUILayout.HorizontalScope(_headerStyle))
             {
                 GUILayout.Label("Location", EditorStyles.boldLabel, GUILayout.Width(LocationWidth));
-                GUILayout.Label("Refs",     EditorStyles.boldLabel, GUILayout.Width(REFS_W));
-                GUILayout.Label("Hits",     EditorStyles.boldLabel, GUILayout.Width(HITS_W));
+                GUILayout.Label("Refs", EditorStyles.boldLabel, GUILayout.Width(REFS_W));
+                GUILayout.Label("Hits", EditorStyles.boldLabel, GUILayout.Width(HITS_W));
                 GUILayout.Label("Provider", EditorStyles.boldLabel, GUILayout.Width(PROVIDER_W));
-                GUILayout.Label("Bucket",   EditorStyles.boldLabel, GUILayout.Width(BUCKET_W));
-                GUILayout.Label("Tag",      EditorStyles.boldLabel, GUILayout.Width(TAG_W));
-                GUILayout.Label("Owner",    EditorStyles.boldLabel, GUILayout.Width(OWNER_W));
-                GUILayout.Label("Tier",     EditorStyles.boldLabel, GUILayout.Width(TIER_W));
+                GUILayout.Label("Bucket", EditorStyles.boldLabel, GUILayout.Width(BUCKET_W));
+                GUILayout.Label("Tag", EditorStyles.boldLabel, GUILayout.Width(TAG_W));
+                GUILayout.Label("Owner", EditorStyles.boldLabel, GUILayout.Width(OWNER_W));
+                GUILayout.Label("Tier", EditorStyles.boldLabel, GUILayout.Width(TIER_W));
             }
         }
 
@@ -247,16 +256,46 @@ namespace CycloneGames.AssetManagement.Editor
                 EditorGUI.DrawRect(rect, rowBg);
 
             float locW = LocationWidth;
-            var locContent = new GUIContent(item.Location, item.Location);
-            GUILayout.Label(locContent, _monoStyle, GUILayout.Width(locW));
+            string tooltip = string.IsNullOrEmpty(item.AssetType)
+                ? item.Location
+                : $"{item.Location}\n[{item.AssetType}]";
 
-            if (rect.Contains(Event.current.mousePosition)
+            // ── Location cell with inline type badge ────────────────────────────
+            var cellRect = GUILayoutUtility.GetRect(locW, 18f);
+
+            if (!string.IsNullOrEmpty(item.AssetType))
+            {
+                // Measure how wide the type suffix " (TypeName)" needs
+                string typeLabel = $" ({item.AssetType})";
+                var typeContent = new GUIContent(typeLabel);
+                float typeW = _typeBadgeStyle.CalcSize(typeContent).x;
+                float gap = 2f;
+
+                // Location takes the remaining space
+                float locTextW = cellRect.width - typeW - gap;
+                var locRect = new Rect(cellRect.x, cellRect.y, locTextW, cellRect.height);
+                GUI.Label(locRect, new GUIContent(item.Location, tooltip), _monoStyle);
+
+                // Type rendered as dim italic text right after, no background
+                var typeRect = new Rect(locRect.xMax + gap, cellRect.y, typeW, cellRect.height);
+                GUI.Label(typeRect, new GUIContent(typeLabel, item.AssetType), _typeBadgeStyle);
+            }
+            else
+            {
+                GUI.Label(cellRect, new GUIContent(item.Location, tooltip), _monoStyle);
+            }
+
+            if (cellRect.Contains(Event.current.mousePosition)
                 && Event.current.type == EventType.MouseDown && Event.current.button == 1)
             {
                 var menu = new GenericMenu();
                 string loc = item.Location;
+                string assetType = item.AssetType;
                 menu.AddItem(new GUIContent("Copy Location"), false,
                     () => EditorGUIUtility.systemCopyBuffer = loc);
+                if (!string.IsNullOrEmpty(assetType))
+                    menu.AddItem(new GUIContent("Copy Type"), false,
+                        () => EditorGUIUtility.systemCopyBuffer = assetType);
                 menu.ShowAsContext();
                 Event.current.Use();
             }
@@ -269,9 +308,9 @@ namespace CycloneGames.AssetManagement.Editor
                 {
                     "Trial" => "RefCount = 0 — asset is in the Trial (probation) idle pool.\n"
                              + "AssetCacheService is holding it for fast re-use.\nNot a leak.",
-                    "Main"  => "RefCount = 0 — asset is in the Main (hot) idle pool.\n"
+                    "Main" => "RefCount = 0 — asset is in the Main (hot) idle pool.\n"
                              + "Promoted due to high access frequency; kept resident for instant re-use.\nNot a leak.",
-                    _       => "RefCount = 0"
+                    _ => "RefCount = 0"
                 };
                 GUI.contentColor = GetTierColor(tier);
                 GUILayout.Label(new GUIContent("0", refsTooltip), _rowStyle, GUILayout.Width(REFS_W));
@@ -388,7 +427,7 @@ namespace CycloneGames.AssetManagement.Editor
             int totalRefs = 0, maxHits = 0;
             int refAnomalies = 0;
             var ownerCounts = new Dictionary<string, int>();
-            var tagCounts   = new Dictionary<string, int>();
+            var tagCounts = new Dictionary<string, int>();
 
             for (int i = 0; i < _allList.Count; i++)
             {
@@ -398,10 +437,10 @@ namespace CycloneGames.AssetManagement.Editor
                 if (e.RefCount > 8) refAnomalies++;
                 switch (e.ProviderType)
                 {
-                    case "YooAsset":      yooCount++;  break;
-                    case "Addressables":  addrCount++; break;
-                    case "Resources":     resCount++;  break;
-                    default:              otherCount++;break;
+                    case "YooAsset": yooCount++; break;
+                    case "Addressables": addrCount++; break;
+                    case "Resources": resCount++; break;
+                    default: otherCount++; break;
                 }
                 if (!string.IsNullOrEmpty(e.Owner))
                 {
@@ -417,12 +456,12 @@ namespace CycloneGames.AssetManagement.Editor
 
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                DrawSummaryRow("Total cached assets",                    _allList.Count.ToString());
-                DrawSummaryRow("Active (in-use, RefCount > 0)",          _activeList.Count.ToString());
-                DrawSummaryRow("Trial pool (idle probation)",             _trialList.Count.ToString());
-                DrawSummaryRow("Main pool (idle hot cache)",              _mainList.Count.ToString());
-                DrawSummaryRow("Total live ref-count sum",                totalRefs.ToString());
-                DrawSummaryRow("Highest AccessCount (hottest asset)",     maxHits.ToString());
+                DrawSummaryRow("Total cached assets", _allList.Count.ToString());
+                DrawSummaryRow("Active (in-use, RefCount > 0)", _activeList.Count.ToString());
+                DrawSummaryRow("Trial pool (idle probation)", _trialList.Count.ToString());
+                DrawSummaryRow("Main pool (idle hot cache)", _mainList.Count.ToString());
+                DrawSummaryRow("Total live ref-count sum", totalRefs.ToString());
+                DrawSummaryRow("Highest AccessCount (hottest asset)", maxHits.ToString());
             }
 
             // Leak suspect section
@@ -455,9 +494,9 @@ namespace CycloneGames.AssetManagement.Editor
             EditorGUILayout.LabelField("Assets by Provider", EditorStyles.boldLabel);
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                DrawSummaryRow("YooAsset",    yooCount.ToString(),  new Color(1f, 0.6f, 0f));
-                DrawSummaryRow("Addressables",addrCount.ToString(), new Color(0.2f, 0.6f, 1f));
-                DrawSummaryRow("Resources",   resCount.ToString(),  Color.gray);
+                DrawSummaryRow("YooAsset", yooCount.ToString(), new Color(1f, 0.6f, 0f));
+                DrawSummaryRow("Addressables", addrCount.ToString(), new Color(0.2f, 0.6f, 1f));
+                DrawSummaryRow("Resources", resCount.ToString(), Color.gray);
                 if (otherCount > 0) DrawSummaryRow("Other", otherCount.ToString());
             }
 
@@ -489,8 +528,8 @@ namespace CycloneGames.AssetManagement.Editor
             if (total > 0)
             {
                 DrawProgressBar("Active", _activeList.Count, total, new Color(0.2f, 0.7f, 0.3f));
-                DrawProgressBar("Trial",  _trialList.Count,  total, new Color(0.9f, 0.6f, 0.1f));
-                DrawProgressBar("Main",   _mainList.Count,   total, new Color(0.2f, 0.5f, 1.0f));
+                DrawProgressBar("Trial", _trialList.Count, total, new Color(0.9f, 0.6f, 0.1f));
+                DrawProgressBar("Main", _mainList.Count, total, new Color(0.2f, 0.5f, 1.0f));
             }
         }
 
@@ -552,18 +591,19 @@ namespace CycloneGames.AssetManagement.Editor
         private string GetTierForEntry(AssetCacheService.CacheDiagnosticEntry e)
         {
             for (int i = 0; i < _activeList.Count; i++)
-                if (_activeList[i].Location == e.Location) return "Active";
+                if (_activeList[i].CacheKey == e.CacheKey) return "Active";
             for (int i = 0; i < _trialList.Count; i++)
-                if (_trialList[i].Location == e.Location) return "Trial";
+                if (_trialList[i].CacheKey == e.CacheKey) return "Trial";
             return "Main";
         }
 
         private bool MatchesFilter(AssetCacheService.CacheDiagnosticEntry e)
         {
-            return (e.Location     != null && e.Location.IndexOf(_searchFilter,     System.StringComparison.OrdinalIgnoreCase) >= 0)
-                || (e.Bucket       != null && e.Bucket.IndexOf(_searchFilter,       System.StringComparison.OrdinalIgnoreCase) >= 0)
-                || (e.Tag          != null && e.Tag.IndexOf(_searchFilter,          System.StringComparison.OrdinalIgnoreCase) >= 0)
-                || (e.Owner        != null && e.Owner.IndexOf(_searchFilter,        System.StringComparison.OrdinalIgnoreCase) >= 0)
+            return (e.Location != null && e.Location.IndexOf(_searchFilter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                || (e.AssetType != null && e.AssetType.IndexOf(_searchFilter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                || (e.Bucket != null && e.Bucket.IndexOf(_searchFilter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                || (e.Tag != null && e.Tag.IndexOf(_searchFilter, System.StringComparison.OrdinalIgnoreCase) >= 0)
+                || (e.Owner != null && e.Owner.IndexOf(_searchFilter, System.StringComparison.OrdinalIgnoreCase) >= 0)
                 || (e.ProviderType != null && e.ProviderType.IndexOf(_searchFilter, System.StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
@@ -597,9 +637,9 @@ namespace CycloneGames.AssetManagement.Editor
             switch (tier)
             {
                 case "Active": return new Color(0.2f, 0.85f, 0.4f);
-                case "Trial":  return new Color(1.0f, 0.75f, 0.1f);
-                case "Main":   return new Color(0.3f, 0.6f, 1.0f);
-                default:       return Color.white;
+                case "Trial": return new Color(1.0f, 0.75f, 0.1f);
+                case "Main": return new Color(0.3f, 0.6f, 1.0f);
+                default: return Color.white;
             }
         }
 
@@ -608,11 +648,13 @@ namespace CycloneGames.AssetManagement.Editor
             switch (tier)
             {
                 case "Active": return "Asset is actively in-use (RefCount > 0). A handle caller is holding a reference.";
-                case "Trial":  return "Asset is in the Trial (W-LRU) idle pool.\nRefCount = 0 — no caller holds it, but AssetCacheService keeps it loaded\nfor fast re-use. Evicted if the pool is full and a new asset arrives.";
-                case "Main":   return "Asset is in the Main (LFU+LRU) hot cache.\nRefCount = 0 — promoted here due to high access frequency.\nKept resident for instant re-use. NOT a leak.";
-                default:       return string.Empty;
+                case "Trial": return "Asset is in the Trial (W-LRU) idle pool.\nRefCount = 0 — no caller holds it, but AssetCacheService keeps it loaded\nfor fast re-use. Evicted if the pool is full and a new asset arrives.";
+                case "Main": return "Asset is in the Main (LFU+LRU) hot cache.\nRefCount = 0 — promoted here due to high access frequency.\nKept resident for instant re-use. NOT a leak.";
+                default: return string.Empty;
             }
         }
+
+
     }
 }
 #endif

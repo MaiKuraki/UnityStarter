@@ -6,7 +6,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// <summary>
     /// A centralized pool manager for GameplayAbility and AbilityTask types.
     /// Uses type-based dictionary lookup for per-type pooling.
-    /// For other GAS types, use GASPool&lt;T&gt; directly.
+    /// For other GAS types, use GASPool<T> directly.
     /// </summary>
     public static class PoolManager
     {

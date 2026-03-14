@@ -10,6 +10,7 @@ using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
 using Unio;
 using Unity.Collections;
+using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -17,6 +18,7 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         private readonly string packageName;
         private int nextId = 1;
+        private bool? _hasRemoteCatalogCache;
 
         public string Name => packageName;
 
@@ -87,7 +89,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 return version;
             }
 
-            Debug.LogWarning("[AddressablesAssetPackage] Version data not found. Make sure Addressables content was built with the build pipeline.");
+            CLogger.LogWarning("[AddressablesAssetPackage] Version data not found. Make sure Addressables content was built with the build pipeline.");
             return string.Empty;
         }
 
@@ -97,6 +99,9 @@ namespace CycloneGames.AssetManagement.Runtime
         /// </summary>
         private bool HasRemoteCatalog()
         {
+            if (_hasRemoteCatalogCache.HasValue) return _hasRemoteCatalogCache.Value;
+
+            bool result = false;
             try
             {
                 var resourceLocators = Addressables.ResourceLocators;
@@ -113,10 +118,12 @@ namespace CycloneGames.AssetManagement.Runtime
                                     // If we find any remote URL, we're using remote catalog
                                     if (keyStr.StartsWith("http://") || keyStr.StartsWith("https://"))
                                     {
-                                        return true;
+                                        result = true;
+                                        break;
                                     }
                                 }
                             }
+                            if (result) break;
                         }
                     }
                 }
@@ -126,7 +133,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
             }
 
-            return false;
+            _hasRemoteCatalogCache = result;
+            return result;
         }
 
         private async UniTask<string> TryLoadVersionFromRemoteAsync(int timeoutSeconds, CancellationToken cancellationToken)
@@ -151,7 +159,7 @@ namespace CycloneGames.AssetManagement.Runtime
                         var versionData = JsonUtility.FromJson<VersionDataJson>(jsonContent);
                         if (versionData != null && !string.IsNullOrEmpty(versionData.contentVersion))
                         {
-                            Debug.Log($"[AddressablesAssetPackage] Loaded version from remote: {versionData.contentVersion}");
+                            CLogger.LogInfo($"[AddressablesAssetPackage] Loaded version from remote: {versionData.contentVersion}");
 
                             await SaveVersionToPersistentDataAsync(versionData.contentVersion, cancellationToken);
 
@@ -162,7 +170,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[AddressablesAssetPackage] Failed to load version from remote: {ex.Message}");
+                CLogger.LogWarning($"[AddressablesAssetPackage] Failed to load version from remote: {ex.Message}");
             }
 
             return string.Empty;
@@ -186,11 +194,11 @@ namespace CycloneGames.AssetManagement.Runtime
                 byte[] bytes = Encoding.UTF8.GetBytes(jsonContent);
                 using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
                 await NativeFile.WriteAllBytesAsync(versionFilePath, nativeBytes);
-                Debug.Log($"[AddressablesAssetPackage] Saved version to persistent data: {version}");
+                CLogger.LogInfo($"[AddressablesAssetPackage] Saved version to persistent data: {version}");
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[AddressablesAssetPackage] Failed to save version to persistent data: {ex.Message}");
+                CLogger.LogWarning($"[AddressablesAssetPackage] Failed to save version to persistent data: {ex.Message}");
             }
         }
 
@@ -224,7 +232,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[AddressablesAssetPackage] Failed to determine remote version URL: {ex.Message}");
+                CLogger.LogWarning($"[AddressablesAssetPackage] Failed to determine remote version URL: {ex.Message}");
             }
 
             return string.Empty;
@@ -253,14 +261,14 @@ namespace CycloneGames.AssetManagement.Runtime
                     var versionData = JsonUtility.FromJson<VersionDataJson>(jsonContent);
                     if (versionData != null && !string.IsNullOrEmpty(versionData.contentVersion))
                     {
-                        Debug.Log($"[AddressablesAssetPackage] Loaded version from persistent data (cached): {versionData.contentVersion}");
+                        CLogger.LogInfo($"[AddressablesAssetPackage] Loaded version from persistent data (cached): {versionData.contentVersion}");
                         return versionData.contentVersion;
                     }
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[AddressablesAssetPackage] Failed to load version from persistent data: {ex.Message}");
+                CLogger.LogWarning($"[AddressablesAssetPackage] Failed to load version from persistent data: {ex.Message}");
             }
 
             return string.Empty;
@@ -312,7 +320,7 @@ namespace CycloneGames.AssetManagement.Runtime
                             var versionData = JsonUtility.FromJson<VersionDataJson>(jsonContent);
                             if (versionData != null && !string.IsNullOrEmpty(versionData.contentVersion))
                             {
-                                Debug.Log($"[AddressablesAssetPackage] Loaded version from StreamingAssets: {versionFilePath} -> {versionData.contentVersion}");
+                                CLogger.LogInfo($"[AddressablesAssetPackage] Loaded version from StreamingAssets: {versionFilePath} -> {versionData.contentVersion}");
                                 return versionData.contentVersion;
                             }
                         }
@@ -326,7 +334,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[AddressablesAssetPackage] Failed to load version from StreamingAssets: {ex.Message}");
+                CLogger.LogWarning($"[AddressablesAssetPackage] Failed to load version from StreamingAssets: {ex.Message}");
             }
 
             return string.Empty;
@@ -352,7 +360,7 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 // No remote catalog available (standalone game scenario)
                 // Skip UpdateCatalogs to avoid triggering Unity's error logging
-                Debug.Log($"[AddressablesAssetPackage] No remote catalog detected (standalone game). Skipping catalog update. Using local content.");
+                CLogger.LogInfo($"[AddressablesAssetPackage] No remote catalog detected (standalone game). Skipping catalog update. Using local content.");
                 return true; // Return true to indicate we can continue with local content
             }
 
@@ -371,7 +379,7 @@ namespace CycloneGames.AssetManagement.Runtime
                     if (errorMessage != null && errorMessage.Contains("Content update not available", StringComparison.OrdinalIgnoreCase))
                     {
                         // This can happen if remote catalog was configured but is not available
-                        Debug.Log($"[AddressablesAssetPackage] Remote catalog not available. Using local content.");
+                        CLogger.LogInfo($"[AddressablesAssetPackage] Remote catalog not available. Using local content.");
                         Addressables.Release(handle);
                         return true; // Return true to indicate we can continue with local content
                     }
@@ -386,11 +394,11 @@ namespace CycloneGames.AssetManagement.Runtime
                 string errorMessage = ex.Message ?? string.Empty;
                 if (errorMessage.Contains("Content update not available", StringComparison.OrdinalIgnoreCase))
                 {
-                    Debug.Log($"[AddressablesAssetPackage] Remote catalog not available. Using local content.");
+                    CLogger.LogInfo($"[AddressablesAssetPackage] Remote catalog not available. Using local content.");
                     return true; // Return true to indicate we can continue with local content
                 }
 
-                Debug.LogWarning($"[AddressablesAssetPackage] Failed to update catalogs: {ex.Message}");
+                CLogger.LogWarning($"[AddressablesAssetPackage] Failed to update catalogs: {ex.Message}");
                 return false;
             }
         }
@@ -399,7 +407,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (clearMode == ClearCacheMode.ByTags)
             {
-                Debug.LogWarning("[AddressablesAssetPackage] ClearCacheFilesAsync by tags is not supported by Addressables. All cache will be cleared.");
+                CLogger.LogWarning("[AddressablesAssetPackage] ClearCacheFilesAsync by tags is not supported by Addressables. All cache will be cleared.");
             }
             return UniTask.FromResult(Caching.ClearCache());
         }
@@ -446,27 +454,29 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cached = _cacheService.Get(location, bucket, tag, owner);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAssetHandle<TAsset>)cached;
 
             var handle = Addressables.LoadAssetAsync<TAsset>(location);
             var id = RegisterHandle();
-            var wrapped = AddressableAssetHandle<TAsset>.Create(id, location, handle, _cacheService.OnHandleReleased, cancellationToken);
+            var wrapped = AddressableAssetHandle<TAsset>.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(location, bucket, tag, owner, wrapped);
+            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
             return wrapped;
         }
 
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cached = _cacheService.Get(location, bucket, tag, owner);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAllAssetsHandle<TAsset>)cached;
 
             var handle = Addressables.LoadAssetsAsync<TAsset>(location, null);
             var id = RegisterHandle();
-            var wrapped = AddressableAllAssetsHandle<TAsset>.Create(id, location, handle, _cacheService.OnHandleReleased, cancellationToken);
+            var wrapped = AddressableAllAssetsHandle<TAsset>.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(location, bucket, tag, owner, wrapped);
+            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
             return wrapped;
         }
 
@@ -537,7 +547,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public UniTask UnloadUnusedAssetsAsync()
         {
             _cacheService.ClearAll();
-            Debug.LogWarning("[AddressablesAssetPackage] UnloadUnusedAssetsAsync is not recommended. Please release individual asset handles via Dispose() for precise memory management.");
+            CLogger.LogWarning("[AddressablesAssetPackage] UnloadUnusedAssetsAsync is not recommended. Please release individual asset handles via Dispose() for precise memory management.");
             return UniTask.CompletedTask;
         }
 
