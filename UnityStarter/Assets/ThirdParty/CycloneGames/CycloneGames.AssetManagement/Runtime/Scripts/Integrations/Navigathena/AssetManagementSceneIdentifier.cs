@@ -38,6 +38,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
     {
         private readonly ISceneHandle sceneHandle;
         private readonly IAssetPackage assetPackage;
+        private bool _unloaded;
 
         public UnityEngine.SceneManagement.Scene Scene => sceneHandle.Scene;
 
@@ -61,12 +62,19 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
 
         public UniTask Unload(IProgress<float> progress = null, CancellationToken cancellationToken = default)
         {
+            if (_unloaded) return UniTask.CompletedTask;
+            _unloaded = true;
             return assetPackage.UnloadSceneAsync(sceneHandle);
         }
 
         public void Dispose()
         {
-            (sceneHandle as IDisposable)?.Dispose();
+            // After Unload, the scene handle is already fully disposed by UnloadSceneAsync.
+            // Only dispose if Unload was never called.
+            if (!_unloaded)
+            {
+                (sceneHandle as IDisposable)?.Dispose();
+            }
         }
     }
 }
