@@ -1,4 +1,4 @@
-# Unity 项目启动模板
+﻿# Unity 项目启动模板
 
 一个生产就绪、模块化的 Unity 项目模板，为游戏开发提供坚实的基础。借鉴**虚幻引擎**架构模式，本模板集成了经过验证的游戏系统、高性能基础设施和现代开发工作流。
 
@@ -43,6 +43,7 @@
 - ✅ 带 CI/CD 集成的构建管线
 - ✅ 现代输入系统（支持上下文栈）
 - ✅ 层级式 UI 管理框架（支持 MVP 架构）
+- ✅ 跨平台设备反馈（触觉振动、手柄震动、灯光控制）
 
 > **📖 文档**: 每个模块都有详细文档。请参阅 [模块目录](#模块目录) 部分以获取详细指南链接。
 
@@ -159,12 +160,12 @@
 
 ### 🏗️ 核心基础设施
 
-| 模块                | 路径                           | 描述                                                                                | 文档                                                                                                    |
-| ------------------- | ------------------------------ | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| **Factory**         | `CycloneGames.Factory`         | 高性能对象池。线程安全、自动扩缩容池，O(1) 操作复杂度。零 GC 分配。                 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.SCH.md)         |
-| **Logger**          | `CycloneGames.Logger`          | 零 GC 日志系统。多线程、文件轮转、跨平台（包括 WebGL）。可插拔处理器。              | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.SCH.md)          |
+| 模块                | 路径                           | 描述                                                                                 | 文档                                                                                                    |
+| ------------------- | ------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| **Factory**         | `CycloneGames.Factory`         | 高性能对象池。线程安全、自动扩缩容池，O(1) 操作复杂度。零 GC 分配。                  | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.SCH.md)         |
+| **Logger**          | `CycloneGames.Logger`          | 零 GC 日志系统。多线程、文件轮转、跨平台（包括 WebGL）。可插拔处理器。               | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.SCH.md)          |
 | **AssetManagement** | `CycloneGames.AssetManagement` | DI 优先的资源加载抽象层（基于 W-TinyLFU 缓存），并无缝集成 YooAsset / Addressables。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
-| **Audio**           | `CycloneGames.Audio`           | 高性能音频管理。类似 Wwise 的 API、低 GC、使用 Unity 原生音频的高级功能。           | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)           |
+| **Audio**           | `CycloneGames.Audio`           | 高性能音频管理。类似 Wwise 的 API、低 GC、使用 Unity 原生音频的高级功能。            | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)           |
 
 ### 🎯 输入与界面
 
@@ -172,6 +173,12 @@
 | --------------- | -------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | **InputSystem** | `CycloneGames.InputSystem` | 响应式输入封装，支持上下文栈。本地多人支持、设备自动检测、运行时 YAML 键位配置。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.SCH.md) |
 | **UIFramework** | `CycloneGames.UIFramework` | 层级式 UI 管理。基于层的组织、MVP 架构、转场动画、资源集成。                     | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
+
+### 📳 设备反馈
+
+| 模块               | 路径                          | 描述                                                                                | 文档                                                                                                   |
+| ------------------ | ----------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **DeviceFeedback** | `CycloneGames.DeviceFeedback` | 多平台硬件反馈。手机触觉振动（Android / iOS / WebGL）、手柄马达震动、设备灯条控制。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.SCH.md) |
 
 ### 🛠️ 工具与服务
 
@@ -308,6 +315,7 @@ git clone https://github.com/MaiKuraki/UnityStarter.git
 - **[InputSystem](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.SCH.md)** - 输入系统配置和使用
 - **[UIFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md)** - UI 框架架构和示例
 - **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md)** - 资源加载和版本管理
+- **[DeviceFeedback](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.SCH.md)** - 跨平台触觉振动、震动与灯光控制
 
 ---
 
