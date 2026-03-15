@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace CycloneGames.DeviceFeedback.Runtime
 {
-    [CreateAssetMenu(fileName = "NewHapticClip", menuName = "Device Feedback/Haptic Clip")]
+    [CreateAssetMenu(fileName = "NewHapticClip", menuName = "CycloneGames/Device Feedback/Haptic Clip")]
     public sealed class HapticClip : ScriptableObject
     {
         [Min(0.01f)]
