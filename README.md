@@ -152,6 +152,7 @@ Modules are designed to be:
 
 | Module                | Path                             | Description                                                                                                              | Documentation                                                                                     |
 | --------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| **UIFramework**       | `CycloneGames.UIFramework`       | Hierarchical UI management. Layer-based, MVP architecture, transitions, asset integration.                               | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md)       |
 | **GameplayFramework** | `CycloneGames.GameplayFramework` | UE-style gameplay architecture (Actor/Pawn/Controller/GameMode). DI-friendly, scalable foundation for game projects.     | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.md) |
 | **GameplayAbilities** | `CycloneGames.GameplayAbilities` | Data-driven ability system (GAS-inspired). ScriptableObject-based abilities, attributes, effects, and status management. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.md) |
 | **GameplayTags**      | `CycloneGames.GameplayTags`      | Hierarchical tag system for decoupled game logic. Runtime registration, auto-generation, and tag-based queries.          | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.md)      |
@@ -167,18 +168,12 @@ Modules are designed to be:
 | **AssetManagement** | `CycloneGames.AssetManagement` | DI-first asset loading abstraction with W-TinyLFU cache, And seamless YooAsset/Addressables integration.       | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md) |
 | **Audio**           | `CycloneGames.Audio`           | High-performance audio management. Wwise-like API, low-GC, advanced features using Unity native audio.         | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.md)           |
 
-### 🎯 Input & UI
+### 🕹️ Input & Device Interaction
 
-| Module          | Path                       | Description                                                                                                                 | Documentation                                                                               |
-| --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| **InputSystem** | `CycloneGames.InputSystem` | Reactive input wrapper with context stacks. Local co-op support, device auto-detection, runtime YAML keybind configuration. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.md) |
-| **UIFramework** | `CycloneGames.UIFramework` | Hierarchical UI management. Layer-based, MVP architecture, transitions, asset integration.                                  | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md) |
-
-### 📳 Device Feedback
-
-| Module             | Path                          | Description                                                                                                         | Documentation                                                                                  |
-| ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| **DeviceFeedback** | `CycloneGames.DeviceFeedback` | Multi-platform hardware feedback. Mobile haptics (Android / iOS / WebGL), gamepad rumble, device light bar control. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.md) |
+| Module             | Path                          | Description                                                                                                                 | Documentation                                                                                  |
+| ------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **InputSystem**    | `CycloneGames.InputSystem`    | Reactive input wrapper with context stacks. Local co-op support, device auto-detection, runtime YAML keybind configuration. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.md)    |
+| **DeviceFeedback** | `CycloneGames.DeviceFeedback` | Multi-platform hardware feedback. Mobile haptics (Android / iOS / WebGL), gamepad rumble, device light bar control.         | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.md) |
 
 ### 🛠️ Utilities & Services
 
