@@ -67,6 +67,10 @@ namespace CycloneGames.Audio.Runtime
     public enum ParameterType
     {
         Volume,
-        Pitch
+        Pitch,
+        SpatialBlend,
+        PanStereo,
+        ReverbZoneMix,
+        DopplerLevel
     }
 }

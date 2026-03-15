@@ -58,6 +58,14 @@ namespace CycloneGames.Audio.Runtime
         private List<AudioEventParameter> parameters = new List<AudioEventParameter>();
 
         /// <summary>
+        /// Priority for voice stealing. Higher priority events are less likely to be stolen.
+        /// Range: 0 (lowest) to 100 (highest). Default: 50.
+        /// </summary>
+        [SerializeField]
+        [Range(0, 100)]
+        private int priority = 50;
+
+        /// <summary>
         /// The maximum number of simultaneous instances of an event that can be played
         /// </summary>
         public int InstanceLimit
@@ -74,6 +82,11 @@ namespace CycloneGames.Audio.Runtime
             get { return this.group; }
             set { group = value; }
         }
+
+        /// <summary>
+        /// Priority for voice stealing (0-100). Higher priority events are less likely to be stolen.
+        /// </summary>
+        public int Priority => this.priority;
 
         public bool ValidateAudioFiles()
         {
@@ -301,6 +314,17 @@ namespace CycloneGames.Audio.Runtime
             {
                 return this.parameters;
             }
+        }
+
+        /// <summary>
+        /// Priority for voice stealing (0-100). Higher = less likely to be stolen.
+        /// </summary>
+        public int PriorityValue
+        {
+            get { return this.priority; }
+#if UNITY_EDITOR
+            set { this.priority = Mathf.Clamp(value, 0, 100); }
+#endif
         }
 
         #endregion

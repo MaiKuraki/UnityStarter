@@ -43,6 +43,15 @@ namespace CycloneGames.Audio.Runtime
         [Range(128, 512)]
         [SerializeField] private int desktopHighEndMaxPoolSize = 256;
 
+        [Header("Console Platforms")]
+        [Tooltip("Max pool size for Nintendo Switch")]
+        [Range(32, 128)]
+        [SerializeField] private int switchMaxPoolSize = 64;
+
+        [Tooltip("Max pool size for current-gen consoles (PS5, Xbox Series)")]
+        [Range(96, 384)]
+        [SerializeField] private int consoleMaxPoolSize = 192;
+
         [Header("Initial Pool Sizes")]
         [Tooltip("Initial pool size for WebGL")]
         [Range(8, 32)]
@@ -55,6 +64,14 @@ namespace CycloneGames.Audio.Runtime
         [Tooltip("Initial pool size for desktop platforms")]
         [Range(32, 128)]
         [SerializeField] private int desktopInitialPoolSize = 80;
+
+        [Tooltip("Initial pool size for Nintendo Switch")]
+        [Range(16, 64)]
+        [SerializeField] private int switchInitialPoolSize = 32;
+
+        [Tooltip("Initial pool size for current-gen consoles")]
+        [Range(32, 128)]
+        [SerializeField] private int consoleInitialPoolSize = 64;
 
         [Header("Pool Expansion")]
         [Tooltip("Number of sources to add when expanding the pool")]
@@ -82,10 +99,14 @@ namespace CycloneGames.Audio.Runtime
         public int DesktopLowEndMaxPoolSize => desktopLowEndMaxPoolSize;
         public int DesktopMidRangeMaxPoolSize => desktopMidRangeMaxPoolSize;
         public int DesktopHighEndMaxPoolSize => desktopHighEndMaxPoolSize;
+        public int SwitchMaxPoolSize => switchMaxPoolSize;
+        public int ConsoleMaxPoolSize => consoleMaxPoolSize;
 
         public int WebGLInitialPoolSize => webGLInitialPoolSize;
         public int MobileInitialPoolSize => mobileInitialPoolSize;
         public int DesktopInitialPoolSize => desktopInitialPoolSize;
+        public int SwitchInitialPoolSize => switchInitialPoolSize;
+        public int ConsoleInitialPoolSize => consoleInitialPoolSize;
 
         public int ExpansionIncrement => expansionIncrement;
         public float ShrinkIdleThreshold => shrinkIdleThreshold;
@@ -102,33 +123,35 @@ namespace CycloneGames.Audio.Runtime
 #if UNITY_WEBGL
             return webGLMaxPoolSize;
 #elif UNITY_ANDROID || UNITY_IOS
-            if (ramMB < 3072) return mobileLowEndMaxPoolSize;      // < 3 GB
-            if (ramMB < 6144) return mobileMidRangeMaxPoolSize;    // 3-6 GB
-            return mobileHighEndMaxPoolSize;                        // > 6 GB
+            if (ramMB < 3072) return mobileLowEndMaxPoolSize;
+            if (ramMB < 6144) return mobileMidRangeMaxPoolSize;
+            return mobileHighEndMaxPoolSize;
+#elif UNITY_SWITCH
+            return switchMaxPoolSize;
+#elif UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+            return consoleMaxPoolSize;
 #else
-            if (ramMB < 8192) return desktopLowEndMaxPoolSize;     // < 8 GB
-            if (ramMB < 16384) return desktopMidRangeMaxPoolSize;  // 8-16 GB
-            return desktopHighEndMaxPoolSize;                       // > 16 GB
+            if (ramMB < 8192) return desktopLowEndMaxPoolSize;
+            if (ramMB < 16384) return desktopMidRangeMaxPoolSize;
+            return desktopHighEndMaxPoolSize;
 #endif
         }
 
-        /// <summary>
-        /// Get the initial pool size for the current platform.
-        /// </summary>
         public int GetInitialPoolSizeForPlatform()
         {
 #if UNITY_WEBGL
             return webGLInitialPoolSize;
 #elif UNITY_ANDROID || UNITY_IOS
             return mobileInitialPoolSize;
+#elif UNITY_SWITCH
+            return switchInitialPoolSize;
+#elif UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+            return consoleInitialPoolSize;
 #else
             return desktopInitialPoolSize;
 #endif
         }
 
-        /// <summary>
-        /// Get the device tier name for debugging purposes.
-        /// </summary>
         public string GetDeviceTierName()
         {
             int ramMB = SystemInfo.systemMemorySize;
@@ -139,6 +162,10 @@ namespace CycloneGames.Audio.Runtime
             if (ramMB < 3072) return "Mobile Low-End";
             if (ramMB < 6144) return "Mobile Mid-Range";
             return "Mobile High-End";
+#elif UNITY_SWITCH
+            return "Console Switch";
+#elif UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+            return "Console Current-Gen";
 #else
             if (ramMB < 8192) return "Desktop Low-End";
             if (ramMB < 16384) return "Desktop Mid-Range";
@@ -161,6 +188,10 @@ namespace CycloneGames.Audio.Runtime
             if (ramMB < 3072) return 48;
             if (ramMB < 6144) return 64;
             return 96;
+#elif UNITY_SWITCH
+            return 64;
+#elif UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+            return 192;
 #else
             if (ramMB < 8192) return 128;
             if (ramMB < 16384) return 192;
@@ -168,23 +199,21 @@ namespace CycloneGames.Audio.Runtime
 #endif
         }
 
-        /// <summary>
-        /// Get default initial pool size for platform when no config asset exists.
-        /// </summary>
         public static int GetDefaultInitialPoolSizeForPlatform()
         {
 #if UNITY_WEBGL
             return 16;
 #elif UNITY_ANDROID || UNITY_IOS
             return 32;
+#elif UNITY_SWITCH
+            return 32;
+#elif UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+            return 64;
 #else
             return 80;
 #endif
         }
 
-        /// <summary>
-        /// Get default device tier name.
-        /// </summary>
         public static string GetDefaultDeviceTierName()
         {
             int ramMB = SystemInfo.systemMemorySize;
@@ -195,6 +224,10 @@ namespace CycloneGames.Audio.Runtime
             if (ramMB < 3072) return "Mobile Low-End";
             if (ramMB < 6144) return "Mobile Mid-Range";
             return "Mobile High-End";
+#elif UNITY_SWITCH
+            return "Console Switch";
+#elif UNITY_PS4 || UNITY_PS5 || UNITY_XBOXONE || UNITY_GAMECORE
+            return "Console Current-Gen";
 #else
             if (ramMB < 8192) return "Desktop Low-End";
             if (ramMB < 16384) return "Desktop Mid-Range";
@@ -235,19 +268,19 @@ namespace CycloneGames.Audio.Runtime
         public static AudioPoolConfig FindConfig()
         {
             if (hasSearchedForConfig && cachedConfig != null) return cachedConfig;
-            
+
             // Reset search flag if config was destroyed
             if (hasSearchedForConfig && cachedConfig == null)
             {
                 hasSearchedForConfig = false;
             }
-            
+
             hasSearchedForConfig = true;
 
             // Try to find in Resources first (multiple possible names)
             cachedConfig = Resources.Load<AudioPoolConfig>("AudioPoolConfig");
             if (cachedConfig != null) return cachedConfig;
-            
+
             cachedConfig = Resources.Load<AudioPoolConfig>("Audio Pool Config");
             if (cachedConfig != null) return cachedConfig;
 
@@ -288,7 +321,7 @@ namespace CycloneGames.Audio.Runtime
         {
             cachedConfig = config;
             hasSearchedForConfig = true;
-            
+
             if (config != null)
             {
                 Debug.Log($"AudioPoolConfig: External config set (Device tier: {config.GetDeviceTierName()})");
