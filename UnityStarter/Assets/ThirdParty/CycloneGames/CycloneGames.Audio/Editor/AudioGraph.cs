@@ -40,12 +40,12 @@ namespace CycloneGames.Audio.Editor
         /// The rectangle defining the space where the parameters are drawn
         /// </summary>
         private Rect parameterListRect = new Rect(0, 20, 300, 400);
-        
+
         /// <summary>
         /// Number of columns for parameter grid layout
         /// </summary>
         private int parameterGridColumns = 2;
-        
+
         /// <summary>
         /// Number of columns for switch grid layout
         /// </summary>
@@ -202,7 +202,7 @@ namespace CycloneGames.Audio.Editor
             GUILayout.BeginHorizontal(EditorStyles.toolbar);
             this.editorType = (EditorTypes)GUILayout.Toolbar((int)this.editorType, this.editorTypeNames, EditorStyles.toolbarButton);
             GUILayout.FlexibleSpace();
-            
+
             // Save Bank button
             if (this.audioBank != null)
             {
@@ -213,7 +213,7 @@ namespace CycloneGames.Audio.Editor
                 }
                 GUI.color = Color.white;
             }
-            
+
             if (GUILayout.Button("Actions", EditorStyles.toolbarDropDown))
             {
                 GenericMenu newNodeMenu = new GenericMenu();
@@ -316,7 +316,7 @@ namespace CycloneGames.Audio.Editor
                 var duplicates = AudioManager.ValidateBankForDuplicateNames(this.audioBank);
                 if (duplicates.Count > 0)
                 {
-                    EditorGUILayout.HelpBox($"⚠ {duplicates.Count} duplicate event name(s) detected. Only the first event of each name will be accessible via PlayEvent(string).", 
+                    EditorGUILayout.HelpBox($"⚠ {duplicates.Count} duplicate event name(s) detected. Only the first event of each name will be accessible via PlayEvent(string).",
                         MessageType.Warning);
                 }
             }
@@ -373,10 +373,10 @@ namespace CycloneGames.Audio.Editor
 
                     // Show warning icon for duplicate names
                     string displayName = tempEvent.name;
-                    bool isDuplicate = !string.IsNullOrEmpty(tempEvent.name) && 
-                                       nameCounts.TryGetValue(tempEvent.name, out int count) && 
+                    bool isDuplicate = !string.IsNullOrEmpty(tempEvent.name) &&
+                                       nameCounts.TryGetValue(tempEvent.name, out int count) &&
                                        count > 1;
-                    
+
                     EditorGUILayout.BeginHorizontal();
                     if (isDuplicate)
                     {
@@ -386,7 +386,7 @@ namespace CycloneGames.Audio.Editor
                     {
                         EditorGUILayout.LabelField("", GUILayout.Width(20));
                     }
-                    
+
                     if (GUILayout.Button(displayName, GUILayout.ExpandWidth(true)))
                     {
                         GUI.FocusControl(null);
@@ -488,7 +488,7 @@ namespace CycloneGames.Audio.Editor
             AudioParameter tempParameter;
             int paramCount = this.audioBank.EditorParameters.Count;
             int currentColumn = 0;
-            
+
             // Calculate column width based on window width and number of columns
             // Account for scrollbar (20px) and padding (20px total)
             float availableWidth = this.position.width - 40;
@@ -634,7 +634,7 @@ namespace CycloneGames.Audio.Editor
             AudioSwitch tempSwitch;
             int switchCount = this.audioBank.EditorSwitches.Count;
             int currentColumn = 0;
-            
+
             // Calculate column width based on window width and number of columns
             float availableWidth = this.position.width - 40;
             float columnWidth = (availableWidth / this.switchGridColumns) - 10; // 10px spacing between columns
@@ -794,7 +794,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUI.BeginChangeCheck();
 
             string newName = EditorGUILayout.TextField("Event Name", audioEvent.name);
-            
+
             // Check for duplicate names within the same bank
             if (!string.IsNullOrEmpty(newName) && this.audioBank != null && this.audioBank.EditorEvents != null)
             {
@@ -821,6 +821,7 @@ namespace CycloneGames.Audio.Editor
             float newFadeIn = EditorGUILayout.FloatField("Fade In", audioEvent.FadeIn);
             float newFadeOut = EditorGUILayout.FloatField("Fade Out", audioEvent.FadeOut);
             int newGroup = EditorGUILayout.IntField("Group", audioEvent.Group);
+            int newPriority = EditorGUILayout.IntSlider("Priority", audioEvent.PriorityValue, 0, 100);
 
             if (EditorGUI.EndChangeCheck())
             {
@@ -829,6 +830,7 @@ namespace CycloneGames.Audio.Editor
                 audioEvent.FadeIn = newFadeIn;
                 audioEvent.FadeOut = newFadeOut;
                 audioEvent.Group = newGroup;
+                audioEvent.PriorityValue = newPriority;
                 EditorUtility.SetDirty(audioEvent);
                 EditorUtility.SetDirty(this.audioBank);
                 AssetDatabase.SaveAssets();
@@ -1016,12 +1018,12 @@ namespace CycloneGames.Audio.Editor
         private void AddEvent()
         {
             AudioEvent newEvent = this.audioBank.AddEvent(new Vector2((CANVAS_SIZE - 200) / 2, (CANVAS_SIZE - 180) / 2));
-            
+
             // Generate unique name to avoid duplicates
             string baseName = "New Audio Event";
             string uniqueName = baseName;
             int counter = 1;
-            
+
             if (this.audioBank.EditorEvents != null)
             {
                 HashSet<string> existingNames = new HashSet<string>();
@@ -1035,19 +1037,19 @@ namespace CycloneGames.Audio.Editor
                         existingNames.Add(existingEvent.name);
                     }
                 }
-                
+
                 while (existingNames.Contains(uniqueName))
                 {
                     uniqueName = $"{baseName} {counter}";
                     counter++;
                 }
             }
-            
+
             newEvent.name = uniqueName;
             EditorUtility.SetDirty(newEvent);
             EditorUtility.SetDirty(this.audioBank);
             AssetDatabase.SaveAssets();
-            
+
             SelectEvent(newEvent);
         }
 
@@ -1672,19 +1674,19 @@ namespace CycloneGames.Audio.Editor
                 tempNode.InitializeNode(position);
                 tempNode.File = clips[i];
                 newEvent.AddNode(tempNode);
-                
+
                 // Generate unique name if clip name already exists
                 string baseName = clips[i].name;
                 string uniqueName = baseName;
                 int counter = 1;
-                
+
                 while (existingNames.Contains(uniqueName))
                 {
                     uniqueName = $"{baseName} {counter}";
                     counter++;
                     duplicateCount++;
                 }
-                
+
                 newEvent.name = uniqueName;
                 existingNames.Add(uniqueName);
                 newEvent.Output.Input.AddConnection(tempNode.Output);
@@ -1860,7 +1862,7 @@ namespace CycloneGames.Audio.Editor
                     if (audioEvent != null)
                     {
                         EditorUtility.SetDirty(audioEvent);
-                        
+
                         // Mark all nodes in the event
                         if (audioEvent.EditorNodes != null)
                         {

@@ -96,7 +96,7 @@ namespace CycloneGames.Audio.Editor
             if (!Application.isPlaying)
             {
                 EditorGUILayout.HelpBox("Runtime data is only available in Play Mode.\nEnter Play Mode to see audio system status.", MessageType.Info);
-                
+
                 EditorGUILayout.Space(5);
                 DrawDefaultInspector();
                 return;
@@ -185,13 +185,13 @@ namespace CycloneGames.Audio.Editor
 
             // Active Sources
             DrawStatBox("Active", AudioManager.PoolStats.InUse.ToString(), poolColor);
-            
+
             // Loaded Banks
             DrawStatBox("Banks", AudioManager.GetLoadedBankCount().ToString(), banksColor);
-            
+
             // Active Events
             DrawStatBox("Events", AudioManager.ActiveEvents.Count.ToString(), activeColor);
-            
+
             // Memory
             DrawStatBox("Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage), memoryColor);
 
@@ -201,12 +201,12 @@ namespace CycloneGames.Audio.Editor
         private void DrawStatBox(string label, string value, Color color)
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.MinWidth(70));
-            
+
             EditorGUILayout.LabelField(label, EditorStyles.centeredGreyMiniLabel);
-            
+
             _statValueStyle.normal.textColor = color;
             EditorGUILayout.LabelField(value, _statValueStyle, GUILayout.Height(22));
-            
+
             EditorGUILayout.EndVertical();
         }
 
@@ -229,7 +229,7 @@ namespace CycloneGames.Audio.Editor
             // Config status
             string configStatus = AudioManager.PoolStats.HasConfig ? "[OK] Custom Config" : "[!] Using Defaults";
             Color statusColor = AudioManager.PoolStats.HasConfig ? successColor : warningColor;
-            
+
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("Configuration", GUILayout.Width(100));
             GUI.color = statusColor;
@@ -243,7 +243,7 @@ namespace CycloneGames.Audio.Editor
 
             // Pool sizes grid
             EditorGUILayout.LabelField("Pool Status", _sectionLabelStyle);
-            
+
             EditorGUILayout.BeginHorizontal();
             DrawMiniStatBox("Initial", AudioManager.PoolStats.InitialSize.ToString());
             DrawMiniStatBox("Current", AudioManager.PoolStats.CurrentSize.ToString());
@@ -257,7 +257,7 @@ namespace CycloneGames.Audio.Editor
             int activeSources = AudioManager.PoolStats.InUse;
             int totalSources = AudioManager.PoolStats.CurrentSize;
             float ratio = AudioManager.PoolStats.UsageRatio;
-            
+
             Rect progressRect = EditorGUILayout.GetControlRect(false, 18);
             EditorGUI.ProgressBar(progressRect, ratio, $"Usage: {activeSources} / {totalSources} ({ratio:P0})");
 
@@ -265,7 +265,7 @@ namespace CycloneGames.Audio.Editor
 
             // Smart pool stats
             EditorGUILayout.LabelField("Performance", _sectionLabelStyle);
-            
+
             EditorGUILayout.BeginHorizontal();
             DrawMiniStatBox("Peak", AudioManager.PoolStats.PeakUsage.ToString());
             DrawMiniStatBox("Expansions", AudioManager.PoolStats.TotalExpansions.ToString());
@@ -341,14 +341,14 @@ namespace CycloneGames.Audio.Editor
             }
 
             EditorGUILayout.BeginHorizontal();
-            
+
             // Bank reference
             EditorGUILayout.ObjectField(bank, typeof(AudioBank), false, GUILayout.Width(150));
-            
+
             // Event count
             int eventCount = bank.AudioEvents != null ? bank.AudioEvents.Count : 0;
             EditorGUILayout.LabelField($"{eventCount} events", EditorStyles.miniLabel, GUILayout.Width(60));
-            
+
             // Duplicate warning
             var duplicates = AudioManager.ValidateBankForDuplicateNames(bank);
             if (duplicates.Count > 0)
@@ -386,7 +386,7 @@ namespace CycloneGames.Audio.Editor
                     $"Unload '{bank.name}' AND stop all playing events from this bank?",
                     "Yes", "Cancel"))
                 {
-                    AudioManager.UnloadBankAndStopEvents(bank);
+                    AudioManager.UnloadBank(bank);
                 }
             }
 
@@ -399,7 +399,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
             var activeEvents = AudioManager.ActiveEvents;
-            
+
             if (activeEvents.Count == 0)
             {
                 EditorGUILayout.LabelField("No active events", EditorStyles.centeredGreyMiniLabel);
@@ -420,8 +420,8 @@ namespace CycloneGames.Audio.Editor
                 // Scrollable list (max 6 visible)
                 float itemHeight = 20f;
                 int visibleItems = Mathf.Min(6, activeEvents.Count);
-                
-                activeEventsScrollPos = EditorGUILayout.BeginScrollView(activeEventsScrollPos, 
+
+                activeEventsScrollPos = EditorGUILayout.BeginScrollView(activeEventsScrollPos,
                     GUILayout.Height(visibleItems * itemHeight + 5));
 
                 for (int i = 0; i < activeEvents.Count; i++)
@@ -473,7 +473,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("Search:", GUILayout.Width(50));
             searchEventName = EditorGUILayout.TextField(searchEventName, GUILayout.MinWidth(120));
-            
+
             if (GUILayout.Button("Find", EditorStyles.miniButtonLeft, GUILayout.Width(40)))
             {
                 if (!string.IsNullOrEmpty(searchEventName))
@@ -577,7 +577,7 @@ namespace CycloneGames.Audio.Editor
                     }
 
                     int refCount = AudioManager.ActiveClipRefCount.TryGetValue(kvp.Key, out int count) ? count : 0;
-                    
+
                     EditorGUILayout.LabelField(kvp.Key.name, GUILayout.MinWidth(120));
                     EditorGUILayout.LabelField($"{refCount} refs", EditorStyles.miniLabel, GUILayout.Width(45));
                     EditorGUILayout.LabelField(ToMemorySizeString(kvp.Value), EditorStyles.boldLabel, GUILayout.Width(70));

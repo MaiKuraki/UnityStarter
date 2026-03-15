@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 using System;
-using System.Buffers;
 using System.Threading;
 using UnityEngine;
 #if UNITY_EDITOR
@@ -108,6 +107,7 @@ namespace CycloneGames.Audio.Runtime
         private bool callbackActivated;
         private bool hasTimeAdvanced;
         internal bool hasSnapshotTransition;
+        private bool isPaused;
         private CancellationTokenSource cancellationTokenSource;
         internal double scheduledDspTime = -1;
 
@@ -168,6 +168,8 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
+            if (isPaused) return;
+
             float dt = Time.deltaTime;
             elapsedTime += dt;
 
@@ -193,6 +195,14 @@ namespace CycloneGames.Audio.Runtime
                 UpdateFade(dt);
             }
 
+            // Track audio playback progress for completion detection
+            if (hasPlayed && !hasTimeAdvanced && sourceCount > 0)
+            {
+                ref var src = ref sourcesArray[0];
+                if (src.IsValid && src.source.time > 0f)
+                    hasTimeAdvanced = true;
+            }
+
             if (!rootEvent.Output.loop)
             {
                 UpdateRemainingTime();
@@ -207,6 +217,30 @@ namespace CycloneGames.Audio.Runtime
             UpdateParameters();
             ApplyParameters();
         }
+
+        public void Pause()
+        {
+            if (isPaused || status != EventStatus.Played) return;
+            isPaused = true;
+            for (int i = 0; i < sourceCount; i++)
+            {
+                ref var es = ref sourcesArray[i];
+                if (es.IsValid) es.source.Pause();
+            }
+        }
+
+        public void Resume()
+        {
+            if (!isPaused || status != EventStatus.Played) return;
+            isPaused = false;
+            for (int i = 0; i < sourceCount; i++)
+            {
+                ref var es = ref sourcesArray[i];
+                if (es.IsValid) es.source.UnPause();
+            }
+        }
+
+        public bool IsPaused => isPaused;
 
         public void Stop()
         {
@@ -480,10 +514,13 @@ namespace CycloneGames.Audio.Runtime
 
         private void UpdateParameters()
         {
+            float dt = Time.deltaTime;
             for (int i = 0; i < activeParameterCount; i++)
             {
                 var ap = activeParameters[i];
                 if (ap?.rootParameter?.parameter == null) continue;
+
+                ap.rootParameter.parameter.UpdateInterpolation(dt);
 
                 if (ap.rootParameter.CurrentValue != ap.rootParameter.parameter.CurrentValue)
                 {
@@ -496,6 +533,10 @@ namespace CycloneGames.Audio.Runtime
         {
             float tempVolume = eventVolume;
             float tempPitch = eventPitch;
+            float spatialBlend = -1f;
+            float panStereo = float.NaN;
+            float reverbZoneMix = float.NaN;
+            float dopplerLevel = float.NaN;
 
             for (int i = 0; i < activeParameterCount; i++)
             {
@@ -509,6 +550,18 @@ namespace CycloneGames.Audio.Runtime
                         break;
                     case ParameterType.Pitch:
                         tempPitch *= param.CurrentResult;
+                        break;
+                    case ParameterType.SpatialBlend:
+                        spatialBlend = param.CurrentResult;
+                        break;
+                    case ParameterType.PanStereo:
+                        panStereo = param.CurrentResult;
+                        break;
+                    case ParameterType.ReverbZoneMix:
+                        reverbZoneMix = param.CurrentResult;
+                        break;
+                    case ParameterType.DopplerLevel:
+                        dopplerLevel = param.CurrentResult;
                         break;
                 }
             }
@@ -528,6 +581,11 @@ namespace CycloneGames.Audio.Runtime
                 {
                     es.source.volume = tempVolume;
                 }
+
+                if (spatialBlend >= 0f) es.source.spatialBlend = spatialBlend;
+                if (!float.IsNaN(panStereo)) es.source.panStereo = panStereo;
+                if (!float.IsNaN(reverbZoneMix)) es.source.reverbZoneMix = reverbZoneMix;
+                if (!float.IsNaN(dopplerLevel)) es.source.dopplerLevel = dopplerLevel;
             }
         }
 
@@ -597,6 +655,7 @@ namespace CycloneGames.Audio.Runtime
             fadeStopQueued = false;
             hasPlayed = false;
             isAsync = false;
+            isPaused = false;
             useGaze = false;
             callbackActivated = false;
             hasTimeAdvanced = false;
