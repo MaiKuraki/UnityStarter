@@ -152,6 +152,7 @@
 
 | 模块                  | 路径                             | 描述                                                                               | 文档                                                                                                      |
 | --------------------- | -------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **UIFramework**       | `CycloneGames.UIFramework`       | 层级式 UI 管理。基于层的组织、MVP 架构、转场动画、资源集成。                       | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md)       |
 | **GameplayFramework** | `CycloneGames.GameplayFramework` | UE 风格游戏架构（Actor/Pawn/Controller/GameMode）。支持 DI，可扩展的游戏项目基础。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.SCH.md) |
 | **GameplayAbilities** | `CycloneGames.GameplayAbilities` | 数据驱动能力系统（GAS 风格）。基于 ScriptableObject 的能力、属性、效果和状态管理。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.SCH.md) |
 | **GameplayTags**      | `CycloneGames.GameplayTags`      | 分层标签系统，用于解耦的游戏逻辑。运行时注册、自动生成和基于标签的查询。           | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.SCH.md)      |
@@ -167,17 +168,11 @@
 | **AssetManagement** | `CycloneGames.AssetManagement` | DI 优先的资源加载抽象层（基于 W-TinyLFU 缓存），并无缝集成 YooAsset / Addressables。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
 | **Audio**           | `CycloneGames.Audio`           | 高性能音频管理。类似 Wwise 的 API、低 GC、使用 Unity 原生音频的高级功能。            | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)           |
 
-### 🎯 输入与界面
-
-| 模块            | 路径                       | 描述                                                                             | 文档                                                                                                |
-| --------------- | -------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| **InputSystem** | `CycloneGames.InputSystem` | 响应式输入封装，支持上下文栈。本地多人支持、设备自动检测、运行时 YAML 键位配置。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.SCH.md) |
-| **UIFramework** | `CycloneGames.UIFramework` | 层级式 UI 管理。基于层的组织、MVP 架构、转场动画、资源集成。                     | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
-
-### 📳 设备反馈
+### 🕹️ 输入与设备交互
 
 | 模块               | 路径                          | 描述                                                                                | 文档                                                                                                   |
 | ------------------ | ----------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| **InputSystem**    | `CycloneGames.InputSystem`    | 响应式输入封装，支持上下文栈。本地多人支持、设备自动检测、运行时 YAML 键位配置。    | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.SCH.md)    |
 | **DeviceFeedback** | `CycloneGames.DeviceFeedback` | 多平台硬件反馈。手机触觉振动（Android / iOS / WebGL）、手柄马达震动、设备灯条控制。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.SCH.md) |
 
 ### 🛠️ 工具与服务
