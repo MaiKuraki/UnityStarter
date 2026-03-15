@@ -25,9 +25,15 @@ Unity 多平台硬件反馈库。
 - **手柄震动接口** — 双马达控制（占位接口，可扩展）
 - **设备灯光控制** — 灯条颜色、渐变、亮度曲线，适用于 DualSense / DualShock（占位接口，可扩展）
 - **DI 友好架构** — 面向接口编程（`IHapticFeedbackService`、`IMobileVibrationService` 等）
-- **静态门面** — `MobileVibration` 类，无需 DI 即可快速调用
-- **线程安全** — 双重检查锁单例，`volatile` 字段
-- **内存安全** — `IDisposable`，JNI 对象通过 `using` / `Dispose()` 正确释放，Core Haptics 引擎生命周期管理
+
+---
+
+## 系统要求
+
+- Unity **2019.3** 或更高版本
+- **Android**：API 1+（振幅功能需要 API 26+）
+- **iOS**：Taptic Engine（iPhone 7+）；Core Haptics（iPhone 8+ 且 iOS 13+）
+- **WebGL**：支持 Vibration API 的浏览器
 
 ---
 
@@ -89,7 +95,7 @@ public class GameManager
 
 ## HapticClip — 设计师触觉模式资产
 
-通过 **Assets > Create > Device Feedback > Haptic Clip** 创建。
+通过 **Assets > Create > CycloneGames > Device Feedback > Haptic Clip** 创建。
 
 `HapticClip` 是一个 `ScriptableObject`，支持两种模式：
 
@@ -262,35 +268,5 @@ s_intensityBuf, s_sharpnessBuf, s_typeBuf, s_durationBuf
 - **实时调制** — 启动持续触觉后通过滑块调节参数
 - iOS 专用 Impact / Notification / Selection 反馈
 - 启用/禁用开关
-
----
-
-## 架构
-
-```
-IHapticFeedbackService             ← 通用契约（Play、PlayCurve、PlayClip）
-├── IMobileVibrationService        ← 手机扩展 + UpdateContinuousParameters
-│   └── MobileVibrationService     ← Android / iOS（Core Haptics）/ WebGL
-│       └── MobileVibration        ← 静态门面（线程安全单例）
-│
-├── IGamepadRumbleService          ← 手柄扩展 + IDisposable
-│   └── GamepadRumbleService       ← TODO: 待实现
-│
-IDeviceLightService                ← 灯条 / RGB 控制 + IDisposable
-└── GamepadLightService            ← TODO: DualSense / DualShock 实现
-
-HapticClip (ScriptableObject)      ← 设计师触觉模式资产
-HapticEvent (struct)               ← 离散事件：类型、时间、时长、强度、锐度
-HapticPreset (enum)                ← Light / Medium / Heavy / Success / Warning / Error / Selection
-```
-
----
-
-## 系统要求
-
-- Unity **2019.3** 或更高版本
-- **Android**：API 1+（振幅功能需要 API 26+）
-- **iOS**：Taptic Engine（iPhone 7+）；Core Haptics（iPhone 8+ 且 iOS 13+）
-- **WebGL**：支持 Vibration API 的浏览器
 
 ---
