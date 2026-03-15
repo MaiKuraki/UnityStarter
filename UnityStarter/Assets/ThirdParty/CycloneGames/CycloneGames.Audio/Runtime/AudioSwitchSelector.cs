@@ -28,7 +28,14 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            int nodeNum = switchObject.CurrentValue;
+            if (switchObject == null)
+            {
+                Debug.LogWarningFormat("No AudioSwitch assigned for {0}", this.name);
+                return;
+            }
+
+            int count = this.input.ConnectedNodes.Length;
+            int nodeNum = Mathf.Clamp(switchObject.CurrentValue, 0, count - 1);
 
             ProcessConnectedNode(nodeNum, activeEvent);
         }

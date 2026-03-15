@@ -9,62 +9,80 @@ using UnityEditor;
 namespace CycloneGames.Audio.Runtime
 {
     /// <summary>
-    /// A runtime value that affects audio properties on an AudioEvent
+    /// A runtime value that affects audio properties on an AudioEvent.
+    /// Supports min/max range enforcement and optional value interpolation (smoothing).
     /// </summary>
     public class AudioParameter : ScriptableObject
     {
-        /// <summary>
-        /// The value the parameter will be set to until explicitly set
-        /// </summary>
         [SerializeField]
         private float defaultValue = 0;
+        [SerializeField]
+        private float minValue = 0f;
+        [SerializeField]
+        private float maxValue = 1f;
         /// <summary>
-        /// Whether the value will be updated with the angle between the camera and emitter
+        /// Speed of interpolation toward the target value (units/sec). 0 = instant.
         /// </summary>
+        [SerializeField]
+        private float interpolationSpeed = 0f;
         [SerializeField]
         private bool useGaze = false;
 
-        /// <summary>
-        /// Public accessor for whether the value is updated with the angle between the camera and emitter
-        /// </summary>
-        public bool UseGaze
-        {
-            get { return this.useGaze; }
-        }
+        public bool UseGaze => this.useGaze;
+        public float MinValue => this.minValue;
+        public float MaxValue => this.maxValue;
+        public float InterpolationSpeed => this.interpolationSpeed;
 
         /// <summary>
-        /// The current value of the parameter, before being evaluated on the response curve
+        /// The current (possibly interpolated) value of the parameter.
         /// </summary>
         public float CurrentValue { get; private set; }
 
         /// <summary>
-        /// Set the initial value of the parameter
+        /// The target value that CurrentValue is interpolating toward.
+        /// When interpolationSpeed is 0, CurrentValue == TargetValue always.
         /// </summary>
+        public float TargetValue { get; private set; }
+
         public void InitializeParameter()
         {
-            this.CurrentValue = this.defaultValue;
+            this.CurrentValue = Mathf.Clamp(this.defaultValue, this.minValue, this.maxValue);
+            this.TargetValue = this.CurrentValue;
         }
 
-        /// <summary>
-        /// Set the value back to default
-        /// </summary>
         public void ResetParameter()
         {
-            this.CurrentValue = this.defaultValue;
+            this.CurrentValue = Mathf.Clamp(this.defaultValue, this.minValue, this.maxValue);
+            this.TargetValue = this.CurrentValue;
         }
 
         /// <summary>
-        /// Set a new value for the parameter to be evaluated on the response curve
+        /// Set a new target value. Clamped to [minValue, maxValue].
+        /// If interpolationSpeed > 0, CurrentValue will smoothly approach the target.
         /// </summary>
-        /// <param name="newValue">The value to be set as CurrentValue</param>
         public void SetValue(float newValue)
         {
-            if (this.useGaze || newValue == this.CurrentValue)
-            {
-                return;
-            }
+            if (this.useGaze) return;
 
-            this.CurrentValue = newValue;
+            newValue = Mathf.Clamp(newValue, this.minValue, this.maxValue);
+            if (newValue == this.TargetValue) return;
+
+            this.TargetValue = newValue;
+
+            if (this.interpolationSpeed <= 0f)
+            {
+                this.CurrentValue = newValue;
+            }
+        }
+
+        /// <summary>
+        /// Advance interpolation. Called once per frame by AudioManager.
+        /// </summary>
+        public void UpdateInterpolation(float deltaTime)
+        {
+            if (this.interpolationSpeed <= 0f || this.CurrentValue == this.TargetValue) return;
+
+            this.CurrentValue = Mathf.MoveTowards(this.CurrentValue, this.TargetValue, this.interpolationSpeed * deltaTime);
         }
 
 #if UNITY_EDITOR
@@ -77,13 +95,20 @@ namespace CycloneGames.Audio.Runtime
             EditorGUI.BeginChangeCheck();
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             string newName = EditorGUILayout.TextField("Name", this.name);
-            float newDefaultValue = EditorGUILayout.FloatField("Default Value", this.defaultValue);
+            float newMinValue = EditorGUILayout.FloatField("Min Value", this.minValue);
+            float newMaxValue = EditorGUILayout.FloatField("Max Value", this.maxValue);
+            float newDefaultValue = EditorGUILayout.Slider("Default Value", this.defaultValue, newMinValue, newMaxValue);
+            float newInterpSpeed = EditorGUILayout.FloatField("Interpolation Speed", this.interpolationSpeed);
+            if (newInterpSpeed < 0) newInterpSpeed = 0;
             bool newUseGaze = EditorGUILayout.Toggle("Use Gaze", this.useGaze);
             EditorGUILayout.EndVertical();
             if (EditorGUI.EndChangeCheck())
             {
                 this.name = newName;
-                this.defaultValue = newDefaultValue;
+                this.minValue = newMinValue;
+                this.maxValue = Mathf.Max(newMaxValue, newMinValue);
+                this.defaultValue = Mathf.Clamp(newDefaultValue, this.minValue, this.maxValue);
+                this.interpolationSpeed = newInterpSpeed;
                 this.useGaze = newUseGaze;
                 return true;
             }
