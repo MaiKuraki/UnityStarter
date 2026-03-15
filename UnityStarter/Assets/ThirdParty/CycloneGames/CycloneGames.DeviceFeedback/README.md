@@ -25,9 +25,15 @@ Whether you need a simple one-line vibration call or pixel-perfect Core Haptics 
 - **Gamepad rumble interface** — Dual-motor control for controllers (placeholder, extensible)
 - **Device light control** — Light bar color, gradient, and intensity curve for DualSense / DualShock (placeholder, extensible)
 - **DI-friendly architecture** — Program against interfaces (`IHapticFeedbackService`, `IMobileVibrationService`, etc.)
-- **Static facade** — `MobileVibration` class for quick access without DI
-- **Thread-safe** — Double-checked locking singleton, `volatile` fields
-- **Memory-safe** — `IDisposable`, proper JNI object cleanup via `using` / `Dispose()`, Core Haptics engine lifecycle management
+
+---
+
+## Requirements
+
+- Unity **2019.3** or later
+- **Android**: API level 1+ (amplitude features require API 26+)
+- **iOS**: Taptic Engine (iPhone 7+); Core Haptics (iPhone 8+ with iOS 13+)
+- **WebGL**: Browser with Vibration API support
 
 ---
 
@@ -89,7 +95,7 @@ public class GameManager
 
 ## HapticClip — Designer-Authored Haptic Patterns
 
-Create via **Assets > Create > Device Feedback > Haptic Clip**.
+Create via **Assets > Create > CycloneGames > Device Feedback > Haptic Clip**.
 
 A `HapticClip` is a `ScriptableObject` with two modes:
 
@@ -262,35 +268,5 @@ The sample demonstrates:
 - **Real-time modulation** — start a continuous haptic and modulate via sliders
 - iOS-specific Impact / Notification / Selection feedback
 - Enable/disable toggle
-
----
-
-## Architecture
-
-```
-IHapticFeedbackService             ← Common contract (Play, PlayCurve, PlayClip)
-├── IMobileVibrationService        ← Mobile extensions + UpdateContinuousParameters
-│   └── MobileVibrationService     ← Android / iOS (Core Haptics) / WebGL
-│       └── MobileVibration        ← Static facade (thread-safe singleton)
-│
-├── IGamepadRumbleService          ← Gamepad extensions + IDisposable
-│   └── GamepadRumbleService       ← TODO: implementation
-│
-IDeviceLightService                ← Light bar / RGB control + IDisposable
-└── GamepadLightService            ← TODO: DualSense / DualShock
-
-HapticClip (ScriptableObject)      ← Designer-authored haptic pattern asset
-HapticEvent (struct)               ← Discrete event: type, time, duration, intensity, sharpness
-HapticPreset (enum)                ← Light / Medium / Heavy / Success / Warning / Error / Selection
-```
-
----
-
-## Requirements
-
-- Unity **2019.3** or later
-- **Android**: API level 1+ (amplitude features require API 26+)
-- **iOS**: Taptic Engine (iPhone 7+); Core Haptics (iPhone 8+ with iOS 13+)
-- **WebGL**: Browser with Vibration API support
 
 ---
