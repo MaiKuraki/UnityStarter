@@ -43,6 +43,7 @@ This template is designed for developers who want to start with a professional, 
 - ✅ Build pipeline with CI/CD integration
 - ✅ Modern input system with context stacks
 - ✅ UI framework with hierarchical management and MVP architecture support
+- ✅ Cross-platform device feedback (haptics, rumble, lighting)
 
 > **📖 Documentation**: Each module has comprehensive documentation. See the [Module Catalog](#module-catalog) section for links to detailed guides.
 
@@ -172,6 +173,12 @@ Modules are designed to be:
 | --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | **InputSystem** | `CycloneGames.InputSystem` | Reactive input wrapper with context stacks. Local co-op support, device auto-detection, runtime YAML keybind configuration. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.md) |
 | **UIFramework** | `CycloneGames.UIFramework` | Hierarchical UI management. Layer-based, MVP architecture, transitions, asset integration.                                  | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md) |
+
+### 📳 Device Feedback
+
+| Module             | Path                          | Description                                                                                                         | Documentation                                                                                  |
+| ------------------ | ----------------------------- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| **DeviceFeedback** | `CycloneGames.DeviceFeedback` | Multi-platform hardware feedback. Mobile haptics (Android / iOS / WebGL), gamepad rumble, device light bar control. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.md) |
 
 ### 🛠️ Utilities & Services
 
@@ -308,6 +315,7 @@ Projects built using this template:
 - **[InputSystem](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.md)** - Input system configuration and usage
 - **[UIFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md)** - UI framework architecture and examples
 - **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md)** - Asset loading and version management
+- **[DeviceFeedback](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.md)** - Cross-platform haptics, rumble, and lighting
 
 ---
 
