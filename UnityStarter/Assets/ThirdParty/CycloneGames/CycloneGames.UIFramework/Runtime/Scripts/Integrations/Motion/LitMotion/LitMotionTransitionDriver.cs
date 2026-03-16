@@ -149,7 +149,11 @@ namespace CycloneGames.UIFramework.Runtime
         /// <summary>Override to customize scale animation.</summary>
         protected virtual async UniTask AnimateScale(TransitionContext ctx, ScaleConfig config, bool isOpen, Ease ease, CancellationToken ct)
         {
-            float from = isOpen ? config.ScaleFrom : 1f;
+            // Read current scale factor relative to OriginalScale for seamless mid-interrupt
+            float currentScaleFactor = ctx.OriginalScale.x != 0f
+                ? ctx.Transform.localScale.x / ctx.OriginalScale.x
+                : 1f;
+            float from = isOpen ? config.ScaleFrom : currentScaleFactor;
             float to = isOpen ? 1f : config.ScaleFrom;
             var handle = LMotion.Create(from, to, config.Duration)
                 .WithEase(ease)
@@ -163,7 +167,8 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (ctx.RectTransform == null) return;
             Vector2 offset = GetSlideOffset(ctx.RectTransform, config);
-            Vector2 from = isOpen ? offset : ctx.OriginalPosition;
+            // Use current position as 'from' for close to handle mid-open interruption
+            Vector2 from = isOpen ? offset : ctx.RectTransform.anchoredPosition;
             Vector2 to = isOpen ? ctx.OriginalPosition : offset;
             var handle = LMotion.Create(from, to, config.Duration)
                 .WithEase(ease)

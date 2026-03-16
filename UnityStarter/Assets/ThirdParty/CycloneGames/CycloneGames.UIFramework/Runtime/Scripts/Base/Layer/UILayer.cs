@@ -195,6 +195,39 @@ namespace CycloneGames.UIFramework.Runtime
             }
         }
 
+        /// <summary>
+        /// Detaches a window from this layer's tracking without calling Close/Destroy.
+        /// Used by UIManager when the close animation is driven externally (CloseAsync)
+        /// so the layer no longer references the window during its closing transition.
+        /// </summary>
+        public void  DetachWindow(string windowName)
+        {
+            if (!IsFinishedLayerInit || string.IsNullOrEmpty(windowName)) return;
+
+            int windowIndex = -1;
+            for (int i = 0; i < WindowCount; i++)
+            {
+                if (uiWindowArray[i] != null && string.Equals(uiWindowArray[i].WindowName, windowName, System.StringComparison.Ordinal))
+                {
+                    windowIndex = i;
+                    break;
+                }
+            }
+
+            if (windowIndex != -1)
+            {
+                UIWindow window = uiWindowArray[windowIndex];
+                if (window != null) window.SetUILayer(null);
+
+                if (windowIndex < WindowCount - 1)
+                {
+                    System.Array.Copy(uiWindowArray, windowIndex + 1, uiWindowArray, windowIndex, WindowCount - windowIndex - 1);
+                }
+                WindowCount--;
+                uiWindowArray[WindowCount] = null;
+            }
+        }
+
         private void SortUIWindowByPriority()
         {
             if (uiWindowArray == null || WindowCount <= 1) return;
