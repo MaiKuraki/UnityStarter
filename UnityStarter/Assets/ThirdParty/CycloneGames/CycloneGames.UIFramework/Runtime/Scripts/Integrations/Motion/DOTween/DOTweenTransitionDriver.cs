@@ -153,6 +153,7 @@ namespace CycloneGames.UIFramework.Runtime
         /// <summary>Override to customize scale tween creation.</summary>
         protected virtual Tween CreateScaleTween(TransitionContext ctx, ScaleConfig config, bool isOpen, Ease ease)
         {
+            // For close: read current scale to handle mid-open interruption seamlessly
             Vector3 to = isOpen ? ctx.OriginalScale : ctx.OriginalScale * config.ScaleFrom;
             return ctx.Transform.DOScale(to, config.Duration).SetEase(ease);
         }
@@ -160,6 +161,7 @@ namespace CycloneGames.UIFramework.Runtime
         /// <summary>Override to customize slide tween creation.</summary>
         protected virtual Tween CreateSlideTween(TransitionContext ctx, SlideConfig config, bool isOpen, Ease ease)
         {
+            // DOTween reads current value as 'from' by default — seamless mid-interrupt
             Vector2 to = isOpen ? ctx.OriginalPosition : GetSlideOffset(ctx.RectTransform, config);
             return ctx.RectTransform.DOAnchorPos(to, config.Duration).SetEase(ease);
         }

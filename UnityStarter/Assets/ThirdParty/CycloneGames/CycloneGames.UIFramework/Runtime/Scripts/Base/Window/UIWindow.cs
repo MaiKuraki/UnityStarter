@@ -56,6 +56,11 @@ namespace CycloneGames.UIFramework.Runtime
         private bool _isDestroying = false; // Flag to prevent multiple destruction logic paths
 
         /// <summary>
+        /// The current window state. Used by UIManager to check if the window is closing/closed.
+        /// </summary>
+        public IUIWindowState CurrentState => currentState;
+
+        /// <summary>
         /// Sets the logical name for this UI window.
         /// This name is used by UIManager and UILayer for identification.
         /// </summary>
@@ -85,20 +90,14 @@ namespace CycloneGames.UIFramework.Runtime
         /// </summary>
         internal void Close()
         {
-            if (_isDestroying) return; // Already in the process of closing/destroying
+            if (_isDestroying) return;
 
             if (currentState is ClosingState || currentState is ClosedState)
             {
                 return;
             }
 
-            // Transition to ClosingState, which might trigger animations.
             OnStartClose();
-
-            // TODO: Implement actual closing animation.
-            // For now, immediately "finish" closing.
-            // In a real scenario, OnFinishedClose would be called by an animation event, a timer, or UniTask.Delay.
-            // If using animations, ensure OnFinishedClose is reliably called.
             OnFinishedClose();
         }
 
@@ -108,20 +107,17 @@ namespace CycloneGames.UIFramework.Runtime
         public async UniTask CloseAsync(CancellationToken externalToken)
         {
             if (_isDestroying) return;
+            if (currentState is ClosingState || currentState is ClosedState) return;
+
             // cancel any ongoing open
             openCts?.Cancel();
             openCts?.Dispose();
             openCts = null;
 
             closeCts?.Dispose();
-            if (externalToken == CancellationToken.None)
-            {
-                closeCts = new CancellationTokenSource();
-            }
-            else
-            {
-                closeCts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
-            }
+            closeCts = externalToken == CancellationToken.None
+                ? new CancellationTokenSource()
+                : CancellationTokenSource.CreateLinkedTokenSource(externalToken);
             var ct = closeCts.Token;
 
             OnStartClose();
@@ -188,10 +184,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         protected virtual void OnFinishedClose()
         {
-            if (_isDestroying && currentState is ClosedState) return; // Already fully closed and processed by OnDestroy
-            if (_isDestroying && !(currentState is ClosingState)) return; // If already destroying by other means and not in closing state
-
-            _isDestroying = true; // Mark that destruction process has started from logical close
+            if (_isDestroying && currentState is ClosedState) return;
+            if (_isDestroying && !(currentState is ClosingState)) return;
 
             ChangeState(ClosedStateShared);
             if (_binders != null)
@@ -199,8 +193,7 @@ namespace CycloneGames.UIFramework.Runtime
                 for (int i = 0; i < _binders.Length; i++) _binders[i].OnWindowStateChanged(this, WindowStateCallbackType.OnFinishedClose);
             }
 
-            // The window is responsible for destroying its GameObject.
-            // UILayer will be notified via this window's OnDestroy method.
+            _isDestroying = true;
             if (gameObject) Destroy(gameObject);
         }
 

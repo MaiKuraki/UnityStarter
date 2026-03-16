@@ -74,6 +74,13 @@ namespace CycloneGames.UIFramework.Runtime
         void SetTransitionCoordinator(IUITransitionCoordinator coordinator);
 
         /// <summary>
+        /// Sets the strategy for handling rapid sequential coordinated navigations.
+        /// <see cref="CoordinatedNavStrategy.DirectJump"/>: skip intermediate pages.
+        /// <see cref="CoordinatedNavStrategy.CardStack"/>: overlapping cascading transitions.
+        /// </summary>
+        void SetCoordinatedNavStrategy(CoordinatedNavStrategy strategy);
+
+        /// <summary>
         /// Navigates from <paramref name="fromWindow"/> to <paramref name="toWindow"/> using the
         /// active IUITransitionCoordinator. Falls back to sequential OpenUI when no coordinator is set.
         /// </summary>
@@ -337,6 +344,12 @@ namespace CycloneGames.UIFramework.Runtime
             _transitionCoordinator = coordinator;
             if (uiManagerInstance != null)
                 uiManagerInstance.SetTransitionCoordinator(coordinator);
+        }
+
+        public void SetCoordinatedNavStrategy(CoordinatedNavStrategy strategy)
+        {
+            if (uiManagerInstance != null)
+                uiManagerInstance.SetCoordinatedNavStrategy(strategy);
         }
 
         public async Cysharp.Threading.Tasks.UniTask CoordinatedNavigateAsync(
