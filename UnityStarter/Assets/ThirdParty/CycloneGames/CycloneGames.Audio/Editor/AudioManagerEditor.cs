@@ -8,16 +8,22 @@ using CycloneGames.Audio.Runtime;
 
 namespace CycloneGames.Audio.Editor
 {
-    [CustomEditor(typeof(AudioManager))]
+    [CustomEditor(typeof(AudioManager), true)]
     public class AudioManagerEditor : UnityEditor.Editor
     {
         // Foldout states
+        private bool showSettings = true;
         private bool showStatistics = true;
         private bool showPoolStatus = true;
         private bool showLoadedBanks = true;
         private bool showEventNameMap = false;
         private bool showMemoryUsage = false;
         private bool showActiveEvents = true;
+
+        // Serialized properties for settings
+        private SerializedProperty _focusModeProp;
+        private SerializedProperty _customPoolSizeProp;
+        private SerializedProperty _mainMixerProp;
 
         // Cached lists to avoid per-frame allocations
         private readonly List<KeyValuePair<AudioClip, long>> sortedClipList = new List<KeyValuePair<AudioClip, long>>();
@@ -33,6 +39,7 @@ namespace CycloneGames.Audio.Editor
         private Vector2 eventMapScrollPos;
 
         // Colors for visual styling
+        private static readonly Color settingsColor = new Color(0.5f, 0.5f, 0.6f);
         private static readonly Color statsColor = new Color(0.3f, 0.6f, 0.8f);
         private static readonly Color poolColor = new Color(0.4f, 0.7f, 0.4f);
         private static readonly Color banksColor = new Color(0.7f, 0.5f, 0.8f);
@@ -49,6 +56,13 @@ namespace CycloneGames.Audio.Editor
         private GUIStyle _statValueStyle;
         private GUIStyle _sectionLabelStyle;
         private bool _stylesInitialized;
+
+        private void OnEnable()
+        {
+            _focusModeProp = serializedObject.FindProperty("focusMode");
+            _customPoolSizeProp = serializedObject.FindProperty("customPoolSize");
+            _mainMixerProp = serializedObject.FindProperty("mainMixer");
+        }
 
         private void InitializeStyles()
         {
@@ -104,6 +118,15 @@ namespace CycloneGames.Audio.Editor
 
             // Quick Stats Overview
             DrawQuickStats();
+
+            EditorGUILayout.Space(3);
+
+            // Settings Section (serialized fields)
+            showSettings = DrawFoldoutHeader("Settings", showSettings, settingsColor);
+            if (showSettings)
+            {
+                DrawSettingsSection();
+            }
 
             EditorGUILayout.Space(3);
 
@@ -177,6 +200,21 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.LabelField("Runtime Audio System Controller", _subtitleStyle);
+        }
+
+        private void DrawSettingsSection()
+        {
+            serializedObject.Update();
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            EditorGUILayout.PropertyField(_focusModeProp);
+            EditorGUILayout.PropertyField(_customPoolSizeProp, new GUIContent("Custom Pool Size"));
+            EditorGUILayout.PropertyField(_mainMixerProp);
+
+            EditorGUILayout.EndVertical();
+
+            serializedObject.ApplyModifiedProperties();
         }
 
         private void DrawQuickStats()
