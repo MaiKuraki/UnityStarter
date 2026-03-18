@@ -138,6 +138,7 @@ namespace CycloneGames.Audio.Runtime
 
         private static float globalVolume = 1f;
         private static bool globalPaused;
+        private static bool systemPaused;
         private static AudioFocusMode activeFocusMode = AudioFocusMode.All;
         private static bool debugMode;
         public static bool DebugMode => debugMode;
@@ -541,6 +542,9 @@ namespace CycloneGames.Audio.Runtime
             int idx = ActiveEvents.IndexOf(stoppedEvent);
             if (idx < 0) return;
 
+            // Track memory BEFORE clearing clips, so TrackMemory can read source.clip
+            TrackMemory(stoppedEvent, false);
+
             // Clear AudioSource.clip before returning to pool.
             // This releases the clip reference so external asset management systems
             // (AssetManagement, Addressables, etc.) can safely unload the underlying asset.
@@ -554,8 +558,6 @@ namespace CycloneGames.Audio.Runtime
                     availableSources.Enqueue(es.source);
                 }
             }
-
-            TrackMemory(stoppedEvent, false);
 
             // O(1) swap-remove
             int last = ActiveEvents.Count - 1;
@@ -681,12 +683,12 @@ namespace CycloneGames.Audio.Runtime
             if (pauseStatus)
             {
                 if ((activeFocusMode & AudioFocusMode.PauseOnAppPause) != 0)
-                    PauseAll();
+                    SystemPause();
             }
             else
             {
-                if ((activeFocusMode & AudioFocusMode.ResumeOnAppResume) != 0 && !globalPaused)
-                    ResumeAll();
+                if ((activeFocusMode & AudioFocusMode.ResumeOnAppResume) != 0)
+                    SystemResume();
             }
         }
 
@@ -695,13 +697,34 @@ namespace CycloneGames.Audio.Runtime
             if (!hasFocus)
             {
                 if ((activeFocusMode & AudioFocusMode.PauseOnFocusLost) != 0)
-                    PauseAll();
+                    SystemPause();
             }
             else
             {
-                if ((activeFocusMode & AudioFocusMode.ResumeOnFocusGain) != 0 && !globalPaused)
-                    ResumeAll();
+                if ((activeFocusMode & AudioFocusMode.ResumeOnFocusGain) != 0)
+                    SystemResume();
             }
+        }
+
+        /// <summary>
+        /// System-initiated pause (focus/app lifecycle). Tracked separately from manual PauseAll()
+        /// so that auto-resume can work even after globalPaused was set.
+        /// </summary>
+        private static void SystemPause()
+        {
+            systemPaused = true;
+            PauseAll();
+        }
+
+        /// <summary>
+        /// System-initiated resume. Only resumes if the pause was system-initiated,
+        /// not if the game manually called PauseAll().
+        /// </summary>
+        private static void SystemResume()
+        {
+            if (!systemPaused) return;
+            systemPaused = false;
+            ResumeAll();
         }
 
         private static void Cleanup()
@@ -725,6 +748,7 @@ namespace CycloneGames.Audio.Runtime
             availableSources.Clear();
             globalVolume = 1f;
             globalPaused = false;
+            systemPaused = false;
             activeFocusMode = AudioFocusMode.All;
             while (commandQueue.TryDequeue(out _)) { }
             AllowCreateInstance = false;

@@ -107,7 +107,8 @@ namespace CycloneGames.Utility.Editor
 
         private void DrawAsPopup(Rect position, SerializedProperty property, GUIContent label, CachedConstantData cachedData)
         {
-            cachedData.ValueToIndexMap.TryGetValue(property.stringValue, out int currentIndex);
+            bool found = cachedData.ValueToIndexMap.TryGetValue(property.stringValue, out int currentIndex);
+            if (!found) currentIndex = -1;
 
             // The display options for popup should be the raw field names
             int newIndex = EditorGUI.Popup(position, label.text, currentIndex, cachedData.DisplayOptions);
