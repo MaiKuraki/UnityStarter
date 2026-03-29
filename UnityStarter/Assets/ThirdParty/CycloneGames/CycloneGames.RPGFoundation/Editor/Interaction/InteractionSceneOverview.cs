@@ -20,6 +20,12 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private enum SortMode { Name, Priority, Distance, State }
 
+        // Cached row colors — avoid per-frame Color allocation
+        private static readonly Color ColorDisabledRow = new(0.5f, 0.5f, 0.5f, 0.3f);
+        private static readonly Color ColorAutoRow = new(0.3f, 0.7f, 1f, 0.3f);
+        private static readonly Color ColorInteractingRow = new(1f, 0.6f, 0.2f, 0.3f);
+        private static readonly Color ColorDefaultRow = new(0.3f, 0.8f, 0.3f, 0.2f);
+
         [MenuItem("Tools/CycloneGames/Interaction/Scene Overview")]
         public static void ShowWindow()
         {
@@ -206,6 +212,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             // Prompt
             EditorGUILayout.LabelField(interactable.InteractionPrompt, GUILayout.Width(100));
 
+            // Channel
+            EditorGUILayout.LabelField(interactable.Channel.ToString(), GUILayout.Width(70));
+
             // Priority
             EditorGUILayout.LabelField($"P:{interactable.Priority}", GUILayout.Width(40));
 
@@ -238,12 +247,12 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private Color GetRowColor(Interactable interactable)
         {
             if (!interactable.isActiveAndEnabled)
-                return new Color(0.5f, 0.5f, 0.5f, 0.3f);
+                return ColorDisabledRow;
             if (interactable.AutoInteract)
-                return new Color(0.3f, 0.7f, 1f, 0.3f);
+                return ColorAutoRow;
             if (Application.isPlaying && interactable.IsInteracting)
-                return new Color(1f, 0.6f, 0.2f, 0.3f);
-            return new Color(0.3f, 0.8f, 0.3f, 0.2f);
+                return ColorInteractingRow;
+            return ColorDefaultRow;
         }
 
         private string GetStateIcon(Interactable interactable)
