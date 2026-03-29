@@ -122,18 +122,12 @@ namespace CycloneGames.GameplayTags.Runtime
 
       public override readonly bool Equals(object obj)
       {
-         if (obj is GameplayTag other)
-            return m_Definition == other.m_Definition;
-
-         if (obj is string otherStr)
-            return m_Name == otherStr;
-
-         return false;
+         return obj is GameplayTag other && m_Definition == other.m_Definition;
       }
 
       public override readonly int GetHashCode()
       {
-         return Definition.GetHashCode();
+         return m_Definition != null ? m_Definition.GetHashCode() : 0;
       }
 
       public override readonly string ToString()

@@ -18,88 +18,105 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Defines the lifetime policy of the effect (Instant, HasDuration, Infinite).
         /// </summary>
-        /// <remarks>
-        /// - <c>Instant</c>: The effect is applied and immediately resolved. It does not persist on the target. Ideal for damage, healing, or resource costs.
-        /// - <c>HasDuration</c>: The effect persists on the target for a specified duration. Ideal for buffs, debuffs, and damage-over-time effects.
-        /// - <c>Infinite</c>: The effect persists on the target indefinitely until explicitly removed. Ideal for passive effects, stances, or auras.
-        /// </remarks>
         public EDurationPolicy DurationPolicy { get; }
 
         /// <summary>
         /// The total duration of the effect in seconds. This is only used if DurationPolicy is <c>HasDuration</c>.
-        /// A value of -1 indicates an infinite duration, though using the <c>Infinite</c> policy is preferred for clarity.
         /// </summary>
         public float Duration { get; }
 
         /// <summary>
-        /// The interval in seconds at which the effect's instant components (Modifiers, Executions) are re-applied.
-        /// This is only used for <c>HasDuration</c> and <c>Infinite</c> effects to create periodic behaviors like damage-over-time. A value of 0 or less disables periodic application.
+        /// The interval in seconds at which the effect's instant components are re-applied.
         /// </summary>
         public float Period { get; }
 
         /// <summary>
-        /// A list of attribute modifications to apply to the target. Modifiers are the primary mechanism for predictable attribute changes.
+        /// A list of attribute modifications to apply to the target.
         /// </summary>
         public IReadOnlyList<ModifierInfo> Modifiers { get; }
 
         /// <summary>
         /// A custom, non-predictable calculation class that can perform complex, multi-attribute logic.
-        /// Only executes for <c>Instant</c> and periodic effects. Ideal for complex damage formulas.
         /// </summary>
         public GameplayEffectExecutionCalculation Execution { get; }
 
         /// <summary>
-        /// Defines how this effect interacts with other instances of the same effect on a target, including stacking rules and limits.
+        /// Defines how this effect interacts with other instances of the same effect on a target.
         /// </summary>
         public GameplayEffectStacking Stacking { get; }
 
         /// <summary>
         /// A list of abilities to grant to the target for the duration of this effect.
-        /// Only applicable to <c>HasDuration</c> and <c>Infinite</c> effects.
         /// </summary>
         public IReadOnlyList<GameplayAbility> GrantedAbilities { get; }
 
         /// <summary>
         /// A list of GameplayCue tags to trigger when this effect is applied, removed, or executed.
-        /// Cues are responsible for non-gameplay visuals and sounds (VFX, SFX).
         /// </summary>
         public GameplayTagContainer GameplayCues { get; }
 
         /// <summary>
         /// Tags that describe the effect itself. These are NOT granted to the target.
-        /// They serve as metadata for identifying the effect, e.g., for removal by other systems.
         /// </summary>
-        /// <remarks>
-        /// Example: An effect might have an AssetTag of 'Damage.Type.Fire'. Another ability could then be designed to remove all effects with this tag.
-        /// </remarks>
         public GameplayTagContainer AssetTags { get; }
 
         /// <summary>
         /// Tags that are temporarily granted to the target's AbilitySystemComponent for the duration of this effect.
-        /// This is the primary mechanism for applying temporary states like stuns, buffs, or cooldowns.
         /// </summary>
-        /// <remarks>
-        /// Example: A cooldown effect grants the 'Cooldown.Skill.Fireball' tag. The Fireball ability's 'CanActivate' check will fail if the caster has this tag.
-        /// </remarks>
         public GameplayTagContainer GrantedTags { get; }
 
         /// <summary>
         /// Defines the tag requirements on a target for this effect to be successfully applied.
-        /// If the target does not meet these requirements, the effect application fails.
         /// </summary>
         public GameplayTagRequirements ApplicationTagRequirements { get; }
 
         /// <summary>
-        /// Once applied, the effect will only be active (i.e., its modifiers will apply) if the target continues to meet these tag requirements.
-        /// If the requirements are no longer met, the effect is temporarily disabled without being removed.
+        /// Once applied, the effect will only be active if the target continues to meet these tag requirements.
         /// </summary>
         public GameplayTagRequirements OngoingTagRequirements { get; }
 
         /// <summary>
-        /// Upon successful application of this effect, any active effects on the target that have matching tags in their <c>AssetTags</c> or <c>GrantedTags</c> will be removed.
-        /// Ideal for creating dispel effects or effect upgrades.
+        /// Upon successful application, any active effects on the target matching these tags will be removed.
         /// </summary>
         public GameplayTagContainer RemoveGameplayEffectsWithTags { get; }
+
+        /// <summary>
+        /// If true, gameplay cues (VFX/SFX) are suppressed for this effect.
+        /// UE5: bSuppressGameplayCues on UGameplayEffect.
+        /// Useful for silent/debug application without visual feedback.
+        /// </summary>
+        public bool SuppressGameplayCues { get; }
+
+        /// <summary>
+        /// If true, gameplay effects applied by the granting ability are automatically removed when the ability ends.
+        /// UE5: RemoveGameplayEffectContainerOnAbilityEnd / bRemoveGameplayEffectsAfterAbilityEnds.
+        /// </summary>
+        public bool RemoveGameplayEffectsAfterAbilityEnds { get; }
+
+        /// <summary>
+        /// Optional custom application requirement. If set, CanApplyGameplayEffect is called before application.
+        /// UE5: TArray&lt;TSubclassOf&lt;UGameplayEffectCustomApplicationRequirement&gt;&gt;.
+        /// </summary>
+        public IReadOnlyList<ICustomApplicationRequirement> CustomApplicationRequirements { get; }
+
+        /// <summary>
+        /// If true, periodic effects execute their first tick immediately upon application.
+        /// If false, the first execution waits for the full period interval.
+        /// UE5: bExecutePeriodicEffectOnApplication. Default is true (UE5 default).
+        /// </summary>
+        public bool ExecutePeriodicEffectOnApplication { get; }
+
+        /// <summary>
+        /// Effects to apply when a stacking application attempt occurs while at the stack limit.
+        /// UE5: OverflowEffects.
+        /// </summary>
+        public IReadOnlyList<GameplayEffect> OverflowEffects { get; }
+
+        /// <summary>
+        /// If true, the original effect application (duration refresh, etc.) is denied when overflow occurs.
+        /// UE5: bDenyOverflowApplication.
+        /// </summary>
+        public bool DenyOverflowApplication { get; }
 
         public GameplayEffect(
             string name,
@@ -115,7 +132,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             GameplayTagRequirements applicationTagRequirements = default,
             GameplayTagRequirements ongoingTagRequirements = default,
             GameplayTagContainer removeGameplayEffectsWithTags = null,
-            GameplayTagContainer gameplayCues = null)
+            GameplayTagContainer gameplayCues = null,
+            bool suppressGameplayCues = false,
+            bool removeGameplayEffectsAfterAbilityEnds = false,
+            List<ICustomApplicationRequirement> customApplicationRequirements = null,
+            bool executePeriodicEffectOnApplication = true,
+            List<GameplayEffect> overflowEffects = null,
+            bool denyOverflowApplication = false)
         {
             Name = name;
             DurationPolicy = durationPolicy;
@@ -131,6 +154,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
             OngoingTagRequirements = ongoingTagRequirements;
             RemoveGameplayEffectsWithTags = removeGameplayEffectsWithTags ?? new GameplayTagContainer();
             GameplayCues = gameplayCues ?? new GameplayTagContainer();
+            SuppressGameplayCues = suppressGameplayCues;
+            RemoveGameplayEffectsAfterAbilityEnds = removeGameplayEffectsAfterAbilityEnds;
+            CustomApplicationRequirements = customApplicationRequirements ?? (IReadOnlyList<ICustomApplicationRequirement>)System.Array.Empty<ICustomApplicationRequirement>();
+            ExecutePeriodicEffectOnApplication = executePeriodicEffectOnApplication;
+            OverflowEffects = overflowEffects ?? (IReadOnlyList<GameplayEffect>)System.Array.Empty<GameplayEffect>();
+            DenyOverflowApplication = denyOverflowApplication;
 
             if (DurationPolicy == EDurationPolicy.HasDuration && duration <= 0 && duration != GameplayEffectConstants.INFINITE_DURATION)
             {

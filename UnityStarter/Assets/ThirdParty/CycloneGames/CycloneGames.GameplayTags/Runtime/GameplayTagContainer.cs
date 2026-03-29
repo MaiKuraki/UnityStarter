@@ -339,7 +339,7 @@ namespace CycloneGames.GameplayTags.Runtime
             return new GameplayTagContainer(rhs);
 
          if (rhs.IsEmpty)
-            new GameplayTagContainer(lhs);
+            return new GameplayTagContainer(lhs);
 
          OrderedListUnion(lhs.Indices.Explicit, rhs.Indices.Explicit, union.m_Indices.Explicit);
          OrderedListUnion(lhs.Indices.Implicit, rhs.Indices.Implicit, union.m_Indices.Implicit);
@@ -503,7 +503,7 @@ namespace CycloneGames.GameplayTags.Runtime
             if (index < 0)
             {
                GameplayTagUtility.WarnNotExplictlyAddedTagRemoval(tag);
-               return;
+               continue;
             }
 
             m_Indices.Explicit.RemoveAt(index);

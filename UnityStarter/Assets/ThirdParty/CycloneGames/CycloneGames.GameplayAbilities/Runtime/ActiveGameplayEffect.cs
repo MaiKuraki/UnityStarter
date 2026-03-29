@@ -14,6 +14,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public int StackCount { get; private set; }
         public bool IsExpired { get; private set; }
 
+        /// <summary>
+        /// True when the effect's OngoingTagRequirements are not met and its modifiers are temporarily suppressed.
+        /// UE5: bIsInhibited / OnInhibitionChanged.
+        /// </summary>
+        public bool IsInhibited { get; internal set; }
+
+        /// <summary>
+        /// Fired when the inhibition state changes (true = now inhibited, false = no longer inhibited).
+        /// UE5: OnInhibitionChanged delegate.
+        /// </summary>
+        public event Action<bool> OnInhibitionChanged;
+
+        internal void NotifyInhibitionChanged(bool inhibited)
+        {
+            OnInhibitionChanged?.Invoke(inhibited);
+        }
+
         private float periodTimer;
         private float cachedPeriod;
         private EDurationPolicy cachedDurationPolicy;
@@ -34,6 +51,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             TimeRemaining = 0;
             StackCount = 0;
             IsExpired = false;
+            IsInhibited = false;
+            OnInhibitionChanged = null;
             periodTimer = -1f;
             cachedPeriod = 0;
             cachedDurationPolicy = default;
@@ -60,8 +79,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
             cachedPeriod = spec.Def.Period;
             cachedDurationPolicy = spec.Def.DurationPolicy;
 
-            // First tick executes immediately for periodic effects
-            periodTimer = cachedPeriod > 0 ? 0f : -1f;
+            // UE5: bExecutePeriodicEffectOnApplication
+            // If true (default), first tick fires immediately (periodTimer = 0).
+            // If false, first tick waits for the full period interval.
+            if (cachedPeriod > 0)
+            {
+                periodTimer = spec.Def.ExecutePeriodicEffectOnApplication ? 0f : cachedPeriod;
+            }
+            else
+            {
+                periodTimer = -1f;
+            }
         }
 
         public void ReturnToPool()
@@ -92,6 +120,25 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
+        /// Removes a single stack. Used by EGameplayEffectStackingExpirationPolicy.RemoveSingleStackAndRefreshDuration.
+        /// </summary>
+        public void RemoveStack()
+        {
+            if (StackCount > 0)
+            {
+                StackCount--;
+            }
+        }
+
+        /// <summary>
+        /// Clears the expired flag so the effect can continue living (used after removing a single stack).
+        /// </summary>
+        public void ClearExpired()
+        {
+            IsExpired = false;
+        }
+
+        /// <summary>
         /// Refreshes duration without modifying stack count.
         /// </summary>
         public void RefreshDurationAndPeriod()
@@ -104,6 +151,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (periodTimer >= 0)
             {
                 periodTimer = cachedPeriod;
+            }
+        }
+
+        /// <summary>
+        /// Sets the remaining duration to a specific value.
+        /// UE5: Section 4.5.16 - Changing Active Gameplay Effect Duration.
+        /// </summary>
+        public void SetRemainingDuration(float newDuration)
+        {
+            if (cachedDurationPolicy == EDurationPolicy.HasDuration)
+            {
+                TimeRemaining = System.Math.Max(0f, newDuration);
             }
         }
 

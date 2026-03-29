@@ -4,162 +4,225 @@
 
 # CycloneGames.GameplayAbilities
 
-A powerful, data-driven Gameplay Ability System for Unity, inspired by Unreal Engine's GAS.
+A powerful, data-driven Gameplay Ability System (GAS) for Unity, inspired by Unreal Engine 5's GAS architecture.
+
+Whether you are building an RPG, MOBA, action game, or any project with complex character abilities, buffs, and stats — this framework provides a production-ready, scalable foundation.
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-| Feature                      | Description                                                       |
-| ---------------------------- | ----------------------------------------------------------------- |
-| 🎮 **Data-Driven Abilities** | Define abilities in ScriptableObjects, no code changes needed     |
-| ⚡ **GameplayEffects**       | Instant/Duration/Infinite effects with stacking & periodic ticks  |
-| 🏷️ **Tag-Based System**      | Decouple logic with GameplayTags for abilities, states, cooldowns |
-| 🎯 **Targeting System**      | Built-in sphere overlap, line trace, and ground select actors     |
-| 📊 **AttributeSets**         | Flexible character stats with validation hooks                    |
-| 🎨 **GameplayCues**          | Separate VFX/SFX from gameplay logic                              |
-| ⏱️ **AbilityTasks**          | Async ability logic (delays, targeting, animations)               |
-| 🔄 **Object Pooling**        | Zero-GC operation with automatic pooling                          |
-
----
-
-## 📚 Table of Contents
-
-### Getting Started
-
-1. [Why GAS?](#the-gas-philosophy-a-paradigm-shift-for-skill-systems) — Traditional vs GAS approach
-2. [Architecture](#architecture-deep-dive) — Core component diagrams
-3. [Quick Start](#comprehensive-quick-start-guide) — Build a Heal ability from scratch
-
-### Core Concepts
-
-4. [GameplayTags](#gameplay-tags) — Universal language of GAS
-5. [GameplayEffects](#gameplay-effects) — Modifiers, duration, stacking
-6. [AttributeSets](#attribute-sets) — Character stats system
-7. [Ability Lifecycle](#ability-lifecycle) — Grant → Activate → Commit → End
-
-### Advanced Features
-
-8. [AbilityTasks](#abilitytasks) — Async operations in abilities
-9. [Targeting System](#targeting-system-overview) — Find and select targets
-10. [GameplayCues](#gameplaycue-system) — VFX/SFX management
-11. [Execution Calculations](#execution-calculations) — Complex damage formulas
-
-### Reference
-
-12. [Samples Walkthrough](#sample-walkthrough) — Fireball, Purify, Leveling
-13. [FAQ](#frequently-asked-questions-faq) — Common questions answered
-14. [Troubleshooting](#troubleshooting-guide) — Debug checklist
-15. [Performance](#performance-optimization) — Zero-GC tips
+| Feature                    | Description                                                                                   |
+| -------------------------- | --------------------------------------------------------------------------------------------- |
+| **Data-Driven Abilities**  | Define abilities entirely in ScriptableObjects — designers iterate without code changes       |
+| **GameplayEffects**        | Instant / Duration / Infinite effects with stacking, periodic ticks, and overflow policies    |
+| **Tag-Based Architecture** | Decouple all logic through hierarchical GameplayTags — abilities, states, cooldowns, factions |
+| **Attribute System**       | Flexible character stats with validation hooks, derived attributes, and modifier aggregation  |
+| **AbilityTasks**           | 10+ built-in async tasks — delays, event waits, attribute watches, targeting, repeats         |
+| **Targeting System**       | Sphere overlap, line trace, cone trace, ground select — or write your own `ITargetActor`      |
+| **GameplayCues**           | VFX/SFX completely separated from gameplay logic — artists iterate independently              |
+| **Execution Calculations** | Complex multi-attribute damage formulas as reusable data assets                               |
+| **Object Pooling**         | Zero-GC runtime with three-tier adaptive pools, platform-aware sizing, and health monitoring  |
+| **Network-Ready**          | Transport-agnostic prediction keys and execution policies (Local / Server / Predicted)        |
 
 ---
 
-## The GAS Philosophy: A Paradigm Shift for Skill Systems
+## Table of Contents
 
-Before diving into the technical details, it's crucial to understand _why_ a system like GAS exists and how it fundamentally differs from traditional approaches.
+**I. Understanding GAS**
 
-### The Trouble with Traditional Systems
+1. [Why GAS?](#1-why-gas) — The problem it solves
+2. [Mental Model](#2-mental-model) — Glossary and how pieces fit together
+3. [Architecture](#3-architecture) — System diagrams
 
-In many projects, ability logic starts simple but quickly spirals out of control. A typical evolution of problems looks like this:
+**II. Getting Started** 4. [Quick Start](#4-quick-start-build-a-heal-ability) — Build a Heal ability from scratch
 
-1.  **Hard-coded Abilities:** A `PlayerController` has a function like `UseFireball()`. This is simple, but what if an enemy needs to use it? You copy the code. What if a trap needs to use it? You copy it again. The logic is tightly coupled to the character.
-2.  **The "God" Controller:** To manage complexity, developers create a monolithic `SkillManager` or expand the `PlayerController` to handle every skill, buff, and interaction. This class becomes a massive state machine, full of boolean flags (`isStunned`, `isPoisoned`, `isBurning`), timers in `Update()`, and long `switch` or `if/else` chains. It becomes fragile, difficult to debug, and a bottleneck for team collaboration.
-3.  **Data & Logic Tangled:** Game designers want to tweak a skill's damage or duration. In traditional systems, this often means they have to venture into complex code files, risking the introduction of bugs. The data (`damage = 10`) is inseparable from the logic (`target.TakeDamage(damage)`).
+**III. Core Systems** 5. [GameplayTags](#5-gameplaytags) — The universal language 6. [Attributes & AttributeSets](#6-attributes--attributesets) — Character stats 7. [GameplayEffects](#7-gameplayeffects) — Modifiers, duration, stacking 8. [GameplayAbilities](#8-gameplayabilities) — The ability lifecycle
 
-This approach is not scalable. The number of potential interactions between skills and states grows exponentially, leading to what is commonly known as "spaghetti code."
+**IV. Advanced Systems** 9. [AbilityTasks](#9-abilitytasks) — Async ability logic 10. [Targeting System](#10-targeting-system) — Finding and selecting targets 11. [Execution Calculations](#11-execution-calculations) — Complex formulas 12. [GameplayCues](#12-gameplaycues) — VFX/SFX management 13. [Networking](#13-networking) — Prediction and replication
 
-### The GAS Solution: Abilities and Effects as Data
+**V. Production** 14. [Object Pooling & Performance](#14-object-pooling--performance) — Zero-GC strategies 15. [Editor Tools & Debugging](#15-editor-tools--debugging) — Inspector, debugger window, runtime overlay 16. [Samples Walkthrough](#16-samples-walkthrough) — Fireball, Purify, Leveling 17. [FAQ & Troubleshooting](#17-faq--troubleshooting) 18. [Dependencies](#18-dependencies)
 
-GAS solves these problems by treating abilities and effects not as functions, but as **data**. This is the core paradigm shift.
+---
 
-- **GameplayAbilities are Data Assets (`GameplayAbilitySO`):** An "ability" is a `ScriptableObject` that encapsulates its logic and links to other data assets that define its cost, cooldown, and effects. Your character doesn't know what "Fireball" is; it just knows it has an ability identified by a `GameplayTag`.
-- **Status Effects are Data Assets (`GameplayEffectSO`):** A character is no longer just `isPoisoned`. Instead, they have an **active instance** of a "Poison" `GameplayEffect` asset. This asset _is_ the poison. It contains all relevant data: its duration, its periodic damage, the gameplay tags it applies (`Status.Debuff.Poison`), and even how it stacks with other poison effects. The system manages its entire lifecycle automatically.
-- **Decoupling through Tags (`GameplayTag`):** Tags are the universal language of GAS. They are used to identify everything: abilities (`Ability.Skill.Fireball`), cooldowns (`Cooldown.Skill.Fireball`), status effects (`Status.Debuff.Poison`), character states (`State.Stunned`), and even damage types (`Damage.Type.Fire`). The system uses tags to ask questions like, "Does the ability owner have the `Cooldown.Skill.Fireball` tag?" or "Is the target immune to the `Damage.Type.Fire` tag?" This creates a powerful, decoupled system where different parts can interact without direct references.
+# I. Understanding GAS
 
-This data-centric approach empowers designers, promotes reusability, simplifies debugging (you inspect data assets, not complex call stacks), and creates a robust, scalable foundation for your game's mechanics.
+## 1. Why GAS?
 
-### Comparison: Traditional vs. GAS
+### The Problem
 
-| Aspect                  | Traditional System (The "Pain Points")                                                                                                                 | CycloneGames.GameplayAbilities (The "Solution")                                                                                                                                                           |
-| :---------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Architecture**        | Monolithic (`PlayerController`, `SkillManager`) with hard-coded logic.                                                                                 | Decoupled components (`AbilitySystemComponent`) and data assets (`GameplayAbilitySO`).                                                                                                                    |
-| **Data & Logic**        | **Tightly Coupled.** Skill logic (`UseFireball()`) and data (`damage = 10`) are mixed in the same C# file. Designers cannot safely balance the game.   | **Strictly Separated.** Data is stored in `ScriptableObject` assets (`GameplayAbilitySO`). Logic is in the runtime `GameplayAbility` class. Designers work with assets, programmers work with code.       |
-| **State Management**    | **Manual & Fragile.** Relies on boolean flags (`isStunned`), manual timers in `Update()`, and complex state machines that are hard to debug and scale. | **Automated & Robust.** Status effects are self-contained `GameplayEffect` instances. The system automatically manages their duration, periodic application, and cleanup. State is an object, not a flag. |
-| **Extensibility**       | **Invasive.** Adding a new skill or status effect often requires modifying multiple core classes, increasing the risk of regression bugs.              | **Modular.** Add a new ability by creating a new `GameplayAbilitySO` asset and its corresponding `GameplayAbility` class. No changes to existing code are needed.                                         |
-| **Reusability**         | **Low.** A skill written for the Player must often be rewritten for an AI, as it's tied to the `PlayerController`.                                     | **High.** The same `GameplayAbilitySO` asset can be granted to any `AbilitySystemComponent`, whether it's on a player, an AI, or even a breakable barrel.                                                 |
-| **Complexity Handling** | **Exponential.** As skills and effects are added, the number of `if/else` checks for interactions grows exponentially, leading to unmaintainable code. | **Linear & Tag-Driven.** Interactions are managed by `GameplayTags`. An ability checks "Do I have `Cooldown.Fireball`?" instead of `if (skillManager.fireball_cooldown > 0)`. This scales cleanly.        |
+Ability systems in games tend to start simple — a `UseFireball()` method, a few boolean flags — but quickly grow into unmanageable complexity:
 
-## Architecture Deep Dive
+| Stage       | What Happens                                                                  | The Pain                                                                         |
+| ----------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| **Early**   | `PlayerController.UseFireball()` hard-coded                                   | Works for 1 character, but enemies need the same skill → copy-paste              |
+| **Growing** | A monolithic `SkillManager` with `isStunned`, `isPoisoned`, `isBurning` flags | Fragile state machine; every new interaction adds exponential `if/else` branches |
+| **Late**    | Designers can't tweak `damage = 10` without touching C# code                  | Iteration speed drops; bugs from mixing data and logic in one file               |
+
+This trajectory is unsustainable. The number of potential interactions between N skills and M status effects grows as O(N×M), creating the classic "spaghetti code" problem.
+
+### The GAS Solution
+
+GAS solves this by treating abilities and effects as **data**, not functions:
+
+- **Abilities are data assets** — a `ScriptableObject` defines what an ability is (cost, cooldown, tags, effects). Your character merely "has" an ability identified by a tag.
+- **Status effects are data objects** — a character is not `isPoisoned`; instead it has an active instance of a "Poison" `GameplayEffect` that carries its own duration, periodic tick, tag grants, and stacking rules. The system manages its lifecycle automatically.
+- **Tags replace booleans** — instead of `if (isCasting && !isStunned)`, the system asks "does the owner have `State.Casting`?" and "does the owner lack `State.Stunned`?". Tags are hierarchical, queryable, and entirely data-driven.
+
+### Comparison
+
+| Aspect                  | Traditional System                 | GAS                                                 |
+| ----------------------- | ---------------------------------- | --------------------------------------------------- |
+| **Architecture**        | Monolithic `SkillManager`          | Decoupled `AbilitySystemComponent` + data assets    |
+| **Data & Logic**        | Mixed in one C# file               | Strictly separated — SO for data, class for logic   |
+| **State Management**    | Boolean flags + manual timers      | Self-managing `GameplayEffect` instances            |
+| **Extensibility**       | Modify core classes to add content | Add new SO assets — zero existing code changes      |
+| **Reusability**         | Player-specific code               | Same ability asset works on Player, AI, or a barrel |
+| **Interaction Scaling** | O(N×M) if/else branches            | O(1) tag lookups                                    |
+
+---
+
+## 2. Mental Model
+
+If you have never used Unreal Engine's GAS, this section maps every key concept so you can build a clear mental picture before reading any code.
+
+### Glossary
+
+| Concept                          | What It Is                                                                                                           | Analogy                                |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| **AbilitySystemComponent (ASC)** | The central manager on each actor. Owns abilities, effects, attributes, and tags.                                    | The actor's "ability brain"            |
+| **GameplayAbility**              | A discrete action an actor can perform (attack, heal, dash). Contains activation logic.                              | A "skill card" in the actor's hand     |
+| **GameplayAbilitySO**            | ScriptableObject that defines an ability's data (name, tags, cost, cooldown). Creates the runtime `GameplayAbility`. | The "card template" designers edit     |
+| **GameplayAbilitySpec**          | Runtime wrapper that tracks a granted ability's state (level, active status).                                        | The actor's "equipped card slot"       |
+| **GameplayEffect**               | Immutable definition of something that happens to an actor — modifies attributes, grants tags, ticks periodically.   | A "recipe" written on a card           |
+| **GameplayEffectSO**             | ScriptableObject for designers to configure a GameplayEffect in the Inspector.                                       | The "recipe card template"             |
+| **GameplayEffectSpec**           | A stamped-out, mutable instance of a GameplayEffect carrying context (source, level, SetByCaller values).            | A filled-out "recipe order"            |
+| **ActiveGameplayEffect**         | A GameplayEffectSpec that is currently applied to an ASC — tracks time remaining, stack count, inhibition.           | The "recipe cooking on the stove"      |
+| **GameplayAttribute**            | A single numeric stat (Health, Mana, AttackPower). Floats modified by GameplayEffects.                               | One line on a character sheet          |
+| **AttributeSet**                 | A grouped collection of related GameplayAttributes with validation hooks.                                            | A page on the character sheet          |
+| **GameplayTag**                  | A hierarchical string identifier (`Ability.Skill.Fireball`, `Status.Debuff.Poison`).                                 | A sticky label                         |
+| **GameplayTagContainer**         | A set of GameplayTags, used for queries (`HasTag`, `HasAll`, `HasAny`).                                              | A collection of sticky labels          |
+| **AbilityTask**                  | An async operation inside an ability — wait for time, wait for input, watch for tag changes.                         | A "step" in a recipe                   |
+| **ITargetActor**                 | An object that performs spatial queries (sphere overlap, raycast) to find targets.                                   | A "radar scanner"                      |
+| **TargetData**                   | The result of a targeting query — contains hit actors and physics info.                                              | The "scan results"                     |
+| **GameplayCue**                  | A VFX/SFX triggered by tag, completely decoupled from gameplay logic.                                                | A "special effect sticker" on a recipe |
+| **ExecutionCalculation**         | A code class that computes complex multi-attribute formulas (damage = ATK × 1.5 − DEF × 0.5).                        | A "calculator subroutine"              |
+
+### How the Pieces Fit Together
+
+```mermaid
+flowchart LR
+    subgraph Designer["🎨 Designer Creates"]
+        direction TB
+        AbilitySO["GameplayAbilitySO"]
+        EffectSO["GameplayEffectSO"]
+        EffectDef["GameplayEffect<br/>(immutable definition)"]
+        AbilitySO -->|references| EffectSO
+        EffectSO -->|creates| EffectDef
+    end
+
+    subgraph Runtime["⚙️ Runtime Flow"]
+        direction TB
+        Ability["GameplayAbility"]
+        Activate["ActivateAbility()"]
+        Commit["CommitAbility()"]
+        CostCD["Apply Cost + Cooldown"]
+        Spec["GameplayEffectSpec"]
+        Apply["ASC.ApplySpecToSelf()"]
+        ActiveGE["ActiveGameplayEffect"]
+        Ability --> Activate --> Commit --> CostCD
+        CostCD --> Spec --> Apply --> ActiveGE
+    end
+
+    subgraph Result["📊 Result"]
+        direction TB
+        ModAttr["Modify Attributes"]
+        GrantTag["Grant Tags"]
+        TrigCue["Trigger GameplayCues"]
+    end
+
+    AbilitySO -->|"CreateAbility()"| Ability
+    EffectDef -->|"Spec.Create()"| Spec
+    ActiveGE --> ModAttr
+    ActiveGE --> GrantTag
+    ActiveGE --> TrigCue
+```
+
+---
+
+## 3. Architecture
 
 ### System Architecture Overview
 
 ```mermaid
 flowchart TB
-    subgraph DataLayer["📦 Data Assets - ScriptableObjects"]
-        GAbilitySO["GameplayAbilitySO"]
-        GEffectSO["GameplayEffectSO"]
-        GCueSO["GameplayCueSO"]
+    subgraph Data["📦 Data Assets (ScriptableObjects)"]
+        GAbilitySO["GameplayAbilitySO<br/>― ability definition"]
+        GEffectSO["GameplayEffectSO<br/>― effect definition"]
+        GCueSO["GameplayCueSO<br/>― VFX/SFX definition"]
+        ExecCalcSO["ExecutionCalculationSO<br/>― formula definition"]
     end
 
-    subgraph RuntimeCore["⚙️ Runtime Core"]
-        ASC["AbilitySystemComponent"]
-        AttrSet["AttributeSet"]
-        GAbility["GameplayAbility"]
-        GEffect["GameplayEffect"]
+    subgraph Runtime["⚙️ Runtime Core"]
+        ASC["AbilitySystemComponent<br/>― central manager"]
+        AttrSet["AttributeSet<br/>― stats container"]
+        GAbility["GameplayAbility<br/>― skill logic"]
+        GEffect["GameplayEffect<br/>― immutable definition"]
     end
 
-    subgraph ActiveInstances["🎯 Active Instances - Pooled"]
+    subgraph Active["🔄 Active Instances (Pooled)"]
         GSpec["GameplayAbilitySpec"]
         GESpec["GameplayEffectSpec"]
         ActiveGE["ActiveGameplayEffect"]
     end
 
-    subgraph AsyncSystems["⏱️ Async Systems"]
-        AbilityTask["AbilityTask"]
-        TargetActor["ITargetActor"]
+    subgraph Async["⏱️ Async Systems"]
+        Task["AbilityTask"]
+        Target["ITargetActor"]
     end
 
-    subgraph VFXLayer["🎨 VFX/SFX Layer"]
-        CueManager["GameplayCueManager"]
+    subgraph Cue["🎨 Presentation Layer"]
+        CueMgr["GameplayCueManager"]
     end
 
-    GAbilitySO -->|CreateAbility| GAbility
-    GEffectSO -->|CreateEffect| GEffect
+    GAbilitySO -->|"CreateAbility()"| GAbility
+    GEffectSO -->|"GetGameplayEffect()"| GEffect
+    ExecCalcSO -->|"CreateExecutionCalculation()"| GEffect
 
     ASC -->|owns| AttrSet
     ASC -->|manages| GSpec
     ASC -->|tracks| ActiveGE
 
     GSpec -->|wraps| GAbility
-    GAbility -->|spawns| AbilityTask
-    AbilityTask -->|uses| TargetActor
+    GAbility -->|spawns| Task
+    Task -->|uses| Target
 
-    GEffect -->|instantiated as| GESpec
-    GESpec -->|applied as| ActiveGE
+    GEffect -->|"Spec.Create()"| GESpec
+    GESpec -->|"ApplyToSelf()"| ActiveGE
     ActiveGE -->|modifies| AttrSet
-    ActiveGE -->|triggers| CueManager
+    ActiveGE -->|triggers| CueMgr
 
-    GCueSO -.->|registered in| CueManager
+    GCueSO -.->|registered in| CueMgr
 ```
 
 ### GameplayEffect Lifecycle
 
 ```mermaid
 flowchart LR
-    subgraph Definition["Definition Phase"]
+    subgraph Def["Definition"]
         SO["GameplayEffectSO<br/>📋 Data Asset"]
-        GE["GameplayEffect<br/>📝 Stateless Definition"]
+        GE["GameplayEffect<br/>📝 Immutable Template"]
     end
 
-    subgraph Instantiation["Instantiation Phase"]
-        Spec["GameplayEffectSpec<br/>📦 Pooled Instance<br/>• Source ASC<br/>• Level<br/>• SetByCaller Data"]
+    subgraph Inst["Instantiation"]
+        Spec["GameplayEffectSpec<br/>📦 Pooled Instance<br/>• Source ASC<br/>• Level / SetByCaller<br/>• Dynamic Tags"]
     end
 
-    subgraph Application["Application Phase"]
-        Active["ActiveGameplayEffect<br/>⏱️ Active on Target<br/>• TimeRemaining<br/>• StackCount<br/>• PeriodTimer"]
+    subgraph Apply["Application"]
+        Active["ActiveGameplayEffect<br/>⏱️ On Target ASC<br/>• TimeRemaining<br/>• StackCount<br/>• IsInhibited"]
     end
 
-    subgraph Execution["Execution"]
+    subgraph Exec["Execution"]
         Instant["Instant ✅"]
         Duration["HasDuration ⏳"]
         Infinite["Infinite ♾️"]
@@ -167,13 +230,13 @@ flowchart LR
 
     SO -->|"CreateGameplayEffect()"| GE
     GE -->|"GameplayEffectSpec.Create()"| Spec
-    Spec -->|"ASC.ApplyGameplayEffectSpecToSelf()"| Active
+    Spec -->|"ASC.ApplySpecToSelf()"| Active
 
     Active --> Instant
     Active --> Duration
     Active --> Infinite
 
-    Duration -->|"Expired"| Pool["🔄 Return to Pool"]
+    Duration -->|"Expired"| Pool["🔄 Pool"]
     Infinite -->|"Manually Removed"| Pool
     Spec -->|"After Use"| Pool
 ```
@@ -183,618 +246,276 @@ flowchart LR
 ```mermaid
 flowchart TB
     subgraph Input["1️⃣ Input"]
-        Trigger["Player Input / AI Decision"]
+        Trigger["Player Input / AI Decision / Tag Trigger"]
     end
 
-    subgraph Activation["2️⃣ Activation Check"]
-        TryActivate["TryActivateAbility()"]
-        CheckTags["Check Tags<br/>• ActivationRequiredTags<br/>• ActivationBlockedTags"]
-        CheckCost["CheckCost()"]
-        CheckCooldown["CheckCooldown()"]
+    subgraph Check["2️⃣ Activation Check"]
+        Try["TryActivateAbility()"]
+        Tags["Tag Check<br/>ActivationRequiredTags ✓<br/>ActivationBlockedTags ✗<br/>Source/Target Tags"]
+        Cost["CheckCost()"]
+        CD["CheckCooldown()"]
     end
 
-    subgraph Execution["3️⃣ Execution"]
+    subgraph Run["3️⃣ Execution"]
         Activate["ActivateAbility()"]
-        Tasks["AbilityTasks<br/>• WaitDelay<br/>• WaitTargetData<br/>• WaitGameplayEvent"]
-        Commit["CommitAbility()<br/>• Apply Cost Effect<br/>• Apply Cooldown Effect"]
+        Tasks["AbilityTasks<br/>WaitDelay / WaitTargetData<br/>WaitGameplayEvent / ..."]
+        Commit["CommitAbility()<br/>Apply Cost + Cooldown"]
     end
 
-    subgraph Effects["4️⃣ Apply Effects"]
+    subgraph Effects["4️⃣ Effects"]
         ApplyGE["Apply GameplayEffects"]
-        TriggerCue["Trigger GameplayCues<br/>🎨 VFX / 🔊 SFX"]
+        Cues["Trigger GameplayCues"]
     end
 
-    subgraph Cleanup["5️⃣ Cleanup"]
+    subgraph End["5️⃣ Cleanup"]
         EndAbility["EndAbility()"]
-        ReturnPool["🔄 Return to Pool"]
+        ReturnPool["Return to Pool"]
     end
 
-    Trigger --> TryActivate
-    TryActivate --> CheckTags
-    CheckTags -->|Pass| CheckCost
-    CheckTags -->|Fail| Blocked["❌ Blocked"]
-    CheckCost -->|Pass| CheckCooldown
-    CheckCost -->|Fail| NoCost["❌ Insufficient Resource"]
-    CheckCooldown -->|Pass| Activate
-    CheckCooldown -->|Fail| OnCooldown["❌ On Cooldown"]
+    Trigger --> Try
+    Try --> Tags
+    Tags -->|Pass| Cost
+    Tags -->|Fail| Blocked["❌ Blocked"]
+    Cost -->|Pass| CD
+    Cost -->|Fail| NoCost["❌ Insufficient Resource"]
+    CD -->|Pass| Activate
+    CD -->|Fail| OnCD["❌ On Cooldown"]
 
     Activate --> Tasks
     Tasks --> Commit
     Commit --> ApplyGE
-    ApplyGE --> TriggerCue
-    TriggerCue --> EndAbility
+    ApplyGE --> Cues
+    Cues --> EndAbility
     EndAbility --> ReturnPool
 ```
 
-## Comprehensive Quick-Start Guide
+---
 
-This comprehensive guide will walk you through creating a complete "Heal" ability from scratch, step by step. By the end, you'll understand the core concepts and be ready to create your own abilities.
+# II. Getting Started
+
+## 4. Quick Start: Build a Heal Ability
+
+This step-by-step tutorial creates a fully functional Heal ability from scratch. By the end you will understand all core concepts.
+
+### The Simplest GAS Flow (No Abilities Needed)
+
+Before building a full ability, understand the absolute minimum data flow. You can modify attributes with **just an ASC, an AttributeSet, and a GameplayEffect** — no ability required:
+
+```csharp
+// 1. Get the ASC
+var asc = GetComponent<AbilitySystemComponentHolder>().AbilitySystemComponent;
+asc.InitAbilityActorInfo(this, gameObject);
+
+// 2. Add attributes
+var attrs = new PlayerAttributeSet();
+asc.AddAttributeSet(attrs);
+
+// 3. Create an effect and apply it — done!
+var healEffect = new GameplayEffect("Heal", EDurationPolicy.Instant, 0, 0,
+    new() { new ModifierInfo(attrs.Health, EAttributeModifierOperation.Add, 25f) });
+asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(healEffect, asc));
+// Health is now +25. That's it — 3 lines of real logic.
+```
+
+```mermaid
+flowchart LR
+    A["ASC + AttributeSet"] -->|"GameplayEffectSpec.Create()"| B["GameplayEffectSpec"]
+    B -->|"ApplySpecToSelf()"| C["Health += 25"]
+```
+
+**GameplayAbilities add structure on top of this flow** — activation checks, cost/cooldown, async tasks, targeting — but the core data path is always: **Effect → Spec → Apply → Attribute changes**.
 
 ### Prerequisites
 
-Before starting, ensure you have:
+- Unity 2021.3+
+- `CycloneGames.GameplayAbilities` package installed
+- Dependencies installed: `GameplayTags`, `Logger`, `AssetManagement`, `Factory`
 
-- Unity 2021.3 or later
-- The `CycloneGames.GameplayAbilities` package installed
-- All dependencies installed (`GameplayTags`, `Logger`, `AssetManagement`, `Factory`, `Service`)
+### Step 1 — Create an AttributeSet
 
-### Step 1: Project Setup
-
-**1.1 Create Folder Structure**
-
-Organize your project with a clear folder structure. In your `Assets` folder, create:
-
-```
-Assets/
-└── _Project/
-    ├── Scripts/
-    │   ├── Attributes/
-    │   ├── Abilities/
-    │   └── Characters/
-    ├── Data/
-    │   ├── Effects/
-    │   └── Abilities/
-    └── Prefabs/
-```
-
-This structure keeps your code organized and makes it easy to find assets later.
-
-> **Note on Gameplay Tags**: The `CycloneGames.GameplayTags` system automatically registers tags at runtime. Tags can be defined in JSON files in `ProjectSettings/GameplayTags/` or through code attributes. When you use `GameplayTagManager.RequestTag("Ability.Action.Heal")`, it will automatically find and use the tag if it's been defined. You don't need to manually register tags in code.
-
-### Step 2: Create the Attribute Set
-
-The Attribute Set defines what stats your characters have. This is the foundation of your character system.
-
-**2.1 Create PlayerAttributeSet.cs**
-
-In `_Project/Scripts/Attributes/`, create `PlayerAttributeSet.cs`:
+An `AttributeSet` holds character stats. Every attribute is a `GameplayAttribute` — a named float that effects can modify.
 
 ```csharp
-// _Project/Scripts/Attributes/PlayerAttributeSet.cs
 using CycloneGames.GameplayAbilities.Runtime;
 using UnityEngine;
 
-/// <summary>
-/// Defines all attributes for a player character.
-/// Attributes are the core stats that abilities and effects modify.
-/// </summary>
 public class PlayerAttributeSet : AttributeSet
 {
-    // Health attributes
-    public readonly GameplayAttribute Health = new GameplayAttribute("Player.Attribute.Health");
-    public readonly GameplayAttribute MaxHealth = new GameplayAttribute("Player.Attribute.MaxHealth");
+    public readonly GameplayAttribute Health    = new("Player.Attribute.Health");
+    public readonly GameplayAttribute MaxHealth = new("Player.Attribute.MaxHealth");
+    public readonly GameplayAttribute Mana      = new("Player.Attribute.Mana");
+    public readonly GameplayAttribute MaxMana   = new("Player.Attribute.MaxMana");
 
-    // Mana attributes
-    public readonly GameplayAttribute Mana = new GameplayAttribute("Player.Attribute.Mana");
-    public readonly GameplayAttribute MaxMana = new GameplayAttribute("Player.Attribute.MaxMana");
-
-    /// <summary>
-    /// Called before an attribute value changes. Use this to clamp values or apply constraints.
-    /// </summary>
+    // Called BEFORE a value changes — use for clamping
     public override void PreAttributeChange(GameplayAttribute attribute, ref float newValue)
     {
-        // Clamp health between 0 and MaxHealth
-        if (attribute.Name == "Player.Attribute.Health")
-        {
-            float maxHealth = GetCurrentValue(MaxHealth);
-            newValue = Mathf.Clamp(newValue, 0, maxHealth);
-        }
-
-        // Clamp mana between 0 and MaxMana
-        if (attribute.Name == "Player.Attribute.Mana")
-        {
-            float maxMana = GetCurrentValue(MaxMana);
-            newValue = Mathf.Clamp(newValue, 0, maxMana);
-        }
+        if (attribute.Name == Health.Name)
+            newValue = Mathf.Clamp(newValue, 0, GetCurrentValue(MaxHealth));
+        if (attribute.Name == Mana.Name)
+            newValue = Mathf.Clamp(newValue, 0, GetCurrentValue(MaxMana));
     }
 
-    /// <summary>
-    /// Called after an attribute value changes. Use this for side effects like death detection.
-    /// </summary>
+    // Called AFTER a value changes — use for side effects
     public override void PostAttributeChange(GameplayAttribute attribute, float oldValue, float newValue)
     {
-        // Example: Check for death when health reaches 0
-        if (attribute.Name == "Player.Attribute.Health" && newValue <= 0 && oldValue > 0)
-        {
-            Debug.Log("Player has died!");
-            // Trigger death logic here
-        }
+        if (attribute.Name == Health.Name && newValue <= 0 && oldValue > 0)
+            Debug.Log("Character died!");
     }
 }
 ```
 
-**Key Points:**
-
-- Attributes are defined as `readonly GameplayAttribute` fields
-- Use `PreAttributeChange` to validate and clamp values
-- Use `PostAttributeChange` for side effects like death detection
-- Attribute names are strings - consider using constants or a centralized tag system
-
-### Step 3: Create the Character Controller
-
-The character controller initializes the Ability System Component and grants abilities to the character.
-
-**3.1 Create PlayerCharacter.cs**
-
-In `_Project/Scripts/Characters/`, create `PlayerCharacter.cs`:
+### Step 2 — Set Up the Character
 
 ```csharp
-// _Project/Scripts/Characters/PlayerCharacter.cs
 using CycloneGames.GameplayAbilities.Runtime;
 using UnityEngine;
 
-/// <summary>
-/// Main character controller that manages the Ability System Component.
-/// This component must be on the same GameObject as AbilitySystemComponentHolder.
-/// </summary>
 [RequireComponent(typeof(AbilitySystemComponentHolder))]
 public class PlayerCharacter : MonoBehaviour
 {
-    [Header("Abilities")]
-    [Tooltip("The heal ability asset to grant to this character.")]
     [SerializeField] private GameplayAbilitySO healAbilitySO;
 
-    [Header("Initial Attributes")]
-    [Tooltip("Initial attribute values applied on Start.")]
-    [SerializeField] private float initialHealth = 100f;
-    [SerializeField] private float initialMaxHealth = 100f;
-    [SerializeField] private float initialMana = 50f;
-    [SerializeField] private float initialMaxMana = 50f;
-
-    // Component references
     private AbilitySystemComponentHolder ascHolder;
-    private PlayerAttributeSet playerAttributes;
+    private PlayerAttributeSet attributes;
 
     void Awake()
     {
-        // Get the Ability System Component Holder
-        // This component wraps the AbilitySystemComponent and provides MonoBehaviour integration
         ascHolder = GetComponent<AbilitySystemComponentHolder>();
-
-        if (ascHolder == null)
-        {
-            Debug.LogError("AbilitySystemComponentHolder not found! Add it to the GameObject.");
-        }
     }
 
     void Start()
     {
-        // CRITICAL: Initialize the Ability System Component
-        // This tells the ASC who owns it (this script) and what the avatar is (this GameObject)
-        ascHolder.AbilitySystemComponent.InitAbilityActorInfo(this, this.gameObject);
+        var asc = ascHolder.AbilitySystemComponent;
 
-        // Create and add the Attribute Set
-        // This is where all character stats are defined
-        playerAttributes = new PlayerAttributeSet();
-        ascHolder.AbilitySystemComponent.AddAttributeSet(playerAttributes);
+        // 1. Initialize actor info (required before any ASC operation)
+        asc.InitAbilityActorInfo(this, gameObject);
 
-        // Set initial attribute values
-        SetInitialAttributes();
+        // 2. Add attributes
+        attributes = new PlayerAttributeSet();
+        asc.AddAttributeSet(attributes);
 
-        // Grant abilities
-        GrantInitialAbilities();
-    }
+        // 3. Set initial values via an Instant effect
+        var initEffect = new GameplayEffect("GE_Init", EDurationPolicy.Instant, 0, 0,
+            new() {
+                new ModifierInfo(attributes.MaxHealth, EAttributeModifierOperation.Override, 100),
+                new ModifierInfo(attributes.Health,    EAttributeModifierOperation.Override, 100),
+                new ModifierInfo(attributes.MaxMana,   EAttributeModifierOperation.Override, 50),
+                new ModifierInfo(attributes.Mana,      EAttributeModifierOperation.Override, 50),
+            });
+        asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(initEffect, asc));
 
-    /// <summary>
-    /// Sets the initial values for all attributes.
-    /// </summary>
-    private void SetInitialAttributes()
-    {
-        // Create a temporary effect to set initial values
-        // This is a common pattern for initializing attributes
-        var initialEffect = new GameplayEffect(
-            "GE_InitialAttributes",
-            EDurationPolicy.Instant, // Instant means it applies once and is done
-            0, // No duration needed for instant
-            0, // No period needed for instant
-            new System.Collections.Generic.List<ModifierInfo>
-            {
-                new ModifierInfo(playerAttributes.MaxHealth, EAttributeModifierOperation.Override, initialMaxHealth),
-                new ModifierInfo(playerAttributes.Health, EAttributeModifierOperation.Override, initialHealth),
-                new ModifierInfo(playerAttributes.MaxMana, EAttributeModifierOperation.Override, initialMaxMana),
-                new ModifierInfo(playerAttributes.Mana, EAttributeModifierOperation.Override, initialMana)
-            }
-        );
-
-        var spec = GameplayEffectSpec.Create(initialEffect, ascHolder.AbilitySystemComponent);
-        ascHolder.AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
-    }
-
-    /// <summary>
-    /// Grants all initial abilities to this character.
-    /// </summary>
-    private void GrantInitialAbilities()
-    {
+        // 4. Grant abilities
         if (healAbilitySO != null)
-        {
-            // Create the ability instance from the ScriptableObject
-            var ability = healAbilitySO.CreateAbility();
-
-            // Grant it to this character's Ability System Component
-            ascHolder.AbilitySystemComponent.GrantAbility(ability);
-
-            Debug.Log($"Granted ability: {healAbilitySO.AbilityName}");
-        }
+            asc.GrantAbility(healAbilitySO.CreateAbility());
     }
 
     void Update()
     {
-        // Example: Activate heal ability with 'H' key
         if (Input.GetKeyDown(KeyCode.H))
         {
-            ActivateHealAbility();
-        }
-    }
-
-    /// <summary>
-    /// Finds and activates the heal ability by its tag.
-    /// </summary>
-    private void ActivateHealAbility()
-    {
-        // Get all activatable abilities
-        var abilities = ascHolder.AbilitySystemComponent.GetActivatableAbilities();
-
-        // Find the heal ability by its tag
-        foreach (var spec in abilities)
-        {
-            // Check if this ability has the heal tag
-            if (spec.Ability.AbilityTags.HasTag("Ability.Action.Heal"))
+            var asc = ascHolder.AbilitySystemComponent;
+            foreach (var spec in asc.GetActivatableAbilities())
             {
-                // Try to activate it
-                bool success = ascHolder.AbilitySystemComponent.TryActivateAbility(spec);
-
-                if (success)
+                if (spec.Ability.AbilityTags.HasTag("Ability.Action.Heal"))
                 {
-                    Debug.Log("Heal ability activated!");
+                    asc.TryActivateAbility(spec);
+                    break;
                 }
-                else
-                {
-                    Debug.LogWarning("Failed to activate heal ability. Check cost, cooldown, or tag requirements.");
-                }
-
-                return; // Found and attempted activation, exit
             }
         }
-
-        Debug.LogWarning("Heal ability not found. Make sure it's granted and has the correct tag.");
-    }
-
-    /// <summary>
-    /// Helper method to get current health (useful for UI, etc.)
-    /// </summary>
-    public float GetCurrentHealth()
-    {
-        return playerAttributes?.GetCurrentValue(playerAttributes.Health) ?? 0f;
-    }
-
-    /// <summary>
-    /// Helper method to get current mana (useful for UI, etc.)
-    /// </summary>
-    public float GetCurrentMana()
-    {
-        return playerAttributes?.GetCurrentValue(playerAttributes.Mana) ?? 0f;
     }
 }
 ```
 
-**Key Points:**
-
-- Always call `InitAbilityActorInfo()` before using the ASC
-- Create and add Attribute Sets before granting abilities
-- Use `GrantAbility()` to give characters abilities
-- Find abilities by their tags using `GetActivatableAbilities()`
-- Use `TryActivateAbility()` to activate abilities (it checks cost, cooldown, etc. automatically)
-
-### Step 4: Create the Heal Ability
-
-Now we'll create the actual ability. An ability has two parts:
-
-1. **Runtime Logic** (`HealAbility.cs`) - The code that runs when activated
-2. **Data Asset** (`HealAbilitySO.cs`) - The ScriptableObject that designers configure
-
-**4.1 Create the Runtime Logic**
-
-In `_Project/Scripts/Abilities/`, create `HealAbility.cs`:
+### Step 3 — Create the Ability (Runtime Logic)
 
 ```csharp
-// _Project/Scripts/Abilities/HealAbility.cs
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.Logger;
 
-/// <summary>
-/// A simple instant heal ability that restores health to the caster.
-/// This is an "instant" ability - it applies its effect immediately and ends.
-/// </summary>
 public class HealAbility : GameplayAbility
 {
-    /// <summary>
-    /// Called when the ability is activated.
-    /// This is where you put the ability's main logic.
-    /// </summary>
     public override void ActivateAbility(
         GameplayAbilityActorInfo actorInfo,
         GameplayAbilitySpec spec,
         GameplayAbilityActivationInfo activationInfo)
     {
-        CLogger.LogInfo($"[HealAbility] Activated by {actorInfo.OwnerActor}");
-
-        // CRITICAL: Commit the ability
-        // This applies the Cost and Cooldown effects defined in the ScriptableObject
-        // It also applies any "Commit Gameplay Effects" defined in the SO
+        // CommitAbility applies cost, cooldown, and commit effects
         CommitAbility(actorInfo, spec);
-
-        // For an instant heal, the actual healing is done by the "Commit Gameplay Effects"
-        // defined in the ScriptableObject asset. If you need custom logic here, you can
-        // create and apply GameplayEffectSpecs manually.
-
-        // End the ability immediately since it's instant
         EndAbility();
     }
 
-    /// <summary>
-    /// Required for object pooling. Returns a new instance of this ability.
-    /// The pooling system uses this to create ability instances efficiently.
-    /// </summary>
-    public override GameplayAbility CreatePoolableInstance()
-    {
-        return new HealAbility();
-    }
+    public override GameplayAbility CreatePoolableInstance() => new HealAbility();
 }
 ```
 
-**4.2 Create the ScriptableObject Factory**
-
-In `_Project/Scripts/Abilities/`, create `HealAbilitySO.cs`:
+### Step 4 — Create the Ability (ScriptableObject)
 
 ```csharp
-// _Project/Scripts/Abilities/HealAbilitySO.cs
 using UnityEngine;
 using CycloneGames.GameplayAbilities.Runtime;
 
-/// <summary>
-/// ScriptableObject factory for creating Heal ability instances.
-/// This bridges the gap between editor data (configured in Inspector) and runtime logic.
-/// </summary>
-[CreateAssetMenu(fileName = "GA_Heal", menuName = "CycloneGames/Abilities/Heal")]
+[CreateAssetMenu(fileName = "GA_Heal", menuName = "GAS/Abilities/Heal")]
 public class HealAbilitySO : GameplayAbilitySO
 {
-    /// <summary>
-    /// Factory method that creates a runtime ability instance from this ScriptableObject.
-    /// This is called when the ability is granted to a character.
-    /// </summary>
     public override GameplayAbility CreateAbility()
     {
-        // Create a new instance of the runtime ability class
-        var abilityInstance = new HealAbility();
-
-        // Initialize it with all the data configured in the Inspector
-        // This includes: name, tags, cost, cooldown, etc.
-        abilityInstance.Initialize(
-            AbilityName,                    // Name of the ability
-            InstancingPolicy,               // How the ability is instantiated
-            NetExecutionPolicy,             // Network execution policy
-            CostEffect?.GetGameplayEffect(), // Effect that defines the cost (e.g., mana)
-            CooldownEffect?.GetGameplayEffect(), // Effect that defines the cooldown
-            AbilityTags,                    // Tags that identify this ability
-            ActivationBlockedTags,          // Tags that prevent activation
-            ActivationRequiredTags,         // Tags required for activation
-            CancelAbilitiesWithTag,         // Abilities to cancel when this activates
-            BlockAbilitiesWithTag           // Abilities to block when this is active
-        );
-
-        return abilityInstance;
+        var ability = new HealAbility();
+        InitializeAbility(ability); // Copies all Inspector data to the runtime instance
+        return ability;
     }
 }
 ```
 
-**Key Points:**
+### Step 5 — Create GameplayEffect Assets
 
-- The runtime class (`HealAbility`) contains the logic
-- The SO class (`HealAbilitySO`) is the data asset
-- Always call `CommitAbility()` in `ActivateAbility()` - this applies cost and cooldown
-- Use `CreatePoolableInstance()` for object pooling support
-- The `Initialize()` method connects editor data to runtime logic
+In the Unity Editor, create three `GameplayEffectSO` assets:
 
-### Step 5: Create the Gameplay Effects
+| Asset Name         | Duration Policy  | Modifiers  | Granted Tags          |
+| ------------------ | ---------------- | ---------- | --------------------- |
+| `GE_Heal`          | Instant          | Health +25 | —                     |
+| `GE_Heal_Cost`     | Instant          | Mana −10   | —                     |
+| `GE_Heal_Cooldown` | HasDuration (5s) | —          | `Cooldown.Skill.Heal` |
 
-Gameplay Effects define what happens when abilities are used. We need:
+### Step 6 — Configure the Ability Asset
 
-1. **Heal Effect** - Restores health
-2. **Cost Effect** - Consumes mana (optional)
-3. **Cooldown Effect** - Prevents spam (optional)
+Create a `GA_Heal` asset and configure in Inspector:
 
-**5.1 Create the Heal Effect**
+- **Ability Tags**: `Ability.Action.Heal`
+- **Cost Effect**: `GE_Heal_Cost`
+- **Cooldown Effect**: `GE_Heal_Cooldown`
+- **Commit Gameplay Effects**: `GE_Heal`
 
-1. In Unity, navigate to `_Project/Data/Effects/`
-2. Right-click → `Create → CycloneGames → GameplayAbilities → GameplayEffect`
-3. Name it `GE_Heal`
-4. Configure it in the Inspector:
-   - **Effect Name:** `Heal Effect`
-   - **Duration Policy:** `Instant` (heals immediately, no duration)
-   - **Modifiers:**
-     - Click `+` to add a modifier
-     - **Attribute:** `PlayerAttributeSet.Health` (or type the path manually)
-     - **Operation:** `Add` (adds to current health)
-     - **Magnitude:** `25` (heals 25 HP)
+### Step 7 — Wire Up in Scene
 
-**5.2 Create the Cost Effect (Optional)**
+1. Create a GameObject with `AbilitySystemComponentHolder` + your `PlayerCharacter` component
+2. Drag `GA_Heal` into the `healAbilitySO` field
+3. Press Play, press **H** — the character heals, spends mana, and enters cooldown
 
-1. Create another GameplayEffect named `GE_Heal_Cost`
-2. Configure it:
-   - **Duration Policy:** `Instant`
-   - **Modifiers:**
-     - **Attribute:** `PlayerAttributeSet.Mana`
-     - **Operation:** `Add`
-     - **Magnitude:** `-10` (negative = consumes 10 mana)
+---
 
-**5.3 Create the Cooldown Effect (Optional)**
+# III. Core Systems
 
-1. Create another GameplayEffect named `GE_Heal_Cooldown`
-2. Configure it:
-   - **Duration Policy:** `HasDuration`
-   - **Duration:** `5.0` (5 second cooldown)
-   - **Granted Tags:**
-     - Click `+` and add `Cooldown.Skill.Heal`
-   - **Modifiers:** None (cooldowns don't modify attributes, they just grant tags)
+## 5. GameplayTags
 
-**Key Points:**
+GameplayTags are the **universal language** of GAS. Every interaction — activation rules, immunities, cooldowns, targeting filters — is expressed through tags rather than direct code references.
 
-- **Instant** effects apply once and are done
-- **HasDuration** effects last for a set time
-- **Infinite** effects last until manually removed
-- Use **Granted Tags** to mark effects (like cooldowns)
-- Negative magnitudes reduce values (for costs/damage)
+### Tag Conventions
 
-### Step 6: Create the Ability Asset
-
-Now we'll create the ScriptableObject asset that ties everything together.
-
-**6.1 Create the Ability Asset**
-
-1. In Unity, navigate to `_Project/Data/Abilities/`
-2. Right-click → `Create → CycloneGames → Abilities → Heal`
-3. Name it `GA_Heal`
-4. Configure it in the Inspector:
-
-   **Basic Settings:**
-
-   - **Ability Name:** `Simple Heal`
-   - **Instancing Policy:** `InstancedPerActor` (one instance per character, reused)
-   - **Net Execution Policy:** `LocalPredicted` (for single-player, `LocalOnly` is fine)
-
-   **Tags:**
-
-   - **Ability Tags:**
-     - Click `+` and add `Ability.Action.Heal`
-   - **Activation Blocked Tags:** (leave empty for now)
-   - **Activation Required Tags:** (leave empty for now)
-
-   **Effects:**
-
-   - **Cost Effect:** Drag `GE_Heal_Cost` here (or leave null if no cost)
-   - **Cooldown Effect:** Drag `GE_Heal_Cooldown` here (or leave null if no cooldown)
-   - **Commit Gameplay Effects:**
-     - Click `+` and drag `GE_Heal` here
-     - This effect is applied when `CommitAbility()` is called
-
-**Key Points:**
-
-- **Instancing Policy:** `InstancedPerActor` is most common
-- **Ability Tags** identify the ability (used to find it)
-- **Cost Effect** is checked before activation
-- **Cooldown Effect** prevents rapid reuse
-- **Commit Gameplay Effects** are applied when the ability commits
-
-### Step 7: Set Up the Character in Unity
-
-**7.1 Create the Player GameObject**
-
-1. In your scene, create an empty GameObject named `Player`
-2. Add the `Ability System Component Holder` component
-3. Add the `Player Character` component (you created this earlier)
-4. In the `Player Character` component:
-   - Drag `GA_Heal` from your project into the `Heal Ability SO` field
-   - Set initial attribute values if desired
-
-**7.2 Create a Prefab**
-
-1. Drag the `Player` GameObject from Hierarchy to `_Project/Prefabs/`
-2. This creates a prefab you can reuse
-
-### Step 8: Test Your Ability
-
-**8.1 Run the Scene**
-
-1. Press Play
-2. Press `H` to activate the heal ability
-3. Check the Console for logs
-
-**8.2 Debug Tips**
-
-If the ability doesn't work:
-
-1. **Check Console Logs:** Look for error messages
-2. **Verify Ability is Granted:**
-   ```csharp
-   // Add this to PlayerCharacter.Update() temporarily
-   var abilities = ascHolder.AbilitySystemComponent.GetActivatableAbilities();
-   Debug.Log($"Granted abilities: {abilities.Count}");
-   ```
-3. **Check Tags:** Make sure tags are registered
-4. **Check Cost:** If mana cost is too high, ability won't activate
-5. **Check Cooldown:** If on cooldown, ability won't activate
-
-**8.3 View Attributes (Optional)**
-
-To see attributes in the Inspector, you can add a debug component:
-
-```csharp
-// _Project/Scripts/Debug/AttributeDebugger.cs
-using CycloneGames.GameplayAbilities.Runtime;
-using UnityEngine;
-
-public class AttributeDebugger : MonoBehaviour
-{
-    [SerializeField] private AbilitySystemComponentHolder holder;
-
-    void OnGUI()
-    {
-        if (holder == null) return;
-
-        var asc = holder.AbilitySystemComponent;
-        if (asc == null) return;
-
-        // Get attributes (adjust names to match your AttributeSet)
-        var healthAttr = asc.GetAttribute("Player.Attribute.Health");
-        var manaAttr = asc.GetAttribute("Player.Attribute.Mana");
-
-        if (healthAttr != null)
-        {
-            GUI.Label(new Rect(10, 10, 200, 20), $"Health: {healthAttr.CurrentValue}");
-        }
-        if (manaAttr != null)
-        {
-            GUI.Label(new Rect(10, 30, 200, 20), $"Mana: {manaAttr.CurrentValue}");
-        }
-    }
-}
+```
+Ability.Skill.Fireball          ← identifies an ability
+Ability.Passive.Regeneration    ← passive ability
+Cooldown.Skill.Fireball         ← applied during cooldown
+Status.Debuff.Poison            ← status effect
+Status.Buff.Shield              ← buff
+State.Casting                   ← transient state
+State.Dead                      ← permanent state
+Damage.Type.Fire                ← damage classification
+Faction.Player                  ← faction membership
+GameplayCue.Impact.Fireball     ← VFX/SFX trigger
+Event.Character.LeveledUp       ← gameplay event
 ```
 
-## Core Concepts
-
-### Gameplay Tags
-
-Gameplay Tags are the universal language of GAS. They identify everything without hard-coded references.
-
-**Common Tag Patterns:**
-
-- `Ability.Skill.Fireball` - Identifies an ability
-- `Cooldown.Skill.Fireball` - Marks a cooldown state
-- `Status.Debuff.Poison` - Identifies a status effect
-- `Damage.Type.Fire` - Identifies damage type
-- `Faction.Player` - Identifies faction/team
-
-**Using Tags:**
+### Using Tags
 
 ```csharp
 // Check if character has a tag
@@ -803,170 +524,586 @@ if (asc.CombinedTags.HasTag("Status.Debuff.Poison"))
     // Character is poisoned
 }
 
-// Create a tag container
+// Remove all poison effects by their granted tag
 var poisonTag = GameplayTagContainer.FromTag("Status.Debuff.Poison");
-
-// Remove all effects with a tag
 targetASC.RemoveActiveEffectsWithGrantedTags(poisonTag);
 ```
 
-### Advanced Tag Features
+### Tag Containers on Different Objects
 
-Beyond simple identification, tags control powerful gameplay logic:
+| Container                         | Where           | Purpose                                                               |
+| --------------------------------- | --------------- | --------------------------------------------------------------------- |
+| **AbilityTags**                   | GameplayAbility | Identifies the ability (`Ability.Skill.Fireball`)                     |
+| **AssetTags**                     | GameplayEffect  | Metadata describing the effect (`Damage.Type.Fire`)                   |
+| **GrantedTags**                   | GameplayEffect  | Tags applied to target while effect is active (`Status.Burning`)      |
+| **ActivationBlockedTags**         | GameplayAbility | If owner has ANY of these → ability cannot activate                   |
+| **ActivationRequiredTags**        | GameplayAbility | Owner must have ALL of these → otherwise blocked                      |
+| **ActivationOwnedTags**           | GameplayAbility | Tags granted to owner while ability is active                         |
+| **CancelAbilitiesWithTag**        | GameplayAbility | Active abilities with these tags are cancelled                        |
+| **BlockAbilitiesWithTag**         | GameplayAbility | Abilities with these tags cannot activate                             |
+| **SourceRequiredTags**            | GameplayAbility | Source (caster's ASC) must have all these tags                        |
+| **SourceBlockedTags**             | GameplayAbility | Source must NOT have any of these tags                                |
+| **TargetRequiredTags**            | GameplayAbility | Target's ASC must have all these tags                                 |
+| **TargetBlockedTags**             | GameplayAbility | Target must NOT have any of these tags                                |
+| **ApplicationTagRequirements**    | GameplayEffect  | Target must satisfy tag requirements for effect to apply              |
+| **OngoingTagRequirements**        | GameplayEffect  | Effect is inhibited if requirements stop being met                    |
+| **RemoveGameplayEffectsWithTags** | GameplayEffect  | On application, remove effects whose GrantedTags match                |
+| **ImmunityTags**                  | ASC             | Incoming effects with matching Asset/GrantedTags are blocked entirely |
+| **GameplayCues**                  | GameplayEffect  | Tags that trigger VFX/SFX through GameplayCueManager                  |
 
-#### ActivationOwnedTags (On Ability)
+### Tag Events
 
-Tags that are **automatically granted** to the ability owner while the ability is active.
-
-- **Use Case**: When casting "Meteor", grant `State.Casting`. This can be used to play animations or block other abilities.
-- **Duration**: Persists only as long as the ability is active.
-
-#### ImmunityTags (On AbilitySystemComponent)
-
-Tags that grant **total immunity** to specific GameplayEffects.
-
-- **How it works**: If the ASC has `ImmunityTags` (e.g., `State.DebuffImmune`), any incoming GameplayEffect with a matching **AssetTag** or **GrantedTag** (`State.Debuff.Poison`) will be **blocked** completely.
-- **Use Case**: A "Divine Shield" ability grants an immunity tag to preventing all negative status effects.
-
-### Gameplay Effects
-
-Gameplay Effects are the building blocks of abilities. They modify attributes, grant tags, and create status effects.
-
-**Duration Policies:**
-
-- **Instant:** Applies once and is done (damage, healing, costs)
-- **HasDuration:** Lasts for a set time (buffs, debuffs, cooldowns)
-- **Infinite:** Lasts until manually removed (equipment stats, auras)
-
-**Modifiers:**
-Modifiers change attribute values:
-
-- **Override:** Sets value to exact amount
-- **Add:** Adds to current value
-- **Multiply:** Multiplies current value
-- **Divide:** Divides current value
-
-**Example - Damage Over Time:**
+You can react to tag changes on any ASC:
 
 ```csharp
-// Create a poison DoT effect
-var poisonEffect = new GameplayEffect(
-    "Poison DoT",
-    EDurationPolicy.HasDuration, // Lasts 10 seconds
-    10f,                         // Duration: 10 seconds
-    1f,                          // Period: damage every 1 second
-    new List<ModifierInfo>
-    {
-        new ModifierInfo(healthAttr, EAttributeModifierOperation.Add, -5f) // -5 HP per tick
-    }
-);
+asc.RegisterTagEventCallback("Status.Debuff.Poison", (tag, newCount) =>
+{
+    if (newCount > 0) ShowPoisonIcon();
+    else              HidePoisonIcon();
+});
 ```
 
-### Ability Lifecycle
+---
 
-1. **Grant:** Ability is given to a character (`GrantAbility()`)
-2. **Activate:** Player/AI tries to use it (`TryActivateAbility()`)
-3. **CanActivate Check:** System checks cost, cooldown, tags
-4. **Commit:** Cost and cooldown are applied (`CommitAbility()`)
-5. **Execute:** Ability logic runs (`ActivateAbility()`)
-6. **End:** Ability finishes (`EndAbility()`)
+## 6. Attributes & AttributeSets
 
-### Attribute Sets
+### GameplayAttribute
 
-Attribute Sets define character stats. They:
+A `GameplayAttribute` is a named float value with two layers:
 
-- Define attributes as `GameplayAttribute` fields
-- Validate changes in `PreAttributeChange()`
-- React to changes in `PostAttributeChange()`
-- Can have derived attributes (calculated from base attributes)
-
-**Example - Derived Attribute:**
+- **BaseValue** — permanent, set by Instant effects or direct assignment
+- **CurrentValue** — BaseValue plus all active modifiers from Duration/Infinite effects
 
 ```csharp
-public override float GetCurrentValue(GameplayAttribute attribute)
+// Listen to value changes
+attribute.OnCurrentValueChanged += (oldVal, newVal) => UpdateHealthBar(newVal);
+attribute.OnBaseValueChanged    += (oldVal, newVal) => { /* ... */ };
+```
+
+### AttributeSet
+
+Group related attributes and add validation logic:
+
+```csharp
+public class CharacterAttributeSet : AttributeSet
 {
-    if (attribute.Name == "Player.Attribute.HealthPercent")
+    public readonly GameplayAttribute Health      = new("Character.Health");
+    public readonly GameplayAttribute MaxHealth   = new("Character.MaxHealth");
+    public readonly GameplayAttribute AttackPower = new("Character.AttackPower");
+    public readonly GameplayAttribute Defense     = new("Character.Defense");
+
+    // Clamp before change
+    public override void PreAttributeChange(GameplayAttribute attribute, ref float newValue)
     {
-        float health = GetCurrentValue(Health);
-        float maxHealth = GetCurrentValue(MaxHealth);
-        return maxHealth > 0 ? health / maxHealth : 0f;
+        if (attribute.Name == Health.Name)
+            newValue = Mathf.Clamp(newValue, 0, GetCurrentValue(MaxHealth));
     }
-    return base.GetCurrentValue(attribute);
+
+    // React after change
+    public override void PostAttributeChange(GameplayAttribute attr, float oldVal, float newVal) { }
+
+    // Intercept instant effects (e.g., apply armor reduction to damage)
+    public override void PreProcessInstantEffect(GameplayEffectSpec spec) { }
+    public override void PostGameplayEffectExecute(GameplayEffectModCallbackData data) { }
+
+    // Derived attribute example
+    public override float GetCurrentValue(GameplayAttribute attribute)
+    {
+        if (attribute.Name == "Character.HealthPercent")
+        {
+            float max = GetCurrentValue(MaxHealth);
+            return max > 0 ? GetCurrentValue(Health) / max : 0f;
+        }
+        return base.GetCurrentValue(attribute);
+    }
 }
 ```
 
-## Advanced Features
+### Accessing Attributes
 
-### AbilityTasks
+```csharp
+var healthAttr = asc.GetAttribute("Character.Health");
+float current  = healthAttr.CurrentValue;
+float baseVal  = healthAttr.BaseValue;
+```
 
-AbilityTasks handle asynchronous operations in abilities. They're essential for complex abilities.
+---
 
-**Built-in Tasks:**
+## 7. GameplayEffects
 
-- `AbilityTask_WaitDelay` - Wait for a duration
-- `AbilityTask_WaitTargetData` - Wait for targeting input
+GameplayEffects are the **building blocks** of GAS. They modify attributes, grant tags, trigger cues, and manage their own lifecycle.
 
-**Example - Charged Attack:**
+### Duration Policies
+
+| Policy          | Behavior                                     | Use Cases                        |
+| --------------- | -------------------------------------------- | -------------------------------- |
+| **Instant**     | Applies modifiers once, immediately consumed | Damage, healing, mana cost       |
+| **HasDuration** | Active for a fixed time, then auto-removed   | Buffs, debuffs, cooldowns, DoTs  |
+| **Infinite**    | Active until manually removed                | Equipment stats, auras, passives |
+
+### Modifiers
+
+Each modifier targets one attribute with an operation:
+
+| Operation    | Effect                      |
+| ------------ | --------------------------- |
+| **Add**      | `CurrentValue += Magnitude` |
+| **Multiply** | `CurrentValue *= Magnitude` |
+| **Division** | `CurrentValue /= Magnitude` |
+| **Override** | `CurrentValue = Magnitude`  |
+
+> **Duration/Infinite modifiers** are aggregated — they modify `CurrentValue` while `BaseValue` stays unchanged. When the effect is removed, the modifier is automatically reversed.
+>
+> **Instant modifiers** permanently change `BaseValue`.
+
+### Creating Effects in Code
+
+```csharp
+// Poison DoT: -5 HP every 1s for 10s
+var poison = new GameplayEffect(
+    name: "Poison DoT",
+    durationPolicy: EDurationPolicy.HasDuration,
+    duration: 10f,
+    period: 1f,
+    modifiers: new() { new ModifierInfo(healthAttr, EAttributeModifierOperation.Add, -5f) },
+    grantedTags: new GameplayTagContainer { "Status.Debuff.Poison" }
+);
+```
+
+### Stacking
+
+Configure how multiple applications of the same effect interact:
+
+| Property             | Options                                                                        | Description                       |
+| -------------------- | ------------------------------------------------------------------------------ | --------------------------------- |
+| **StackingType**     | `None` / `AggregateBySource` / `AggregateByTarget`                             | Grouping axis                     |
+| **StackLimit**       | int                                                                            | Maximum stack count               |
+| **DurationPolicy**   | `RefreshOnSuccessfulApplication` / `NeverRefresh`                              | Whether new stacks reset duration |
+| **ExpirationPolicy** | `ClearEntireStack` / `RemoveSingleStackAndRefreshDuration` / `RefreshDuration` | What happens when a stack expires |
+
+### Overflow Effects
+
+When an effect would be applied but the target has already reached `StackLimit`:
+
+- **OverflowEffects** — a list of secondary GameplayEffects to apply instead
+- **DenyOverflowApplication** — if `true`, the original effect is not applied at all (only overflow effects fire)
+
+### OngoingTagRequirements & Inhibition
+
+Duration/Infinite effects can be temporarily **inhibited** (suppressed) rather than removed:
+
+- Define `OngoingTagRequirements` on the effect
+- If the target's tags stop meeting the requirements, the effect's modifiers are suspended
+- When requirements are met again, modifiers resume
+- The `ActiveGameplayEffect.IsInhibited` property and `OnInhibitionChanged` event expose this state
+
+### ExecutePeriodicEffectOnApplication
+
+Set to `true` to trigger the first periodic tick immediately when the effect is applied, rather than waiting one full period.
+
+### SetByCaller Magnitudes
+
+Pass dynamic values into an effect at runtime:
+
+```csharp
+var spec = GameplayEffectSpec.Create(damageEffect, sourceASC);
+spec.SetByCallerMagnitude("Damage.Base", 50f);
+asc.ApplyGameplayEffectSpecToSelf(spec);
+```
+
+### DynamicGrantedTags & DynamicAssetTags
+
+Add extra tags to a specific `GameplayEffectSpec` instance at runtime, beyond what the base definition provides:
+
+```csharp
+spec.DynamicGrantedTags.AddTag("Status.Buff.Empowered");
+spec.DynamicAssetTags.AddTag("Source.Player");
+```
+
+### Custom Application Requirements
+
+Implement `ICustomApplicationRequirement` to add arbitrary logic gates:
+
+```csharp
+public class RequireMinHealth : ICustomApplicationRequirement
+{
+    public bool CanApplyGameplayEffect(GameplayEffectSpec spec, AbilitySystemComponent target)
+    {
+        var health = target.GetAttribute("Character.Health");
+        return health != null && health.CurrentValue > 10f;
+    }
+}
+```
+
+### Attribute Snapshotting
+
+Modifiers can capture attribute values at different times:
+
+- **Snapshot** — the source's attribute value is captured at effect creation time
+- **NotSnapshot** — the source's attribute value is read live when recalculating
+
+Configure via `EGameplayEffectAttributeCaptureSnapshot` on `ModifierInfo`.
+
+---
+
+## 8. GameplayAbilities
+
+### Lifecycle
+
+```
+GrantAbility()          → Ability is added to the ASC
+  └─ OnGiveAbility()    → (optional) called once when granted
+
+TryActivateAbility()    → Runs all checks
+  ├─ Tag requirements   → ActivationRequired/Blocked/Source/Target Tags
+  ├─ CheckCost()        → Sufficient resources?
+  └─ CheckCooldown()    → No cooldown tag present?
+
+ActivateAbility()       → Your logic runs here
+  ├─ AbilityTasks       → Async operations (delays, targeting, etc.)
+  └─ CommitAbility()    → Applies Cost + Cooldown effects
+
+EndAbility()            → Cleanup, return to pool
+  └─ ASC fires OnAbilityEndedEvent
+```
+
+### Creating an Ability
+
+Every ability needs two classes:
+
+**1. Runtime Logic** — extends `GameplayAbility`:
+
+```csharp
+public class GA_Fireball : GameplayAbility
+{
+    private GameplayEffect damageEffect;
+    private float damageMultiplier;
+
+    public void SetupData(GameplayEffect damage, float multiplier)
+    {
+        damageEffect = damage;
+        damageMultiplier = multiplier;
+    }
+
+    public override void ActivateAbility(
+        GameplayAbilityActorInfo actorInfo,
+        GameplayAbilitySpec spec,
+        GameplayAbilityActivationInfo activationInfo)
+    {
+        CommitAbility(actorInfo, spec);
+
+        // Create spec & pass dynamic data
+        var dmgSpec = MakeOutgoingGameplayEffectSpec(damageEffect, spec.Level);
+        dmgSpec.SetByCallerMagnitude("Damage.Multiplier", damageMultiplier);
+
+        // Apply to target
+        var targetASC = FindTarget();
+        ApplyGameplayEffectToTarget(dmgSpec, targetASC);
+
+        EndAbility();
+    }
+
+    public override GameplayAbility CreatePoolableInstance() => new GA_Fireball();
+}
+```
+
+**2. ScriptableObject** — extends `GameplayAbilitySO`:
+
+```csharp
+[CreateAssetMenu(menuName = "GAS/Abilities/Fireball")]
+public class GA_Fireball_SO : GameplayAbilitySO
+{
+    [SerializeField] private GameplayEffectSO damageEffectSO;
+    [SerializeField] private float damageMultiplier = 1.5f;
+
+    public override GameplayAbility CreateAbility()
+    {
+        var ability = new GA_Fireball();
+        InitializeAbility(ability); // Copies tags, cost, cooldown from Inspector
+        ability.SetupData(damageEffectSO.GetGameplayEffect(), damageMultiplier);
+        return ability;
+    }
+}
+```
+
+### Ability Triggers
+
+Abilities can auto-activate in response to events or tag changes:
+
+```csharp
+// In GameplayAbilitySO Inspector, add an AbilityTriggerData:
+// TriggerTag: "Event.Character.Hit"
+// TriggerSource: GameplayEvent
+
+// Or configure programmatically:
+ability.AbilityTriggers = new List<AbilityTriggerData>
+{
+    new() { TriggerTag = "Event.Character.Hit", TriggerSource = EAbilityTriggerSource.GameplayEvent },
+    new() { TriggerTag = "Status.Debuff.Poison", TriggerSource = EAbilityTriggerSource.OwnedTagAdded },
+};
+```
+
+| TriggerSource     | When It Fires                                                    |
+| ----------------- | ---------------------------------------------------------------- |
+| `GameplayEvent`   | When `ASC.HandleGameplayEvent()` is called with the matching tag |
+| `OwnedTagAdded`   | When the trigger tag is added to the ASC's combined tags         |
+| `OwnedTagRemoved` | When the trigger tag is removed from the ASC                     |
+
+### Source/Target Tags
+
+Beyond standard `ActivationRequired/BlockedTags` (which check the **owner's** tags), abilities support four additional tag containers:
+
+| Container              | Checks Against | Purpose                                                  |
+| ---------------------- | -------------- | -------------------------------------------------------- |
+| **SourceRequiredTags** | Caster's ASC   | Caster must have all of these to activate                |
+| **SourceBlockedTags**  | Caster's ASC   | Caster must NOT have any of these                        |
+| **TargetRequiredTags** | Target's ASC   | Target must have all of these (via `CanApplyToTarget()`) |
+| **TargetBlockedTags**  | Target's ASC   | Target must NOT have any of these                        |
+
+**Use case**: A healing ability might require `SourceRequiredTags = State.InHealingStance` (caster check) and `TargetBlockedTags = State.Dead` (can't heal dead targets).
+
+### InputPressed / InputReleased
+
+Virtual hooks for input-driven abilities (e.g., charged attacks, hold-to-channel):
+
+```csharp
+public override void InputPressed(GameplayAbilitySpec spec)
+{
+    // Called when the bound input action is pressed while ability is active
+    StartCharging();
+}
+
+public override void InputReleased(GameplayAbilitySpec spec)
+{
+    // Called when released
+    ReleaseCharge();
+    EndAbility();
+}
+```
+
+These methods are deliberately **input-agnostic** — they don't reference any specific input system. Your input layer (Unity Input System, CycloneGames.InputSystem's R3 Observables, etc.) calls them.
+
+### Lifecycle Events on ASC
+
+```csharp
+asc.OnAbilityActivated += (ability) => { /* fired on activation */ };
+asc.OnAbilityCommitted += (ability) => { /* fired on commit   */ };
+asc.OnAbilityEndedEvent += (ability) => { /* fired on end      */ };
+```
+
+### Instancing Policies
+
+| Policy                  | Behavior                                        | Use Case                              |
+| ----------------------- | ----------------------------------------------- | ------------------------------------- |
+| `NonInstanced`          | Shared instance, no per-actor state             | Simple instant abilities              |
+| `InstancedPerActor`     | One instance per ASC, reused across activations | Most abilities                        |
+| `InstancedPerExecution` | New instance per activation                     | Abilities with overlapping executions |
+
+---
+
+# IV. Advanced Systems
+
+## 9. AbilityTasks
+
+AbilityTasks enable **asynchronous, multi-step ability logic**. Without them, everything would run synchronously inside `ActivateAbility()`.
+
+### Built-In Tasks
+
+| Task                              | Purpose                                            |
+| --------------------------------- | -------------------------------------------------- |
+| `AbilityTask_WaitDelay`           | Wait for a time duration                           |
+| `AbilityTask_WaitTargetData`      | Wait for targeting to provide target data          |
+| `AbilityTask_WaitGameplayEvent`   | Wait for a gameplay event with a specific tag      |
+| `AbilityTask_WaitGameplayTag`     | Wait for a tag to be added or removed from the ASC |
+| `AbilityTask_WaitGameplayEffect`  | Wait for an effect to be applied or removed        |
+| `AbilityTask_WaitAttributeChange` | Wait for an attribute's value to change            |
+| `AbilityTask_WaitConfirmCancel`   | Wait for external confirm/cancel signals           |
+| `AbilityTask_WaitAbilityActivate` | Wait for another ability to activate               |
+| `AbilityTask_WaitAbilityEnd`      | Wait for another ability to end                    |
+| `AbilityTask_Repeat`              | Repeatedly execute logic at an interval            |
+
+### Usage Patterns
+
+**Callback style:**
+
+```csharp
+public override void ActivateAbility(...)
+{
+    CommitAbility(actorInfo, spec);
+
+    var waitTask = NewAbilityTask<AbilityTask_WaitDelay>();
+    waitTask.WaitTime = 2.0f;
+    waitTask.OnFinished = () =>
+    {
+        ApplyDamage();
+        EndAbility();
+    };
+    waitTask.Activate();
+}
+```
+
+**Async/await style:**
 
 ```csharp
 public override async void ActivateAbility(...)
 {
     CommitAbility(actorInfo, spec);
 
-    // Wait 2 seconds for charge
+    // Step 1: Charge up
     var chargeTask = NewAbilityTask<AbilityTask_WaitDelay>();
     chargeTask.WaitTime = 2.0f;
     await chargeTask.ActivateAsync();
 
-    // Apply damage after charge
-    ApplyDamage();
+    // Step 2: Pick target
+    var targetTask = NewAbilityTask<AbilityTask_WaitTargetData>();
+    // ... configure target actor ...
+    var targetData = await targetTask.ActivateAsync();
+
+    // Step 3: Apply
+    ApplyDamageToTargets(targetData);
     EndAbility();
 }
 ```
 
-See the [AbilityTask Deep Dive](#abilitytask-deep-dive) section for more details.
-
-### Targeting System Overview
-
-The targeting system finds and selects targets for abilities.
-
-**Built-in Target Actors:**
-
-- `GameplayAbilityTargetActor_SphereOverlap` - Finds targets in radius
-- `GameplayAbilityTargetActor_SingleLineTrace` - Raycast targeting
-- `GameplayAbilityTargetActor_ConeTrace` - Cone-shaped targeting
-
-**Example:**
+**Task chaining:**
 
 ```csharp
-var targetActor = new GameplayAbilityTargetActor_SphereOverlap(
-    5f, // 5 unit radius
-    GameplayTagContainer.FromTag("Faction.Enemy") // Only target enemies
-);
-
-var task = AbilityTask_WaitTargetData.WaitTargetData(this, targetActor);
-task.OnValidData = (targetData) =>
+taskA.OnFinished = () =>
 {
-    foreach (var targetASC in targetData.AbilitySystemComponents)
-    {
-        ApplyDamageTo(targetASC);
-    }
-    EndAbility();
+    var taskB = NewAbilityTask<NextTask>();
+    taskB.OnFinished = () => EndAbility();
+    taskB.Activate();
 };
-task.Activate();
+taskA.Activate();
 ```
 
-### Execution Calculations
+**Timeout pattern:**
 
-For complex damage formulas, use Execution Calculations instead of simple modifiers.
+```csharp
+var targetTask = NewAbilityTask<AbilityTask_WaitTargetData>();
+var timeoutTask = NewAbilityTask<AbilityTask_WaitDelay>();
+timeoutTask.WaitTime = 5.0f;
+timeoutTask.OnFinished = () =>
+{
+    targetTask.Cancel();
+    EndAbility();
+};
+timeoutTask.Activate();
+targetTask.Activate();
+```
 
-**When to Use:**
+### Creating Custom Tasks
 
-- Damage = AttackPower _ 1.5 - Defense _ 0.5
-- Healing = BaseHeal + SpellPower \* 0.3
-- Any formula involving multiple attributes
+```csharp
+public class AbilityTask_WaitForInput : AbilityTask, IAbilityTaskTick
+{
+    public Action OnJumpPressed;
 
-**Example:**
+    protected override void OnActivate() { /* subscribe */ }
+
+    public void Tick(float deltaTime)
+    {
+        if (!IsActive) return;
+        if (Input.GetKeyDown(KeyCode.Space))
+        {
+            OnJumpPressed?.Invoke();
+            EndTask();
+        }
+    }
+
+    protected override void OnDestroy()
+    {
+        OnJumpPressed = null;
+    }
+}
+```
+
+### Rules
+
+1. **Always** create tasks via `NewAbilityTask<T>()` (never `new` — pools are bypassed)
+2. Clean up event subscriptions in `OnDestroy()`
+3. Call `EndTask()` when done
+4. Check `IsActive` before executing logic
+5. All active tasks are force-ended when the ability ends
+
+---
+
+## 10. Targeting System
+
+The targeting system decouples "how to find targets" from "what to do with targets".
+
+### ITargetActor Interface
+
+```csharp
+public interface ITargetActor
+{
+    event Action<TargetData> OnTargetDataReady;
+    event Action OnCanceled;
+
+    void Configure(GameplayAbility ability, Action<TargetData> onReady, Action onCancelled);
+    void StartTargeting();
+    void ConfirmTargeting();
+    void CancelTargeting();
+    void Destroy();
+}
+```
+
+### Built-In Target Actors
+
+| Actor                                        | Behavior                                                |
+| -------------------------------------------- | ------------------------------------------------------- |
+| `GameplayAbilityTargetActor_SphereOverlap`   | Finds all targets in a sphere radius with tag filtering |
+| `GameplayAbilityTargetActor_SingleLineTrace` | Single raycast to the first hit                         |
+| `GameplayAbilityTargetActor_ConeTrace`       | Cone/sweep shaped detection                             |
+| `GameplayAbilityTargetActor_GroundSelect`    | Interactive ground placement with visual indicator      |
+
+### Target Data Types
+
+| Type                                        | Description                             |
+| ------------------------------------------- | --------------------------------------- |
+| `GameplayAbilityTargetData_ActorArray`      | List of target actors                   |
+| `GameplayAbilityTargetData_SingleTargetHit` | Single target with `RaycastHit` details |
+| `GameplayAbilityTargetData_MultiTarget`     | Multiple targets from bulk physics      |
+
+### Example: Sphere Overlap in an Ability
+
+```csharp
+public override void ActivateAbility(...)
+{
+    CommitAbility(actorInfo, spec);
+
+    var targetActor = new GameplayAbilityTargetActor_SphereOverlap(
+        radius: 5f,
+        requiredTags: GameplayTagContainer.FromTag("Faction.Player")
+    );
+
+    var task = AbilityTask_WaitTargetData.WaitTargetData(this, targetActor);
+    task.OnValidData = (targetData) =>
+    {
+        // Process each target
+        // Apply effects, remove debuffs, etc.
+        EndAbility();
+    };
+    task.OnCancelled = () => EndAbility();
+    task.Activate();
+}
+```
+
+---
+
+## 11. Execution Calculations
+
+For formulas that involve multiple attributes from both source and target, use `GameplayEffectExecutionCalculation`.
+
+### When to Use
+
+| Scenario                              | Use                   |
+| ------------------------------------- | --------------------- |
+| Heal 50 HP                            | Simple Modifier       |
+| Damage = ATK × 1.5 − DEF × 0.5        | Execution Calculation |
+| Healing = BaseHeal + SpellPower × 0.3 | Execution Calculation |
+
+### Example
 
 ```csharp
 public class ExecCalc_Damage : GameplayEffectExecutionCalculation
@@ -976,1093 +1113,411 @@ public class ExecCalc_Damage : GameplayEffectExecutionCalculation
         var source = context.Spec.Source;
         var target = context.Target;
 
-        float attackPower = source.GetAttribute("AttackPower")?.CurrentValue ?? 0f;
-        float defense = target.GetAttribute("Defense")?.CurrentValue ?? 0f;
+        float atk = source.GetAttribute("Character.AttackPower")?.CurrentValue ?? 0;
+        float def = target.GetAttribute("Character.Defense")?.CurrentValue ?? 0;
+        float dmg = Mathf.Max(0, atk * 1.5f - def * 0.5f);
 
-        float damage = attackPower * 1.5f - defense * 0.5f;
-
-        context.AddOutputModifier(new ModifierInfo(
-            target.GetAttribute("Health"),
-            EAttributeModifierOperation.Add,
-            -damage // Negative for damage
-        ));
+        var healthAttr = target.GetAttribute("Character.Health");
+        if (healthAttr != null)
+        {
+            context.AddOutputModifier(new ModifierInfo(
+                healthAttr, EAttributeModifierOperation.Add, -dmg
+            ));
+        }
     }
 }
 ```
 
-### GameplayCue System
+Create a `GameplayEffectExecutionCalculationSO` wrapper and assign it to your `GameplayEffectSO`'s Execution field.
 
-GameplayCues handle visual and audio effects, completely separated from gameplay logic.
+---
 
-**Cue Events:**
+## 12. GameplayCues
 
-- **Executed:** Instant effects (impact VFX, hit sounds)
-- **OnActive:** When effect starts (buff glow, status icon)
-- **WhileActive:** Continuous while active (burning particles)
-- **Removed:** When effect ends (fade-out VFX)
+GameplayCues separate **presentation** (VFX, SFX, camera shakes) from **gameplay logic** completely.
 
-**Example:**
+### Why?
 
 ```csharp
-[CreateAssetMenu(menuName = "CycloneGames/GameplayCues/Fireball Impact")]
-public class GC_Fireball_Impact : GameplayCueSO
-{
-    public string ImpactVFXPrefab;
-    public string ImpactSound;
-
-    public override async UniTask OnExecutedAsync(GameplayCueParameters parameters, IGameObjectPoolManager poolManager)
-    {
-        // Spawn VFX
-        var vfx = await poolManager.GetAsync(ImpactVFXPrefab, parameters.TargetObject.transform.position, Quaternion.identity);
-
-        // Play sound
-        var audioClip = await GameplayCueManager.Instance.ResourceLocator.LoadAssetAsync<AudioClip>(ImpactSound);
-        AudioSource.PlayClipAtPoint(audioClip, parameters.TargetObject.transform.position);
-    }
+// ❌ Coupled: VFX mixed with logic
+void DealDamage(float dmg) {
+    target.Health -= dmg;
+    Instantiate(explosionVFX, target.Position);
 }
+
+// ✅ Decoupled: VFX triggered by tag
+var spec = GameplayEffectSpec.Create(damageEffect, sourceASC);
+// damageEffect has GameplayCues tag "GameplayCue.Impact.Fire"
+targetASC.ApplyGameplayEffectSpecToSelf(spec);
+// GameplayCueManager handles VFX automatically
 ```
-
-See the [GameplayCue System](#gameplaycue-system) section for more details.
-
-## Sample Walkthrough
-
-The `Samples` folder contains a practical scene demonstrating several key features of the Gameplay Ability System, including complex abilities and a leveling system. This provides a hands-on look at how the data-driven architecture works in practice.
-
-### Sample Scene Overview
-
-The `SampleScene.unity` features a **Player** and an **Enemy** character, each equipped with an `AbilitySystemComponentHolder` (the MonoBehaviour wrapper) which manages their underlying `AbilitySystemComponent` and `CharacterAttributeSet` instances. The `SampleCombatManager` script handles player input and updates the UI to reflect the real-time status of each character, including their attributes, active gameplay effects, and gameplay tags.
-
-- **Player Controls:**
-  - **[1] Key:** Cast **Fireball** on the Enemy.
-  - **[2] Key:** Cast **Purify** to remove poison debuffs from self.
-  - **[Space] Key:** Grant self 50 XP for testing the leveling system.
-- **Enemy Controls:**
-  - **[E] Key:** Force the Enemy to cast **PoisonBlade** on the Player.
-
-### Featured Abilities
-
-#### 1. Fireball (Direct Damage + Damage over Time)
-
-Fireball is an offensive ability that deals instant damage and applies a lingering burn effect. It demonstrates:
-
-- **Data-Driven Design**: The ability is defined by `GA_Fireball_SO`. This ScriptableObject links to other `GameplayEffectSO` assets for its mana **cost**, **cooldown**, instant **impact damage**, and the **burn DoT**.
-- **Complex Attribute Interaction**: The final damage isn't just a simple number. When the damage `GameplayEffect` is applied, the target's `CharacterAttributeSet` intercepts it in its `PreProcessInstantEffect` method. It then calculates damage mitigation based on the target's `Defense` attribute before applying the final health reduction.
-- **Stat Snapshotting (`SetSetByCallerMagnitude`):** When Fireball is cast, it "snapshots" the player's `BonusDamageMultiplier` attribute at that moment. This value is passed into the `GameplayEffectSpec`, ensuring that the damage calculation uses the stats from the time of casting, not the time of impact.
-
-#### 2. PoisonBlade (Direct Damage + Debuff)
-
-This is the Enemy's primary attack. It's a straightforward example of an ability that applies both instant damage and a persistent poison debuff.
-
-- **Applying Multiple Effects:** The `GA_PoisonBlade` ability applies two separate `GameplayEffect`s in sequence: one for the initial weapon hit and another to apply the `Debuff.Poison` tag and its associated damage-over-time.
-
-#### 3. Purify (Area of Effect Dispel)
-
-Purify is a defensive ability that removes poison effects from the caster. It showcases several advanced concepts:
-
-- **Asynchronous Abilities:** Purify does not execute instantly. It uses an `AbilityTask_WaitTargetData` to perform its logic over time.
-- **Targeting Actors:** It uses a `GameplayAbilityTargetActor_SphereOverlap` to find all valid targets within a radius.
-- **Faction Filtering:** The ability is configured in its `SO` asset to only affect friendly targets (those with the `Faction.Player` tag), demonstrating how to use tags for targeting.
-- **Removing Effects by Tag:** The core logic of the dispel is a single line of code: `RemoveActiveEffectsWithGrantedTags`. It removes any active `GameplayEffect` on the target that grants the `Debuff.Poison` tag.
-
-### Leveling System
-
-The sample includes a fully functional leveling system driven by `GameplayEffect`s.
-
-- **Gaining Experience:** When the Enemy dies, its `BountyEffect` is applied to the Player. This effect, `GE_Bounty_Enemy.asset`, simply grants a set amount of the `Experience` attribute.
-- **Triggering a Level Up:** The `CharacterAttributeSet` listens for changes to the `Experience` attribute. When XP is gained, it calls the `CheckForLevelUp` method on the `Character`.
-- **Applying Level Up Stats:** The `CheckForLevelUp` logic calculates how many levels were gained and dynamically creates a new, temporary `GameplayEffect` in code. This effect contains modifiers to increase `Level`, `MaxHealth`, `MaxMana`, and other stats, demonstrating the system's flexibility to create and apply effects on the fly.
-
-## GameplayCue System
-
-The **GameplayCue System** is the GAS way of handling **cosmetic effects** like VFX, SFX, camera shakes, and screen effects. It completely separates gameplay logic from presentation, allowing artists and designers to work independently on visual feedback without touching ability code.
-
-> **🎨 Key Concept**: GameplayCues are **presentation-only**. They should never affect gameplay state (health, damage, etc.). They exist purely to communicate what's happening to the player through visuals and audio.
-
-### Why GameplayCues?
-
-In traditional systems, you might see code like this inside an ability:
-
-```csharp
-// ❌ BAD: Presentation tightly coupled with logic
-void DealDamage(Target target, float damage)
-{
-    target.Health -= damage;
-    Instantiate(explosionVFX, target.Position);  // VFX creation mixed with damage
-    PlaySound(impactSound);       // Audio mixed with logic
-}
-```
-
-With GAS, this becomes:
-
-```csharp
-// ✅ GOOD: Logic and presentation separated
-void DealDamage(Target target, float damage)
-{
-    var damageEffect = CreateDamageEffect(damage);
-    damageEffect.GameplayCues.Add("GameplayCue.Impact.Explosion"); // Just a tag reference
-    target.ASC.ApplyGameplayEffectSpecToSelf(damageEffect);
-}
-```
-
-The `GameplayCueManager` sees the `"GameplayCue.Impact.Explosion"` tag and handles all VFX/SFX automatically.
-
-### Core Components
-
-- **`GameplayCueManager`**: Singleton that handles cue registration, loading, and execution
-- **`GameplayCueSO`**: ScriptableObject base class for defining cue assets
-- **`GameplayCueParameters`**: Data struct passed to cues containing context (target, source, magnitude, etc.)
-- **`EGameplayCueEvent`**: Enum defining when a cue fires: `Executed`, `OnActive`, `WhileActive`, `Removed`
 
 ### Cue Event Types
 
-| Event           | When It Fires                                           | Use Case                                 |
-| :-------------- | :------------------------------------------------------ | :--------------------------------------- |
-| **Executed**    | Instant effects (like damage) or periodic ticks         | Impact VFX, hit sounds, damage numbers   |
-| **OnActive**    | When a duration/infinite effect is first applied        | Buff activation glow, status effect icon |
-| **WhileActive** | Continuously while a duration/infinite effect is active | Looping fire particles for a burn debuff |
-| **Removed**     | When a duration/infinite effect expires or is removed   | Buff fade-out VFX, debuff cleanse sound  |
+| Event         | When                                     | Example                |
+| ------------- | ---------------------------------------- | ---------------------- |
+| `Executed`    | Instant effect applied, or periodic tick | Impact VFX, hit sound  |
+| `OnActive`    | Duration/Infinite effect first applied   | Buff glow, status icon |
+| `WhileActive` | Continuous while effect is active        | Looping fire particles |
+| `Removed`     | Effect expires or is removed             | Fade-out VFX           |
 
-### Example 1: Instant Impact Cue (Fireball)
-
-The sample includes `GC_Fireball_Impact`, which plays VFX and SFX when the Fireball effect hits:
+### Creating a Cue
 
 ```csharp
-// GC_Fireball_Impact.cs (simplified)
-[CreateAssetMenu(menuName = "CycloneGames/GameplayCues/Fireball Impact")]
+[CreateAssetMenu(menuName = "GAS/Cues/Fireball Impact")]
 public class GC_Fireball_Impact : GameplayCueSO
 {
     public string ImpactVFXPrefab;
-    public float VFXLifetime = 2.0f;
     public string ImpactSound;
 
-    public override async UniTask OnExecutedAsync(GameplayCueParameters parameters, IGameObjectPoolManager poolManager)
+    public override async UniTask OnExecutedAsync(
+        GameplayCueParameters parameters, IGameObjectPoolManager poolManager)
     {
         if (parameters.TargetObject == null) return;
 
-        // Spawn VFX from pool at target location
-        if (!string.IsNullOrEmpty(ImpactVFXPrefab))
-        {
-            var vfx = await poolManager.GetAsync(ImpactVFXPrefab, parameters.TargetObject.transform.position, Quaternion.identity);
-            if (vfx != null)
-            {
-                // Return to pool after lifetime
-                ReturnToPoolAfterDelay(poolManager, vfx, VFXLifetime).Forget();
-            }
-        }
+        var vfx = await poolManager.GetAsync(
+            ImpactVFXPrefab, parameters.TargetObject.transform.position, Quaternion.identity);
 
-        // Play sound at impact point
-        if (!string.IsNullOrEmpty(ImpactSound))
-        {
-            var audioClip = await GameplayCueManager.Instance.ResourceLocator.LoadAssetAsync<AudioClip>(ImpactSound);
-            if (audioClip)
-            {
-                AudioSource.PlayClipAtPoint(audioClip, parameters.TargetObject.transform.position);
-            }
-        }
+        // Return to pool after lifetime
+        ReturnToPoolAfterDelay(poolManager, vfx, 2f).Forget();
     }
 }
 ```
 
-**To use it:**
+### Persistent Cues
 
-1. Create the `GC_Fireball_Impact` asset in the Editor
-2. Configure `ImpactVFXPrefab` and `ImpactSound` paths
-3. In your `GameplayEffectSO` (e.g., `GE_Fireball_Damage`), add the tag `"GameplayCue.Impact.Fireball"` to the `GameplayCues` container
-4. Register the cue: `GameplayCueManager.Instance.RegisterStaticCue("GameplayCue.Impact.Fireball", cueAsset)`
-
-Now, whenever Fireball damage is applied, the VFX and SFX play automatically—**no code changes needed in the ability!**
-
-### Example 2: Persistent Looping Cue (Burn Effect)
-
-For ongoing effects like a fire DoT, you want looping particles that persist for the duration:
+For looping effects (burn particles, shield glow), implement `IPersistentGameplayCue`:
 
 ```csharp
-[CreateAssetMenu(menuName = "CycloneGames/GameplayCues/Burn Loop")]
 public class GC_Burn_Loop : GameplayCueSO, IPersistentGameplayCue
 {
     public string BurnVFXPrefab;
 
-    // Called when the burn effect is first applied
     public async UniTask<GameObject> OnActiveAsync(GameplayCueParameters parameters, IGameObjectPoolManager poolManager)
     {
-        if (parameters.TargetObject == null) return null;
-
-        // Spawn looping VFX attached to the target
-        var vfxInstance = await poolManager.GetAsync(BurnVFXPrefab, parameters.TargetObject.transform.position, Quaternion.identity);
-        if (vfxInstance != null)
-        {
-            vfxInstance.transform.SetParent(parameters.TargetObject.transform);
-        }
-        return vfxInstance; // GameplayCueManager tracks this instance
+        var vfx = await poolManager.GetAsync(BurnVFXPrefab, parameters.TargetObject.transform.position, Quaternion.identity);
+        vfx.transform.SetParent(parameters.TargetObject.transform);
+        return vfx; // Tracked by manager
     }
 
-    // Called when the burn effect is removed
     public async UniTask OnRemovedAsync(GameObject instance, GameplayCueParameters parameters)
     {
-        if (instance != null)
-        {
-            // Optional: Play a "puff of smoke" effect before destroying
-            // Then release back to pool
-            poolManager.Release(instance);
-        }
+        poolManager.Release(instance); // Auto-cleanup
     }
 }
 ```
 
-By implementing `IPersistentGameplayCue`, the system automatically tracks and cleans up the VFX instance when the effect ends.
-
-### Registering Cues
-
-**Static Registration** (at game start):
+### Registering & Debugging
 
 ```csharp
-// In your game's initialization code
-GameplayCueManager.Instance.Initialize(resourceLocator, gameObjectPoolManager);
-
-GameplayCueManager.Instance.RegisterStaticCue("GameplayCue.Impact.Fireball", fireballImpactCueAsset);
-GameplayCueManager.Instance.RegisterStaticCue("GameplayCue.Buff.Burn", burnLoopCueAsset);
+// At game start
+GameplayCueManager.Instance.Initialize(resourceLocator, poolManager);
+GameplayCueManager.Instance.RegisterStaticCue("GameplayCue.Impact.Fireball", cueAsset);
 ```
 
-**Dynamic Runtime Registration** (for code-driven cues):
-
-```csharp
-public class MyCustomCueHandler : IGameplayCueHandler
-{
-    public void HandleCue(GameplayTag cueTag, EGameplayCueEvent eventType, GameplayCueParameters parameters)
-    {
-        if (eventType == EGameplayCueEvent.Executed)
-        {
-            Debug.Log($"Custom cue triggered: {cueTag}");
-            // Your custom VFX/SFX logic here
-        }
-    }
-}
-
-// Register it
-var handler = new MyCustomCueHandler();
-GameplayCueManager.Instance.RegisterRuntimeHandler(GameplayTagManager.RequestTag("GameplayCue.Custom.Test"), handler);
-```
-
-### Best Practices
-
-1.  **Use Descriptive Tag Names**: `"GameplayCue.Impact.Fire"`, `"GameplayCue.Buff.Shield"`, `"GameplayCue.Debuff.Poison"`
-2.  **Pool Your VFX**: Always use object pooling for performance (the system supports this natively)
-3.  **Keep Cues Stateless**: Each cue should work independently without relying on external state
-4.  **Test in Isolation**: Create a test scene where you can trigger cues manually to verify they work
-5.  **Separate Concerns**: Artists can iterate on VFX/SFX without needing to recompile code
-
-### Debugging Cues
-
-If a cue isn't playing:
-
-- Check that the cue tag is added to the `GameplayEffect`'s `GameplayCues` container
-- Verify the cue is registered with `GameplayCueManager`
-- Ensure `GameplayCueManager.Initialize()` was called
-- Check console logs—the manager logs when it can't find a cue
-- Verify the target `GameplayEffectSpec` has a valid target object in `parameters.TargetObject`
-
-## Networking Architecture
-
-CycloneGames.GameplayAbilities is designed with a **Network-Architected** approach, meaning the core classes (`GameplayAbility`, `AbilitySystemComponent`) are structured to support replication and prediction, but it is **transport-agnostic**.
-
-> [!IMPORTANT] > **Integration Required**: This package does **not** include a built-in networking layer (like Mirror, Netcode for GameObjects, or Photon). You must implement the `ServerTryActivateAbility` and `ClientActivateAbilitySucceed/Failed` bridges yourself using your chosen networking solution.
-
-#### Execution Policies (`ENetExecutionPolicy`)
-
-- **LocalOnly**: Runs only on the client. Good for UI or cosmetic abilities.
-- **ServerOnly**: Client requests activation; Server runs it. Secure, but has latency.
-- **LocalPredicted**: Client runs immediately (predicts success) while sending a request to the Server.
-  - **Success**: Server confirms, client keeps the result.
-  - **Failure**: Server rejects, client **rolls back** (undoes) the ability's effects.
-
-#### Prediction Keys
-
-The system uses `PredictionKey` to track predicted actions. When a client activates a predicted ability, it generates a key. If the server validates it, that key is "approved." If not, all effects tied to that key are removed.
-
-## AbilityTask Deep Dive
-
-**AbilityTasks** are the key to creating complex, asynchronous abilities. They handle operations that take time or wait for input, such as delays, waiting for player targeting, waiting for animation events, or complex multi-stage ability logic.
-
-> **🔑 Key Concept**: Without AbilityTasks, all ability logic would need to run synchronously in `ActivateAbility()`. Tasks allow you to break complex abilities into manageable, asynchronous steps.
-
-### Why Use AbilityTasks?
-
-Consider a "Charge Attack" ability:
-
-1. Play charging animation (wait 2 seconds)
-2. Wait for player to confirm target location
-3. Dash to location
-4. Deal AoE damage
-5. End ability
-
-Doing this without tasks would require messy coroutines or state machines. With `AbilityTask`, it's clean:
-
-```csharp
-public override async void ActivateAbility(...)
-{
-    CommitAbility(actorInfo, spec);
-
-    // Step 1: Wait for charge time
-    var waitTask = NewAbilityTask<AbilityTask_WaitDelay>();
-    waitTask.WaitTime = 2.0f;
-    await waitTask.ActivateAsync();
-
-    // Step 2: Wait for player to pick target
-    var targetTask = NewAbilityTask<AbilityTask_WaitTargetData>();
-    targetTask.TargetActor = new GroundTargetActor();
-    var targetData = await targetTask.ActivateAsync();
-
-    // Step 3-5: Execute logic with the target data
-    DashAndDamage(targetData);
-
-    EndAbility();
-}
-```
-
-### Built-In Tasks
-
-#### 1. AbilityTask_WaitDelay
-
-Waits for a specified duration before continuing.
-
-```csharp
-public class GA_DelayedHeal : GameplayAbility
-{
-    public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
-    {
-        var waitTask = NewAbilityTask<AbilityTask_WaitDelay>();
-        waitTask.WaitTime = 1.5f;
-        waitTask.OnFinished = () =>
-        {
-            // Apply heal after delay
-            var healSpec = GameplayEffectSpec.Create(healEffect, AbilitySystemComponent, spec.Level);
-            AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(healSpec);
-            EndAbility();
-        };
-        waitTask.Activate();
-    }
-}
-```
-
-#### 2. AbilityTask_WaitTargetData
-
-Waits for targeting data from an `ITargetActor`. This is how abilities like Purify get their target list.
-
-**Complete Example from Samples (`GA_Purify`):**
-
-```csharp
-public class GA_Purify : GameplayAbility
-{
-    private readonly float radius;
-    private readonly GameplayTagContainer requiredTags; // e.g., Faction.Player
-
-    public override void ActivateAbility(...)
-    {
-        CommitAbility(actorInfo, spec);
-
-        // Create a sphere overlap target actor
-        var targetActor = new GameplayAbilityTargetActor_SphereOverlap(radius, requiredTags);
-
-        // Create the task that waits for targeting
-        var targetTask = AbilityTask_WaitTargetData.WaitTargetData(this, targetActor);
-
-        targetTask.OnValidData = (targetData) =>
-        {
-            // Process each target found
-            foreach (var targetASC in targetData.AbilitySystemComponents)
-            {
-                // Remove all effects that grant the "Debuff.Poison" tag
-                targetASC.RemoveActiveEffectsWithGrantedTags(GameplayTagContainer.FromTag("Debuff.Poison"));
-            }
-            EndAbility();
-        };
-
-        targetTask.OnCancelled = () =>
-        {
-            CLogger.LogInfo("Purify cancelled");
-            EndAbility();
-        };
-
-        targetTask.Activate();
-    }
-}
-```
-
-### Creating Custom AbilityTasks
-
-To create a custom task, inherit from `AbilityTask` and override lifecycle methods:
-
-```csharp
-public class AbilityTask_WaitForAttributeChange : AbilityTask
-{
-    public Action<float> OnAttributeChanged;
-    private GameplayAttribute attributeToWatch;
-    private AbilitySystemComponent targetASC;
-
-    public static AbilityTask_WaitForAttributeChange WaitForAttributeChange(
-        GameplayAbility ability,
-        AbilitySystemComponent target,
-        GameplayAttribute attribute)
-    {
-        var task = ability.NewAbilityTask<AbilityTask_WaitForAttributeChange>();
-        task.attributeToWatch = attribute;
-        task.targetASC = target;
-        return task;
-    }
-
-    protected override void OnActivate()
-    {
-        // Subscribe to attribute changes
-        // (Note: You'd need to add this event to AttributeSet in a real implementation)
-        targetASC.OnAttributeChangedEvent += HandleAttributeChange;
-    }
-
-    private void HandleAttributeChange(GameplayAttribute attribute, float oldValue, float newValue)
-    {
-        if (attribute.Name == attributeToWatch.Name)
-        {
-            OnAttributeChanged?.Invoke(newValue);
-            EndTask(); // Task completes after one change
-        }
-    }
-
-    protected override void OnDestroy()
-    {
-        if (targetASC != null)
-        {
-            targetASC.OnAttributeChangedEvent -= HandleAttributeChange;
-        }
-        OnAttributeChanged = null;
-    }
-}
-```
-
-**Usage:**
-
-```csharp
-var task = AbilityTask_WaitForAttributeChange.WaitForAttributeChange(this, targetASC, targetASC.GetAttribute("Health"));
-task.OnAttributeChanged = (newHealth) =>
-{
-    CLogger.LogInfo($"Health changed to: {newHealth}");
-};
-task.Activate();
-```
-
-### Task Lifecycle
-
-1. **Creation**: Call `NewAbilityTask<T>()` on the owning ability
-2. **Configuration**: Set properties and subscribe to events (e.g., `OnFinished`, `OnValidData`)
-3. **Activation**: Call `task.Activate()` to start execution
-4. **Execution**: Task logic runs (waiting, checking conditions, etc.)
-5. **Completion**: Task calls `EndTask()` when done
-6. **Cleanup**: `OnDestroy()` is called, task is returned to pool
-7. **Owner Cleanup**: When ability ends, all active tasks are forcibly ended
-
-### Pooling and Performance
-
-All tasks are **automatically pooled** for zero-GC operation:
-
-```csharp
-// ✅ GOOD: Uses the pool
-var task = NewAbilityTask<AbilityTask_WaitDelay>(); // Retrieved from pool
-
-// ❌ BAD: Never create tasks manually
-var task = new AbilityTask_WaitDelay(); // Bypasses pooling!
-```
-
-The `AbilityTask` base class handles pooling automatically. When a task ends, it's returned to the pool for reuse.
-
-### Best Practices
-
-1. **Always Use `NewAbilityTask<T>()`**: Never instantiate tasks with `new`
-2. **Clean Up Events**: Unsubscribe from all events in `OnDestroy()`
-3. **End Tasks Explicitly**: Call `EndTask()` when task logic completes
-4. **Check `IsActive`**: Before executing logic, ensure `IsActive` is true
-5. **Handle Cancellation**: Abilities can be interrupted; handle cleanup gracefully
-
-### Common Patterns
-
-**Pattern 1: Wait for Multiple Conditions**
-
-```csharp
-var task1 = NewAbilityTask<AbilityTask_WaitDelay>();
-var task2 = NewAbilityTask<AbilityTask_WaitForInput>();
-// When both complete, proceed
-```
-
-**Pattern 2: Task Chain**
-
-```csharp
-taskA.OnFinished = () =>
-{
-    var taskB = NewAbilityTask<NextTask>();
-    taskB.OnFinished = () => EndAbility();
-    taskB.Activate();
-};
-```
-
-**Pattern 3: Timeout**
-
-```csharp
-var targetTask = NewAbilityTask<AbilityTask_WaitTargetData>();
-var timeoutTask = NewAbilityTask<AbilityTask_WaitDelay>();
-timeoutTask.WaitTime = 5.0f;
-timeoutTask.OnFinished = () =>
-{
-    targetTask.Cancel(); // Cancel targeting if timeout
-    EndAbility();
-};
-```
-
-### Targeting System Deep Dive
-
-The targeting system allows abilities to find and select targets based on spatial queries, tag requirements, and custom filter logic. It works seamlessly with `AbilityTask_WaitTargetData` for async targeting workflows.
-
-### ITargetActor Interface
-
-All targeting actors implement `ITargetActor`:
-
-```csharp
-public interface ITargetActor
-{
-    void StartTargeting(GameplayAbilityActorInfo actorInfo, onTargetDataReadyDelegate onReady);
-    void ConfirmTargeting();
-    void CancelTargeting();
-    void Destroy();
-}
-```
-
-### Built-In Target Actors
-
-#### 1. GameplayAbilityTargetActor_SphereOverlap
-
-Finds all targets within a sphere radius.
-
-```csharp
-public class GameplayAbilityTargetActor_SphereOverlap : ITargetActor
-{
-    private readonly float radius;
-    private readonly GameplayTagRequirements filter; // Optional tag filtering
-
-    public GameplayAbilityTargetActor_SphereOverlap(float radius, GameplayTagContainer requiredTags = null)
-    {
-        this.radius = radius;
-        if (requiredTags != null)
-        {
-            filter = new GameplayTagRequirements { RequireTags = requiredTags };
-        }
-    }
-
-    public void StartTargeting(GameplayAbilityActorInfo actorInfo, Action<TargetData> onReady)
-    {
-        var casterPosition = (actorInfo.AvatarActor as GameObject).transform.position;
-        var hits = Physics.OverlapSphere(casterPosition, radius);
-
-        var targetData = new TargetData();
-        foreach (var hit in hits)
-        {
-            if (hit.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
-            {
-                // Optional: Filter by tags
-                if (filter != null && !filter.RequirementsMet(holder.AbilitySystemComponent.CombinedTags))
-                {
-                    continue; // Skip targets that don't meet tag requirements
-                }
-
-                targetData.AbilitySystemComponents.Add(holder.AbilitySystemComponent);
-                targetData.HitResults.Add(new RaycastHit()); // Can add actual hit data if needed
-            }
-        }
-
-        onReady?.Invoke(targetData);
-    }
-}
-```
-
-**Usage in Ability:**
-
-```csharp
-var targetActor = new GameplayAbilityTargetActor_SphereOverlap(5f, GameplayTagContainer.FromTag("Faction.Player"));
-var task = AbilityTask_WaitTargetData.WaitTargetData(this, targetActor);
-task.OnValidData = (data) => {
-    // Process targets
-};
-task.Activate();
-```
-
-#### 2. GameplayAbilityTargetActor_GroundSelect (From Samples)
-
-Allows player to select a ground location, then finds targets in that area.
-
-```csharp
-public class GameplayAbilityTargetActor_GroundSelect : MonoBehaviour, ITargetActor
-{
-    public float radius = 5f;
-    public GameObject visualIndicatorPrefab;
-
-    private GameObject indicator;
-    private Action<TargetData> onTargetDataReady;
-    private bool isActive;
-
-    public void StartTargeting(GameplayAbilityActorInfo actorInfo, Action<TargetData> onReady)
-    {
-        onTargetDataReady = onReady;
-        isActive = true;
-
-        // Spawn visual indicator
-        indicator = Instantiate(visualIndicatorPrefab);
-        indicator.transform.localScale = Vector3.one * radius * 2;
-    }
-
-    private void Update()
-    {
-        if (!isActive) return;
-
-        // Move indicator to mouse position via raycast
-        Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
-        if (Physics.Raycast(ray, out RaycastHit hit))
-        {
-            indicator.transform.position = hit.point;
-        }
-
-        // Confirm on mouse click
-        if (Input.GetMouseButtonDown(0))
-        {
-            ConfirmTargeting();
-        }
-    }
-
-    public void ConfirmTargeting()
-    {
-        if (!isActive) return;
-
-        var targetData = new TargetData();
-        targetData.TargetLocation = indicator.transform.position;
-
-        // Find all targets at location
-        var hits = Physics.OverlapSphere(indicator.transform.position, radius);
-        foreach (var hit in hits)
-        {
-            if (hit.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
-            {
-                targetData.AbilitySystemComponents.Add(holder.AbilitySystemComponent);
-            }
-        }
-
-        onTargetDataReady?.Invoke(targetData);
-        Destroy();
-    }
-
-    public void Destroy()
-    {
-        if (indicator != null) Destroy(indicator);
-        Destroy(gameObject);
-    }
-}
-```
-
-### Custom Targeting Filters
-
-Create sophisticated targeting logic with custom filters:
-
-```csharp
-public class GameplayAbilityTargetActor_LineTrace : ITargetActor
-{
-    private readonly float maxDistance;
-    private readonly Func<GameObject, bool> customFilter;
-
-    public GameplayAbilityTargetActor_LineTrace(float distance, Func<GameObject, bool> filter = null)
-    {
-        maxDistance = distance;
-        customFilter = filter;
-    }
-
-    public void StartTargeting(GameplayAbilityActorInfo actorInfo, Action<TargetData> onReady)
-    {
-        var caster =  (actorInfo.AvatarActor as GameObject);
-        var ray = new Ray(caster.transform.position, caster.transform.forward);
-
-        if (Physics.Raycast(ray, out RaycastHit hit, maxDistance))
-        {
-            // Custom filter logic
-            if (customFilter != null && !customFilter(hit.collider.gameObject))
-            {
-                onReady?.Invoke(new TargetData()); // Empty target data
-                return;
-            }
-
-            var targetData = new TargetData();
-            if (hit.collider.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
-            {
-                targetData.AbilitySystemComponents.Add(holder.AbilitySystemComponent);
-                targetData.HitResults.Add(hit);
-            }
-            onReady?.Invoke(targetData);
-        }
-    }
-}
-```
-
-**Usage:**
-
-```csharp
-// Only target enemies with low health
-var targetActor = new GameplayAbilityTargetActor_LineTrace(10f, (go) =>
-{
-    if (go.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
-    {
-        var healthAttr = holder.AbilitySystemComponent.GetAttribute("Health");
-        return healthAttr?.CurrentValue < 50f;
-    }
-    return false;
-});
-```
-
-## Execution Calculations
-
-For complex, multi-attribute calculations that go beyond simple modifiers, use `GameplayEffectExecutionCalculation`.
-
-### When to Use Execution Calculations vs Modifiers
-
-| Feature         | Simple Modifiers         | Execution Calculations                         |
-| :-------------- | :----------------------- | :--------------------------------------------- |
-| **Use Case**    | Single attribute changes | Complex formulas involving multiple attributes |
-| **Predictable** | Yes (client can predict) | No (server-authoritative)                      |
-| **Performance** | Faster                   | Slightly slower                                |
-| **Complexity**  | Low                      | High                                           |
-| **Example**     | Heal for 50 HP           | Damage = AttackPower _ 1.5 - Defense _ 0.5     |
-
-### Example: Burn Damage Calculation
-
-From the samples, `ExecCalc_Burn` demonstrates a calculation that factors in both source and target attributes:
-
-```csharp
-public class ExecCalc_Burn : GameplayEffectExecutionCalculation
-{
-    public override void Execute(GameplayEffectExecutionCalculationContext context)
-    {
-        var spec = context.Spec;
-        var target = context.Target;
-        var source = spec.Source;
-
-        // Capture source's spell power
-        float spellPower = source.GetAttributeSet<CharacterAttributeSet>()?.GetCurrentValue(
-            source.GetAttributeSet<CharacterAttributeSet>().SpellPower) ?? 0f;
-
-        // Capture target's magic resistance
-        float magicResist = target.GetAttributeSet<CharacterAttributeSet>()?.GetCurrentValue(
-            target.GetAttributeSet<CharacterAttributeSet>().MagicResistance) ?? 0f;
-
-        // Calculate final burn damage
-        float baseDamage = 10f; // Base burn damage per tick
-        float finalDamage = (baseDamage + spellPower * 0.2f) * (1f - magicResist / 100f);
-
-        // Apply damage to health
-        var healthAttr = target.GetAttribute("Character.Attribute.Health");
-        if (healthAttr != null)
-        {
-            context.AddOutputModifier(new ModifierInfo
-            {
-                Attribute = healthAttr,
-                ModifierOp = EAttributeModOp.Add,
-                Magnitude = -finalDamage // Negative for damage
-            });
-        }
-    }
-}
-```
-
-**Creating the ScriptableObject:**
-
-```csharp
-[CreateAssetMenu(menuName = "GAS/Execution Calculations/Burn")]
-public class ExecCalcSO_Burn : GameplayEffectExecutionCalculationSO
-{
-    public override GameplayEffectExecutionCalculation CreateExecutionCalculation()
-    {
-        return new ExecCalc_Burn();
-    }
-}
-```
-
-**Using in GameplayEffect:**
-
-In your `GameplayEffectSO`, assign the `ExecCalcSO_Burn` asset to the `Execution` field instead of using simple `Modifiers`.
-
-### Best Practices
-
-- Use modifiers for straightforward attribute changes
-- Use executions for damage formulas, complex buff scaling, or conditional logic
-- Executions are **not network-predicted**—they always run server-side in multiplayer
-
-## Frequently Asked Questions (FAQ)
-
-### Q: When should I use Instant vs Duration vs Infinite effects?
-
-- **Instant**: One-time changes (damage, healing, mana cost, instant stat boost)
-- **HasDuration**: Temporary buffs/debuffs with a fixed time (speed boost for 10s, stun for 2s)
-- **Infinite**: Passive effects or states that last until removed (equipment stats, auras, persistent debuffs)
-
-### Q: How do I debug why my ability won't activate?
-
-1. Check `CanActivate()` return value—add logs to each check:
-   ```csharp
-   if (!CheckTagRequirements(...)) { CLogger.LogWarning("Tag requirements failed"); return false; }
-   if (!CheckCost(...)) { CLogger.LogWarning("Cost check failed"); return false; }
-   if (!CheckCooldown(...)) { CLogger.LogWarning("Cooldown active"); return false; }
-   ```
-2. Verify the ability is granted: `ASC.GetActivatableAbilities()` should contain your ability
-3. Check that `AbilityTags` match what you're checking for
-4. Ensure `AbilitySystemComponent.InitAbilityActorInfo()` was called
-
-### Q: What's the difference between AbilityTags, AssetTags, and GrantedTags?
-
-- **AbilityTags**: Identity of the ability itself (e.g., `"Ability.Skill.Fireball"`)
-- **AssetTags** (on GameplayEffect): Metadata describing the effect (e.g., `"Damage.Type.Fire"`)
-- **GrantedTags** (on GameplayEffect): Tags given to the target while effect is active (e.g., `"Status.Burning"`)
-
-### Q: How do I create a damage-over-time (DoT) effect?
-
-Create a `GameplayEffect` with:
-
-- `DurationPolicy = HasDuration` (e.g., 10 seconds)
-- `Period = 1.0f` (damage every 1 second)
-- `Modifiers` targeting Health with negative magnitude
-
-The system automatically applies the modifiers every `Period` seconds for the effect's `Duration`.
-
-### Q: Why use tags instead of direct component references?
-
-Tags provide **loose coupling**:
-
-- Abilities don't need to know specific enemy types
-- Effects can target "anything with tag X" without hard-coded references
-- Easy to add new content without modifying existing code
-- Supports data-driven design—designers can configure interactions in the Inspector
-
-### Q: How do I handle ability cooldowns?
-
-Cooldowns are just `GameplayEffect`s that grant a cooldown tag:
-
-1. Create a `GE_Cooldown_Fireball` effect:
-   - `DurationPolicy = HasDuration`, `Duration = 5.0f`
-   - `GrantedTags = ["Cooldown.Skill.Fireball"]`
-2. In your ability's `GameplayAbilitySO`, assign this as the `CooldownEffect`
-3. The ability's `CanActivate()` automatically checks if the owner has the cooldown tag
-
-### Q: What are performance considerations?
-
-- **Object Pooling**: Abilities, effects, and specs are all pooled—zero GC during gameplay
-- **Tag Lookups**: Tag queries are fast (hash-based), but avoid excessive nested checks in hot paths
-- **AttributeSet Size**: Keep attribute sets focused—don't create monolithic sets with 100+ attributes
-- **Cue Pooling**: Always use pooled VFX/SFX via `IGameObjectPoolManager`
-
-## Troubleshooting Guide
-
-### Ability Not Activating
-
-**Checklist:**
-
-- [ ] Is the ability granted? Check `ASC.GetActivatableAbilities()`
-- [ ] Does the ability pass tag requirements? Log `CanActivate()` checks
-- [ ] Is there sufficient resource for cost? Check mana/stamina values
-- [ ] Is the ability on cooldown? Check for cooldown tags on owner
-- [ ] Was `InitAbilityActorInfo()` called on the ASC?
-
-**Common Mistake:** Forgetting to call `CommitAbility()` in `ActivateAbility()`, so cost/cooldown aren't applied.
-
-### Effect Not Applying
-
-**Checklist:**
-
-- [ ] Does the target meet `ApplicationTagRequirements`?
-- [ ] Is the effect spec created correctly? Verify `GameplayEffectSpec.Create()`
-- [ ] Is the target's ASC initialized?
-- [ ] Are there conflicting `RemoveGameplayEffectsWithTags` removing it instantly?
-
-**Common Mistake:** Applying an effect with `ApplicationTagRequirements` that the target doesn't have.
-
-### Tags Not Working as Expected
-
-**Checklist:**
-
-- [ ] Are tags defined? Tags are automatically registered from JSON files or code attributes, but they must be defined first
-- [ ] Are you checking `CombinedTags` on the ASC (not just `GrantedTags` on a single effect)?
-- [ ] Is the effect active? Check `ActiveGameplayEffects` list
-- [ ] For tag requirements, are you using `RequireTags` vs `IgnoreTags` correctly?
-
-**Common Mistake:** Checking tags on the `GameplayEffect` instead of on the `AbilitySystemComponent.CombinedTags`.
-
-### GameplayCue Not Playing
-
-**Checklist:**
-
-- [ ] Is the cue registered with `GameplayCueManager`?
-- [ ] Is `GameplayCueManager.Initialize()` called at game start?
-- [ ] Is the cue tag added to the effect's `GameplayCues` container?
-- [ ] Does `parameters.TargetObject` exist and have a valid transform?
-
-**Common Mistake:** Adding the cue tag to `AssetTags` instead of `GameplayCues`.
-
-## Performance Optimization
-
-The system is designed for high-performance, zero-GC gameplay. Here are key strategies:
-
-### Object Pooling
-
-Every major object is pooled:
-
-- `GameplayAbilitySpec` - Pooled when abilities are granted/removed
-- `GameplayEffectSpec` - Pooled when effects are created/destroyed
-- `ActiveGameplayEffect` - Pooled during effect lifecycle
-- `AbilityTask` - Pooled during task execution
-
-**You must use the pool APIs:**
-
-```csharp
-// ✅ GOOD
-var spec = GameplayEffectSpec.Create(effect, source, level); // From pool
-source.ApplyGameplayEffectSpecToSelf(spec); // Returned to pool automatically
-
-// ❌ BAD
-var spec = new GameplayEffectSpec(); // Bypasses pool, creates garbage!
-```
-
-### Advanced GameObject Pooling & W-TinyLFU Integration
-
-The `GameObjectPoolManager` features advanced memory management tied to the underlying Asset Management system (like W-TinyLFU LRU cache).
-
-#### `IdleExpirationTime` and Object Lifecycles
-
-You can define how long a pool stays in memory before it completely deconstructs itself and passes the underlying asset handle back to the Cache Service for eviction.
-
-1. **Short-lived Pools (Exploration/Dungeons):**
-   - Configure `IdleExpirationTime = 60f` (or similar).
-   - If the pool is completely inactive for 60 seconds (e.g., you traveled to a new area and left a specific enemy type behind), the pool **breaks the `MinCapacity` constraint** and fully destroys all cached GameObjects. The underlying Asset Handle is `Dispose()`d, allowing W-TinyLFU to evict the asset from RAM entirely.
-
-2. **Immortal Pools (Core Hero Abilities):**
-   - Configure `IdleExpirationTime = -1f` (or any `<= 0` value).
-   - Core hero abilities (like the main gun's muzzle flash or standard bullets) should **never** auto-decay. This guarantees absolute 0-GC, 0-hitch response times when you fire your weapon after 30 minutes of quiet exploration. The pool will only ever shrink down to `MinCapacity` upon explicit `AggressiveShrink()` calls.
-
-### Tag Lookup Optimization
-
-- Tags use hash-based lookups (O(1) average case)
-- `CombinedTags` is cached and updated only when effects change
-- Avoid rebuilding `GameplayTagContainer` in hot paths:
-
-```csharp
-// ✅ GOOD: Cache tag containers
-private static readonly GameplayTagContainer poisonTag = GameplayTagContainer.FromTag("Debuff.Poison");
-
-public void RemovePoison(AbilitySystemComponent target)
-{
-    target.RemoveActiveEffectsWithGrantedTags(poisonTag); // Reuses cached container
-}
-
-// ❌ BAD: Creates new container every call
-public void RemovePoison(AbilitySystemComponent target)
-{
-    target.RemoveActiveEffectsWithGrantedTags(GameplayTagContainer.FromTag("Debuff.Poison")); // Allocates!
-}
-```
-
-### Attribute Dirty Flagging
-
-- Attributes are only recalculated when marked dirty
-- Modifications are batched during effect application
-- `RecalculateDirtyAttributes()` is called once per frame, not per effect
-
-### VFX/SFX Pooling
-
-Always use `IGameObjectPoolManager` for cues:
-
-```csharp
-var vfx = await poolManager.GetAsync(prefabPath, position, rotation); // From pool
-// ... use VFX ...
-poolManager.Release(vfx); // Return to pool
-```
-
-### Profiling Tips
-
-1. **Check GC Allocations**: Use Unity Profiler's GC Alloc column—should be zero during gameplay
-2. **Monitor Tag Updates**: `UpdateCombinedTags()` should only run when effects are applied/removed
-3. **Watch Effect Count**: Hundreds of active effects on one actor can slow recalculation; consider effect stacking limits
-
-### Pool Management with GASPoolUtility
-
-The system includes a centralized pool management utility with scalable tier presets:
-
-```csharp
-// Configure pools for different game scales (call on initialization)
-GASPoolUtility.ConfigureUltra();     // Bullet Hell (2000+ active entities)
-GASPoolUtility.ConfigureHigh();      // Vampire Survivors / RTS (1000+ entities)
-GASPoolUtility.ConfigureMedium();    // Action RPG / Arena (Standard)
-GASPoolUtility.ConfigureLow();       // Adventure / Casual
-GASPoolUtility.ConfigureMinimal();    // Very low memory footprint
-GASPoolUtility.ConfigureMobile();    // Optimized specific defaults for mobile
-
-// Pre-warm pools during loading screens (reduces first-frame hitches)
-GASPoolUtility.WarmAllPools();                // Warm to Target capacity
-GASPoolUtility.WarmAllPools(64, 128, 64);     // Custom specific counts
-
-// Scene transitions: release memory
-GASPoolUtility.AggressiveShrinkAll();         // Shrink to minimum capacity
-GASPoolUtility.ClearAllPools();               // Complete reset (use with caution)
-```
-
-### Pool Statistics and Health Monitoring
-
-Debug pool performance in development builds:
-
-```csharp
-// Log statistics for all pools
-GASPoolUtility.LogAllStatistics();
-
-// Check pool health (hit rate > 80% is healthy)
-if (!GASPoolUtility.CheckPoolHealth(out string report))
-{
-    Debug.LogWarning(report); // Suggests increasing MinCapacity or WarmPool count
-}
-
-// Individual pool statistics
-var stats = GameplayEffectSpec.GetStatistics();
-Debug.Log($"Pool: {stats.PoolSize}, Active: {stats.ActiveCount}, HitRate: {stats.HitRate:P1}");
-```
-
-### Platform-Adaptive Pool Limits
-
-Pools automatically configure optimal sizes based on platform:
-
-| Platform          | Max Capacity | Min Capacity | Rationale                 |
-| ----------------- | ------------ | ------------ | ------------------------- |
-| **Mobile/Switch** | Lower        | Lower        | Conservative memory usage |
-| **PC/Console**    | Higher       | Higher       | Better cache hit rates    |
-| **Default**       | Medium       | Medium       | Balanced fallback         |
-
-### Best Practices Summary
-
-- Cache tag containers and reuse them
-- Use pooling APIs exclusively (never `new` for specs/tasks)
-- Limit attribute set size (20-30 attributes max per set)
-- Use execution calculations sparingly (they're slower than modifiers)
-- Profile regularly—the system is designed for 0GC, verify this in your use case
+**Cue not playing?** Check: (1) tag in effect's `GameplayCues` container, (2) cue registered with manager, (3) `Initialize()` called, (4) valid `TargetObject`.
 
 ---
 
-## Sample Walkthrough
+## 13. Networking
 
-For a comprehensive guide to the included samples (Fireball, Purification, Leveling), please read the **[Samples Documentation](Samples/README.md)**.
+The system is **network-architected** but **transport-agnostic** — it provides prediction infrastructure without locking you into a specific networking library.
 
-- DemoLink: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
-- <img src="./Documents~/DemoPreview_2.gif" alt="Demo Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
-- <img src="./Documents~/DemoPreview_1.png" alt="Demo Preview 2" style="width: 100%; height: auto; max-width: 800px;" />
+> **Integration Required:** You must bridge `ServerTryActivateAbility` and `ClientActivateAbilitySucceed/Failed` using your networking solution (Mirror, Netcode, Photon, etc.).
 
-## Dependencies
+### Execution Policies
 
-This package relies on the following external and internal packages:
+| Policy           | Behavior                                                                      |
+| ---------------- | ----------------------------------------------------------------------------- |
+| `LocalOnly`      | Client-only; no server involvement (UI abilities, cosmetics)                  |
+| `ServerOnly`     | Client requests, server runs; secure but latent                               |
+| `LocalPredicted` | Client runs immediately (predicts), server validates; rolls back on rejection |
 
-- `com.cysharp.unitask`: For asynchronous operations.
-- `com.cyclone-games.assetmanagement`: For loading assets.
-- `com.cyclone-games.gameplay-tags`: For the underlying `GameplayTag` system.
-- `com.cyclone-games.logger`: For debug logging.
-- `com.cyclone-games.factory`: For object creation and pooling.
+### Prediction Keys
+
+Each predicted activation generates a `PredictionKey`. Effects applied under that key are tracked. If the server rejects the activation, all effects tied to that key are automatically rolled back.
+
+---
+
+# V. Production
+
+## 14. Object Pooling & Performance
+
+### Zero-GC Design
+
+Every major runtime object is pooled:
+
+| Type                    | Pool                                                  |
+| ----------------------- | ----------------------------------------------------- |
+| `GameplayAbilitySpec`   | Automatic                                             |
+| `GameplayEffectSpec`    | `GameplayEffectSpec.Create()` / auto-return           |
+| `ActiveGameplayEffect`  | `ActiveGameplayEffect.Create()` / auto-return         |
+| `AbilityTask`           | `NewAbilityTask<T>()` / auto-return                   |
+| `GameplayEffectContext` | `GameplayEffectContextFactory.Create()` / auto-return |
+
+**Critical rule:** Never use `new` to create these objects — always use the factory/pool APIs.
+
+### Pool Configuration
+
+```csharp
+// Choose a preset matching your game scale
+GASPoolUtility.ConfigureUltra();     // Bullet hell (2000+ entities)
+GASPoolUtility.ConfigureHigh();      // Vampire Survivors / RTS
+GASPoolUtility.ConfigureMedium();    // Action RPG (default)
+GASPoolUtility.ConfigureLow();       // Adventure / casual
+GASPoolUtility.ConfigureMinimal();   // Minimal footprint
+GASPoolUtility.ConfigureMobile();    // Mobile-optimized
+
+// Pre-warm during loading screens
+GASPoolUtility.WarmAllPools();
+
+// Scene transitions
+GASPoolUtility.AggressiveShrinkAll();
+```
+
+### GameObject Pool Integration (W-TinyLFU)
+
+The `GameObjectPoolManager` integrates with asset management caching:
+
+- **`IdleExpirationTime > 0`** — pool auto-destructs after N seconds of complete inactivity, releasing asset handles back to the W-TinyLFU cache for eviction
+- **`IdleExpirationTime <= 0`** — immortal pool, never auto-decays (use for core abilities like main weapon VFX)
+
+### Performance Tips
+
+```csharp
+// ✅ Cache tag containers
+private static readonly GameplayTagContainer PoisonTag =
+    GameplayTagContainer.FromTag("Debuff.Poison");
+
+// ❌ Creates new container every call (allocation!)
+target.RemoveActiveEffectsWithGrantedTags(GameplayTagContainer.FromTag("Debuff.Poison"));
+```
+
+- Attributes only recalculate when marked dirty (batched once per frame)
+- Tag lookups are O(1) hash-based
+- Pool health monitoring: `GASPoolUtility.CheckPoolHealth(out string report)` — aim for >80% hit rate
+
+---
+
+## 15. Editor Tools & Debugging
+
+The framework ships with a suite of editor extensions and a runtime debug overlay to streamline development and debugging.
+
+### Tool Overview
+
+| Tool | Type | Access | Purpose |
+|---|---|---|---|
+| **GAS Debugger** | Editor Window | `Tools > CycloneGames > GameplayAbilities > GAS Debugger` | Deep inspection of a selected ASC — effects, attributes, abilities, tags, immunity, pool stats, event log |
+| **GAS Debug Overlay** | Runtime IMGUI | `Tools > CycloneGames > GameplayAbilities > GAS Overlay (Play Mode)` or `GASDebugOverlay.Toggle()` | Live heads-up overlay — auto-discovers all ASCs in scene, world-position tracking, collapsible panels |
+| **GAS Overlay Config** | ScriptableObject | `Tools > CycloneGames > GameplayAbilities > GAS Overlay Config` | Configure overlay appearance — tag colors, effect colors, panel settings, primary attribute priority |
+| **GameplayEffectSO Inspector** | Custom Editor | Automatic (select any `GameplayEffectSO` asset) | Organized layout with validation, summaries, conditional field visibility, and derived-type support |
+| **GameplayAbilitySO Inspector** | Custom Editor | Automatic (select any `GameplayAbilitySO` asset) | Structured tag overview, activation rules summary, cost/cooldown validation |
+| **Stacking Drawer** | Property Drawer | Automatic (in `GameplayEffectSO` Inspector) | Shows Limit / DurationPolicy / ExpirationPolicy fields only when stacking type is not `None` |
+| **AttributeNameSelector** | Property Drawer | Add `[AttributeNameSelector]` to a `string` field | Dropdown populated from a constants class — replaces manual tag string entry |
+
+### GAS Debugger (Editor Window)
+
+A comprehensive editor window for inspecting any `AbilitySystemComponent` in real-time during Play Mode.
+
+**Open:** `Tools > CycloneGames > GameplayAbilities > GAS Debugger`
+
+**Features:**
+
+- **ASC Picker** — dropdown listing all scene ASCs, auto-refreshes
+- **Toolbar** — pause/resume, configurable refresh rate, [Select GameObject] button
+- **Active Effects** — expandable rows showing duration bars, stack counts, modifiers, granted tags, inhibition status
+- **Attributes** — mini health-bar visualization with base / current values
+- **Abilities** — active, on-cooldown, or ready status with cooldown progress bars
+- **Tags** — all combined tags with color coding and reference counts
+- **Immunity Tags** — tags that block incoming effects
+- **Pool Stats** — pool size / active / hit rate for specs, effects, tasks, and contexts
+- **Event Log** — rolling log of ability activations, commits, and endings (capped at 64 entries)
+
+### GAS Debug Overlay (Runtime)
+
+A zero-dependency runtime IMGUI overlay that renders floating debug panels for all discovered ASCs directly in the Game view.
+
+**Toggle in Play Mode:**
+
+```csharp
+// Via code
+GASDebugOverlay.Toggle();
+
+// Via menu
+// Tools > CycloneGames > GameplayAbilities > GAS Overlay (Play Mode)
+```
+
+**Features:**
+
+- **Auto-Discovery** — reflects on all `MonoBehaviour` instances to find `AbilitySystemComponent` properties/fields; reflection results are cached per type for zero-GC on subsequent scans
+- **World Tracking** — panels follow their owner's screen-projected position with connecting lines
+- **Collapsible Panels** — click panel header to toggle between expanded (attributes, effects, abilities, tags) and collapsed (single-line summary) views
+- **Runtime Controls** — in-overlay config panel for alpha, scale, section visibility, min priority filter, and collapse/expand all
+- **DPI-Adaptive** — dual-scale architecture: `baseScale` (DPI/resolution) for config UI, `scale` (baseScale × runtimeScale) for data panels
+- **Zero-GC Design** — `StringBuilder` reuse, `AppendInt` / `AppendFloat1` char-arithmetic formatting, dictionary-cached hex colors and short names, cached reflection metadata
+
+**Priority System:**
+
+```csharp
+// Prioritize important ASCs (higher priority = shown first)
+GASDebugOverlay.SetPriority(playerASC, 100);
+GASDebugOverlay.SetPriority(bossASC, 50);
+
+// Filter out low-priority ASCs at runtime via the overlay's MinPriority slider
+```
+
+### GAS Overlay Config
+
+A `ScriptableObject` that controls the overlay's visual appearance and behavior.
+
+**Setup:** Create via `Assets > Create > CycloneGames > GAS Overlay Config`, name it `GASOverlayConfig`, and place it in a `Resources` folder.
+
+| Setting | Default | Description |
+|---|---|---|
+| **TagColorRules** | (empty) | Ordered list of substring→color rules for tag display. First match wins. |
+| **DebuffTagSubstrings** | (empty) | Substrings to identify debuff effects (e.g., `"Debuff"`) |
+| **PrimaryAttributeSubstrings** | Health, HP, Shield, Mana, MP, Stamina, SP, Energy | Priority list for selecting which attribute to show in collapsed panel summary |
+| **PanelAlpha** | 0.8 | Background transparency (adjustable at runtime) |
+| **MaxPanels** | 8 | Maximum simultaneous panels |
+| **PanelWidthRatio** | 0.20 | Panel width as fraction of screen width |
+| **TrackWorldPosition** | true | Panels follow owner's world position |
+
+### Custom Inspectors
+
+**GameplayEffectSO** — the custom inspector organizes the effect's properties into collapsible sections:
+
+- **Core** — name, duration policy, duration/period (auto-hidden when irrelevant)
+- **Modifiers** — modifier list with validation warnings
+- **Tags** — all tag containers in a dedicated section
+- **Cosmetics** — GameplayCue references
+- **Advanced** — overflow effects, periodic-on-application toggle
+- **Summary** — auto-generated text summary of the complete effect definition
+- **Derived Fields** — properties added by subclasses are automatically grouped separately
+
+**GameplayAbilitySO** — structured view of ability configuration:
+
+- **Basic** — name, instancing policy, network execution, cost/cooldown effect references
+- **Activation** — activate-on-granted toggle, trigger data
+- **Tags** — identity tags, activation requirements, interaction rules, source/target filters
+- **Summary** — tag overview showing all configured tag containers at a glance
+
+---
+
+## 16. Samples Walkthrough
+
+The `Samples` folder provides a complete combat scenario with a **Player** and an **Enemy**.
+
+**Controls:**
+
+- **[1]** — Fireball (damage + burn DoT)
+- **[2]** — Purify (AoE dispel)
+- **[Space]** — Grant 50 XP
+- **[E]** — Enemy PoisonBlade attack
+
+### Fireball
+
+Demonstrates: data-driven design, complex attribute interaction via `PreProcessInstantEffect`, stat snapshotting via `SetByCallerMagnitude`.
+
+### PoisonBlade
+
+Demonstrates: applying multiple effects in sequence (weapon hit + persistent poison debuff).
+
+### Purify
+
+Demonstrates: async ability with `AbilityTask_WaitTargetData`, `SphereOverlap` targeting with faction filtering, removing effects by tag (`RemoveActiveEffectsWithGrantedTags`).
+
+### Leveling System
+
+Demonstrates: attribute-driven events, dynamic effect creation in code, multi-modifier instant effects.
+
+### Sample Abilities Reference
+
+| Ability        | Type      | Key Features                              |
+| -------------- | --------- | ----------------------------------------- |
+| Fireball       | Offensive | DoT, snapshotting, execution calculations |
+| PoisonBlade    | Offensive | Multi-effect, periodic damage             |
+| Purify         | Defensive | AoE targeting, tag-based dispel           |
+| Meteor         | Offensive | Area effect, ActivationOwnedTags          |
+| ChainLightning | Offensive | Multi-target chaining                     |
+| ShieldOfLight  | Defensive | Duration buff                             |
+| Berserk        | Buff      | Self-buff with trade-offs                 |
+| ArmorStack     | Defensive | Stackable effect                          |
+| SlamAttack     | Offensive | Melee AoE                                 |
+| Execute        | Offensive | Conditional execution                     |
+| Shockwave      | Offensive | Knockback AoE                             |
+
+- Demo: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
+- <img src="./Documents~/DemoPreview_2.gif" alt="Demo Preview" style="width: 100%; max-width: 800px;" />
+- <img src="./Documents~/DemoPreview_1.png" alt="Demo Preview" style="width: 100%; max-width: 800px;" />
+
+---
+
+## 17. FAQ & Troubleshooting
+
+### Frequently Asked Questions
+
+**Q: Instant vs Duration vs Infinite — when to use which?**
+
+| Type        | Use When                                                  |
+| ----------- | --------------------------------------------------------- |
+| Instant     | One-time: damage, heal, cost, instant stat set            |
+| HasDuration | Temporary: speed buff (10s), stun (2s), cooldown (5s)     |
+| Infinite    | Permanent until removed: equipment stats, auras, passives |
+
+**Q: What's the difference between AbilityTags, AssetTags, and GrantedTags?**
+
+- **AbilityTags** — identity of the ability (`Ability.Skill.Fireball`)
+- **AssetTags** — metadata on a GameplayEffect (`Damage.Type.Fire`)
+- **GrantedTags** — tags applied to target while effect is active (`Status.Burning`)
+
+**Q: How do cooldowns work?**
+A cooldown is simply a `HasDuration` GameplayEffect that grants a cooldown tag (e.g., `Cooldown.Skill.Fireball`). The ability's `CheckCooldown()` checks if the owner has that tag.
+
+**Q: Why tags instead of direct references?**
+Tags provide loose coupling — abilities don't need to know concrete types. New content can be added without modifying existing code. Designers configure interactions in the Inspector.
+
+**Q: How to create a DoT?**
+Create a `HasDuration` effect with a `Period` and a negative `Add` modifier on Health.
+
+### Troubleshooting Checklist
+
+**Ability won't activate:**
+
+- [ ] `InitAbilityActorInfo()` called?
+- [ ] Ability granted via `GrantAbility()`?
+- [ ] Tag requirements satisfied? (log `CanActivate()` checks)
+- [ ] Sufficient resources for cost?
+- [ ] Not on cooldown?
+- [ ] `CommitAbility()` called in `ActivateAbility()`?
+
+**Effect not applying:**
+
+- [ ] `ApplicationTagRequirements` met?
+- [ ] Target ASC initialized?
+- [ ] `RemoveGameplayEffectsWithTags` not removing it immediately?
+- [ ] `ICustomApplicationRequirement` returning `true`?
+
+**Tags not working:**
+
+- [ ] Tags defined in project settings or code?
+- [ ] Checking `ASC.CombinedTags` (not individual effect tags)?
+- [ ] Effect actually active? Check active effects list
+
+**Cue not playing:**
+
+- [ ] Tag in effect's `GameplayCues` container (not `AssetTags`)?
+- [ ] Cue registered with `GameplayCueManager`?
+- [ ] `GameplayCueManager.Initialize()` called?
+- [ ] `parameters.TargetObject` valid?
+
+---
+
+## 18. Dependencies
+
+| Package                             | Purpose                     |
+| ----------------------------------- | --------------------------- |
+| `com.cysharp.unitask`               | Async operations            |
+| `com.cyclone-games.gameplay-tags`   | GameplayTag system          |
+| `com.cyclone-games.assetmanagement` | Asset loading               |
+| `com.cyclone-games.logger`          | Debug logging               |
+| `com.cyclone-games.factory`         | Object creation and pooling |

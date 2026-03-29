@@ -19,6 +19,10 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private SerializedProperty _interactionPoint;
         private SerializedProperty _interactionCooldown;
         private SerializedProperty _resetToIdleOnComplete;
+        private SerializedProperty _channel;
+        private SerializedProperty _holdDuration;
+        private SerializedProperty _maxInteractionRange;
+        private SerializedProperty _actions;
 
         private SerializedProperty _useLocalization;
         private SerializedProperty _promptData;
@@ -29,15 +33,23 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private static bool _coreSettingsFoldout = true;
         private static bool _behaviorFoldout = true;
+        private static bool _actionsFoldout;
         private static bool _localizationFoldout = true;
         private static bool _eventsFoldout;
-        private static bool _debugFoldout = true;
+        private static bool _runtimeFoldout = true;
+        private static bool _debugFoldout;
 
         private static readonly Color ColorIdle = new(0.3f, 0.8f, 0.3f, 1f);
         private static readonly Color ColorInteracting = new(1f, 0.6f, 0.2f, 1f);
         private static readonly Color ColorDisabled = new(0.5f, 0.5f, 0.5f, 1f);
         private static readonly Color ColorAuto = new(0.3f, 0.7f, 1f, 1f);
         private static readonly Color ColorCooldown = new(0.8f, 0.4f, 0.4f, 1f);
+
+        // Cached reflection — avoid per-frame GetField allocations
+        private static System.Reflection.FieldInfo s_lastInteractionTimeField;
+
+        // Cached GUIStyle for gizmo labels — avoid per-draw allocation
+        private static GUIStyle s_gizmoLabelStyle;
 
         private void OnEnable()
         {
@@ -51,6 +63,10 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             _interactionPoint = serializedObject.FindProperty("interactionPoint");
             _interactionCooldown = serializedObject.FindProperty("interactionCooldown");
             _resetToIdleOnComplete = serializedObject.FindProperty("resetToIdleOnComplete");
+            _channel = serializedObject.FindProperty("channel");
+            _holdDuration = serializedObject.FindProperty("holdDuration");
+            _maxInteractionRange = serializedObject.FindProperty("maxInteractionRange");
+            _actions = serializedObject.FindProperty("actions");
 
             _useLocalization = serializedObject.FindProperty("useLocalization");
             _promptData = serializedObject.FindProperty("promptData");
@@ -72,6 +88,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
             DrawCoreSettings();
             DrawBehaviorSettings();
+            DrawActionsSettings();
             DrawLocalization();
             DrawEvents();
             DrawDebugSettings();
@@ -103,29 +120,45 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private void DrawValidation()
         {
             Collider col = _target.GetComponent<Collider>();
+            Collider2D col2D = _target.GetComponent<Collider2D>();
             int layer = _target.gameObject.layer;
 
-            if (col == null)
+            if (col == null && col2D == null)
             {
                 EditorGUILayout.Space(4);
                 EditorGUILayout.HelpBox(
-                    "⚠️ MISSING COLLIDER\nInteractionDetector uses Physics.OverlapSphere to find this object.",
+                    "MISSING COLLIDER\nInteractionDetector uses Physics.OverlapSphere (3D) or Physics2D.OverlapCircle (2D) to find this object.",
                     MessageType.Error);
 
                 GUI.backgroundColor = new Color(1f, 0.9f, 0.4f);
-                if (GUILayout.Button("+ Add Sphere Collider (Trigger)", GUILayout.Height(24)))
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("+ Add Sphere Collider (3D Trigger)", GUILayout.Height(24)))
                 {
                     Undo.RecordObject(_target.gameObject, "Add SphereCollider");
                     var sphere = _target.gameObject.AddComponent<SphereCollider>();
                     sphere.isTrigger = true;
                     sphere.radius = 0.1f;
                 }
+                if (GUILayout.Button("+ Add Circle Collider (2D Trigger)", GUILayout.Height(24)))
+                {
+                    Undo.RecordObject(_target.gameObject, "Add CircleCollider2D");
+                    var circle = _target.gameObject.AddComponent<CircleCollider2D>();
+                    circle.isTrigger = true;
+                    circle.radius = 0.1f;
+                }
+                EditorGUILayout.EndHorizontal();
                 GUI.backgroundColor = Color.white;
             }
-            else if (!col.isTrigger)
+            else if (col != null && !col.isTrigger)
             {
                 EditorGUILayout.HelpBox(
-                    "ℹ️ Collider is solid. Consider setting 'Is Trigger = true' for walk-through interactions.",
+                    "Collider is solid. Consider setting 'Is Trigger = true' for walk-through interactions.",
+                    MessageType.Info);
+            }
+            else if (col2D != null && !col2D.isTrigger)
+            {
+                EditorGUILayout.HelpBox(
+                    "Collider2D is solid. Consider setting 'Is Trigger = true' for walk-through interactions.",
                     MessageType.Info);
             }
 
@@ -142,8 +175,8 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             if (!Application.isPlaying) return;
 
             EditorGUILayout.Space(4);
-            _debugFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_debugFoldout, "🔍 Runtime Status");
-            if (_debugFoldout)
+            _runtimeFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_runtimeFoldout, "🔍 Runtime Status");
+            if (_runtimeFoldout)
             {
                 EditorGUI.indentLevel++;
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
@@ -168,6 +201,17 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                     EditorGUILayout.Toggle(_target.IsInteractable);
                     EditorGUILayout.EndHorizontal();
 
+                    // Hold interaction progress
+                    if (_holdDuration.floatValue > 0 && _target.InteractionProgress > 0f)
+                    {
+                        EditorGUILayout.BeginHorizontal();
+                        EditorGUILayout.LabelField("Hold Progress", GUILayout.Width(100));
+                        Rect progressRect = EditorGUILayout.GetControlRect();
+                        EditorGUI.ProgressBar(progressRect, _target.InteractionProgress,
+                            $"{_target.InteractionProgress:P0}");
+                        EditorGUILayout.EndHorizontal();
+                    }
+
                     if (_interactionCooldown.floatValue > 0)
                     {
                         float cooldownRemaining = GetCooldownRemaining();
@@ -177,6 +221,23 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                         float progress = 1f - (cooldownRemaining / _interactionCooldown.floatValue);
                         EditorGUI.ProgressBar(rect, Mathf.Clamp01(progress),
                             cooldownRemaining > 0 ? $"{cooldownRemaining:F1}s" : "Ready");
+                        EditorGUILayout.EndHorizontal();
+                    }
+
+                    // Instigator
+                    InstigatorHandle instigator = _target.CurrentInstigator;
+                    if (instigator != null)
+                    {
+                        EditorGUILayout.BeginHorizontal();
+                        EditorGUILayout.LabelField("Instigator", GUILayout.Width(100));
+                        if (instigator is GameObjectInstigator goInstigator && goInstigator.GameObject != null)
+                        {
+                            EditorGUILayout.ObjectField(goInstigator.GameObject, typeof(GameObject), true);
+                        }
+                        else
+                        {
+                            EditorGUILayout.LabelField($"ID: {instigator.Id}");
+                        }
                         EditorGUILayout.EndHorizontal();
                     }
 
@@ -212,10 +273,10 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private float GetCooldownRemaining()
         {
             if (_interactionCooldown.floatValue <= 0) return 0f;
-            var lastTimeField = typeof(Interactable).GetField("_lastInteractionTime",
+            s_lastInteractionTimeField ??= typeof(Interactable).GetField("_lastInteractionTime",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (lastTimeField == null) return 0f;
-            float lastTime = (float)lastTimeField.GetValue(_target);
+            if (s_lastInteractionTimeField == null) return 0f;
+            float lastTime = (float)s_lastInteractionTimeField.GetValue(_target);
             float elapsed = Time.time - lastTime;
             return Mathf.Max(0, _interactionCooldown.floatValue - elapsed);
         }
@@ -231,6 +292,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                     EditorGUILayout.PropertyField(_isInteractable, new GUIContent("Enabled", "Can this object be interacted with?"));
                     EditorGUILayout.PropertyField(_autoInteract, new GUIContent("Auto Interact", "Automatically trigger when player enters range"));
                     EditorGUILayout.PropertyField(_priority, new GUIContent("Priority", "Higher priority objects are selected first"));
+                    EditorGUILayout.PropertyField(_channel, new GUIContent("Channel", "Interaction channel for filtering"));
 
                     EditorGUILayout.Space(4);
 
@@ -252,10 +314,32 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 {
                     EditorGUILayout.PropertyField(_interactionCooldown, new GUIContent("Cooldown", "Minimum time between interactions"));
                     EditorGUILayout.PropertyField(_resetToIdleOnComplete, new GUIContent("Auto Reset", "Return to Idle state after completion"));
+
+                    EditorGUILayout.Space(4);
+
+                    EditorGUILayout.PropertyField(_holdDuration, new GUIContent("Hold Duration", "Required hold time in seconds. 0 = instant interaction."));
+                    if (_holdDuration.floatValue > 0)
+                    {
+                        EditorGUI.indentLevel++;
+                        EditorGUILayout.PropertyField(_maxInteractionRange, new GUIContent("Max Hold Range", "Cancel hold if instigator moves beyond this distance. 0 = no limit."));
+                        EditorGUI.indentLevel--;
+                    }
+                    else
+                    {
+                        EditorGUILayout.PropertyField(_maxInteractionRange, new GUIContent("Max Interaction Range", "Cancel interaction if instigator exceeds this distance. 0 = no limit."));
+                    }
                 }
                 EditorGUI.indentLevel--;
             }
             EditorGUILayout.EndFoldoutHeaderGroup();
+        }
+
+        private void DrawActionsSettings()
+        {
+            EditorGUILayout.Space(4);
+            EditorGUILayout.PropertyField(_actions, new GUIContent("🎬 Actions",
+                "Define multiple interaction actions (e.g. \"Open\", \"Inspect\", \"Pick Up\").\n" +
+                "Each action has an ID, display text, optional input hint, and localization key."), true);
         }
 
         private void DrawLocalization()
@@ -321,6 +405,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             "interactionPrompt", "isInteractable", "autoInteract", "priority",
             "interactionDistance", "interactionPoint", "interactionCooldown",
             "resetToIdleOnComplete", "useLocalization", "promptData",
+            "channel", "actions", "holdDuration", "maxInteractionRange",
             "onInteract", "onFocus", "onDefocus"
         };
 
@@ -385,15 +470,18 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
             if (InteractableGizmoSettings.ShowLabels)
             {
-                GUIStyle style = new GUIStyle(EditorStyles.boldLabel)
+                if (s_gizmoLabelStyle == null)
                 {
-                    alignment = TextAnchor.MiddleCenter,
-                    normal = { textColor = wireColor }
-                };
+                    s_gizmoLabelStyle = new GUIStyle(EditorStyles.boldLabel)
+                    {
+                        alignment = TextAnchor.MiddleCenter
+                    };
+                }
+                s_gizmoLabelStyle.normal.textColor = wireColor;
                 string label = Application.isPlaying
                     ? $"{interactable.name}\n[{interactable.CurrentState}]"
                     : interactable.name;
-                Handles.Label(pos + Vector3.up * (radius + 0.5f), label, style);
+                Handles.Label(pos + Vector3.up * (radius + 0.5f), label, s_gizmoLabelStyle);
             }
         }
     }

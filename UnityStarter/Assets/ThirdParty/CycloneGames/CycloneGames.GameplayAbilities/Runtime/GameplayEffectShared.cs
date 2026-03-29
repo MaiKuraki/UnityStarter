@@ -1,8 +1,54 @@
+using CycloneGames.GameplayTags.Runtime;
+
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     public static class GameplayEffectConstants
     {
         public const float INFINITE_DURATION = -1.0f;
+    }
+
+    /// <summary>
+    /// Determines how an ability is automatically triggered.
+    /// UE5: EGameplayAbilityTriggerSource::Type.
+    /// </summary>
+    public enum EAbilityTriggerSource
+    {
+        /// <summary>
+        /// Triggered when a gameplay event with the matching tag is received (SendGameplayEventToActor).
+        /// </summary>
+        GameplayEvent,
+        /// <summary>
+        /// Triggered when the associated tag is added to the owner.
+        /// </summary>
+        OwnedTagAdded,
+        /// <summary>
+        /// Triggered when the associated tag is removed from the owner.
+        /// </summary>
+        OwnedTagRemoved
+    }
+
+    /// <summary>
+    /// Defines how an ability can be automatically triggered.
+    /// UE5: FAbilityTriggerData.
+    /// </summary>
+    [System.Serializable]
+    public struct AbilityTriggerData
+    {
+        /// <summary>
+        /// The tag that triggers this ability.
+        /// </summary>
+        public GameplayTag TriggerTag;
+
+        /// <summary>
+        /// How the trigger fires (on event, on tag added, on tag removed).
+        /// </summary>
+        public EAbilityTriggerSource TriggerSource;
+
+        public AbilityTriggerData(GameplayTag triggerTag, EAbilityTriggerSource triggerSource)
+        {
+            TriggerTag = triggerTag;
+            TriggerSource = triggerSource;
+        }
     }
 
     /// <summary>
@@ -36,6 +82,59 @@ namespace CycloneGames.GameplayAbilities.Runtime
     }
 
     /// <summary>
+    /// Defines what happens when a stacked effect's duration expires.
+    /// UE5: EGameplayEffectStackingExpirationPolicy.
+    /// </summary>
+    public enum EGameplayEffectStackingExpirationPolicy
+    {
+        /// <summary>
+        /// The entire effect (all stacks) is removed when the duration expires.
+        /// </summary>
+        ClearEntireStack,
+        /// <summary>
+        /// Only one stack is removed when the duration expires. Duration is refreshed and the cycle repeats.
+        /// </summary>
+        RemoveSingleStackAndRefreshDuration,
+        /// <summary>
+        /// Duration is refreshed when a single stack is removed upon expiration (same as above but more explicit).
+        /// </summary>
+        RefreshDuration
+    }
+
+    /// <summary>
+    /// Determines how an attribute value is captured for effect calculations.
+    /// UE5: EGameplayEffectAttributeCaptureSource.
+    /// </summary>
+    public enum EGameplayEffectAttributeCaptureSource
+    {
+        /// <summary>
+        /// Attribute is read from the source (instigator) of the effect.
+        /// </summary>
+        Source,
+        /// <summary>
+        /// Attribute is read from the target of the effect.
+        /// </summary>
+        Target
+    }
+
+    /// <summary>
+    /// Determines when an attribute value is captured (snapshotted).
+    /// UE5: bSnapshot on FGameplayEffectAttributeCaptureDefinition.
+    /// </summary>
+    public enum EGameplayEffectAttributeCaptureSnapshot
+    {
+        /// <summary>
+        /// The attribute value is captured (frozen) at the time of effect application.
+        /// Later changes to the source attribute will NOT affect this modifier.
+        /// </summary>
+        Snapshot,
+        /// <summary>
+        /// The attribute value is read live from the source each time the modifier is evaluated.
+        /// </summary>
+        NotSnapshot
+    }
+
+    /// <summary>
     /// Defines how an effect stacks with other instances of the same effect.
     /// </summary>
     public enum EGameplayEffectStackingType
@@ -54,12 +153,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public EGameplayEffectStackingType Type;
         public int Limit;
         public EGameplayEffectStackingDurationPolicy DurationPolicy;
+        public EGameplayEffectStackingExpirationPolicy ExpirationPolicy;
 
-        public GameplayEffectStacking(EGameplayEffectStackingType type, int limit, EGameplayEffectStackingDurationPolicy durationPolicy)
+        public GameplayEffectStacking(EGameplayEffectStackingType type, int limit, EGameplayEffectStackingDurationPolicy durationPolicy,
+            EGameplayEffectStackingExpirationPolicy expirationPolicy = EGameplayEffectStackingExpirationPolicy.ClearEntireStack)
         {
             Type = type;
             Limit = limit;
             DurationPolicy = durationPolicy;
+            ExpirationPolicy = expirationPolicy;
         }
     }
 
@@ -120,6 +222,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public readonly GameplayModMagnitudeCalculation CustomCalculation;
 
         /// <summary>
+        /// Determines whether the modifier magnitude is snapshotted at application time
+        /// or recalculated live each evaluation. Default is Snapshot (UE5 default behavior).
+        /// Only meaningful for modifiers using CustomCalculation.
+        /// </summary>
+        public readonly EGameplayEffectAttributeCaptureSnapshot SnapshotPolicy;
+
+        /// <summary>
         /// Constructor for data-driven, scalable float modifiers.
         /// </summary>
         public ModifierInfo(string attributeName, EAttributeModifierOperation operation, ScalableFloat magnitude)
@@ -127,7 +236,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             AttributeName = attributeName;
             Operation = operation;
             Magnitude = magnitude;
-            CustomCalculation = null; // Ensure the other is null
+            CustomCalculation = null;
+            SnapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot;
         }
 
         /// <summary>
@@ -139,22 +249,27 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Operation = operation;
             Magnitude = magnitude;
             CustomCalculation = null;
+            SnapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot;
         }
 
-        public ModifierInfo(string attributeName, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation)
+        public ModifierInfo(string attributeName, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
         {
             AttributeName = attributeName;
             Operation = operation;
-            Magnitude = default; // Ensure the other is default
+            Magnitude = default;
             CustomCalculation = customCalculation;
+            SnapshotPolicy = snapshotPolicy;
         }
 
-        public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation)
+        public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
         {
             AttributeName = attribute.Name;
             Operation = operation;
-            Magnitude = default; // Ensure the other is default
+            Magnitude = default;
             CustomCalculation = customCalculation;
+            SnapshotPolicy = snapshotPolicy;
         }
     }
 }

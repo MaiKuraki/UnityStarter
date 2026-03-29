@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine.Assertions;
 
 namespace CycloneGames.GameplayTags.Runtime
@@ -99,8 +98,9 @@ namespace CycloneGames.GameplayTags.Runtime
             string[] parentTagNames = GameplayTagUtility.GetHeirarchyNames(definition.TagName);
 
             GameplayTagFlags flags = definition.Flags;
-            foreach (string parentTagName in Enumerable.Reverse(parentTagNames))
+            for (int i = parentTagNames.Length - 1; i >= 0; i--)
             {
+               string parentTagName = parentTagNames[i];
                if (m_TagsByName.TryGetValue(parentTagName, out GameplayTagDefinition parentTag))
                {
                   flags |= parentTag.Flags;
@@ -114,7 +114,7 @@ namespace CycloneGames.GameplayTags.Runtime
 
       private void SortDefinitionsAlphabetically()
       {
-         m_Definition.Sort((a, b) => string.Compare(a.TagName, b.TagName, StringComparison.OrdinalIgnoreCase));
+         m_Definition.Sort((a, b) => string.Compare(a.TagName, b.TagName, StringComparison.Ordinal));
       }
 
       private void FillParentsAndChildren()
@@ -154,13 +154,15 @@ namespace CycloneGames.GameplayTags.Runtime
          {
             GameplayTagDefinition definition = m_Definition[i];
 
-            List<GameplayTag> hierarcyTags = new();
+            ReadOnlySpan<GameplayTag> parentHierarchy = definition.ParentTagDefinition != null
+               ? definition.ParentTagDefinition.HierarchyTags
+               : ReadOnlySpan<GameplayTag>.Empty;
 
-            if (definition.ParentTagDefinition != null)
-               hierarcyTags.AddRange(definition.ParentTagDefinition.HierarchyTags.ToArray());
+            GameplayTag[] hierarchyTags = new GameplayTag[parentHierarchy.Length + 1];
+            parentHierarchy.CopyTo(hierarchyTags);
+            hierarchyTags[parentHierarchy.Length] = definition.Tag;
 
-            hierarcyTags.Add(definition.Tag);
-            definition.SetHierarchyTags(hierarcyTags.ToArray());
+            definition.SetHierarchyTags(hierarchyTags);
          }
       }
 

@@ -14,12 +14,15 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private static readonly Color ColorActivated = new(0.3f, 0.9f, 0.4f, 1f);
         private static readonly Color ColorDeactivated = new(0.6f, 0.6f, 0.6f, 1f);
 
+        // Cached GUIStyle for gizmo labels — avoid per-draw allocation
+        private static GUIStyle s_gizmoLabelStyle;
+
         // Base class fields to exclude from derived class section
         private static readonly string[] BaseClassFields =
         {
             "m_Script",
             "startActivated",
-            // Interactable base fields
+            // Interactable base fields (for subclasses that also extend Interactable)
             "interactionPrompt",
             "isInteractable",
             "autoInteract",
@@ -28,8 +31,12 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             "interactionPoint",
             "interactionCooldown",
             "resetToIdleOnComplete",
+            "channel",
             "useLocalization",
             "promptData",
+            "actions",
+            "holdDuration",
+            "maxInteractionRange",
             "onInteract",
             "onFocus",
             "onDefocus"
@@ -176,13 +183,16 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             Handles.DrawSolidDisc(pos, Vector3.up, 0.2f);
             Handles.DrawWireDisc(pos, Vector3.up, 0.3f);
 
-            GUIStyle style = new GUIStyle(EditorStyles.boldLabel)
+            if (s_gizmoLabelStyle == null)
             {
-                alignment = TextAnchor.MiddleCenter,
-                normal = { textColor = color }
-            };
+                s_gizmoLabelStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    alignment = TextAnchor.MiddleCenter
+                };
+            }
+            s_gizmoLabelStyle.normal.textColor = color;
             string label = target.IsActivated ? "ON" : "OFF";
-            Handles.Label(pos + Vector3.up * 0.5f, label, style);
+            Handles.Label(pos + Vector3.up * 0.5f, label, s_gizmoLabelStyle);
         }
     }
 }

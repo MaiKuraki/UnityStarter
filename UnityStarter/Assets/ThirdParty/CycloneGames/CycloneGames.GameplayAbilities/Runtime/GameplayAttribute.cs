@@ -20,6 +20,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public float CurrentValue => _currentValue;
 
         public event Action<float, float> OnCurrentValueChanged; // old, new
+        public event Action<float, float> OnBaseValueChanged; // old, new
 
         public GameplayAttribute(string name)
         {
@@ -28,7 +29,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void SetBaseValue(float value)
         {
+            float oldValue = _baseValue;
             _baseValue = value;
+            if (Math.Abs(oldValue - value) > float.Epsilon)
+            {
+                OnBaseValueChanged?.Invoke(oldValue, value);
+            }
         }
 
         public void SetCurrentValue(float value)

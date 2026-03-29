@@ -206,14 +206,15 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
             foreach (var interactable in interactables)
             {
-                // Check for Collider
-                var collider = interactable.GetComponent<Collider>();
-                if (collider == null)
+                // Check for Collider (3D or 2D)
+                var collider3D = interactable.GetComponent<Collider>();
+                var collider2D = interactable.GetComponent<Collider2D>();
+                if (collider3D == null && collider2D == null)
                 {
                     _issues.Add(new ValidationIssue
                     {
                         Severity = Severity.Error,
-                        Message = $"Missing Collider on '{interactable.name}'. Interaction detection requires a Collider.",
+                        Message = $"Missing Collider on '{interactable.name}'. Interaction detection requires a Collider (3D or 2D).",
                         Target = interactable,
                         CanAutoFix = true,
                         FixAction = () =>
@@ -223,18 +224,34 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                         }
                     });
                 }
-                else if (!collider.isTrigger)
+                else if (collider3D != null && !collider3D.isTrigger)
                 {
                     _issues.Add(new ValidationIssue
                     {
                         Severity = Severity.Warning,
-                        Message = $"Collider on '{interactable.name}' is not a trigger. Consider setting isTrigger=true for interaction detection.",
+                        Message = $"Collider on '{interactable.name}' is not a trigger. Consider setting isTrigger=true.",
                         Target = interactable,
                         CanAutoFix = true,
                         FixAction = () =>
                         {
-                            Undo.RecordObject(collider, "Set Trigger");
-                            collider.isTrigger = true;
+                            Undo.RecordObject(collider3D, "Set Trigger");
+                            collider3D.isTrigger = true;
+                            _fixedCount++;
+                        }
+                    });
+                }
+                else if (collider2D != null && !collider2D.isTrigger)
+                {
+                    _issues.Add(new ValidationIssue
+                    {
+                        Severity = Severity.Warning,
+                        Message = $"Collider2D on '{interactable.name}' is not a trigger. Consider setting isTrigger=true.",
+                        Target = interactable,
+                        CanAutoFix = true,
+                        FixAction = () =>
+                        {
+                            Undo.RecordObject(collider2D, "Set Trigger");
+                            collider2D.isTrigger = true;
                             _fixedCount++;
                         }
                     });
@@ -256,7 +273,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
                 // Check for cooldown
                 var serializedObject = new SerializedObject(interactable);
-                var cooldownProp = serializedObject.FindProperty("cooldownTime");
+                var cooldownProp = serializedObject.FindProperty("interactionCooldown");
                 if (cooldownProp != null && cooldownProp.floatValue <= 0)
                 {
                     _issues.Add(new ValidationIssue
@@ -319,22 +336,44 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                     });
                 }
 
-                var layerMaskProp = serializedObject.FindProperty("detectionLayer");
-                if (layerMaskProp != null && layerMaskProp.intValue == 0)
+                var modeProp = serializedObject.FindProperty("detectionMode");
+                if (modeProp != null)
                 {
-                    _issues.Add(new ValidationIssue
+                    var mode = (DetectionMode)modeProp.enumValueIndex;
+                    if (mode == DetectionMode.SpatialHash)
                     {
-                        Severity = Severity.Error,
-                        Message = $"DetectionLayer on '{detector.name}' is empty (Nothing). No layers will be detected.",
-                        Target = detector,
-                        CanAutoFix = true,
-                        FixAction = () =>
+                        var system = FindAnyObjectByType<InteractionSystem>();
+                        if (system == null)
                         {
-                            layerMaskProp.intValue = -1; // Everything
-                            serializedObject.ApplyModifiedProperties();
-                            _fixedCount++;
+                            _issues.Add(new ValidationIssue
+                            {
+                                Severity = Severity.Error,
+                                Message = $"Detector '{detector.name}' uses SpatialHash mode but no InteractionSystem found in scene.",
+                                Target = detector,
+                                CanAutoFix = false
+                            });
                         }
-                    });
+                    }
+                    else
+                    {
+                        var layerMaskProp = serializedObject.FindProperty("interactableLayer");
+                        if (layerMaskProp != null && layerMaskProp.intValue == 0)
+                        {
+                            _issues.Add(new ValidationIssue
+                            {
+                                Severity = Severity.Error,
+                                Message = $"InteractableLayer on '{detector.name}' is empty (Nothing). No layers will be detected.",
+                                Target = detector,
+                                CanAutoFix = true,
+                                FixAction = () =>
+                                {
+                                    layerMaskProp.intValue = -1;
+                                    serializedObject.ApplyModifiedProperties();
+                                    _fixedCount++;
+                                }
+                            });
+                        }
+                    }
                 }
             }
 
@@ -352,14 +391,25 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private void ValidateEffectPool()
         {
-            // EffectPoolSystem is static - just provide info about its usage
-            _issues.Add(new ValidationIssue
+            // EffectPoolSystem is static — only validate PooledEffect prefab references in scene
+            var pooledEffects = FindObjectsByType<PooledEffect>(FindObjectsSortMode.None);
+            foreach (var effect in pooledEffects)
             {
-                Severity = Severity.Info,
-                Message = "EffectPoolSystem is a static utility. It auto-initializes when first used at runtime.",
-                Target = null,
-                CanAutoFix = false
-            });
+                if (effect.gameObject.scene.isLoaded && !effect.gameObject.activeInHierarchy)
+                    continue; // Inactive is fine for pool
+
+                var ps = effect.GetComponent<ParticleSystem>();
+                if (ps == null)
+                {
+                    _issues.Add(new ValidationIssue
+                    {
+                        Severity = Severity.Info,
+                        Message = $"PooledEffect '{effect.name}' has no ParticleSystem. This is fine if you use a non-particle effect.",
+                        Target = effect,
+                        CanAutoFix = false
+                    });
+                }
+            }
         }
 
         private void ValidateLayers()
@@ -379,7 +429,24 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private void ValidateTwoStateInteractions()
         {
-            
+            var twoStates = FindObjectsByType<TwoStateInteractionBase>(FindObjectsSortMode.None);
+
+            foreach (var ts in twoStates)
+            {
+                // Check for collider
+                var collider3D = ts.GetComponent<Collider>();
+                var collider2D = ts.GetComponent<Collider2D>();
+                if (collider3D == null && collider2D == null)
+                {
+                    _issues.Add(new ValidationIssue
+                    {
+                        Severity = Severity.Warning,
+                        Message = $"TwoStateInteraction '{ts.name}' has no Collider. If it's used with InteractionDetector, a collider is required.",
+                        Target = ts,
+                        CanAutoFix = false
+                    });
+                }
+            }
         }
 
         private void FixAllIssues()

@@ -40,6 +40,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 runtimeExecution = ExecutionDefinition.CreateExecution();
             }
 
+            var runtimeOverflowEffects = new List<GameplayEffect>();
+            if (OverflowEffects != null)
+            {
+                foreach (var overflowSO in OverflowEffects)
+                {
+                    if (overflowSO != null) runtimeOverflowEffects.Add(overflowSO.GetGameplayEffect());
+                }
+            }
+
             return new GameplayEffect(
                 EffectName,
                 DurationPolicy,
@@ -54,7 +63,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 ApplicationTagRequirements,
                 OngoingTagRequirements,
                 RemoveGameplayEffectsWithTags,
-                GameplayCues
+                GameplayCues,
+                SuppressGameplayCues,
+                RemoveGameplayEffectsAfterAbilityEnds,
+                customApplicationRequirements: null,
+                executePeriodicEffectOnApplication: ExecutePeriodicEffectOnApplication,
+                overflowEffects: runtimeOverflowEffects,
+                denyOverflowApplication: DenyOverflowApplication
             );
         }
     }

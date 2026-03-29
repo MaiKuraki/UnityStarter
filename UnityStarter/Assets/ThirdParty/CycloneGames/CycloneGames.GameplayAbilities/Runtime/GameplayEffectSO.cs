@@ -54,6 +54,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("A list of GameplayCue tags (e.g., 'GameplayCue.VFX.Fireball.Impact') to trigger for cosmetic effects like particles and sounds when the effect is applied, executed, or removed.")]
         public GameplayTagContainer GameplayCues;
 
+        [Tooltip("If true, gameplay cues (VFX/SFX) are suppressed for this effect. Useful for silent/debug application.")]
+        public bool SuppressGameplayCues;
+
+        [Header("Advanced")]
+        [Tooltip("If true, this effect is automatically removed when the ability that applied it ends. UE5: RemoveGameplayEffectContainerOnAbilityEnd.")]
+        public bool RemoveGameplayEffectsAfterAbilityEnds;
+
+        [Tooltip("If true (default), periodic effects execute their first tick immediately upon application. If false, the first execution waits for the full period interval. UE5: bExecutePeriodicEffectOnApplication.")]
+        public bool ExecutePeriodicEffectOnApplication = true;
+
+        [Tooltip("Effects to apply when a stacking attempt occurs while at the stack limit. UE5: OverflowEffects.")]
+        public List<GameplayEffectSO> OverflowEffects;
+
+        [Tooltip("If true, the original effect's duration refresh is denied when overflow occurs. UE5: bDenyOverflowApplication.")]
+        public bool DenyOverflowApplication;
+
         private GameplayEffect _runtimeCache;
         public GameplayEffect GetGameplayEffect()
         {
