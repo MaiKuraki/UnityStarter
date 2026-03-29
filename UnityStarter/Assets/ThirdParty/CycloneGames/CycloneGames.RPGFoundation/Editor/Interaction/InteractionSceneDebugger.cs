@@ -32,6 +32,15 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private static GUIStyle s_boxStyle;
         private static Rect s_windowRect = new(10, 10, 200, 150);
 
+        // Cached scene queries — throttled to avoid per-frame FindObjectsByType
+        private static Interactable[] s_cachedInteractables;
+        private static InteractionDetector[] s_cachedDetectors;
+        private static double s_lastCacheTime;
+        private const double CacheRefreshInterval = 0.2;
+
+        // Cached reflection — avoid per-frame GetField allocations
+        private static System.Reflection.FieldInfo s_radiusField;
+
         static InteractionSceneDebugger()
         {
             s_enabled = EditorPrefs.GetBool("InteractionSceneDebugger_Enabled", false);
@@ -148,10 +157,28 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             GUI.DragWindow();
         }
 
+        private static void RefreshCacheIfNeeded()
+        {
+            double now = EditorApplication.timeSinceStartup;
+            if (s_cachedInteractables != null && now - s_lastCacheTime < CacheRefreshInterval)
+                return;
+            s_lastCacheTime = now;
+            s_cachedInteractables = Object.FindObjectsByType<Interactable>(FindObjectsSortMode.None);
+            s_cachedDetectors = Object.FindObjectsByType<InteractionDetector>(FindObjectsSortMode.None);
+        }
+
+        private static float GetDetectorRadius(InteractionDetector detector)
+        {
+            s_radiusField ??= typeof(InteractionDetector).GetField("detectionRadius",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            return s_radiusField != null ? (float)s_radiusField.GetValue(detector) : 3f;
+        }
+
         private static void DrawEditModeVisualization()
         {
-            var interactables = Object.FindObjectsByType<Interactable>(FindObjectsSortMode.None);
-            var detectors = Object.FindObjectsByType<InteractionDetector>(FindObjectsSortMode.None);
+            RefreshCacheIfNeeded();
+            var interactables = s_cachedInteractables;
+            var detectors = s_cachedDetectors;
 
             // Draw interactable zones
             foreach (var interactable in interactables)
@@ -183,8 +210,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 if (detector == null) continue;
 
                 Vector3 pos = detector.transform.position;
-                var so = new SerializedObject(detector);
-                float radius = so.FindProperty("detectionRadius")?.floatValue ?? 3f;
+                float radius = GetDetectorRadius(detector);
 
                 Handles.color = ColorDetector;
                 Handles.DrawWireDisc(pos, Vector3.up, radius);
@@ -198,8 +224,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private static void DrawPlayModeVisualization()
         {
-            var interactables = Object.FindObjectsByType<Interactable>(FindObjectsSortMode.None);
-            var detectors = Object.FindObjectsByType<InteractionDetector>(FindObjectsSortMode.None);
+            RefreshCacheIfNeeded();
+            var interactables = s_cachedInteractables;
+            var detectors = s_cachedDetectors;
 
             // Draw interactables with state colors
             foreach (var interactable in interactables)
@@ -242,32 +269,19 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 if (detector == null) continue;
 
                 Vector3 detectorPos = detector.transform.position;
-                var so = new SerializedObject(detector);
-                float radius = so.FindProperty("detectionRadius")?.floatValue ?? 3f;
+                float radius = GetDetectorRadius(detector);
 
                 // Detection radius
                 Handles.color = ColorDetector;
                 Handles.DrawWireDisc(detectorPos, Vector3.up, radius);
 
-                // Current target connection
-                var targetProp = so.FindProperty("currentTarget");
-                if (targetProp != null && targetProp.propertyType == SerializedPropertyType.Generic)
+                // Current target connection — use public CurrentInteractable property
+                IInteractable currentTarget = detector.CurrentInteractable.CurrentValue;
+                if (currentTarget != null && currentTarget is MonoBehaviour mb)
                 {
-                    // ReactiveProperty - try to get value at runtime
-                    var rp = detector.GetType().GetProperty("CurrentTarget");
-                    if (rp != null)
-                    {
-                        var rpValue = rp.GetValue(detector);
-                        var valueProp = rpValue?.GetType().GetProperty("Value");
-                        var currentTarget = valueProp?.GetValue(rpValue) as IInteractable;
-
-                        if (currentTarget != null && currentTarget is MonoBehaviour mb)
-                        {
-                            Handles.color = ColorCandidate;
-                            Handles.DrawLine(detectorPos, mb.transform.position);
-                            Handles.DrawSolidDisc(mb.transform.position + Vector3.up * 0.5f, Vector3.up, 0.15f);
-                        }
-                    }
+                    Handles.color = ColorCandidate;
+                    Handles.DrawLine(detectorPos, mb.transform.position);
+                    Handles.DrawSolidDisc(mb.transform.position + Vector3.up * 0.5f, Vector3.up, 0.15f);
                 }
 
                 if (s_showConnections)

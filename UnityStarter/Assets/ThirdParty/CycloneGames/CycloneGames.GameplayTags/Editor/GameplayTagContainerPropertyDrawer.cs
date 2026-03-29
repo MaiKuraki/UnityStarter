@@ -13,9 +13,10 @@ namespace CycloneGames.GameplayTags.Editor
       private const float k_ButtonsWidth = 90f;
       private const float k_ButtonHeight = 20f;
       private const float k_TagHeight = 18f;
+      private const float k_RemoveButtonWidth = 22f;
+      private const float k_RemoveButtonGap = 4f;
 
       private static GUIContent s_TempContent = new();
-      private static GUIContent s_EditTagsContent;
 
       private static GUIStyle s_TagBoxStyle;
 
@@ -30,7 +31,6 @@ namespace CycloneGames.GameplayTags.Editor
             tooltip = "Remove this tag."
          };
 
-         s_EditTagsContent = new GUIContent("Edit Tags...", "Edit tags in a popup window.");
          if (s_TagBoxStyle == null)
          {
             s_TagBoxStyle = new GUIStyle(EditorStyles.helpBox)
@@ -86,7 +86,10 @@ namespace CycloneGames.GameplayTags.Editor
          Rect editButtonRect = new(position.x, position.y, k_ButtonsWidth, k_ButtonHeight);
          using (new EditorGUI.DisabledScope(explicitTagsProperty.hasMultipleDifferentValues))
          {
-            if (GUI.Button(editButtonRect, s_EditTagsContent))
+            string editLabel = explicitTagsProperty.arraySize > 0
+               ? $"Edit Tags ({explicitTagsProperty.arraySize})..."
+               : "Edit Tags...";
+            if (GUI.Button(editButtonRect, editLabel))
             {
                GameplayTagContainerTreeView tagTreeView = new(new TreeViewState(), explicitTagsProperty);
                Rect activatorRect = editButtonRect;
@@ -143,7 +146,7 @@ namespace CycloneGames.GameplayTags.Editor
                s_TempContent.text = isValid ? element.stringValue : element.stringValue + " (Invalid)";
                s_TempContent.tooltip = tag.Description ?? "No description";
 
-               Rect removeButtonRect = new(tagRect.x, tagRect.y, 22, tagRect.height);
+               Rect removeButtonRect = new(tagRect.x, tagRect.y, k_RemoveButtonWidth, tagRect.height);
                if (GUI.Button(removeButtonRect, m_RemoveTagContent))
                {
                   explicitTagsProperty.DeleteArrayElementAtIndex(i);
@@ -151,11 +154,12 @@ namespace CycloneGames.GameplayTags.Editor
                   break;
                }
 
-               Rect labelRect = new(removeButtonRect.xMax + 4, tagRect.y, tagRect.width - 20, tagRect.height);
+               float labelX = removeButtonRect.xMax + k_RemoveButtonGap;
+               Rect labelRect = new(labelX, tagRect.y, tagRect.xMax - labelX, tagRect.height);
 
                Color previousColor = GUI.color;
                if (!isValid)
-                  GUI.color = new Color(previousColor.g, previousColor.g, previousColor.b, previousColor.a * 0.5f);
+                  GUI.color = new Color(1f, 0.4f, 0.4f, previousColor.a);
 
                EditorGUI.LabelField(labelRect, s_TempContent);
 

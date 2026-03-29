@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Linq;
 
 namespace CycloneGames.GameplayTags.Runtime
 {
@@ -158,23 +157,31 @@ namespace CycloneGames.GameplayTags.Runtime
       public void SetParent(GameplayTagDefinition parent)
       {
          ParentTagDefinition = parent;
-         List<GameplayTag> tags = new();
 
+         // Count ancestors to pre-allocate exact array size (avoids List + Reverse + ToArray)
+         int count = 0;
          GameplayTagDefinition current = parent;
          while (current != null)
          {
-            tags.Add(current.Tag);
+            count++;
             current = current.ParentTagDefinition;
          }
 
-         tags.Reverse();
-         m_ParentTags = tags.ToArray();
+         m_ParentTags = new GameplayTag[count];
+         current = parent;
+         for (int i = count - 1; i >= 0; i--)
+         {
+            m_ParentTags[i] = current.Tag;
+            current = current.ParentTagDefinition;
+         }
       }
 
       public void SetChildren(List<GameplayTagDefinition> children)
       {
          m_Children = children.ToArray();
-         m_ChildTags = children.Select(c => c.Tag).ToArray();
+         m_ChildTags = new GameplayTag[children.Count];
+         for (int i = 0; i < children.Count; i++)
+            m_ChildTags[i] = children[i].Tag;
       }
 
       public void SetHierarchyTags(GameplayTag[] hierarchyTags)

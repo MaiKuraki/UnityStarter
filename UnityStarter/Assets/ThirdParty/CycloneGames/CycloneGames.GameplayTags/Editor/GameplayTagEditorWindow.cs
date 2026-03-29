@@ -7,8 +7,7 @@ namespace CycloneGames.GameplayTags.Editor
 {
     public class GameplayTagEditorWindow : EditorWindow
     {
-        private SearchField searchField;
-        private GameplayTagTreeView treeView;
+        private ManagerTreeView treeView;
         private TreeViewState treeViewState;
 
         [MenuItem("Tools/CycloneGames/Gameplay Tag Manager")]
@@ -20,56 +19,47 @@ namespace CycloneGames.GameplayTags.Editor
         private void OnEnable()
         {
             treeViewState = new TreeViewState();
-            treeView = new GameplayTagTreeView(treeViewState);
-            searchField = new SearchField();
-            searchField.downOrUpArrowKeyPressed += treeView.SetFocusAndEnsureSelectedItem;
-            ReloadTreeView();
+            treeView = new ManagerTreeView(treeViewState);
         }
 
         private void OnGUI()
         {
-            EditorGUILayout.LabelField("Gameplay Tag Manager", EditorStyles.boldLabel);
-            EditorGUILayout.Space();
+            // Header
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            EditorGUILayout.LabelField("Gameplay Tag Manager", EditorStyles.boldLabel, GUILayout.ExpandWidth(true));
 
-            if (GUILayout.Button("Refresh Tags & Generate Code"))
+            int tagCount = GameplayTagManager.GetAllTags().Length;
+            GUILayout.Label($"{tagCount} tags", EditorStyles.centeredGreyMiniLabel, GUILayout.ExpandWidth(false));
+
+            EditorGUILayout.EndHorizontal();
+
+            // Refresh button
+            if (GUILayout.Button("Refresh Tags & Generate Code", GUILayout.Height(24)))
             {
-                // Step 1: Reload the tags in memory.
                 GameplayTagManager.ReloadTags();
-                
-                // Step 2: Force Unity to recompile, which will trigger the source generator.
                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
-
-                // Step 3: Reload the tree view to show the latest tags.
-                ReloadTreeView();
-                
-                // Step 4: Inform the user with a clear log and a simple dialog.
-                Debug.Log("<b>Gameplay Tag Source Generation Triggered</b>\n" +
-                          "The 'AllGameplayTags.g.cs' file is a virtual file generated during compilation. " +
-                          "To view its contents, open your project in an IDE like <b>Visual Studio</b> or <b>Rider</b> and navigate to:\n" +
-                          "<i>Solution Explorer -> YourUnityProject -> Analyzers -> CycloneGames.GameplayTags.SourceGenerator -> AllGameplayTags.g.cs</i>");
-
-                EditorUtility.DisplayDialog("Process Started", "Tags have been refreshed and a recompile has been triggered to update the 'AllGameplayTags' class. Please check the Console for more details.", "OK");
-            }
-
-            EditorGUILayout.Space();
-            
-            string searchString = searchField.OnGUI(treeView.searchString);
-            if (searchString != treeView.searchString)
-            {
-                treeView.searchString = searchString;
                 treeView.Reload();
             }
 
-            Rect rect = GUILayoutUtility.GetLastRect();
-            Rect treeRect = new Rect(rect.x, rect.y + EditorGUIUtility.singleLineHeight, position.width, position.height - rect.y - EditorGUIUtility.singleLineHeight * 2);
+            // Tree view fills remaining space
+            Rect treeRect = GUILayoutUtility.GetRect(0, position.width, 0, position.height, GUILayout.ExpandHeight(true));
             treeView.OnGUI(treeRect);
         }
 
-        private void ReloadTreeView()
+        private class ManagerTreeView : GameplayTagTreeViewBase
         {
-            if (treeView != null)
+            public ManagerTreeView(TreeViewState state) : base(state)
             {
-                treeView.Reload();
+            }
+
+            protected override void RowGUI(RowGUIArgs args)
+            {
+                float indent = GetContentIndent(args.item);
+                Rect rect = args.rowRect;
+                rect.xMin += indent + 2 - (hasSearch ? 14 : 0);
+
+                if (args.item is GameplayTagTreeViewItem item)
+                    DoTagRowGUI(rect, item);
             }
         }
     }

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using CycloneGames.GameplayTags.Runtime;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
@@ -30,141 +29,184 @@ namespace CycloneGames.GameplayTags.Editor
                 return;
             }
 
-            GameplayTag tag = GameplayTagManager.RequestTag(nameProperty.stringValue);
+            GameplayTag tag = GameplayTagManager.RequestTag(nameProperty.stringValue, false);
 
-            s_TempContent.text = string.IsNullOrEmpty(tag.Name) || !tag.IsValid ? "Select..." : tag.Name;
-            s_TempContent.tooltip = tag.Description;
+            bool hasValue = !string.IsNullOrEmpty(nameProperty.stringValue);
+            bool isValid = hasValue && tag.IsValid;
+
+            if (!hasValue)
+                s_TempContent.text = "None";
+            else if (!isValid)
+                s_TempContent.text = nameProperty.stringValue + " (Invalid)";
+            else
+                s_TempContent.text = tag.Name;
+
+            s_TempContent.tooltip = isValid ? tag.Description : null;
+
+            // Draw clear button when a tag is selected
+            Rect clearRect = default;
+            if (hasValue)
+            {
+                clearRect = new Rect(position.xMax - 18, position.y, 18, position.height);
+                position.width -= 20;
+            }
 
             if (EditorGUI.DropdownButton(position, s_TempContent, FocusType.Keyboard))
             {
                 Action<GameplayTag> onTagSelected = newTag =>
                 {
-                    nameProperty.stringValue = newTag.Name;
+                    nameProperty.stringValue = newTag.IsNone ? null : newTag.Name;
                     property.serializedObject.ApplyModifiedProperties();
                 };
 
                 var tagPickerTreeView = new TagPickerTreeView(new TreeViewState(), onTagSelected);
-                ShowPopupWindow(tagPickerTreeView, position, 280f);
+                var content = new TagPickerPopup(tagPickerTreeView, position.width);
+                PopupWindow.Show(position, content);
+            }
+
+            if (hasValue)
+            {
+                Color prev = GUI.color;
+                if (!isValid) GUI.color = new Color(1f, 0.4f, 0.4f);
+                if (GUI.Button(clearRect, "\u00D7", EditorStyles.miniLabel))
+                {
+                    nameProperty.stringValue = null;
+                    property.serializedObject.ApplyModifiedProperties();
+                }
+                GUI.color = prev;
             }
 
             EditorGUI.indentLevel = oldIndentLevel;
             EditorGUI.EndProperty();
         }
 
-        private static void ShowPopupWindow<T>(T treeView, Rect rect, float height) where T : TreeView
+        private class TagPickerPopup : PopupWindowContent
         {
-            var content = new TreeViewPopupContent<T>(treeView, null);
-            PopupWindow.Show(rect, content);
-        }
+            private readonly TagPickerTreeView m_TreeView;
+            private readonly SearchField m_SearchField;
+            private readonly float m_Width;
 
-        // --- Nested Helper Classes to avoid conflicts ---
-
-        private class TreeViewPopupContent<T> : PopupWindowContent where T : TreeView
-        {
-            private readonly T m_TreeView;
-            private readonly Action m_OnClose;
-
-            public TreeViewPopupContent(T treeView, Action onClose)
+            public TagPickerPopup(TagPickerTreeView treeView, float width)
             {
                 m_TreeView = treeView;
-                m_OnClose = onClose;
+                m_TreeView.closeRequested = () => editorWindow?.Close();
+                m_SearchField = new SearchField();
+                m_Width = Mathf.Max(width, 200f);
+            }
+
+            public override Vector2 GetWindowSize()
+            {
+                return new Vector2(m_Width, 300f);
             }
 
             public override void OnGUI(Rect rect)
             {
-                const int border = 4;
-                Rect treeRect = new(border, border, rect.width - border * 2, rect.height - border * 2);
-                m_TreeView.OnGUI(treeRect);
-            }
+                const float searchHeight = 20f;
+                const float padding = 4f;
 
-            public override void OnClose()
-            {
-                m_OnClose?.Invoke();
+                Rect searchRect = new(rect.x + padding, rect.y + padding, rect.width - padding * 2, searchHeight);
+                string newSearch = m_SearchField.OnGUI(searchRect, m_TreeView.searchString);
+                if (newSearch != m_TreeView.searchString)
+                    m_TreeView.searchString = newSearch;
+
+                Rect treeRect = new(rect.x + padding, searchRect.yMax + padding, rect.width - padding * 2, rect.height - searchHeight - padding * 3);
+                m_TreeView.OnGUI(treeRect);
             }
         }
 
         private class TagPickerTreeView : TreeView
         {
             private readonly Action<GameplayTag> onTagSelected;
+            private readonly Dictionary<int, string> m_IdToTagPath = new();
+            public Action closeRequested;
 
             public TagPickerTreeView(TreeViewState state, Action<GameplayTag> onTagSelected) : base(state)
             {
                 this.onTagSelected = onTagSelected;
+                showAlternatingRowBackgrounds = true;
                 Reload();
             }
 
             protected override TreeViewItem BuildRoot()
             {
                 var root = new TreeViewItem { id = 0, depth = -1, displayName = "Root" };
-                
+
                 GameplayTagManager.InitializeIfNeeded();
-                var allTags = GameplayTagManager.GetAllTags().ToArray().OrderBy(t => t.Name).ToList();
+                ReadOnlySpan<GameplayTag> allTags = GameplayTagManager.GetAllTags();
 
                 var tagItems = new Dictionary<string, TreeViewItem>();
                 int id = 1;
 
-                // Add "None" option
-                var noneItem = new TreeViewItem { id = id++, displayName = "None" };
-                root.AddChild(noneItem);
+                // "None" option at top
+                int noneId = id++;
+                var noneItem = new TreeViewItem { id = noneId, displayName = "(None)", depth = 0 };
+                m_IdToTagPath[noneId] = null;
 
-                foreach (var tag in allTags)
+                List<TreeViewItem> flatItems = new() { noneItem };
+
+                for (int t = 0; t < allTags.Length; t++)
                 {
+                    GameplayTag tag = allTags[t];
                     string[] parts = tag.Name.Split('.');
                     string currentPath = "";
+
                     for (int i = 0; i < parts.Length; i++)
                     {
-                        string parentPath = currentPath;
                         currentPath = i == 0 ? parts[i] : $"{currentPath}.{parts[i]}";
 
                         if (!tagItems.ContainsKey(currentPath))
                         {
-                            var newItem = new TreeViewItem { id = id++, displayName = parts[i] };
-                            tagItems.Add(currentPath, newItem);
-
-                            if (string.IsNullOrEmpty(parentPath))
-                            {
-                                root.AddChild(newItem);
-                            }
-                            else if (tagItems.TryGetValue(parentPath, out var parentItem))
-                            {
-                                parentItem.AddChild(newItem);
-                            }
+                            int itemId = id++;
+                            var newItem = new TreeViewItem { id = itemId, displayName = parts[i], depth = i + 1 };
+                            tagItems[currentPath] = newItem;
+                            m_IdToTagPath[itemId] = currentPath;
+                            flatItems.Add(newItem);
                         }
                     }
                 }
-                
-                SetupParentsAndChildrenFromDepths(root, root.children);
+
+                SetupParentsAndChildrenFromDepths(root, flatItems);
                 return root;
             }
 
-            protected override void SelectionChanged(IList<int> selectedIds)
+            protected override bool DoesItemMatchSearch(TreeViewItem item, string search)
             {
-                if (selectedIds.Count == 0) return;
+                if (m_IdToTagPath.TryGetValue(item.id, out string path) && path != null)
+                    return path.IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0;
+                return false;
+            }
 
-                var selectedItem = FindItem(selectedIds[0], rootItem);
-                if (selectedItem == null) return;
+            protected override void SingleClickedItem(int id)
+            {
+                SelectTagById(id);
+            }
 
-                if (selectedItem.displayName == "None")
+            protected override void KeyEvent()
+            {
+                if (Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Return)
+                {
+                    var selection = GetSelection();
+                    if (selection.Count > 0)
+                        SelectTagById(selection[0]);
+                }
+            }
+
+            private void SelectTagById(int id)
+            {
+                if (!m_IdToTagPath.TryGetValue(id, out string path))
+                    return;
+
+                if (path == null)
                 {
                     onTagSelected?.Invoke(GameplayTag.None);
                 }
                 else
                 {
-                    string fullPath = GetFullTagPath(selectedItem);
-                    GameplayTag selectedTag = GameplayTagManager.RequestTag(fullPath);
+                    GameplayTag selectedTag = GameplayTagManager.RequestTag(path);
                     onTagSelected?.Invoke(selectedTag);
                 }
-                
-                EditorWindow.GetWindow<PopupWindow>().Close();
-            }
 
-            private string GetFullTagPath(TreeViewItem item)
-            {
-                if (item == null || item.parent == null || item.parent.depth == -1)
-                {
-                    return item?.displayName ?? "";
-                }
-                return $"{GetFullTagPath(item.parent)}.{item.displayName}";
+                closeRequested?.Invoke();
             }
         }
     }

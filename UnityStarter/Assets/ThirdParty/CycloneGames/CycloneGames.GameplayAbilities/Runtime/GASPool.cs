@@ -6,6 +6,16 @@ using System.Threading;
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
+    /// Non-generic pool contract for centralized registry operations (AOT-safe, no reflection).
+    /// </summary>
+    public interface IGASPool
+    {
+        void Clear();
+        void AggressiveShrink();
+        GASPoolStatistics GetStatistics();
+    }
+
+    /// <summary>
     /// Contract for poolable objects. Implement to enable pool lifecycle callbacks.
     /// </summary>
     public interface IGASPoolable
@@ -30,7 +40,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// - Unity "fake null" validation support
     /// - Full statistics for profiling
     /// </summary>
-    public sealed class GASPool<T> where T : class, IGASPoolable, new()
+    public sealed class GASPool<T> : IGASPool where T : class, IGASPoolable, new()
     {
         #region Platform Configuration
 
@@ -405,7 +415,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public static class GASPoolRegistry
     {
-        private static readonly ConcurrentDictionary<Type, object> s_Pools = new();
+        private static readonly ConcurrentDictionary<Type, IGASPool> s_Pools = new();
 
         public static void Register<T>(GASPool<T> pool) where T : class, IGASPoolable, new()
             => s_Pools[typeof(T)] = pool;
@@ -424,7 +434,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             foreach (var kvp in s_Pools)
             {
-                kvp.Value.GetType().GetMethod("AggressiveShrink")?.Invoke(kvp.Value, null);
+                kvp.Value.AggressiveShrink();
             }
         }
 
@@ -432,7 +442,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             foreach (var kvp in s_Pools)
             {
-                kvp.Value.GetType().GetMethod("Clear")?.Invoke(kvp.Value, null);
+                kvp.Value.Clear();
             }
         }
     }

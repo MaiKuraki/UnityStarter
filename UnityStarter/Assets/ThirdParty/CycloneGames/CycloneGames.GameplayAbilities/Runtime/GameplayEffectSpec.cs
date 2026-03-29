@@ -45,6 +45,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public float[] ModifierMagnitudes = System.Array.Empty<float>();
         public GameplayAttribute[] TargetAttributes = System.Array.Empty<GameplayAttribute>();
 
+        /// <summary>
+        /// Tags added at runtime to this specific spec instance, supplementing the definition's GrantedTags.
+        /// UE5: FGameplayEffectSpec::DynamicGrantedTags.
+        /// These tags are granted to the target in addition to Def.GrantedTags.
+        /// </summary>
+        public GameplayTagContainer DynamicGrantedTags { get; } = new GameplayTagContainer();
+
+        /// <summary>
+        /// Tags added at runtime to this specific spec instance, supplementing the definition's AssetTags.
+        /// UE5: FGameplayEffectSpec::DynamicAssetTags.
+        /// These tags describe this specific instance and can be used for immunity/removal checks.
+        /// </summary>
+        public GameplayTagContainer DynamicAssetTags { get; } = new GameplayTagContainer();
+
         // SetByCaller magnitude storage
         private readonly Dictionary<GameplayTag, float> setByCallerMagnitudes = new Dictionary<GameplayTag, float>();
         private readonly Dictionary<string, float> setByCallerMagnitudesByName = new Dictionary<string, float>(System.StringComparer.Ordinal);
@@ -77,6 +91,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             System.Array.Clear(TargetAttributes, 0, TargetAttributes.Length);
             setByCallerMagnitudes.Clear();
             setByCallerMagnitudesByName.Clear();
+            DynamicGrantedTags.Clear();
+            DynamicAssetTags.Clear();
         }
 
         #endregion

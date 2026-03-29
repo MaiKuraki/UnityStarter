@@ -1,7 +1,9 @@
+using System;
+
 namespace CycloneGames.RPGFoundation.Runtime.Interaction
 {
-    [System.Serializable]
-    public struct InteractionPromptData
+    [Serializable]
+    public struct InteractionPromptData : IEquatable<InteractionPromptData>
     {
         public string LocalizationTableName;
         public string LocalizationKey;
@@ -15,5 +17,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         }
 
         public bool IsValid => !string.IsNullOrEmpty(LocalizationTableName) && !string.IsNullOrEmpty(LocalizationKey);
+
+        public bool Equals(InteractionPromptData other) =>
+            LocalizationTableName == other.LocalizationTableName &&
+            LocalizationKey == other.LocalizationKey;
+
+        public override bool Equals(object obj) => obj is InteractionPromptData other && Equals(other);
+        public override int GetHashCode() => HashCode.Combine(LocalizationTableName, LocalizationKey);
     }
 }
