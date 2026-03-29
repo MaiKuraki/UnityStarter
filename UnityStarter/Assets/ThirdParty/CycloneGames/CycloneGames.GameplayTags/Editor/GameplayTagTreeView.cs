@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using CycloneGames.GameplayTags.Runtime;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
@@ -20,13 +19,14 @@ namespace CycloneGames.GameplayTags.Editor
             var allItems = new List<TreeViewItem>();
             
             GameplayTagManager.InitializeIfNeeded();
-            var allTags = GameplayTagManager.GetAllTags().ToArray().OrderBy(t => t.Name).ToList();
+            var allTags = GameplayTagManager.GetAllTags();
 
             var tagItems = new Dictionary<string, TreeViewItem>();
             int id = 1;
 
-            foreach (var tag in allTags)
+            for (int t = 0; t < allTags.Length; t++)
             {
+                var tag = allTags[t];
                 string[] parts = tag.Name.Split('.');
                 string currentPath = "";
                 for (int i = 0; i < parts.Length; i++)
@@ -54,7 +54,7 @@ namespace CycloneGames.GameplayTags.Editor
             
             // We are manually setting up children, but we still need to call this
             // to ensure the TreeView's internal state (like parent pointers) is correctly built from the depth information.
-            SetupParentsAndChildrenFromDepths(root, root.children.ToList());
+            SetupParentsAndChildrenFromDepths(root, root.children != null ? new List<TreeViewItem>(root.children) : new List<TreeViewItem>());
             return root;
         }
 
@@ -70,7 +70,7 @@ namespace CycloneGames.GameplayTags.Editor
                 EditorGUIUtility.systemCopyBuffer = fullPath;
             });
 
-            string staticAccessorPath = $"AllGameplayTags.{fullPath.Replace('.', '.')}.Get()";
+            string staticAccessorPath = $"AllGameplayTags.{fullPath}.Get()";
             menu.AddItem(new GUIContent("Copy Static Accessor Path"), false, () => {
                 EditorGUIUtility.systemCopyBuffer = staticAccessorPath;
             });

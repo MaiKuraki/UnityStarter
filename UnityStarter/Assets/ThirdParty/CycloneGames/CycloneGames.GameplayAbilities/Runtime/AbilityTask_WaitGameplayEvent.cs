@@ -5,7 +5,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
     /// AbilityTask that waits for a GameplayEvent with a specific tag to be received.
-    /// Essential for creating responsive abilities that react to events from other abilities or systems.
+    /// Listens to the ASC's GameplayEvent delegate system (SendGameplayEventToActor pattern),
+    /// NOT tag count changes. This matches UE5's UAbilityTask_WaitGameplayEvent behavior.
     /// </summary>
     public class AbilityTask_WaitGameplayEvent : AbilityTask
     {
@@ -21,7 +22,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private GameplayTag eventTag;
         private bool onlyTriggerOnce;
-        private OnTagCountChangedDelegate tagCallback;
+        private GameplayEventDelegate eventCallback;
 
         /// <summary>
         /// Creates a WaitGameplayEvent task.
@@ -46,35 +47,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
 
-            // Register for tag change events - use method reference to avoid closure allocation
-            tagCallback = HandleTagCountChanged;
-            Ability.AbilitySystemComponent.RegisterTagEventCallback(
-                eventTag,
-                GameplayTagEventType.NewOrRemoved,
-                tagCallback
-            );
+            // Register for gameplay events via the ASC's event delegate system
+            eventCallback = HandleGameplayEvent;
+            Ability.AbilitySystemComponent.RegisterGameplayEventCallback(eventTag, eventCallback);
         }
 
-        private void HandleTagCountChanged(GameplayTag tag, int newCount)
+        private void HandleGameplayEvent(GameplayEventData eventData)
         {
             if (!IsActive || IsCancelled) return;
 
-            // Only trigger when tag is added (count increases from 0 to 1+)
-            if (newCount > 0)
+            OnEventReceived?.Invoke(eventData);
+
+            if (onlyTriggerOnce)
             {
-                var eventData = new GameplayEventData
-                {
-                    EventTag = tag,
-                    Instigator = Ability.AbilitySystemComponent,
-                    Target = Ability.AbilitySystemComponent
-                };
-
-                OnEventReceived?.Invoke(eventData);
-
-                if (onlyTriggerOnce)
-                {
-                    EndTask();
-                }
+                EndTask();
             }
         }
 
@@ -86,15 +72,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         protected override void OnDestroy()
         {
-            // Unregister callback
-            if (Ability?.AbilitySystemComponent != null && tagCallback != null)
+            // Unregister callback from the event delegate system
+            if (Ability?.AbilitySystemComponent != null && eventCallback != null)
             {
-                Ability.AbilitySystemComponent.RemoveTagEventCallback(eventTag, GameplayTagEventType.NewOrRemoved, tagCallback);
+                Ability.AbilitySystemComponent.RemoveGameplayEventCallback(eventTag, eventCallback);
             }
 
             OnEventReceived = null;
             OnCancelled = null;
-            tagCallback = null;
+            eventCallback = null;
             base.OnDestroy();
         }
     }

@@ -37,6 +37,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public AbilitySystemComponent Owner { get; private set; }
 
+        /// <summary>
+        /// The ActiveGameplayEffect that granted this ability (null if granted directly).
+        /// Used for automatic cleanup when the granting effect is removed.
+        /// </summary>
+        public ActiveGameplayEffect GrantingEffect { get; internal set; }
+
         public GameplayAbilitySpec() { }
 
         #region IGASPoolable Implementation
@@ -51,6 +57,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Ability = null;
             AbilityInstance = null;
             Owner = null;
+            GrantingEffect = null;
             Level = 0;
             IsActive = false;
         }

@@ -131,10 +131,11 @@ namespace CycloneGames.GameplayTags.Runtime
         public T Get()
         {
             T element;
-            _totalGets++;
             
             lock (_stack)
             {
+                _totalGets++;
+                
                 if (_stack.Count == 0)
                 {
                     element = new T();

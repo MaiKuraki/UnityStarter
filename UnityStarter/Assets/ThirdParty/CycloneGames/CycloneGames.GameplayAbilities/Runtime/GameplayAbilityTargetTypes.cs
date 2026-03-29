@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -56,7 +57,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class GameplayAbilityTargetData_SingleTargetHit : GameplayAbilityTargetData_ActorArray
     {
-        private static readonly Stack<GameplayAbilityTargetData_SingleTargetHit> pool = new Stack<GameplayAbilityTargetData_SingleTargetHit>();
+        private static readonly ConcurrentStack<GameplayAbilityTargetData_SingleTargetHit> pool = new();
 
         /// <summary>
         /// The specific, engine-dependent physics hit result.
@@ -64,7 +65,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public RaycastHit HitResult { get; private set; }
 
-        public static GameplayAbilityTargetData_SingleTargetHit Get() => pool.Count > 0 ? pool.Pop() : new GameplayAbilityTargetData_SingleTargetHit();
+        public static GameplayAbilityTargetData_SingleTargetHit Get() => pool.TryPop(out var item) ? item : new GameplayAbilityTargetData_SingleTargetHit();
 
         public void Init(RaycastHit hit)
         {
@@ -91,9 +92,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class GameplayAbilityTargetData_MultiTarget : GameplayAbilityTargetData_ActorArray
     {
-        private static readonly Stack<GameplayAbilityTargetData_MultiTarget> pool = new Stack<GameplayAbilityTargetData_MultiTarget>();
+        private static readonly ConcurrentStack<GameplayAbilityTargetData_MultiTarget> pool = new();
 
-        public static GameplayAbilityTargetData_MultiTarget Get() => pool.Count > 0 ? pool.Pop() : new GameplayAbilityTargetData_MultiTarget();
+        public static GameplayAbilityTargetData_MultiTarget Get() => pool.TryPop(out var item) ? item : new GameplayAbilityTargetData_MultiTarget();
 
         public void Init(List<GameObject> targets)
         {

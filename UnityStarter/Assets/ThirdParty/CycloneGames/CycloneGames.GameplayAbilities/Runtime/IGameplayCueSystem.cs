@@ -1,4 +1,5 @@
 using System.Threading;
+using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Runtime;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -33,16 +34,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         void Shutdown();
     }
 
-    /// <summary>
-    /// Describes the type of event that triggered a GameplayCue.
-    /// </summary>
-    public enum EGameplayCueEvent
-    {
-        OnActive,
-        WhileActive,
-        Removed,
-        Executed
-    }
+    // EGameplayCueEvent is canonically defined in Core/GASInterfaces.cs.
+    // Re-export here so Runtime consumers can use it without importing Core namespace.
 
     /// <summary>
     /// A data structure passed to GameplayCues, providing context about the event.

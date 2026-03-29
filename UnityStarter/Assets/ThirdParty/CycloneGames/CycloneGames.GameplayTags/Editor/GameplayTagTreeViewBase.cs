@@ -295,6 +295,28 @@ namespace CycloneGames.GameplayTags.Editor
          return false;
       }
 
+      protected override void ContextClickedItem(int id)
+      {
+         if (FindItem(id, rootItem) is not GameplayTagTreeViewItem item)
+            return;
+
+         GenericMenu menu = new();
+         string tagName = item.Tag.Name;
+
+         menu.AddItem(new GUIContent("Copy Tag Name"), false, () =>
+         {
+            EditorGUIUtility.systemCopyBuffer = tagName;
+         });
+
+         if (item.CanBeDeleted)
+         {
+            menu.AddSeparator("");
+            menu.AddItem(new GUIContent("Delete Tag"), false, () => CreateDeleteTagPanel(item.Tag));
+         }
+
+         menu.ShowAsContext();
+      }
+
       protected override TreeViewItem BuildRoot()
       {
          TreeViewItem root = new(-2, -1, "<Root>");

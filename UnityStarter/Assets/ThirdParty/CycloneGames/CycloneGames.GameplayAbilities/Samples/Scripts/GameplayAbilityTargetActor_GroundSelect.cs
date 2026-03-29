@@ -64,6 +64,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             var targetData = GameplayAbilityTargetData_SingleTargetHit.Get();
             targetData.Init(lastValidHit);
             onTargetDataReadyCallback?.Invoke(targetData);
+            OnTargetDataReady?.Invoke(targetData);
         }
 
         public void CancelTargeting()
@@ -71,6 +72,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             if (!isTargeting) return;
             isTargeting = false;
             onCancelledCallback?.Invoke();
+            OnCanceled?.Invoke();
         }
 
         public void Destroy()
