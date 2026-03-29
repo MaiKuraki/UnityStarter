@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Concurrent;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -8,19 +9,18 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
     public static class EffectPoolSystem
     {
         private static readonly ConcurrentDictionary<int, ObjectPool<PooledEffectSpawnData, PooledEffect>> s_pools = new();
-        private static readonly object s_poolCreationLock = new();
         private static readonly DefaultUnityObjectSpawner s_spawner = new();
 
         private static Transform s_root;
         private static bool s_initialized;
-        private static UnityEngine.SceneManagement.Scene s_ownerScene;
+        private static Scene s_ownerScene;
 
         public static void Initialize()
         {
             if (s_initialized) return;
 
             var go = new GameObject("[EffectPoolSystem]");
-            Object.DontDestroyOnLoad(go);
+            UnityEngine.Object.DontDestroyOnLoad(go);
             s_root = go.transform;
             s_ownerScene = SceneManager.GetActiveScene();
             s_initialized = true;
@@ -28,7 +28,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             SceneManager.sceneUnloaded += OnSceneUnloaded;
         }
 
-        private static void OnSceneUnloaded(UnityEngine.SceneManagement.Scene scene)
+        private static void OnSceneUnloaded(Scene scene)
         {
             if (scene == s_ownerScene && s_initialized)
                 Dispose();
@@ -46,29 +46,23 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
             if (!prefab.TryGetComponent<PooledEffect>(out var template))
             {
-                Object.Instantiate(prefab, position, rotation);
+                UnityEngine.Object.Instantiate(prefab, position, rotation);
                 return;
             }
 
             int key = prefab.GetInstanceID();
 
-            if (!s_pools.TryGetValue(key, out var pool))
+            // GetOrAdd is atomic — no external lock needed
+            var pool = s_pools.GetOrAdd(key, _ =>
             {
-                lock (s_poolCreationLock)
-                {
-                    if (!s_pools.TryGetValue(key, out pool))
-                    {
-                        var factory = new MonoPrefabFactory<PooledEffect>(s_spawner, template, s_root);
-                        pool = new ObjectPool<PooledEffectSpawnData, PooledEffect>(
-                            factory: factory,
-                            initialCapacity: 8,
-                            expansionFactor: 0.5f,
-                            shrinkBufferFactor: 0.2f
-                        );
-                        s_pools.TryAdd(key, pool);
-                    }
-                }
-            }
+                var factory = new MonoPrefabFactory<PooledEffect>(s_spawner, template, s_root);
+                return new ObjectPool<PooledEffectSpawnData, PooledEffect>(
+                    factory: factory,
+                    initialCapacity: 8,
+                    expansionFactor: 0.5f,
+                    shrinkBufferFactor: 0.2f
+                );
+            });
 
             var spawnData = new PooledEffectSpawnData(position, rotation, duration);
             pool.Spawn(spawnData);
@@ -86,7 +80,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
             if (s_root != null)
             {
-                Object.Destroy(s_root.gameObject);
+                UnityEngine.Object.Destroy(s_root.gameObject);
                 s_root = null;
             }
 

@@ -9,14 +9,19 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
     {
         private InteractionDetector _target;
 
+        private SerializedProperty _detectionMode;
         private SerializedProperty _detectionRadius;
         private SerializedProperty _interactableLayer;
         private SerializedProperty _obstructionLayer;
         private SerializedProperty _detectionOffset;
         private SerializedProperty _maxInteractables;
+        private SerializedProperty _channelMask;
 
         private SerializedProperty _distanceWeight;
         private SerializedProperty _angleWeight;
+        private SerializedProperty _priorityWeight;
+
+        private SerializedProperty _maxNearbyCandidates;
 
         private SerializedProperty _nearDistance;
         private SerializedProperty _farDistance;
@@ -36,6 +41,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private static bool _detectionFoldout = true;
         private static bool _scoringFoldout = true;
         private static bool _lodFoldout = true;
+        private static bool _nearbyFoldout = true;
         private static bool _debugFoldout = true;
 
         private static readonly Color ColorDetectionRange = new(0.2f, 0.8f, 0.4f, 0.6f);
@@ -45,18 +51,42 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private static readonly Color ColorCurrentTarget = new(0f, 1f, 0.5f, 1f);
         private static readonly Color ColorCandidate = new(1f, 0.8f, 0.2f, 0.8f);
 
+        // LOD status colors — cached to avoid per-frame Color allocation
+        private static readonly Color ColorLODActive = new(0.3f, 0.9f, 0.4f);
+        private static readonly Color ColorLODSleeping = new(0.6f, 0.6f, 0.9f);
+
+        // Cached reflection — avoid per-frame GetField allocations
+        private static System.Reflection.FieldInfo s_detectionOriginField;
+        private static System.Reflection.FieldInfo s_detectionOffsetField;
+        private static System.Reflection.FieldInfo s_detectionRadiusField;
+
+        private static void EnsureReflectionCached()
+        {
+            if (s_detectionOriginField != null) return;
+            const System.Reflection.BindingFlags flags =
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+            s_detectionOriginField = typeof(InteractionDetector).GetField("detectionOrigin", flags);
+            s_detectionOffsetField = typeof(InteractionDetector).GetField("detectionOffset", flags);
+            s_detectionRadiusField = typeof(InteractionDetector).GetField("detectionRadius", flags);
+        }
+
         private void OnEnable()
         {
             _target = (InteractionDetector)target;
 
+            _detectionMode = serializedObject.FindProperty("detectionMode");
             _detectionRadius = serializedObject.FindProperty("detectionRadius");
             _interactableLayer = serializedObject.FindProperty("interactableLayer");
             _obstructionLayer = serializedObject.FindProperty("obstructionLayer");
             _detectionOffset = serializedObject.FindProperty("detectionOffset");
             _maxInteractables = serializedObject.FindProperty("maxInteractables");
+            _channelMask = serializedObject.FindProperty("channelMask");
 
             _distanceWeight = serializedObject.FindProperty("distanceWeight");
             _angleWeight = serializedObject.FindProperty("angleWeight");
+            _priorityWeight = serializedObject.FindProperty("priorityWeight");
+
+            _maxNearbyCandidates = serializedObject.FindProperty("maxNearbyCandidates");
 
             _nearDistance = serializedObject.FindProperty("nearDistance");
             _farDistance = serializedObject.FindProperty("farDistance");
@@ -93,6 +123,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             DrawDetectionSettings();
             DrawScoringSettings();
             DrawLODSettings();
+            DrawNearbySettings();
             DrawDebugSettings();
 
             serializedObject.ApplyModifiedProperties();
@@ -103,9 +134,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private new void DrawHeader()
         {
-            EditorGUILayout.LabelField("🔍 Interaction Detector", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("Interaction Detector", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "Detects nearby Interactable objects using Physics.OverlapSphere.\n" +
+                "Detects nearby Interactable objects using Physics3D, Physics2D, or SpatialHash.\n" +
                 "Attach to player character or camera.",
                 MessageType.None);
         }
@@ -134,6 +165,28 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                     EditorGUILayout.LabelField($"  Prompt: {current.InteractionPrompt}");
                     EditorGUILayout.LabelField($"  State: {current.CurrentState}");
                     EditorGUILayout.LabelField($"  Priority: {current.Priority}");
+                    EditorGUILayout.LabelField($"  Channel: {current.Channel}");
+                }
+
+                // Nearby candidates count
+                var nearby = _target.NearbyInteractables;
+                if (nearby.Count > 0)
+                {
+                    EditorGUILayout.Space(4);
+                    EditorGUILayout.LabelField($"Nearby Candidates: {nearby.Count}", EditorStyles.boldLabel);
+                    int displayMax = Mathf.Min(nearby.Count, 8);
+                    for (int i = 0; i < displayMax; i++)
+                    {
+                        var c = nearby[i];
+                        string name = c.Interactable is MonoBehaviour mb ? mb.name : "?";
+                        bool isCurrent = c.Interactable == current;
+                        string marker = isCurrent ? "▶ " : "  ";
+                        GUI.color = isCurrent ? ColorCurrentTarget : Color.white;
+                        EditorGUILayout.LabelField($"{marker}{name}  (Score: {c.Score:F1}, Dist²: {c.DistanceSqr:F1})");
+                        GUI.color = Color.white;
+                    }
+                    if (nearby.Count > 8)
+                        EditorGUILayout.LabelField($"  ... +{nearby.Count - 8} more");
                 }
 
                 EditorGUILayout.Space(4);
@@ -150,21 +203,40 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private void DrawDetectionSettings()
         {
-            _detectionFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_detectionFoldout, "📡 Detection");
+            _detectionFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_detectionFoldout, "Detection");
             if (_detectionFoldout)
             {
                 EditorGUI.indentLevel++;
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                 {
+                    EditorGUILayout.PropertyField(_detectionMode, new GUIContent("Mode", "Physics3D, Physics2D, or SpatialHash"));
+
+                    var mode = (DetectionMode)_detectionMode.enumValueIndex;
+                    if (mode == DetectionMode.SpatialHash)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "SpatialHash mode uses the InteractionSystem's spatial grid.\n" +
+                            "Best for scenes with thousands of interactables.\n" +
+                            "LayerMask / MaxCandidates are not used in this mode.",
+                            MessageType.Info);
+                    }
+
+                    EditorGUILayout.Space(4);
+
                     EditorGUILayout.PropertyField(_detectionOrigin, new GUIContent("Origin", "Transform to use as detection center"));
                     EditorGUILayout.PropertyField(_detectionRadius, new GUIContent("Radius", "Maximum detection range"));
                     EditorGUILayout.PropertyField(_detectionOffset, new GUIContent("Offset", "Local offset from origin"));
 
                     EditorGUILayout.Space(4);
 
-                    EditorGUILayout.PropertyField(_interactableLayer, new GUIContent("Interactable Layer", "LayerMask for interactable objects"));
-                    EditorGUILayout.PropertyField(_obstructionLayer, new GUIContent("Obstruction Layer", "LayerMask for line-of-sight blocking"));
-                    EditorGUILayout.PropertyField(_maxInteractables, new GUIContent("Max Candidates", "Buffer size for OverlapSphere"));
+                    EditorGUILayout.PropertyField(_channelMask, new GUIContent("Channel Mask", "Only detect interactables on these channels"));
+
+                    if (mode != DetectionMode.SpatialHash)
+                    {
+                        EditorGUILayout.PropertyField(_interactableLayer, new GUIContent("Interactable Layer", "LayerMask for interactable objects"));
+                        EditorGUILayout.PropertyField(_obstructionLayer, new GUIContent("Obstruction Layer", "LayerMask for line-of-sight blocking"));
+                        EditorGUILayout.PropertyField(_maxInteractables, new GUIContent("Max Candidates", "Buffer size for physics queries"));
+                    }
                 }
                 EditorGUI.indentLevel--;
             }
@@ -180,10 +252,11 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                 {
                     EditorGUILayout.HelpBox(
-                        "Score = Priority×100 + Angle×AngleWeight - Distance×DistanceWeight\n" +
+                        $"Score = Priority×{_priorityWeight.floatValue:F0} + Angle×AngleWeight - Distance×DistanceWeight\n" +
                         "Higher score = more likely to be selected",
                         MessageType.None);
 
+                    EditorGUILayout.PropertyField(_priorityWeight, new GUIContent("Priority Weight", "Multiplier for Priority in scoring. Higher = Priority dominates."));
                     EditorGUILayout.PropertyField(_distanceWeight, new GUIContent("Distance Weight", "Penalty for farther objects"));
                     EditorGUILayout.PropertyField(_angleWeight, new GUIContent("Angle Weight", "Bonus for objects in front"));
                 }
@@ -260,21 +333,35 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                         $"Near: {nearHz:F0} checks/sec | Sleep: {sleepHz:F1} checks/sec",
                         MessageType.None);
 
-                    // Runtime status
+                    // Runtime LOD status
                     if (Application.isPlaying)
                     {
-                        EditorGUILayout.Space(4);
-                        var isSleepingField = typeof(InteractionDetector).GetField("_isSleeping",
-                            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                        bool isSleeping = isSleepingField != null && (bool)isSleepingField.GetValue(_target);
+                        IInteractable currentTarget = _target.CurrentInteractable.CurrentValue;
+                        bool hastarget = currentTarget != null;
 
+                        EditorGUILayout.Space(4);
                         EditorGUILayout.BeginHorizontal();
                         EditorGUILayout.LabelField("Status:", GUILayout.Width(60));
-                        GUI.color = isSleeping ? new Color(0.6f, 0.6f, 0.9f) : new Color(0.3f, 0.9f, 0.4f);
-                        EditorGUILayout.LabelField(isSleeping ? "💤 Sleeping" : "👁 Active", EditorStyles.boldLabel);
+                        GUI.color = hastarget ? ColorLODActive : ColorLODSleeping;
+                        EditorGUILayout.LabelField(hastarget ? "👁 Active" : "💤 No Target", EditorStyles.boldLabel);
                         GUI.color = Color.white;
                         EditorGUILayout.EndHorizontal();
                     }
+                }
+                EditorGUI.indentLevel--;
+            }
+            EditorGUILayout.EndFoldoutHeaderGroup();
+        }
+
+        private void DrawNearbySettings()
+        {
+            _nearbyFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_nearbyFoldout, "📋 Nearby List");
+            if (_nearbyFoldout)
+            {
+                EditorGUI.indentLevel++;
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                {
+                    EditorGUILayout.PropertyField(_maxNearbyCandidates, new GUIContent("Max Candidates", "Maximum number of candidates to track in the nearby list"));
                 }
                 EditorGUI.indentLevel--;
             }
@@ -306,10 +393,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         {
             if (_target == null) return;
 
+            EnsureReflectionCached();
             Transform origin = _target.GetComponent<Transform>();
-            var originField = typeof(InteractionDetector).GetField("detectionOrigin",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (originField?.GetValue(_target) is Transform customOrigin && customOrigin != null)
+            if (s_detectionOriginField?.GetValue(_target) is Transform customOrigin && customOrigin != null)
                 origin = customOrigin;
 
             Vector3 offset = _detectionOffset.vector3Value;
@@ -373,19 +459,13 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         {
             if (!DetectorGizmoSettings.ShowDetectionRange) return;
 
+            EnsureReflectionCached();
             Transform origin = detector.transform;
-            var originField = typeof(InteractionDetector).GetField("detectionOrigin",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (originField?.GetValue(detector) is Transform customOrigin && customOrigin != null)
+            if (s_detectionOriginField?.GetValue(detector) is Transform customOrigin && customOrigin != null)
                 origin = customOrigin;
 
-            var offsetField = typeof(InteractionDetector).GetField("detectionOffset",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            Vector3 offset = offsetField != null ? (Vector3)offsetField.GetValue(detector) : Vector3.zero;
-
-            var radiusField = typeof(InteractionDetector).GetField("detectionRadius",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            float radius = radiusField != null ? (float)radiusField.GetValue(detector) : 3f;
+            Vector3 offset = s_detectionOffsetField != null ? (Vector3)s_detectionOffsetField.GetValue(detector) : Vector3.zero;
+            float radius = s_detectionRadiusField != null ? (float)s_detectionRadiusField.GetValue(detector) : 3f;
 
             Vector3 center = origin.position + origin.TransformDirection(offset);
 

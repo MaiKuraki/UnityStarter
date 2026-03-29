@@ -13,6 +13,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         Minimal
     }
 
+    // Delegate for gameplay event delivery (UE5: SendGameplayEventToActor)
+    public delegate void GameplayEventDelegate(GameplayEventData eventData);
+
+    // Delegate for effect lifecycle events
+    public delegate void ActiveEffectDelegate(ActiveGameplayEffect effect);
+
     public partial class AbilitySystemComponent : IDisposable
     {
         public object OwnerActor { get; private set; }
@@ -29,21 +35,28 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GameplayTagContainer ImmunityTags { get; } = new GameplayTagContainer();
 
         private readonly List<AttributeSet> attributeSets = new List<AttributeSet>(4);
+        public IReadOnlyList<AttributeSet> AttributeSets => attributeSets;
         private readonly Dictionary<string, GameplayAttribute> attributes = new Dictionary<string, GameplayAttribute>(32);
         private readonly List<ActiveGameplayEffect> activeEffects = new List<ActiveGameplayEffect>(32);
-        public IReadOnlyList<ActiveGameplayEffect> ActiveEffects => activeEffects.AsReadOnly();
+        // Expose as IReadOnlyList without AsReadOnly() wrapper allocation.
+        // List<T> implements IReadOnlyList<T> directly since .NET 4.5.
+        public IReadOnlyList<ActiveGameplayEffect> ActiveEffects => activeEffects;
+
+        // P0: O(1) stacking index — avoids linear search per ApplyGameplayEffectSpecToSelf
+        // Key: GameplayEffect def → first matching ActiveGameplayEffect (for AggregateByTarget)
+        private readonly Dictionary<GameplayEffect, ActiveGameplayEffect> stackingIndexByTarget = new Dictionary<GameplayEffect, ActiveGameplayEffect>(16);
+        // Key: (GameplayEffect def, source ASC) → ActiveGameplayEffect (for AggregateBySource)
+        private readonly Dictionary<(GameplayEffect, AbilitySystemComponent), ActiveGameplayEffect> stackingIndexBySource = new Dictionary<(GameplayEffect, AbilitySystemComponent), ActiveGameplayEffect>(16);
 
         private readonly List<GameplayAbilitySpec> activatableAbilities = new List<GameplayAbilitySpec>(16);
-        public IReadOnlyList<GameplayAbilitySpec> GetActivatableAbilities() => activatableAbilities.AsReadOnly();
+        public IReadOnlyList<GameplayAbilitySpec> GetActivatableAbilities() => activatableAbilities;
 
         private readonly List<GameplayAbilitySpec> tickingAbilities = new List<GameplayAbilitySpec>(16);
 
-        // Pre-allocated lists for granted abilities to avoid per-effect List allocations
-        private readonly Dictionary<ActiveGameplayEffect, int> effectGrantedAbilitiesStart = new Dictionary<ActiveGameplayEffect, int>(16);
-        private readonly Dictionary<ActiveGameplayEffect, int> effectGrantedAbilitiesCount = new Dictionary<ActiveGameplayEffect, int>(16);
-        private readonly List<GameplayAbilitySpec> grantedAbilitiesBuffer = new List<GameplayAbilitySpec>(32);
-
         private readonly List<GameplayAttribute> dirtyAttributes = new List<GameplayAttribute>(32);
+
+        // P2: Tracks effects applied by abilities for RemoveGameplayEffectsAfterAbilityEnds
+        private readonly Dictionary<GameplayAbility, List<ActiveGameplayEffect>> abilityAppliedEffects = new Dictionary<GameplayAbility, List<ActiveGameplayEffect>>(8);
 
         [ThreadStatic]
         private static List<ModifierInfo> executionOutputScratchPad;
@@ -53,6 +66,27 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly List<ActiveGameplayEffect> pendingPredictedEffects = new List<ActiveGameplayEffect>();
 
         public IFactory<IGameplayEffectContext> EffectContextFactory { get; private set; }
+
+        // Cached ActorInfo to avoid repeated struct construction
+        private GameplayAbilityActorInfo cachedActorInfo;
+
+        // --- Events (UE5: OnGameplayEffectAppliedDelegateToSelf, OnAnyGameplayEffectRemovedDelegate) ---
+        public event ActiveEffectDelegate OnGameplayEffectAppliedToSelf;
+        public event ActiveEffectDelegate OnGameplayEffectRemovedFromSelf;
+
+        // --- Ability Lifecycle Events (UE5: AbilityActivatedCallbacks, AbilityEndedCallbacks, AbilityCommittedCallbacks) ---
+        public event Action<GameplayAbility> OnAbilityActivated;
+        public event Action<GameplayAbility> OnAbilityEndedEvent;
+        public event Action<GameplayAbility> OnAbilityCommitted;
+
+        // --- Gameplay Event System (UE5: SendGameplayEventToActor) ---
+        private readonly Dictionary<GameplayTag, GameplayEventDelegate> eventDelegates = new Dictionary<GameplayTag, GameplayEventDelegate>(8);
+
+        // --- Ability Trigger System (UE5: FAbilityTriggerData) ---
+        // Maps trigger tags to the specs whose abilities should be activated when the trigger fires.
+        private readonly Dictionary<GameplayTag, List<GameplayAbilitySpec>> triggerEventAbilities = new Dictionary<GameplayTag, List<GameplayAbilitySpec>>(8);
+        private readonly Dictionary<GameplayTag, List<GameplayAbilitySpec>> triggerTagAddedAbilities = new Dictionary<GameplayTag, List<GameplayAbilitySpec>>(8);
+        private readonly Dictionary<GameplayTag, List<GameplayAbilitySpec>> triggerTagRemovedAbilities = new Dictionary<GameplayTag, List<GameplayAbilitySpec>>(8);
 
         #region Tag Event Convenience API
 
@@ -96,6 +130,71 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         #endregion
 
+        #region Gameplay Event System (UE5: SendGameplayEventToActor)
+
+        /// <summary>
+        /// Registers a delegate to handle gameplay events with a specific tag.
+        /// </summary>
+        public void RegisterGameplayEventCallback(GameplayTag eventTag, GameplayEventDelegate callback)
+        {
+            if (eventTag.IsNone || callback == null) return;
+            if (eventDelegates.TryGetValue(eventTag, out var existing))
+            {
+                eventDelegates[eventTag] = existing + callback;
+            }
+            else
+            {
+                eventDelegates[eventTag] = callback;
+            }
+        }
+
+        /// <summary>
+        /// Removes a gameplay event callback.
+        /// </summary>
+        public void RemoveGameplayEventCallback(GameplayTag eventTag, GameplayEventDelegate callback)
+        {
+            if (eventTag.IsNone || callback == null) return;
+            if (eventDelegates.TryGetValue(eventTag, out var existing))
+            {
+                var updated = existing - callback;
+                if (updated == null)
+                    eventDelegates.Remove(eventTag);
+                else
+                    eventDelegates[eventTag] = updated;
+            }
+        }
+
+        /// <summary>
+        /// Sends a gameplay event to this ASC. Matching handlers and waiting AbilityTasks will be notified.
+        /// Also triggers abilities registered with GameplayEvent trigger type.
+        /// UE5 equivalent: UAbilitySystemBlueprintLibrary::SendGameplayEventToActor.
+        /// </summary>
+        public void HandleGameplayEvent(GameplayEventData eventData)
+        {
+            if (eventData.EventTag.IsNone) return;
+
+            // Notify registered delegates
+            if (eventDelegates.TryGetValue(eventData.EventTag, out var handler))
+            {
+                handler.Invoke(eventData);
+            }
+
+            // UE5: Trigger abilities registered for this event tag
+            if (triggerEventAbilities.TryGetValue(eventData.EventTag, out var triggeredSpecs))
+            {
+                for (int i = 0; i < triggeredSpecs.Count; i++)
+                {
+                    var spec = triggeredSpecs[i];
+                    if (!spec.IsActive)
+                    {
+                        TryActivateAbility(spec);
+                    }
+                }
+            }
+        }
+
+        #endregion
+
         public AbilitySystemComponent(IFactory<IGameplayEffectContext> effectContextFactory)
         {
             this.EffectContextFactory = effectContextFactory;
@@ -105,6 +204,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             OwnerActor = owner;
             AvatarActor = avatar;
+            cachedActorInfo = new GameplayAbilityActorInfo(owner, avatar);
         }
 
         public void AddAttributeSet(AttributeSet set)
@@ -125,6 +225,27 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Removes an AttributeSet from this ASC at runtime.
+        /// UE5: UAbilitySystemComponent::GetSpawnedAttributes_Mutable().Remove()
+        /// </summary>
+        public void RemoveAttributeSet(AttributeSet set)
+        {
+            if (set == null || !attributeSets.Contains(set)) return;
+
+            foreach (var attr in set.GetAttributes())
+            {
+                // Only remove if this set actually owns the attribute in our dictionary
+                if (attributes.TryGetValue(attr.Name, out var registered) && registered == attr)
+                {
+                    attributes.Remove(attr.Name);
+                }
+            }
+
+            attributeSets.Remove(set);
+            set.OwningAbilitySystemComponent = null;
         }
 
         public void MarkAttributeDirty(GameplayAttribute attribute)
@@ -150,15 +271,39 @@ namespace CycloneGames.GameplayAbilities.Runtime
             spec.Init(this);
 
             activatableAbilities.Add(spec);
-            spec.GetPrimaryInstance().OnGiveAbility(new GameplayAbilityActorInfo(OwnerActor, AvatarActor), spec);
+            spec.GetPrimaryInstance().OnGiveAbility(cachedActorInfo, spec);
+
+            // UE5: Register ability triggers (FAbilityTriggerData)
+            RegisterAbilityTriggers(spec);
+
+            // UE5: bActivateAbilityOnGranted — auto-activate passive abilities
+            if (ability.ActivateAbilityOnGranted)
+            {
+                TryActivateAbility(spec);
+            }
+
             return spec;
         }
 
         public void ClearAbility(GameplayAbilitySpec spec)
         {
             if (spec == null) return;
+
+            // UE5: Unregister ability triggers before removal
+            UnregisterAbilityTriggers(spec);
+
             spec.OnRemoveSpec();
-            activatableAbilities.Remove(spec);
+            // P0: Swap-with-last O(1) removal instead of O(n) List.Remove
+            int index = activatableAbilities.IndexOf(spec);
+            if (index >= 0)
+            {
+                int lastIndex = activatableAbilities.Count - 1;
+                if (index != lastIndex)
+                {
+                    activatableAbilities[index] = activatableAbilities[lastIndex];
+                }
+                activatableAbilities.RemoveAt(lastIndex);
+            }
         }
 
         // --- Ability Activation Flow ---
@@ -169,9 +314,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var ability = spec.GetPrimaryInstance();
             if (ability == null) return false;
 
-            var actorInfo = new GameplayAbilityActorInfo(OwnerActor, AvatarActor);
-
-            if (!ability.CanActivate(actorInfo, spec))
+            if (!ability.CanActivate(cachedActorInfo, spec))
             {
                 return false;
             }
@@ -201,8 +344,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void ServerTryActivateAbility(GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
             // --- This block runs on the "server" ---
-            var actorInfo = new GameplayAbilityActorInfo(OwnerActor, AvatarActor);
-            if (spec.GetPrimaryInstance().CanActivate(actorInfo, spec))
+            if (spec.GetPrimaryInstance().CanActivate(cachedActorInfo, spec))
             {
                 // Server confirms activation
                 ActivateAbilityInternal(spec, activationInfo);
@@ -237,14 +379,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
             spec.IsActive = true;
             tickingAbilities.Add(spec);
 
-            // Apply ActivationOwnedTags - tags granted while ability is active
+            // UE5: Cancel abilities with matching tags
+            if (ability.CancelAbilitiesWithTag != null && !ability.CancelAbilitiesWithTag.IsEmpty)
+            {
+                CancelAbilitiesWithTags(ability.CancelAbilitiesWithTag);
+            }
+
+            // Apply ActivationOwnedTags — incremental, no full rebuild
             if (ability.ActivationOwnedTags != null && !ability.ActivationOwnedTags.IsEmpty)
             {
                 looseTags.AddTags(ability.ActivationOwnedTags);
-                UpdateCombinedTags();
+                CombinedTags.AddTags(ability.ActivationOwnedTags);
             }
 
-            ability.ActivateAbility(new GameplayAbilityActorInfo(OwnerActor, AvatarActor), spec, activationInfo);
+            ability.ActivateAbility(cachedActorInfo, spec, activationInfo);
+
+            OnAbilityActivated?.Invoke(ability);
 
             // Clear prediction key after atomic activation
             this.currentPredictionKey = default;
@@ -301,6 +451,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             spec.GetPrimaryInstance()?.CancelAbility();
         }
 
+        internal void NotifyAbilityCommitted(GameplayAbility ability)
+        {
+            OnAbilityCommitted?.Invoke(ability);
+        }
+
         internal void OnAbilityEnded(GameplayAbility ability)
         {
             if (ability.Spec != null)
@@ -308,18 +463,47 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (ability.Spec.IsActive)
                 {
                     ability.Spec.IsActive = false;
-                    tickingAbilities.Remove(ability.Spec);
+                    // P0: Swap-with-last for tickingAbilities removal
+                    int tickIdx = tickingAbilities.IndexOf(ability.Spec);
+                    if (tickIdx >= 0)
+                    {
+                        int lastIdx = tickingAbilities.Count - 1;
+                        if (tickIdx != lastIdx)
+                        {
+                            tickingAbilities[tickIdx] = tickingAbilities[lastIdx];
+                        }
+                        tickingAbilities.RemoveAt(lastIdx);
+                    }
 
-                    // Remove ActivationOwnedTags when ability ends
+                    // Remove ActivationOwnedTags when ability ends — incremental, no full rebuild
                     if (ability.ActivationOwnedTags != null && !ability.ActivationOwnedTags.IsEmpty)
                     {
                         looseTags.RemoveTags(ability.ActivationOwnedTags);
-                        UpdateCombinedTags();
+                        CombinedTags.RemoveTags(ability.ActivationOwnedTags);
+                    }
+
+                    // UE5: RemoveGameplayEffectsAfterAbilityEnds — remove effects this ability applied
+                    if (abilityAppliedEffects.TryGetValue(ability, out var appliedEffects))
+                    {
+                        for (int ei = appliedEffects.Count - 1; ei >= 0; ei--)
+                        {
+                            var trackedEffect = appliedEffects[ei];
+                            int aeIdx = activeEffects.IndexOf(trackedEffect);
+                            if (aeIdx >= 0 && !trackedEffect.IsExpired)
+                            {
+                                RemoveActiveEffectAtIndex(aeIdx);
+                                OnEffectRemoved(trackedEffect, true);
+                            }
+                        }
+                        appliedEffects.Clear();
+                        abilityAppliedEffects.Remove(ability);
                     }
                 }
 
                 // This ensures that flags like 'isEnding' are ready for the next activation.
                 ability.InternalOnEndAbility();
+
+                OnAbilityEndedEvent?.Invoke(ability);
 
                 if (ability.InstancingPolicy == EGameplayAbilityInstancingPolicy.InstancedPerExecution)
                 {
@@ -368,9 +552,33 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var newActiveEffect = ActiveGameplayEffect.Create(spec);
             activeEffects.Add(newActiveEffect);
 
+            // P0: Maintain stacking index for O(1) lookup
+            if (spec.Def.Stacking.Type != EGameplayEffectStackingType.None)
+            {
+                if (spec.Def.Stacking.Type == EGameplayEffectStackingType.AggregateByTarget)
+                {
+                    stackingIndexByTarget.TryAdd(spec.Def, newActiveEffect);
+                }
+                else if (spec.Def.Stacking.Type == EGameplayEffectStackingType.AggregateBySource)
+                {
+                    stackingIndexBySource.TryAdd((spec.Def, spec.Source), newActiveEffect);
+                }
+            }
+
             if (currentPredictionKey.IsValid())
             {
                 pendingPredictedEffects.Add(newActiveEffect);
+            }
+
+            // P2: Track effects for RemoveGameplayEffectsAfterAbilityEnds
+            if (spec.Def.RemoveGameplayEffectsAfterAbilityEnds && spec.Context?.AbilityInstance != null)
+            {
+                if (!abilityAppliedEffects.TryGetValue(spec.Context.AbilityInstance, out var list))
+                {
+                    list = new List<ActiveGameplayEffect>(4);
+                    abilityAppliedEffects[spec.Context.AbilityInstance] = list;
+                }
+                list.Add(newActiveEffect);
             }
 
             GASLog.Info($"{OwnerActor} Apply GameplayEffect '{spec.Def.Name}' to self.");
@@ -416,6 +624,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     GASLog.Debug($"Apply GameplayEffect '{spec.Def.Name}' blocked: target has immunity to effect's tags.");
                     return false;
                 }
+                // Also check dynamic tags on the spec instance
+                if (!spec.DynamicAssetTags.IsEmpty && spec.DynamicAssetTags.HasAny(ImmunityTags))
+                {
+                    GASLog.Debug($"Apply GameplayEffect '{spec.Def.Name}' blocked: target has immunity to effect's dynamic asset tags.");
+                    return false;
+                }
+                if (!spec.DynamicGrantedTags.IsEmpty && spec.DynamicGrantedTags.HasAny(ImmunityTags))
+                {
+                    GASLog.Debug($"Apply GameplayEffect '{spec.Def.Name}' blocked: target has immunity to effect's dynamic granted tags.");
+                    return false;
+                }
             }
 
             if (spec.Def.ApplicationTagRequirements.RequiredTags != null && !spec.Def.ApplicationTagRequirements.RequiredTags.IsEmpty)
@@ -434,6 +653,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     return false;
                 }
             }
+
+            // P1: Custom Application Requirements (UE5: UGameplayEffectCustomApplicationRequirement)
+            var requirements = spec.Def.CustomApplicationRequirements;
+            for (int i = 0; i < requirements.Count; i++)
+            {
+                if (!requirements[i].CanApplyGameplayEffect(spec, this))
+                {
+                    GASLog.Debug($"Apply GameplayEffect '{spec.Def.Name}' blocked by custom application requirement.");
+                    return false;
+                }
+            }
+
             return true;
         }
 
@@ -492,8 +723,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     var effect = activeEffects[i];
                     if (effect.Tick(deltaTime, this))
                     {
-                        RemoveActiveEffectAtIndex(i);
-                        OnEffectRemoved(effect, true);
+                        // P2: Stack Expiration Policy
+                        HandleEffectExpiration(effect, i);
                     }
                 }
             }
@@ -502,6 +733,38 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 RecalculateDirtyAttributes();
             }
+        }
+
+        /// <summary>
+        /// Handles effect expiration with stack expiration policy support.
+        /// UE5: EGameplayEffectStackingExpirationPolicy.
+        /// </summary>
+        private void HandleEffectExpiration(ActiveGameplayEffect effect, int index)
+        {
+            var stacking = effect.Spec.Def.Stacking;
+            if (stacking.Type != EGameplayEffectStackingType.None && effect.StackCount > 1)
+            {
+                switch (stacking.ExpirationPolicy)
+                {
+                    case EGameplayEffectStackingExpirationPolicy.RemoveSingleStackAndRefreshDuration:
+                    case EGameplayEffectStackingExpirationPolicy.RefreshDuration:
+                        // Remove one stack and refresh duration
+                        effect.RemoveStack();
+                        effect.RefreshDurationAndPeriod();
+                        effect.ClearExpired();
+                        MarkAttributesDirtyFromEffect(effect);
+                        return;
+
+                    case EGameplayEffectStackingExpirationPolicy.ClearEntireStack:
+                    default:
+                        break; // Fall through to full removal
+                }
+            }
+
+            // Full removal
+            RemoveActiveEffectAtIndex(index);
+            RemoveFromStackingIndex(effect);
+            OnEffectRemoved(effect, true);
         }
 
         private void RemoveActiveEffectAtIndex(int index)
@@ -515,10 +778,36 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
+        /// Removes an effect from the stacking index.
+        /// </summary>
+        private void RemoveFromStackingIndex(ActiveGameplayEffect effect)
+        {
+            var def = effect.Spec.Def;
+            if (def.Stacking.Type == EGameplayEffectStackingType.AggregateByTarget)
+            {
+                if (stackingIndexByTarget.TryGetValue(def, out var indexed) && indexed == effect)
+                {
+                    stackingIndexByTarget.Remove(def);
+                }
+            }
+            else if (def.Stacking.Type == EGameplayEffectStackingType.AggregateBySource)
+            {
+                var key = (def, effect.Spec.Source);
+                if (stackingIndexBySource.TryGetValue(key, out var indexed) && indexed == effect)
+                {
+                    stackingIndexBySource.Remove(key);
+                }
+            }
+        }
+
+        /// <summary>
         /// Recalculates all dirty attributes using UE5-style aggregation formula.
         /// Formula: ((BaseValue + Additive) * Multiplicative) / Division
         /// Multiplicative uses bias-based summation: 1 + (Mod1 - 1) + (Mod2 - 1) + ...
         /// Division uses same bias formula: 1 + (Mod1 - 1) + (Mod2 - 1) + ...
+        /// 
+        /// P0 Optimization: OngoingTagRequirements check is cached per-effect (once per effect,
+        /// not once per modifier), and periodic-only effects are skipped early.
         /// </summary>
         private void RecalculateDirtyAttributes()
         {
@@ -529,9 +818,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                 float baseValue = attr.OwningSet.GetBaseValue(attr);
                 float additive = 0f;
-                // UE5 uses bias of 1.0 for multiply/divide, meaning we sum (magnitude - 1)
-                float multiplicativeBiasSum = 0f;  // Will become: 1 + sum of (magnitude - 1)
-                float divisionBiasSum = 0f;        // Will become: 1 + sum of (magnitude - 1)
+                float multiplicativeBiasSum = 0f;
+                float divisionBiasSum = 0f;
                 float overrideValue = 0f;
                 bool hasOverride = false;
 
@@ -539,48 +827,68 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 for (int i = 0; i < affectingEffects.Count; i++)
                 {
                     var effect = affectingEffects[i];
+                    var def = effect.Spec.Def;
 
-                    // Check if effect is active and meets requirements
-                    if (effect.Spec.Def.Period > 0 ||
-                        (!effect.Spec.Def.OngoingTagRequirements.IsEmpty && !effect.Spec.Def.OngoingTagRequirements.MeetsRequirements(CombinedTags)))
+                    // Skip periodic-only effects (they execute instant effects on tick, not continuous modifiers)
+                    if (def.Period > 0) continue;
+
+                    // P0: Cache OngoingTagRequirements check per-effect, not per-modifier
+                    bool isInhibited = !def.OngoingTagRequirements.IsEmpty && !def.OngoingTagRequirements.MeetsRequirements(CombinedTags);
+
+                    // UE5: Track inhibition state changes and fire OnInhibitionChanged
+                    if (isInhibited != effect.IsInhibited)
+                    {
+                        effect.IsInhibited = isInhibited;
+                        effect.NotifyInhibitionChanged(isInhibited);
+                    }
+
+                    if (isInhibited)
                     {
                         continue;
                     }
 
-                    var modifiers = effect.Spec.Def.Modifiers;
+                    var modifiers = def.Modifiers;
+                    int stackCount = effect.StackCount;
                     for (int m = 0; m < modifiers.Count; m++)
                     {
+                        if (effect.Spec.TargetAttributes[m] != attr) continue;
+
+                        // For non-snapshotted custom calculations, recalculate magnitude live
+                        float baseMagnitude;
                         var mod = modifiers[m];
-                        if (effect.Spec.TargetAttributes[m] == attr)
+                        if (mod.SnapshotPolicy == EGameplayEffectAttributeCaptureSnapshot.NotSnapshot && mod.CustomCalculation != null)
                         {
-                            float magnitude = effect.Spec.ModifierMagnitudes[m] * effect.StackCount;
-                            switch (mod.Operation)
-                            {
-                                case EAttributeModifierOperation.Add:
-                                    additive += magnitude;
-                                    break;
-                                case EAttributeModifierOperation.Multiply:
-                                    // UE5 bias formula: sum of (magnitude - bias), bias = 1.0
-                                    multiplicativeBiasSum += (magnitude - 1f);
-                                    break;
-                                case EAttributeModifierOperation.Division:
-                                    // Same bias formula for division
-                                    if (magnitude != 0f) divisionBiasSum += (magnitude - 1f);
-                                    break;
-                                case EAttributeModifierOperation.Override:
-                                    overrideValue = magnitude;
-                                    hasOverride = true;
-                                    break;
-                            }
+                            baseMagnitude = mod.CustomCalculation.CalculateMagnitude(effect.Spec);
+                            effect.Spec.ModifierMagnitudes[m] = baseMagnitude; // Update cached value
+                        }
+                        else
+                        {
+                            baseMagnitude = effect.Spec.ModifierMagnitudes[m];
+                        }
+
+                        float magnitude = baseMagnitude * stackCount;
+                        switch (modifiers[m].Operation)
+                        {
+                            case EAttributeModifierOperation.Add:
+                                additive += magnitude;
+                                break;
+                            case EAttributeModifierOperation.Multiply:
+                                multiplicativeBiasSum += (magnitude - 1f);
+                                break;
+                            case EAttributeModifierOperation.Division:
+                                if (magnitude != 0f) divisionBiasSum += (magnitude - 1f);
+                                break;
+                            case EAttributeModifierOperation.Override:
+                                overrideValue = magnitude;
+                                hasOverride = true;
+                                break;
                         }
                     }
                 }
 
-                // Apply UE5 formula: ((Base + Additive) * Multiplicative) / Division
-                // Where Multiplicative = 1 + biasSum, Division = 1 + biasSum
                 float multiplicative = 1f + multiplicativeBiasSum;
                 float division = 1f + divisionBiasSum;
-                if (division == 0f) division = 1f;  // Prevent divide by zero
+                if (division == 0f) division = 1f;
 
                 float finalValue = hasOverride ? overrideValue : ((baseValue + additive) * multiplicative / division);
 
@@ -593,15 +901,24 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void OnEffectApplied(ActiveGameplayEffect effect)
         {
-            fromEffectsTags.AddTags(effect.Spec.Def.GrantedTags);
-            UpdateCombinedTags();
+            // P0: Incremental tag update — add to both containers directly, no full rebuild
+            if (!effect.Spec.Def.GrantedTags.IsEmpty)
+            {
+                fromEffectsTags.AddTags(effect.Spec.Def.GrantedTags);
+                CombinedTags.AddTags(effect.Spec.Def.GrantedTags);
+            }
+            // UE5: DynamicGrantedTags — spec-instance-level tags
+            if (!effect.Spec.DynamicGrantedTags.IsEmpty)
+            {
+                fromEffectsTags.AddTags(effect.Spec.DynamicGrantedTags);
+                CombinedTags.AddTags(effect.Spec.DynamicGrantedTags);
+            }
 
             // Update the attribute's internal effect list directly
             var modifiers = effect.Spec.Def.Modifiers;
             for (int i = 0; i < modifiers.Count; i++)
             {
                 var attribute = effect.Spec.TargetAttributes[i];
-                // Fallback if cache is missing (rare/instant execution edge case), usually cached.
                 if (attribute == null) attribute = GetAttribute(modifiers[i].AttributeName);
 
                 if (attribute != null)
@@ -610,26 +927,21 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
-            // Grant abilities from effect using pre-allocated buffer (0 GC)
+            // Grant abilities via GrantingEffect back-reference (0 GC, no buffer needed)
             if (effect.Spec.Def.GrantedAbilities.Count > 0)
             {
-                int startIndex = grantedAbilitiesBuffer.Count;
-                int count = 0;
                 foreach (var ability in effect.Spec.Def.GrantedAbilities)
                 {
                     var newSpec = GrantAbility(ability, effect.Spec.Level);
-                    grantedAbilitiesBuffer.Add(newSpec);
-                    count++;
+                    newSpec.GrantingEffect = effect;
                 }
-                effectGrantedAbilitiesStart[effect] = startIndex;
-                effectGrantedAbilitiesCount[effect] = count;
             }
 
-            if (!effect.Spec.Def.GameplayCues.IsEmpty)
+            // P2: SuppressGameplayCues — skip all cue handling when suppressed
+            if (!effect.Spec.Def.SuppressGameplayCues && !effect.Spec.Def.GameplayCues.IsEmpty)
             {
                 var eventType = (effect.Spec.Def.DurationPolicy == EDurationPolicy.Instant) ? EGameplayCueEvent.Executed : EGameplayCueEvent.OnActive;
 
-                // Iterate through the tags in the effect's cue container.
                 foreach (var cueTag in effect.Spec.Def.GameplayCues)
                 {
                     if (cueTag.IsNone) continue;
@@ -642,19 +954,30 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                 }
             }
+
+            OnGameplayEffectAppliedToSelf?.Invoke(effect);
         }
 
         private void OnEffectRemoved(ActiveGameplayEffect effect, bool markDirty)
         {
-            fromEffectsTags.RemoveTags(effect.Spec.Def.GrantedTags);
-            UpdateCombinedTags();
+            // P0: Incremental tag update — remove from both containers directly, no full rebuild
+            if (!effect.Spec.Def.GrantedTags.IsEmpty)
+            {
+                fromEffectsTags.RemoveTags(effect.Spec.Def.GrantedTags);
+                CombinedTags.RemoveTags(effect.Spec.Def.GrantedTags);
+            }
+            // UE5: DynamicGrantedTags — spec-instance-level tags
+            if (!effect.Spec.DynamicGrantedTags.IsEmpty)
+            {
+                fromEffectsTags.RemoveTags(effect.Spec.DynamicGrantedTags);
+                CombinedTags.RemoveTags(effect.Spec.DynamicGrantedTags);
+            }
 
             // Remove from attribute's internal list
             var modifiers = effect.Spec.Def.Modifiers;
             for (int i = 0; i < modifiers.Count; i++)
             {
                 var attribute = effect.Spec.TargetAttributes[i];
-                // Fallback lookup
                 if (attribute == null) attribute = GetAttribute(modifiers[i].AttributeName);
 
                 if (attribute != null)
@@ -672,21 +995,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
-            // Remove granted abilities using buffer indices (0 GC)
-            if (effectGrantedAbilitiesStart.TryGetValue(effect, out int startIndex) &&
-                effectGrantedAbilitiesCount.TryGetValue(effect, out int count))
+            // Remove abilities granted by this effect via GrantingEffect back-reference (0 GC)
+            for (int i = activatableAbilities.Count - 1; i >= 0; i--)
             {
-                // Clear abilities in reverse to maintain buffer integrity
-                for (int i = startIndex + count - 1; i >= startIndex && i < grantedAbilitiesBuffer.Count; i--)
+                if (activatableAbilities[i].GrantingEffect == effect)
                 {
-                    var spec = grantedAbilitiesBuffer[i];
-                    if (spec != null) ClearAbility(spec);
+                    ClearAbility(activatableAbilities[i]);
                 }
-                effectGrantedAbilitiesStart.Remove(effect);
-                effectGrantedAbilitiesCount.Remove(effect);
             }
 
-            if (effect.Spec.Def.DurationPolicy != EDurationPolicy.Instant && !effect.Spec.Def.GameplayCues.IsEmpty)
+            // P2: SuppressGameplayCues — skip cue handling when suppressed
+            if (!effect.Spec.Def.SuppressGameplayCues &&
+                effect.Spec.Def.DurationPolicy != EDurationPolicy.Instant && !effect.Spec.Def.GameplayCues.IsEmpty)
             {
                 foreach (var cueTag in effect.Spec.Def.GameplayCues)
                 {
@@ -695,21 +1015,252 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
+            OnGameplayEffectRemovedFromSelf?.Invoke(effect);
+
             if (markDirty) MarkAttributesDirtyFromEffect(effect);
 
             effect.ReturnToPool();
         }
 
         // --- Tag Management ---
-        public void AddLooseGameplayTag(GameplayTag tag) { looseTags.AddTag(tag); UpdateCombinedTags(); }
-        public void RemoveLooseGameplayTag(GameplayTag tag) { looseTags.RemoveTag(tag); UpdateCombinedTags(); }
+        // P0: Incremental tag updates — directly add/remove from CombinedTags, no full rebuild
+        public void AddLooseGameplayTag(GameplayTag tag) { looseTags.AddTag(tag); CombinedTags.AddTag(tag); }
+        public void RemoveLooseGameplayTag(GameplayTag tag) { looseTags.RemoveTag(tag); CombinedTags.RemoveTag(tag); }
 
-        private void UpdateCombinedTags()
+        #region Missing UE5 GAS Features
+
+        /// <summary>
+        /// Cancels all currently active abilities that have ANY of the specified tags.
+        /// UE5: Integrated into ability activation flow via CancelAbilitiesWithTag.
+        /// </summary>
+        public void CancelAbilitiesWithTags(GameplayTagContainer tags)
         {
-            CombinedTags.Clear();
-            CombinedTags.AddTags(looseTags);
-            CombinedTags.AddTags(fromEffectsTags);
+            if (tags == null || tags.IsEmpty) return;
+
+            for (int i = activatableAbilities.Count - 1; i >= 0; i--)
+            {
+                var spec = activatableAbilities[i];
+                if (!spec.IsActive) continue;
+
+                var abilityTags = spec.GetPrimaryInstance()?.AbilityTags;
+                if (abilityTags != null && abilityTags.HasAny(tags))
+                {
+                    spec.GetPrimaryInstance()?.CancelAbility();
+                }
+            }
         }
+
+        /// <summary>
+        /// Checks if any currently active ability is blocking the given tags.
+        /// UE5: BlockAbilitiesWithTag check during CanActivateAbility.
+        /// </summary>
+        public bool AreAbilitiesBlockedByTag(GameplayTagContainer abilityTags)
+        {
+            if (abilityTags == null || abilityTags.IsEmpty) return false;
+
+            for (int i = 0; i < activatableAbilities.Count; i++)
+            {
+                var spec = activatableAbilities[i];
+                if (!spec.IsActive) continue;
+
+                var blockTags = spec.GetPrimaryInstance()?.BlockAbilitiesWithTag;
+                if (blockTags != null && !blockTags.IsEmpty && abilityTags.HasAny(blockTags))
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Changes the remaining duration of an active gameplay effect.
+        /// UE5: Section 4.5.16 - Changing Active Gameplay Effect Duration.
+        /// </summary>
+        /// <returns>True if the effect was found and its duration was changed.</returns>
+        public bool ChangeActiveEffectDuration(ActiveGameplayEffect effect, float newDuration)
+        {
+            if (effect == null || effect.IsExpired) return false;
+            if (effect.Spec.Def.DurationPolicy != EDurationPolicy.HasDuration) return false;
+
+            int idx = activeEffects.IndexOf(effect);
+            if (idx < 0) return false;
+
+            effect.SetRemainingDuration(newDuration);
+            return true;
+        }
+
+        /// <summary>
+        /// Finds the first active effect matching the given GameplayEffect definition.
+        /// </summary>
+        public ActiveGameplayEffect FindActiveEffectByDef(GameplayEffect def)
+        {
+            for (int i = 0; i < activeEffects.Count; i++)
+            {
+                if (activeEffects[i].Spec.Def == def && !activeEffects[i].IsExpired)
+                    return activeEffects[i];
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Gets the current stack count of an active effect by its definition.
+        /// Returns 0 if the effect is not active.
+        /// UE5: GetCurrentStackCount.
+        /// </summary>
+        public int GetCurrentStackCount(GameplayEffect def)
+        {
+            var effect = FindActiveEffectByDef(def);
+            return effect?.StackCount ?? 0;
+        }
+
+        #endregion
+
+        #region Tag Convenience API
+
+        /// <summary>
+        /// Checks if the owner has a specific gameplay tag.
+        /// UE5: HasMatchingGameplayTag.
+        /// </summary>
+        public bool HasMatchingGameplayTag(GameplayTag tag) => CombinedTags.HasTag(tag);
+
+        /// <summary>
+        /// Checks if the owner has ALL of the specified gameplay tags.
+        /// UE5: HasAllMatchingGameplayTags.
+        /// </summary>
+        public bool HasAllMatchingGameplayTags(GameplayTagContainer tags) => tags == null || tags.IsEmpty || CombinedTags.HasAll(tags);
+
+        /// <summary>
+        /// Checks if the owner has ANY of the specified gameplay tags.
+        /// UE5: HasAnyMatchingGameplayTags.
+        /// </summary>
+        public bool HasAnyMatchingGameplayTags(GameplayTagContainer tags) => tags != null && !tags.IsEmpty && CombinedTags.HasAny(tags);
+
+        /// <summary>
+        /// Gets the count of how many times a specific tag is applied (from loose + effects).
+        /// UE5: GetTagCount.
+        /// </summary>
+        public int GetTagCount(GameplayTag tag) => CombinedTags.GetTagCount(tag);
+
+        #endregion
+
+        #region Ability Trigger System
+
+        /// <summary>
+        /// Registers all triggers defined on the ability spec.
+        /// Called when an ability is granted.
+        /// </summary>
+        private void RegisterAbilityTriggers(GameplayAbilitySpec spec)
+        {
+            var ability = spec.GetPrimaryInstance();
+            if (ability?.AbilityTriggers == null || ability.AbilityTriggers.Count == 0) return;
+
+            for (int i = 0; i < ability.AbilityTriggers.Count; i++)
+            {
+                var trigger = ability.AbilityTriggers[i];
+                if (trigger.TriggerTag.IsNone) continue;
+
+                switch (trigger.TriggerSource)
+                {
+                    case EAbilityTriggerSource.GameplayEvent:
+                        AddToTriggerMap(triggerEventAbilities, trigger.TriggerTag, spec);
+                        break;
+                    case EAbilityTriggerSource.OwnedTagAdded:
+                        AddToTriggerMap(triggerTagAddedAbilities, trigger.TriggerTag, spec);
+                        // Register a tag event callback to fire the trigger
+                        CombinedTags.RegisterTagEventCallback(trigger.TriggerTag, GameplayTagEventType.NewOrRemoved, OnTriggerTagChanged);
+                        break;
+                    case EAbilityTriggerSource.OwnedTagRemoved:
+                        AddToTriggerMap(triggerTagRemovedAbilities, trigger.TriggerTag, spec);
+                        CombinedTags.RegisterTagEventCallback(trigger.TriggerTag, GameplayTagEventType.NewOrRemoved, OnTriggerTagChanged);
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Unregisters all triggers defined on the ability spec.
+        /// Called when an ability is removed.
+        /// </summary>
+        private void UnregisterAbilityTriggers(GameplayAbilitySpec spec)
+        {
+            var ability = spec.GetPrimaryInstance();
+            if (ability?.AbilityTriggers == null || ability.AbilityTriggers.Count == 0) return;
+
+            for (int i = 0; i < ability.AbilityTriggers.Count; i++)
+            {
+                var trigger = ability.AbilityTriggers[i];
+                if (trigger.TriggerTag.IsNone) continue;
+
+                switch (trigger.TriggerSource)
+                {
+                    case EAbilityTriggerSource.GameplayEvent:
+                        RemoveFromTriggerMap(triggerEventAbilities, trigger.TriggerTag, spec);
+                        break;
+                    case EAbilityTriggerSource.OwnedTagAdded:
+                        RemoveFromTriggerMap(triggerTagAddedAbilities, trigger.TriggerTag, spec);
+                        break;
+                    case EAbilityTriggerSource.OwnedTagRemoved:
+                        RemoveFromTriggerMap(triggerTagRemovedAbilities, trigger.TriggerTag, spec);
+                        break;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Callback fired when a trigger-related tag changes on the owner.
+        /// </summary>
+        private void OnTriggerTagChanged(GameplayTag tag, int newCount)
+        {
+            if (newCount > 0)
+            {
+                // Tag was added
+                if (triggerTagAddedAbilities.TryGetValue(tag, out var addedSpecs))
+                {
+                    for (int i = 0; i < addedSpecs.Count; i++)
+                    {
+                        if (!addedSpecs[i].IsActive)
+                        {
+                            TryActivateAbility(addedSpecs[i]);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                // Tag was removed
+                if (triggerTagRemovedAbilities.TryGetValue(tag, out var removedSpecs))
+                {
+                    for (int i = 0; i < removedSpecs.Count; i++)
+                    {
+                        if (!removedSpecs[i].IsActive)
+                        {
+                            TryActivateAbility(removedSpecs[i]);
+                        }
+                    }
+                }
+            }
+        }
+
+        private static void AddToTriggerMap(Dictionary<GameplayTag, List<GameplayAbilitySpec>> map, GameplayTag tag, GameplayAbilitySpec spec)
+        {
+            if (!map.TryGetValue(tag, out var list))
+            {
+                list = new List<GameplayAbilitySpec>(2);
+                map[tag] = list;
+            }
+            list.Add(spec);
+        }
+
+        private static void RemoveFromTriggerMap(Dictionary<GameplayTag, List<GameplayAbilitySpec>> map, GameplayTag tag, GameplayAbilitySpec spec)
+        {
+            if (map.TryGetValue(tag, out var list))
+            {
+                list.Remove(spec);
+                if (list.Count == 0) map.Remove(tag);
+            }
+        }
+
+        #endregion
 
         public void Dispose()
         {
@@ -720,71 +1271,87 @@ namespace CycloneGames.GameplayAbilities.Runtime
             attributeSets.Clear();
             attributes.Clear();
             activatableAbilities.Clear();
-            grantedAbilitiesBuffer.Clear();
-            effectGrantedAbilitiesStart.Clear();
-            effectGrantedAbilitiesCount.Clear();
             looseTags.Clear();
             fromEffectsTags.Clear();
             CombinedTags.Clear();
             dirtyAttributes.Clear();
+            eventDelegates.Clear();
+            stackingIndexByTarget.Clear();
+            stackingIndexBySource.Clear();
+            abilityAppliedEffects.Clear();
+            triggerEventAbilities.Clear();
+            triggerTagAddedAbilities.Clear();
+            triggerTagRemovedAbilities.Clear();
+            OnGameplayEffectAppliedToSelf = null;
+            OnGameplayEffectRemovedFromSelf = null;
+            OnAbilityActivated = null;
+            OnAbilityEndedEvent = null;
+            OnAbilityCommitted = null;
             OwnerActor = null;
             AvatarActor = null;
         }
 
-        // Dummy implementations for brevity in this example
+        // P0: O(1) stacking lookup using dictionary index instead of O(n) linear search
         private bool HandleStacking(GameplayEffectSpec spec)
         {
-            // If the effect doesn't stack, do nothing and let the calling function create a new effect instance.
             if (spec.Def.Stacking.Type == EGameplayEffectStackingType.None)
             {
                 return false;
             }
 
-            // Search for an existing active effect that matches the stacking criteria.
-            for (int i = 0; i < activeEffects.Count; i++)
+            ActiveGameplayEffect existingEffect = null;
+
+            // O(1) lookup using stacking index
+            if (spec.Def.Stacking.Type == EGameplayEffectStackingType.AggregateByTarget)
             {
-                var existingEffect = activeEffects[i];
-                if (existingEffect.IsExpired) continue;
-
-                // Stacking requires the GameplayEffect definitions to be the same.
-                if (existingEffect.Spec.Def == spec.Def)
-                {
-                    // For AggregateBySource, the source AbilitySystemComponent must also match.
-                    if (spec.Def.Stacking.Type == EGameplayEffectStackingType.AggregateBySource &&
-                        existingEffect.Spec.Source != spec.Source)
-                    {
-                        continue; // Not a match, keep searching.
-                    }
-
-                    // Found a stackable effect.
-
-                    // Check if the stack limit has been reached.
-                    if (existingEffect.StackCount >= spec.Def.Stacking.Limit)
-                    {
-                        // At stack limit. Respect duration refresh policy when re-applied.
-                        if (spec.Def.Stacking.DurationPolicy == EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication)
-                        {
-                            existingEffect.RefreshDurationAndPeriod();
-                        }
-                        GASLog.Debug($"Stacking limit for {spec.Def.Name} reached.");
-                    }
-                    else
-                    {
-                        // Increment the stack count on the existing effect.
-                        existingEffect.OnStackApplied();
-                    }
-
-                    // Mark attributes as dirty to force recalculation.
-                    MarkAttributesDirtyFromEffect(existingEffect);
-
-                    // The new spec has been handled by stacking, so it can be returned to the pool.
-                    // Returning true prevents a new ActiveGameplayEffect from being created.
-                    return true;
-                }
+                stackingIndexByTarget.TryGetValue(spec.Def, out existingEffect);
+            }
+            else if (spec.Def.Stacking.Type == EGameplayEffectStackingType.AggregateBySource)
+            {
+                stackingIndexBySource.TryGetValue((spec.Def, spec.Source), out existingEffect);
             }
 
-            // No existing effect found to stack with.
-            return false;
+            // Validate the found effect is still valid
+            if (existingEffect == null || existingEffect.IsExpired)
+            {
+                // Index is stale, remove it
+                if (existingEffect != null)
+                {
+                    RemoveFromStackingIndex(existingEffect);
+                }
+                return false;
+            }
+
+            // Found a stackable effect
+            if (existingEffect.StackCount >= spec.Def.Stacking.Limit)
+            {
+                // UE5: Overflow — apply overflow effects when stack limit is reached.
+                if (spec.Def.OverflowEffects.Count > 0)
+                {
+                    for (int i = 0; i < spec.Def.OverflowEffects.Count; i++)
+                    {
+                        var overflowSpec = GameplayEffectSpec.Create(spec.Def.OverflowEffects[i], spec.Source, spec.Level);
+                        ApplyGameplayEffectSpecToSelf(overflowSpec);
+                    }
+                }
+
+                // UE5: bDenyOverflowApplication — skip duration refresh if denied.
+                if (!spec.Def.DenyOverflowApplication)
+                {
+                    if (spec.Def.Stacking.DurationPolicy == EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication)
+                    {
+                        existingEffect.RefreshDurationAndPeriod();
+                    }
+                }
+                GASLog.Debug($"Stacking limit for {spec.Def.Name} reached.");
+            }
+            else
+            {
+                existingEffect.OnStackApplied();
+            }
+
+            MarkAttributesDirtyFromEffect(existingEffect);
+            return true;
         }
         private void RemoveEffectsWithTags(GameplayTagContainer tags)
         {

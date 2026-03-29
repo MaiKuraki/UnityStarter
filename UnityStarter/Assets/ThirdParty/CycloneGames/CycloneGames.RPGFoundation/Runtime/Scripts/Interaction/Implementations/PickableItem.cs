@@ -10,13 +10,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         [SerializeField] private bool destroyOnPickup = true;
         [SerializeField] private GameObject pickupEffectPrefab;
 
-        // Note: autoInteract is configured in the base class Interactable
-        // Set autoInteract = true in Inspector for auto-pickup behavior
-
-        protected override UniTask OnDoInteractAsync(CancellationToken ct)
+        protected override void Awake()
         {
-            // Call base to trigger onInteract event (for sound, etc.)
-            base.OnDoInteractAsync(ct);
+            base.Awake();
+            // Subclass or Inspector can assign a project-specific channel.
+            // No default override — the framework does not assume game semantics.
+        }
+
+        protected override async UniTask OnDoInteractAsync(CancellationToken ct)
+        {
+            await base.OnDoInteractAsync(ct);
 
             OnPickedUp();
 
@@ -30,8 +33,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 gameObject.SetActive(false);
                 Destroy(gameObject);
             }
-
-            return UniTask.CompletedTask;
         }
 
         protected virtual void OnPickedUp() { }

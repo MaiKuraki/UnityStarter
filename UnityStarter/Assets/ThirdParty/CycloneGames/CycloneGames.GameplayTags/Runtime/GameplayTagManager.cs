@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
 using UnityEngine;
 
@@ -13,8 +12,9 @@ namespace CycloneGames.GameplayTags.Runtime
         private static Dictionary<string, GameplayTagDefinition> s_TagDefinitionsByName = new();
         private static List<GameplayTagDefinition> s_TagsDefinitionsList = new();
         private static GameplayTag[] s_Tags;
-        private static bool s_IsInitialized;
+        private static volatile bool s_IsInitialized;
         private static bool s_HasBeenReloaded;
+        private static readonly object s_InitLock = new();
 
         public static ReadOnlySpan<GameplayTag> GetAllTags()
         {
@@ -188,44 +188,89 @@ namespace CycloneGames.GameplayTags.Runtime
 
         private static void RebuildTagHierarchyAndArray()
         {
-            // Sort definitions to ensure parent tags are processed before children.
-            s_TagsDefinitionsList.Sort((a, b) => string.Compare(a.TagName, b.TagName, StringComparison.Ordinal));
-            
-            // Update runtime indices after sorting.
-            for (int i = 0; i < s_TagsDefinitionsList.Count; i++)
+            // Auto-register missing parent definitions for dynamically added tags
+            int initialCount = s_TagsDefinitionsList.Count;
+            for (int i = 0; i < initialCount; i++)
             {
-                s_TagsDefinitionsList[i].SetRuntimeIndex(i);
-            }
-
-            // Rebuild hierarchy relationships.
-            var definitionsByName = s_TagsDefinitionsList.ToDictionary(d => d.TagName);
-            foreach (var definition in s_TagsDefinitionsList)
-            {
+                GameplayTagDefinition definition = s_TagsDefinitionsList[i];
                 if (definition.IsNone()) continue;
 
                 string parentName = GameplayTagUtility.GetParentName(definition.TagName);
-                if (!string.IsNullOrEmpty(parentName) && definitionsByName.TryGetValue(parentName, out var parentDef))
+                while (!string.IsNullOrEmpty(parentName))
                 {
-                    definition.SetParent(parentDef);
+                    if (s_TagDefinitionsByName.ContainsKey(parentName))
+                        break;
+
+                    var parentDef = new GameplayTagDefinition(parentName, string.Empty, GameplayTagFlags.None);
+                    s_TagDefinitionsByName[parentName] = parentDef;
+                    s_TagsDefinitionsList.Add(parentDef);
+
+                    parentName = GameplayTagUtility.GetParentName(parentName);
                 }
             }
-            
-            foreach (var definition in s_TagsDefinitionsList)
+
+            s_TagsDefinitionsList.Sort((a, b) => string.Compare(a.TagName, b.TagName, StringComparison.Ordinal));
+
+            for (int i = 0; i < s_TagsDefinitionsList.Count; i++)
+                s_TagsDefinitionsList[i].SetRuntimeIndex(i);
+
+            s_TagDefinitionsByName.Clear();
+            foreach (GameplayTagDefinition definition in s_TagsDefinitionsList)
+                s_TagDefinitionsByName[definition.TagName] = definition;
+
+            // Build all-descendant children map (matches initialization behavior in GameplayTagRegistrationContext)
+            var childrenMap = new Dictionary<GameplayTagDefinition, List<GameplayTagDefinition>>();
+            for (int i = 0; i < s_TagsDefinitionsList.Count; i++)
+            {
+                GameplayTagDefinition definition = s_TagsDefinitionsList[i];
+                if (definition.IsNone()) continue;
+
+                string[] hierarchyNames = GameplayTagUtility.GetHeirarchyNames(definition.TagName);
+                for (int j = 0; j < hierarchyNames.Length - 1; j++)
+                {
+                    if (s_TagDefinitionsByName.TryGetValue(hierarchyNames[j], out var ancestorDef))
+                    {
+                        if (!childrenMap.TryGetValue(ancestorDef, out var children))
+                        {
+                            children = new List<GameplayTagDefinition>();
+                            childrenMap[ancestorDef] = children;
+                        }
+                        children.Add(definition);
+                    }
+                }
+            }
+
+            foreach (var kvp in childrenMap)
+            {
+                kvp.Key.SetChildren(kvp.Value);
+                foreach (GameplayTagDefinition child in kvp.Value)
+                    child.SetParent(kvp.Key);
+            }
+
+            foreach (GameplayTagDefinition definition in s_TagsDefinitionsList)
             {
                 if (definition.IsNone()) continue;
-                
-                var children = s_TagsDefinitionsList.Where(d => d.ParentTagDefinition == definition).ToList();
-                definition.SetChildren(children);
 
-                var hierarchyTags = new List<GameplayTag>();
-                var current = definition;
+                if (!childrenMap.ContainsKey(definition))
+                    definition.SetChildren(new List<GameplayTagDefinition>());
+
+                // Build hierarchy tags bottom-up without List allocation
+                int depth = 0;
+                GameplayTagDefinition current = definition;
                 while (current != null && !current.IsNone())
                 {
-                    hierarchyTags.Add(current.Tag);
+                    depth++;
                     current = current.ParentTagDefinition;
                 }
-                hierarchyTags.Reverse();
-                definition.SetHierarchyTags(hierarchyTags.ToArray());
+
+                var hierarchyTags = new GameplayTag[depth];
+                current = definition;
+                for (int k = depth - 1; k >= 0; k--)
+                {
+                    hierarchyTags[k] = current.Tag;
+                    current = current.ParentTagDefinition;
+                }
+                definition.SetHierarchyTags(hierarchyTags);
             }
 
             RebuildTagArray();
