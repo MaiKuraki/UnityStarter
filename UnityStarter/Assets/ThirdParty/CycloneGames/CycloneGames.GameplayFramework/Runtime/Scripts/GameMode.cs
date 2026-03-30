@@ -10,11 +10,19 @@ namespace CycloneGames.GameplayFramework.Runtime
     {
         UniTask LaunchGameModeAsync(CancellationToken cancellationToken = default);
     }
+
     public class GameMode : Actor, IGameMode
     {
         private const string DEBUG_FLAG = "<color=cyan>[GameMode]</color>";
         private IUnityObjectSpawner objectSpawner;
         private IWorldSettings worldSettings;
+        private IGameSession gameSession;
+
+        [SerializeField] private bool bStartPlayersAsSpectators;
+        public bool StartPlayersAsSpectators { get => bStartPlayersAsSpectators; set => bStartPlayersAsSpectators = value; }
+
+        public IGameSession GetGameSession() => gameSession;
+        public void SetGameSession(IGameSession session) => gameSession = session;
 
         public virtual void Initialize(IUnityObjectSpawner objectSpawner, IWorldSettings worldSettings)
         {
@@ -22,7 +30,8 @@ namespace CycloneGames.GameplayFramework.Runtime
             this.worldSettings = worldSettings;
         }
 
-        void InitNewPlayer(PlayerController NewPlayerController, string Portal = "")
+        #region Player Start Management
+        protected virtual void InitNewPlayer(PlayerController NewPlayerController, string Portal = "")
         {
             if (NewPlayerController == null)
             {
@@ -38,27 +47,21 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             UpdatePlayerStartSpot(NewPlayerController, Portal);
         }
-        bool UpdatePlayerStartSpot(PlayerController Player, string Portal = "")
+
+        protected virtual bool UpdatePlayerStartSpot(PlayerController Player, string Portal = "")
         {
             Actor StartSpot = FindPlayerStart(Player, Portal);
-            if (StartSpot)
+            if (StartSpot != null)
             {
-                Quaternion StartRotation =
-                    Quaternion.Euler(0, StartSpot.GetYaw(), 0);
+                Quaternion StartRotation = Quaternion.Euler(0, StartSpot.GetYaw(), 0);
                 Player.SetInitialLocationAndRotation(StartSpot.transform.position, StartRotation);
-
                 Player.SetStartSpot(StartSpot);
-
                 return true;
             }
-
             return false;
         }
 
-        /// <summary>
-        /// Finds a PlayerStart for the given controller. 
-        /// </summary>
-        Actor FindPlayerStart(Controller Player, string IncommingName = "")
+        protected virtual Actor FindPlayerStart(Controller Player, string IncomingName = "")
         {
             var playerStarts = PlayerStart.GetAllPlayerStarts();
 
@@ -68,28 +71,42 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return null;
             }
 
-            if (!string.IsNullOrEmpty(IncommingName))
+            if (!string.IsNullOrEmpty(IncomingName))
             {
                 for (int i = 0; i < playerStarts.Count; i++)
                 {
-                    var st = playerStarts[i];
-                    if (string.Equals(st.GetName(), IncommingName, System.StringComparison.Ordinal))
+                    if (string.Equals(playerStarts[i].GetName(), IncomingName, System.StringComparison.Ordinal))
                     {
-                        Player.SetStartSpot(st);
-                        return st;
+                        Player.SetStartSpot(playerStarts[i]);
+                        return playerStarts[i];
                     }
                 }
             }
 
-            if (playerStarts.Count > 0)
+            Actor chosen = ChoosePlayerStart(Player);
+            if (chosen != null)
             {
-                var randomStartSpot = playerStarts[0]; // Return first one in the list
-                Player.SetStartSpot(randomStartSpot);
-                return randomStartSpot;
+                Player.SetStartSpot(chosen);
             }
-
-            return null;
+            return chosen;
         }
+
+        /// <summary>
+        /// Override to implement custom player start selection logic (random, round-robin, team-based, etc.)
+        /// </summary>
+        protected virtual Actor ChoosePlayerStart(Controller Player)
+        {
+            var playerStarts = PlayerStart.GetAllPlayerStarts();
+            return playerStarts.Count > 0 ? playerStarts[0] : null;
+        }
+
+        protected virtual bool ShouldSpawnAtStartSpot(PlayerController Player)
+        {
+            return Player.GetStartSpot() != null;
+        }
+        #endregion
+
+        #region Restart Player
         public virtual void RestartPlayer(PlayerController NewPlayer, string Portal = "")
         {
             if (NewPlayer == null)
@@ -101,7 +118,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             Actor StartSpot = FindPlayerStart(NewPlayer, Portal);
             if (StartSpot == null)
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} Invalid Player Start, player will spawn at Vector3(0, 0, 0)");
+                CLogger.LogWarning($"{DEBUG_FLAG} No PlayerStart found, spawning at origin");
                 RestartPlayerAtLocation(NewPlayer, Vector3.zero);
                 return;
             }
@@ -109,14 +126,13 @@ namespace CycloneGames.GameplayFramework.Runtime
             RestartPlayerAtPlayerStart(NewPlayer, StartSpot);
         }
 
-        void RestartPlayerAtPlayerStart(PlayerController NewPlayer, Actor StartSpot)
+        protected virtual void RestartPlayerAtPlayerStart(PlayerController NewPlayer, Actor StartSpot)
         {
             if (NewPlayer == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
                 return;
             }
-
             if (StartSpot == null)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Invalid Player Start");
@@ -128,18 +144,19 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 SpawnRotation = NewPlayer.GetPawn().transform.rotation;
             }
-            else if (GetDefaultPawnPrefabForController(NewPlayer))
+            else if (GetDefaultPawnPrefabForController(NewPlayer) != null)
             {
                 Pawn NewPawn = SpawnDefaultPawnAtPlayerStart(NewPlayer, StartSpot);
-                if (NewPawn)
+                if (NewPawn != null)
                 {
                     NewPlayer.SetPawn(NewPawn);
                 }
             }
 
-            if (!NewPlayer.GetPawn())
+            if (NewPlayer.GetPawn() == null)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at PlayerStart, Invalid Pawn");
+                NewPlayer.FailedToSpawnPawn();
+                CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at PlayerStart");
             }
             else
             {
@@ -147,7 +164,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        void RestartPlayerAtTransform(PlayerController NewPlayer, Transform SpawnTransform)
+        protected virtual void RestartPlayerAtTransform(PlayerController NewPlayer, Transform SpawnTransform)
         {
             if (NewPlayer == null)
             {
@@ -160,17 +177,18 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 SpawnRotation = NewPlayer.GetPawn().transform.rotation;
             }
-            else if (GetDefaultPawnPrefabForController(NewPlayer))
+            else if (GetDefaultPawnPrefabForController(NewPlayer) != null)
             {
                 Pawn NewPawn = SpawnDefaultPawnAtTransform(NewPlayer, SpawnTransform);
-                if (NewPawn)
+                if (NewPawn != null)
                 {
                     NewPlayer.SetPawn(NewPawn);
                 }
             }
 
-            if (!NewPlayer.GetPawn())
+            if (NewPlayer.GetPawn() == null)
             {
+                NewPlayer.FailedToSpawnPawn();
                 CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at Transform");
             }
             else
@@ -179,7 +197,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        void RestartPlayerAtLocation(PlayerController NewPlayer, Vector3 NewLocation)
+        protected virtual void RestartPlayerAtLocation(PlayerController NewPlayer, Vector3 NewLocation)
         {
             if (NewPlayer == null)
             {
@@ -192,18 +210,19 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 SpawnRotation = NewPlayer.GetPawn().transform.rotation;
             }
-            else if (GetDefaultPawnPrefabForController(NewPlayer))
+            else if (GetDefaultPawnPrefabForController(NewPlayer) != null)
             {
                 Pawn NewPawn = SpawnDefaultPawnAtLocation(NewPlayer, NewLocation);
-                if (NewPawn)
+                if (NewPawn != null)
                 {
                     NewPlayer.SetPawn(NewPawn);
                 }
             }
 
-            if (!NewPlayer.GetPawn())
+            if (NewPlayer.GetPawn() == null)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at Transform");
+                NewPlayer.FailedToSpawnPawn();
+                CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at Location");
             }
             else
             {
@@ -211,37 +230,39 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        void FinishRestartPlayer(Controller NewPlayer, Quaternion StartRotation)
+        protected virtual void FinishRestartPlayer(Controller NewPlayer, Quaternion StartRotation)
         {
             NewPlayer.Possess(NewPlayer.GetPawn());
 
-            if (!NewPlayer.GetPawn())
+            if (NewPlayer.GetPawn() == null)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Pawn");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Pawn after possess");
             }
             else
             {
-                Quaternion NewControllerRot = StartRotation;
-                NewPlayer.SetControlRotation(NewControllerRot);
+                NewPlayer.SetControlRotation(StartRotation);
             }
         }
+        #endregion
 
-        Pawn SpawnDefaultPawnAtPlayerStart(Controller NewPlayer, Actor StartSpot)
+        #region Spawn Pawn
+        protected virtual Pawn SpawnDefaultPawnAtPlayerStart(Controller NewPlayer, Actor StartSpot)
         {
             return SpawnDefaultPawnAtTransform(NewPlayer, StartSpot.transform);
         }
 
-        Pawn SpawnDefaultPawnAtTransform(Controller NewPlayer, Transform SpawnTransform)
+        protected virtual Pawn SpawnDefaultPawnAtTransform(Controller NewPlayer, Transform SpawnTransform)
         {
             if (SpawnTransform == null)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid target transform, please check your spawn pipeline");
+                CLogger.LogError($"{DEBUG_FLAG} Invalid target transform");
                 return null;
             }
+
             Pawn p = objectSpawner?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
             if (p == null)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn, please check your spawn pipeline");
+                CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn, check spawn pipeline");
                 return null;
             }
 
@@ -252,68 +273,53 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         /// <summary>
         /// Teleports a pawn to the specified position and rotation.
-        /// Handles different movement systems: CharacterController, Rigidbody, or pure Transform.
+        /// Handles CharacterController, Rigidbody, or pure Transform movement systems.
         /// </summary>
         protected virtual void TeleportPawn(Pawn pawn, Vector3 position, Quaternion rotation)
         {
             if (pawn == null) return;
 
-            #region Unity Simple Character Controller
-            // CharacterController teleport (always available, Unity built-in component)
             var characterController = pawn.GetComponent<CharacterController>();
             if (characterController != null)
             {
                 // CharacterController requires disable/enable cycle to sync internal state
                 characterController.enabled = false;
-                pawn.transform.position = position;
+                pawn.transform.SetPositionAndRotation(position, rotation);
                 pawn.transform.localScale = Vector3.one;
-                pawn.transform.rotation = rotation;
                 characterController.enabled = true;
                 return;
             }
-            #endregion
 
-            #region Physics (Rigidbody)
             var rigidbody = pawn.GetComponent<Rigidbody>();
-            CLogger.LogInfo($"{DEBUG_FLAG} Teleporting {pawn.name} to {position}");
             if (rigidbody != null)
             {
                 if (rigidbody.isKinematic)
                 {
-                    // Kinematic: Set transform directly, then sync with MovePosition
-                    pawn.transform.position = position;
+                    pawn.transform.SetPositionAndRotation(position, rotation);
                     pawn.transform.localScale = Vector3.one;
-                    pawn.transform.rotation = rotation;
                     rigidbody.MovePosition(position);
                     rigidbody.MoveRotation(rotation);
                 }
                 else
                 {
-                    // Dynamic: Reset velocities before teleporting
 #if UNITY_6000_0_OR_NEWER
                     rigidbody.linearVelocity = Vector3.zero;
-                    rigidbody.angularVelocity = Vector3.zero;
 #else
                     rigidbody.velocity = Vector3.zero;
-                    rigidbody.angularVelocity = Vector3.zero;
 #endif
-                    pawn.transform.position = position;
+                    rigidbody.angularVelocity = Vector3.zero;
+                    pawn.transform.SetPositionAndRotation(position, rotation);
                     pawn.transform.localScale = Vector3.one;
-                    pawn.transform.rotation = rotation;
                 }
-                
                 Physics.SyncTransforms();
                 return;
             }
-            #endregion
 
-            // Fallback: Pure Transform teleport (no physics components)
-            pawn.transform.position = position;
+            pawn.transform.SetPositionAndRotation(position, rotation);
             pawn.transform.localScale = Vector3.one;
-            pawn.transform.rotation = rotation;
         }
 
-        Pawn SpawnDefaultPawnAtLocation(Controller NewPlayer, Vector3 NewLocation)
+        protected virtual Pawn SpawnDefaultPawnAtLocation(Controller NewPlayer, Vector3 NewLocation)
         {
             Pawn p = objectSpawner?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
             if (p == null)
@@ -322,22 +328,32 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return null;
             }
             p.transform.SetParent(null);
-            p.transform.position = NewLocation;
+            p.transform.SetPositionAndRotation(NewLocation, Quaternion.identity);
             p.transform.localScale = Vector3.one;
-            p.transform.rotation = Quaternion.identity;
             p.NotifyInitialRotation(Quaternion.identity);
-
             return p;
         }
+        #endregion
 
-        private PlayerController cachedPlayerController;
-        PlayerController SpawnPlayerController()
+        #region Pawn Class
+        /// <summary>
+        /// Override to return a different pawn prefab per controller (e.g., team-based or class-based selection).
+        /// </summary>
+        protected virtual Pawn GetDefaultPawnPrefabForController(Controller InController)
         {
-            //  TODO: maybe should not bind in the DI framework, if you are using the DI to implement the IObjectSpawner?
+            return InController.GetDefaultPawnPrefab();
+        }
+        #endregion
+
+        #region Player Controller
+        private PlayerController cachedPlayerController;
+
+        protected virtual PlayerController SpawnPlayerController()
+        {
             cachedPlayerController = objectSpawner?.Create(worldSettings?.PlayerControllerClass) as PlayerController;
             if (cachedPlayerController == null)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Spawn PlayerController Failed, please check your spawn pipeline");
+                CLogger.LogError($"{DEBUG_FLAG} Spawn PlayerController Failed, check spawn pipeline");
                 return null;
             }
             cachedPlayerController.Initialize(objectSpawner, worldSettings);
@@ -345,27 +361,81 @@ namespace CycloneGames.GameplayFramework.Runtime
         }
 
         public PlayerController GetPlayerController() => cachedPlayerController;
+        #endregion
 
-        Pawn GetDefaultPawnPrefabForController(Controller InController)
+        #region Match Lifecycle
+        /// <summary>
+        /// Called when a new player is being set up. Override for custom player initialization.
+        /// </summary>
+        protected virtual void HandleStartingNewPlayer(PlayerController NewPlayer) { }
+
+        protected virtual void HandleMatchHasStarted()
         {
-            return InController.GetDefaultPawnPrefab();
+            gameSession?.HandleMatchHasStarted();
         }
 
+        protected virtual void HandleMatchHasEnded()
+        {
+            gameSession?.HandleMatchHasEnded();
+        }
+        #endregion
+
+        #region Login / Logout
+        /// <summary>
+        /// Validates whether a player should be allowed to join before creating their PlayerController.
+        /// Delegates to IGameSession.ApproveLogin if a session is set.
+        /// Override for custom validation (whitelist, matchmaking tickets, etc.)
+        /// </summary>
+        protected virtual bool PreLogin(string options, string address, out string errorMessage)
+        {
+            if (gameSession != null && !gameSession.ApproveLogin(options, address, out errorMessage))
+            {
+                return false;
+            }
+            errorMessage = null;
+            return true;
+        }
+
+        /// <summary>
+        /// Called after a PlayerController is fully initialized and ready for gameplay.
+        /// Registers the player with the session and invokes HandleStartingNewPlayer.
+        /// </summary>
+        public virtual void PostLogin(PlayerController NewPlayer)
+        {
+            HandleStartingNewPlayer(NewPlayer);
+            gameSession?.RegisterPlayer(NewPlayer);
+        }
+
+        /// <summary>
+        /// Called when a player leaves the game (disconnect, quit, kicked).
+        /// Unregisters the player from the session.
+        /// </summary>
+        public virtual void Logout(Controller Exiting)
+        {
+            if (Exiting is PlayerController pc)
+            {
+                gameSession?.UnregisterPlayer(pc);
+            }
+        }
+        #endregion
+
+        #region Launch
         public virtual async UniTask LaunchGameModeAsync(CancellationToken cancellationToken = default)
         {
             CLogger.LogInfo($"{DEBUG_FLAG} Launch GameMode");
 
             PlayerController PC = SpawnPlayerController();
-            if (!PC)
-            {
-                return;
-            }
+            if (PC == null) return;
 
             await PC.InitializationTask.AttachExternalCancellation(cancellationToken);
             if (cancellationToken.IsCancellationRequested) return;
 
-            //  Now PlayerController is fully initialized, we can restart player(spawn pawn and possess it)
+            PostLogin(PC);
+
+            HandleMatchHasStarted();
+
             RestartPlayer(PC);
         }
+        #endregion
     }
 }

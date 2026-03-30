@@ -253,7 +253,7 @@
             <param name="right">The second reference to compare.</param>
             <returns><c>true</c> if the memory address referenced by <paramref name="left"/> is greater than the memory address referenced by <paramref name="right"/>; otherwise <c>false</c>.</returns>
             <remarks>
-            This check is conceptually similar to "(void*)(&amp;left) &gt; (void*)(&amp;right)". Both parameters must reference the same object, array, or span;
+            This check is conceptually similar to "(void*)(&amp;left) > (void*)(&amp;right)". Both parameters must reference the same object, array, or span;
             or the objects being referenced must both be pinned; or both references must represent unmanaged pointers; otherwise the result is undefined.
             </remarks>
         </member>
@@ -265,7 +265,7 @@
             <param name="right">The second reference to compare.</param>
             <returns><c>true</c> if the memory address referenced by <paramref name="left"/> is less than the memory address referenced by <paramref name="right"/>; otherwise <c>false</c>.</returns>
             <remarks>
-            This check is conceptually similar to "(void*)(&amp;left) &lt; (void*)(&amp;right)". Both parameters must reference the same object, array, or span;
+            This check is conceptually similar to "(void*)(&amp;left) < (void*)(&amp;right)". Both parameters must reference the same object, array, or span;
             or the objects being referenced must both be pinned; or both references must represent unmanaged pointers; otherwise the result is undefined.
             </remarks>
         </member>

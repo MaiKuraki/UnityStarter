@@ -188,7 +188,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Defines automatic triggers for this ability (event received, tag added/removed).
-        /// UE5: TArray&lt;FAbilityTriggerData&gt; AbilityTriggers.
+        /// UE5: TArray<FAbilityTriggerData> AbilityTriggers.
         /// </summary>
         public IReadOnlyList<AbilityTriggerData> AbilityTriggers { get; protected set; }
 

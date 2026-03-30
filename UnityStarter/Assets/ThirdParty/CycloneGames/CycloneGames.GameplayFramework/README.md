@@ -1,1993 +1,1006 @@
-> **Note:** This document was written with AI assistance. If you are looking for absolute accuracy, please read the source code directly. Both the **source code** and the **examples** were written by the author.
-
 [**English**] | [**简体中文**](README.SCH.md)
 
 # CycloneGames.GameplayFramework
 
-A minimal, UE-style gameplay framework for Unity. It mirrors Unreal Engine's Gameplay Framework concepts (Actor, Pawn, Controller, GameMode, etc.), making it easy to build scalable, maintainable gameplay systems with dependency injection support.
+A structured gameplay framework for Unity, inspired by **Unreal Engine's GameFramework** architecture. It separates game logic into clear, composable layers — **Actor**, **Pawn**, **Controller**, **GameMode**, **PlayerState**, and more — each solving a specific architectural problem to keep your project scalable, testable, and easy to extend.
 
-This framework is perfect for developers who want Unreal Engine's proven architecture patterns in Unity, or for teams transitioning from Unreal to Unity. It provides a clean separation of concerns and follows industry-standard design patterns.
+Ideal for developers who want Unreal Engine's proven architecture patterns in Unity, or for teams transitioning from Unreal Engine to Unity. The framework provides clean separation of concerns and follows industry-standard design patterns that have been battle-tested in countless AAA titles.
 
 - **Unity**: 2022.3+
 - **Dependencies**:
-  - `com.unity.cinemachine@3` - For camera management
-  - `com.cysharp.unitask@2` - For asynchronous operations
-  - `com.cyclone-games.factory@1` - For object spawning
-  - `com.cyclone-games.logger@1` - For debug logging
+  - `com.unity.burst` / `com.unity.mathematics` — Burst-optimized math utilities
+  - `com.unity.cinemachine@3` — Camera management
+  - `com.cysharp.unitask@2` — Async operations
+  - `com.cyclone-games.factory@1` — Object spawning abstraction (`IUnityObjectSpawner`)
+  - `com.cyclone-games.logger@1` — Debug logging
+
+---
 
 ## Table of Contents
 
-1. [Framework Philosophy](#framework-philosophy)
-2. [Core Concepts](#core-concepts)
-3. [Quick Start Guide](#comprehensive-quick-start-guide)
-4. [Architecture Overview](#architecture-overview)
+1. [Design Philosophy](#design-philosophy)
+2. [Architecture Overview](#architecture-overview)
+3. [Class Reference](#class-reference)
+   - [Actor](#actor)
+   - [Pawn](#pawn)
+   - [Controller](#controller)
+   - [PlayerController](#playercontroller)
+   - [AIController](#aicontroller)
+   - [PlayerState](#playerstate)
+   - [GameMode](#gamemode)
+   - [GameState](#gamestate)
+   - [GameSession](#gamesession)
+   - [DamageType System](#damagetype-system)
+   - [World & WorldSettings](#world--worldsettings)
+   - [CameraManager](#cameramanager)
+   - [PlayerStart](#playerstart)
+   - [SpectatorPawn](#spectatorpawn)
+   - [KillZVolume](#killzvolume)
+   - [SceneLogic](#scenelogic)
+   - [ActorTag System](#actortag-system)
+4. [Quick Start](#quick-start)
 5. [Advanced Usage](#advanced-usage)
-6. [Local Multiplayer Guide](#local-multiplayer-guide)
+6. [Integration with Other Packages](#integration-with-other-packages)
 7. [Best Practices](#best-practices)
+8. [FAQ](#faq)
 
-## Framework Philosophy
+---
 
-CycloneGames.GameplayFramework brings Unreal Engine's proven Gameplay Framework architecture to Unity. This design pattern has been battle-tested in countless AAA games and provides a robust foundation for building complex gameplay systems.
+## Design Philosophy
 
-### Why Use This Framework?
+### The Problem
 
-**Traditional Unity Approach:**
+A typical Unity project tends to evolve a monolithic `PlayerController` script that handles input, movement, camera, scoring, respawn, and game rules all in one place. As the project grows, this creates tight coupling, makes character swapping difficult, and turns testing into a nightmare.
 
-- Monolithic `PlayerController` scripts that handle everything
-- Tight coupling between player logic, camera, and game state
-- Difficult to swap player characters or implement respawn systems
-- Hard to test and maintain as complexity grows
+### The Solution
 
-**GameplayFramework Approach:**
+Drawing inspiration from Unreal Engine's GameFramework, this framework decomposes gameplay into **layers with clear responsibilities**:
 
-- **Separation of Concerns**: Player logic (`Pawn`), control (`Controller`), state (`PlayerState`), and game rules (`GameMode`) are separate
-- **Easy Character Swapping**: Change the `Pawn` prefab without touching controller code
-- **Persistent State**: `PlayerState` survives Pawn respawns, perfect for score, inventory, etc.
-- **Testable**: Each component has clear responsibilities and can be tested independently
-- **Scalable**: Add new features without modifying existing code
+| Layer | Class | Responsibility |
+|-------|-------|---------------|
+| **Entity** | `Actor` | Base for all gameplay objects — lifecycle, ownership, tags, damage |
+| **Controllable** | `Pawn` | An Actor that can be possessed and receive movement input |
+| **Decision** | `Controller` | The brain — decides what the Pawn does |
+| **Human Input** | `PlayerController` | A Controller driven by human input, with camera and spectator support |
+| **AI Decision** | `AIController` | A Controller driven by AI logic, with focus and auto-rotation |
+| **Persistent Data** | `PlayerState` | Player data that survives Pawn death/respawn (score, name, stats) |
+| **Game Rules** | `GameMode` | Spawn logic, respawn rules, match flow orchestration |
+| **Match State** | `GameState` | Observable match state machine and player roster |
+| **Session** | `GameSession` | Network-agnostic player capacity, login validation, kick/ban |
+| **Damage** | `DamageType` | Typed damage pipeline with point/radial routing |
+| **World** | `World` | Lightweight service locator for GameMode/GameState/PlayerController |
+| **Configuration** | `WorldSettings` | ScriptableObject that binds all prefab class references |
 
-### Key Benefits
+### Key Principles
 
-- ✅ **Familiar to Unreal Developers**: If you know Unreal's Gameplay Framework, you'll feel at home
-- ✅ **DI-Friendly**: Works seamlessly with dependency injection containers
-- ✅ **Clean Architecture**: Clear separation between gameplay logic and infrastructure
-- ✅ **Flexible**: Easy to extend and customize for your specific needs
-- ✅ **Production-Ready**: Based on proven patterns used in AAA games
+- **DI-friendly**: All spawning goes through `IUnityObjectSpawner` — swap in any DI container or object pool without touching framework code.
+- **Interface-first extensibility**: Core systems expose interfaces (`IGameMode`, `IGameSession`, `IDamageType`, `IWorldSettings`) so you can provide custom implementations without subclassing.
+- **No forced dependencies**: The framework has **zero** compile-time dependency on GameplayAbilities, GameplayTags, Networking, or any other CycloneGames package. Integration is handled through interfaces and opaque context fields.
+- **Zero-GC awareness**: Hot paths use pre-allocated buffers, static lists, and Burst-compiled math. No per-frame allocations in Actor visibility toggling, tag queries, or orientation math.
 
-## Core Concepts
-
-### Actor
-
-The base class for all gameplay objects. Every object in your game that has gameplay logic should inherit from `Actor`.
-
-**Key Features:**
-
-- **Ownership**: Actors can have owners (other Actors)
-- **Lifespan**: Automatic destruction after a set time
-- **Location/Rotation**: Helper methods for position and rotation
-- **World Events**: `FellOutOfWorld()` for handling out-of-bounds actors
-
-**Example:**
-
-```csharp
-public class MyActor : Actor
-{
-    protected override void Awake()
-    {
-        base.Awake();
-        // Your initialization code
-    }
-
-    public override void FellOutOfWorld()
-    {
-        // Custom behavior when actor falls out of world
-        base.FellOutOfWorld(); // Destroys the actor
-    }
-}
-```
-
-### Pawn
-
-A `Pawn` is a controllable `Actor` that can be "possessed" by a `Controller`. This is your player character, enemy, or any entity that can be controlled.
-
-**Key Features:**
-
-- **Possession**: Can be controlled by a `Controller`
-- **PlayerState Link**: Connected to `PlayerState` for persistent data
-- **Restart**: Can be restarted (useful for respawns)
-
-**Example:**
-
-```csharp
-public class MyPlayerPawn : Pawn
-{
-    protected override void Awake()
-    {
-        base.Awake();
-        // Initialize movement, abilities, etc.
-    }
-
-    public override void PossessedBy(Controller NewController)
-    {
-        base.PossessedBy(NewController);
-        // Called when a controller takes control
-        // Initialize input, enable movement, etc.
-    }
-
-    public override void UnPossessed()
-    {
-        base.UnPossessed();
-        // Called when controller releases control
-        // Disable input, stop movement, etc.
-    }
-}
-```
-
-### Controller
-
-A `Controller` owns and controls a `Pawn`. It's the "brain" that makes decisions and sends commands to the Pawn.
-
-**Types:**
-
-- **PlayerController**: For human players
-- **AIController**: For AI-controlled entities
-
-**Key Features:**
-
-- **Possession**: `Possess(Pawn)` and `UnPossess()` methods
-- **Control Rotation**: Manages where the controller is "looking"
-- **PlayerState**: Each controller has a `PlayerState` for persistent data
-
-**Example:**
-
-```csharp
-public class MyPlayerController : PlayerController
-{
-    void Update()
-    {
-        // Handle input
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            // Make the pawn jump
-            if (GetPawn() is MyPlayerPawn pawn)
-            {
-                pawn.Jump();
-            }
-        }
-    }
-}
-```
-
-### PlayerState
-
-`PlayerState` holds player-centric data that persists across Pawn respawns. This is perfect for:
-
-- Score
-- Inventory
-- Stats
-- Any data that should survive death/respawn
-
-**Key Features:**
-
-- **Persistent**: Survives Pawn destruction
-- **Pawn Reference**: Tracks the current `Pawn`
-- **Events**: `OnPawnSetEvent` fires when Pawn changes
-
-**Example:**
-
-```csharp
-public class MyPlayerState : PlayerState
-{
-    public int Score { get; private set; }
-    public int Health { get; private set; }
-
-    public void AddScore(int points)
-    {
-        Score += points;
-        // Notify UI, etc.
-    }
-
-    protected override void Awake()
-    {
-        base.Awake();
-        Health = 100;
-        Score = 0;
-    }
-}
-```
-
-### GameMode
-
-`GameMode` orchestrates the game rules. It handles:
-
-- Spawning `PlayerController`
-- Spawning and respawning `Pawn`s
-- Finding `PlayerStart` locations
-- Game-specific rules
-
-**Key Methods:**
-
-- `LaunchGameMode()`: Starts the game, spawns player
-- `RestartPlayer(PlayerController)`: Respawns a player
-- `FindPlayerStart(Controller, string)`: Finds spawn points
-
-**Example:**
-
-```csharp
-public class MyGameMode : GameMode
-{
-    public override void RestartPlayer(PlayerController NewPlayer, string Portal = "")
-    {
-        // Custom respawn logic
-        base.RestartPlayer(NewPlayer, Portal);
-
-        // Maybe restore health, reset abilities, etc.
-        if (NewPlayer.GetPlayerState() is MyPlayerState ps)
-        {
-            ps.RestoreHealth();
-        }
-    }
-}
-```
-
-### WorldSettings
-
-A `ScriptableObject` that defines all the key prefabs and classes your game needs. This is your "game configuration" asset.
-
-**Contains:**
-
-- `GameModeClass` - Your game mode prefab
-- `PlayerControllerClass` - Your player controller prefab
-- `PawnClass` - Your default player pawn prefab
-- `PlayerStateClass` - Your player state prefab
-- `CameraManagerClass` - Your camera manager prefab
-- `SpectatorPawnClass` - Your spectator pawn prefab
-
-### World
-
-A lightweight container that holds a reference to the `GameMode` and provides lookup methods. This is NOT Unreal's UWorld—it's much simpler.
-
-**Usage:**
-
-```csharp
-World world = new World();
-world.SetGameMode(gameMode);
-PlayerController pc = world.GetPlayerController();
-Pawn pawn = world.GetPlayerPawn();
-```
-
-### CameraManager
-
-Manages Cinemachine cameras and follows the current view target (usually the `PlayerController`).
-
-**Requirements:**
-
-- Main Camera must have `CinemachineBrain` component
-- At least one `CinemachineCamera` in the scene
-
-**Features:**
-
-- Automatic camera finding
-- View target following
-- FOV control
-
-### PlayerStart
-
-A spawn point for players. Place these in your scene where you want players to spawn.
-
-**Features:**
-
-- Name-based matching (for portals/checkpoints)
-- Rotation support (players spawn facing the correct direction)
-- First found is used by default
-
-### SpectatorPawn
-
-A non-interactive `Pawn` used when the player doesn't have a real Pawn yet (e.g., during loading or when spectating).
-
-## Comprehensive Quick-Start Guide
-
-This guide will walk you through setting up a complete GameplayFramework project from scratch.
-
-### Prerequisites
-
-Before starting, ensure you have:
-
-- Unity 2022.3 or later
-- The `CycloneGames.GameplayFramework` package installed
-- All dependencies installed (`Cinemachine`, `UniTask`, `Factory`, `Logger`)
-
-### Step 1: Create Your Prefabs
-
-Before creating `WorldSettings`, you need to create the prefabs it will reference.
-
-**1.1 Create GameMode Prefab**
-
-1. Create an empty GameObject in your scene
-2. Add the `GameMode` component (or your custom subclass)
-3. Name it `GameMode_MyGame`
-4. Drag it to your `Prefabs` folder to create a prefab
-
-**1.2 Create PlayerController Prefab**
-
-1. Create an empty GameObject
-2. Add the `PlayerController` component (or your custom subclass)
-3. Name it `PlayerController_MyGame`
-4. Drag it to your `Prefabs` folder
-
-**1.3 Create Pawn Prefab**
-
-1. Create a GameObject with your player character (e.g., a capsule with a CharacterController)
-2. Add the `Pawn` component (or your custom subclass)
-3. Add any movement, input, or ability components
-4. Name it `Pawn_MyPlayer`
-5. Drag it to your `Prefabs` folder
-
-**1.4 Create PlayerState Prefab**
-
-1. Create an empty GameObject
-2. Add the `PlayerState` component (or your custom subclass)
-3. Name it `PlayerState_MyGame`
-4. Drag it to your `Prefabs` folder
-
-**1.5 Create CameraManager Prefab**
-
-1. Create an empty GameObject
-2. Add the `CameraManager` component (or your custom subclass)
-3. Name it `CameraManager_MyGame`
-4. Drag it to your `Prefabs` folder
-
-**1.6 Create SpectatorPawn Prefab**
-
-1. Create a simple GameObject (e.g., a capsule)
-2. Add the `SpectatorPawn` component
-3. Name it `SpectatorPawn_MyGame`
-4. Drag it to your `Prefabs` folder
-
-### Step 2: Create WorldSettings
-
-`WorldSettings` is a `ScriptableObject` that ties all your prefabs together.
-
-**2.1 Create the Asset**
-
-1. In the Project window, right-click in your desired folder
-2. Select **Create > CycloneGames > GameplayFramework > WorldSettings**
-3. Name it `MyWorldSettings`
-
-**2.2 Configure WorldSettings**
-
-1. Select the `MyWorldSettings` asset
-2. In the Inspector, drag your prefabs into the corresponding fields:
-   - **Game Mode Class**: Drag `GameMode_MyGame`
-   - **Player Controller Class**: Drag `PlayerController_MyGame`
-   - **Pawn Class**: Drag `Pawn_MyPlayer`
-   - **Player State Class**: Drag `PlayerState_MyGame`
-   - **Camera Manager Class**: Drag `CameraManager_MyGame`
-   - **Spectator Pawn Class**: Drag `SpectatorPawn_MyGame`
-
-**2.3 Place in Resources (Optional)**
-
-If you want to load `WorldSettings` by name at runtime:
-
-1. Create a `Resources` folder in your `Assets` directory (if it doesn't exist)
-2. Move `MyWorldSettings` into the `Resources` folder
-3. You can now load it with `Resources.Load<WorldSettings>("MyWorldSettings")`
-
-### Step 3: Implement Object Spawner
-
-The framework uses `IUnityObjectSpawner` (from `com.cyclone-games.factory`) to spawn objects. This allows you to integrate with dependency injection or object pooling.
-
-**3.1 Create Simple Spawner**
-
-Create a new script `SimpleObjectSpawner.cs`:
-
-```csharp
-// SimpleObjectSpawner.cs
-using CycloneGames.Factory.Runtime;
-using UnityEngine;
-
-/// <summary>
-/// A simple object spawner that uses Unity's Instantiate.
-/// For production, consider integrating with your DI container or object pooling system.
-/// </summary>
-public class SimpleObjectSpawner : IUnityObjectSpawner
-{
-    public T Create<T>(T origin) where T : Object
-    {
-        if (origin == null)
-        {
-            Debug.LogError("[SimpleObjectSpawner] Attempted to spawn null object");
-            return null;
-        }
-
-        return Object.Instantiate(origin);
-    }
-}
-```
-
-**3.2 Advanced: DI Integration Example**
-
-If you're using a DI container (like VContainer, Zenject, etc.), you can integrate it:
-
-```csharp
-// DIObjectSpawner.cs
-using CycloneGames.Factory.Runtime;
-using UnityEngine;
-
-public class DIObjectSpawner : IUnityObjectSpawner
-{
-    private IContainer container; // Your DI container
-
-    public DIObjectSpawner(IContainer container)
-    {
-        this.container = container;
-    }
-
-    public T Create<T>(T origin) where T : Object
-    {
-        if (origin == null) return null;
-
-        // Use your DI container to resolve dependencies
-        var instance = container.Instantiate(origin);
-        return instance;
-    }
-}
-```
-
-### Step 4: Create Game Bootstrap
-
-The bootstrap script initializes the framework and launches the game.
-
-**4.1 Create Bootstrap Script**
-
-Create a new script `GameBootstrap.cs`:
-
-```csharp
-// GameBootstrap.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-using CycloneGames.Factory.Runtime;
-using Cysharp.Threading.Tasks;
-
-/// <summary>
-/// Bootstrap script that initializes the GameplayFramework.
-/// Attach this to a GameObject in your initial scene.
-/// </summary>
-public class GameBootstrap : MonoBehaviour
-{
-    [Header("Configuration")]
-    [Tooltip("The WorldSettings asset to use. If null, will try to load from Resources.")]
-    [SerializeField] private WorldSettings worldSettings;
-
-    [Tooltip("Name of WorldSettings to load from Resources (if worldSettings is null).")]
-    [SerializeField] private string worldSettingsName = "MyWorldSettings";
-
-    private IUnityObjectSpawner objectSpawner;
-    private World world;
-
-    async void Start()
-    {
-        // Initialize the World
-        world = new World();
-
-        // Create object spawner
-        // In production, you might get this from your DI container
-        objectSpawner = new SimpleObjectSpawner();
-
-        // Load WorldSettings
-        WorldSettings ws = worldSettings;
-        if (ws == null)
-        {
-            ws = Resources.Load<WorldSettings>(worldSettingsName);
-            if (ws == null)
-            {
-                Debug.LogError($"[GameBootstrap] Failed to load WorldSettings: {worldSettingsName}");
-                return;
-            }
-        }
-
-        // Spawn and initialize GameMode
-        var gameMode = objectSpawner.Create(ws.GameModeClass) as GameMode;
-        if (gameMode == null)
-        {
-            Debug.LogError("[GameBootstrap] Failed to spawn GameMode. Check WorldSettings configuration.");
-            return;
-        }
-
-        gameMode.Initialize(objectSpawner, ws);
-
-        // Set GameMode in World
-        world.SetGameMode(gameMode);
-
-        // Launch the game
-        await gameMode.LaunchGameModeAsync(this.GetCancellationTokenOnDestroy());
-
-        Debug.Log("[GameBootstrap] Game launched successfully!");
-    }
-}
-```
-
-**4.2 Set Up Bootstrap in Scene**
-
-1. Create an empty GameObject in your scene
-2. Name it `GameBootstrap`
-3. Add the `GameBootstrap` component
-4. Optionally assign `MyWorldSettings` in the Inspector, or leave it null to load from Resources
-
-### Step 5: Set Up Your Scene
-
-**5.1 Add PlayerStart**
-
-1. Create an empty GameObject in your scene
-2. Add the `PlayerStart` component
-3. Position it where you want players to spawn
-4. Rotate it to set the spawn direction
-5. (Optional) Name it something specific if you want to use portal-based spawning
-
-**5.2 Set Up Camera**
-
-1. Ensure your Main Camera has a `CinemachineBrain` component
-2. Create at least one `CinemachineCamera` in your scene
-3. Configure the `CinemachineCamera` to follow your player (the `CameraManager` will set this automatically)
-
-**5.3 (Optional) Add KillZVolume**
-
-To automatically destroy actors that fall out of bounds:
-
-1. Create an empty GameObject
-2. Add a `BoxCollider` component
-3. Check **Is Trigger**
-4. Add the `KillZVolume` component
-5. Position and scale the collider to cover the "death zone"
-6. Ensure falling actors have both `Collider` and `Rigidbody` components
-
-### Step 6: Test Your Setup
-
-**6.1 Run the Scene**
-
-1. Press Play
-2. The framework should:
-   - Spawn `PlayerController`
-   - Spawn `PlayerState`
-   - Spawn `CameraManager`
-   - Spawn `SpectatorPawn`
-   - Find a `PlayerStart`
-   - Spawn your `Pawn` at the `PlayerStart`
-   - Possess the `Pawn` with the `PlayerController`
-
-**6.2 Verify in Hierarchy**
-
-Check that these objects were spawned:
-
-- `PlayerController_MyGame(Clone)`
-- `PlayerState_MyGame(Clone)`
-- `CameraManager_MyGame(Clone)`
-- `SpectatorPawn_MyGame(Clone)`
-- `Pawn_MyPlayer(Clone)`
-
-**6.3 Debug Tips**
-
-If things don't work:
-
-1. **Check Console**: Look for error messages
-2. **Verify Prefabs**: Ensure all prefabs have the required components
-3. **Check WorldSettings**: All fields should be assigned
-4. **Verify PlayerStart**: At least one `PlayerStart` must exist in the scene
-5. **Check Camera**: Main Camera needs `CinemachineBrain`, and at least one `CinemachineCamera` must exist
+---
 
 ## Architecture Overview
 
 ### Component Hierarchy
 
 ```mermaid
-flowchart TB
-    subgraph WorldLayer["🌍 World Layer"]
-        World["World"]
-        GameMode["GameMode<br/>• Game Rules<br/>• Spawn Logic"]
-    end
+graph TD
+    WS["WorldSettings<br/>(ScriptableObject — prefab class references)"]
+    GM["GameMode<br/>(game rules, spawn logic, match orchestration)"]
+    GSession["GameSession<br/>(optional — login validation, capacity, kick/ban)"]
+    GState["GameState<br/>(optional — match state machine, player roster)"]
+    PC["PlayerController<br/>(human player brain)"]
+    PS["PlayerState<br/>(persistent player data)"]
+    CM["CameraManager<br/>(Cinemachine integration)"]
+    SP["SpectatorPawn<br/>(placeholder pawn during loading/spectating)"]
+    Pawn["Pawn<br/>(the actual controllable character)"]
+    User["Your movement, abilities, visuals"]
 
-    subgraph PlayerLayer["🎮 Player Layer"]
-        PC["PlayerController<br/>• Input Handling"]
-        PS["PlayerState<br/>• Score, Inventory<br/>• Persistent Data"]
-        CM["CameraManager<br/>• Cinemachine"]
-    end
-
-    subgraph PawnLayer["🏃 Pawn Layer"]
-        Pawn["Pawn<br/>• Movement<br/>• Abilities"]
-        Spectator["SpectatorPawn<br/>• Non-Interactive"]
-    end
-
-    subgraph Config["📋 Configuration"]
-        WS["WorldSettings<br/>ScriptableObject"]
-        PSt["PlayerStart<br/>Spawn Points"]
-    end
-
-    World --> GameMode
-    GameMode --> PC
+    WS --> GM
+    GM --> GSession
+    GM --> GState
+    GM --> PC
     PC --> PS
     PC --> CM
-    PC -.->|possesses| Pawn
-    PC -.->|possesses| Spectator
+    PC --> SP
+    PC --> Pawn
+    Pawn --> User
 
-    WS -.->|configures| GameMode
-    PSt -.->|spawn location| Pawn
+    style WS fill:#4a6,stroke:#333,color:#fff
+    style GM fill:#46a,stroke:#333,color:#fff
+    style PC fill:#a64,stroke:#333,color:#fff
+    style Pawn fill:#a46,stroke:#333,color:#fff
+    style User fill:#555,stroke:#999,color:#fff,stroke-dasharray: 5 5
 ```
 
-### Lifecycle Flow
+### Lifecycle Sequence
 
 ```mermaid
 sequenceDiagram
-    participant Boot as GameBootstrap
-    participant World as World
+    participant Boot as Bootstrap
+    participant W as World
     participant GM as GameMode
     participant PC as PlayerController
     participant PS as PlayerState
+    participant Cam as CameraManager
+    participant SP as SpectatorPawn
     participant Pawn as Pawn
 
-    Boot->>World: Create World
-    Boot->>GM: Spawn GameMode
+    Boot->>W: create World
+    Boot->>GM: spawn GameMode
     Boot->>GM: Initialize(spawner, settings)
-    World->>GM: SetGameMode()
     Boot->>GM: LaunchGameModeAsync()
-
-    GM->>PC: Spawn PlayerController
-    PC->>PS: Spawn PlayerState
-    PC->>PC: Spawn CameraManager
-    PC->>PC: Spawn SpectatorPawn
-
+    GM->>PC: spawn PlayerController
+    activate PC
+    PC->>PS: spawn PlayerState
+    PC->>Cam: spawn CameraManager
+    PC->>SP: spawn SpectatorPawn
+    PC-->>GM: InitializationTask complete
+    deactivate PC
+    GM->>GM: PostLogin(PC)
+    GM->>GM: HandleStartingNewPlayer(PC)
     GM->>GM: RestartPlayer(PC)
     GM->>GM: FindPlayerStart()
-    GM->>Pawn: Spawn Pawn at PlayerStart
-    PC->>Pawn: Possess(Pawn)
-
-    Note over Pawn: Player can now control Pawn
+    GM->>Pawn: spawn Pawn at start
+    GM->>PC: Possess(Pawn)
 ```
 
-### Data Flow
+### Data Lifetime
 
-```mermaid
-flowchart LR
-    subgraph Persistent["📦 Persistent - Survives Death"]
-        PS["PlayerState<br/>• Score<br/>• Inventory<br/>• Stats"]
-        PC["PlayerController<br/>• Input<br/>• Camera"]
-    end
+| Survives Pawn Death | Destroyed with Pawn |
+|---|---|
+| `PlayerController` | `Pawn` instance |
+| `PlayerState` (score, name, stats) | Movement state |
+| `CameraManager` | Visual components |
+| `SpectatorPawn` | Physics state |
 
-    subgraph Temporary["💀 Temporary - Destroyed on Death"]
-        Pawn["Pawn<br/>• Movement<br/>• Abilities<br/>• Visual"]
-    end
+This separation means respawning is simply: destroy old Pawn -> spawn new Pawn -> `Possess()` — all player data remains intact.
 
-    PC -->|"Possess()"| Pawn
-    PC <-->|linked| PS
-    Pawn -.->|"respawn via"| GM["GameMode"]
-    GM -->|"RestartPlayer()"| Pawn
-    PS -.->|"data persists"| PS
-```
+---
 
-- **PlayerState**: Persists across Pawn respawns
-  - Score, inventory, stats
-  - Linked to `PlayerController`, not `Pawn`
-- **Pawn**: Temporary, can be destroyed and respawned
-  - Movement, abilities, visual representation
-  - Destroyed on death, respawned by `GameMode`
-- **Controller**: The "brain"
-  - Input handling (for `PlayerController`)
-  - AI logic (for `AIController`)
-  - Possesses `Pawn` to control it
+## Class Reference
 
-## Advanced Usage
+### Actor
 
-### Custom GameMode
+**Purpose**: Base class for every gameplay object. Provides lifecycle hooks, ownership chain, tag system, visibility toggling, damage pipeline, and network extensibility.
 
-Create custom game rules by subclassing `GameMode`:
+**Design rationale**: In a typical Unity project, gameplay MonoBehaviours lack a shared contract for lifecycle, ownership, or damage. Actor establishes this contract so that any gameplay object — characters, projectiles, pickups, volumes — shares a consistent API.
+
+**Key features**:
+
+| Feature | API | Notes |
+|---|---|---|
+| Lifecycle | `BeginPlay()` / `EndPlay()` | Called once after Start / before OnDestroy |
+| Ownership | `SetOwner(Actor)` / `GetOwner()` | Hierarchical ownership chain |
+| Instigator | `SetInstigator(Actor)` / `GetInstigator()` | Who caused this Actor to be created |
+| Tags | `ActorHasTag(string)` / `AddTag()` / `RemoveTag()` | Simple string-based tag system with `[ActorTag]` Inspector support |
+| Visibility | `SetActorHiddenInGame(bool)` | Zero-GC batch renderer toggle |
+| Damage | `TakeDamage(float)` / `TakeDamage(float, DamageEvent, ...)` | Routes to `ReceivePointDamage` / `ReceiveRadialDamage` / `ReceiveAnyDamage` |
+| Lifespan | `SetLifeSpan(float)` | Auto-destroy after N seconds |
+| Bounds | `FellOutOfWorld()` / `OutsideWorldBounds()` | Override to handle out-of-bounds |
+| Network | `HasAuthority()` | Override in network layer; defaults to `true` (standalone) |
+| Orientation | `GetOrientation()` | Burst-compiled quaternion-to-Euler conversion |
+| Events | `OnDestroyed` / `OwnerChanged` | Observable Actor lifecycle events |
+| Transform | `GetActorLocation()` / `SetActorLocation()` / `GetActorRotation()` / ... | Convenience wrappers over `transform` |
+
+**Example — Custom Actor with lifecycle and damage handling**:
 
 ```csharp
-public class MyGameMode : GameMode
+public class Projectile : Actor
 {
-    public int MaxLives = 3;
-    private Dictionary<PlayerController, int> playerLives = new();
+    [SerializeField] private float speed = 20f;
 
-    public override void RestartPlayer(PlayerController NewPlayer, string Portal = "")
+    protected override void BeginPlay()
     {
-        // Check lives before respawning
-        if (!playerLives.ContainsKey(NewPlayer))
-        {
-            playerLives[NewPlayer] = MaxLives;
-        }
-
-        if (playerLives[NewPlayer] > 0)
-        {
-            playerLives[NewPlayer]--;
-            base.RestartPlayer(NewPlayer, Portal);
-        }
-        else
-        {
-            // Game over logic
-            OnPlayerGameOver(NewPlayer);
-        }
+        // Called once after Start — set up lifespan for auto-cleanup
+        SetLifeSpan(5f);
     }
 
-    private void OnPlayerGameOver(PlayerController player)
+    protected override void EndPlay()
     {
-        Debug.Log($"{player.name} is out of lives!");
-        // Show game over UI, etc.
+        // Called before OnDestroy — clean up effects, return to pool, etc.
     }
-}
-```
-
-### Custom PlayerController
-
-Add input handling and player-specific logic:
-
-```csharp
-public class MyPlayerController : PlayerController
-{
-    private MyPlayerPawn currentPawn;
 
     void Update()
     {
-        // Handle input
-        HandleMovementInput();
-        HandleAbilityInput();
+        if (!IsHidden())
+            transform.Translate(Vector3.forward * speed * Time.deltaTime);
     }
 
-    void HandleMovementInput()
+    public override void FellOutOfWorld()
     {
-        if (GetPawn() is MyPlayerPawn pawn)
-        {
-            Vector2 moveInput = new Vector2(
-                Input.GetAxis("Horizontal"),
-                Input.GetAxis("Vertical")
-            );
-
-            pawn.Move(moveInput);
-        }
-    }
-
-    void HandleAbilityInput()
-    {
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            if (GetPawn() is MyPlayerPawn pawn)
-            {
-                pawn.Jump();
-            }
-        }
-    }
-
-    public override void OnPossess(Pawn InPawn)
-    {
-        base.OnPossess(InPawn);
-        currentPawn = InPawn as MyPlayerPawn;
-
-        // Enable input, show UI, etc.
-        if (currentPawn != null)
-        {
-            currentPawn.EnableInput();
-        }
-    }
-
-    public override void OnUnPossess()
-    {
-        if (currentPawn != null)
-        {
-            currentPawn.DisableInput();
-        }
-
-        base.OnUnPossess();
-        currentPawn = null;
+        // Hit kill zone — destroy immediately
+        Destroy(gameObject);
     }
 }
 ```
 
-### Custom Pawn
+### Pawn
 
-Implement movement, abilities, and gameplay logic:
+**Purpose**: An Actor that can be **possessed** by a Controller. This is your player character, AI enemy, vehicle — anything that receives input and acts in the world.
+
+**Design rationale**: Separating the "body" (Pawn) from the "brain" (Controller) means you can swap characters without rewriting control logic, and the same Pawn class can be driven by either human input or AI.
+
+**Key features**:
+
+- **Possession**: `PossessedBy(Controller)` / `UnPossessed()` — framework handles owner/state transfer.
+- **Movement input pipeline**: `AddMovementInput(direction, scale)` accumulates input per frame. Movement components call `ConsumeMovementInputVector()` each tick to drive actual movement.
+- **Controller rotation**: `FaceRotation()` automatically syncs Pawn rotation to Controller's `ControlRotation`, respecting per-axis flags (`UseControllerRotationPitch/Yaw/Roll`).
+- **Initial rotation**: `NotifyInitialRotation(Quaternion)` broadcasts to all `IInitialRotationSettable` components on spawn — allowing external movement components (e.g., from RPGFoundation) to synchronize without framework coupling.
+- **State queries**: `IsPlayerControlled()`, `IsBotControlled()`, `IsLocallyControlled()`, `IsTurnedOff()`.
+- **View**: `GetPawnViewLocation()`, `GetViewRotation()`, `GetBaseAimRotation()` — camera and aiming integration.
+- **Turn on/off**: `TurnOff()` / `TurnOn()` — disable pawn without destroying it.
+
+**Example — Character Pawn with movement**:
 
 ```csharp
-public class MyPlayerPawn : Pawn
+public class CharacterPawn : Pawn
 {
-    private CharacterController characterController;
-    private float moveSpeed = 5f;
-    private bool inputEnabled = true;
+    [SerializeField] private float moveSpeed = 5f;
+    [SerializeField] private CharacterController characterController;
 
-    protected override void Awake()
+    protected override void BeginPlay()
     {
-        base.Awake();
-        characterController = GetComponent<CharacterController>();
-    }
-
-    public void Move(Vector2 input)
-    {
-        if (!inputEnabled) return;
-
-        Vector3 moveDirection = new Vector3(input.x, 0, input.y);
-        moveDirection = transform.TransformDirection(moveDirection);
-        moveDirection *= moveSpeed;
-
-        // Apply gravity
-        moveDirection.y -= 9.81f * Time.deltaTime;
-
-        characterController.Move(moveDirection * Time.deltaTime);
-    }
-
-    public void Jump()
-    {
-        if (!inputEnabled) return;
-        // Jump logic
-    }
-
-    public void EnableInput()
-    {
-        inputEnabled = true;
-    }
-
-    public void DisableInput()
-    {
-        inputEnabled = false;
+        UseControllerRotationYaw = true; // Sync yaw to controller
     }
 
     public override void PossessedBy(Controller NewController)
     {
         base.PossessedBy(NewController);
-        EnableInput();
+        // Enable visuals, start animations, etc.
     }
 
     public override void UnPossessed()
     {
-        DisableInput();
         base.UnPossessed();
-    }
-}
-```
-
-### Portal-Based Spawning
-
-Use named `PlayerStart` objects for checkpoint/portal systems:
-
-```csharp
-// In your GameMode or custom script
-public void SpawnPlayerAtPortal(string portalName)
-{
-    PlayerController pc = GetPlayerController();
-    if (pc != null)
-    {
-        RestartPlayer(pc, portalName); // portalName matches PlayerStart name
-    }
-}
-```
-
-**Setup:**
-
-1. Create multiple `PlayerStart` objects in your scene
-2. Name them (e.g., "Checkpoint1", "Checkpoint2")
-3. Call `RestartPlayer(playerController, "Checkpoint1")` to spawn at that specific start
-
-### Respawn System
-
-Implement a respawn system using `GameMode.RestartPlayer()`:
-
-```csharp
-public class RespawnSystem : MonoBehaviour
-{
-    private GameMode gameMode;
-    private PlayerController playerController;
-
-    void Start()
-    {
-        // Get references (you might want to use a service locator or DI)
-        gameMode = FindObjectOfType<GameMode>();
-        playerController = FindObjectOfType<PlayerController>();
-    }
-
-    public void RespawnPlayer()
-    {
-        if (gameMode != null && playerController != null)
-        {
-            // Respawn at the last checkpoint
-            gameMode.RestartPlayer(playerController, lastCheckpointName);
-        }
-    }
-
-    // Call this when player dies
-    public void OnPlayerDeath()
-    {
-        // Wait a bit, then respawn
-        StartCoroutine(RespawnAfterDelay(2f));
-    }
-
-    private System.Collections.IEnumerator RespawnAfterDelay(float delay)
-    {
-        yield return new WaitForSeconds(delay);
-        RespawnPlayer();
-    }
-}
-```
-
-### Camera Switching
-
-Switch between different Cinemachine cameras:
-
-```csharp
-public class CameraSwitcher : MonoBehaviour
-{
-    private CameraManager cameraManager;
-    public CinemachineCamera firstPersonCamera;
-    public CinemachineCamera thirdPersonCamera;
-
-    void Start()
-    {
-        PlayerController pc = FindObjectOfType<PlayerController>();
-        cameraManager = pc?.GetCameraManager();
+        // Disable input-driven behavior
     }
 
     void Update()
     {
-        if (Input.GetKeyDown(KeyCode.C))
+        // Consume accumulated movement input
+        Vector3 input = ConsumeMovementInputVector();
+        if (input.sqrMagnitude > 0.001f)
         {
-            // Toggle between cameras
-            if (cameraManager != null)
-            {
-                var current = cameraManager.ActiveVirtualCamera;
-                var next = current == firstPersonCamera ? thirdPersonCamera : firstPersonCamera;
-                cameraManager.SetActiveVirtualCamera(next);
-            }
+            characterController.Move(input * moveSpeed * Time.deltaTime);
+        }
+
+        // Sync rotation to controller
+        if (Controller != null)
+        {
+            FaceRotation(GetControlRotation(), Time.deltaTime);
         }
     }
 }
 ```
 
-## Local Multiplayer Guide
+### Controller
 
-This guide will walk you through implementing local multiplayer (split-screen or shared screen) using GameplayFramework. Local multiplayer means multiple players on the same device, each with their own controller and input.
+**Purpose**: The abstract "brain" that possesses and controls a Pawn. Holds persistent references (PlayerState, start spot) and manages control rotation.
 
-### Overview
+**Design rationale**: By separating decision-making (Controller) from execution (Pawn), the framework supports hot-swapping characters, AI takeover of player pawns, and clean input suppression — all impossible with monolithic player scripts.
 
-For local multiplayer, you need to:
+**Key features**:
 
-1. **Extend GameMode** to manage multiple `PlayerController`s
-2. **Assign player indices** to distinguish between players
-3. **Spawn multiple PlayerStarts** (one per player)
-4. **Handle multiple input sources** (Unity Input System or traditional input)
-5. **Manage multiple cameras** (split-screen or picture-in-picture)
-6. **Create independent PlayerState** for each player
+- **Possess / UnPossess**: Full handshake — notifies old and new Pawn, old Controller, transfers ownership. `OnPossessedPawnChanged` event fires.
+- **Stacked input suppression**: `SetIgnoreMoveInput(true/false)` / `SetIgnoreLookInput(true/false)` increments/decrements a counter. Multiple systems can independently suppress input without stomping each other. Call `ResetIgnoreInputFlags()` to clear all.
+- **Spawner and settings injection**: `Initialize(IUnityObjectSpawner, IWorldSettings)` — constructor injection for DI compatibility.
+- **Start spot**: `SetStartSpot(Actor)` / `GetStartSpot()` — tracks where this controller's pawn was spawned.
+- **Game flow**: `GameHasEnded(Actor, bool)` / `FailedToSpawnPawn()` — override to react to game events.
 
-### Step 1: Create Multiplayer GameMode
+### PlayerController
 
-First, create a custom `GameMode` that can handle multiple players:
+**Purpose**: A Controller for human players. Extends Controller with **camera management**, **spectator pawn**, and **async initialization**.
+
+**Design rationale**: Human players need camera setup, spectator fallback during loading, and async init (waiting for dependencies). PlayerController encapsulates all of this so game-specific subclasses only need to handle input.
+
+**Key features**:
+
+- **Async init**: `InitializationTask` (UniTask) — spawns PlayerState, CameraManager, SpectatorPawn in sequence. GameMode awaits this before proceeding.
+- **Camera**: `GetCameraManager()`, `SetViewTarget(Actor)`, `SetViewTargetWithBlend(Actor, float)`, `AutoManageActiveCameraTarget(Actor)`.
+- **Spectator**: `SpawnSpectatorPawn()` / `GetSpectatorPawn()` — used as fallback Pawn during loading.
+
+**Example — PlayerController with input**:
 
 ```csharp
-// MultiplayerGameMode.cs
-using System.Collections.Generic;
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-using Cysharp.Threading.Tasks;
-using System.Threading;
-
-/// <summary>
-/// GameMode that supports local multiplayer with multiple players.
-/// </summary>
-public class MultiplayerGameMode : GameMode
+public class MyPlayerController : PlayerController
 {
-    [Header("Multiplayer Settings")]
-    [Tooltip("Maximum number of players")]
-    [SerializeField] private int maxPlayers = 4;
-
-    [Tooltip("Player indices that are currently active")]
-    [SerializeField] private List<int> activePlayerIndices = new List<int>();
-
-    // Dictionary to store all player controllers by their index
-    private Dictionary<int, PlayerController> playerControllers = new Dictionary<int, PlayerController>();
-
-    // Dictionary to store player states by index
-    private Dictionary<int, PlayerState> playerStates = new Dictionary<int, PlayerState>();
-
-    // Dictionary to store player starts by player index
-    private Dictionary<int, PlayerStart> playerStartMap = new Dictionary<int, PlayerStart>();
-
-    /// <summary>
-    /// Gets the PlayerController for a specific player index.
-    /// </summary>
-    public PlayerController GetPlayerController(int playerIndex)
+    void Update()
     {
-        return playerControllers.TryGetValue(playerIndex, out var pc) ? pc : null;
+        if (IsMoveInputIgnored()) return;
+
+        Pawn pawn = GetPawn();
+        if (pawn == null) return;
+
+        // WASD movement input
+        float h = Input.GetAxisRaw("Horizontal");
+        float v = Input.GetAxisRaw("Vertical");
+        Vector3 direction = new Vector3(h, 0, v).normalized;
+        if (direction.sqrMagnitude > 0.001f)
+        {
+            pawn.AddMovementInput(direction, 1f);
+        }
+
+        // Mouse look -> control rotation
+        float mouseX = Input.GetAxis("Mouse X");
+        Quaternion rot = ControlRotation() * Quaternion.Euler(0, mouseX * 2f, 0);
+        SetControlRotation(rot);
+    }
+}
+```
+
+### AIController
+
+**Purpose**: A Controller for AI-driven pawns. Provides **focus system** and **auto-rotation** toward targets.
+
+**Design rationale**: AI needs to look at targets and run logic loops. AIController provides the focus/rotation plumbing so AI implementations (behavior trees, state machines, GOAP) only need to call `SetFocus(Actor)` or `SetFocalPoint(Vector3)`.
+
+**Key features**:
+
+- **Focus**: `SetFocus(Actor)` / `SetFocalPoint(Vector3)` / `ClearFocus()` / `GetFocusActor()` / `GetFocalPoint()`.
+- **Auto-rotation**: Automatically rotates toward focus target each Update.
+- **AI lifecycle**: `RunAI()` / `StopAI()` / `IsRunningAI()` — called automatically on possess/unpossess if `bStartAILogicOnPossess` is true.
+
+**Example — AI patrol with focus**:
+
+```csharp
+public class PatrolAIController : AIController
+{
+    [SerializeField] private Transform[] patrolPoints;
+    private int currentIndex = 0;
+
+    public override void RunAI()
+    {
+        base.RunAI();
+        MoveToNextPatrolPoint();
     }
 
-    /// <summary>
-    /// Gets all active player controllers.
-    /// </summary>
-    public List<PlayerController> GetAllPlayerControllers()
+    void MoveToNextPatrolPoint()
     {
-        return new List<PlayerController>(playerControllers.Values);
+        if (patrolPoints.Length == 0) return;
+        SetFocalPoint(patrolPoints[currentIndex].position);
     }
 
-    /// <summary>
-    /// Gets the PlayerState for a specific player index.
-    /// </summary>
-    public PlayerState GetPlayerState(int playerIndex)
+    void Update()
     {
-        return playerStates.TryGetValue(playerIndex, out var ps) ? ps : null;
-    }
+        if (!IsRunningAI()) return;
 
-    /// <summary>
-    /// Adds a player to the game.
-    /// </summary>
-    public async UniTask AddPlayer(int playerIndex, CancellationToken cancellationToken = default)
-    {
-        if (playerControllers.ContainsKey(playerIndex))
+        Pawn pawn = GetPawn();
+        if (pawn == null) return;
+
+        Vector3 target = patrolPoints[currentIndex].position;
+        Vector3 dir = (target - pawn.GetActorLocation()).normalized;
+        pawn.AddMovementInput(dir, 1f);
+
+        if (Vector3.Distance(pawn.GetActorLocation(), target) < 1f)
         {
-            Debug.LogWarning($"[MultiplayerGameMode] Player {playerIndex} already exists");
-            return;
-        }
-
-        if (playerIndex < 0 || playerIndex >= maxPlayers)
-        {
-            Debug.LogError($"[MultiplayerGameMode] Invalid player index: {playerIndex}");
-            return;
-        }
-
-        // Spawn PlayerController
-        var playerController = SpawnPlayerController(playerIndex);
-        if (playerController == null)
-        {
-            Debug.LogError($"[MultiplayerGameMode] Failed to spawn PlayerController for player {playerIndex}");
-            return;
-        }
-
-        // Wait for initialization
-        await playerController.InitializationTask.AttachExternalCancellation(cancellationToken);
-        if (cancellationToken.IsCancellationRequested) return;
-
-        // Store references
-        playerControllers[playerIndex] = playerController;
-        playerStates[playerIndex] = playerController.GetPlayerState();
-
-        // Add to active list
-        if (!activePlayerIndices.Contains(playerIndex))
-        {
-            activePlayerIndices.Add(playerIndex);
-        }
-
-        // Spawn and possess pawn
-        RestartPlayer(playerController, GetPlayerStartName(playerIndex));
-
-        Debug.Log($"[MultiplayerGameMode] Player {playerIndex} added successfully");
-    }
-
-    /// <summary>
-    /// Removes a player from the game.
-    /// </summary>
-    public void RemovePlayer(int playerIndex)
-    {
-        if (!playerControllers.TryGetValue(playerIndex, out var pc))
-        {
-            Debug.LogWarning($"[MultiplayerGameMode] Player {playerIndex} not found");
-            return;
-        }
-
-        // Unpossess and destroy pawn
-        if (pc.GetPawn() != null)
-        {
-            pc.UnPossess();
-            Destroy(pc.GetPawn().gameObject);
-        }
-
-        // Destroy PlayerController and related objects
-        if (pc.GetPlayerState() != null)
-        {
-            Destroy(pc.GetPlayerState().gameObject);
-        }
-        if (pc.GetCameraManager() != null)
-        {
-            Destroy(pc.GetCameraManager().gameObject);
-        }
-        if (pc.GetSpectatorPawn() != null)
-        {
-            Destroy(pc.GetSpectatorPawn().gameObject);
-        }
-
-        Destroy(pc.gameObject);
-
-        // Remove from dictionaries
-        playerControllers.Remove(playerIndex);
-        playerStates.Remove(playerIndex);
-        activePlayerIndices.Remove(playerIndex);
-
-        Debug.Log($"[MultiplayerGameMode] Player {playerIndex} removed");
-    }
-
-    /// <summary>
-    /// Spawns a PlayerController for a specific player index.
-    /// </summary>
-    private PlayerController SpawnPlayerController(int playerIndex)
-    {
-        var playerController = objectSpawner?.Create(worldSettings?.PlayerControllerClass) as PlayerController;
-        if (playerController == null)
-        {
-            Debug.LogError($"[MultiplayerGameMode] Failed to spawn PlayerController for player {playerIndex}");
-            return null;
-        }
-
-        // Set player index (if your PlayerController supports it)
-        if (playerController is MultiplayerPlayerController mpc)
-        {
-            mpc.SetPlayerIndex(playerIndex);
-        }
-
-        playerController.Initialize(objectSpawner, worldSettings);
-        return playerController;
-    }
-
-    /// <summary>
-    /// Gets the PlayerStart name for a player index.
-    /// You can name your PlayerStarts as "PlayerStart_0", "PlayerStart_1", etc.
-    /// </summary>
-    private string GetPlayerStartName(int playerIndex)
-    {
-        return $"PlayerStart_{playerIndex}";
-    }
-
-    /// <summary>
-    /// Override LaunchGameModeAsync to support multiple players.
-    /// </summary>
-    public override async UniTask LaunchGameModeAsync(CancellationToken cancellationToken = default)
-    {
-        Debug.Log("[MultiplayerGameMode] Launching multiplayer game mode");
-
-        // Add initial players (you can modify this based on your game's needs)
-        // For example, add players based on connected controllers
-        for (int i = 0; i < GetConnectedPlayerCount(); i++)
-        {
-            await AddPlayer(i, cancellationToken);
-            if (cancellationToken.IsCancellationRequested) return;
+            currentIndex = (currentIndex + 1) % patrolPoints.Length;
+            MoveToNextPatrolPoint();
         }
     }
 
-    /// <summary>
-    /// Override RestartPlayer to support player-specific spawn points.
-    /// </summary>
+    public void OnPlayerDetected(Actor player)
+    {
+        // Switch focus to the player — auto-rotation will track them
+        SetFocus(player);
+    }
+}
+```
+
+### PlayerState
+
+**Purpose**: Persistent player data that **survives Pawn death and respawn**.
+
+**Design rationale**: Score, player name, team, inventory — these must not be destroyed when a character dies. PlayerState lives on the Controller (not the Pawn), so respawning creates a new Pawn but keeps all player data.
+
+**Key features**:
+
+- **Pawn tracking**: `GetPawn()` / `OnPawnSetEvent` — notified when the possessed Pawn changes. Event signature: `(PlayerState, newPawn, oldPawn)`.
+- **Player info**: `GetPlayerName()` / `SetPlayerName()`, `GetPlayerId()` / `SetPlayerId()`, `GetScore()` / `SetScore()`, `AddScore()` (returns new score).
+- **Flags**: `IsABot()` / `SetIsABot()`, `IsSpectator()` / `SetIsSpectator()`.
+- **Copy**: `CopyProperties(PlayerState)` — for seamless travel or respawn state transfer.
+
+**Example — Custom PlayerState with inventory**:
+
+```csharp
+public class RPGPlayerState : PlayerState
+{
+    private List<string> inventory = new List<string>();
+    public int Kills { get; private set; }
+
+    public void RecordKill()
+    {
+        Kills++;
+        AddScore(100f);
+    }
+
+    public void AddItem(string itemId)
+    {
+        inventory.Add(itemId);
+    }
+
+    public override void CopyProperties(PlayerState other)
+    {
+        base.CopyProperties(other);
+        if (other is RPGPlayerState rpg)
+        {
+            inventory = new List<string>(rpg.inventory);
+            Kills = rpg.Kills;
+        }
+    }
+}
+```
+
+### GameMode
+
+**Purpose**: **The orchestrator**. Handles player spawning, respawning, start point selection, and match flow.
+
+**Design rationale**: Game rules (how many lives, where to spawn, when the match starts) are fundamentally different from player input or character movement. GameMode centralizes these decisions in one place, making it trivial to swap game modes (Deathmatch vs. CTF vs. Tutorial) by changing a single prefab reference.
+
+**Key features**:
+
+- **Launch**: `LaunchGameModeAsync(CancellationToken)` — the entry point. Spawns PlayerController, waits for init, calls PostLogin, starts match, restarts player.
+- **Player start selection**: `FindPlayerStart()` -> `ChoosePlayerStart()` — override for custom logic (random, team-based, round-robin).
+- **Spawn pipeline**: `SpawnDefaultPawnAtPlayerStart/Transform/Location()` — spawns Pawn, handles CharacterController/Rigidbody teleport via `TeleportPawn()`.
+- **Login/Logout**: `PreLogin()` (validate with GameSession) -> `PostLogin()` (register + HandleStartingNewPlayer) -> `Logout()` (unregister).
+- **Session integration**: `SetGameSession(IGameSession)` — optional. Without a session, all login checks pass (standalone mode).
+- **Pawn class selection**: Override `GetDefaultPawnPrefabForController()` to return different Pawn prefabs per player (class-based or team-based selection).
+
+**Example — GameMode with lives and custom spawn**:
+
+```csharp
+public class ArenaGameMode : GameMode
+{
+    private Dictionary<PlayerController, int> playerLives = new();
+    private const int MaxLives = 3;
+
+    protected override void HandleStartingNewPlayer(PlayerController NewPlayer)
+    {
+        playerLives[NewPlayer] = MaxLives;
+    }
+
     public override void RestartPlayer(PlayerController NewPlayer, string Portal = "")
     {
-        if (NewPlayer == null)
+        if (playerLives.TryGetValue(NewPlayer, out int lives) && lives <= 0)
         {
-            Debug.LogError("[MultiplayerGameMode] Invalid Player Controller");
+            // No lives left — switch to spectator
+            NewPlayer.GetPlayerState()?.SetIsSpectator(true);
             return;
         }
-
-        // Get player index
-        int playerIndex = GetPlayerIndex(NewPlayer);
-        if (playerIndex < 0)
-        {
-            Debug.LogWarning("[MultiplayerGameMode] Could not determine player index, using default spawn");
-            base.RestartPlayer(NewPlayer, Portal);
-            return;
-        }
-
-        // Use player-specific portal name if Portal is empty
-        if (string.IsNullOrEmpty(Portal))
-        {
-            Portal = GetPlayerStartName(playerIndex);
-        }
-
         base.RestartPlayer(NewPlayer, Portal);
     }
 
-    /// <summary>
-    /// Gets the player index for a PlayerController.
-    /// </summary>
-    private int GetPlayerIndex(PlayerController pc)
+    // Override to pick a random spawn point
+    protected override Actor ChoosePlayerStart(Controller Player)
     {
-        foreach (var kvp in playerControllers)
-        {
-            if (kvp.Value == pc)
-            {
-                return kvp.Key;
-            }
-        }
-        return -1;
+        var starts = PlayerStart.GetAllPlayerStarts();
+        if (starts.Count == 0) return null;
+        return starts[UnityEngine.Random.Range(0, starts.Count)];
     }
 
-    /// <summary>
-    /// Gets the number of connected players (implement based on your input system).
-    /// </summary>
-    private int GetConnectedPlayerCount()
+    // Override to assign class-specific pawn prefabs
+    protected override Pawn GetDefaultPawnPrefabForController(Controller InController)
     {
-        // Example: Check Unity Input System
-        // return UnityEngine.InputSystem.InputSystem.devices.Count(d => d is UnityEngine.InputSystem.Gamepad);
+        // Could return different pawn prefabs based on player class selection
+        return base.GetDefaultPawnPrefabForController(InController);
+    }
 
-        // For now, return a default value (you should implement this based on your needs)
-        return 2; // Default to 2 players for local multiplayer
+    public void OnPlayerKilled(PlayerController player)
+    {
+        if (playerLives.ContainsKey(player))
+        {
+            playerLives[player]--;
+            RestartPlayer(player);
+        }
     }
 }
 ```
 
-### Step 2: Create Multiplayer PlayerController
+### GameState
 
-Create a custom `PlayerController` that supports player indices:
+**Purpose**: Observable match state visible to all players. Tracks match phase, elapsed time, and the authoritative player roster.
+
+**Design rationale**: In multiplayer games, all clients need to agree on match state (waiting, in progress, ended). Even in single-player, a state machine for match phases prevents ad-hoc boolean flags scattered across scripts.
+
+**Key features**:
+
+- **Match state machine**: `EMatchState` enum (EnteringMap -> WaitingToStart -> InProgress -> WaitingPostMatch -> LeavingMap -> Aborted).
+- **State transitions**: `SetMatchState(EMatchState)` -> `OnMatchStateChanged(old, new)` — override for custom transition logic.
+- **Player roster**: `AddPlayerState()` / `RemovePlayerState()` / `PlayerArray` / `GetNumPlayers()`.
+- **Elapsed time**: `ElapsedTime` — auto-increments during `InProgress` state.
+
+**Example — GameState with win condition**:
 
 ```csharp
-// MultiplayerPlayerController.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-
-/// <summary>
-/// PlayerController that supports player indices for local multiplayer.
-/// </summary>
-public class MultiplayerPlayerController : PlayerController
+public class ArenaGameState : GameState
 {
-    [Header("Multiplayer")]
-    [SerializeField] private int playerIndex = 0;
+    public int ScoreToWin { get; set; } = 10;
 
-    /// <summary>
-    /// Gets the player index for this controller.
-    /// </summary>
-    public int PlayerIndex => playerIndex;
-
-    /// <summary>
-    /// Sets the player index (called by GameMode during spawn).
-    /// </summary>
-    public void SetPlayerIndex(int index)
+    protected override void OnMatchStateChanged(EMatchState OldState, EMatchState NewState)
     {
-        playerIndex = index;
-        gameObject.name = $"PlayerController_{index}";
-    }
-
-    protected override void Update()
-    {
-        base.Update();
-
-        // Handle input based on player index
-        HandlePlayerInput();
-    }
-
-    /// <summary>
-    /// Handles input for this specific player.
-    /// </summary>
-    private void HandlePlayerInput()
-    {
-        if (GetPawn() is MultiplayerPawn pawn)
+        if (NewState == EMatchState.InProgress)
         {
-            // Get input based on player index
-            Vector2 moveInput = GetMoveInput(playerIndex);
-            bool jumpInput = GetJumpInput(playerIndex);
+            // Match just started — notify UI
+            Debug.Log("Match started!");
+        }
+        else if (NewState == EMatchState.WaitingPostMatch)
+        {
+            Debug.Log($"Match ended after {ElapsedTime:F1}s");
+        }
+    }
 
-            if (moveInput.magnitude > 0.1f)
+    public void CheckWinCondition()
+    {
+        foreach (var ps in PlayerArray)
+        {
+            if (ps.GetScore() >= ScoreToWin)
             {
-                pawn.Move(moveInput);
-            }
-
-            if (jumpInput)
-            {
-                pawn.Jump();
+                SetMatchState(EMatchState.WaitingPostMatch);
+                return;
             }
         }
     }
-
-    /// <summary>
-    /// Gets movement input for a specific player index.
-    /// Implement this based on your input system.
-    /// </summary>
-    private Vector2 GetMoveInput(int playerIdx)
-    {
-        // Example using Unity's traditional Input system with player-specific axes
-        // You might use "Horizontal_P1", "Vertical_P1", "Horizontal_P2", "Vertical_P2", etc.
-        string horizontalAxis = $"Horizontal_P{playerIdx + 1}";
-        string verticalAxis = $"Vertical_P{playerIdx + 1}";
-
-        // If using Unity Input System, you could do:
-        // var gamepad = Gamepad.all[playerIdx];
-        // return gamepad.leftStick.ReadValue();
-
-        // For this example, using traditional input with custom axes
-        return new Vector2(
-            Input.GetAxis(horizontalAxis),
-            Input.GetAxis(verticalAxis)
-        );
-    }
-
-    /// <summary>
-    /// Gets jump input for a specific player index.
-    /// </summary>
-    private bool GetJumpInput(int playerIdx)
-    {
-        // Example: Player 1 uses Space, Player 2 uses Enter, etc.
-        KeyCode[] jumpKeys = { KeyCode.Space, KeyCode.Return, KeyCode.JoystickButton0, KeyCode.JoystickButton1 };
-
-        if (playerIdx < jumpKeys.Length)
-        {
-            return Input.GetKeyDown(jumpKeys[playerIdx]);
-        }
-
-        return false;
-    }
 }
 ```
 
-### Step 3: Set Up Input System
+### GameSession
 
-You need to configure input for multiple players. Here are two approaches:
+**Purpose**: Network-agnostic session management — player capacity, login validation, kick/ban.
 
-#### Option A: Unity Input Manager (Traditional)
+**Design rationale**: Networking solutions vary (Mirror, Netcode, Photon, custom). GameSession provides a stable interface (`IGameSession`) that GameMode calls into, while the actual network implementation lives in an adapter. Without a session, GameMode operates in standalone mode with no capacity checks.
 
-1. Open **Edit > Project Settings > Input Manager**
-2. Create duplicate axes for each player:
-   - `Horizontal_P1`, `Vertical_P1` (Player 1)
-   - `Horizontal_P2`, `Vertical_P2` (Player 2)
-   - etc.
-3. Assign different keys/gamepads to each axis
+**Key features**:
 
-#### Option B: Unity Input System (Recommended)
+- **`IGameSession` interface**: `ApproveLogin()`, `RegisterPlayer()`, `UnregisterPlayer()`, `AtCapacity()`, `KickPlayer()`, `BanPlayer()`, `HandleMatchHasStarted/Ended()`.
+- **Default implementation**: `GameSession` (Actor subclass) — local standalone session that counts players/spectators against `MaxPlayers`/`MaxSpectators`.
+- **Integration**: Implement `IGameSession` in a Mirror/Netcode/Photon adapter. Pass it to `GameMode.SetGameSession()`.
 
-Create an Input Action Asset with multiple action maps:
+**Example — Custom session with password**:
 
 ```csharp
-// Example: Using Unity Input System
-// Create an Input Actions asset with action maps: "Player1", "Player2", etc.
-
-using UnityEngine;
-using UnityEngine.InputSystem;
-
-public class MultiplayerInputHandler : MonoBehaviour
+public class PasswordGameSession : GameSession
 {
-    private PlayerInput[] playerInputs;
+    [SerializeField] private string serverPassword = "";
 
-    public void SetupPlayerInput(int playerIndex, PlayerInput input)
+    public override bool ApproveLogin(string options, string address, out string errorMessage)
     {
-        if (playerInputs == null)
-        {
-            playerInputs = new PlayerInput[4]; // Max 4 players
-        }
+        if (!base.ApproveLogin(options, address, out errorMessage))
+            return false;
 
-        playerInputs[playerIndex] = input;
-        input.SwitchCurrentActionMap($"Player{playerIndex + 1}");
-    }
-
-    public Vector2 GetMoveInput(int playerIndex)
-    {
-        if (playerInputs[playerIndex] != null)
+        if (!string.IsNullOrEmpty(serverPassword) && options != serverPassword)
         {
-            var moveAction = playerInputs[playerIndex].actions["Move"];
-            return moveAction.ReadValue<Vector2>();
+            errorMessage = "Invalid password";
+            return false;
         }
-        return Vector2.zero;
+        return true;
     }
 }
 ```
 
-### Step 4: Set Up Multiple PlayerStarts
+### DamageType System
 
-In your scene, create multiple `PlayerStart` objects:
+**Purpose**: Typed, routed damage pipeline. Defines what kind of damage was dealt (fire, explosive, environmental) and carries hit context (location, direction, radius).
 
-1. Create `PlayerStart` objects named:
-   - `PlayerStart_0` (for Player 1)
-   - `PlayerStart_1` (for Player 2)
-   - `PlayerStart_2` (for Player 3)
-   - `PlayerStart_3` (for Player 4)
-2. Position them where you want each player to spawn
-3. Rotate them to set spawn direction
+**Design rationale**: Games need to distinguish damage types for armor, resistances, visual effects, and sound. The framework provides `IDamageType` as an interface so it works standalone, but can also carry GameplayAbilities context through the opaque `EffectContext` field — without any compile-time dependency on GAS.
 
-### Step 5: Handle Multiple Cameras
+**Components**:
 
-For split-screen multiplayer, you need to manage multiple cameras. Here's an example:
+- **`IDamageType`** (interface): `CausedByWorld`, `ScaleMomentumByMass`, `DamageImpulse`, `DamageFalloff`.
+- **`DamageType`** (ScriptableObject): Default implementation — create via `Create -> CycloneGames -> GameplayFramework -> DamageType`.
+- **`EDamageEventType`** (enum): `Generic`, `Point`, `Radial`.
+- **`DamageEvent`** (struct): Zero-allocation value type with fields for event type, damage type, hit location/normal/direction (point), origin/radii (radial), and optional `EffectContext` (object) for GAS bridging.
+- **Factory methods**: `DamageEvent.MakeGenericDamage()`, `MakePointDamage(...)`, `MakeRadialDamage(...)`.
+
+**Damage routing in Actor**:
+
+```mermaid
+flowchart LR
+    TD["TakeDamage(amount, damageEvent,<br/>instigator, causer)"] --> Point{Point?}
+    TD --> Radial{Radial?}
+    TD --> Always["Always"]
+
+    Point -->|Yes| RPD["ReceivePointDamage()"]
+    RPD --> OTPD["OnTakePointDamage event"]
+
+    Radial -->|Yes| RRD["ReceiveRadialDamage()"]
+    RRD --> OTRD["OnTakeRadialDamage event"]
+
+    Always --> RAD["ReceiveAnyDamage()"]
+
+    style TD fill:#c44,stroke:#333,color:#fff
+    style RPD fill:#46a,stroke:#333,color:#fff
+    style RRD fill:#46a,stroke:#333,color:#fff
+    style RAD fill:#46a,stroke:#333,color:#fff
+```
+
+**Example — Applying and receiving damage**:
 
 ```csharp
-// SplitScreenCameraManager.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-
-/// <summary>
-/// Manages split-screen cameras for local multiplayer.
-/// </summary>
-public class SplitScreenCameraManager : MonoBehaviour
+// --- Applying damage (e.g., from a weapon) ---
+public class Weapon : Actor
 {
-    [Header("Split Screen Settings")]
-    [SerializeField] private int playerCount = 2;
-    [SerializeField] private CameraManager[] cameraManagers;
+    [SerializeField] private DamageType fireDamageType;
 
-    private Camera[] playerCameras;
-
-    void Start()
+    public void FireAt(Actor target, Vector3 hitLocation, Vector3 hitNormal)
     {
-        SetupSplitScreen();
+        var damageEvent = DamageEvent.MakePointDamage(
+            hitLocation, hitNormal, GetActorForwardVector(), fireDamageType);
+
+        target.TakeDamage(25f, damageEvent,
+            GetInstigator<Controller>(), this);
     }
 
-    /// <summary>
-    /// Sets up split-screen viewports based on player count.
-    /// </summary>
-    public void SetupSplitScreen()
+    public void Explode(Vector3 origin, float radius)
     {
-        playerCameras = new Camera[playerCount];
+        var damageEvent = DamageEvent.MakeRadialDamage(
+            origin, innerRadius: 2f, outerRadius: radius, fireDamageType);
 
-        for (int i = 0; i < playerCount; i++)
-        {
-            if (i < cameraManagers.Length && cameraManagers[i] != null)
-            {
-                // Get the camera from CameraManager
-                var brain = cameraManagers[i].GetComponentInChildren<Camera>();
-                if (brain != null)
-                {
-                    playerCameras[i] = brain;
-                    SetupViewport(playerCameras[i], i, playerCount);
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Sets up the viewport for a specific player camera.
-    /// </summary>
-    private void SetupViewport(Camera cam, int playerIndex, int totalPlayers)
-    {
-        if (cam == null) return;
-
-        Rect viewport = CalculateViewport(playerIndex, totalPlayers);
-        cam.rect = viewport;
-    }
-
-    /// <summary>
-    /// Calculates the viewport rect for a player based on split-screen layout.
-    /// </summary>
-    private Rect CalculateViewport(int playerIndex, int totalPlayers)
-    {
-        switch (totalPlayers)
-        {
-            case 2:
-                // Two players: side by side
-                return new Rect(playerIndex * 0.5f, 0, 0.5f, 1);
-
-            case 3:
-                // Three players: one on top, two on bottom
-                if (playerIndex == 0)
-                    return new Rect(0, 0.5f, 1, 0.5f);
-                else
-                    return new Rect((playerIndex - 1) * 0.5f, 0, 0.5f, 0.5f);
-
-            case 4:
-                // Four players: 2x2 grid
-                float x = (playerIndex % 2) * 0.5f;
-                float y = (playerIndex < 2) ? 0.5f : 0;
-                return new Rect(x, y, 0.5f, 0.5f);
-
-            default:
-                return new Rect(0, 0, 1, 1);
-        }
-    }
-
-    /// <summary>
-    /// Updates split-screen when player count changes.
-    /// </summary>
-    public void UpdatePlayerCount(int newCount)
-    {
-        playerCount = newCount;
-        SetupSplitScreen();
+        // Apply to all actors in radius...
     }
 }
-```
 
-### Step 6: Update Bootstrap for Multiplayer
-
-Modify your bootstrap to use the multiplayer GameMode:
-
-```csharp
-// MultiplayerGameBootstrap.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-using CycloneGames.Factory.Runtime;
-using Cysharp.Threading.Tasks;
-
-public class MultiplayerGameBootstrap : MonoBehaviour
+// --- Receiving damage (in your Actor subclass) ---
+public class EnemyActor : Actor
 {
-    [Header("Configuration")]
-    [SerializeField] private WorldSettings worldSettings;
-    [SerializeField] private int numberOfPlayers = 2;
+    private float health = 100f;
 
-    private IUnityObjectSpawner objectSpawner;
-    private World world;
-    private MultiplayerGameMode gameMode;
-
-    async void Start()
+    protected override void ReceiveAnyDamage(float Damage, Controller EventInstigator, Actor DamageCauser)
     {
-        // Initialize
-        world = new World();
-        objectSpawner = new SimpleObjectSpawner();
-
-        // Load WorldSettings
-        WorldSettings ws = worldSettings;
-        if (ws == null)
-        {
-            ws = Resources.Load<WorldSettings>("MyWorldSettings");
-        }
-
-        // Spawn MultiplayerGameMode (make sure your WorldSettings references MultiplayerGameMode prefab)
-        gameMode = objectSpawner.Create(ws.GameModeClass) as MultiplayerGameMode;
-        if (gameMode == null)
-        {
-            Debug.LogError("[MultiplayerGameBootstrap] WorldSettings must reference a MultiplayerGameMode prefab!");
-            return;
-        }
-
-        gameMode.Initialize(objectSpawner, ws);
-        world.SetGameMode(gameMode);
-
-        // Launch game mode (it will add players based on GetConnectedPlayerCount)
-        await gameMode.LaunchGameModeAsync(this.GetCancellationTokenOnDestroy());
-
-        Debug.Log($"[MultiplayerGameBootstrap] Multiplayer game launched with {gameMode.GetAllPlayerControllers().Count} players!");
+        health -= Damage;
+        if (health <= 0f)
+            Destroy(gameObject);
     }
 
-    // Example: Add a player when a controller connects
-    public async void OnPlayerConnected(int playerIndex)
+    protected override void ReceivePointDamage(float Damage, DamageEvent damageEvent,
+        Controller EventInstigator, Actor DamageCauser)
     {
-        if (gameMode != null)
-        {
-            await gameMode.AddPlayer(playerIndex);
-        }
+        // Spawn hit VFX at impact point
+        // damageEvent.HitLocation, damageEvent.HitNormal, damageEvent.ShotDirection
     }
 
-    // Example: Remove a player when a controller disconnects
-    public void OnPlayerDisconnected(int playerIndex)
+    protected override void ReceiveRadialDamage(float Damage, DamageEvent damageEvent,
+        Controller EventInstigator, Actor DamageCauser)
     {
-        if (gameMode != null)
-        {
-            gameMode.RemovePlayer(playerIndex);
-        }
+        // Apply knockback from explosion origin
+        // damageEvent.Origin, damageEvent.InnerRadius, damageEvent.OuterRadius
     }
 }
 ```
 
-### Step 7: Create Multiplayer Pawn
+### World & WorldSettings
 
-Create a pawn that can work with player indices:
+**`WorldSettings`** (ScriptableObject) — The configuration asset that binds all class references:
 
-```csharp
-// MultiplayerPawn.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework;
+| Field | Type | Required |
+|---|---|---|
+| `GameModeClass` | `GameMode` | Yes |
+| `PlayerControllerClass` | `PlayerController` | Yes |
+| `PawnClass` | `Pawn` | Yes |
+| `PlayerStateClass` | `PlayerState` | No |
+| `CameraManagerClass` | `CameraManager` | No |
+| `SpectatorPawnClass` | `SpectatorPawn` | No |
 
-public class MultiplayerPawn : Pawn
-{
-    [Header("Visual")]
-    [SerializeField] private Material[] playerMaterials; // Different colors for each player
-    [SerializeField] private Renderer[] renderers; // Renderers to apply materials to
+Create via `Create -> CycloneGames -> GameplayFramework -> WorldSettings`. Editor validation shows green/red/yellow status for each field.
 
-    private int playerIndex = -1;
-
-    public override void PossessedBy(Controller NewController)
-    {
-        base.PossessedBy(NewController);
-
-        // Get player index from controller
-        if (NewController is MultiplayerPlayerController mpc)
-        {
-            playerIndex = mpc.PlayerIndex;
-            ApplyPlayerVisuals(playerIndex);
-        }
-    }
-
-    /// <summary>
-    /// Applies visual differences based on player index (colors, etc.).
-    /// </summary>
-    private void ApplyPlayerVisuals(int index)
-    {
-        if (playerMaterials != null && index < playerMaterials.Length)
-        {
-            foreach (var renderer in renderers)
-            {
-                if (renderer != null)
-                {
-                    renderer.material = playerMaterials[index];
-                }
-            }
-        }
-    }
-
-    // Movement methods (same as single-player example)
-    public void Move(Vector2 input) { /* ... */ }
-    public void Jump() { /* ... */ }
-}
-```
-
-### Complete Example: 2-Player Local Multiplayer Setup
-
-Here's a complete setup checklist:
-
-1. **Create Prefabs:**
-
-   - `MultiplayerGameMode` (with `MultiplayerGameMode` component)
-   - `MultiplayerPlayerController` (with `MultiplayerPlayerController` component)
-   - `MultiplayerPawn` (with `MultiplayerPawn` component)
-   - Standard `PlayerState`, `CameraManager`, `SpectatorPawn`
-
-2. **Update WorldSettings:**
-
-   - Set `GameModeClass` to `MultiplayerGameMode` prefab
-   - Set `PlayerControllerClass` to `MultiplayerPlayerController` prefab
-   - Set `PawnClass` to `MultiplayerPawn` prefab
-
-3. **Scene Setup:**
-
-   - Add `PlayerStart_0` and `PlayerStart_1` to scene
-   - Position them appropriately
-   - Add `SplitScreenCameraManager` to scene
-
-4. **Input Setup:**
-
-   - Configure input axes for Player 1 and Player 2
-   - Or set up Unity Input System with multiple action maps
-
-5. **Bootstrap:**
-   - Use `MultiplayerGameBootstrap` instead of single-player bootstrap
-
-### Tips and Best Practices
-
-1. **Player Index Management:**
-
-   - Always use 0-based indices (0, 1, 2, 3)
-   - Store player index in `PlayerController` and `PlayerState`
-   - Use player index for input mapping and visual differentiation
-
-2. **Input Handling:**
-
-   - Use Unity Input System for better multi-controller support
-   - Consider using `PlayerInput` component with different action maps
-   - Handle controller disconnection gracefully
-
-3. **Camera Management:**
-
-   - For split-screen, adjust viewport rects dynamically
-   - Consider picture-in-picture for more than 2 players
-   - Use Cinemachine's `CinemachineTargetGroup` for shared camera
-
-4. **Performance:**
-
-   - Limit maximum players based on your game's needs
-   - Consider LOD systems for distant players
-   - Optimize rendering for split-screen (fewer draw calls per viewport)
-
-5. **Testing:**
-   - Test with different numbers of players
-   - Test player join/leave during gameplay
-   - Test respawn with multiple players
-
-## Best Practices
-
-### 1. Keep Pawns Simple
-
-`Pawn` should focus on:
-
-- Movement
-- Visual representation
-- Abilities/actions
-
-Avoid putting game logic in `Pawn`—put it in `Controller` or `GameMode`.
-
-### 2. Use PlayerState for Persistent Data
-
-Don't store persistent data in `Pawn`:
-
-- ❌ Bad: `pawn.score`, `pawn.inventory`
-- ✅ Good: `playerState.score`, `playerState.inventory`
-
-### 3. Subclass for Customization
-
-Create subclasses for your specific needs:
-
-- `MyGameMode` extends `GameMode`
-- `MyPlayerController` extends `PlayerController`
-- `MyPlayerPawn` extends `Pawn`
-- `MyPlayerState` extends `PlayerState`
-
-### 4. Use World for Lookups
-
-Access game objects through `World`:
+**`World`** — A non-MonoBehaviour service locator. Holds references to GameMode, GameState, and provides player queries:
 
 ```csharp
-World world = GetWorld(); // Your way to get World reference
+World world = new World();
+world.SetGameMode(gameMode);
+world.SetGameState(gameState);
 PlayerController pc = world.GetPlayerController();
 Pawn pawn = world.GetPlayerPawn();
 ```
 
-### 5. Integrate with DI
-
-If you're using dependency injection:
-
-- Implement `IUnityObjectSpawner` using your DI container
-- Register `World` and `GameMode` in your DI container
-- Inject dependencies into your custom classes
-
-### 6. Handle Async Initialization
-
-`PlayerController` initialization is async. Always await it:
-
-```csharp
-await gameMode.LaunchGameModeAsync(cancellationToken);
-// Now PlayerController is fully initialized
-```
-
-## API Reference
-
-### GameMode
-
-**Key Methods:**
-
-- `Initialize(IUnityObjectSpawner, IWorldSettings)`: Wire dependencies
-- `LaunchGameModeAsync(CancellationToken)`: Spawns `PlayerController` and starts the game
-- `RestartPlayer(PlayerController, string)`: Respawns a player (optionally at a named portal)
-- `FindPlayerStart(Controller, string)`: Finds a spawn point
-- `GetPlayerController()`: Gets the current player controller
-
-**Spawn Helpers:**
-
-- `SpawnDefaultPawnAtPlayerStart(Controller, Actor)`: Spawns pawn at a PlayerStart
-- `SpawnDefaultPawnAtTransform(Controller, Transform)`: Spawns pawn at a transform
-- `SpawnDefaultPawnAtLocation(Controller, Vector3)`: Spawns pawn at a location
-
-### PlayerController
-
-**Key Methods:**
-
-- `GetPawn()`: Gets the currently possessed pawn
-- `GetPlayerState()`: Gets the player state
-- `GetCameraManager()`: Gets the camera manager
-- `GetSpectatorPawn()`: Gets the spectator pawn
-- `InitializationTask`: UniTask that completes when initialization is done
-
-**Lifecycle:**
-
-- Automatically spawns `PlayerState`, `CameraManager`, and `SpectatorPawn` during async initialization
-
-### Controller
-
-**Key Methods:**
-
-- `Possess(Pawn)`: Takes control of a pawn
-- `UnPossess()`: Releases control of the current pawn
-- `SetControlRotation(Quaternion)`: Sets where the controller is "looking"
-- `ControlRotation()`: Gets the current control rotation
-- `GetDefaultPawnPrefab()`: Gets the default pawn prefab from `WorldSettings`
-
-**Virtual Methods:**
-
-- `OnPossess(Pawn)`: Called when possessing a pawn
-- `OnUnPossess()`: Called when unpossessing
-
-### Pawn
-
-**Key Methods:**
-
-- `PossessedBy(Controller)`: Called when a controller takes control
-- `UnPossessed()`: Called when controller releases control
-- `DispatchRestart()`: Triggers restart logic
-- `NotifyInitialRotation(Quaternion)`: Notifies components about initial rotation (for movement components)
-
-**Properties:**
-
-- `Controller`: The controller currently possessing this pawn
-
-### PlayerState
-
-**Key Methods:**
-
-- `GetPawn()`: Gets the current pawn
-- `GetPawn<T>()`: Gets the current pawn as a specific type
-
-**Events:**
-
-- `OnPawnSetEvent`: Fires when the pawn changes (parameters: PlayerState, NewPawn, OldPawn)
-
 ### CameraManager
 
-**Key Methods:**
+**Purpose**: Manages Cinemachine cameras and follows the current view target.
 
-- `SetActiveVirtualCamera(CinemachineCamera)`: Sets the active camera
-- `SetViewTarget(Transform)`: Sets what the camera should follow
-- `SetFOV(float)`: Sets the field of view
-- `InitializeFor(PlayerController)`: Initializes for a specific player controller
+**Requirements**: Main Camera must have `CinemachineBrain`. At least one `CinemachineCamera` must exist in the scene.
 
-**Properties:**
+**Key API**: `InitializeFor(PlayerController)`, `SetActiveVirtualCamera()`, `SetViewTarget(Transform)`, `SetFOV(float)`.
 
-- `ActiveVirtualCamera`: The currently active Cinemachine camera
-
-### WorldSettings
-
-**Properties:**
-
-- `GameModeClass`: Prefab reference for GameMode
-- `PlayerControllerClass`: Prefab reference for PlayerController
-- `PawnClass`: Prefab reference for default Pawn
-- `PlayerStateClass`: Prefab reference for PlayerState
-- `CameraManagerClass`: Prefab reference for CameraManager
-- `SpectatorPawnClass`: Prefab reference for SpectatorPawn
-
-### World
-
-**Key Methods:**
-
-- `SetGameMode(GameMode)`: Sets the current game mode
-- `GetGameMode()`: Gets the current game mode
-- `GetPlayerController()`: Gets the player controller
-- `GetPlayerPawn()`: Gets the player pawn
-
-## Troubleshooting
-
-### Spawn Failed / Null References
-
-**Symptoms:** Objects don't spawn, or you get null reference errors
-
-**Solutions:**
-
-- ✅ Ensure `WorldSettings` fields reference valid prefabs with required components
-- ✅ Provide an `IUnityObjectSpawner` (create `SimpleObjectSpawner` or integrate your DI container)
-- ✅ Check that prefabs are not missing components
-- ✅ Verify prefabs are in the correct folders and not corrupted
-
-**Debug Code:**
+**Example — Switching camera target**:
 
 ```csharp
-// Add to your bootstrap
-if (ws.GameModeClass == null) Debug.LogError("GameModeClass is null!");
-if (ws.PlayerControllerClass == null) Debug.LogError("PlayerControllerClass is null!");
-if (ws.PawnClass == null) Debug.LogError("PawnClass is null!");
-```
-
-### Camera Not Following
-
-**Symptoms:** Camera doesn't follow the player or stays static
-
-**Solutions:**
-
-- ✅ Add `CinemachineBrain` component to Main Camera
-- ✅ Ensure at least one `CinemachineCamera` exists in the scene
-- ✅ Verify `CameraManager` is spawned (check hierarchy)
-- ✅ Check that `CameraManager.InitializeFor(PlayerController)` was called
-
-**Debug:**
-
-```csharp
-var brain = Camera.main?.GetComponent<CinemachineBrain>();
-if (brain == null) Debug.LogError("Main Camera missing CinemachineBrain!");
-
-var vcams = FindObjectsOfType<CinemachineCamera>();
-if (vcams.Length == 0) Debug.LogError("No CinemachineCamera found in scene!");
-```
-
-### Player Spawns at Origin
-
-**Symptoms:** Player spawns at (0, 0, 0) instead of at PlayerStart
-
-**Solutions:**
-
-- ✅ Add at least one `PlayerStart` to the scene
-- ✅ Verify `PlayerStart` has the `PlayerStart` component
-- ✅ Check that `PlayerStart` is active in the scene
-- ✅ If using portal names, verify the name matches exactly
-
-**Debug:**
-
-```csharp
-var starts = FindObjectsOfType<PlayerStart>();
-Debug.Log($"Found {starts.Length} PlayerStart(s) in scene");
-foreach (var start in starts)
+// In your PlayerController subclass:
+public void SwitchToSpectateTarget(Actor target)
 {
-    Debug.Log($"  - {start.name} at {start.transform.position}");
+    SetViewTargetWithBlend(target, 0.5f); // 0.5s blend
+}
+
+// Or access CameraManager directly:
+CameraManager cam = GetCameraManager();
+cam.SetViewTarget(someActor.transform);
+cam.SetFOV(60f);
+```
+
+### PlayerStart
+
+**Purpose**: Spawn point for players. Uses a **static registry pattern** for zero-GC lookup — no `FindObjectsOfType` at runtime.
+
+**Features**: Auto-register/unregister on enable/disable. Name-based matching for portal/checkpoint systems. Gizmo visualization in editor.
+
+**Example — Portal-based spawning with named starts**:
+
+```csharp
+// Name your PlayerStart GameObjects: "SpawnPoint_LevelA", "SpawnPoint_LevelB"
+// Then in GameMode:
+protected override Actor ChoosePlayerStart(Controller Player)
+{
+    string portal = "SpawnPoint_LevelB";
+    foreach (var start in PlayerStart.GetAllPlayerStarts())
+    {
+        if (start.gameObject.name == portal)
+            return start;
+    }
+    return base.ChoosePlayerStart(Player);
 }
 ```
 
-### KillZ Not Firing
+### SpectatorPawn
 
-**Symptoms:** Actors don't get destroyed when falling into KillZVolume
+**Purpose**: A minimal Pawn used as a placeholder when the player doesn't have a real character yet (during loading, between rounds, when spectating).
 
-**Solutions:**
+**Key field**: `spectatorSpeed` — movement speed in spectator mode.
 
-- ✅ `KillZVolume` needs a `BoxCollider` (or other collider) set to **Is Trigger**
-- ✅ Falling actors need both `Collider` and `Rigidbody` components
-- ✅ Ensure the `KillZVolume` GameObject is active
-- ✅ Check that the collider bounds cover the death zone
+### KillZVolume
 
-**Debug:**
+**Purpose**: Trigger volume that calls `FellOutOfWorld()` on any Actor that enters. Supports both 3D (`BoxCollider` with IsTrigger) and 2D (`BoxCollider2D` with IsTrigger).
 
-```csharp
-// Add to KillZVolume.OnTriggerEnter
-Debug.Log($"[KillZ] {other.name} entered. Has Actor: {other.GetComponent<Actor>() != null}");
-```
+**Usage**: Add `KillZVolume` component to a GameObject with a trigger collider. Position it under the playable area.
 
-### Pawn Rotation Not Synchronized After Spawn
+### SceneLogic
 
-**Symptoms:** Pawn spawns but rotation doesn't match the spawn point
+**Purpose**: Per-scene logic controller. Provides lifecycle hooks (`Awake`, `Start`, `Update`, etc.) for scene-specific gameplay scripting — e.g., opening cutscenes, level-specific triggers, ambient events.
 
-**Solutions:**
+### ActorTag System
 
-- ✅ If using `MovementComponent` from `RPGFoundation`:
-  - If GameplayFramework is installed via Package Manager: Should work automatically
-  - If GameplayFramework is in Assets folder: Add `GAMEPLAY_FRAMEWORK_PRESENT` to Scripting Define Symbols
-- ✅ Or manually set rotation after spawn:
-  ```csharp
-  Pawn pawn = SpawnDefaultPawnAtTransform(...);
-  var movement = pawn.GetComponent<MovementComponent>();
-  if (movement != null)
-  {
-      movement.SetRotation(spawnTransform.rotation, immediate: true);
-  }
-  ```
+**Purpose**: Inspector-friendly tag selection for Actor's string-based tag fields.
 
-### PlayerController Not Initializing
+**Components**:
 
-**Symptoms:** `InitializationTask` never completes, or components aren't spawned
+- **`ActorTagAttribute`**: PropertyAttribute with optional `Type` parameter.
+  - `[ActorTag]` — no type: draws as normal string field (used by framework base class).
+  - `[ActorTag(typeof(MyTags))]` — with type: draws a searchable popup picker sourced from `public const string` fields in the specified class.
+- **`ActorTagPropertyDrawer`**: Editor drawer that opens a `PopupWindow` with `SearchField` + scrollable `TreeView`. Supports search filtering, (None) option, clear button, and invalid value highlighting.
 
-**Solutions:**
-
-- ✅ Ensure `PlayerController.Initialize(spawner, settings)` was called
-- ✅ Check that `WorldSettings` has all required prefabs assigned
-- ✅ Verify `IUnityObjectSpawner` is working (test with `SimpleObjectSpawner`)
-- ✅ Check for errors in console during initialization
-
-**Debug:**
+**Example**:
 
 ```csharp
-// In your bootstrap, after spawning PlayerController
-var pc = gameMode.GetPlayerController();
-if (pc != null)
+// 1. Define your tag constants
+public static class ActorTags
 {
-    await pc.InitializationTask;
-    Debug.Log($"PlayerController initialized. Pawn: {pc.GetPawn()?.name}, State: {pc.GetPlayerState()?.name}");
+    public const string Player = "Player";
+    public const string Enemy = "Enemy";
+    public const string NPC = "NPC";
+    public const string Interactable = "Interactable";
+    public const string Destructible = "Destructible";
+}
+
+// 2. Use in your Actor subclass — Inspector shows a searchable dropdown
+public class MyPawn : Pawn
+{
+    [SerializeField, ActorTag(typeof(ActorTags))]
+    private List<string> tags;
+}
+
+// 3. Query tags at runtime
+if (someActor.ActorHasTag("Enemy"))
+{
+    // React to enemy
 }
 ```
 
-## Samples
+---
 
-The framework includes a complete sample project in `Samples/Sample.PureUnity`:
+## Quick Start
 
-- **Scene**: `Scene/UnitySampleScene.unity` - A ready-to-run scene
-- **Prefabs**: All required prefabs in `Prefabs/` folder
-- **WorldSettings**: `Resources/UnitySampleWorldSettings.asset` - Complete configuration
-- **Bootstrap**: `UnitySampleBoot.cs` - Example bootstrap script
-- **Spawner**: `UnitySampleObjectSpawner.cs` - Example object spawner
+### Prerequisites
 
-**To use the sample:**
+- Unity 2022.3+
+- Packages installed: `CycloneGames.GameplayFramework`, `Cinemachine`, `UniTask`, `CycloneGames.Factory`, `CycloneGames.Logger`
 
-1. Open `Samples/Sample.PureUnity/Scene/UnitySampleScene.unity`
-2. Press Play
-3. The framework will automatically spawn and set up everything
+### Minimal Setup (5 steps)
 
-## Dependencies
+**Step 1 — Create prefabs**
 
-This package relies on the following external and internal packages:
+Create empty GameObjects, add the corresponding component, and save as prefabs:
 
-- `com.unity.cinemachine@3`: For camera management via Cinemachine
-- `com.cysharp.unitask@2`: For asynchronous operations
-- `com.cyclone-games.factory@1`: For object creation and spawning interface
-- `com.cyclone-games.logger@1`: For debug logging
+| Prefab | Component | Notes |
+|---|---|---|
+| `GM_MyGame` | `GameMode` (or your subclass) | Required |
+| `PC_MyGame` | `PlayerController` (or your subclass) | Required |
+| `Pawn_MyGame` | `Pawn` (or your subclass) | Required — add your character model/controller here |
+| `PS_MyGame` | `PlayerState` (or your subclass) | Required |
+| `CM_MyGame` | `CameraManager` | Optional — needed if using Cinemachine |
+| `SP_MyGame` | `SpectatorPawn` | Optional |
 
-## Frequently Asked Questions
+**Step 2 — Create WorldSettings**
 
-### Q: Can I use this with GameplayAbilities?
+`Create -> CycloneGames -> GameplayFramework -> WorldSettings`. Assign all prefabs.
 
-Yes! `GameplayFramework` and `GameplayAbilities` are designed to work together. You can:
+**Step 3 — Create the bootstrap**
 
-- Add `AbilitySystemComponentHolder` to your `Pawn`
-- Initialize the ability system in `Pawn.PossessedBy()`
-- Store ability-related data in `PlayerState`
+```csharp
+using Cysharp.Threading.Tasks;
+using UnityEngine;
+using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Factory.Runtime;
 
-### Q: How do I handle multiple players?
+public class GameBootstrap : MonoBehaviour
+{
+    [SerializeField] private WorldSettings worldSettings;
 
-See the **[Local Multiplayer Guide](#local-multiplayer-guide)** section for a complete tutorial. The guide covers:
+    async void Start()
+    {
+        IUnityObjectSpawner spawner = new SimpleObjectSpawner();
 
-- Creating a `MultiplayerGameMode` to manage multiple players
-- Setting up player indices and input mapping
-- Implementing split-screen cameras
-- Handling multiple `PlayerController`s and `PlayerState`s
+        var gameMode = spawner.Create(worldSettings.GameModeClass) as GameMode;
+        gameMode.Initialize(spawner, worldSettings);
 
-### Q: Can I use this without Cinemachine?
+        var world = new World();
+        world.SetGameMode(gameMode);
 
-`CameraManager` requires Cinemachine. If you don't want to use it:
+        await gameMode.LaunchGameModeAsync(destroyCancellationToken);
+    }
+}
 
-- Don't assign `CameraManagerClass` in `WorldSettings` (leave it null)
-- Implement your own camera system
-- The framework will work fine without `CameraManager`
+public class SimpleObjectSpawner : IUnityObjectSpawner
+{
+    public T Create<T>(T origin) where T : Object
+    {
+        return origin != null ? Object.Instantiate(origin) : null;
+    }
+}
+```
 
-### Q: How do I save/load game state?
+**Step 4 — Set up the scene**
 
-Use `PlayerState` for persistent data:
+1. Add a `PlayerStart` component to an empty GameObject and position it.
+2. Ensure the Main Camera has `CinemachineBrain` and the scene has at least one `CinemachineCamera`.
+3. Add the `GameBootstrap` component to a GameObject and assign your `WorldSettings`.
 
-- Save `PlayerState` data to disk
-- On load, restore the data to `PlayerState`
-- `PlayerState` persists across Pawn respawns, so your data is safe
+**Step 5 — Press Play**
+
+The framework will: spawn PlayerController -> init PlayerState / CameraManager / SpectatorPawn -> find PlayerStart -> spawn Pawn -> possess.
+
+---
+
+## Advanced Usage
+
+### Respawn System
+
+```csharp
+// In your GameMode subclass:
+public void OnPlayerDied(PlayerController player)
+{
+    // Unpossess the dead pawn
+    Pawn deadPawn = player.GetPawn();
+    player.UnPossess();
+
+    // Optionally delay respawn
+    RespawnAfterDelay(player, 3f).Forget();
+}
+
+private async UniTaskVoid RespawnAfterDelay(PlayerController player, float delay)
+{
+    await UniTask.Delay(TimeSpan.FromSeconds(delay));
+    RestartPlayer(player);
+}
+```
+
+### Character Swapping
+
+```csharp
+// Swap pawn mid-game (e.g., entering a vehicle)
+public class VehicleActor : Actor
+{
+    [SerializeField] private Pawn vehiclePawn;
+
+    public void EnterVehicle(PlayerController driver)
+    {
+        Pawn oldPawn = driver.GetPawn();
+        driver.UnPossess();
+        driver.Possess(vehiclePawn);
+        oldPawn.SetActorHiddenInGame(true);
+    }
+
+    public void ExitVehicle(PlayerController driver, Pawn originalPawn)
+    {
+        driver.UnPossess();
+        originalPawn.SetActorHiddenInGame(false);
+        originalPawn.SetActorLocation(transform.position + Vector3.right * 2f);
+        driver.Possess(originalPawn);
+    }
+}
+```
+
+### Input Suppression
+
+```csharp
+// Multiple systems can suppress input independently
+playerController.SetIgnoreMoveInput(true);  // UI opened — suppress
+playerController.SetIgnoreMoveInput(true);  // Cutscene — suppress (counter = 2)
+playerController.SetIgnoreMoveInput(false); // UI closed (counter = 1, still suppressed)
+playerController.SetIgnoreMoveInput(false); // Cutscene ended (counter = 0, input restored)
+
+// Or reset everything at once
+playerController.ResetIgnoreInputFlags();
+```
+
+### Damage with Event Subscription
+
+```csharp
+// Subscribe to damage events from outside the Actor
+Actor target = someEnemy;
+target.OnTakePointDamage += (damage, damageEvent, instigator, causer) =>
+{
+    // Spawn hit marker UI
+    ShowHitMarker(damageEvent.HitLocation);
+};
+target.OnTakeRadialDamage += (damage, damageEvent, instigator, causer) =>
+{
+    // Show explosion indicator
+    ShowExplosionIndicator(damageEvent.Origin);
+};
+```
+
+---
+
+## Integration with Other Packages
+
+The framework is designed to work **alongside** other CycloneGames packages without compile-time dependencies:
+
+| Package | How it integrates |
+|---|---|
+| **GameplayAbilities (GAS)** | Set `DamageEvent.EffectContext` to your `GameplayEffectSpec` or `IGameplayEffectContext`. Downstream handlers cast it back. |
+| **GameplayTags** | Actor's `tags` (simple strings) and `GameplayTagContainer` (hierarchical counted tags) serve different purposes and coexist on the same GameObject. |
+| **RPGFoundation** | Pawn calls `NotifyInitialRotation()` which broadcasts to `IInitialRotationSettable` components — RPGFoundation's movement components can implement this interface. |
+| **InputSystem** | PlayerController subclass reads from `CycloneGames.InputSystem` and calls `Pawn.AddMovementInput()`. |
+| **Networking (Mirror, etc.)** | Implement `IGameSession` in a network adapter. Pass to `GameMode.SetGameSession()`. Override `Actor.HasAuthority()` in networked Actor subclasses. |
+| **AIPerception** | High-performance AI perception system (sight, hearing) with Jobs/Burst optimization — pair with `AIController` for detection-driven AI. |
+| **BehaviorTree** | Visual behavior tree editor and runtime — drive `AIController.RunAI()` logic with composable nodes. |
+| **AssetManagement** | Interface-first, DI-friendly asset management (wraps YooAsset) — use for async Pawn/level loading. |
+| **Audio** | Enhanced audio management with async loading — trigger sound effects from Actor damage events or GameState transitions. |
+| **Services** | Graphics settings, camera services, and device settings management. |
+| **DeviceFeedback** | Multi-platform haptics/vibration/light bar — trigger from damage events or ability activations. |
+| **Cheat** | Lightweight cheat command system — useful during development for testing GameMode rules, spawning, etc. |
+| **UIFramework** | Simple UI framework — build HUD/menus that read from PlayerState, GameState, and match events. |
+| **Factory** | Object spawning/pooling abstraction — the framework's `IUnityObjectSpawner` is defined here (required dependency). |
+| **Logger** | Thread-safe logging with category filtering — the framework's `CLogger` calls go through this (required dependency). |
+
+---
+
+## Best Practices
+
+1. **Keep Pawn focused** — Movement, visual representation, abilities. No game rules, no scoring.
+2. **Use PlayerState for persistent data** — Score, inventory, stats belong on PlayerState, not Pawn. They survive respawn.
+3. **One GameMode per game type** — Deathmatch, CTF, Tutorial — each is a GameMode subclass. Swap by changing the WorldSettings prefab reference.
+4. **Override, don't modify** — Subclass `GameMode`, `PlayerController`, `Pawn`, etc. The framework's base classes handle the plumbing.
+5. **Use interfaces for testing** — `IGameMode`, `IGameSession`, `IWorldSettings`, `IUnityObjectSpawner` are all mockable for unit tests.
+6. **Let GameMode orchestrate** — Spawning, respawning, match flow all belong in GameMode. Don't scatter these across Pawn or Controller.
+7. **Prefer TakeDamage over direct health manipulation** — Route all damage through the Actor damage pipeline for consistent event firing and type routing.
+
+---
+
+## FAQ
+
+**Q: Can I use this without Cinemachine?**
+Yes. Don't assign `CameraManagerClass` in WorldSettings. The framework works fine without it — implement your own camera system.
+
+**Q: How does respawning work?**
+Call `GameMode.RestartPlayer(playerController)`. It finds a PlayerStart, spawns a new Pawn, and possesses it. PlayerState is untouched.
+
+**Q: Can I have multiple players?**
+The framework provides single-player flow out of the box. For local multiplayer, subclass GameMode to spawn multiple PlayerControllers and manage them with player indices.
+
+**Q: How do I integrate with my DI container?**
+Implement `IUnityObjectSpawner` using your container's instantiate method. Pass it to `GameMode.Initialize()`.
+
+**Q: Does Actor.tags conflict with GameplayTags?**
+No. Actor.tags is a simple `List<string>` for lightweight labeling. GameplayTags is a hierarchical counted tag system for ability/effect queries. They serve different purposes and coexist.
+
+**Q: What is the inspiration behind this framework?**
+The architecture is inspired by Unreal Engine's GameFramework. Concepts like Actor, Pawn, Controller, GameMode, and PlayerState map directly to their Unreal counterparts. However, the implementation is built natively for Unity — leveraging MonoBehaviour, Cinemachine, UniTask, and Unity-specific patterns.
