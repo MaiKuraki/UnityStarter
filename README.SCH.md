@@ -44,6 +44,8 @@
 - ✅ 现代输入系统（支持上下文栈）
 - ✅ 层级式 UI 管理框架（支持 MVP 架构）
 - ✅ 跨平台设备反馈（触觉振动、手柄震动、灯光控制）
+- ✅ AI 行为树（可视化编辑器，支持 10,000+ 智能体扩展）
+- ✅ AI 感知系统（Jobs/Burst 优化）
 
 > **📖 文档**: 每个模块都有详细文档。请参阅 [模块目录](#模块目录) 部分以获取详细指南链接。
 
@@ -157,7 +159,8 @@
 | **GameplayAbilities** | `CycloneGames.GameplayAbilities` | 数据驱动能力系统（GAS 风格）。基于 ScriptableObject 的能力、属性、效果和状态管理。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.SCH.md) |
 | **GameplayTags**      | `CycloneGames.GameplayTags`      | 分层标签系统，用于解耦的游戏逻辑。运行时注册、自动生成和基于标签的查询。           | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.SCH.md)      |
 | **RPGFoundation**     | `CycloneGames.RPGFoundation`     | RPG 特定扩展（移动、战斗等）。RPG 类游戏的基础组件。                               | [查看模块目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)                    |
-| **BehaviorTree**      | `CycloneGames.BehaviorTree`      | AI 行为树系统。可视化编辑器、基于 ScriptableObject、针对移动设备优化。             | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.SCH.md)      |
+| **BehaviorTree**      | `CycloneGames.BehaviorTree`      | 生产级 AI 行为树。双层 SO→Runtime 架构、30+ 内置节点、三级扩展（1–10,000+ 智能体）、多人网络同步、Burst/DOD 批量仿真、GraphView 编辑器（动画化运行时可视化）。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.SCH.md)      |
+| **AIPerception**      | `CycloneGames.AIPerception`      | 高性能 AI 感知系统。Jobs/Burst 优化的零 GC 传感器查询、可视化调试工具、可扩展类型系统。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.SCH.md)      |
 
 ### 🏗️ 核心基础设施
 
@@ -194,7 +197,7 @@
 
 | 模块           | 路径                      | 描述                                                       | 文档         |
 | -------------- | ------------------------- | ---------------------------------------------------------- | ------------ |
-| **Networking** | `CycloneGames.Networking` | 网络抽象层。Mirror 适配器、传输/序列化接口、能力系统集成。 | 查看模块目录 |
+| **Networking** | `CycloneGames.Networking` | 生产级网络抽象层。零 GC 运行时、可插拔序列化器（Json、MessagePack、ProtoBuf）、Mirror 适配器、线程安全跨线程消息、连接诊断。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.SCH.md) |
 
 ### 🧰 工具
 
@@ -311,6 +314,9 @@ git clone https://github.com/MaiKuraki/UnityStarter.git
 - **[UIFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md)** - UI 框架架构和示例
 - **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md)** - 资源加载和版本管理
 - **[DeviceFeedback](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.SCH.md)** - 跨平台触觉振动、震动与灯光控制
+- **[BehaviorTree](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.SCH.md)** - AI 行为树双层架构与扩展指南
+- **[AIPerception](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.SCH.md)** - Burst 优化的 AI 感知系统
+- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.SCH.md)** - 可插拔传输层的网络抽象层
 
 ---
 
