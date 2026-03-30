@@ -14,7 +14,7 @@ namespace CycloneGames.UIFramework.Runtime
     /// - Event subscription management
     /// 
     /// FOR MOST USERS:
-    /// Use UIWindow&lt;TPresenter&gt; with UIPresenterFactory.CustomFactory for DI integration.
+    /// Use UIWindow<TPresenter> with UIPresenterFactory.CustomFactory for DI integration.
     /// This interface is only needed if you must inject into UIWindow itself.
     /// 
     /// TO INTEGRATE (if needed in future):

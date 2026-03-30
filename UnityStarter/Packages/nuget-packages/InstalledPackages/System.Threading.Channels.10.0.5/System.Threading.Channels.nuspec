@@ -13,7 +13,7 @@
 
 Commonly Used Types:
 System.Threading.Channel
-System.Threading.Channel&lt;T&gt;</description>
+System.Threading.Channel<T></description>
     <releaseNotes>https://go.microsoft.com/fwlink/?LinkID=799421</releaseNotes>
     <copyright>© Microsoft Corporation. All rights reserved.</copyright>
     <serviceable>true</serviceable>

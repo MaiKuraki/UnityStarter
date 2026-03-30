@@ -95,7 +95,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Optional custom application requirement. If set, CanApplyGameplayEffect is called before application.
-        /// UE5: TArray&lt;TSubclassOf&lt;UGameplayEffectCustomApplicationRequirement&gt;&gt;.
+        /// UE5: TArray<TSubclassOf<UGameplayEffectCustomApplicationRequirement>>.
         /// </summary>
         public IReadOnlyList<ICustomApplicationRequirement> CustomApplicationRequirements { get; }
 

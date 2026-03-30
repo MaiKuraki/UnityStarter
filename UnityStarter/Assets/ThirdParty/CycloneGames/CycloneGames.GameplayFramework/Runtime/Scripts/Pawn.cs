@@ -5,30 +5,58 @@ namespace CycloneGames.GameplayFramework.Runtime
 {
     public class Pawn : Actor
     {
+        [SerializeField] private bool bUseControllerRotationPitch;
+        [SerializeField] private bool bUseControllerRotationYaw;
+        [SerializeField] private bool bUseControllerRotationRoll;
+        [SerializeField] private float baseEyeHeight = 0.8f;
+
         private PlayerState playerState;
         private Controller controller;
         public Controller Controller => controller;
+
+        private Vector3 pendingMovementInput;
+        private Vector3 lastMovementInput;
+        private bool bIsTurnedOff;
+
         private readonly List<MonoBehaviour> _cachedComponents = new List<MonoBehaviour>(16);
 
+        #region Controller Rotation Properties
+        public bool UseControllerRotationPitch { get => bUseControllerRotationPitch; set => bUseControllerRotationPitch = value; }
+        public bool UseControllerRotationYaw { get => bUseControllerRotationYaw; set => bUseControllerRotationYaw = value; }
+        public bool UseControllerRotationRoll { get => bUseControllerRotationRoll; set => bUseControllerRotationRoll = value; }
+        public float BaseEyeHeight { get => baseEyeHeight; set => baseEyeHeight = value; }
+        #endregion
+
+        #region Movement Input
         /// <summary>
-        /// Notifies components about the initial rotation when a Pawn is spawned.
-        /// Components that implement IInitialRotationSettable will automatically synchronize their rotation.
-        /// 
-        /// IMPORTANT FOR DEVELOPERS:
-        /// If GameplayFramework is not installed via Package Manager (e.g., placed directly in Assets folder),
-        /// and you are using MovementComponent from RPGFoundation, you must manually set the define symbol
-        /// GAMEPLAY_FRAMEWORK_PRESENT in PlayerSettings > Scripting Define Symbols for automatic rotation
-        /// synchronization to work. Otherwise, you will need to manually set the Pawn's rotation after spawning:
-        /// 
-        /// Example manual setup:
-        /// ```csharp
-        /// Pawn pawn = SpawnDefaultPawnAtTransform(...);
-        /// var movement = pawn.GetComponent<MovementComponent>();
-        /// if (movement != null)
-        /// {
-        ///     movement.SetRotation(spawnTransform.rotation, immediate: true);
-        /// }
-        /// ```
+        /// Adds movement input along the given world direction, scaled by ScaleValue.
+        /// Accumulated each frame and consumed by movement component via ConsumeMovementInputVector().
+        /// </summary>
+        public virtual void AddMovementInput(Vector3 WorldDirection, float ScaleValue = 1.0f, bool bForce = false)
+        {
+            if (bIsTurnedOff && !bForce) return;
+            if (controller != null && controller.IsMoveInputIgnored() && !bForce) return;
+            pendingMovementInput += WorldDirection * ScaleValue;
+        }
+
+        public Vector3 GetPendingMovementInputVector() => pendingMovementInput;
+        public Vector3 GetLastMovementInputVector() => lastMovementInput;
+
+        /// <summary>
+        /// Returns and clears the pending movement input. Typically called by PawnMovementComponent each tick.
+        /// </summary>
+        public Vector3 ConsumeMovementInputVector()
+        {
+            lastMovementInput = pendingMovementInput;
+            pendingMovementInput = Vector3.zero;
+            return lastMovementInput;
+        }
+        #endregion
+
+        #region Initial Rotation
+        /// <summary>
+        /// Notifies IInitialRotationSettable components when a Pawn is spawned with rotation.
+        /// Uses cached component list to avoid GC allocation.
         /// </summary>
         public void NotifyInitialRotation(Quaternion rotation)
         {
@@ -42,57 +70,163 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
             }
         }
+        #endregion
 
+        #region Restart
         public void DispatchRestart()
         {
             Restart();
         }
-        private void Restart()
+
+        protected virtual void Restart()
         {
-            //  TODO: MAYBE BLOCK MOVEMENT
+            ConsumeMovementInputVector();
         }
+        #endregion
+
+        #region Possession
         public virtual void PossessedBy(Controller NewController)
         {
+            Controller oldController = controller;
             SetOwner(NewController);
             controller = NewController;
 
-            if (Controller.GetPlayerState() != null)
+            if (controller?.GetPlayerState() != null)
             {
-                SetPlayerState(Controller.GetPlayerState());
+                SetPlayerState(controller.GetPlayerState());
             }
+
+            NotifyControllerChanged(oldController, NewController);
         }
 
         public virtual void UnPossessed()
         {
+            Controller oldController = controller;
             SetPlayerState(null);
             SetOwner(null);
             controller = null;
+            NotifyControllerChanged(oldController, null);
         }
 
-        //  TODO: SetPawnPrivate should not called from pawn.
+        protected virtual void NotifyControllerChanged(Controller OldController, Controller NewController) { }
+        #endregion
+
+        #region PlayerState
         private void SetPlayerState(PlayerState NewPlayerState)
         {
-            if (playerState && playerState.GetPawn() == this)
+            if (playerState != null && ReferenceEquals(playerState.GetPawn(), this))
             {
                 playerState.SetPawnPrivate(null);
             }
             playerState = NewPlayerState;
-
-            if (playerState)
+            if (playerState != null)
             {
                 playerState.SetPawnPrivate(this);
             }
-            //  OnPlayerStateChangedEvent
         }
 
-        Quaternion GetControlRotation()
+        public PlayerState GetPlayerState() => playerState;
+        public T GetPlayerState<T>() where T : PlayerState => playerState as T;
+        #endregion
+
+        #region Control Rotation
+        public Quaternion GetControlRotation()
         {
-            return Controller ? Controller.ControlRotation() : UnityEngine.Quaternion.identity;
+            return controller != null ? controller.ControlRotation() : Quaternion.identity;
+        }
+        #endregion
+
+        #region View
+        public virtual Quaternion GetViewRotation()
+        {
+            return controller != null ? controller.ControlRotation() : GetActorRotation();
         }
 
-        bool IsControlled()
+        public virtual Quaternion GetBaseAimRotation()
         {
-            return (PlayerController)Controller != null;
+            return GetViewRotation();
+        }
+
+        public virtual Vector3 GetPawnViewLocation()
+        {
+            return GetActorLocation() + Vector3.up * baseEyeHeight;
+        }
+        #endregion
+
+        #region FaceRotation
+        /// <summary>
+        /// Updates Pawn rotation to match the controller's ControlRotation,
+        /// respecting bUseControllerRotation* flags. Called automatically each Update.
+        /// </summary>
+        public virtual void FaceRotation(Quaternion NewControlRotation, float DeltaTime = 0f)
+        {
+            Vector3 euler = NewControlRotation.eulerAngles;
+            Vector3 current = transform.eulerAngles;
+
+            if (bUseControllerRotationPitch) current.x = euler.x;
+            if (bUseControllerRotationYaw) current.y = euler.y;
+            if (bUseControllerRotationRoll) current.z = euler.z;
+
+            if (bUseControllerRotationPitch || bUseControllerRotationYaw || bUseControllerRotationRoll)
+            {
+                SetActorRotation(Quaternion.Euler(current));
+            }
+        }
+        #endregion
+
+        #region State Queries
+        public bool IsPawnControlled() => controller != null;
+
+        public bool IsPlayerControlled()
+        {
+            return controller is PlayerController;
+        }
+
+        public bool IsBotControlled()
+        {
+            return controller is AIController;
+        }
+
+        public virtual bool IsLocallyControlled()
+        {
+            return controller != null;
+        }
+        #endregion
+
+        #region Turn Off/On
+        public bool IsTurnedOff() => bIsTurnedOff;
+
+        public virtual void TurnOff()
+        {
+            bIsTurnedOff = true;
+        }
+
+        public virtual void TurnOn()
+        {
+            bIsTurnedOff = false;
+        }
+        #endregion
+
+        #region Detach
+        public virtual void DetachFromControllerPendingDestroy()
+        {
+            if (controller != null)
+            {
+                controller.UnPossess();
+            }
+        }
+        #endregion
+
+        protected override void Update()
+        {
+            base.Update();
+            if (!bIsTurnedOff && controller != null)
+            {
+                if (bUseControllerRotationPitch || bUseControllerRotationYaw || bUseControllerRotationRoll)
+                {
+                    FaceRotation(controller.ControlRotation(), Time.deltaTime);
+                }
+            }
         }
     }
 }

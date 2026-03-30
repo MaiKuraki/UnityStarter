@@ -1,1993 +1,1006 @@
-> **注意：** 本文档由 AI 辅助编写，如果你追求绝对精准，请直接阅读模块源码, **源码**以及**示例**皆由作者编写。
-
 [**English**](README.md) | [**简体中文**]
 
 # CycloneGames.GameplayFramework
 
-一个面向 Unity 的轻量级 UnrealEngine 风格玩法框架。它模仿虚幻引擎的 Gameplay Framework 概念（Actor、Pawn、Controller、GameMode 等），使您能够轻松构建可扩展、可维护的游戏系统，并支持依赖注入。
+一个结构化的 Unity 游戏玩法框架，灵感来源于 **虚幻引擎（Unreal Engine）的 GameFramework** 架构。它将游戏逻辑分解为清晰、可组合的层次 — **Actor**、**Pawn**、**Controller**、**GameMode**、**PlayerState** 等 — 每个类解决一个明确的架构问题，让项目保持可扩展、可测试、易于维护。
 
-本框架非常适合想要在 Unity 中使用虚幻引擎成熟架构模式的开发者，或从虚幻引擎过渡到 Unity 的团队。它提供了清晰的关注点分离，并遵循行业标准的设计模式。
+非常适合想要在 Unity 中使用虚幻引擎成熟架构模式的开发者，或从虚幻引擎过渡到 Unity 的团队。它提供了清晰的关注点分离，并遵循经过无数 AAA 级项目实战验证的行业标准设计模式。
 
 - **Unity**: 2022.3+
-- **依赖项**：
-  - `com.unity.cinemachine@3` - 用于摄像机管理
-  - `com.cysharp.unitask@2` - 用于异步操作
-  - `com.cyclone-games.factory@1` - 用于对象生成
-  - `com.cyclone-games.logger@1` - 用于调试日志
+- **依赖**:
+  - `com.unity.burst` / `com.unity.mathematics` — Burst 优化的数学工具
+  - `com.unity.cinemachine@3` — 摄像机管理
+  - `com.cysharp.unitask@2` — 异步操作
+  - `com.cyclone-games.factory@1` — 对象生成抽象（`IUnityObjectSpawner`）
+  - `com.cyclone-games.logger@1` — 调试日志
+
+---
 
 ## 目录
 
-1. [框架设计哲学](#框架设计哲学)
-2. [核心概念](#核心概念)
-3. [快速上手指南](#综合快速上手指南)
-4. [架构概览](#架构概览)
-5. [高级用法](#高级用法)
-6. [本地多人游戏指南](#本地多人游戏指南)
+1. [设计理念](#设计理念)
+2. [架构概览](#架构概览)
+3. [类参考](#类参考)
+   - [Actor](#actor)
+   - [Pawn](#pawn)
+   - [Controller](#controller)
+   - [PlayerController](#playercontroller)
+   - [AIController](#aicontroller)
+   - [PlayerState](#playerstate)
+   - [GameMode](#gamemode)
+   - [GameState](#gamestate)
+   - [GameSession](#gamesession)
+   - [DamageType 伤害系统](#damagetype-伤害系统)
+   - [World 与 WorldSettings](#world-与-worldsettings)
+   - [CameraManager](#cameramanager)
+   - [PlayerStart](#playerstart)
+   - [SpectatorPawn](#spectatorpawn)
+   - [KillZVolume](#killzvolume)
+   - [SceneLogic](#scenelogic)
+   - [ActorTag 标签系统](#actortag-标签系统)
+4. [快速开始](#快速开始)
+5. [进阶用法](#进阶用法)
+6. [与其他包的集成](#与其他包的集成)
 7. [最佳实践](#最佳实践)
+8. [常见问题](#常见问题)
 
-## 框架设计哲学
+---
 
-CycloneGames.GameplayFramework 将虚幻引擎经过验证的 Gameplay Framework 架构引入 Unity。这种设计模式已在无数 AAA 游戏中得到验证，为构建复杂的游戏系统提供了坚实的基础。
+## 设计理念
 
-### 为什么使用这个框架？
+### 问题
 
-**传统 Unity 方法：**
+典型的 Unity 项目往往会演变出一个巨型 `PlayerController` 脚本，同时处理输入、移动、摄像机、计分、重生、游戏规则。随着项目增长，这会导致强耦合、角色替换困难、测试极为痛苦。
 
-- 处理一切的单一 `PlayerController` 脚本
-- 玩家逻辑、摄像机和游戏状态之间的紧密耦合
-- 难以交换玩家角色或实现重生系统
-- 随着复杂性增长，难以测试和维护
+### 解决方案
 
-**GameplayFramework 方法：**
+借鉴虚幻引擎 GameFramework 的架构思想，本框架将游戏玩法分解为 **职责清晰的层次**：
 
-- **关注点分离**: 玩家逻辑（`Pawn`）、控制（`Controller`）、状态（`PlayerState`）和游戏规则（`GameMode`）是分离的
-- **轻松交换角色**: 更改 `Pawn` 预制体而无需修改控制器代码
-- **持久状态**: `PlayerState` 在 Pawn 重生后仍然存在，非常适合分数、库存等
-- **可测试**: 每个组件都有明确的职责，可以独立测试
-- **可扩展**: 添加新功能而无需修改现有代码
+| 层次 | 类 | 职责 |
+|------|-----|------|
+| **实体** | `Actor` | 所有游戏对象的基类 — 生命周期、所有权、标签、伤害 |
+| **可控体** | `Pawn` | 可被附身并接收移动输入的 Actor |
+| **决策** | `Controller` | 大脑 — 决定 Pawn 做什么 |
+| **人类输入** | `PlayerController` | 由人类输入驱动的 Controller，带摄像机与观战支持 |
+| **AI 决策** | `AIController` | 由 AI 逻辑驱动的 Controller，带注视目标与自动转向 |
+| **持久数据** | `PlayerState` | 在 Pawn 死亡/重生后仍保留的玩家数据（分数、昵称、统计） |
+| **游戏规则** | `GameMode` | 生成逻辑、重生规则、比赛流程编排 |
+| **比赛状态** | `GameState` | 可观察的比赛状态机与玩家名册 |
+| **会话** | `GameSession` | 网络无关的玩家容量、登录验证、踢人/封禁 |
+| **伤害** | `DamageType` | 类型化的伤害管线，支持点/范围路由 |
+| **世界** | `World` | 轻量级服务定位器，用于访问 GameMode/GameState/PlayerController |
+| **配置** | `WorldSettings` | ScriptableObject，绑定所有预制体类引用 |
 
-### 主要优势
+### 核心原则
 
-- ✅ **虚幻开发者熟悉**: 如果您了解虚幻的 Gameplay Framework，您会感到熟悉
-- ✅ **支持 DI**: 与依赖注入容器无缝协作
-- ✅ **清晰的架构**: 游戏逻辑和基础设施之间的清晰分离
-- ✅ **灵活**: 易于扩展和自定义以满足您的特定需求
-- ✅ **生产就绪**: 基于在 AAA 游戏中使用的经过验证的模式
+- **DI 友好**：所有对象生成通过 `IUnityObjectSpawner` 进行 — 可无缝替换为任何 DI 容器或对象池，无需修改框架代码。
+- **接口优先可扩展**：核心系统暴露接口（`IGameMode`、`IGameSession`、`IDamageType`、`IWorldSettings`），无需继承即可提供自定义实现。
+- **零强制依赖**：框架对 GameplayAbilities、GameplayTags、Networking 或其他 CycloneGames 包 **没有任何** 编译时依赖。集成通过接口和不透明上下文字段完成。
+- **零 GC 意识**：热路径使用预分配缓冲区、静态列表和 Burst 编译的数学运算。Actor 可见性切换、标签查询、方向计算均无逐帧分配。
 
-## 核心概念
+---
+
+## 架构概览
+
+### 组件层级
+
+```mermaid
+graph TD
+    WS["WorldSettings<br/>（ScriptableObject — 预制体类引用）"]
+    GM["GameMode<br/>（游戏规则、生成逻辑、比赛编排）"]
+    GSession["GameSession<br/>（可选 — 登录验证、容量、踢人/封禁）"]
+    GState["GameState<br/>（可选 — 比赛状态机、玩家名册）"]
+    PC["PlayerController<br/>（人类玩家的大脑）"]
+    PS["PlayerState<br/>（持久玩家数据）"]
+    CM["CameraManager<br/>（Cinemachine 集成）"]
+    SP["SpectatorPawn<br/>（加载/观战时的占位 Pawn）"]
+    Pawn["Pawn<br/>（实际可控角色）"]
+    User["你的移动、技能、视觉表现"]
+
+    WS --> GM
+    GM --> GSession
+    GM --> GState
+    GM --> PC
+    PC --> PS
+    PC --> CM
+    PC --> SP
+    PC --> Pawn
+    Pawn --> User
+
+    style WS fill:#4a6,stroke:#333,color:#fff
+    style GM fill:#46a,stroke:#333,color:#fff
+    style PC fill:#a64,stroke:#333,color:#fff
+    style Pawn fill:#a46,stroke:#333,color:#fff
+    style User fill:#555,stroke:#999,color:#fff,stroke-dasharray: 5 5
+```
+
+### 生命周期序列
+
+```mermaid
+sequenceDiagram
+    participant Boot as Bootstrap
+    participant W as World
+    participant GM as GameMode
+    participant PC as PlayerController
+    participant PS as PlayerState
+    participant Cam as CameraManager
+    participant SP as SpectatorPawn
+    participant Pawn as Pawn
+
+    Boot->>W: 创建 World
+    Boot->>GM: 生成 GameMode
+    Boot->>GM: Initialize(spawner, settings)
+    Boot->>GM: LaunchGameModeAsync()
+    GM->>PC: 生成 PlayerController
+    activate PC
+    PC->>PS: 生成 PlayerState
+    PC->>Cam: 生成 CameraManager
+    PC->>SP: 生成 SpectatorPawn
+    PC-->>GM: InitializationTask 完成
+    deactivate PC
+    GM->>GM: PostLogin(PC)
+    GM->>GM: HandleStartingNewPlayer(PC)
+    GM->>GM: RestartPlayer(PC)
+    GM->>GM: FindPlayerStart()
+    GM->>Pawn: 在出生点生成 Pawn
+    GM->>PC: Possess(Pawn)
+```
+
+### 数据生命周期
+
+| Pawn 死亡后保留 | 随 Pawn 销毁 |
+|---|---|
+| `PlayerController` | `Pawn` 实例 |
+| `PlayerState`（分数、昵称、统计） | 移动状态 |
+| `CameraManager` | 视觉组件 |
+| `SpectatorPawn` | 物理状态 |
+
+这意味着重生非常简单：销毁旧 Pawn -> 生成新 Pawn -> `Possess()` — 所有玩家数据保持完整。
+
+---
+
+## 类参考
 
 ### Actor
 
-所有游戏对象的基础类。游戏中具有游戏逻辑的每个对象都应该继承自 `Actor`。
+**用途**：所有游戏对象的基类。提供生命周期钩子、所有权链、标签系统、可见性切换、伤害管线和网络扩展性。
 
-**关键特性：**
+**设计动机**：典型 Unity 项目中，游戏性 MonoBehaviour 缺乏统一的生命周期、所有权或伤害契约。Actor 建立了这个契约，使任何游戏对象 — 角色、弹体、拾取物、体积 — 共享一致的 API。
 
-- **所有权**: Actor 可以拥有所有者（其他 Actor）
-- **生命周期**: 在设定时间后自动销毁
-- **位置/旋转**: 用于位置和旋转的辅助方法
-- **世界事件**: `FellOutOfWorld()` 用于处理超出边界的 Actor
+**核心功能**：
 
-**示例：**
+| 功能 | API | 说明 |
+|------|-----|------|
+| 生命周期 | `BeginPlay()` / `EndPlay()` | Start 之后 / OnDestroy 之前各调用一次 |
+| 所有权 | `SetOwner(Actor)` / `GetOwner()` | 层级所有权链 |
+| 发起者 | `SetInstigator(Actor)` / `GetInstigator()` | 谁导致了此 Actor 的创建 |
+| 标签 | `ActorHasTag(string)` / `AddTag()` / `RemoveTag()` | 简单字符串标签系统，支持 `[ActorTag]` Inspector 选择器 |
+| 可见性 | `SetActorHiddenInGame(bool)` | 零 GC 的批量渲染器切换 |
+| 伤害 | `TakeDamage(float)` / `TakeDamage(float, DamageEvent, ...)` | 路由至 `ReceivePointDamage` / `ReceiveRadialDamage` / `ReceiveAnyDamage` |
+| 生命期 | `SetLifeSpan(float)` | N 秒后自动销毁 |
+| 边界 | `FellOutOfWorld()` / `OutsideWorldBounds()` | 重写以处理出界 |
+| 网络 | `HasAuthority()` | 在网络层重写；默认 `true`（单机模式） |
+| 朝向 | `GetOrientation()` | Burst 编译的四元数转欧拉角 |
+| 事件 | `OnDestroyed` / `OwnerChanged` | 可观察的 Actor 生命周期事件 |
+| 变换 | `GetActorLocation()` / `SetActorLocation()` / `GetActorRotation()` / ... | 对 `transform` 的便捷封装 |
+
+**示例 — 自定义 Actor 的生命周期与伤害处理**：
 
 ```csharp
-public class MyActor : Actor
+public class Projectile : Actor
 {
-    protected override void Awake()
+    [SerializeField] private float speed = 20f;
+
+    protected override void BeginPlay()
     {
-        base.Awake();
-        // 您的初始化代码
+        // Start 之后调用一次 — 设置自动销毁时间
+        SetLifeSpan(5f);
+    }
+
+    protected override void EndPlay()
+    {
+        // OnDestroy 之前调用 — 清理特效、回收对象池等
+    }
+
+    void Update()
+    {
+        if (!IsHidden())
+            transform.Translate(Vector3.forward * speed * Time.deltaTime);
     }
 
     public override void FellOutOfWorld()
     {
-        // 当 Actor 掉出世界时的自定义行为
-        base.FellOutOfWorld(); // 销毁 Actor
+        // 触碰死亡区域 — 立即销毁
+        Destroy(gameObject);
     }
 }
 ```
 
 ### Pawn
 
-`Pawn` 是一个可被 `Controller` "占有"的可控制 `Actor`。这是您的玩家角色、敌人或任何可被控制的实体。
+**用途**：可被 Controller **附身** 的 Actor。即你的玩家角色、AI 敌人、载具 — 任何接收输入并在世界中行动的实体。
 
-**关键特性：**
+**设计动机**：将"身体"（Pawn）与"大脑"（Controller）分离，意味着可以在不重写控制逻辑的情况下更换角色，同一个 Pawn 类可以由人类输入或 AI 驱动。
 
-- **占有**: 可以被 `Controller` 控制
-- **PlayerState 链接**: 连接到 `PlayerState` 以获取持久数据
-- **重启**: 可以重启（对重生有用）
+**核心功能**：
 
-**示例：**
+- **附身**：`PossessedBy(Controller)` / `UnPossessed()` — 框架处理所有权和状态传递。
+- **移动输入管线**：`AddMovementInput(direction, scale)` 每帧累积输入。移动组件每帧调用 `ConsumeMovementInputVector()` 驱动实际移动。
+- **控制器旋转**：`FaceRotation()` 自动将 Pawn 旋转同步至 Controller 的 `ControlRotation`，支持逐轴控制（`UseControllerRotationPitch/Yaw/Roll`）。
+- **初始旋转**：`NotifyInitialRotation(Quaternion)` 向所有 `IInitialRotationSettable` 组件广播 — 允许外部移动组件（如 RPGFoundation）同步初始旋转而无需框架耦合。
+- **状态查询**：`IsPlayerControlled()`、`IsBotControlled()`、`IsLocallyControlled()`、`IsTurnedOff()`。
+- **视角**：`GetPawnViewLocation()`、`GetViewRotation()`、`GetBaseAimRotation()` — 摄像机与瞄准集成。
+- **开关**：`TurnOff()` / `TurnOn()` — 禁用 Pawn 而不销毁它。
+
+**示例 — 带移动的角色 Pawn**：
 
 ```csharp
-public class MyPlayerPawn : Pawn
+public class CharacterPawn : Pawn
 {
-    protected override void Awake()
+    [SerializeField] private float moveSpeed = 5f;
+    [SerializeField] private CharacterController characterController;
+
+    protected override void BeginPlay()
     {
-        base.Awake();
-        // 初始化移动、能力等
+        UseControllerRotationYaw = true; // 同步 Yaw 到 Controller
     }
 
     public override void PossessedBy(Controller NewController)
     {
         base.PossessedBy(NewController);
-        // 当控制器获得控制权时调用
-        // 初始化输入、启用移动等
+        // 启用视觉效果、开始动画等
     }
 
     public override void UnPossessed()
     {
         base.UnPossessed();
-        // 当控制器释放控制权时调用
-        // 禁用输入、停止移动等
+        // 禁用输入驱动的行为
+    }
+
+    void Update()
+    {
+        // 消费累积的移动输入
+        Vector3 input = ConsumeMovementInputVector();
+        if (input.sqrMagnitude > 0.001f)
+        {
+            characterController.Move(input * moveSpeed * Time.deltaTime);
+        }
+
+        // 同步旋转到 Controller
+        if (Controller != null)
+        {
+            FaceRotation(GetControlRotation(), Time.deltaTime);
+        }
     }
 }
 ```
 
 ### Controller
 
-`Controller` 拥有并控制 `Pawn`。它是做出决策并向 Pawn 发送命令的"大脑"。
+**用途**：附身并控制 Pawn 的抽象"大脑"。持有持久引用（PlayerState、出生点）并管理控制旋转。
 
-**类型：**
+**设计动机**：将决策（Controller）与执行（Pawn）分离，框架支持热切换角色、AI 接管玩家 Pawn、干净的输入抑制 — 这些在单体玩家脚本中均不可能实现。
 
-- **PlayerController**: 用于人类玩家
-- **AIController**: 用于 AI 控制的实体
+**核心功能**：
 
-**关键特性：**
+- **Possess / UnPossess**：完整的握手流程 — 通知旧 Pawn 和新 Pawn、旧 Controller，传递所有权。`OnPossessedPawnChanged` 事件触发。
+- **堆栈式输入抑制**：`SetIgnoreMoveInput(true/false)` / `SetIgnoreLookInput(true/false)` 递增/递减计数器。多个系统可独立抑制输入而互不干扰。调用 `ResetIgnoreInputFlags()` 一次性清除。
+- **生成器和设置注入**：`Initialize(IUnityObjectSpawner, IWorldSettings)` — 构造注入，适配 DI。
+- **出生点**：`SetStartSpot(Actor)` / `GetStartSpot()` — 追踪此 Controller 的 Pawn 生成位置。
+- **游戏流程**：`GameHasEnded(Actor, bool)` / `FailedToSpawnPawn()` — 重写以响应游戏事件。
 
-- **占有**: `Possess(Pawn)` 和 `UnPossess()` 方法
-- **控制旋转**: 管理控制器"看向"的方向
-- **PlayerState**: 每个控制器都有一个 `PlayerState` 用于持久数据
+### PlayerController
 
-**示例：**
+**用途**：面向人类玩家的 Controller。在 Controller 基础上扩展了 **摄像机管理**、**观战 Pawn** 和 **异步初始化**。
+
+**设计动机**：人类玩家需要摄像机设置、加载期间的观战回退、异步初始化（等待依赖就绪）。PlayerController 封装了所有这些，使游戏专用子类只需关注输入处理。
+
+**核心功能**：
+
+- **异步初始化**：`InitializationTask`（UniTask） 按顺序生成 PlayerState、CameraManager、SpectatorPawn。GameMode 会等待此任务完成后再继续。
+- **摄像机**：`GetCameraManager()`、`SetViewTarget(Actor)`、`SetViewTargetWithBlend(Actor, float)`、`AutoManageActiveCameraTarget(Actor)`。
+- **观战**：`SpawnSpectatorPawn()` / `GetSpectatorPawn()` — 加载期间用作回退 Pawn。
+
+**示例 — 带输入的 PlayerController**：
 
 ```csharp
 public class MyPlayerController : PlayerController
 {
     void Update()
     {
-        // 处理输入
-        if (Input.GetKeyDown(KeyCode.Space))
+        if (IsMoveInputIgnored()) return;
+
+        Pawn pawn = GetPawn();
+        if (pawn == null) return;
+
+        // WASD 移动输入
+        float h = Input.GetAxisRaw("Horizontal");
+        float v = Input.GetAxisRaw("Vertical");
+        Vector3 direction = new Vector3(h, 0, v).normalized;
+        if (direction.sqrMagnitude > 0.001f)
         {
-            // 让 Pawn 跳跃
-            if (GetPawn() is MyPlayerPawn pawn)
-            {
-                pawn.Jump();
-            }
+            pawn.AddMovementInput(direction, 1f);
         }
+
+        // 鼠标视角 -> 控制旋转
+        float mouseX = Input.GetAxis("Mouse X");
+        Quaternion rot = ControlRotation() * Quaternion.Euler(0, mouseX * 2f, 0);
+        SetControlRotation(rot);
+    }
+}
+```
+
+### AIController
+
+**用途**：面向 AI 驱动 Pawn 的 Controller。提供 **注视系统** 和 **自动转向**。
+
+**设计动机**：AI 需要注视目标并运行逻辑循环。AIController 提供注视/旋转管线，使 AI 实现（行为树、状态机、GOAP）只需调用 `SetFocus(Actor)` 或 `SetFocalPoint(Vector3)` 即可。
+
+**核心功能**：
+
+- **注视**：`SetFocus(Actor)` / `SetFocalPoint(Vector3)` / `ClearFocus()` / `GetFocusActor()` / `GetFocalPoint()`。
+- **自动转向**：每帧 Update 中自动朝注视目标旋转。
+- **AI 生命周期**：`RunAI()` / `StopAI()` / `IsRunningAI()` — 如果 `bStartAILogicOnPossess` 为 true，在附身/脱离附身时自动调用。
+
+**示例 — 带注视的 AI 巡逻**：
+
+```csharp
+public class PatrolAIController : AIController
+{
+    [SerializeField] private Transform[] patrolPoints;
+    private int currentIndex = 0;
+
+    public override void RunAI()
+    {
+        base.RunAI();
+        MoveToNextPatrolPoint();
+    }
+
+    void MoveToNextPatrolPoint()
+    {
+        if (patrolPoints.Length == 0) return;
+        SetFocalPoint(patrolPoints[currentIndex].position);
+    }
+
+    void Update()
+    {
+        if (!IsRunningAI()) return;
+
+        Pawn pawn = GetPawn();
+        if (pawn == null) return;
+
+        Vector3 target = patrolPoints[currentIndex].position;
+        Vector3 dir = (target - pawn.GetActorLocation()).normalized;
+        pawn.AddMovementInput(dir, 1f);
+
+        if (Vector3.Distance(pawn.GetActorLocation(), target) < 1f)
+        {
+            currentIndex = (currentIndex + 1) % patrolPoints.Length;
+            MoveToNextPatrolPoint();
+        }
+    }
+
+    public void OnPlayerDetected(Actor player)
+    {
+        // 切换注视到玩家 — 自动转向会跟踪玩家
+        SetFocus(player);
     }
 }
 ```
 
 ### PlayerState
 
-`PlayerState` 保存玩家相关的数据，这些数据在 Pawn 重生后仍然存在。这非常适合：
+**用途**：在 Pawn 死亡和重生后 **仍然保留** 的持久玩家数据。
 
-- 分数
-- 库存
-- 属性
-- 任何应该在死亡/重生后保留的数据
+**设计动机**：分数、玩家昵称、队伍、背包 — 这些数据不应在角色死亡时丢失。PlayerState 挂载在 Controller 上（而非 Pawn 上），因此重生时创建新 Pawn 但所有玩家数据完好无损。
 
-**关键特性：**
+**核心功能**：
 
-- **持久**: 在 Pawn 销毁后仍然存在
-- **Pawn 引用**: 跟踪当前的 `Pawn`
-- **事件**: 当 Pawn 改变时触发 `OnPawnSetEvent`
+- **Pawn 追踪**：`GetPawn()` / `OnPawnSetEvent` — 当附身的 Pawn 变更时收到通知。事件签名：`(PlayerState, newPawn, oldPawn)`。
+- **玩家信息**：`GetPlayerName()` / `SetPlayerName()`、`GetPlayerId()` / `SetPlayerId()`、`GetScore()` / `SetScore()`、`AddScore()`（返回新分数）。
+- **标记**：`IsABot()` / `SetIsABot()`、`IsSpectator()` / `SetIsSpectator()`。
+- **复制**：`CopyProperties(PlayerState)` — 用于无缝旅行或重生时的状态传递。
 
-**示例：**
+**示例 — 带背包的自定义 PlayerState**：
 
 ```csharp
-public class MyPlayerState : PlayerState
+public class RPGPlayerState : PlayerState
 {
-    public int Score { get; private set; }
-    public int Health { get; private set; }
+    private List<string> inventory = new List<string>();
+    public int Kills { get; private set; }
 
-    public void AddScore(int points)
+    public void RecordKill()
     {
-        Score += points;
-        // 通知 UI 等
+        Kills++;
+        AddScore(100f);
     }
 
-    protected override void Awake()
+    public void AddItem(string itemId)
     {
-        base.Awake();
-        Health = 100;
-        Score = 0;
+        inventory.Add(itemId);
+    }
+
+    public override void CopyProperties(PlayerState other)
+    {
+        base.CopyProperties(other);
+        if (other is RPGPlayerState rpg)
+        {
+            inventory = new List<string>(rpg.inventory);
+            Kills = rpg.Kills;
+        }
     }
 }
 ```
 
 ### GameMode
 
-`GameMode` 编排游戏规则。它处理：
+**用途**：**总编排者**。处理玩家生成、重生、出生点选择和比赛流程。
 
-- 生成 `PlayerController`
-- 生成和重生 `Pawn`
-- 查找 `PlayerStart` 位置
-- 游戏特定规则
+**设计动机**：游戏规则（几条命、在哪重生、何时开始比赛）与玩家输入或角色移动有本质区别。GameMode 将这些决策集中在一处，只需更改 WorldSettings 中的预制体引用即可轻松切换游戏模式（死斗 vs. 夺旗 vs. 教程）。
 
-**关键方法：**
+**核心功能**：
 
-- `LaunchGameMode()`: 启动游戏，生成玩家
-- `RestartPlayer(PlayerController)`: 重生玩家
-- `FindPlayerStart(Controller, string)`: 查找生成点
+- **启动**：`LaunchGameModeAsync(CancellationToken)` — 入口点。生成 PlayerController，等待初始化，调用 PostLogin，启动比赛，重启玩家。
+- **出生点选择**：`FindPlayerStart()` -> `ChoosePlayerStart()` — 重写以实现自定义逻辑（随机、基于队伍、轮询）。
+- **生成管线**：`SpawnDefaultPawnAtPlayerStart/Transform/Location()` — 生成 Pawn，通过 `TeleportPawn()` 处理 CharacterController/Rigidbody 传送。
+- **登录/登出**：`PreLogin()`（通过 GameSession 验证）-> `PostLogin()`（注册 + HandleStartingNewPlayer）-> `Logout()`（注销）。
+- **会话集成**：`SetGameSession(IGameSession)` — 可选。不设置会话时，所有登录检查通过（单机模式）。
+- **Pawn 类选择**：重写 `GetDefaultPawnPrefabForController()` 可为不同玩家返回不同 Pawn 预制体（基于职业或队伍的选择）。
 
-**示例：**
+**示例 — 带生命值和自定义出生点的 GameMode**：
 
 ```csharp
-public class MyGameMode : GameMode
+public class ArenaGameMode : GameMode
 {
+    private Dictionary<PlayerController, int> playerLives = new();
+    private const int MaxLives = 3;
+
+    protected override void HandleStartingNewPlayer(PlayerController NewPlayer)
+    {
+        playerLives[NewPlayer] = MaxLives;
+    }
+
     public override void RestartPlayer(PlayerController NewPlayer, string Portal = "")
     {
-        // 自定义重生逻辑
-        base.RestartPlayer(NewPlayer, Portal);
-
-        // 也许恢复生命值、重置能力等
-        if (NewPlayer.GetPlayerState() is MyPlayerState ps)
+        if (playerLives.TryGetValue(NewPlayer, out int lives) && lives <= 0)
         {
-            ps.RestoreHealth();
+            // 没有剩余生命 — 切换为观战者
+            NewPlayer.GetPlayerState()?.SetIsSpectator(true);
+            return;
+        }
+        base.RestartPlayer(NewPlayer, Portal);
+    }
+
+    // 重写以随机选择出生点
+    protected override Actor ChoosePlayerStart(Controller Player)
+    {
+        var starts = PlayerStart.GetAllPlayerStarts();
+        if (starts.Count == 0) return null;
+        return starts[UnityEngine.Random.Range(0, starts.Count)];
+    }
+
+    // 重写以分配职业特定的 Pawn 预制体
+    protected override Pawn GetDefaultPawnPrefabForController(Controller InController)
+    {
+        // 可根据玩家职业选择返回不同的 Pawn 预制体
+        return base.GetDefaultPawnPrefabForController(InController);
+    }
+
+    public void OnPlayerKilled(PlayerController player)
+    {
+        if (playerLives.ContainsKey(player))
+        {
+            playerLives[player]--;
+            RestartPlayer(player);
         }
     }
 }
 ```
 
-### WorldSettings
+### GameState
 
-一个 `ScriptableObject`，定义游戏所需的所有关键预制体和类。这是您的"游戏配置"资产。
+**用途**：所有玩家可见的、可观察的比赛状态。追踪比赛阶段、经过时间和权威的玩家名册。
 
-**包含：**
+**设计动机**：在多人游戏中，所有客户端需要就比赛状态达成一致（等待中、进行中、已结束）。即使在单人游戏中，比赛阶段的状态机也能避免散落在各处的临时 bool 标志。
 
-- `GameModeClass` - 您的游戏模式预制体
-- `PlayerControllerClass` - 您的玩家控制器预制体
-- `PawnClass` - 您的默认玩家 Pawn 预制体
-- `PlayerStateClass` - 您的玩家状态预制体
-- `CameraManagerClass` - 您的摄像机管理器预制体
-- `SpectatorPawnClass` - 您的旁观者 Pawn 预制体
+**核心功能**：
 
-### World
+- **比赛状态机**：`EMatchState` 枚举（EnteringMap -> WaitingToStart -> InProgress -> WaitingPostMatch -> LeavingMap -> Aborted）。
+- **状态转换**：`SetMatchState(EMatchState)` -> `OnMatchStateChanged(old, new)` — 重写以实现自定义转换逻辑。
+- **玩家名册**：`AddPlayerState()` / `RemovePlayerState()` / `PlayerArray` / `GetNumPlayers()`。
+- **经过时间**：`ElapsedTime` — 在 `InProgress` 状态下自动递增。
 
-一个轻量级容器，保存对 `GameMode` 的引用并提供查找方法。这**不是**虚幻的 UWorld——它要简单得多。
+**示例 — 带胜利条件的 GameState**：
 
-**用法：**
+```csharp
+public class ArenaGameState : GameState
+{
+    public int ScoreToWin { get; set; } = 10;
+
+    protected override void OnMatchStateChanged(EMatchState OldState, EMatchState NewState)
+    {
+        if (NewState == EMatchState.InProgress)
+        {
+            // 比赛刚开始 — 通知 UI
+            Debug.Log("Match started!");
+        }
+        else if (NewState == EMatchState.WaitingPostMatch)
+        {
+            Debug.Log($"Match ended after {ElapsedTime:F1}s");
+        }
+    }
+
+    public void CheckWinCondition()
+    {
+        foreach (var ps in PlayerArray)
+        {
+            if (ps.GetScore() >= ScoreToWin)
+            {
+                SetMatchState(EMatchState.WaitingPostMatch);
+                return;
+            }
+        }
+    }
+}
+```
+
+### GameSession
+
+**用途**：网络无关的会话管理 — 玩家容量、登录验证、踢人/封禁。
+
+**设计动机**：网络方案各异（Mirror、Netcode、Photon、自研）。GameSession 提供稳定的接口（`IGameSession`），GameMode 通过它调用，而实际网络实现则位于适配器中。不设置会话时，GameMode 以单机模式运行，无容量检查。
+
+**核心功能**：
+
+- **`IGameSession` 接口**：`ApproveLogin()`、`RegisterPlayer()`、`UnregisterPlayer()`、`AtCapacity()`、`KickPlayer()`、`BanPlayer()`、`HandleMatchHasStarted/Ended()`。
+- **默认实现**：`GameSession`（Actor 子类） 本地单机会话，对照 `MaxPlayers`/`MaxSpectators` 计数。
+- **集成方式**：在 Mirror/Netcode/Photon 适配器中实现 `IGameSession`。传递给 `GameMode.SetGameSession()`。
+
+**示例 — 带密码的自定义会话**：
+
+```csharp
+public class PasswordGameSession : GameSession
+{
+    [SerializeField] private string serverPassword = "";
+
+    public override bool ApproveLogin(string options, string address, out string errorMessage)
+    {
+        if (!base.ApproveLogin(options, address, out errorMessage))
+            return false;
+
+        if (!string.IsNullOrEmpty(serverPassword) && options != serverPassword)
+        {
+            errorMessage = "Invalid password";
+            return false;
+        }
+        return true;
+    }
+}
+```
+
+### DamageType 伤害系统
+
+**用途**：类型化、可路由的伤害管线。定义伤害种类（火焰、爆炸、环境）并携带命中上下文（位置、方向、半径）。
+
+**设计动机**：游戏需要区分伤害类型以处理护甲、抗性、视觉效果和音效。框架提供 `IDamageType` 接口使其可独立使用，同时通过不透明的 `EffectContext` 字段携带 GameplayAbilities 上下文 — 无需对 GAS 产生任何编译时依赖。
+
+**组件**：
+
+- **`IDamageType`**（接口）：`CausedByWorld`、`ScaleMomentumByMass`、`DamageImpulse`、`DamageFalloff`。
+- **`DamageType`**（ScriptableObject）：默认实现 — 通过 `Create -> CycloneGames -> GameplayFramework -> DamageType` 创建。
+- **`EDamageEventType`**（枚举）：`Generic`、`Point`、`Radial`。
+- **`DamageEvent`**（结构体）：零分配值类型，包含事件类型、伤害类型、命中位置/法线/方向（点伤害）、原点/半径（范围伤害），以及可选的 `EffectContext`（object）用于 GAS 桥接。
+- **工厂方法**：`DamageEvent.MakeGenericDamage()`、`MakePointDamage(...)`、`MakeRadialDamage(...)`。
+
+**Actor 中的伤害路由**：
+
+```mermaid
+flowchart LR
+    TD["TakeDamage(amount, damageEvent,<br/>instigator, causer)"] --> Point{Point?}
+    TD --> Radial{Radial?}
+    TD --> Always["Always"]
+
+    Point -->|Yes| RPD["ReceivePointDamage()"]
+    RPD --> OTPD["OnTakePointDamage 事件"]
+
+    Radial -->|Yes| RRD["ReceiveRadialDamage()"]
+    RRD --> OTRD["OnTakeRadialDamage 事件"]
+
+    Always --> RAD["ReceiveAnyDamage()"]
+
+    style TD fill:#c44,stroke:#333,color:#fff
+    style RPD fill:#46a,stroke:#333,color:#fff
+    style RRD fill:#46a,stroke:#333,color:#fff
+    style RAD fill:#46a,stroke:#333,color:#fff
+```
+
+**示例 — 施加和接收伤害**：
+
+```csharp
+// --- 施加伤害（如武器）---
+public class Weapon : Actor
+{
+    [SerializeField] private DamageType fireDamageType;
+
+    public void FireAt(Actor target, Vector3 hitLocation, Vector3 hitNormal)
+    {
+        var damageEvent = DamageEvent.MakePointDamage(
+            hitLocation, hitNormal, GetActorForwardVector(), fireDamageType);
+
+        target.TakeDamage(25f, damageEvent,
+            GetInstigator<Controller>(), this);
+    }
+
+    public void Explode(Vector3 origin, float radius)
+    {
+        var damageEvent = DamageEvent.MakeRadialDamage(
+            origin, innerRadius: 2f, outerRadius: radius, fireDamageType);
+
+        // 对半径内的所有 Actor 施加伤害...
+    }
+}
+
+// --- 接收伤害（在你的 Actor 子类中）---
+public class EnemyActor : Actor
+{
+    private float health = 100f;
+
+    protected override void ReceiveAnyDamage(float Damage, Controller EventInstigator, Actor DamageCauser)
+    {
+        health -= Damage;
+        if (health <= 0f)
+            Destroy(gameObject);
+    }
+
+    protected override void ReceivePointDamage(float Damage, DamageEvent damageEvent,
+        Controller EventInstigator, Actor DamageCauser)
+    {
+        // 在撞击点生成命中特效
+        // damageEvent.HitLocation, damageEvent.HitNormal, damageEvent.ShotDirection
+    }
+
+    protected override void ReceiveRadialDamage(float Damage, DamageEvent damageEvent,
+        Controller EventInstigator, Actor DamageCauser)
+    {
+        // 从爆炸原点施加击退
+        // damageEvent.Origin, damageEvent.InnerRadius, damageEvent.OuterRadius
+    }
+}
+```
+
+### World 与 WorldSettings
+
+**`WorldSettings`**（ScriptableObject） 绑定所有类引用的配置资产：
+
+| 字段 | 类型 | 必需 |
+|------|------|------|
+| `GameModeClass` | `GameMode` | 是 |
+| `PlayerControllerClass` | `PlayerController` | 是 |
+| `PawnClass` | `Pawn` | 是 |
+| `PlayerStateClass` | `PlayerState` | 否 |
+| `CameraManagerClass` | `CameraManager` | 否 |
+| `SpectatorPawnClass` | `SpectatorPawn` | 否 |
+
+通过 `Create -> CycloneGames -> GameplayFramework -> WorldSettings` 创建。编辑器验证会为每个字段显示绿色/红色/黄色状态。
+
+**`World`** — 非 MonoBehaviour 的服务定位器。持有 GameMode、GameState 引用，提供玩家查询：
 
 ```csharp
 World world = new World();
 world.SetGameMode(gameMode);
+world.SetGameState(gameState);
 PlayerController pc = world.GetPlayerController();
 Pawn pawn = world.GetPlayerPawn();
 ```
 
 ### CameraManager
 
-管理 Cinemachine 摄像机并跟随当前视角目标（通常是 `PlayerController`）。
+**用途**：管理 Cinemachine 摄像机，跟踪当前视角目标。
 
-**要求：**
+**前提**：主摄像机需要 `CinemachineBrain`。场景中至少需要一个 `CinemachineCamera`。
 
-- 主摄像机必须有 `CinemachineBrain` 组件
-- 场景中至少有一个 `CinemachineCamera`
+**核心 API**：`InitializeFor(PlayerController)`、`SetActiveVirtualCamera()`、`SetViewTarget(Transform)`、`SetFOV(float)`。
 
-**特性：**
+**示例 — 切换摄像机目标**：
 
-- 自动查找摄像机
-- 跟随视角目标
-- FOV 控制
+```csharp
+// 在你的 PlayerController 子类中：
+public void SwitchToSpectateTarget(Actor target)
+{
+    SetViewTargetWithBlend(target, 0.5f); // 0.5 秒混合
+}
+
+// 或直接访问 CameraManager：
+CameraManager cam = GetCameraManager();
+cam.SetViewTarget(someActor.transform);
+cam.SetFOV(60f);
+```
 
 ### PlayerStart
 
-玩家的生成点。在您希望玩家生成的位置放置这些。
+**用途**：玩家出生点。使用 **静态注册表模式** 实现零 GC 查找 — 运行时无需 `FindObjectsOfType`。
 
-**特性：**
+**特性**：启用/禁用时自动注册/注销。支持基于名称的匹配，用于传送门/检查点系统。编辑器中绘制 Gizmo。
 
-- 基于名称的匹配（用于传送门/检查点）
-- 旋转支持（玩家面向正确方向生成）
-- 默认使用找到的第一个
+**示例 — 基于传送门名称的出生点选择**：
+
+```csharp
+// 将 PlayerStart 的 GameObject 命名为："SpawnPoint_LevelA"、"SpawnPoint_LevelB"
+// 然后在 GameMode 中：
+protected override Actor ChoosePlayerStart(Controller Player)
+{
+    string portal = "SpawnPoint_LevelB";
+    foreach (var start in PlayerStart.GetAllPlayerStarts())
+    {
+        if (start.gameObject.name == portal)
+            return start;
+    }
+    return base.ChoosePlayerStart(Player);
+}
+```
 
 ### SpectatorPawn
 
-一个非交互式 `Pawn`，当玩家还没有真正的 Pawn 时使用（例如，在加载期间或旁观时）。
+**用途**：当玩家尚未获得实际角色时使用的最小 Pawn（加载期间、回合间隙、观战时）。
 
-## 综合快速上手指南
+**关键字段**：`spectatorSpeed` — 观战模式下的移动速度。
 
-本指南将引导您从零开始设置一个完整的 GameplayFramework 项目。
+### KillZVolume
 
-### 前置条件
+**用途**：触发体积，任何进入的 Actor 都会调用 `FellOutOfWorld()`。同时支持 3D（`BoxCollider` + IsTrigger）和 2D（`BoxCollider2D` + IsTrigger）。
 
-在开始之前，请确保您已具备：
+**使用方式**：将 `KillZVolume` 组件添加到带有触发碰撞器的 GameObject 上。放置在可游玩区域下方。
 
-- Unity 2022.3 或更高版本
-- 已安装 `CycloneGames.GameplayFramework` 包
-- 已安装所有依赖项（`Cinemachine`, `UniTask`, `Factory`, `Logger`）
+### SceneLogic
 
-### 步骤 1: 创建您的预制体
+**用途**：每场景的逻辑控制器。提供生命周期钩子（`Awake`、`Start`、`Update` 等），用于场景特定的游戏脚本 — 如开场过场、关卡特定触发器、环境事件等。
 
-在创建 `WorldSettings` 之前，您需要创建它将引用的预制体。
+### ActorTag 标签系统
 
-**1.1 创建 GameMode 预制体**
+**用途**：为 Actor 基于字符串的标签字段提供 Inspector 友好的标签选择。
 
-1. 在场景中创建一个空 GameObject
-2. 添加 `GameMode` 组件（或您的自定义子类）
-3. 命名为 `GameMode_MyGame`
-4. 将其拖到您的 `Prefabs` 文件夹以创建预制体
+**组件**：
 
-**1.2 创建 PlayerController 预制体**
+- **`ActorTagAttribute`**：带可选 `Type` 参数的 PropertyAttribute。
+  - `[ActorTag]` — 不指定类型：绘制为普通字符串字段（框架基类使用）。
+  - `[ActorTag(typeof(MyTags))]` — 指定类型：绘制可搜索弹出选择器，数据源为指定类中的 `public const string` 字段。
+- **`ActorTagPropertyDrawer`**：编辑器 Drawer，打开带 `SearchField` + 可滚动 `TreeView` 的 `PopupWindow`。支持搜索过滤、(None) 选项、清除按钮和无效值高亮。
 
-1. 创建一个空 GameObject
-2. 添加 `PlayerController` 组件（或您的自定义子类）
-3. 命名为 `PlayerController_MyGame`
-4. 将其拖到您的 `Prefabs` 文件夹
-
-**1.3 创建 Pawn 预制体**
-
-1. 创建一个带有玩家角色的 GameObject（例如，带有 CharacterController 的胶囊体）
-2. 添加 `Pawn` 组件（或您的自定义子类）
-3. 添加任何移动、输入或能力组件
-4. 命名为 `Pawn_MyPlayer`
-5. 将其拖到您的 `Prefabs` 文件夹
-
-**1.4 创建 PlayerState 预制体**
-
-1. 创建一个空 GameObject
-2. 添加 `PlayerState` 组件（或您的自定义子类）
-3. 命名为 `PlayerState_MyGame`
-4. 将其拖到您的 `Prefabs` 文件夹
-
-**1.5 创建 CameraManager 预制体**
-
-1. 创建一个空 GameObject
-2. 添加 `CameraManager` 组件（或您的自定义子类）
-3. 命名为 `CameraManager_MyGame`
-4. 将其拖到您的 `Prefabs` 文件夹
-
-**1.6 创建 SpectatorPawn 预制体**
-
-1. 创建一个简单的 GameObject（例如，一个胶囊体）
-2. 添加 `SpectatorPawn` 组件
-3. 命名为 `SpectatorPawn_MyGame`
-4. 将其拖到您的 `Prefabs` 文件夹
-
-### 步骤 2: 创建 WorldSettings
-
-`WorldSettings` 是一个 `ScriptableObject`，它将所有预制体联系在一起。
-
-**2.1 创建资产**
-
-1. 在项目窗口中，在所需文件夹中右键单击
-2. 选择 **Create > CycloneGames > GameplayFramework > WorldSettings**
-3. 命名为 `MyWorldSettings`
-
-**2.2 配置 WorldSettings**
-
-1. 选择 `MyWorldSettings` 资产
-2. 在 Inspector 中，将您的预制体拖到相应字段：
-   - **Game Mode Class**: 拖入 `GameMode_MyGame`
-   - **Player Controller Class**: 拖入 `PlayerController_MyGame`
-   - **Pawn Class**: 拖入 `Pawn_MyPlayer`
-   - **Player State Class**: 拖入 `PlayerState_MyGame`
-   - **Camera Manager Class**: 拖入 `CameraManager_MyGame`
-   - **Spectator Pawn Class**: 拖入 `SpectatorPawn_MyGame`
-
-**2.3 放置在 Resources 中（可选）**
-
-如果您想按名称在运行时加载 `WorldSettings`：
-
-1. 在 `Assets` 目录中创建一个 `Resources` 文件夹（如果不存在）
-2. 将 `MyWorldSettings` 移动到 `Resources` 文件夹
-3. 现在可以使用 `Resources.Load<WorldSettings>("MyWorldSettings")` 加载它
-
-### 步骤 3: 实现对象生成器
-
-框架使用 `IUnityObjectSpawner`（来自 `com.cyclone-games.factory`）来生成对象。这允许您与依赖注入或对象池集成。
-
-**3.1 创建简单生成器**
-
-创建一个新脚本 `SimpleObjectSpawner.cs`：
+**示例**：
 
 ```csharp
-// SimpleObjectSpawner.cs
-using CycloneGames.Factory.Runtime;
-using UnityEngine;
+// 1. 定义标签常量
+public static class ActorTags
+{
+    public const string Player = "Player";
+    public const string Enemy = "Enemy";
+    public const string NPC = "NPC";
+    public const string Interactable = "Interactable";
+    public const string Destructible = "Destructible";
+}
 
-/// <summary>
-/// 一个使用 Unity 的 Instantiate 的简单对象生成器。
-/// 对于生产环境，考虑与您的 DI 容器或对象池系统集成。
-/// </summary>
+// 2. 在你的 Actor 子类中使用 — Inspector 显示可搜索下拉菜单
+public class MyPawn : Pawn
+{
+    [SerializeField, ActorTag(typeof(ActorTags))]
+    private List<string> tags;
+}
+
+// 3. 运行时查询标签
+if (someActor.ActorHasTag("Enemy"))
+{
+    // 对敌人做出反应
+}
+```
+
+---
+
+## 快速开始
+
+### 前提条件
+
+- Unity 2022.3+
+- 已安装包：`CycloneGames.GameplayFramework`、`Cinemachine`、`UniTask`、`CycloneGames.Factory`、`CycloneGames.Logger`
+
+### 最小配置（5 步）
+
+**步骤 1 — 创建预制体**
+
+创建空 GameObject，添加对应组件，保存为预制体：
+
+| 预制体 | 组件 | 说明 |
+|--------|------|------|
+| `GM_MyGame` | `GameMode`（或你的子类） | 必需 |
+| `PC_MyGame` | `PlayerController`（或你的子类） | 必需 |
+| `Pawn_MyGame` | `Pawn`（或你的子类） | 必需 — 在此添加角色模型/控制器 |
+| `PS_MyGame` | `PlayerState`（或你的子类） | 必需 |
+| `CM_MyGame` | `CameraManager` | 可选 — 使用 Cinemachine 时需要 |
+| `SP_MyGame` | `SpectatorPawn` | 可选 |
+
+**步骤 2 — 创建 WorldSettings**
+
+`Create -> CycloneGames -> GameplayFramework -> WorldSettings`。分配所有预制体。
+
+**步骤 3 — 创建引导程序**
+
+```csharp
+using Cysharp.Threading.Tasks;
+using UnityEngine;
+using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Factory.Runtime;
+
+public class GameBootstrap : MonoBehaviour
+{
+    [SerializeField] private WorldSettings worldSettings;
+
+    async void Start()
+    {
+        IUnityObjectSpawner spawner = new SimpleObjectSpawner();
+
+        var gameMode = spawner.Create(worldSettings.GameModeClass) as GameMode;
+        gameMode.Initialize(spawner, worldSettings);
+
+        var world = new World();
+        world.SetGameMode(gameMode);
+
+        await gameMode.LaunchGameModeAsync(destroyCancellationToken);
+    }
+}
+
 public class SimpleObjectSpawner : IUnityObjectSpawner
 {
     public T Create<T>(T origin) where T : Object
     {
-        if (origin == null)
-        {
-            Debug.LogError("[SimpleObjectSpawner] 尝试生成空对象");
-            return null;
-        }
-
-        return Object.Instantiate(origin);
+        return origin != null ? Object.Instantiate(origin) : null;
     }
 }
 ```
 
-**3.2 高级：DI 集成示例**
+**步骤 4 — 设置场景**
 
-如果您使用 DI 容器（如 VContainer、Zenject 等），可以这样集成：
+1. 在空 GameObject 上添加 `PlayerStart` 组件并定位。
+2. 确保主摄像机有 `CinemachineBrain`，场景中有至少一个 `CinemachineCamera`。
+3. 在 GameObject 上添加 `GameBootstrap` 组件并分配你的 `WorldSettings`。
 
-```csharp
-// DIObjectSpawner.cs
-using CycloneGames.Factory.Runtime;
-using UnityEngine;
+**步骤 5 — 按下 Play**
 
-public class DIObjectSpawner : IUnityObjectSpawner
-{
-    private IContainer container; // 您的 DI 容器
+框架将自动：生成 PlayerController -> 初始化 PlayerState / CameraManager / SpectatorPawn -> 查找 PlayerStart -> 生成 Pawn -> 附身。
 
-    public DIObjectSpawner(IContainer container)
-    {
-        this.container = container;
-    }
+---
 
-    public T Create<T>(T origin) where T : Object
-    {
-        if (origin == null) return null;
-
-        // 使用您的 DI 容器来解析依赖
-        var instance = container.Instantiate(origin);
-        return instance;
-    }
-}
-```
-
-### 步骤 4: 创建游戏引导脚本
-
-引导脚本初始化框架并启动游戏。
-
-**4.1 创建引导脚本**
-
-创建一个新脚本 `GameBootstrap.cs`：
-
-```csharp
-// GameBootstrap.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-using CycloneGames.Factory.Runtime;
-using Cysharp.Threading.Tasks;
-
-/// <summary>
-/// 初始化 GameplayFramework 的引导脚本。
-/// 将此脚本附加到初始场景中的 GameObject。
-/// </summary>
-public class GameBootstrap : MonoBehaviour
-{
-    [Header("配置")]
-    [Tooltip("要使用的 WorldSettings 资产。如果为 null，将尝试从 Resources 加载。")]
-    [SerializeField] private WorldSettings worldSettings;
-
-    [Tooltip("要从 Resources 加载的 WorldSettings 名称（如果 worldSettings 为 null）。")]
-    [SerializeField] private string worldSettingsName = "MyWorldSettings";
-
-    private IUnityObjectSpawner objectSpawner;
-    private World world;
-
-    async void Start()
-    {
-        // 初始化 World
-        world = new World();
-
-        // 创建对象生成器
-        // 在生产环境中，您可能从 DI 容器获取此对象
-        objectSpawner = new SimpleObjectSpawner();
-
-        // 加载 WorldSettings
-        WorldSettings ws = worldSettings;
-        if (ws == null)
-        {
-            ws = Resources.Load<WorldSettings>(worldSettingsName);
-            if (ws == null)
-            {
-                Debug.LogError($"[GameBootstrap] 加载 WorldSettings 失败: {worldSettingsName}");
-                return;
-            }
-        }
-
-        // 生成并初始化 GameMode
-        var gameMode = objectSpawner.Create(ws.GameModeClass) as GameMode;
-        if (gameMode == null)
-        {
-            Debug.LogError("[GameBootstrap] 生成 GameMode 失败。请检查 WorldSettings 配置。");
-            return;
-        }
-
-        gameMode.Initialize(objectSpawner, ws);
-
-        // 在 World 中设置 GameMode
-        world.SetGameMode(gameMode);
-
-        // 启动游戏
-        await gameMode.LaunchGameModeAsync(this.GetCancellationTokenOnDestroy());
-
-        Debug.Log("[GameBootstrap] 游戏启动成功！");
-    }
-}
-```
-
-**4.2 在场景中设置引导**
-
-1. 在场景中创建一个空 GameObject
-2. 命名为 `GameBootstrap`
-3. 添加 `GameBootstrap` 组件
-4. 可选：在 Inspector 中分配 `MyWorldSettings`，或留空以从 Resources 加载
-
-### 步骤 5: 设置您的场景
-
-**5.1 添加 PlayerStart**
-
-1. 在场景中创建一个空 GameObject
-2. 添加 `PlayerStart` 组件
-3. 将其放置在您希望玩家生成的位置
-4. 旋转它以设置生成方向
-5. （可选）如果您想使用基于传送门的生成，给它一个特定名称
-
-**5.2 设置摄像机**
-
-1. 确保您的主摄像机有 `CinemachineBrain` 组件
-2. 在场景中创建至少一个 `CinemachineCamera`
-3. 配置 `CinemachineCamera` 以跟随您的玩家（`CameraManager` 会自动设置此功能）
-
-**5.3 （可选）添加 KillZVolume**
-
-要自动销毁掉出边界的 Actor：
-
-1. 创建一个空 GameObject
-2. 添加 `BoxCollider` 组件
-3. 勾选 **Is Trigger**
-4. 添加 `KillZVolume` 组件
-5. 定位并缩放碰撞体以覆盖"死亡区域"
-6. 确保下落的 Actor 同时具有 `Collider` 和 `Rigidbody` 组件
-
-### 步骤 6: 测试您的设置
-
-**6.1 运行场景**
-
-1. 按 Play
-2. 框架应该：
-   - 生成 `PlayerController`
-   - 生成 `PlayerState`
-   - 生成 `CameraManager`
-   - 生成 `SpectatorPawn`
-   - 查找 `PlayerStart`
-   - 在 `PlayerStart` 处生成您的 `Pawn`
-   - 用 `PlayerController` 占有 `Pawn`
-
-**6.2 在 Hierarchy 中验证**
-
-检查这些对象是否已生成：
-
-- `PlayerController_MyGame(Clone)`
-- `PlayerState_MyGame(Clone)`
-- `CameraManager_MyGame(Clone)`
-- `SpectatorPawn_MyGame(Clone)`
-- `Pawn_MyPlayer(Clone)`
-
-**6.3 调试技巧**
-
-如果出现问题：
-
-1. **检查控制台**: 查找错误消息
-2. **验证预制体**: 确保所有预制体都有必需的组件
-3. **检查 WorldSettings**: 所有字段都应该已分配
-4. **验证 PlayerStart**: 场景中必须至少有一个 `PlayerStart`
-5. **检查摄像机**: 主摄像机需要 `CinemachineBrain`，并且必须至少存在一个 `CinemachineCamera`
-
-## 架构概览
-
-### 组件层次结构
-
-```mermaid
-flowchart TB
-    subgraph WorldLayer["🌍 世界层"]
-        World["World"]
-        GameMode["GameMode<br/>• 游戏规则<br/>• 生成逻辑"]
-    end
-
-    subgraph PlayerLayer["🎮 玩家层"]
-        PC["PlayerController<br/>• 输入处理"]
-        PS["PlayerState<br/>• 分数、库存<br/>• 持久数据"]
-        CM["CameraManager<br/>• Cinemachine"]
-    end
-
-    subgraph PawnLayer["🏃 Pawn 层"]
-        Pawn["Pawn<br/>• 移动<br/>• 能力"]
-        Spectator["SpectatorPawn<br/>• 非交互式"]
-    end
-
-    subgraph Config["📋 配置"]
-        WS["WorldSettings<br/>ScriptableObject"]
-        PSt["PlayerStart<br/>生成点"]
-    end
-
-    World --> GameMode
-    GameMode --> PC
-    PC --> PS
-    PC --> CM
-    PC -.->|占有| Pawn
-    PC -.->|占有| Spectator
-
-    WS -.->|配置| GameMode
-    PSt -.->|生成位置| Pawn
-```
-
-### 生命周期流程
-
-```mermaid
-sequenceDiagram
-    participant Boot as GameBootstrap
-    participant World as World
-    participant GM as GameMode
-    participant PC as PlayerController
-    participant PS as PlayerState
-    participant Pawn as Pawn
-
-    Boot->>World: 创建 World
-    Boot->>GM: 生成 GameMode
-    Boot->>GM: Initialize(spawner, settings)
-    World->>GM: SetGameMode()
-    Boot->>GM: LaunchGameModeAsync()
-
-    GM->>PC: 生成 PlayerController
-    PC->>PS: 生成 PlayerState
-    PC->>PC: 生成 CameraManager
-    PC->>PC: 生成 SpectatorPawn
-
-    GM->>GM: RestartPlayer(PC)
-    GM->>GM: FindPlayerStart()
-    GM->>Pawn: 在 PlayerStart 生成 Pawn
-    PC->>Pawn: Possess(Pawn)
-
-    Note over Pawn: 玩家现在可以控制 Pawn
-```
-
-### 数据流
-
-```mermaid
-flowchart LR
-    subgraph Persistent["📦 持久 - 死亡后保留"]
-        PS["PlayerState<br/>• 分数<br/>• 库存<br/>• 属性"]
-        PC["PlayerController<br/>• 输入<br/>• 相机"]
-    end
-
-    subgraph Temporary["💀 临时 - 死亡时销毁"]
-        Pawn["Pawn<br/>• 移动<br/>• 能力<br/>• 视觉"]
-    end
-
-    PC -->|"Possess()"| Pawn
-    PC <-->|链接| PS
-    Pawn -.->|"重生通过"| GM["GameMode"]
-    GM -->|"RestartPlayer()"| Pawn
-    PS -.->|"数据持久"| PS
-```
-
-- **PlayerState**: 在 Pawn 重生后仍然存在
-  - 分数、库存、属性
-  - 链接到 `PlayerController`，而不是 `Pawn`
-- **Pawn**: 临时的，可以被销毁和重生
-  - 移动、能力、视觉表现
-  - 在死亡时销毁，由 `GameMode` 重生
-- **Controller**: "大脑"
-  - 输入处理（对于 `PlayerController`）
-  - AI 逻辑（对于 `AIController`）
-  - 占有 `Pawn` 以控制它
-
-## 高级用法
-
-### 自定义 GameMode
-
-通过子类化 `GameMode` 创建自定义游戏规则：
-
-```csharp
-public class MyGameMode : GameMode
-{
-    public int MaxLives = 3;
-    private Dictionary<PlayerController, int> playerLives = new();
-
-    public override void RestartPlayer(PlayerController NewPlayer, string Portal = "")
-    {
-        // 在重生前检查生命值
-        if (!playerLives.ContainsKey(NewPlayer))
-        {
-            playerLives[NewPlayer] = MaxLives;
-        }
-
-        if (playerLives[NewPlayer] > 0)
-        {
-            playerLives[NewPlayer]--;
-            base.RestartPlayer(NewPlayer, Portal);
-        }
-        else
-        {
-            // 游戏结束逻辑
-            OnPlayerGameOver(NewPlayer);
-        }
-    }
-
-    private void OnPlayerGameOver(PlayerController player)
-    {
-        Debug.Log($"{player.name} 生命值用尽！");
-        // 显示游戏结束 UI 等
-    }
-}
-```
-
-### 自定义 PlayerController
-
-添加输入处理和玩家特定逻辑：
-
-```csharp
-public class MyPlayerController : PlayerController
-{
-    private MyPlayerPawn currentPawn;
-
-    void Update()
-    {
-        // 处理输入
-        HandleMovementInput();
-        HandleAbilityInput();
-    }
-
-    void HandleMovementInput()
-    {
-        if (GetPawn() is MyPlayerPawn pawn)
-        {
-            Vector2 moveInput = new Vector2(
-                Input.GetAxis("Horizontal"),
-                Input.GetAxis("Vertical")
-            );
-
-            pawn.Move(moveInput);
-        }
-    }
-
-    void HandleAbilityInput()
-    {
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            if (GetPawn() is MyPlayerPawn pawn)
-            {
-                pawn.Jump();
-            }
-        }
-    }
-
-    public override void OnPossess(Pawn InPawn)
-    {
-        base.OnPossess(InPawn);
-        currentPawn = InPawn as MyPlayerPawn;
-
-        // 启用输入、显示 UI 等
-        if (currentPawn != null)
-        {
-            currentPawn.EnableInput();
-        }
-    }
-
-    public override void OnUnPossess()
-    {
-        if (currentPawn != null)
-        {
-            currentPawn.DisableInput();
-        }
-
-        base.OnUnPossess();
-        currentPawn = null;
-    }
-}
-```
-
-### 自定义 Pawn
-
-实现移动、能力和游戏逻辑：
-
-```csharp
-public class MyPlayerPawn : Pawn
-{
-    private CharacterController characterController;
-    private float moveSpeed = 5f;
-    private bool inputEnabled = true;
-
-    protected override void Awake()
-    {
-        base.Awake();
-        characterController = GetComponent<CharacterController>();
-    }
-
-    public void Move(Vector2 input)
-    {
-        if (!inputEnabled) return;
-
-        Vector3 moveDirection = new Vector3(input.x, 0, input.y);
-        moveDirection = transform.TransformDirection(moveDirection);
-        moveDirection *= moveSpeed;
-
-        // 应用重力
-        moveDirection.y -= 9.81f * Time.deltaTime;
-
-        characterController.Move(moveDirection * Time.deltaTime);
-    }
-
-    public void Jump()
-    {
-        if (!inputEnabled) return;
-        // 跳跃逻辑
-    }
-
-    public void EnableInput()
-    {
-        inputEnabled = true;
-    }
-
-    public void DisableInput()
-    {
-        inputEnabled = false;
-    }
-
-    public override void PossessedBy(Controller NewController)
-    {
-        base.PossessedBy(NewController);
-        EnableInput();
-    }
-
-    public override void UnPossessed()
-    {
-        DisableInput();
-        base.UnPossessed();
-    }
-}
-```
-
-### 基于传送门的生成
-
-使用命名的 `PlayerStart` 对象实现检查点/传送门系统：
-
-```csharp
-// 在您的 GameMode 或自定义脚本中
-public void SpawnPlayerAtPortal(string portalName)
-{
-    PlayerController pc = GetPlayerController();
-    if (pc != null)
-    {
-        RestartPlayer(pc, portalName); // portalName 匹配 PlayerStart 名称
-    }
-}
-```
-
-**设置：**
-
-1. 在场景中创建多个 `PlayerStart` 对象
-2. 命名它们（例如，"Checkpoint1"、"Checkpoint2"）
-3. 调用 `RestartPlayer(playerController, "Checkpoint1")` 以在该特定起点生成
+## 进阶用法
 
 ### 重生系统
 
-使用 `GameMode.RestartPlayer()` 实现重生系统：
+```csharp
+// 在你的 GameMode 子类中：
+public void OnPlayerDied(PlayerController player)
+{
+    // 取消附身死亡的 Pawn
+    Pawn deadPawn = player.GetPawn();
+    player.UnPossess();
+
+    // 延迟重生（可选）
+    RespawnAfterDelay(player, 3f).Forget();
+}
+
+private async UniTaskVoid RespawnAfterDelay(PlayerController player, float delay)
+{
+    await UniTask.Delay(TimeSpan.FromSeconds(delay));
+    RestartPlayer(player);
+}
+```
+
+### 角色切换
 
 ```csharp
-public class RespawnSystem : MonoBehaviour
+// 游戏中切换 Pawn（例如进入载具）
+public class VehicleActor : Actor
 {
-    private GameMode gameMode;
-    private PlayerController playerController;
+    [SerializeField] private Pawn vehiclePawn;
 
-    void Start()
+    public void EnterVehicle(PlayerController driver)
     {
-        // 获取引用（您可能想使用服务定位器或 DI）
-        gameMode = FindObjectOfType<GameMode>();
-        playerController = FindObjectOfType<PlayerController>();
+        Pawn oldPawn = driver.GetPawn();
+        driver.UnPossess();
+        driver.Possess(vehiclePawn);
+        oldPawn.SetActorHiddenInGame(true);
     }
 
-    public void RespawnPlayer()
+    public void ExitVehicle(PlayerController driver, Pawn originalPawn)
     {
-        if (gameMode != null && playerController != null)
-        {
-            // 在最后一个检查点重生
-            gameMode.RestartPlayer(playerController, lastCheckpointName);
-        }
-    }
-
-    // 当玩家死亡时调用此方法
-    public void OnPlayerDeath()
-    {
-        // 等待一会儿，然后重生
-        StartCoroutine(RespawnAfterDelay(2f));
-    }
-
-    private System.Collections.IEnumerator RespawnAfterDelay(float delay)
-    {
-        yield return new WaitForSeconds(delay);
-        RespawnPlayer();
+        driver.UnPossess();
+        originalPawn.SetActorHiddenInGame(false);
+        originalPawn.SetActorLocation(transform.position + Vector3.right * 2f);
+        driver.Possess(originalPawn);
     }
 }
 ```
 
-### 摄像机切换
-
-在不同 Cinemachine 摄像机之间切换：
+### 输入抑制
 
 ```csharp
-public class CameraSwitcher : MonoBehaviour
-{
-    private CameraManager cameraManager;
-    public CinemachineCamera firstPersonCamera;
-    public CinemachineCamera thirdPersonCamera;
+// 多个系统可独立抑制输入
+playerController.SetIgnoreMoveInput(true);  // UI 打开 — 抑制
+playerController.SetIgnoreMoveInput(true);  // 过场动画 — 抑制（计数器 = 2）
+playerController.SetIgnoreMoveInput(false); // UI 关闭（计数器 = 1，仍被抑制）
+playerController.SetIgnoreMoveInput(false); // 过场结束（计数器 = 0，输入恢复）
 
-    void Start()
-    {
-        PlayerController pc = FindObjectOfType<PlayerController>();
-        cameraManager = pc?.GetCameraManager();
-    }
-
-    void Update()
-    {
-        if (Input.GetKeyDown(KeyCode.C))
-        {
-            // 在摄像机之间切换
-            if (cameraManager != null)
-            {
-                var current = cameraManager.ActiveVirtualCamera;
-                var next = current == firstPersonCamera ? thirdPersonCamera : firstPersonCamera;
-                cameraManager.SetActiveVirtualCamera(next);
-            }
-        }
-    }
-}
+// 或一次性重置所有
+playerController.ResetIgnoreInputFlags();
 ```
 
-## 本地多人游戏指南
-
-本指南将引导您使用 GameplayFramework 实现本地多人游戏（分屏或共享屏幕）。本地多人游戏意味着同一设备上的多个玩家，每个玩家都有自己的控制器和输入。
-
-### 概述
-
-对于本地多人游戏，您需要：
-
-1. **扩展 GameMode** 以管理多个 `PlayerController`
-2. **分配玩家索引** 以区分玩家
-3. **生成多个 PlayerStart**（每个玩家一个）
-4. **处理多个输入源**（Unity Input System 或传统输入）
-5. **管理多个摄像机**（分屏或画中画）
-6. **为每个玩家创建独立的 PlayerState**
-
-### 步骤 1: 创建多人游戏 GameMode
-
-首先，创建一个可以处理多个玩家的自定义 `GameMode`：
+### 伤害事件订阅
 
 ```csharp
-// MultiplayerGameMode.cs
-using System.Collections.Generic;
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-using Cysharp.Threading.Tasks;
-using System.Threading;
-
-/// <summary>
-/// 支持本地多人游戏的 GameMode，可管理多个玩家。
-/// </summary>
-public class MultiplayerGameMode : GameMode
+// 从 Actor 外部订阅伤害事件
+Actor target = someEnemy;
+target.OnTakePointDamage += (damage, damageEvent, instigator, causer) =>
 {
-    [Header("多人游戏设置")]
-    [Tooltip("最大玩家数量")]
-    [SerializeField] private int maxPlayers = 4;
-
-    [Tooltip("当前活跃的玩家索引")]
-    [SerializeField] private List<int> activePlayerIndices = new List<int>();
-
-    // 按索引存储所有玩家控制器的字典
-    private Dictionary<int, PlayerController> playerControllers = new Dictionary<int, PlayerController>();
-
-    // 按索引存储玩家状态的字典
-    private Dictionary<int, PlayerState> playerStates = new Dictionary<int, PlayerState>();
-
-    // 按玩家索引存储玩家起点的字典
-    private Dictionary<int, PlayerStart> playerStartMap = new Dictionary<int, PlayerStart>();
-
-    /// <summary>
-    /// 获取特定玩家索引的 PlayerController。
-    /// </summary>
-    public PlayerController GetPlayerController(int playerIndex)
-    {
-        return playerControllers.TryGetValue(playerIndex, out var pc) ? pc : null;
-    }
-
-    /// <summary>
-    /// 获取所有活跃的玩家控制器。
-    /// </summary>
-    public List<PlayerController> GetAllPlayerControllers()
-    {
-        return new List<PlayerController>(playerControllers.Values);
-    }
-
-    /// <summary>
-    /// 获取特定玩家索引的 PlayerState。
-    /// </summary>
-    public PlayerState GetPlayerState(int playerIndex)
-    {
-        return playerStates.TryGetValue(playerIndex, out var ps) ? ps : null;
-    }
-
-    /// <summary>
-    /// 向游戏添加玩家。
-    /// </summary>
-    public async UniTask AddPlayer(int playerIndex, CancellationToken cancellationToken = default)
-    {
-        if (playerControllers.ContainsKey(playerIndex))
-        {
-            Debug.LogWarning($"[MultiplayerGameMode] 玩家 {playerIndex} 已存在");
-            return;
-        }
-
-        if (playerIndex < 0 || playerIndex >= maxPlayers)
-        {
-            Debug.LogError($"[MultiplayerGameMode] 无效的玩家索引: {playerIndex}");
-            return;
-        }
-
-        // 生成 PlayerController
-        var playerController = SpawnPlayerController(playerIndex);
-        if (playerController == null)
-        {
-            Debug.LogError($"[MultiplayerGameMode] 为玩家 {playerIndex} 生成 PlayerController 失败");
-            return;
-        }
-
-        // 等待初始化
-        await playerController.InitializationTask.AttachExternalCancellation(cancellationToken);
-        if (cancellationToken.IsCancellationRequested) return;
-
-        // 存储引用
-        playerControllers[playerIndex] = playerController;
-        playerStates[playerIndex] = playerController.GetPlayerState();
-
-        // 添加到活跃列表
-        if (!activePlayerIndices.Contains(playerIndex))
-        {
-            activePlayerIndices.Add(playerIndex);
-        }
-
-        // 生成并占有 Pawn
-        RestartPlayer(playerController, GetPlayerStartName(playerIndex));
-
-        Debug.Log($"[MultiplayerGameMode] 玩家 {playerIndex} 添加成功");
-    }
-
-    /// <summary>
-    /// 从游戏中移除玩家。
-    /// </summary>
-    public void RemovePlayer(int playerIndex)
-    {
-        if (!playerControllers.TryGetValue(playerIndex, out var pc))
-        {
-            Debug.LogWarning($"[MultiplayerGameMode] 未找到玩家 {playerIndex}");
-            return;
-        }
-
-        // 释放占有并销毁 Pawn
-        if (pc.GetPawn() != null)
-        {
-            pc.UnPossess();
-            Destroy(pc.GetPawn().gameObject);
-        }
-
-        // 销毁 PlayerController 和相关对象
-        if (pc.GetPlayerState() != null)
-        {
-            Destroy(pc.GetPlayerState().gameObject);
-        }
-        if (pc.GetCameraManager() != null)
-        {
-            Destroy(pc.GetCameraManager().gameObject);
-        }
-        if (pc.GetSpectatorPawn() != null)
-        {
-            Destroy(pc.GetSpectatorPawn().gameObject);
-        }
-
-        Destroy(pc.gameObject);
-
-        // 从字典中移除
-        playerControllers.Remove(playerIndex);
-        playerStates.Remove(playerIndex);
-        activePlayerIndices.Remove(playerIndex);
-
-        Debug.Log($"[MultiplayerGameMode] 玩家 {playerIndex} 已移除");
-    }
-
-    /// <summary>
-    /// 为特定玩家索引生成 PlayerController。
-    /// </summary>
-    private PlayerController SpawnPlayerController(int playerIndex)
-    {
-        var playerController = objectSpawner?.Create(worldSettings?.PlayerControllerClass) as PlayerController;
-        if (playerController == null)
-        {
-            Debug.LogError($"[MultiplayerGameMode] 为玩家 {playerIndex} 生成 PlayerController 失败");
-            return null;
-        }
-
-        // 设置玩家索引（如果您的 PlayerController 支持）
-        if (playerController is MultiplayerPlayerController mpc)
-        {
-            mpc.SetPlayerIndex(playerIndex);
-        }
-
-        playerController.Initialize(objectSpawner, worldSettings);
-        return playerController;
-    }
-
-    /// <summary>
-    /// 获取玩家索引的 PlayerStart 名称。
-    /// 您可以将 PlayerStart 命名为 "PlayerStart_0"、"PlayerStart_1" 等。
-    /// </summary>
-    private string GetPlayerStartName(int playerIndex)
-    {
-        return $"PlayerStart_{playerIndex}";
-    }
-
-    /// <summary>
-    /// 重写 LaunchGameModeAsync 以支持多个玩家。
-    /// </summary>
-    public override async UniTask LaunchGameModeAsync(CancellationToken cancellationToken = default)
-    {
-        Debug.Log("[MultiplayerGameMode] 启动多人游戏模式");
-
-        // 添加初始玩家（您可以根据游戏需求修改此部分）
-        // 例如，根据连接的控制器添加玩家
-        for (int i = 0; i < GetConnectedPlayerCount(); i++)
-        {
-            await AddPlayer(i, cancellationToken);
-            if (cancellationToken.IsCancellationRequested) return;
-        }
-    }
-
-    /// <summary>
-    /// 重写 RestartPlayer 以支持玩家特定的生成点。
-    /// </summary>
-    public override void RestartPlayer(PlayerController NewPlayer, string Portal = "")
-    {
-        if (NewPlayer == null)
-        {
-            Debug.LogError("[MultiplayerGameMode] 无效的玩家控制器");
-            return;
-        }
-
-        // 获取玩家索引
-        int playerIndex = GetPlayerIndex(NewPlayer);
-        if (playerIndex < 0)
-        {
-            Debug.LogWarning("[MultiplayerGameMode] 无法确定玩家索引，使用默认生成");
-            base.RestartPlayer(NewPlayer, Portal);
-            return;
-        }
-
-        // 如果 Portal 为空，使用玩家特定的传送门名称
-        if (string.IsNullOrEmpty(Portal))
-        {
-            Portal = GetPlayerStartName(playerIndex);
-        }
-
-        base.RestartPlayer(NewPlayer, Portal);
-    }
-
-    /// <summary>
-    /// 获取 PlayerController 的玩家索引。
-    /// </summary>
-    private int GetPlayerIndex(PlayerController pc)
-    {
-        foreach (var kvp in playerControllers)
-        {
-            if (kvp.Value == pc)
-            {
-                return kvp.Key;
-            }
-        }
-        return -1;
-    }
-
-    /// <summary>
-    /// 获取连接的玩家数量（根据您的输入系统实现）。
-    /// </summary>
-    private int GetConnectedPlayerCount()
-    {
-        // 示例：检查 Unity Input System
-        // return UnityEngine.InputSystem.InputSystem.devices.Count(d => d is UnityEngine.InputSystem.Gamepad);
-
-        // 现在返回默认值（您应该根据需求实现此功能）
-        return 2; // 本地多人游戏默认为 2 个玩家
-    }
-}
+    // 显示命中标记 UI
+    ShowHitMarker(damageEvent.HitLocation);
+};
+target.OnTakeRadialDamage += (damage, damageEvent, instigator, causer) =>
+{
+    // 显示爆炸指示器
+    ShowExplosionIndicator(damageEvent.Origin);
+};
 ```
 
-### 步骤 2: 创建多人游戏 PlayerController
-
-创建一个支持玩家索引的自定义 `PlayerController`：
-
-```csharp
-// MultiplayerPlayerController.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-
-/// <summary>
-/// 支持本地多人游戏玩家索引的 PlayerController。
-/// </summary>
-public class MultiplayerPlayerController : PlayerController
-{
-    [Header("多人游戏")]
-    [SerializeField] private int playerIndex = 0;
-
-    /// <summary>
-    /// 获取此控制器的玩家索引。
-    /// </summary>
-    public int PlayerIndex => playerIndex;
-
-    /// <summary>
-    /// 设置玩家索引（在生成时由 GameMode 调用）。
-    /// </summary>
-    public void SetPlayerIndex(int index)
-    {
-        playerIndex = index;
-        gameObject.name = $"PlayerController_{index}";
-    }
-
-    protected override void Update()
-    {
-        base.Update();
-
-        // 根据玩家索引处理输入
-        HandlePlayerInput();
-    }
-
-    /// <summary>
-    /// 处理此特定玩家的输入。
-    /// </summary>
-    private void HandlePlayerInput()
-    {
-        if (GetPawn() is MultiplayerPawn pawn)
-        {
-            // 根据玩家索引获取输入
-            Vector2 moveInput = GetMoveInput(playerIndex);
-            bool jumpInput = GetJumpInput(playerIndex);
-
-            if (moveInput.magnitude > 0.1f)
-            {
-                pawn.Move(moveInput);
-            }
-
-            if (jumpInput)
-            {
-                pawn.Jump();
-            }
-        }
-    }
-
-    /// <summary>
-    /// 获取特定玩家索引的移动输入。
-    /// 根据您的输入系统实现此功能。
-    /// </summary>
-    private Vector2 GetMoveInput(int playerIdx)
-    {
-        // 使用 Unity 传统 Input 系统的示例，带有玩家特定的轴
-        // 您可以使用 "Horizontal_P1"、"Vertical_P1"、"Horizontal_P2"、"Vertical_P2" 等
-        string horizontalAxis = $"Horizontal_P{playerIdx + 1}";
-        string verticalAxis = $"Vertical_P{playerIdx + 1}";
-
-        // 如果使用 Unity Input System，您可以：
-        // var gamepad = Gamepad.all[playerIdx];
-        // return gamepad.leftStick.ReadValue();
-
-        // 对于此示例，使用带有自定义轴的传统输入
-        return new Vector2(
-            Input.GetAxis(horizontalAxis),
-            Input.GetAxis(verticalAxis)
-        );
-    }
-
-    /// <summary>
-    /// 获取特定玩家索引的跳跃输入。
-    /// </summary>
-    private bool GetJumpInput(int playerIdx)
-    {
-        // 示例：玩家 1 使用空格键，玩家 2 使用回车键，等等
-        KeyCode[] jumpKeys = { KeyCode.Space, KeyCode.Return, KeyCode.JoystickButton0, KeyCode.JoystickButton1 };
-
-        if (playerIdx < jumpKeys.Length)
-        {
-            return Input.GetKeyDown(jumpKeys[playerIdx]);
-        }
-
-        return false;
-    }
-}
-```
-
-### 步骤 3: 设置输入系统
-
-您需要为多个玩家配置输入。这里有两种方法：
-
-#### 选项 A: Unity Input Manager（传统）
-
-1. 打开 **Edit > Project Settings > Input Manager**
-2. 为每个玩家创建重复的轴：
-   - `Horizontal_P1`、`Vertical_P1`（玩家 1）
-   - `Horizontal_P2`、`Vertical_P2`（玩家 2）
-   - 等等
-3. 为每个轴分配不同的按键/手柄
-
-#### 选项 B: Unity Input System（推荐）
-
-创建一个带有多个操作映射的 Input Action Asset：
-
-```csharp
-// 示例：使用 Unity Input System
-// 创建一个带有操作映射的 Input Actions 资产："Player1"、"Player2" 等
-
-using UnityEngine;
-using UnityEngine.InputSystem;
-
-public class MultiplayerInputHandler : MonoBehaviour
-{
-    private PlayerInput[] playerInputs;
-
-    public void SetupPlayerInput(int playerIndex, PlayerInput input)
-    {
-        if (playerInputs == null)
-        {
-            playerInputs = new PlayerInput[4]; // 最多 4 个玩家
-        }
-
-        playerInputs[playerIndex] = input;
-        input.SwitchCurrentActionMap($"Player{playerIndex + 1}");
-    }
-
-    public Vector2 GetMoveInput(int playerIndex)
-    {
-        if (playerInputs[playerIndex] != null)
-        {
-            var moveAction = playerInputs[playerIndex].actions["Move"];
-            return moveAction.ReadValue<Vector2>();
-        }
-        return Vector2.zero;
-    }
-}
-```
-
-### 步骤 4: 设置多个 PlayerStart
-
-在场景中，创建多个 `PlayerStart` 对象：
-
-1. 创建名为以下名称的 `PlayerStart` 对象：
-   - `PlayerStart_0`（玩家 1）
-   - `PlayerStart_1`（玩家 2）
-   - `PlayerStart_2`（玩家 3）
-   - `PlayerStart_3`（玩家 4）
-2. 将它们放置在您希望每个玩家生成的位置
-3. 旋转它们以设置生成方向
-
-### 步骤 5: 处理多个摄像机
-
-对于分屏多人游戏，您需要管理多个摄像机。这是一个示例：
-
-```csharp
-// SplitScreenCameraManager.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-
-/// <summary>
-/// 管理本地多人游戏的分屏摄像机。
-/// </summary>
-public class SplitScreenCameraManager : MonoBehaviour
-{
-    [Header("分屏设置")]
-    [SerializeField] private int playerCount = 2;
-    [SerializeField] private CameraManager[] cameraManagers;
-
-    private Camera[] playerCameras;
-
-    void Start()
-    {
-        SetupSplitScreen();
-    }
-
-    /// <summary>
-    /// 根据玩家数量设置分屏视口。
-    /// </summary>
-    public void SetupSplitScreen()
-    {
-        playerCameras = new Camera[playerCount];
-
-        for (int i = 0; i < playerCount; i++)
-        {
-            if (i < cameraManagers.Length && cameraManagers[i] != null)
-            {
-                // 从 CameraManager 获取摄像机
-                var brain = cameraManagers[i].GetComponentInChildren<Camera>();
-                if (brain != null)
-                {
-                    playerCameras[i] = brain;
-                    SetupViewport(playerCameras[i], i, playerCount);
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// 为特定玩家摄像机设置视口。
-    /// </summary>
-    private void SetupViewport(Camera cam, int playerIndex, int totalPlayers)
-    {
-        if (cam == null) return;
-
-        Rect viewport = CalculateViewport(playerIndex, totalPlayers);
-        cam.rect = viewport;
-    }
-
-    /// <summary>
-    /// 根据分屏布局计算玩家的视口矩形。
-    /// </summary>
-    private Rect CalculateViewport(int playerIndex, int totalPlayers)
-    {
-        switch (totalPlayers)
-        {
-            case 2:
-                // 两个玩家：并排
-                return new Rect(playerIndex * 0.5f, 0, 0.5f, 1);
-
-            case 3:
-                // 三个玩家：一个在上，两个在下
-                if (playerIndex == 0)
-                    return new Rect(0, 0.5f, 1, 0.5f);
-                else
-                    return new Rect((playerIndex - 1) * 0.5f, 0, 0.5f, 0.5f);
-
-            case 4:
-                // 四个玩家：2x2 网格
-                float x = (playerIndex % 2) * 0.5f;
-                float y = (playerIndex < 2) ? 0.5f : 0;
-                return new Rect(x, y, 0.5f, 0.5f);
-
-            default:
-                return new Rect(0, 0, 1, 1);
-        }
-    }
-
-    /// <summary>
-    /// 当玩家数量改变时更新分屏。
-    /// </summary>
-    public void UpdatePlayerCount(int newCount)
-    {
-        playerCount = newCount;
-        SetupSplitScreen();
-    }
-}
-```
-
-### 步骤 6: 更新引导脚本以支持多人游戏
-
-修改您的引导脚本以使用多人游戏 GameMode：
-
-```csharp
-// MultiplayerGameBootstrap.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-using CycloneGames.Factory.Runtime;
-using Cysharp.Threading.Tasks;
-
-public class MultiplayerGameBootstrap : MonoBehaviour
-{
-    [Header("配置")]
-    [SerializeField] private WorldSettings worldSettings;
-    [SerializeField] private int numberOfPlayers = 2;
-
-    private IUnityObjectSpawner objectSpawner;
-    private World world;
-    private MultiplayerGameMode gameMode;
-
-    async void Start()
-    {
-        // 初始化
-        world = new World();
-        objectSpawner = new SimpleObjectSpawner();
-
-        // 加载 WorldSettings
-        WorldSettings ws = worldSettings;
-        if (ws == null)
-        {
-            ws = Resources.Load<WorldSettings>("MyWorldSettings");
-        }
-
-        // 生成 MultiplayerGameMode（确保您的 WorldSettings 引用 MultiplayerGameMode 预制体）
-        gameMode = objectSpawner.Create(ws.GameModeClass) as MultiplayerGameMode;
-        if (gameMode == null)
-        {
-            Debug.LogError("[MultiplayerGameBootstrap] WorldSettings 必须引用 MultiplayerGameMode 预制体！");
-            return;
-        }
-
-        gameMode.Initialize(objectSpawner, ws);
-        world.SetGameMode(gameMode);
-
-        // 启动游戏模式（它将根据 GetConnectedPlayerCount 添加玩家）
-        await gameMode.LaunchGameModeAsync(this.GetCancellationTokenOnDestroy());
-
-        Debug.Log($"[MultiplayerGameBootstrap] 多人游戏已启动，共有 {gameMode.GetAllPlayerControllers().Count} 个玩家！");
-    }
-
-    // 示例：当控制器连接时添加玩家
-    public async void OnPlayerConnected(int playerIndex)
-    {
-        if (gameMode != null)
-        {
-            await gameMode.AddPlayer(playerIndex);
-        }
-    }
-
-    // 示例：当控制器断开连接时移除玩家
-    public void OnPlayerDisconnected(int playerIndex)
-    {
-        if (gameMode != null)
-        {
-            gameMode.RemovePlayer(playerIndex);
-        }
-    }
-}
-```
-
-### 步骤 7: 创建多人游戏 Pawn
-
-创建一个可以使用玩家索引的 Pawn：
-
-```csharp
-// MultiplayerPawn.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework;
-
-public class MultiplayerPawn : Pawn
-{
-    [Header("视觉")]
-    [SerializeField] private Material[] playerMaterials; // 每个玩家的不同颜色
-    [SerializeField] private Renderer[] renderers; // 要应用材质的渲染器
-
-    private int playerIndex = -1;
-
-    public override void PossessedBy(Controller NewController)
-    {
-        base.PossessedBy(NewController);
-
-        // 从控制器获取玩家索引
-        if (NewController is MultiplayerPlayerController mpc)
-        {
-            playerIndex = mpc.PlayerIndex;
-            ApplyPlayerVisuals(playerIndex);
-        }
-    }
-
-    /// <summary>
-    /// 根据玩家索引应用视觉差异（颜色等）。
-    /// </summary>
-    private void ApplyPlayerVisuals(int index)
-    {
-        if (playerMaterials != null && index < playerMaterials.Length)
-        {
-            foreach (var renderer in renderers)
-            {
-                if (renderer != null)
-                {
-                    renderer.material = playerMaterials[index];
-                }
-            }
-        }
-    }
-
-    // 移动方法（与单人游戏示例相同）
-    public void Move(Vector2 input) { /* ... */ }
-    public void Jump() { /* ... */ }
-}
-```
-
-### 完整示例：2 人本地多人游戏设置
-
-这是一个完整的设置检查清单：
-
-1. **创建预制体：**
-
-   - `MultiplayerGameMode`（带有 `MultiplayerGameMode` 组件）
-   - `MultiplayerPlayerController`（带有 `MultiplayerPlayerController` 组件）
-   - `MultiplayerPawn`（带有 `MultiplayerPawn` 组件）
-   - 标准的 `PlayerState`、`CameraManager`、`SpectatorPawn`
-
-2. **更新 WorldSettings：**
-
-   - 将 `GameModeClass` 设置为 `MultiplayerGameMode` 预制体
-   - 将 `PlayerControllerClass` 设置为 `MultiplayerPlayerController` 预制体
-   - 将 `PawnClass` 设置为 `MultiplayerPawn` 预制体
-
-3. **场景设置：**
-
-   - 在场景中添加 `PlayerStart_0` 和 `PlayerStart_1`
-   - 适当地定位它们
-   - 在场景中添加 `SplitScreenCameraManager`
-
-4. **输入设置：**
-
-   - 为玩家 1 和玩家 2 配置输入轴
-   - 或使用多个操作映射设置 Unity Input System
-
-5. **引导：**
-   - 使用 `MultiplayerGameBootstrap` 而不是单人游戏引导
-
-### 提示和最佳实践
-
-1. **玩家索引管理：**
-
-   - 始终使用基于 0 的索引（0, 1, 2, 3）
-   - 在 `PlayerController` 和 `PlayerState` 中存储玩家索引
-   - 使用玩家索引进行输入映射和视觉区分
-
-2. **输入处理：**
-
-   - 使用 Unity Input System 以获得更好的多控制器支持
-   - 考虑使用带有不同操作映射的 `PlayerInput` 组件
-   - 优雅地处理控制器断开连接
-
-3. **摄像机管理：**
-
-   - 对于分屏，动态调整视口矩形
-   - 对于超过 2 个玩家，考虑画中画
-   - 对于共享摄像机，使用 Cinemachine 的 `CinemachineTargetGroup`
-
-4. **性能：**
-
-   - 根据游戏需求限制最大玩家数量
-   - 考虑为远处的玩家使用 LOD 系统
-   - 优化分屏渲染（每个视口更少的绘制调用）
-
-5. **测试：**
-   - 使用不同数量的玩家进行测试
-   - 测试游戏过程中的玩家加入/离开
-   - 测试多个玩家的重生
+---
+
+## 与其他包的集成
+
+框架设计为与其他 CycloneGames 包 **并行工作**，无编译时依赖：
+
+| 包 | 集成方式 |
+|----|------|
+| **GameplayAbilities (GAS)** | 将 `DamageEvent.EffectContext` 设为你的 `GameplayEffectSpec` 或 `IGameplayEffectContext`。下游处理器转型回来。 |
+| **GameplayTags** | Actor 的 `tags`（简单字符串）与 `GameplayTagContainer`（层级计数标签）服务于不同目的，可在同一 GameObject 上共存。 |
+| **RPGFoundation** | Pawn 调用 `NotifyInitialRotation()`，向 `IInitialRotationSettable` 组件广播 — RPGFoundation 的移动组件可实现此接口。 |
+| **InputSystem** | PlayerController 子类从 `CycloneGames.InputSystem` 读取输入，调用 `Pawn.AddMovementInput()`。 |
+| **Networking（Mirror 等）** | 在网络适配器中实现 `IGameSession`。传递给 `GameMode.SetGameSession()`。在联网 Actor 子类中重写 `Actor.HasAuthority()`。 |
+| **AIPerception** | 高性能 AI 感知系统（视觉、听觉），Jobs/Burst 优化 — 与 `AIController` 配合实现基于检测的 AI。 |
+| **BehaviorTree** | 可视化行为树编辑器与运行时 — 用可组合节点驱动 `AIController.RunAI()` 逻辑。 |
+| **AssetManagement** | 接口优先、DI 友好的资源管理（封装 YooAsset） — 用于异步加载 Pawn/关卡。 |
+| **Audio** | 增强型音频管理，支持异步加载 — 从 Actor 伤害事件或 GameState 转换触发音效。 |
+| **Services** | 图形设置、摄像机服务和设备设置管理。 |
+| **DeviceFeedback** | 多平台触觉/振动/灯条反馈 — 从伤害事件或技能激活触发。 |
+| **Cheat** | 轻量级作弊指令系统 — 开发期间测试 GameMode 规则、生成等非常有用。 |
+| **UIFramework** | 简单 UI 框架 — 构建从 PlayerState、GameState 和比赛事件读取数据的 HUD/菜单。 |
+| **Factory** | 对象生成/对象池抽象 — 框架的 `IUnityObjectSpawner` 定义于此（必需依赖）。 |
+| **Logger** | 线程安全日志，支持分类过滤 — 框架的 `CLogger` 调用通过此系统（必需依赖）。 |
+
+---
 
 ## 最佳实践
 
-### 1. 保持 Pawn 简单
-
-`Pawn` 应该专注于：
-
-- 移动
-- 视觉表现
-- 能力/动作
-
-避免在 `Pawn` 中放置游戏逻辑——将其放在 `Controller` 或 `GameMode` 中。
-
-### 2. 使用 PlayerState 存储持久数据
-
-不要在 `Pawn` 中存储持久数据：
-
-- ❌ 不好: `pawn.score`, `pawn.inventory`
-- ✅ 好: `playerState.score`, `playerState.inventory`
-
-### 3. 子类化以进行自定义
-
-为您的特定需求创建子类：
-
-- `MyGameMode` 继承 `GameMode`
-- `MyPlayerController` 继承 `PlayerController`
-- `MyPlayerPawn` 继承 `Pawn`
-- `MyPlayerState` 继承 `PlayerState`
-
-### 4. 使用 World 进行查找
-
-通过 `World` 访问游戏对象：
-
-```csharp
-World world = GetWorld(); // 您获取 World 引用的方式
-PlayerController pc = world.GetPlayerController();
-Pawn pawn = world.GetPlayerPawn();
-```
-
-### 5. 与 DI 集成
-
-如果您使用依赖注入：
-
-- 使用您的 DI 容器实现 `IUnityObjectSpawner`
-- 在您的 DI 容器中注册 `World` 和 `GameMode`
-- 将依赖注入到您的自定义类中
-
-### 6. 处理异步初始化
-
-`PlayerController` 初始化是异步的。始终等待它：
-
-```csharp
-await gameMode.LaunchGameModeAsync(cancellationToken);
-// 现在 PlayerController 已完全初始化
-```
-
-## API 参考
-
-### GameMode
-
-**关键方法：**
-
-- `Initialize(IUnityObjectSpawner, IWorldSettings)`: 连接依赖
-- `LaunchGameModeAsync(CancellationToken)`: 生成 `PlayerController` 并启动游戏
-- `RestartPlayer(PlayerController, string)`: 重生玩家（可选在命名传送门处）
-- `FindPlayerStart(Controller, string)`: 查找生成点
-- `GetPlayerController()`: 获取当前玩家控制器
-
-**生成辅助方法：**
-
-- `SpawnDefaultPawnAtPlayerStart(Controller, Actor)`: 在 PlayerStart 处生成 Pawn
-- `SpawnDefaultPawnAtTransform(Controller, Transform)`: 在 Transform 处生成 Pawn
-- `SpawnDefaultPawnAtLocation(Controller, Vector3)`: 在位置处生成 Pawn
-
-### PlayerController
-
-**关键方法：**
-
-- `GetPawn()`: 获取当前占有的 Pawn
-- `GetPlayerState()`: 获取玩家状态
-- `GetCameraManager()`: 获取摄像机管理器
-- `GetSpectatorPawn()`: 获取旁观者 Pawn
-- `InitializationTask`: 初始化完成时完成的 UniTask
-
-**生命周期：**
-
-- 在异步初始化期间自动生成 `PlayerState`、`CameraManager` 和 `SpectatorPawn`
-
-### Controller
-
-**关键方法：**
-
-- `Possess(Pawn)`: 控制一个 Pawn
-- `UnPossess()`: 释放当前 Pawn 的控制
-- `SetControlRotation(Quaternion)`: 设置控制器"看向"的方向
-- `ControlRotation()`: 获取当前控制旋转
-- `GetDefaultPawnPrefab()`: 从 `WorldSettings` 获取默认 Pawn 预制体
-
-**虚方法：**
-
-- `OnPossess(Pawn)`: 占有 Pawn 时调用
-- `OnUnPossess()`: 释放占有时调用
-
-### Pawn
-
-**关键方法：**
-
-- `PossessedBy(Controller)`: 当控制器获得控制权时调用
-- `UnPossessed()`: 当控制器释放控制权时调用
-- `DispatchRestart()`: 触发重启逻辑
-- `NotifyInitialRotation(Quaternion)`: 通知组件初始旋转（用于移动组件）
-
-**属性：**
-
-- `Controller`: 当前占有此 Pawn 的控制器
-
-### PlayerState
-
-**关键方法：**
-
-- `GetPawn()`: 获取当前 Pawn
-- `GetPawn<T>()`: 获取当前 Pawn 作为特定类型
-
-**事件：**
-
-- `OnPawnSetEvent`: 当 Pawn 改变时触发（参数：PlayerState, NewPawn, OldPawn）
-
-### CameraManager
-
-**关键方法：**
-
-- `SetActiveVirtualCamera(CinemachineCamera)`: 设置活动摄像机
-- `SetViewTarget(Transform)`: 设置摄像机应跟随的目标
-- `SetFOV(float)`: 设置视野
-- `InitializeFor(PlayerController)`: 为特定玩家控制器初始化
-
-**属性：**
-
-- `ActiveVirtualCamera`: 当前活动的 Cinemachine 摄像机
-
-### WorldSettings
-
-**属性：**
-
-- `GameModeClass`: GameMode 的预制体引用
-- `PlayerControllerClass`: PlayerController 的预制体引用
-- `PawnClass`: 默认 Pawn 的预制体引用
-- `PlayerStateClass`: PlayerState 的预制体引用
-- `CameraManagerClass`: CameraManager 的预制体引用
-- `SpectatorPawnClass`: SpectatorPawn 的预制体引用
-
-### World
-
-**关键方法：**
-
-- `SetGameMode(GameMode)`: 设置当前游戏模式
-- `GetGameMode()`: 获取当前游戏模式
-- `GetPlayerController()`: 获取玩家控制器
-- `GetPlayerPawn()`: 获取玩家 Pawn
-
-## 故障排查
-
-### 生成失败 / 空引用
-
-**症状:** 对象不生成，或出现空引用错误
-
-**解决方案：**
-
-- ✅ 确保 `WorldSettings` 字段引用具有必需组件的有效预制体
-- ✅ 提供 `IUnityObjectSpawner`（创建 `SimpleObjectSpawner` 或集成您的 DI 容器）
-- ✅ 检查预制体是否缺少组件
-- ✅ 验证预制体在正确的文件夹中且未损坏
-
-**调试代码：**
-
-```csharp
-// 添加到您的引导脚本
-if (ws.GameModeClass == null) Debug.LogError("GameModeClass 为空！");
-if (ws.PlayerControllerClass == null) Debug.LogError("PlayerControllerClass 为空！");
-if (ws.PawnClass == null) Debug.LogError("PawnClass 为空！");
-```
-
-### 摄像机不跟随
-
-**症状:** 摄像机不跟随玩家或保持静止
-
-**解决方案：**
-
-- ✅ 在主摄像机上添加 `CinemachineBrain` 组件
-- ✅ 确保场景中至少存在一个 `CinemachineCamera`
-- ✅ 验证 `CameraManager` 已生成（检查 Hierarchy）
-- ✅ 检查是否调用了 `CameraManager.InitializeFor(PlayerController)`
-
-**调试：**
-
-```csharp
-var brain = Camera.main?.GetComponent<CinemachineBrain>();
-if (brain == null) Debug.LogError("主摄像机缺少 CinemachineBrain！");
-
-var vcams = FindObjectsOfType<CinemachineCamera>();
-if (vcams.Length == 0) Debug.LogError("场景中未找到 CinemachineCamera！");
-```
-
-### 玩家在原点生成
-
-**症状:** 玩家在 (0, 0, 0) 生成，而不是在 PlayerStart
-
-**解决方案：**
-
-- ✅ 在场景中添加至少一个 `PlayerStart`
-- ✅ 验证 `PlayerStart` 有 `PlayerStart` 组件
-- ✅ 检查 `PlayerStart` 在场景中是否激活
-- ✅ 如果使用传送门名称，验证名称完全匹配
-
-**调试：**
-
-```csharp
-var starts = FindObjectsOfType<PlayerStart>();
-Debug.Log($"在场景中找到 {starts.Length} 个 PlayerStart");
-foreach (var start in starts)
-{
-    Debug.Log($"  - {start.name} 在 {start.transform.position}");
-}
-```
-
-### KillZ 无效
-
-**症状:** Actor 掉入 KillZVolume 时不被销毁
-
-**解决方案：**
-
-- ✅ `KillZVolume` 需要一个 `BoxCollider`（或其他碰撞体）设置为 **Is Trigger**
-- ✅ 下落的 Actor 需要同时具有 `Collider` 和 `Rigidbody` 组件
-- ✅ 确保 `KillZVolume` GameObject 处于激活状态
-- ✅ 检查碰撞体边界是否覆盖死亡区域
-
-**调试：**
-
-```csharp
-// 添加到 KillZVolume.OnTriggerEnter
-Debug.Log($"[KillZ] {other.name} 进入。有 Actor: {other.GetComponent<Actor>() != null}");
-```
-
-### Pawn 生成后旋转未同步
-
-**症状:** Pawn 生成但旋转与生成点不匹配
-
-**解决方案：**
-
-- ✅ 如果使用 `RPGFoundation` 的 `MovementComponent`：
-  - 如果 GameplayFramework 通过 Package Manager 安装：应该自动工作
-  - 如果 GameplayFramework 在 Assets 文件夹中：在 Scripting Define Symbols 中添加 `GAMEPLAY_FRAMEWORK_PRESENT`
-- ✅ 或在生成后手动设置旋转：
-  ```csharp
-  Pawn pawn = SpawnDefaultPawnAtTransform(...);
-  var movement = pawn.GetComponent<MovementComponent>();
-  if (movement != null)
-  {
-      movement.SetRotation(spawnTransform.rotation, immediate: true);
-  }
-  ```
-
-### PlayerController 未初始化
-
-**症状:** `InitializationTask` 永不完成，或组件未生成
-
-**解决方案：**
-
-- ✅ 确保调用了 `PlayerController.Initialize(spawner, settings)`
-- ✅ 检查 `WorldSettings` 是否已分配所有必需的预制体
-- ✅ 验证 `IUnityObjectSpawner` 是否工作（使用 `SimpleObjectSpawner` 测试）
-- ✅ 检查初始化期间控制台是否有错误
-
-**调试：**
-
-```csharp
-// 在您的引导脚本中，生成 PlayerController 后
-var pc = gameMode.GetPlayerController();
-if (pc != null)
-{
-    await pc.InitializationTask;
-    Debug.Log($"PlayerController 已初始化。Pawn: {pc.GetPawn()?.name}, State: {pc.GetPlayerState()?.name}");
-}
-```
-
-## 示例
-
-框架在 `Samples/Sample.PureUnity` 中包含一个完整的示例项目：
-
-- **场景**: `Scene/UnitySampleScene.unity` - 一个可运行的场景
-- **预制体**: `Prefabs/` 文件夹中的所有必需预制体
-- **WorldSettings**: `Resources/UnitySampleWorldSettings.asset` - 完整配置
-- **引导**: `UnitySampleBoot.cs` - 示例引导脚本
-- **生成器**: `UnitySampleObjectSpawner.cs` - 示例对象生成器
-
-**使用示例：**
-
-1. 打开 `Samples/Sample.PureUnity/Scene/UnitySampleScene.unity`
-2. 按 Play
-3. 框架将自动生成并设置所有内容
-
-## 依赖项
-
-本包依赖于以下外部和内部包：
-
-- `com.unity.cinemachine@3`: 用于通过 Cinemachine 进行摄像机管理
-- `com.cysharp.unitask@2`: 用于异步操作
-- `com.cyclone-games.factory@1`: 用于对象创建和生成接口
-- `com.cyclone-games.logger@1`: 用于调试日志
+1. **保持 Pawn 职责专一** — 移动、视觉表现、技能。不处理游戏规则，不处理计分。
+2. **使用 PlayerState 存储持久数据** — 分数、背包、统计数据存放在 PlayerState 而非 Pawn。它们在重生后保留。
+3. **每种游戏类型一个 GameMode** — 死斗、夺旗、教程 — 各是一个 GameMode 子类。通过更改 WorldSettings 预制体引用即可切换。
+4. **重写而非修改** — 继承 `GameMode`、`PlayerController`、`Pawn` 等。框架基类处理底层管线。
+5. **用接口做测试** — `IGameMode`、`IGameSession`、`IWorldSettings`、`IUnityObjectSpawner` 均可 Mock，方便单元测试。
+6. **让 GameMode 编排一切** — 生成、重生、比赛流程都属于 GameMode。不要分散到 Pawn 或 Controller 中。
+7. **优先使用 TakeDamage 而非直接操作血量** — 所有伤害通过 Actor 伤害管线路由，确保事件触发和类型路由的一致性。
+
+---
 
 ## 常见问题
 
-### Q: 我可以将此与 GameplayAbilities 一起使用吗？
+**问：不使用 Cinemachine 可以吗？**
+可以。不要在 WorldSettings 中分配 `CameraManagerClass`。框架在没有它的情况下正常工作 — 实现你自己的摄像机系统即可。
 
-可以！`GameplayFramework` 和 `GameplayAbilities` 设计为协同工作。您可以：
+**问：重生如何工作？**
+调用 `GameMode.RestartPlayer(playerController)`。它会查找 PlayerStart、生成新 Pawn 并附身。PlayerState 不受影响。
 
-- 在您的 `Pawn` 上添加 `AbilitySystemComponentHolder`
-- 在 `Pawn.PossessedBy()` 中初始化能力系统
-- 在 `PlayerState` 中存储能力相关数据
+**问：可以有多个玩家吗？**
+框架开箱即提供单人流程。本地多人游戏需要继承 GameMode，生成多个 PlayerController 并用玩家索引管理它们。
 
-### Q: 如何处理多个玩家？
+**问：如何与我的 DI 容器集成？**
+使用你的容器的实例化方法实现 `IUnityObjectSpawner`。传递给 `GameMode.Initialize()`。
 
-请参阅 **[本地多人游戏指南](#本地多人游戏指南)** 部分以获取完整教程。该指南涵盖：
+**问：Actor.tags 与 GameplayTags 冲突吗？**
+不冲突。Actor.tags 是简单的 `List<string>`，用于轻量标记。GameplayTags 是层级化的计数标签系统，用于技能/效果查询。它们服务于不同目的，可共存。
 
-- 创建 `MultiplayerGameMode` 以管理多个玩家
-- 设置玩家索引和输入映射
-- 实现分屏摄像机
-- 处理多个 `PlayerController` 和 `PlayerState`
-
-### Q: 我可以不使用 Cinemachine 使用此框架吗？
-
-`CameraManager` 需要 Cinemachine。如果您不想使用它：
-
-- 不要在 `WorldSettings` 中分配 `CameraManagerClass`（留空）
-- 实现您自己的摄像机系统
-- 框架在没有 `CameraManager` 的情况下也能正常工作
-
-### Q: 如何保存/加载游戏状态？
-
-使用 `PlayerState` 存储持久数据：
-
-- 将 `PlayerState` 数据保存到磁盘
-- 加载时，将数据恢复到 `PlayerState`
-- `PlayerState` 在 Pawn 重生后仍然存在，因此您的数据是安全的
+**问：这个框架的灵感来源是什么？**
+架构灵感来源于虚幻引擎的 GameFramework。Actor、Pawn、Controller、GameMode、PlayerState 等概念直接对应虚幻引擎中的同名组件。但实现完全基于 Unity 原生构建 — 利用 MonoBehaviour、Cinemachine、UniTask 和 Unity 特有的模式。

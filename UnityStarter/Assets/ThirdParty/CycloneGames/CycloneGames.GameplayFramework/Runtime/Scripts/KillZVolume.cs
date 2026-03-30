@@ -3,23 +3,39 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
-    //  TODO: Implement 2D version
+    /// <summary>
+    /// Volume that kills any Actor entering it. Supports both 3D (BoxCollider) and 2D (BoxCollider2D).
+    /// </summary>
     public class KillZVolume : Actor
     {
-        private const string DEBUG_FLAG = "<color=#FF4B4B>[KillZ Volume]</color>";
+        private const string DEBUG_FLAG = "<color=#FF4B4B>[KillZ]</color>";
+
         protected override void Awake()
         {
             base.Awake();
 
-            BoxCollider collision = GetComponent<BoxCollider>();
-            if (collision) collision.isTrigger = true;
+            var collider3D = GetComponent<BoxCollider>();
+            if (collider3D != null) collider3D.isTrigger = true;
+
+            var collider2D = GetComponent<BoxCollider2D>();
+            if (collider2D != null) collider2D.isTrigger = true;
         }
 
         protected virtual void OnTriggerEnter(Collider other)
         {
-            //  Target Actor require a 'Collision' component and 'Rigidbody' component
-            CLogger.LogInfo($"{DEBUG_FLAG} {other.gameObject.name} Enter Kill Z");
-            if (!other) return;
+            if (other == null) return;
+            CLogger.LogInfo($"{DEBUG_FLAG} {other.gameObject.name} entered KillZ");
+            Actor otherActor = other.GetComponent<Actor>();
+            if (otherActor != null)
+            {
+                otherActor.FellOutOfWorld();
+            }
+        }
+
+        protected virtual void OnTriggerEnter2D(Collider2D other)
+        {
+            if (other == null) return;
+            CLogger.LogInfo($"{DEBUG_FLAG} {other.gameObject.name} entered KillZ");
             Actor otherActor = other.GetComponent<Actor>();
             if (otherActor != null)
             {
