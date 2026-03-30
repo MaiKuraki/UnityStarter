@@ -1,0 +1,20 @@
+{
+    "name": "CycloneGames.BehaviorTree.Runtime.DOD",
+    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.DOD",
+    "references": [
+        "CycloneGames.BehaviorTree.Runtime",
+        "Unity.Burst",
+        "Unity.Collections",
+        "Unity.Mathematics",
+        "Unity.Jobs"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

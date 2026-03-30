@@ -17,6 +17,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public int TickInterval { get; set; } = 1;
         private int _tickCounter = 0;
 
+        // Event-driven execution support
+        private volatile bool _wakeUpRequested;
+        public bool HasWakeUpRequest => _wakeUpRequested;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        public BTStatusLogger StatusLogger { get; set; }
+#endif
+
         public RuntimeBehaviorTree(RuntimeNode root, RuntimeBlackboard blackboard, RuntimeBTContext context = null)
         {
             Root = root;
@@ -27,9 +35,37 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             {
                 Blackboard.Context = Context;
             }
+
+            PropagateOwnerTree(Root);
+
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             BuildNodeMap(Root);
 #endif
+        }
+
+        // Propagate owner tree reference to all nodes for wake-up signaling
+        private void PropagateOwnerTree(RuntimeNode node)
+        {
+            if (node == null) return;
+            node.OwnerTree = this;
+
+            if (node is RuntimeCompositeNode composite && composite.Children != null)
+            {
+                for (int i = 0; i < composite.Children.Length; i++)
+                    PropagateOwnerTree(composite.Children[i]);
+            }
+            else if (node is Nodes.Decorators.RuntimeDecoratorNode decorator)
+            {
+                PropagateOwnerTree(decorator.Child);
+            }
+            else if (node is Nodes.RuntimeRootNode rootNode)
+            {
+                PropagateOwnerTree(rootNode.Child);
+            }
+            else if (node is Nodes.Decorators.RuntimeSubTreeNode subTree)
+            {
+                PropagateOwnerTree(subTree.Child);
+            }
         }
 
         public T GetOwner<T>() where T : class
@@ -42,8 +78,34 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return Context != null ? Context.GetService<T>() : null;
         }
 
+        /// <summary>
+        /// Called by nodes via EmitWakeUpSignal() to request the next tick.
+        /// Thread-safe (volatile flag).
+        /// </summary>
+        internal void RequestWakeUp()
+        {
+            _wakeUpRequested = true;
+        }
+
+        /// <summary>
+        /// Consumes the wake-up flag. Returns true if a wake-up was requested.
+        /// </summary>
+        public bool ConsumeWakeUp()
+        {
+            if (!_wakeUpRequested) return false;
+            _wakeUpRequested = false;
+            return true;
+        }
+
         public bool ShouldTick()
         {
+            if (_wakeUpRequested)
+            {
+                _wakeUpRequested = false;
+                _tickCounter = 0;
+                return true;
+            }
+
             if (TickInterval <= 1) return true;
             _tickCounter++;
             if (_tickCounter >= TickInterval)
@@ -84,13 +146,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 }
             }
 
-            // Traverse Decorator child
             if (node is Nodes.Decorators.RuntimeDecoratorNode decorator)
             {
                 BuildNodeMap(decorator.Child);
             }
 
-            // Traverse RootNode child
             if (node is Nodes.RuntimeRootNode root)
             {
                 BuildNodeMap(root.Child);
@@ -112,6 +172,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             {
                 Root.Abort(Blackboard);
             }
+            Blackboard?.Dispose();
             State = RuntimeState.NotEntered;
         }
     }

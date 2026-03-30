@@ -1,3 +1,5 @@
+using System;
+
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions
 {
     public class RuntimeMessageReceiveNode : RuntimeNode
@@ -11,7 +13,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions
         {
             var message = blackboard.GetObject<string>(KeyHash);
             if (message == null) return false;
-            return message.Equals(ExpectedMessage);
+            return string.Equals(message, ExpectedMessage, StringComparison.Ordinal);
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)

@@ -91,6 +91,16 @@ namespace CycloneGames.BehaviorTree.Editor
 
         private BTState _lastTreeState = BTState.NOT_ENTERED;
 
+        // Cached lists to avoid per-frame ToList() allocations
+        private readonly List<UnityEditor.Experimental.GraphView.Node> _cachedNodeList = new List<UnityEditor.Experimental.GraphView.Node>(64);
+
+        /// <summary>0GC node list refresh — clears and refills from GraphView.nodes enumerator.</summary>
+        private void RefreshCachedNodeList()
+        {
+            _cachedNodeList.Clear();
+            foreach (var n in nodes) _cachedNodeList.Add(n);
+        }
+
         /// <summary>
         /// Gets the actual tree state from the matched RuntimeBehaviorTree via BTRunnerComponent.
         /// </summary>
@@ -313,11 +323,11 @@ namespace CycloneGames.BehaviorTree.Editor
         private void SaveStateCache()
         {
             _stateCache.Clear();
-            var nodeList = nodes.ToList();
-            int nodeCount = nodeList.Count;
+            RefreshCachedNodeList();
+            int nodeCount = _cachedNodeList.Count;
             for (int i = 0; i < nodeCount; i++)
             {
-                if (nodeList[i] is BTNodeView nodeView && nodeView.Node != null)
+                if (_cachedNodeList[i] is BTNodeView nodeView && nodeView.Node != null)
                 {
                     string guid = nodeView.Node.GUID;
                     if (!string.IsNullOrEmpty(guid))
@@ -339,11 +349,11 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             if (_stateCache.Count == 0) return;
 
-            var nodeList = nodes.ToList();
-            int nodeCount = nodeList.Count;
+            RefreshCachedNodeList();
+            int nodeCount = _cachedNodeList.Count;
             for (int i = 0; i < nodeCount; i++)
             {
-                if (nodeList[i] is BTNodeView nodeView && nodeView.Node != null)
+                if (_cachedNodeList[i] is BTNodeView nodeView && nodeView.Node != null)
                 {
                     string guid = nodeView.Node.GUID;
                     if (!string.IsNullOrEmpty(guid) && _stateCache.ContainsKey(guid))
@@ -378,7 +388,8 @@ namespace CycloneGames.BehaviorTree.Editor
 
             bool treeCompleted = currentTreeState == BTState.SUCCESS || currentTreeState == BTState.FAILURE;
 
-            var nodeList = nodes.ToList();
+            RefreshCachedNodeList();
+            var nodeList = _cachedNodeList;
             int nodeCount = nodeList.Count;
 
             if (treeCompleted && _tree.Nodes != null)
@@ -494,8 +505,10 @@ namespace CycloneGames.BehaviorTree.Editor
         }
 
         /// <summary>
-        /// Updates edge visual styles based on parent node state.
-        /// Running edges get a pulsing green glow, completed edges get success/failure colors.
+        /// Updates edge visual styles based on node state.
+        /// Uses GetLastKnownState() as fallback to ensure colors persist after tree completion.
+        /// When the parent is Running, uses granular child-state coloring.
+        /// Inactive edges are dimmed to highlight the execution path.
         /// </summary>
         private void UpdateEdgeStates()
         {
@@ -505,50 +518,85 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 if (element is Edge edge)
                 {
+                    edge.RemoveFromClassList("running-edge");
+                    edge.RemoveFromClassList("success-edge");
+                    edge.RemoveFromClassList("failure-edge");
+                    edge.RemoveFromClassList("inactive-edge");
+
                     if (edge.output?.node is BTNodeView parentView)
                     {
-                        var runtimeNode = parentView.RuntimeNode;
-                        if (runtimeNode != null)
+                        // Resolve parent state: prefer RuntimeNode, fall back to last known
+                        BTState parentState = ResolveNodeState(parentView);
+
+                        // When parent is Running, show per-child granularity
+                        if (parentState == BTState.RUNNING && edge.input?.node is BTNodeView childView)
                         {
-                            bool isRunning = runtimeNode.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running;
-
-                            // Toggle animation if it's an animated edge
-                            if (edge is BTAnimatedEdge animatedEdge)
-                            {
-                                animatedEdge.SetAnimating(isRunning);
-                            }
-
-                            // Clear previous state classes
-                            edge.RemoveFromClassList("running-edge");
-                            edge.RemoveFromClassList("success-edge");
-                            edge.RemoveFromClassList("failure-edge");
-
-                            // Apply state-based styling
-                            switch (runtimeNode.State)
-                            {
-                                case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running:
-                                    edge.AddToClassList("running-edge");
-                                    edge.edgeControl.inputColor = new Color(0.27f, 0.56f, 0.29f, 1f); // Green
-                                    edge.edgeControl.outputColor = new Color(0.27f, 0.56f, 0.29f, 1f);
-                                    break;
-                                case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success:
-                                    edge.AddToClassList("success-edge");
-                                    edge.edgeControl.inputColor = new Color(0.15f, 1f, 0f, 0.8f); // Bright Green
-                                    edge.edgeControl.outputColor = new Color(0.15f, 1f, 0f, 0.8f);
-                                    break;
-                                case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Failure:
-                                    edge.AddToClassList("failure-edge");
-                                    edge.edgeControl.inputColor = new Color(1f, 0f, 0f, 0.8f); // Red
-                                    edge.edgeControl.outputColor = new Color(1f, 0f, 0f, 0.8f);
-                                    break;
-                                default:
-                                    edge.edgeControl.inputColor = new Color(0.6f, 0.6f, 0.6f, 1f);
-                                    edge.edgeControl.outputColor = new Color(0.6f, 0.6f, 0.6f, 1f);
-                                    break;
-                            }
+                            BTState childState = ResolveNodeState(childView);
+                            ApplyEdgeVisual(edge, childState);
+                        }
+                        else
+                        {
+                            ApplyEdgeVisual(edge, parentState);
                         }
                     }
                 }
+            }
+        }
+
+        /// <summary>Resolves the most accurate state for a node view: RuntimeNode first, then last known state.</summary>
+        private BTState ResolveNodeState(BTNodeView nodeView)
+        {
+            var runtimeNode = nodeView.RuntimeNode;
+            if (runtimeNode != null)
+            {
+                switch (runtimeNode.State)
+                {
+                    case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running: return BTState.RUNNING;
+                    case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success: return BTState.SUCCESS;
+                    case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Failure: return BTState.FAILURE;
+                }
+            }
+            return nodeView.GetLastKnownState();
+        }
+
+        /// <summary>Applies visual styling to an edge based on BTState.</summary>
+        private void ApplyEdgeVisual(Edge edge, BTState state)
+        {
+            switch (state)
+            {
+                case BTState.RUNNING:
+                    edge.AddToClassList("running-edge");
+                    edge.edgeControl.inputColor = new Color(0.27f, 0.56f, 0.29f, 1f);
+                    edge.edgeControl.outputColor = new Color(0.27f, 0.56f, 0.29f, 1f);
+                    if (edge is BTAnimatedEdge aeRun)
+                    {
+                        aeRun.SetAnimating(true);
+                        aeRun.SetColors(
+                            new Color(0.56f, 1f, 0.56f, 0.9f),
+                            new Color(0.27f, 0.56f, 0.29f, 0.4f));
+                    }
+                    break;
+
+                case BTState.SUCCESS:
+                    edge.AddToClassList("success-edge");
+                    edge.edgeControl.inputColor = new Color(0.24f, 0.86f, 0.12f, 0.85f);
+                    edge.edgeControl.outputColor = new Color(0.24f, 0.86f, 0.12f, 0.85f);
+                    if (edge is BTAnimatedEdge aeSucc) aeSucc.SetAnimating(false);
+                    break;
+
+                case BTState.FAILURE:
+                    edge.AddToClassList("failure-edge");
+                    edge.edgeControl.inputColor = new Color(0.86f, 0.2f, 0.2f, 0.85f);
+                    edge.edgeControl.outputColor = new Color(0.86f, 0.2f, 0.2f, 0.85f);
+                    if (edge is BTAnimatedEdge aeFail) aeFail.SetAnimating(false);
+                    break;
+
+                default: // NOT_ENTERED
+                    edge.AddToClassList("inactive-edge");
+                    edge.edgeControl.inputColor = new Color(0.4f, 0.4f, 0.4f, 0.35f);
+                    edge.edgeControl.outputColor = new Color(0.4f, 0.4f, 0.4f, 0.35f);
+                    if (edge is BTAnimatedEdge aeIdle) aeIdle.SetAnimating(false);
+                    break;
             }
         }
 
@@ -700,11 +748,11 @@ namespace CycloneGames.BehaviorTree.Editor
         /// </summary>
         private void ClearAllNodeStateCache()
         {
-            var nodeList = nodes.ToList();
-            int nodeCount = nodeList.Count;
+            RefreshCachedNodeList();
+            int nodeCount = _cachedNodeList.Count;
             for (int i = 0; i < nodeCount; i++)
             {
-                if (nodeList[i] is BTNodeView nodeView)
+                if (_cachedNodeList[i] is BTNodeView nodeView)
                 {
                     nodeView.ClearStateCache();
                 }
@@ -793,7 +841,6 @@ namespace CycloneGames.BehaviorTree.Editor
 
                     if (parentView.OutputPort != null && childView.InputPort != null)
                     {
-                        // Use custom animated edge
                         var edge = new BTAnimatedEdge();
                         edge.output = parentView.OutputPort;
                         edge.input = childView.InputPort;
@@ -878,7 +925,8 @@ namespace CycloneGames.BehaviorTree.Editor
             foreach (var type in sortedCompositeTypes)
             {
                 if (type.IsAbstract) continue;
-                evt.menu.AppendAction($"CompositeNode/{type.Name}", a => CreateNode(type, mousePosition));
+                var category = GetNodeCategory(type);
+                evt.menu.AppendAction($"CompositeNode/{category}/{type.Name}", a => CreateNode(type, mousePosition));
             }
 
             var sortedDecoratorTypes = new List<Type>(decoratorTypes);
