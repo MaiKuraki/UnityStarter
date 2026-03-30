@@ -11,7 +11,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
     ///   service.Interval = 0.5f; // run every 0.5 seconds
     ///   service.OnServiceTick = (bb) => {
     ///       // Update perception, target selection, etc.
-    ///       var perception = bb.GetContextOwner&lt;AIPerceptionComponent&gt;();
+    ///       var perception = bb.GetContextOwner<AIPerceptionComponent>();
     ///       var target = perception?.GetClosestSightTarget();
     ///       if (target != null)
     ///           bb.SetObject(Animator.StringToHash("Target"), target);

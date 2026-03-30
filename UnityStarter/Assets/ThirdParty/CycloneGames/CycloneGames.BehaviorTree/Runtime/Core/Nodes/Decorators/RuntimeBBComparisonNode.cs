@@ -34,7 +34,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
     ///   - Set AbortMode to trigger re-evaluation when tracked key changes
     ///   - Integrates with AIPerception by observing perception result keys
     ///
-    /// Example: "If BB[TargetDistance] &lt; 10.0 → execute child, else Failure"
+    /// Example: "If BB[TargetDistance] < 10.0 → execute child, else Failure"
     /// </summary>
     public class RuntimeBBComparisonNode : RuntimeDecoratorNode
     {

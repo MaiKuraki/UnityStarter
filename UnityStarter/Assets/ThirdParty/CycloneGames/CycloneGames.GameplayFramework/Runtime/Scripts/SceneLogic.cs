@@ -3,10 +3,8 @@ using UnityEngine;
 namespace CycloneGames.GameplayFramework.Runtime
 {
     /// <summary>
-    /// This class is designed to provide functionality similar to the "LevelBlueprint" in Unreal Engine.
+    /// Per-scene logic controller. Provides lifecycle hooks for scene-specific gameplay scripting.
     /// </summary>
-    
-    //  TODO: Implement a feature similar to the "LevelBlueprint" in Unreal Engine
     public class SceneLogic : MonoBehaviour
     {
         protected virtual void Awake()
