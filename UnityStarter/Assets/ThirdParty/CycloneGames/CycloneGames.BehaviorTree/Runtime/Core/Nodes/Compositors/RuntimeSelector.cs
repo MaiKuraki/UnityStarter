@@ -3,11 +3,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
     public class RuntimeSelector : RuntimeCompositeNode
     {
         private int _current;
-        public int CurrentIndex => _current;
+        public override int CurrentIndex => _current;
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
             _current = 0;
+            // Reset children states from previous iteration so editor doesn't show stale results
+            var children = Children;
+            for (int i = 0; i < children.Length; i++)
+                children[i].ResetState();
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)

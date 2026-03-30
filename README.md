@@ -44,6 +44,8 @@ This template is designed for developers who want to start with a professional, 
 - ✅ Modern input system with context stacks
 - ✅ UI framework with hierarchical management and MVP architecture support
 - ✅ Cross-platform device feedback (haptics, rumble, lighting)
+- ✅ AI behavior tree with visual editor and 10,000+ agent scaling
+- ✅ AI perception system with Jobs/Burst optimization
 
 > **📖 Documentation**: Each module has comprehensive documentation. See the [Module Catalog](#module-catalog) section for links to detailed guides.
 
@@ -157,7 +159,8 @@ Modules are designed to be:
 | **GameplayAbilities** | `CycloneGames.GameplayAbilities` | Data-driven ability system (GAS-inspired). ScriptableObject-based abilities, attributes, effects, and status management. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.md) |
 | **GameplayTags**      | `CycloneGames.GameplayTags`      | Hierarchical tag system for decoupled game logic. Runtime registration, auto-generation, and tag-based queries.          | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.md)      |
 | **RPGFoundation**     | `CycloneGames.RPGFoundation`     | RPG-specific extensions (movement, combat, etc.). Foundation components for RPG-type games.                              | [See module directory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)    |
-| **BehaviorTree**      | `CycloneGames.BehaviorTree`      | AI behavior tree system. Visual editor, ScriptableObject-based, optimized for mobile devices.                            | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.md)      |
+| **BehaviorTree**      | `CycloneGames.BehaviorTree`      | Production-grade AI behavior tree. Dual-layer SO→Runtime architecture, 30+ built-in nodes, triple-tier scaling (1–10,000+ agents), multiplayer networking, Burst/DOD mass simulation, GraphView editor with animated runtime visualization. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.md)      |
+| **AIPerception**      | `CycloneGames.AIPerception`      | High-performance AI perception system. Jobs/Burst optimized 0GC sensor queries, visual debug tools, extensible type system. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.md)      |
 
 ### 🏗️ Core Infrastructure
 
@@ -194,7 +197,7 @@ Modules are designed to be:
 
 | Module         | Path                      | Description                                                                                                | Documentation        |
 | -------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------------- |
-| **Networking** | `CycloneGames.Networking` | Network abstraction layer. Mirror adapter, transport/serialization interfaces, ability system integration. | See module directory |
+| **Networking** | `CycloneGames.Networking` | Production-grade network abstraction layer. Zero-GC runtime, pluggable serializers (Json, MessagePack, ProtoBuf), Mirror adapter, thread-safe cross-thread messaging, connection diagnostics. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.md) |
 
 ### 🧰 Tools
 
@@ -311,6 +314,9 @@ Projects built using this template:
 - **[UIFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md)** - UI framework architecture and examples
 - **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md)** - Asset loading and version management
 - **[DeviceFeedback](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.md)** - Cross-platform haptics, rumble, and lighting
+- **[BehaviorTree](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.md)** - AI behavior tree with dual-layer architecture and scaling guide
+- **[AIPerception](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.md)** - AI perception system with Burst-optimized sensor queries
+- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.md)** - Network abstraction layer with pluggable transports
 
 ---
 

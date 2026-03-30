@@ -1,19 +1,25 @@
+/* ══════════════════════════════════════════════
+   BT Node View Stylesheet
+   ══════════════════════════════════════════════ */
+
+/* ── Node Container ── */
 #node-border {
     background-color: rgb(56, 56, 56);
-    border-top-width: 1px;
-    border-right-width: 1px;
-    border-bottom-width: 1px;
-    border-left-width: 1px;
-    border-left-color: rgb(88, 88, 88);
-    border-right-color: rgb(88, 88, 88);
-    border-top-color: rgb(88, 88, 88);
-    border-bottom-color: rgb(88, 88, 88);
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
-    border-bottom-right-radius: 12px;
-    border-bottom-left-radius: 12px;
+    border-width: 1px;
+    border-color: rgb(88, 88, 88);
+    border-radius: 12px;
 }
 
+#node-state-border {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    border-radius: 12px;
+}
+
+/* ── Ports ── */
 #input {
     justify-content: center;
     align-items: center;
@@ -26,12 +32,10 @@
 #output {
     justify-content: center;
     align-self: center;
-    min-height: 0px;
-    padding-left: 0px;
+    min-height: 0;
+    padding-left: 0;
     padding-top: 2px;
     padding-bottom: 2px;
-    /* flex-wrap: wrap;
-    flex-direction: column-reverse; */
 }
 
 .bt-port {
@@ -40,6 +44,13 @@
 }
 
 .bt-input-port {
+    z-index: 10;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
     width: 14px;
     height: 14px;
     min-width: 14px;
@@ -47,7 +58,6 @@
     max-width: 14px;
     max-height: 14px;
     padding: 0;
-    flex-shrink: 0;
 }
 
 .bt-input-port .connector {
@@ -57,14 +67,14 @@
     min-height: 10px;
     max-width: 10px;
     max-height: 10px;
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
-    border-bottom-left-radius: 5px;
-    border-bottom-right-radius: 5px;
+    border-radius: 5px;
     background-color: rgb(80, 80, 80);
     border-width: 1.5px;
     border-color: rgb(180, 180, 180);
     margin: 0;
+    margin-left: auto;
+    margin-right: auto;
+    pointer-events: auto;
     transition-property: width, height, background-color, border-color;
     transition-duration: 0.15s;
     transition-timing-function: ease-out;
@@ -77,10 +87,7 @@
     min-height: 12px;
     max-width: 12px;
     max-height: 12px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-    border-bottom-left-radius: 6px;
-    border-bottom-right-radius: 6px;
+    border-radius: 6px;
     background-color: rgb(120, 120, 120);
     border-color: rgb(255, 255, 255);
 }
@@ -93,12 +100,21 @@
 .bt-input-port.connected:hover .connector {
     background-color: rgb(90, 163, 93);
     border-color: rgb(255, 255, 255);
-    box-shadow: 0 0 10px rgba(144, 238, 144, 0.8);
 }
 
 .bt-output-port {
+    z-index: 10;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
     min-width: 12px;
     min-height: 12px;
+    width: 24px;
+    height: 24px;
+    min-width: 24px;
+    min-height: 24px;
 }
 
 .bt-output-port .connector {
@@ -108,14 +124,13 @@
     min-height: 10px;
     max-width: 10px;
     max-height: 10px;
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
-    border-bottom-left-radius: 5px;
-    border-bottom-right-radius: 5px;
+    border-radius: 5px;
     background-color: rgb(80, 80, 80);
     border-width: 1.5px;
     border-color: rgb(180, 180, 180);
     margin: 0;
+    margin-left: auto;
+    margin-right: auto;
     transition-property: width, height, background-color, border-color;
     transition-duration: 0.15s;
     transition-timing-function: ease-out;
@@ -128,10 +143,7 @@
     min-height: 12px;
     max-width: 12px;
     max-height: 12px;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-    border-bottom-left-radius: 6px;
-    border-bottom-right-radius: 6px;
+    border-radius: 6px;
     background-color: rgb(120, 120, 120);
     border-color: rgb(255, 255, 255);
 }
@@ -146,42 +158,9 @@
     border-color: rgb(255, 255, 255);
 }
 
-.bt-input-port {
-    z-index: 10;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    flex-shrink: 0;
-}
-
-.bt-input-port .connector {
-    margin-left: auto;
-    margin-right: auto;
-    pointer-events: auto;
-}
-
-.bt-output-port {
-    z-index: 10;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    min-width: 24px;
-    min-height: 24px;
-    cursor: pointer;
-}
-
-.bt-output-port .connector {
-    margin-left: auto;
-    margin-right: auto;
-}
-
+/* ── Title Area ── */
 #title {
-    min-height: 40px;
+    min-height: 36px;
     align-self: stretch;
     justify-content: center;
     width: 100%;
@@ -199,58 +178,44 @@
     white-space: normal;
     text-overflow: ellipsis;
     align-self: stretch;
-    padding-top: 26px;
+    padding-top: 2px;
     padding-bottom: 2px;
     padding-left: 4px;
     padding-right: 4px;
 }
 
+/* ── Selection Border ── */
 #selection-border {
-    border-left-color: rgb(0, 151, 255);
-    border-right-color: rgb(0, 151, 255);
-    border-top-color: rgb(0, 151, 255);
-    border-bottom-color: rgb(0, 151, 255);
-    border-top-width: 0;
-    border-right-width: 0;
-    border-bottom-width: 0;
-    border-left-width: 0;
+    border-color: rgb(0, 151, 255);
+    border-width: 0;
     position: absolute;
     left: 0;
     top: 0;
     right: 0;
     bottom: 0;
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
-    border-bottom-right-radius: 12px;
-    border-bottom-left-radius: 12px;
+    border-radius: 12px;
 }
 
 :hover > #selection-border {
-    border-top-width: 1px;
-    border-right-width: 1px;
-    border-bottom-width: 1px;
-    border-left-width: 1px;
+    border-width: 1px;
 }
 
 :selected > #selection-border {
-    border-top-width: 1.5px;
-    border-right-width: 1.5px;
-    border-bottom-width: 1.5px;
-    border-left-width: 1.5px;
+    border-width: 1.5px;
 }
 
 :hover:selected > #selection-border {
-    border-top-width: 3px;
-    border-right-width: 3px;
-    border-bottom-width: 3px;
-    border-left-width: 3px;
+    border-width: 3px;
 }
 
+/* ── Node Sizing ── */
 .node {
-    min-width: 100px;
-    max-width: 100px;
+    min-width: 130px;
+    max-width: 160px;
+    width: 130px;
 }
 
+/* ── Node Type Colors (title bar strip) ── */
 .action #input {
     background-color: rgb(127, 161, 74);
 }
@@ -272,96 +237,144 @@
     height: 20px;
 }
 
-#node-state-border {
-    position: absolute;
-    left: 0;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    border-top-left-radius: 12px;
-    border-top-right-radius: 12px;
-    border-bottom-right-radius: 12px;
-    border-bottom-left-radius: 12px;
-}
-
+/* ── Runtime State Styling ── */
 .running #node-border {
     background-color: rgb(70, 143, 73);
-    transition-property: background-color;
+    border-color: rgb(100, 200, 105);
+    border-width: 2px;
+    transition-property: background-color, border-color, border-width;
     transition-timing-function: ease-in-out-sine;
-    transition-duration: 0.25s;
+    transition-duration: 0.3s;
 }
 
-.failure #node-state-border {
-    background-color: rgb(255, 0, 0);
+.running #node-state-border {
+    background-color: rgba(70, 143, 73, 0.2);
+    border-top-width: 2px;
+    border-top-color: rgba(100, 230, 100, 0.6);
+    border-bottom-width: 1px;
+    border-bottom-color: rgba(100, 230, 100, 0.3);
+    transition-property: background-color, border-top-color;
+    transition-duration: 0.3s;
+}
+
+.success #node-border {
+    border-color: rgb(80, 200, 50);
+    border-width: 1.5px;
+    transition-property: border-color, border-width;
+    transition-duration: 0.2s;
 }
 
 .success #node-state-border {
-    background-color: rgb(39, 255, 0);
+    background-color: rgba(39, 255, 0, 0.15);
+    border-top-width: 2px;
+    border-top-color: rgb(39, 255, 0);
+    transition-property: background-color;
+    transition-duration: 0.3s;
 }
 
-.not-entered #node-state-border {
+.failure #node-border {
+    border-color: rgb(200, 60, 60);
+    border-width: 1.5px;
+    transition-property: border-color, border-width;
+    transition-duration: 0.2s;
 }
 
+.failure #node-state-border {
+    background-color: rgba(255, 0, 0, 0.15);
+    border-top-width: 2px;
+    border-top-color: rgb(255, 0, 0);
+    transition-property: background-color;
+    transition-duration: 0.3s;
+}
+
+.not-entered #node-border {
+    transition-property: background-color, border-color, border-width;
+    transition-timing-function: ease-out;
+    transition-duration: 0.4s;
+}
+
+/* ── State Label (own row between #input and #title) ── */
 .state-label {
-    position: absolute;
-    top: 2px;
-    left: 0;
-    right: 0;
-    font-size: 8px;
-    font-weight: bold;
-    padding: 1px 0;
-    background-color: transparent;
-    color: rgb(255, 255, 255);
-    z-index: 10;
-    pointer-events: none;
-    text-transform: uppercase;
-    letter-spacing: 0.3px;
     -unity-text-align: upper-center;
-}
-
-.running .state-label {
-    color: rgb(144, 238, 144);
-    background-color: rgba(40, 100, 45, 0.9);
-}
-
-.success .state-label {
-    color: rgb(200, 255, 200);
-    background-color: rgba(30, 150, 30, 0.9);
-}
-
-.failure .state-label {
-    color: rgb(255, 200, 200);
-    background-color: rgba(150, 30, 30, 0.9);
-}
-
-.not-entered .state-label {
-    color: rgb(180, 180, 180);
-    background-color: rgba(60, 60, 60, 0.9);
-}
-
-.info-container {
-    margin-top: 2px;
-    margin-bottom: 2px;
+    font-size: 8px;
+    -unity-font-style: bold;
+    color: rgb(255, 255, 255);
     padding-top: 2px;
     padding-bottom: 2px;
     padding-left: 6px;
     padding-right: 6px;
-    background-color: rgba(0, 0, 0, 0.3);
+    background-color: rgba(0, 0, 0, 0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    pointer-events: none;
+    z-index: 10;
+    margin-top: 0;
+    margin-bottom: 0;
+    align-self: center;
+    border-radius: 0;
+}
+
+.running .state-label {
+    color: rgb(200, 255, 200);
+    background-color: rgba(40, 100, 45, 0.95);
+}
+
+.success .state-label {
+    color: rgb(200, 255, 200);
+    background-color: rgba(30, 120, 30, 0.95);
+}
+
+.failure .state-label {
+    color: rgb(255, 200, 200);
+    background-color: rgba(140, 30, 30, 0.95);
+}
+
+.not-entered .state-label {
+    color: rgb(160, 160, 160);
+    background-color: rgba(50, 50, 50, 0.9);
+    font-size: 7px;
+}
+
+/* ── Category Badge (inside info-container, inline flow) ── */
+.node-type-badge {
+    -unity-text-align: upper-center;
+    font-size: 7px;
+    -unity-font-style: italic;
+    color: rgba(255, 255, 255, 0.45);
+    background-color: transparent;
+    padding-top: 0;
+    padding-bottom: 0;
+    padding-left: 0;
+    padding-right: 0;
+    margin-top: 0;
+    margin-bottom: 1px;
+    pointer-events: none;
+    border-bottom-width: 1px;
+    border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Info Area (below title, for runtime data) ── */
+.info-container {
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 1px;
+    padding-bottom: 2px;
+    padding-left: 4px;
+    padding-right: 4px;
+    background-color: rgba(0, 0, 0, 0.25);
     border-top-width: 1px;
-    border-top-color: rgba(255, 255, 255, 0.1);
+    border-top-color: rgba(255, 255, 255, 0.06);
     z-index: 1;
     position: relative;
 }
 
 .info-label {
-    font-size: 10px;
+    font-size: 9px;
     color: rgb(200, 200, 200);
     -unity-text-align: middle-center;
     white-space: normal;
     text-overflow: ellipsis;
     overflow: hidden;
-    word-wrap: break-word;
-    text-align: center;
 }
 
 .running .info-label {
@@ -376,59 +389,35 @@
     color: rgb(255, 200, 200);
 }
 
-.running #node-state-border {
-    background-color: rgba(70, 143, 73, 0.3);
-    border-top-width: 2px;
-    border-top-color: rgb(70, 143, 73);
-    animation: borderPulse 2s ease-in-out infinite;
-}
-
-.success #node-state-border {
-    background-color: rgba(39, 255, 0, 0.2);
-    border-top-width: 2px;
-    border-top-color: rgb(39, 255, 0);
-}
-
-.failure #node-state-border {
-    background-color: rgba(255, 0, 0, 0.2);
-    border-top-width: 2px;
-    border-top-color: rgb(255, 0, 0);
-}
-
-.running #node-border {
-    box-shadow: 0 0 8px rgba(70, 143, 73, 0.5);
-}
-
-.success #node-border {
-    box-shadow: 0 0 6px rgba(39, 255, 0, 0.4);
-}
-
-.failure #node-border {
-    box-shadow: 0 0 6px rgba(255, 0, 0, 0.4);
-}
-
-#title {
-    position: relative;
-}
-
-.node {
-    min-width: 130px;
-    max-width: 160px;
-    width: 130px;
-}
-
+/* ── Edge Styles ── */
 .running-edge {
     --unity-colors-default: rgb(70, 143, 73);
 }
 
 .running-edge .edge-path {
-    stroke-width: 3px;
+    stroke-width: 4px;
 }
 
 .success-edge {
-    --unity-colors-default: rgb(39, 255, 0);
+    --unity-colors-default: rgb(60, 220, 30);
+}
+
+.success-edge .edge-path {
+    stroke-width: 3px;
 }
 
 .failure-edge {
-    --unity-colors-default: rgb(255, 0, 0);
+    --unity-colors-default: rgb(220, 50, 50);
+}
+
+.failure-edge .edge-path {
+    stroke-width: 3px;
+}
+
+.inactive-edge {
+    opacity: 0.3;
+}
+
+.inactive-edge .edge-path {
+    stroke-width: 2px;
 }
