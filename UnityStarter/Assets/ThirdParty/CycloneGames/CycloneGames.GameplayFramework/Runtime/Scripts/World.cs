@@ -1,34 +1,36 @@
+using System.Collections.Generic;
+
 namespace CycloneGames.GameplayFramework.Runtime
 {
     public interface IWorld
     {
-        public void SetGameMode(IGameMode inGameModeRef);
-        public GameMode GetGameMode();
-        public PlayerController GetPlayerController();      //  TODO: maybe a player index
-        public Pawn GetPlayerPawn();                        //  TODO: maybe a player index
+        void SetGameMode(IGameMode inGameModeRef);
+        GameMode GetGameMode();
+        GameState GetGameState();
+        PlayerController GetPlayerController();
+        Pawn GetPlayerPawn();
     }
-    
+
     /// <summary>
-    /// NOTE: This class is NOT similar with UWorld in UnrealEngine
+    /// Non-MonoBehaviour world context. Acts as a service locator for GameMode, GameState,
+    /// and player queries. Instantiated per-session (not tied to a scene lifecycle).
     /// </summary>
     public class World : IWorld
     {
         private GameMode savedGameMode;
-        
-        public void Initialize()
-        {
-            
-        }
+        private GameState gameState;
+
+        public void Initialize() { }
 
         public void SetGameMode(IGameMode inGameModeRef)
         {
             savedGameMode = (GameMode)inGameModeRef;
         }
 
-        public GameMode GetGameMode()
-        {
-            return savedGameMode;
-        }
+        public GameMode GetGameMode() => savedGameMode;
+
+        public void SetGameState(GameState inGameState) => gameState = inGameState;
+        public GameState GetGameState() => gameState;
 
         public PlayerController GetPlayerController()
         {

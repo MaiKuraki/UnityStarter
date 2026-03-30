@@ -6,15 +6,10 @@ namespace CycloneGames.GameplayFramework.Runtime
 {
     public class CameraManager : Actor
     {
-        private readonly static string DEBUG_FLAG = "<color=cyan>[Camera Manager]</color>";
+        private const string DEBUG_FLAG = "<color=cyan>[CameraManager]</color>";
 
         [SerializeField] protected float DefaultFOV = 60.0f;
 
-        /// <summary>
-        /// A property to hold the currently active virtual camera.
-        /// It can be read publicly but only set by this class or its subclasses.
-        /// This is no longer serialized, as it's determined at runtime.
-        /// </summary>
         public CinemachineCamera ActiveVirtualCamera { get; private set; }
 
         private PlayerController PCOwner;
@@ -23,23 +18,17 @@ namespace CycloneGames.GameplayFramework.Runtime
         public float GetLockedFOV() => lockedFOV;
         private Transform PendingViewTargetTF;
 
-        /// <summary>
-        /// Sets the provided camera as the new active camera.
-        /// This is the designated entry point for changing the active camera.
-        /// </summary>
-        /// <param name="newActiveCamera">The camera to be made active.</param>
+        // Cached to avoid FindObjectsByType GC allocation on every initialization
+        private static CinemachineCamera[] s_cameraBuffer;
+
         public virtual void SetActiveVirtualCamera(CinemachineCamera newActiveCamera)
         {
-            // This is the perfect place for future expansion, e.g., logging or events.
-            // CLogger.Log($"New active camera set: {newActiveCamera?.name}");
-
             ActiveVirtualCamera = newActiveCamera;
         }
 
         public virtual void SetFOV(float NewFOV)
         {
             lockedFOV = NewFOV;
-            // Now, this method operates on whichever camera is currently active.
             if (ActiveVirtualCamera != null)
             {
                 ActiveVirtualCamera.Lens.FieldOfView = lockedFOV;
@@ -49,7 +38,6 @@ namespace CycloneGames.GameplayFramework.Runtime
         public virtual void SetViewTarget(Transform NewTargetTF)
         {
             PendingViewTargetTF = NewTargetTF;
-            // This also operates on the active camera.
             if (ActiveVirtualCamera != null && PendingViewTargetTF != null)
             {
                 ActiveVirtualCamera.Follow = PendingViewTargetTF;
@@ -62,20 +50,22 @@ namespace CycloneGames.GameplayFramework.Runtime
             PCOwner = PlayerController;
             SetFOV(DefaultFOV);
             SetViewTarget(PlayerController?.transform);
-            // If no active virtual camera has been explicitly set, attempt to find one at runtime.
+
             if (ActiveVirtualCamera == null)
             {
-                var brain = Camera.main ? Camera.main.GetComponent<CinemachineBrain>() : null;
-                if (brain != null)
+                var mainCam = Camera.main;
+                if (mainCam != null)
                 {
-                    // Try find any virtual camera in scene; prefer one that already follows the target
-                    var candidates = GameObject.FindObjectsByType<CinemachineCamera>(FindObjectsSortMode.None);
-                    if (candidates != null && candidates.Length > 0)
+                    var brain = mainCam.GetComponent<CinemachineBrain>();
+                    if (brain != null)
                     {
-                        // Choose first for determinism; callers can override later via SetActiveVirtualCamera
-                        SetActiveVirtualCamera(candidates[0]);
-                        // Ensure follow/look target are set
-                        SetViewTarget(PlayerController?.transform);
+                        // Reuse static buffer to avoid GC from FindObjectsByType
+                        s_cameraBuffer = FindObjectsByType<CinemachineCamera>(FindObjectsSortMode.None);
+                        if (s_cameraBuffer != null && s_cameraBuffer.Length > 0)
+                        {
+                            SetActiveVirtualCamera(s_cameraBuffer[0]);
+                            SetViewTarget(PlayerController?.transform);
+                        }
                     }
                 }
             }
@@ -85,7 +75,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         protected override void Awake()
         {
             base.Awake();
-            CLogger.LogInfo($"{DEBUG_FLAG}\nYour working camera for CameraManager must have a 'CinemachineBrain' component, this is just a notice.\nIf your camera not following the PlayerController by default, check your Camera.\n");
+            CLogger.LogInfo($"{DEBUG_FLAG} CameraManager requires a CinemachineBrain on the active Camera.");
         }
     }
 }

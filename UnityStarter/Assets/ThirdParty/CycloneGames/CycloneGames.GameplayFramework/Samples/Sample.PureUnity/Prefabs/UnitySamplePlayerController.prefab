@@ -45,3 +45,6 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   initialLifeSpanSec: 0
+  bCanBeDamaged: 1
+  bHidden: 0
+  tags: []

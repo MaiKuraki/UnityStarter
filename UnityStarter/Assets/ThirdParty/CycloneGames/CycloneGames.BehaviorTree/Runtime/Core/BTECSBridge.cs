@@ -6,7 +6,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
     /// while keeping the tree structure in managed code.
     /// 
     /// Usage pattern (in an ISystem):
-    ///   foreach (var (btRef, transform) in SystemAPI.Query&lt;BTEntityRef, LocalTransform&gt;())
+    ///   foreach (var (btRef, transform) in SystemAPI.Query<BTEntityRef, LocalTransform>())
     ///   {
     ///       var ctx = new ECSBTContext { Entity = entity, EntityManager = mgr };
     ///       btRef.RuntimeTree.Tick();
