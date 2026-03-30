@@ -22,6 +22,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public RuntimeAbortType AbortType { get; set; } = RuntimeAbortType.None;
 
+        /// <summary>
+        /// Current child index for composites that execute sequentially.
+        /// Override in subclasses (Sequencer, Selector, etc.) for network snapshot support.
+        /// </summary>
+        public virtual int CurrentIndex => 0;
+
         public override bool CanEvaluate
         {
             get

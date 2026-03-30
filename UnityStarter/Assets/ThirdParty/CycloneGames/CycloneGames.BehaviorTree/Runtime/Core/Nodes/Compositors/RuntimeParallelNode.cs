@@ -47,6 +47,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
                 var state = children[i].Run(blackboard);
                 if (state == RuntimeState.Success || state == RuntimeState.Failure)
                 {
+                    AbortAllChildren(blackboard);
                     return RuntimeState.Success;
                 }
             }
@@ -59,7 +60,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             for (int i = 0; i < children.Length; i++)
             {
                 var state = children[i].Run(blackboard);
-                if (state == RuntimeState.Failure) return RuntimeState.Success;
+                if (state == RuntimeState.Failure)
+                {
+                    AbortAllChildren(blackboard);
+                    return RuntimeState.Success;
+                }
             }
             return RuntimeState.Running;
         }
@@ -70,21 +75,27 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             for (int i = 0; i < children.Length; i++)
             {
                 var state = children[i].Run(blackboard);
-                if (state == RuntimeState.Success) return RuntimeState.Success;
+                if (state == RuntimeState.Success)
+                {
+                    AbortAllChildren(blackboard);
+                    return RuntimeState.Success;
+                }
             }
             return RuntimeState.Running;
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        private void AbortAllChildren(RuntimeBlackboard blackboard)
         {
             var children = Children;
             for (int i = 0; i < children.Length; i++)
             {
-                if (children[i].IsStarted)
-                {
-                    children[i].Abort(blackboard);
-                }
+                if (children[i].IsStarted) children[i].Abort(blackboard);
             }
+        }
+
+        protected override void OnStop(RuntimeBlackboard blackboard)
+        {
+            AbortAllChildren(blackboard);
         }
     }
 }
