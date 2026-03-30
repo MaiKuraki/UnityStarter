@@ -17,9 +17,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     public class BTRunnerComponent : MonoBehaviour
     {
         private const string MESSAGE_KEY = "Message";
-        private static readonly System.Collections.Generic.List<BTRunnerComponent> _activeRunners = new System.Collections.Generic.List<BTRunnerComponent>(64);
+        private static readonly System.Collections.Generic.List<BTRunnerComponent> _activeRunnersList = new System.Collections.Generic.List<BTRunnerComponent>(64);
+        private static readonly System.Collections.Generic.HashSet<BTRunnerComponent> _activeRunnersSet = new System.Collections.Generic.HashSet<BTRunnerComponent>();
 
-        public static System.Collections.Generic.IReadOnlyList<BTRunnerComponent> ActiveRunners => _activeRunners;
+        public static System.Collections.Generic.IReadOnlyList<BTRunnerComponent> ActiveRunners => _activeRunnersList;
 
         public event Action OnTreeStopped;
 
@@ -51,15 +52,26 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private void OnEnable()
         {
-            if (!_activeRunners.Contains(this))
+            if (_activeRunnersSet.Add(this))
             {
-                _activeRunners.Add(this);
+                _activeRunnersList.Add(this);
             }
         }
 
         private void OnDisable()
         {
-            _activeRunners.Remove(this);
+            if (_activeRunnersSet.Remove(this))
+            {
+                // Swap-remove: O(1) instead of O(n) List.Remove
+                int idx = _activeRunnersList.IndexOf(this);
+                if (idx >= 0)
+                {
+                    int last = _activeRunnersList.Count - 1;
+                    if (idx < last)
+                        _activeRunnersList[idx] = _activeRunnersList[last];
+                    _activeRunnersList.RemoveAt(last);
+                }
+            }
         }
 
         private void Awake()
@@ -160,18 +172,30 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         private void LateUpdate()
         {
             if (_nextTree == null) return;
+            UnregisterFromManager();
             if (_runtimeTree != null)
             {
                 _runtimeTree.Stop();
             }
             behaviorTree = _nextTree;
             InitializeRuntimeTree();
+            RegisterWithManager();
             _nextTree = null;
         }
 
         private void OnDestroy()
         {
-            _activeRunners.Remove(this);
+            if (_activeRunnersSet.Remove(this))
+            {
+                int idx = _activeRunnersList.IndexOf(this);
+                if (idx >= 0)
+                {
+                    int last = _activeRunnersList.Count - 1;
+                    if (idx < last)
+                        _activeRunnersList[idx] = _activeRunnersList[last];
+                    _activeRunnersList.RemoveAt(last);
+                }
+            }
             UnregisterFromManager();
             if (_runtimeTree != null)
             {

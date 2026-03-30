@@ -1,6 +1,6 @@
 ﻿using System;
-using System.Linq;
 using System.Reflection;
+using System.Text;
 using CycloneGames.BehaviorTree.Runtime.Attributes;
 using CycloneGames.BehaviorTree.Runtime.Conditions;
 using CycloneGames.BehaviorTree.Runtime.Data;
@@ -28,6 +28,33 @@ namespace CycloneGames.BehaviorTree.Editor
         public Port OutputPort;
 
         private BehaviorTreeView _treeView;
+
+        // ── Static FieldInfo cache (avoid per-frame reflection) ──
+        private static FieldInfo s_debugLogMsgField;
+        private static FieldInfo s_waitDurationField;
+        private static FieldInfo s_msgPassKeyField;
+        private static FieldInfo s_msgPassMsgField;
+        private static FieldInfo s_msgRecvKeyField;
+        private static FieldInfo s_msgRecvMsgField;
+        private static FieldInfo s_retryMaxField;
+        private static FieldInfo s_timeoutSecondsField;
+        private static FieldInfo s_delaySecondsField;
+        private static FieldInfo s_switchKeyField;
+        private static FieldInfo s_parallelSuccessField;
+        private static FieldInfo s_msgRemoveKeyField;
+        private static FieldInfo s_subTreeAssetField;
+        private static FieldInfo s_serviceIntervalField;
+        private static FieldInfo s_serviceDeviationField;
+        private static FieldInfo s_bbCompKeyField;
+        private static FieldInfo s_bbCompOpField;
+        private static FieldInfo s_bbCompTypeField;
+        private static FieldInfo s_utilityScoreKeysField;
+
+        // ── Info text throttle (avoid per-frame string allocs) ──
+        private string _cachedInfoText = "";
+        private double _lastInfoUpdateTime;
+        private const double INFO_UPDATE_INTERVAL = 0.1; // ~10 updates/sec
+        private static readonly StringBuilder s_sb = new StringBuilder(128);
 
         internal void SetTreeView(BehaviorTreeView treeView)
         {
@@ -94,12 +121,23 @@ namespace CycloneGames.BehaviorTree.Editor
         }
         public CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode RuntimeNode => GetRuntimeNode();
 
+        /// <summary>Returns the runtime state of the tree root (used to distinguish
+        /// "tree completed" from "node not yet reached in current iteration").</summary>
+        private CycloneGames.BehaviorTree.Runtime.Core.RuntimeState GetTreeRootRuntimeState()
+        {
+            if (_treeView == null) return CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.NotEntered;
+            var runner = _treeView.GetBoundRunner();
+            if (runner == null || runner.RuntimeTree == null) return CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.NotEntered;
+            return runner.RuntimeTree.State;
+        }
+
         // Helper to avoid repeated lookups if we cache it per frame? 
         // For now calling GetRuntimeNode() is safer as Runner might change.
 
 
         private Label _stateLabel;
         private Label _infoLabel;
+        private Label _badgeLabel;
         private VisualElement _infoContainer;
 
         // Progress bar elements for WaitNode and Sequencer/Selector
@@ -132,29 +170,7 @@ namespace CycloneGames.BehaviorTree.Editor
             _lastKnownState = BTState.NOT_ENTERED;
         }
 
-        /// <summary>
-        /// Gets the last known state of a child node by finding its corresponding node view.
-        /// </summary>
-        private BTState GetChildLastKnownState(BTNode childNode)
-        {
-            if (childNode == null || _treeView == null) return BTState.NOT_ENTERED;
 
-            var nodeList = _treeView.nodes.ToList();
-            int nodeCount = nodeList.Count;
-            for (int i = 0; i < nodeCount; i++)
-            {
-                if (nodeList[i] is BTNodeView nodeView && nodeView.Node != null)
-                {
-                    var runtimeNode = nodeView.Node;
-                    if (runtimeNode != null && runtimeNode.GUID == childNode.GUID)
-                    {
-                        return nodeView.GetLastKnownState();
-                    }
-                }
-            }
-
-            return childNode.State;
-        }
 
         public static string ConvertToReadableName(string name)
         {
@@ -183,6 +199,7 @@ namespace CycloneGames.BehaviorTree.Editor
             SetUpClasses();
             CreateInfoElements();
             SetupTooltip();
+            CreateTypeBadge();
         }
 
         public BTNodeView(BTNode node, Vector2 position) : base(AssetDatabase.GetAssetPath(Resources.Load<VisualTreeAsset>("BT_Node_Layout")))
@@ -200,6 +217,7 @@ namespace CycloneGames.BehaviorTree.Editor
             SetUpClasses();
             CreateInfoElements();
             SetupTooltip();
+            CreateTypeBadge();
         }
 
         public override void OnSelected()
@@ -272,14 +290,20 @@ namespace CycloneGames.BehaviorTree.Editor
             }
             else if (currentState == BTState.RUNNING && isStarted)
             {
-                if (_lastKnownState != BTState.SUCCESS && _lastKnownState != BTState.FAILURE)
-                {
-                    _lastKnownState = BTState.RUNNING;
-                }
+                _lastKnownState = BTState.RUNNING;
             }
-            else if (currentState == BTState.NOT_ENTERED)
+            else if (currentState == BTState.NOT_ENTERED && !isStarted)
             {
-                // Keep last known state if tree finished
+                // Node not entered: if the tree root is still running, this node
+                // hasn't been reached yet in the current iteration (e.g. Repeat
+                // restarted children). Reset cached state so stale SUCCESS/FAILURE
+                // from a previous iteration doesn't linger.
+                var treeRootState = GetTreeRootRuntimeState();
+                if (treeRootState == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running)
+                {
+                    _lastKnownState = BTState.NOT_ENTERED;
+                }
+                // else: tree completed — keep last known state for post-run display
             }
 
             UpdateInfoLabel();
@@ -354,21 +378,19 @@ namespace CycloneGames.BehaviorTree.Editor
 
             if (!Application.isPlaying)
             {
-                // Show empty bar in editor mode
                 _progressBarFill.style.width = new StyleLength(new Length(0, LengthUnit.Percent));
 
-                // Get duration from WaitNode for display
                 if (_node is WaitNode waitNode)
                 {
-                    var durationField = typeof(WaitNode).GetField("_duration", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    var duration = durationField != null ? (float)durationField.GetValue(waitNode) : 0f;
-                    _progressLabel.text = $"{duration:F1}s";
+                    s_waitDurationField ??= typeof(WaitNode).GetField("_duration", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var duration = s_waitDurationField != null ? (float)s_waitDurationField.GetValue(waitNode) : 0f;
+                    s_sb.Clear(); s_sb.AppendFormat("{0:F1}", duration); s_sb.Append('s');
+                    _progressLabel.text = s_sb.ToString();
                     _progressBarContainer.style.display = DisplayStyle.Flex;
                 }
                 return;
             }
 
-            // Runtime mode - get progress from RuntimeWaitNode
             var runtimeNode = GetRuntimeNode();
             if (runtimeNode is CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeWaitNode waitRuntimeNode)
             {
@@ -376,27 +398,28 @@ namespace CycloneGames.BehaviorTree.Editor
                 float elapsed = Time.time - waitRuntimeNode.StartTime;
                 float progress = duration > 0 ? Mathf.Clamp01(elapsed / duration) : 0f;
 
-                // Set fill width
                 _progressBarFill.style.width = new StyleLength(new Length(progress * 100f, LengthUnit.Percent));
 
-                // Update colors based on state
                 var state = waitRuntimeNode.State;
                 if (state == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running)
                 {
-                    _progressBarFill.style.backgroundColor = new Color(0.15f, 0.35f, 0.17f, 0.9f); // Dark green 90% opacity
+                    _progressBarFill.style.backgroundColor = new Color(0.15f, 0.35f, 0.17f, 0.9f);
                     float remaining = Mathf.Max(0f, duration - elapsed);
-                    _progressLabel.text = $"{remaining:F1}s / {duration:F1}s";
+                    s_sb.Clear(); s_sb.AppendFormat("{0:F1}", remaining); s_sb.Append("s / "); s_sb.AppendFormat("{0:F1}", duration); s_sb.Append('s');
+                    _progressLabel.text = s_sb.ToString();
                 }
                 else if (state == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success)
                 {
-                    _progressBarFill.style.backgroundColor = new Color(0.12f, 0.6f, 0.12f, 0.9f); // Green 90% opacity
+                    _progressBarFill.style.backgroundColor = new Color(0.12f, 0.6f, 0.12f, 0.9f);
                     _progressBarFill.style.width = new StyleLength(new Length(100, LengthUnit.Percent));
-                    _progressLabel.text = $"Done ({duration:F1}s)";
+                    s_sb.Clear(); s_sb.Append("Done ("); s_sb.AppendFormat("{0:F1}", duration); s_sb.Append("s)");
+                    _progressLabel.text = s_sb.ToString();
                 }
                 else
                 {
                     _progressBarFill.style.width = new StyleLength(new Length(0, LengthUnit.Percent));
-                    _progressLabel.text = $"{duration:F1}s";
+                    s_sb.Clear(); s_sb.AppendFormat("{0:F1}", duration); s_sb.Append('s');
+                    _progressLabel.text = s_sb.ToString();
                 }
 
                 _progressBarContainer.style.display = DisplayStyle.Flex;
@@ -404,26 +427,25 @@ namespace CycloneGames.BehaviorTree.Editor
         }
 
         /// <summary>
-        /// Gets node-specific runtime information for display (e.g., WaitNode remaining time).
-        /// Also shows static configuration info when not in play mode.
+        /// Gets node-specific runtime information for display.
+        /// Throttled to avoid per-frame string allocations.
         /// </summary>
         private string GetNodeSpecificInfo()
         {
-            // Editor mode - show static configuration from BTNode (ScriptableObject)
+            double now = EditorApplication.timeSinceStartup;
+            if (now - _lastInfoUpdateTime < INFO_UPDATE_INTERVAL)
+                return _cachedInfoText;
+            _lastInfoUpdateTime = now;
+
             if (!Application.isPlaying)
             {
-                return GetEditorModeInfo();
+                _cachedInfoText = GetEditorModeInfo();
+                return _cachedInfoText;
             }
 
-            // Runtime mode - show live runtime state from RuntimeNode
             var runtimeNode = GetRuntimeNode();
-            if (runtimeNode == null)
-            {
-                // Fallback to editor info if runtime node not available
-                return GetEditorModeInfo();
-            }
-
-            return GetRuntimeModeInfo(runtimeNode);
+            _cachedInfoText = runtimeNode == null ? GetEditorModeInfo() : GetRuntimeModeInfo(runtimeNode);
+            return _cachedInfoText;
         }
 
         private string GetEditorModeInfo()
@@ -434,29 +456,60 @@ namespace CycloneGames.BehaviorTree.Editor
             switch (_node)
             {
                 case DebugLogNode logNode:
-                    // Access message via serialized field using reflection
-                    var msgField = typeof(DebugLogNode).GetField("_message", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    var msg = msgField?.GetValue(logNode) as string ?? "";
-                    return $"\"{TruncateText(msg, 20)}\"";
+                    s_debugLogMsgField ??= typeof(DebugLogNode).GetField("_message", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var msg = s_debugLogMsgField?.GetValue(logNode) as string ?? "";
+                    s_sb.Clear(); s_sb.Append('"'); s_sb.Append(TruncateText(msg, 20)); s_sb.Append('"');
+                    return s_sb.ToString();
 
                 case WaitNode waitNode:
-                    var durationField = typeof(WaitNode).GetField("_duration", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    var duration = durationField != null ? (float)durationField.GetValue(waitNode) : 0f;
-                    return $"Duration: {duration:F2}s";
+                    s_waitDurationField ??= typeof(WaitNode).GetField("_duration", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var duration = s_waitDurationField != null ? (float)s_waitDurationField.GetValue(waitNode) : 0f;
+                    s_sb.Clear(); s_sb.Append("Duration: "); s_sb.AppendFormat("{0:F2}", duration); s_sb.Append('s');
+                    return s_sb.ToString();
 
                 case Runtime.Nodes.Actions.BlackBoards.MessagePassNode passNode:
-                    var keyFieldP = typeof(Runtime.Nodes.Actions.BlackBoards.MessagePassNode).GetField("_key", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    var msgFieldP = typeof(Runtime.Nodes.Actions.BlackBoards.MessagePassNode).GetField("_message", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    var keyP = keyFieldP?.GetValue(passNode) as string ?? "";
-                    var msgP = msgFieldP?.GetValue(passNode) as string ?? "";
-                    return $"[{keyP}] = \"{TruncateText(msgP, 15)}\"";
+                    s_msgPassKeyField ??= typeof(Runtime.Nodes.Actions.BlackBoards.MessagePassNode).GetField("_key", BindingFlags.NonPublic | BindingFlags.Instance);
+                    s_msgPassMsgField ??= typeof(Runtime.Nodes.Actions.BlackBoards.MessagePassNode).GetField("_message", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var keyP = s_msgPassKeyField?.GetValue(passNode) as string ?? "";
+                    var msgP = s_msgPassMsgField?.GetValue(passNode) as string ?? "";
+                    s_sb.Clear(); s_sb.Append('['); s_sb.Append(keyP); s_sb.Append("] = \""); s_sb.Append(TruncateText(msgP, 15)); s_sb.Append('"');
+                    return s_sb.ToString();
 
                 case Runtime.Conditions.BlackBoards.MessageReceiveNode receiveNode:
-                    var keyFieldR = typeof(Runtime.Conditions.BlackBoards.MessageReceiveNode).GetField("_key", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    var msgFieldR = typeof(Runtime.Conditions.BlackBoards.MessageReceiveNode).GetField("_message", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-                    var keyR = keyFieldR?.GetValue(receiveNode) as string ?? "";
-                    var msgR = msgFieldR?.GetValue(receiveNode) as string ?? "";
-                    return $"[{keyR}] == \"{TruncateText(msgR, 15)}\"";
+                    s_msgRecvKeyField ??= typeof(Runtime.Conditions.BlackBoards.MessageReceiveNode).GetField("_key", BindingFlags.NonPublic | BindingFlags.Instance);
+                    s_msgRecvMsgField ??= typeof(Runtime.Conditions.BlackBoards.MessageReceiveNode).GetField("_message", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var keyR = s_msgRecvKeyField?.GetValue(receiveNode) as string ?? "";
+                    var msgR = s_msgRecvMsgField?.GetValue(receiveNode) as string ?? "";
+                    s_sb.Clear(); s_sb.Append('['); s_sb.Append(keyR); s_sb.Append("] == \""); s_sb.Append(TruncateText(msgR, 15)); s_sb.Append('"');
+                    return s_sb.ToString();
+
+                case Runtime.Nodes.Actions.BlackBoards.MessageRemoveNode removeNode:
+                    s_msgRemoveKeyField ??= typeof(Runtime.Nodes.Actions.BlackBoards.MessageRemoveNode).GetField("_key", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var keyRm = s_msgRemoveKeyField?.GetValue(removeNode) as string ?? "";
+                    s_sb.Clear(); s_sb.Append("Remove [" ); s_sb.Append(keyRm); s_sb.Append(']');
+                    return s_sb.ToString();
+
+                case BBComparisonNode bbCompNode:
+                    s_bbCompKeyField ??= typeof(BBComparisonNode).GetField("_key", BindingFlags.NonPublic | BindingFlags.Instance);
+                    s_bbCompOpField ??= typeof(BBComparisonNode).GetField("_operator", BindingFlags.NonPublic | BindingFlags.Instance);
+                    s_bbCompTypeField ??= typeof(BBComparisonNode).GetField("_valueType", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var bbKey = s_bbCompKeyField?.GetValue(bbCompNode) as string ?? "";
+                    var bbOp = s_bbCompOpField != null ? (CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBComparisonOp)s_bbCompOpField.GetValue(bbCompNode) : CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBComparisonOp.IsSet;
+                    var bbType = s_bbCompTypeField != null ? (CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBValueType)s_bbCompTypeField.GetValue(bbCompNode) : CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBValueType.Int;
+                    s_sb.Clear(); s_sb.Append('['); s_sb.Append(bbKey); s_sb.Append("] "); s_sb.Append(bbOp); s_sb.Append(" ("); s_sb.Append(bbType); s_sb.Append(')');
+                    return s_sb.ToString();
+
+                case ServiceNode serviceNode:
+                    s_serviceIntervalField ??= typeof(ServiceNode).GetField("_interval", BindingFlags.NonPublic | BindingFlags.Instance);
+                    s_serviceDeviationField ??= typeof(ServiceNode).GetField("_randomDeviation", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var svcInterval = s_serviceIntervalField != null ? (float)s_serviceIntervalField.GetValue(serviceNode) : 0.5f;
+                    var svcDeviation = s_serviceDeviationField != null ? (float)s_serviceDeviationField.GetValue(serviceNode) : 0f;
+                    s_sb.Clear(); s_sb.Append("Every "); s_sb.AppendFormat("{0:F2}", svcInterval); s_sb.Append('s');
+                    if (svcDeviation > 0f) { s_sb.Append(" ±"); s_sb.AppendFormat("{0:F2}", svcDeviation); }
+                    return s_sb.ToString();
+
+                case BlackBoardNode _:
+                    return "BB Scope";
 
                 case RepeatNode repeatNode:
                     if (repeatNode.RepeatForever)
@@ -466,8 +519,64 @@ namespace CycloneGames.BehaviorTree.Editor
                     else
                         return $"Repeat: (configured)";
 
+                case RetryNode retryNode:
+                    s_retryMaxField ??= typeof(RetryNode).GetField("_maxAttempts", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var maxAttempts = s_retryMaxField != null ? (int)s_retryMaxField.GetValue(retryNode) : 3;
+                    s_sb.Clear(); s_sb.Append("Max Attempts: "); s_sb.Append(maxAttempts);
+                    return s_sb.ToString();
+
+                case TimeoutNode timeoutNode:
+                    s_timeoutSecondsField ??= typeof(TimeoutNode).GetField("_timeoutSeconds", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var timeout = s_timeoutSecondsField != null ? (float)s_timeoutSecondsField.GetValue(timeoutNode) : 5f;
+                    s_sb.Clear(); s_sb.Append("Timeout: "); s_sb.AppendFormat("{0:F1}", timeout); s_sb.Append('s');
+                    return s_sb.ToString();
+
+                case DelayNode delayNode:
+                    s_delaySecondsField ??= typeof(DelayNode).GetField("_delaySeconds", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var delay = s_delaySecondsField != null ? (float)s_delaySecondsField.GetValue(delayNode) : 1f;
+                    s_sb.Clear(); s_sb.Append("Delay: "); s_sb.AppendFormat("{0:F1}", delay); s_sb.Append('s');
+                    return s_sb.ToString();
+
+                case ForceFailureNode _:
+                    return "→ FAILURE";
+
+                case RunOnceNode _:
+                    return "Run Once";
+
+                case KeepRunningUntilFailureNode _:
+                    return "Until Failure";
+
+                case SubTreeNode subTreeNode:
+                    s_subTreeAssetField ??= typeof(SubTreeNode).GetField("_subTreeAsset", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var subAsset = s_subTreeAssetField?.GetValue(subTreeNode) as Runtime.BehaviorTree;
+                    if (subAsset != null)
+                    { s_sb.Clear(); s_sb.Append("Tree: "); s_sb.Append(subAsset.name); return s_sb.ToString(); }
+                    return "SubTree: (none)";
+
+                case SwitchNode switchNode:
+                    s_switchKeyField ??= typeof(SwitchNode).GetField("_variableKey", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var key = s_switchKeyField?.GetValue(switchNode) as string ?? "";
+                    if (string.IsNullOrEmpty(key)) return "Switch";
+                    s_sb.Clear(); s_sb.Append("Key: "); s_sb.Append(key);
+                    return s_sb.ToString();
+
+                case ParallelAllNode parallelAll:
+                    s_parallelSuccessField ??= typeof(ParallelAllNode).GetField("_successThreshold", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var st = s_parallelSuccessField != null ? (int)s_parallelSuccessField.GetValue(parallelAll) : -1;
+                    if (st < 0) return "All must succeed";
+                    s_sb.Clear(); s_sb.Append("Need "); s_sb.Append(st); s_sb.Append(" success");
+                    return s_sb.ToString();
+
+                case UtilitySelectorNode utilNode:
+                    s_utilityScoreKeysField ??= typeof(UtilitySelectorNode).GetField("_scoreKeys", BindingFlags.NonPublic | BindingFlags.Instance);
+                    var scoreKeys = s_utilityScoreKeysField?.GetValue(utilNode) as System.Collections.Generic.List<string>;
+                    int keysCnt = scoreKeys != null ? scoreKeys.Count : 0;
+                    s_sb.Clear(); s_sb.Append("Utility ("); s_sb.Append(keysCnt); s_sb.Append(" keys)");
+                    return s_sb.ToString();
+
                 case CompositeNode composite:
-                    return $"Children: {composite.Children.Count}";
+                    s_sb.Clear(); s_sb.Append("Children: "); s_sb.Append(composite.Children.Count);
+                    return s_sb.ToString();
 
                 case DecoratorNode decorator:
                     return decorator.Child != null ? "Has Child" : "No Child";
@@ -489,37 +598,106 @@ namespace CycloneGames.BehaviorTree.Editor
                     {
                         float remaining = Mathf.Max(0f, actualDuration - time);
                         float progress = actualDuration > 0 ? Mathf.Clamp01(time / actualDuration) * 100f : 0f;
-                        return $"Remaining: {remaining:F2}s ({progress:F0}%)";
+                        s_sb.Clear(); s_sb.Append("Remaining: "); s_sb.AppendFormat("{0:F2}", remaining); s_sb.Append("s ("); s_sb.AppendFormat("{0:F0}", progress); s_sb.Append("%)");
+                        return s_sb.ToString();
                     }
                     else if (waitNode.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success)
                     {
-                        return $"Completed: {actualDuration:F2}s";
+                        s_sb.Clear(); s_sb.Append("Completed: "); s_sb.AppendFormat("{0:F2}", actualDuration); s_sb.Append('s');
+                        return s_sb.ToString();
                     }
-                    return $"Duration: {actualDuration:F2}s";
+                    s_sb.Clear(); s_sb.Append("Duration: "); s_sb.AppendFormat("{0:F2}", actualDuration); s_sb.Append('s');
+                    return s_sb.ToString();
 
                 case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeDebugLogNode logNode:
-                    return $"\"{TruncateText(logNode.Message, 20)}\"";
+                    s_sb.Clear(); s_sb.Append('"'); s_sb.Append(TruncateText(logNode.Message, 20)); s_sb.Append('"');
+                    return s_sb.ToString();
 
                 case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeMessagePassNode passNode:
-                    return $"[{passNode.KeyHash}] = \"{TruncateText(passNode.Message, 15)}\"";
+                    s_sb.Clear(); s_sb.Append('['); s_sb.Append(passNode.KeyHash); s_sb.Append("] = \""); s_sb.Append(TruncateText(passNode.Message, 15)); s_sb.Append('"');
+                    return s_sb.ToString();
 
                 case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeRepeatNode repeatNode:
+                    s_sb.Clear();
                     if (repeatNode.RepeatForever)
-                        return $"Count: {repeatNode.CurrentRepeatCount}";
+                    { s_sb.Append("Count: "); s_sb.Append(repeatNode.CurrentRepeatCount + 1); }
+                    else if (repeatNode.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success)
+                    { s_sb.Append(repeatNode.RepeatCount); s_sb.Append('/'); s_sb.Append(repeatNode.RepeatCount); }
                     else
-                        return $"{repeatNode.CurrentRepeatCount}/{repeatNode.RepeatCount}";
+                    { s_sb.Append(repeatNode.CurrentRepeatCount + 1); s_sb.Append('/'); s_sb.Append(repeatNode.RepeatCount); }
+                    return s_sb.ToString();
 
                 case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeWaitSuccessNode waitSuccessNode:
-                    return $"Fail After: {waitSuccessNode.ActualWaitTime:F2}s";
+                    s_sb.Clear(); s_sb.Append("Fail After: "); s_sb.AppendFormat("{0:F2}", waitSuccessNode.ActualWaitTime); s_sb.Append('s');
+                    return s_sb.ToString();
 
                 case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeSequencer sequencer:
-                    return $"Current: {sequencer.CurrentIndex + 1}/{sequencer.ChildCount}";
+                    s_sb.Clear();
+                    if (sequencer.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success)
+                    { s_sb.Append("Done "); s_sb.Append(sequencer.ChildCount); s_sb.Append('/'); s_sb.Append(sequencer.ChildCount); }
+                    else if (sequencer.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Failure)
+                    { s_sb.Append("Failed "); s_sb.Append(sequencer.CurrentIndex + 1); s_sb.Append('/'); s_sb.Append(sequencer.ChildCount); }
+                    else
+                    { s_sb.Append("Current: "); s_sb.Append(sequencer.CurrentIndex + 1); s_sb.Append('/'); s_sb.Append(sequencer.ChildCount); }
+                    return s_sb.ToString();
 
                 case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeSelector selector:
-                    return $"Trying: {selector.CurrentIndex + 1}/{selector.ChildCount}";
+                    s_sb.Clear();
+                    if (selector.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success)
+                    { s_sb.Append("Found "); s_sb.Append(selector.CurrentIndex + 1); s_sb.Append('/'); s_sb.Append(selector.ChildCount); }
+                    else if (selector.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Failure)
+                    { s_sb.Append("Exhausted "); s_sb.Append(selector.ChildCount); s_sb.Append('/'); s_sb.Append(selector.ChildCount); }
+                    else
+                    { s_sb.Append("Trying: "); s_sb.Append(selector.CurrentIndex + 1); s_sb.Append('/'); s_sb.Append(selector.ChildCount); }
+                    return s_sb.ToString();
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeRetryNode retryNode:
+                    s_sb.Clear(); s_sb.Append("Attempt: "); s_sb.Append(retryNode.MaxAttempts);
+                    return s_sb.ToString();
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeTimeoutNode timeoutNode:
+                    s_sb.Clear(); s_sb.Append("Timeout: "); s_sb.AppendFormat("{0:F1}", timeoutNode.TimeoutSeconds); s_sb.Append('s');
+                    return s_sb.ToString();
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeDelayNode delayNode:
+                    s_sb.Clear(); s_sb.Append("Delay: "); s_sb.AppendFormat("{0:F1}", delayNode.DelaySeconds); s_sb.Append('s');
+                    return s_sb.ToString();
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeForceFailureNode _:
+                    return "\u2192 FAILURE";
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeRunOnceNode _:
+                    return "Run Once";
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeKeepRunningUntilFailureNode _:
+                    return "Until Failure";
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeParallelAllNode parallelAll:
+                    if (parallelAll.SuccessThreshold < 0) return "All must succeed";
+                    s_sb.Clear(); s_sb.Append("Need "); s_sb.Append(parallelAll.SuccessThreshold); s_sb.Append(" success");
+                    return s_sb.ToString();
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeBBComparisonNode bbCompRt:
+                    s_sb.Clear(); s_sb.Append(bbCompRt.Operator.ToString());
+                    if (bbCompRt.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Failure)
+                        s_sb.Append(" ✗");
+                    else if (bbCompRt.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success)
+                        s_sb.Append(" ✓");
+                    return s_sb.ToString();
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeServiceNode serviceRt:
+                    s_sb.Clear(); s_sb.Append("Service "); s_sb.AppendFormat("{0:F2}", serviceRt.Interval); s_sb.Append('s');
+                    return s_sb.ToString();
+
+                case CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeUtilitySelector utilRt:
+                    s_sb.Clear();
+                    if (utilRt.State == CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running)
+                    { s_sb.Append("Best: "); s_sb.Append(utilRt.CurrentIndex + 1); s_sb.Append('/'); s_sb.Append(utilRt.ChildCount); }
+                    else
+                    { s_sb.Append("Children: "); s_sb.Append(utilRt.ChildCount); }
+                    return s_sb.ToString();
             }
 
-            // Fallback to editor info for nodes without runtime-specific display
             return GetEditorModeInfo();
         }
 
@@ -535,9 +713,11 @@ namespace CycloneGames.BehaviorTree.Editor
         /// </summary>
         private void CreateInfoElements()
         {
+            var topContainer = this.Q<VisualElement>("top");
             var titleContainer = this.Q<VisualElement>("title");
-            if (titleContainer == null) return;
+            if (topContainer == null || titleContainer == null) return;
 
+            // State label goes into #top between #input and #title (its own row)
             _stateLabel = new Label
             {
                 name = "state-label",
@@ -545,7 +725,8 @@ namespace CycloneGames.BehaviorTree.Editor
             };
             _stateLabel.AddToClassList("state-label");
             _stateLabel.style.display = DisplayStyle.None;
-            titleContainer.Add(_stateLabel);
+            int titleIndex = topContainer.IndexOf(titleContainer);
+            topContainer.Insert(titleIndex, _stateLabel);
 
             _infoContainer = new VisualElement
             {
@@ -573,6 +754,9 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 contents.Add(_infoContainer);
             }
+
+            // Initial info update for editor mode
+            UpdateInfoLabel();
         }
 
         /// <summary>
@@ -641,6 +825,20 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 this.tooltip = _node.GetType().Name;
             }
+        }
+
+        private void CreateTypeBadge()
+        {
+            var attribute = _node.GetType().GetCustomAttribute<BTInfoAttribute>();
+            if (attribute == null || string.IsNullOrEmpty(attribute.Category) || attribute.Category == "Base") return;
+            if (_infoContainer == null) return;
+
+            _badgeLabel = new Label
+            {
+                text = attribute.Category
+            };
+            _badgeLabel.AddToClassList("node-type-badge");
+            _infoContainer.Insert(0, _badgeLabel);
         }
 
         /// <summary>
@@ -772,29 +970,29 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             if (InputPort != null)
             {
-                bool isConnected = InputPort.connections != null && InputPort.connections.Count() > 0;
+                bool isConnected = HasAnyConnection(InputPort);
                 if (isConnected)
-                {
                     InputPort.AddToClassList("connected");
-                }
                 else
-                {
                     InputPort.RemoveFromClassList("connected");
-                }
             }
 
             if (OutputPort != null)
             {
-                bool isConnected = OutputPort.connections != null && OutputPort.connections.Count() > 0;
+                bool isConnected = HasAnyConnection(OutputPort);
                 if (isConnected)
-                {
                     OutputPort.AddToClassList("connected");
-                }
                 else
-                {
                     OutputPort.RemoveFromClassList("connected");
-                }
             }
+        }
+
+        /// <summary>0GC check for port connections (avoids LINQ Count() enumerator alloc).</summary>
+        private static bool HasAnyConnection(Port port)
+        {
+            if (port.connections == null) return false;
+            foreach (var _ in port.connections) return true;
+            return false;
         }
 
         /// <summary>

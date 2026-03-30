@@ -9,9 +9,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         [SerializeField] private BTLODConfig _config;
         [SerializeField] private Transform _referencePoint;
 
-        private readonly Dictionary<RuntimeBehaviorTree, TreeLODData> _treeData = new Dictionary<RuntimeBehaviorTree, TreeLODData>();
+        // Parallel arrays for 0GC iteration (avoids Dictionary enumerator allocation)
+        private RuntimeBehaviorTree[] _keys;
+        private TreeLODData[] _values;
+        private int _count;
+        private int _capacity;
 
-        // 0GC iteration buffer: reused each UpdateAllLOD call
+        // O(1) lookup index
+        private readonly Dictionary<RuntimeBehaviorTree, int> _indexMap = new Dictionary<RuntimeBehaviorTree, int>();
+
+        // Reusable buffer for external consumers
         private readonly List<RuntimeBehaviorTree> _iterBuffer = new List<RuntimeBehaviorTree>();
 
         private struct TreeLODData
@@ -39,6 +46,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private void Awake()
         {
+            const int INITIAL_CAPACITY = 64;
+            _capacity = INITIAL_CAPACITY;
+            _keys = new RuntimeBehaviorTree[_capacity];
+            _values = new TreeLODData[_capacity];
+            _count = 0;
+
             if (_referencePoint == null)
             {
                 var player = GameObject.FindGameObjectWithTag("Player");
@@ -48,7 +61,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void RegisterTree(RuntimeBehaviorTree tree, Transform treeTransform)
         {
-            if (tree == null || _treeData.ContainsKey(tree)) return;
+            if (tree == null || _indexMap.ContainsKey(tree)) return;
+
+            if (_count >= _capacity)
+            {
+                int newCap = _capacity * 2;
+                var newKeys = new RuntimeBehaviorTree[newCap];
+                var newValues = new TreeLODData[newCap];
+                System.Array.Copy(_keys, newKeys, _count);
+                System.Array.Copy(_values, newValues, _count);
+                _keys = newKeys;
+                _values = newValues;
+                _capacity = newCap;
+            }
 
             var data = new TreeLODData
             {
@@ -70,17 +95,34 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 }
             }
 
-            _treeData[tree] = data;
+            int idx = _count;
+            _keys[idx] = tree;
+            _values[idx] = data;
+            _indexMap[tree] = idx;
+            _count++;
         }
 
         public void UnregisterTree(RuntimeBehaviorTree tree)
         {
-            _treeData.Remove(tree);
+            if (!_indexMap.TryGetValue(tree, out int idx)) return;
+
+            int last = _count - 1;
+            if (idx != last)
+            {
+                _keys[idx] = _keys[last];
+                _values[idx] = _values[last];
+                _indexMap[_keys[idx]] = idx;
+            }
+            _keys[last] = null;
+            _values[last] = default;
+            _indexMap.Remove(tree);
+            _count--;
         }
 
         public int GetPriority(RuntimeBehaviorTree tree)
         {
-            if (!_treeData.TryGetValue(tree, out var data)) return 0;
+            if (!_indexMap.TryGetValue(tree, out int idx)) return 0;
+            ref var data = ref _values[idx];
 
             if (Time.time < data.BoostEndTime && _config != null)
                 return _config.BoostedPriority;
@@ -93,7 +135,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public int GetTickInterval(RuntimeBehaviorTree tree)
         {
-            if (!_treeData.TryGetValue(tree, out var data)) return 1;
+            if (!_indexMap.TryGetValue(tree, out int idx)) return 1;
+            ref var data = ref _values[idx];
 
             if (Time.time < data.BoostEndTime && _config != null)
                 return _config.BoostedTickInterval;
@@ -106,16 +149,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void BoostPriority(RuntimeBehaviorTree tree, float duration)
         {
-            if (!_treeData.TryGetValue(tree, out var data)) return;
-
-            data.BoostEndTime = Time.time + duration;
-            _treeData[tree] = data;
+            if (!_indexMap.TryGetValue(tree, out int idx)) return;
+            _values[idx].BoostEndTime = Time.time + duration;
         }
 
         public void UpdateLOD(RuntimeBehaviorTree tree)
         {
             if (_config == null || _referencePoint == null) return;
-            if (!_treeData.TryGetValue(tree, out var data)) return;
+            if (!_indexMap.TryGetValue(tree, out int idx)) return;
+            ref var data = ref _values[idx];
             if (data.Transform == null) return;
 
             float sqrDist = (_referencePoint.position - data.Transform.position).sqrMagnitude;
@@ -125,33 +167,42 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             {
                 data.CurrentPriority = _config.Levels[lodLevel].Priority;
                 data.CurrentTickInterval = _config.Levels[lodLevel].TickInterval;
-                _treeData[tree] = data;
             }
         }
 
+        // 0GC: iterates parallel arrays directly, no enumerator allocation
         public void UpdateAllLOD()
         {
             if (_config == null || _referencePoint == null) return;
 
-            _iterBuffer.Clear();
-            foreach (var kvp in _treeData)
+            var refPos = _referencePoint.position;
+            for (int i = 0; i < _count; i++)
             {
-                _iterBuffer.Add(kvp.Key);
-            }
-            for (int i = 0; i < _iterBuffer.Count; i++)
-            {
-                UpdateLOD(_iterBuffer[i]);
+                ref var data = ref _values[i];
+                if (data.Transform == null) continue;
+
+                float sqrDist = (refPos - data.Transform.position).sqrMagnitude;
+                int lodLevel = _config.GetLODLevelSqr(sqrDist);
+
+                if (lodLevel >= 0 && lodLevel < _config.Levels.Length)
+                {
+                    data.CurrentPriority = _config.Levels[lodLevel].Priority;
+                    data.CurrentTickInterval = _config.Levels[lodLevel].TickInterval;
+                }
             }
         }
 
+        // 0GC: returns pre-allocated buffer filled from parallel arrays
         public List<RuntimeBehaviorTree> GetTreeBuffer()
         {
             _iterBuffer.Clear();
-            foreach (var kvp in _treeData)
+            for (int i = 0; i < _count; i++)
             {
-                _iterBuffer.Add(kvp.Key);
+                _iterBuffer.Add(_keys[i]);
             }
             return _iterBuffer;
         }
+
+        public int Count => _count;
     }
 }
