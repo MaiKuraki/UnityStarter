@@ -1,55 +1,55 @@
 using UnityEngine;
-using System.Collections.Generic;
 using System.Text;
 
 namespace CycloneGames.Utility.Runtime
 {
     /// <summary>
-    /// Add this component to any object and it'll display the frame rate.
+    /// Lightweight, 0GC (after initialization) FPS counter with IMGUI overlay.
+    /// Supports safe area, outline text, color thresholds, and multiple display modes.
+    /// Attach to any GameObject; optionally enable singleton + DontDestroyOnLoad.
     /// </summary>
     public class FPSCounter : MonoBehaviour
     {
         public enum Modes { Instant, MovingAverage, InstantAndMovingAverage }
         public enum ScreenPosition
         {
-            TopLeft,        // Top left corner
-            TopCenter,      // Top center
-            TopRight,       // Top right corner
-            MiddleLeft,     // Middle left
-            MiddleRight,    // Middle right
-            BottomLeft,     // Bottom left corner
-            BottomCenter,   // Bottom center
-            BottomRight,    // Bottom right corner
-            Custom          // Custom position
+            TopLeft,
+            TopCenter,
+            TopRight,
+            MiddleLeft,
+            MiddleRight,
+            BottomLeft,
+            BottomCenter,
+            BottomRight,
+            Custom
         }
 
-        // Struct to define FPS thresholds and corresponding colors
         [System.Serializable]
         public struct FPSColor
         {
-            [Tooltip("The FPS threshold. When the current FPS is below this value, the text color will change to the associated color.")]
-            public int FPSValue; // The FPS threshold
+            [Tooltip("When FPS falls below this value, the text changes to the associated color.")]
+            public int FPSValue;
 
-            [Tooltip("The color that will be used when the current FPS is below the threshold.")]
-            public Color Color; // The corresponding color
+            [Tooltip("The color applied when FPS is below the threshold.")]
+            public Color Color;
         }
 
         public static FPSCounter Instance { get; private set; }
 
-        [Tooltip("If true, the FPS counter will be visible by default.")]
+        [Tooltip("If true, the FPS counter will be visible.")]
         public bool IsVisible = true;
 
-        [Tooltip("If true, this component will enforce a singleton pattern and persist across scene loads.")]
+        [Tooltip("If true, enforces singleton pattern and persists across scene loads.")]
         [SerializeField] private bool _singleton = true;
 
         [Header("Safe Area Settings")]
-        [Tooltip("If true, the position of the FPS counter will be adjusted to fit within the screen's safe area.")]
+        [Tooltip("Adjust position to fit within the screen's safe area (notch, rounded corners, etc.).")]
         [SerializeField] private bool AdjustForSafeArea = true;
-        [Tooltip("If true, the UI will extend into the bottom safe area. On iOS, this means drawing behind the Home Indicator. Useful for immersive backgrounds, but interactive elements may be hard to use.")]
-        private bool extendIntoBottomSafeArea = true; // TODO: maybe public?
-        [Tooltip("If true, the bottom inset is increased to match the top inset if the top is larger. Balances a top notch in portrait mode.")]
+        [Tooltip("If true, the UI extends into the bottom safe area (behind Home Indicator on iOS).")]
+        private bool extendIntoBottomSafeArea = true;
+        [Tooltip("If true, the bottom inset is increased to match the top inset. Balances a top notch in portrait mode.")]
         public bool enforceVerticalSymmetry = true;
-        [Tooltip("If true, left/right insets are matched to the larger of the two. Balances a notch/indicator in landscape mode.")]
+        [Tooltip("If true, left/right insets are matched to the larger of the two. Balances a notch in landscape mode.")]
         public bool enforceHorizontalSymmetry = true;
 
         [Space(10)]
@@ -77,49 +77,53 @@ namespace CycloneGames.Utility.Runtime
         [Tooltip("Custom screen position (in pixels) if PositionPreset is set to Custom. (0,0) is top-left.")]
         [SerializeField] private Vector2 CustomPosition = new Vector2(0, 0);
 
-        [Tooltip("A list of FPS thresholds and their corresponding colors. Sorted by FPSValue in descending order. When the current FPS is below a threshold, the text color will change to the associated color.")]
-        [SerializeField] private List<FPSColor> FPSColors = new List<FPSColor>();
+        [Tooltip("FPS thresholds and colors. Sorted descending at runtime. When FPS < threshold, the corresponding color is used.")]
+        [SerializeField] private FPSColor[] FPSColors = new FPSColor[0];
 
         private Color _foregroundColor;
-        private float _framesAccumulated = 0f;
-        private float _framesDrawnInTheInterval = 0f;
+        private float _framesAccumulated;
+        private int _framesDrawnInTheInterval;
         private float _timeLeft;
         private int _currentFPS;
-        private int _totalFrames = 0; // For calculating the cumulative average FPS
-        private int _averageFPS;      // Cumulative average FPS
+        private int _totalFrames;
+        private float _averageAccumulator; // Float accumulator for precision
+        private int _averageFPS;
         private readonly StringBuilder _displayedTextSB = new StringBuilder(16);
-        private string _cachedDisplayText = string.Empty; // Cache to avoid OnGUI allocation when unchanged
-        private Vector2 _labelPosition;
-        private GUIStyle _style = new GUIStyle();
-        private GUIContent _content = new GUIContent();
-        private float _fontSizeRatio = 0.04f; // Relative to the shortest screen side
+        private string _cachedDisplayText = string.Empty;
+        private bool _displayDirty = true;
+        private bool _useDirectString; // True when display string can be a pre-cached FpsString (0GC)
+        private GUIStyle _style;
+        private readonly GUIContent _content = new GUIContent();
+        private float _fontSizeRatio = 0.04f;
 
-        private const int FPS_MAX_CACHED = 300; // Maximum FPS value for which strings are pre-cached
-        private static string[] _fpsStrings = GenerateFPSTextArray(FPS_MAX_CACHED);
+        // Cached screen/safe-area state to avoid per-frame recalculation
+        private int _cachedScreenWidth;
+        private int _cachedScreenHeight;
+        private Rect _cachedSafeArea;
+        private Rect _computedSafeArea;
+        private int _cachedFontSize;
+        private bool _layoutCacheDirty = true;
 
-        // Pre-generates an array of formatted FPS strings for performance
-        private static string[] GenerateFPSTextArray(int maxFPS)
+        private const int FPS_MAX_CACHED = 999;
+        private static readonly string[] FpsStrings = GenerateFpsStrings(FPS_MAX_CACHED);
+
+        private static string[] GenerateFpsStrings(int max)
         {
-            string[] array = new string[maxFPS + 1];
-            for (int i = 0; i <= maxFPS; i++)
+            string[] arr = new string[max + 1];
+            for (int i = 0; i <= max; i++)
             {
-                if (i < 10)
-                {
-                    array[i] = "0" + i.ToString(); // Ensures two digits for 0-9, e.g., "07"
-                }
-                else if (i < 100)
-                {
-                    array[i] = i.ToString("00"); // Ensures two digits, e.g., "99"
-                }
-                else
-                {
-                    array[i] = i.ToString(); // Three digits or more, e.g., "120"
-                }
+                arr[i] = i.ToString();
             }
-            return array;
+            return arr;
         }
 
-        void Awake()
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStatics()
+        {
+            Instance = null;
+        }
+
+        private void Awake()
         {
             if (_singleton)
             {
@@ -133,15 +137,22 @@ namespace CycloneGames.Utility.Runtime
             }
         }
 
+        private void OnDestroy()
+        {
+            if (Instance == this)
+            {
+                Instance = null;
+            }
+        }
+
         protected virtual void Start()
         {
-            // Sort FPSColors by FPSValue in descending order to ensure correct color selection logic
-            // Use a static comparison to avoid delegate allocation
-            FPSColors.Sort(CompareFPSColorsDescending);
-
+            // Sort FPSColors descending by FPSValue for binary search
+            System.Array.Sort(FPSColors, CompareFPSColorsDescending);
             _timeLeft = UpdateInterval;
-            UpdateFontDetails(); // Initialize font size
             _foregroundColor = DefaultForegroundColor;
+            _style = new GUIStyle();
+            InvalidateLayoutCache();
         }
 
         private static int CompareFPSColorsDescending(FPSColor a, FPSColor b)
@@ -154,255 +165,237 @@ namespace CycloneGames.Utility.Runtime
             if (!IsVisible) return;
 
             _framesDrawnInTheInterval++;
-            _framesAccumulated += Time.timeScale / Time.deltaTime; // Using unscaledDeltaTime would be better if timeScale can be 0
-            _timeLeft -= Time.deltaTime;
+            _framesAccumulated += 1f / Time.unscaledDeltaTime;
+            _timeLeft -= Time.unscaledDeltaTime;
 
-            if (_timeLeft <= 0.0f)
+            if (_timeLeft <= 0f)
             {
-                // Calculate current FPS, clamped between 0 and FPS_MAX_CACHED
-                _currentFPS = Mathf.RoundToInt(Mathf.Clamp(_framesAccumulated / _framesDrawnInTheInterval, 0, FPS_MAX_CACHED));
+                _currentFPS = _framesDrawnInTheInterval > 0
+                    ? Mathf.Clamp(Mathf.RoundToInt(_framesAccumulated / _framesDrawnInTheInterval), 0, FPS_MAX_CACHED)
+                    : 0;
 
-                // Reset counters for the next interval
                 _framesDrawnInTheInterval = 0;
                 _framesAccumulated = 0f;
-                _timeLeft += UpdateInterval; // Add UpdateInterval to maintain timing accuracy
+                _timeLeft += UpdateInterval;
 
-                // Update cumulative average FPS
+                // Cumulative moving average with float precision
                 _totalFrames++;
-                _averageFPS += (_currentFPS - _averageFPS) / _totalFrames; // Standard cumulative moving average
-                _averageFPS = Mathf.Clamp(_averageFPS, 0, FPS_MAX_CACHED); // Ensure average is also clamped
+                _averageAccumulator += (_currentFPS - _averageAccumulator) / _totalFrames;
+                _averageFPS = Mathf.Clamp(Mathf.RoundToInt(_averageAccumulator), 0, FPS_MAX_CACHED);
 
-                // Build the display string
-                _displayedTextSB.Clear();
+                // Build display string (only on interval tick, not every frame)
                 switch (Mode)
                 {
                     case Modes.Instant:
-                        _displayedTextSB.Append(_fpsStrings[_currentFPS]);
+                        _cachedDisplayText = FpsStrings[_currentFPS];
+                        _useDirectString = true;
                         break;
                     case Modes.MovingAverage:
-                        _displayedTextSB.Append(_fpsStrings[_averageFPS]);
+                        _cachedDisplayText = FpsStrings[_averageFPS];
+                        _useDirectString = true;
                         break;
                     case Modes.InstantAndMovingAverage:
-                        _displayedTextSB.Append(_fpsStrings[_currentFPS]);
-                        _displayedTextSB.Append(" / "); // Optimized: Use multiple appends
-                        _displayedTextSB.Append(_fpsStrings[_averageFPS]);
+                        _displayedTextSB.Clear();
+                        _displayedTextSB.Append(FpsStrings[_currentFPS]);
+                        _displayedTextSB.Append(" / ");
+                        _displayedTextSB.Append(FpsStrings[_averageFPS]);
+                        _useDirectString = false;
                         break;
                 }
+
                 UpdateForegroundColor();
+                _displayDirty = true;
             }
         }
-
-        // Updates the font size based on screen dimensions
-        private void UpdateFontDetails()
-        {
-            int shortestScreenSide = Mathf.Min(Screen.width, Screen.height);
-            _style.fontSize = Mathf.Max(10, Mathf.RoundToInt(shortestScreenSide * _fontSizeRatio)); // Ensure a minimum font size
-            // _style.alignment can be set here if needed, e.g., TextAnchor.UpperLeft
-        }
-
-        // Determines the appropriate text color based on the current FPS and defined thresholds
-        private void UpdateForegroundColor()
-        {
-            _foregroundColor = DefaultForegroundColor; // Default to green
-            if (FPSColors == null || FPSColors.Count == 0) return;
-
-            // Binary search for the correct color (list is sorted descending by FPSValue)
-            // We want the color for the highest threshold that _currentFPS is below.
-            int selectedColorIndex = -1;
-            for (int i = 0; i < FPSColors.Count; ++i)
-            {
-                if (_currentFPS < FPSColors[i].FPSValue)
-                {
-                    selectedColorIndex = i; // This threshold applies
-                }
-                else
-                {
-                    // Since the list is sorted descending, if currentFPS is not below this threshold,
-                    // it won't be below any subsequent (lower value) thresholds either.
-                    // However, we want the "last" applicable threshold if multiple apply.
-                    // The original binary search was slightly more complex to read.
-                    // A linear scan from highest threshold (lowest FPSValue in sorted list) to lowest is simpler.
-                    // Let's stick to the provided binary search as it was correct, just re-verify.
-
-                    // Original logic was:
-                    // if _currentFPS < FPSColors[mid].FPSValue -> _foregroundColor = FPSColors[mid].Color; left = mid + 1; (Means: this color applies, try even lower FPS thresholds)
-                    // else -> right = mid - 1; (Means: this threshold is too high or FPS is good, try higher FPS thresholds)
-                    // This will find the "lowest" FPSValue in the sorted list (which is highest actual FPS value) that _currentFPS is still less than.
-                    // Correct logic should be: find the color for the *first* (i.e., highest value) threshold that currentFPS is *less than*.
-                    // The list is sorted descending: e.g., [ (50, Yellow), (30, Orange), (15, Red) ]
-                    // If FPS = 25:
-                    //  - It's < 50 (Yellow applies).
-                    //  - It's < 30 (Orange applies). We want Orange.
-                    // The provided binary search actually correctly finds the "last" match in the sorted (descending) list that `_currentFPS < FPSValue` holds, which is what we want.
-                }
-            }
-
-            // Re-implementing the binary search as it was correct and efficient.
-            // FPSColors is sorted descending by FPSValue.
-            // We want the color for the highest FPSValue threshold that _currentFPS is *strictly less than*.
-            // If _currentFPS is 25, and thresholds are 50(Yellow), 20(Red).
-            // _currentFPS < 50 (Yellow)
-            // _currentFPS is not < 20.
-            // The binary search correctly finds the tightest bound.
-            int left = 0, right = FPSColors.Count - 1;
-            // int bestMatchIndex = -1;
-
-            while (left <= right)
-            {
-                int mid = left + (right - left) / 2; // Avoid potential overflow with (left + right) / 2
-                if (_currentFPS < FPSColors[mid].FPSValue)
-                {
-                    // This color is a candidate. Store it and try to find an even "tighter" (lower FPSValue) threshold.
-                    _foregroundColor = FPSColors[mid].Color;
-                    // Because FPSColors is sorted descending, a lower FPSValue is at a higher index.
-                    // So we search in the right part of the array for a potentially more specific (lower) threshold.
-                    left = mid + 1;
-                }
-                else
-                {
-                    // _currentFPS is not below this threshold, so this threshold (and any lower FPSValues / higher indices) are too strict.
-                    // We need to look for higher FPSValues (lower indices).
-                    right = mid - 1;
-                }
-            }
-            // If no threshold was met, _foregroundColor remains DefaultForegroundColor.
-        }
-
 
         private void OnGUI()
         {
             if (!IsVisible) return;
-            if (_displayedTextSB == null || _displayedTextSB.Length == 0) return; // Should not happen after first update
+            if (_style == null) return;
 
-            // Update font size dynamically if screen resolution changes (e.g., window resize)
-            // This check can be more sophisticated if needed (e.g., cache Screen.width/height and only update on change)
-            UpdateFontDetails();
-
-            // Only allocate new string if content changed
-            if (_displayedTextSB.Length != _cachedDisplayText.Length || _displayedTextSB.ToString() != _cachedDisplayText)
+            // Detect screen/safe-area changes (rotation, resize, etc.)
+            if (_cachedScreenWidth != Screen.width ||
+                _cachedScreenHeight != Screen.height ||
+                _cachedSafeArea != Screen.safeArea)
             {
-                _cachedDisplayText = _displayedTextSB.ToString();
-                _content.text = _cachedDisplayText;
+                InvalidateLayoutCache();
             }
+
+            if (_layoutCacheDirty)
+            {
+                RebuildLayoutCache();
+            }
+
+            // Only allocate a new string when the display content actually changed
+            if (_displayDirty)
+            {
+                if (!_useDirectString)
+                {
+                    _cachedDisplayText = _displayedTextSB.ToString();
+                }
+                // _useDirectString: _cachedDisplayText already points to a pre-cached string (0GC)
+                _content.text = _cachedDisplayText;
+                _displayDirty = false;
+            }
+
             Vector2 labelSize = _style.CalcSize(_content);
+            Vector2 labelPos = GetLabelPosition(labelSize);
 
-            _labelPosition = GetLabelPosition(labelSize);
-
-            // Draw outline (background)
+            // Draw outline (4 offset copies)
             _style.normal.textColor = OutlineColor;
-            DrawOutlineText(_style, labelSize, -OutlineOffset.x, -OutlineOffset.y);
-            DrawOutlineText(_style, labelSize, -OutlineOffset.x, OutlineOffset.y);
-            DrawOutlineText(_style, labelSize, OutlineOffset.x, -OutlineOffset.y);
-            DrawOutlineText(_style, labelSize, OutlineOffset.x, OutlineOffset.y);
+            float ox = OutlineOffset.x, oy = OutlineOffset.y;
+            GUI.Label(new Rect(labelPos.x - ox, labelPos.y - oy, labelSize.x, labelSize.y), _content, _style);
+            GUI.Label(new Rect(labelPos.x - ox, labelPos.y + oy, labelSize.x, labelSize.y), _content, _style);
+            GUI.Label(new Rect(labelPos.x + ox, labelPos.y - oy, labelSize.x, labelSize.y), _content, _style);
+            GUI.Label(new Rect(labelPos.x + ox, labelPos.y + oy, labelSize.x, labelSize.y), _content, _style);
 
-            // Draw foreground (main text)
+            // Draw foreground
             _style.normal.textColor = _foregroundColor;
-            GUI.Label(new Rect(_labelPosition.x, _labelPosition.y, labelSize.x, labelSize.y), _content, _style);
+            GUI.Label(new Rect(labelPos.x, labelPos.y, labelSize.x, labelSize.y), _content, _style);
         }
 
-        // Helper method to draw text with an offset, used for the outline effect
-        private void DrawOutlineText(GUIStyle style, Vector2 labelSize, float offsetX, float offsetY)
+        private void InvalidateLayoutCache()
         {
-            GUI.Label(
-                new Rect(
-                    _labelPosition.x + offsetX,
-                    _labelPosition.y + offsetY,
-                    labelSize.x,
-                    labelSize.y
-                ),
-                _content,
-                style
-            );
+            _layoutCacheDirty = true;
         }
 
-        // Calculates the screen position for the FPS counter label
+        private void RebuildLayoutCache()
+        {
+            _cachedScreenWidth = Screen.width;
+            _cachedScreenHeight = Screen.height;
+            _cachedSafeArea = Screen.safeArea;
+
+            // Font size
+            int shortSide = _cachedScreenWidth < _cachedScreenHeight ? _cachedScreenWidth : _cachedScreenHeight;
+            _cachedFontSize = Mathf.Max(10, Mathf.RoundToInt(shortSide * _fontSizeRatio));
+            _style.fontSize = _cachedFontSize;
+
+            // Safe area
+            _computedSafeArea = AdjustForSafeArea ? ComputeAdaptiveSafeArea() : new Rect(0, 0, _cachedScreenWidth, _cachedScreenHeight);
+
+            _layoutCacheDirty = false;
+        }
+
+        /// <summary>
+        /// Determines text color based on current FPS and thresholds.
+        /// Uses binary search on descending-sorted FPSColors array.
+        /// </summary>
+        private void UpdateForegroundColor()
+        {
+            _foregroundColor = DefaultForegroundColor;
+            if (FPSColors == null || FPSColors.Length == 0) return;
+
+            // Binary search: find the tightest (lowest FPSValue) threshold that currentFPS is below.
+            // FPSColors is sorted descending by FPSValue.
+            int left = 0, right = FPSColors.Length - 1;
+            while (left <= right)
+            {
+                int mid = left + ((right - left) >> 1);
+                if (_currentFPS < FPSColors[mid].FPSValue)
+                {
+                    _foregroundColor = FPSColors[mid].Color;
+                    left = mid + 1;
+                }
+                else
+                {
+                    right = mid - 1;
+                }
+            }
+        }
+
         private Vector2 GetLabelPosition(Vector2 labelSize)
         {
-            // Use safe area if enabled, otherwise use full screen rect
-            Rect safeArea = AdjustForSafeArea ? GetAdaptiveSafeArea() : new Rect(0, 0, Screen.width, Screen.height);
-
-            float xPos = 0, yPos = 0;
+            Rect sa = _computedSafeArea;
+            int m = PresetPositionMargin;
 
             switch (PositionPreset)
             {
                 case ScreenPosition.TopLeft:
-                    xPos = safeArea.xMin + PresetPositionMargin;
-                    yPos = safeArea.yMin + PresetPositionMargin;
-                    break;
+                    return new Vector2(sa.xMin + m, sa.yMin + m);
                 case ScreenPosition.TopCenter:
-                    xPos = safeArea.xMin + (safeArea.width - labelSize.x) / 2;
-                    yPos = safeArea.yMin + PresetPositionMargin;
-                    break;
+                    return new Vector2(sa.xMin + (sa.width - labelSize.x) * 0.5f, sa.yMin + m);
                 case ScreenPosition.TopRight:
-                    xPos = safeArea.xMax - labelSize.x - PresetPositionMargin;
-                    yPos = safeArea.yMin + PresetPositionMargin;
-                    break;
+                    return new Vector2(sa.xMax - labelSize.x - m, sa.yMin + m);
                 case ScreenPosition.MiddleLeft:
-                    xPos = safeArea.xMin + PresetPositionMargin;
-                    yPos = safeArea.yMin + (safeArea.height - labelSize.y) / 2;
-                    break;
+                    return new Vector2(sa.xMin + m, sa.yMin + (sa.height - labelSize.y) * 0.5f);
                 case ScreenPosition.MiddleRight:
-                    xPos = safeArea.xMax - labelSize.x - PresetPositionMargin;
-                    yPos = safeArea.yMin + (safeArea.height - labelSize.y) / 2;
-                    break;
+                    return new Vector2(sa.xMax - labelSize.x - m, sa.yMin + (sa.height - labelSize.y) * 0.5f);
                 case ScreenPosition.BottomLeft:
-                    xPos = safeArea.xMin + PresetPositionMargin;
-                    yPos = safeArea.yMax - labelSize.y - PresetPositionMargin;
-                    break;
+                    return new Vector2(sa.xMin + m, sa.yMax - labelSize.y - m);
                 case ScreenPosition.BottomCenter:
-                    xPos = safeArea.xMin + (safeArea.width - labelSize.x) / 2;
-                    yPos = safeArea.yMax - labelSize.y - PresetPositionMargin;
-                    break;
+                    return new Vector2(sa.xMin + (sa.width - labelSize.x) * 0.5f, sa.yMax - labelSize.y - m);
                 case ScreenPosition.BottomRight:
-                    xPos = safeArea.xMax - labelSize.x - PresetPositionMargin;
-                    yPos = safeArea.yMax - labelSize.y - PresetPositionMargin;
-                    break;
+                    return new Vector2(sa.xMax - labelSize.x - m, sa.yMax - labelSize.y - m);
                 case ScreenPosition.Custom:
                     return CustomPosition;
+                default:
+                    return new Vector2(sa.xMin + m, sa.yMin + m);
             }
-            return new Vector2(xPos, yPos);
         }
 
-        /// <summary>
-        /// Calculates the final safe area Rect based on the adaptive settings.
-        /// </summary>
-        private Rect GetAdaptiveSafeArea()
+        private Rect ComputeAdaptiveSafeArea()
         {
-            Rect safeArea = Screen.safeArea;
+            Rect safeArea = _cachedSafeArea;
+            float sw = _cachedScreenWidth;
+            float sh = _cachedScreenHeight;
 
-            float topInset = Screen.height - safeArea.yMax;
+            float topInset = sh - safeArea.yMax;
             float bottomInset = safeArea.yMin;
             float leftInset = safeArea.xMin;
-            float rightInset = Screen.width - safeArea.xMax;
+            float rightInset = sw - safeArea.xMax;
 
-            #region Do not Change this pipe
-            // The 'extendIntoBottomSafeArea' option is intentionally applied first.
-            // It acts as a primary override, allowing the user to explicitly reclaim the
-            // bottom space, regardless of the system's default safe area.
+            // Step 1: Optionally reclaim bottom area (e.g. draw behind iOS Home Indicator)
             if (extendIntoBottomSafeArea)
             {
                 bottomInset = 0;
             }
 
-            // The symmetry logic is then applied to the *result* of the previous step.
-            // This ensures that even if the bottom inset was cleared, it can be restored
-            // to match the top inset (e.g., for a notch). This sequence guarantees that
-            // the aesthetic need for symmetry correctly overrides the functional choice
-            // to extend into the bottom area when a top notch is present.
+            // Step 2: Symmetry overrides (applied after step 1 so notch balance takes priority)
             if (enforceVerticalSymmetry)
             {
-                bottomInset = Mathf.Max(bottomInset, topInset);
+                float maxVertical = bottomInset > topInset ? bottomInset : topInset;
+                bottomInset = maxVertical;
+                // topInset remains unchanged — it's derived from safeArea.yMax
             }
-            #endregion
 
             if (enforceHorizontalSymmetry)
             {
-                float maxHorizontal = Mathf.Max(leftInset, rightInset);
+                float maxHorizontal = leftInset > rightInset ? leftInset : rightInset;
                 leftInset = maxHorizontal;
                 rightInset = maxHorizontal;
             }
 
-            return new Rect(leftInset, bottomInset, Screen.width - leftInset - rightInset, Screen.height - bottomInset - topInset);
+            return new Rect(leftInset, bottomInset, sw - leftInset - rightInset, sh - bottomInset - topInset);
         }
+
+        // --- Public API ---
+
+        /// <summary>
+        /// Toggles FPS counter visibility. Safe to call from anywhere.
+        /// </summary>
+        public void SetVisible(bool visible)
+        {
+            IsVisible = visible;
+        }
+
+        /// <summary>
+        /// Resets the cumulative average FPS counter.
+        /// </summary>
+        public void ResetAverage()
+        {
+            _totalFrames = 0;
+            _averageAccumulator = 0f;
+            _averageFPS = 0;
+        }
+
+        /// <summary>
+        /// Gets the current instantaneous FPS value.
+        /// </summary>
+        public int CurrentFPS => _currentFPS;
+
+        /// <summary>
+        /// Gets the cumulative average FPS value.
+        /// </summary>
+        public int AverageFPS => _averageFPS;
     }
 }
