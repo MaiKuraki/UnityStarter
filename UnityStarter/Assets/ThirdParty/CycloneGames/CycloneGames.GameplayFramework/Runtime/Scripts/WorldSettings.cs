@@ -35,21 +35,29 @@ namespace CycloneGames.GameplayFramework.Runtime
         public CameraManager CameraManagerClass => cameraManagerClass;
         public SpectatorPawn SpectatorPawnClass => spectatorPawnClass;
 
-        void OnValidate()
+        /// <summary>
+        /// Validates that all required references are assigned.
+        /// Call this explicitly when the WorldSettings is about to be used (e.g., at game startup).
+        /// </summary>
+        public bool Validate(bool logWarnings = true)
         {
-            // Validate critical references in editor
+            bool valid = true;
             if (gameModeClass == null)
             {
-                Debug.LogWarning($"[WorldSettings] '{name}': GameModeClass is not assigned.");
+                if (logWarnings) Debug.LogWarning($"[WorldSettings] '{name}': GameModeClass is not assigned.");
+                valid = false;
             }
             if (playerControllerClass == null)
             {
-                Debug.LogWarning($"[WorldSettings] '{name}': PlayerControllerClass is not assigned.");
+                if (logWarnings) Debug.LogWarning($"[WorldSettings] '{name}': PlayerControllerClass is not assigned.");
+                valid = false;
             }
             if (pawnClass == null)
             {
-                Debug.LogWarning($"[WorldSettings] '{name}': PawnClass is not assigned.");
+                if (logWarnings) Debug.LogWarning($"[WorldSettings] '{name}': PawnClass is not assigned.");
+                valid = false;
             }
+            return valid;
         }
     }
 }

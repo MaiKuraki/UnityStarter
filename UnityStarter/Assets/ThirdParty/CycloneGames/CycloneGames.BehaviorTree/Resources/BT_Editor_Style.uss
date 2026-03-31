@@ -22,13 +22,7 @@ Edge > VisualElement {
 
 /* Make edge lines thicker and more visible for easier clicking */
 Edge .edge-line {
-    stroke-width: 3px;
-    transition-property: stroke-width, stroke;
-    transition-duration: 0.2s;
-    transition-timing-function: ease-out;
 }
 
 Edge:hover .edge-line {
-    stroke-width: 4px;
-    stroke: rgb(100, 200, 255);
 }
