@@ -712,8 +712,11 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         private static void SystemPause()
         {
+            if (!ValidateManager()) return;
             systemPaused = true;
-            PauseAll();
+            int count = ActiveEvents.Count;
+            for (int i = 0; i < count; i++)
+                ActiveEvents[i]?.Pause();
         }
 
         /// <summary>
@@ -724,7 +727,8 @@ namespace CycloneGames.Audio.Runtime
         {
             if (!systemPaused) return;
             systemPaused = false;
-            ResumeAll();
+            if (!globalPaused)
+                ResumeAll();
         }
 
         private static void Cleanup()
