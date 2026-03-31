@@ -1,7 +1,6 @@
 # File Utilities
 
-Thread-safe, allocation-optimized file utilities for Unity game development.  
-Part of the **CycloneGames.Utility.Runtime** package.
+[**English**] | [**简体中文**](README.SCH.md)
 
 **Namespace:** `CycloneGames.Utility.Runtime`  
 **Target:** .NET Standard 2.1+ · Unity 2022 LTS / Unity 6000  
@@ -9,65 +8,69 @@ Part of the **CycloneGames.Utility.Runtime** package.
 
 ---
 
-## Table of Contents
-
-- [Overview](#overview)
-- [FileUtility](#fileutility)
-  - [Design Principles](#design-principles)
-  - [Hash Computation](#hash-computation)
-  - [File Comparison](#file-comparison)
-  - [Stream Operations](#stream-operations)
-  - [Byte Array Comparison](#byte-array-comparison)
-  - [File Copy](#file-copy)
-  - [Hex Conversion](#hex-conversion)
-  - [Memory Strategy](#memory-strategy)
-  - [Platform Behavior](#platform-behavior)
-  - [Performance Benchmarks](#performance-benchmarks)
-- [XxHash64 Struct](#xxhash64-struct)
-  - [Why xxHash64](#why-xxhash64)
-  - [API Reference](#api-reference)
-  - [Cryptographic vs Non-Cryptographic](#cryptographic-vs-non-cryptographic)
-- [FilePathUtility](#filepathutility)
-  - [UnityPathSource Enum](#unitypathsource-enum)
-  - [GetUnityWebRequestUri](#getunitywebrequesturi)
-  - [Platform URI Formats](#platform-uri-formats)
-- [Game Development Use Cases](#game-development-use-cases)
-- [Large File Handling & WebGL](#large-file-handling--webgl)
-- [Dependencies](#dependencies)
-
----
-
 ## Overview
 
 This module provides two static utility classes:
 
-| Class | Purpose |
-|---|---|
-| `FileUtility` | Hash computation, file/stream comparison, and smart file copy with zero-GC design |
-| `XxHash64` | Pure C# struct-based xxHash64 implementation — zero heap allocation, non-cryptographic |
-| `FilePathUtility` | Platform-correct URI generation for `UnityWebRequest` |
+| Class             | Purpose                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------- |
+| `FileUtility`     | Hash computation, file/stream comparison, and smart file copy with zero-GC design      |
+| `XxHash64`        | Pure C# struct-based xxHash64 implementation — zero heap allocation, non-cryptographic |
+| `FilePathUtility` | Platform-correct URI generation for `UnityWebRequest`                                  |
+
+---
+
+## Table of Contents
+
+- [File Utilities](#file-utilities)
+  - [Overview](#overview)
+  - [Table of Contents](#table-of-contents)
+  - [FileUtility](#fileutility)
+    - [Hash Computation](#hash-computation)
+      - [Async Methods](#async-methods)
+      - [Synchronous Methods](#synchronous-methods)
+      - [Usage Examples](#usage-examples)
+    - [File Comparison](#file-comparison)
+    - [Stream Operations](#stream-operations)
+    - [Byte Array Comparison](#byte-array-comparison)
+    - [File Copy](#file-copy)
+    - [Hex Conversion](#hex-conversion)
+    - [Memory Strategy](#memory-strategy)
+    - [Platform Behavior](#platform-behavior)
+    - [Performance Benchmarks](#performance-benchmarks)
+  - [XxHash64 Struct](#xxhash64-struct)
+    - [Why xxHash64](#why-xxhash64)
+    - [API Reference](#api-reference)
+    - [Cryptographic vs Non-Cryptographic](#cryptographic-vs-non-cryptographic)
+  - [FilePathUtility](#filepathutility)
+    - [UnityPathSource Enum](#unitypathsource-enum)
+    - [GetUnityWebRequestUri](#getunitywebrequesturi)
+      - [Usage Examples](#usage-examples-1)
+    - [Platform URI Formats](#platform-uri-formats)
+  - [Game Development Use Cases](#game-development-use-cases)
+    - [Hot Update / Asset Patching](#hot-update--asset-patching)
+    - [AssetBundle Integrity Verification](#assetbundle-integrity-verification)
+    - [Save System](#save-system)
+    - [Build Pipeline / Editor Tools](#build-pipeline--editor-tools)
+    - [Fast Local Change Detection](#fast-local-change-detection)
+    - [Direct XxHash64 Usage](#direct-xxhash64-usage)
+    - [Cross-Platform Resource Loading](#cross-platform-resource-loading)
+  - [Large File Handling \& WebGL](#large-file-handling--webgl)
+  - [Dependencies](#dependencies)
 
 ---
 
 ## FileUtility
 
-### Design Principles
-
-- **Thread Safety** — All public methods are safe to call concurrently. `IncrementalHash` is created per-call (not cached in `ThreadLocal`) to avoid cross-thread state corruption in async continuations. `XxHash64` is a value-type struct — each copy is independent by design.
-- **Minimal GC** — Read buffers use `ArrayPool<byte>.Shared` rent/return. Hash buffers use `stackalloc` in synchronous methods and `ArrayPool` in async methods. Hex conversion uses `stackalloc char[]` with a lookup table. `XxHash64` is struct-based with zero heap allocation.
-- **Cancellation** — All async methods accept `CancellationToken` and propagate `OperationCanceledException` correctly.
-- **ConfigureAwait(false)** — Used throughout the entire async chain to avoid unnecessary synchronization context capture.
-- **Periodic Yield** — All async loops yield back to the caller every N chunks via `Task.Yield()`, preventing browser/UI freezes on WebGL and single-threaded runtimes when processing large files (e.g., 1 GB).
-
 ### Hash Computation
 
 Supports **MD5** (16 bytes), **SHA256** (32 bytes), and **XxHash64** (8 bytes) via the `HashAlgorithmType` enum.
 
-| Algorithm | Output Size | Type | Use Case |
-|-----------|------------|------|----------|
-| `MD5` | 128 bit | Cryptographic | Legacy compatibility, fast integrity check |
-| `SHA256` | 256 bit | Cryptographic | Tamper-proof verification, CDN manifests |
-| `XxHash64` | 64 bit | Non-cryptographic | Fast change detection, deduplication, editor tools |
+| Algorithm  | Output Size | Type              | Use Case                                           |
+| ---------- | ----------- | ----------------- | -------------------------------------------------- |
+| `MD5`      | 128 bit     | Cryptographic     | Legacy compatibility, fast integrity check         |
+| `SHA256`   | 256 bit     | Cryptographic     | Tamper-proof verification, CDN manifests           |
+| `XxHash64` | 64 bit      | Non-cryptographic | Fast change detection, deduplication, editor tools |
 
 #### Async Methods
 
@@ -156,14 +159,14 @@ Task<bool> AreFilesEqualAsync(
 
 **Comparison Strategy (automatic):**
 
-| Step | Condition | Action |
-|------|-----------|--------|
-| 1 | Same path string (ordinal) | Return `true` immediately |
-| 2 | File does not exist | Return `false` |
-| 3 | Different file sizes | Return `false` |
-| 4 | Both files empty | Return `true` |
-| 5 | File size ≤ 10 MB | Compare by hash (two full reads, one comparison) |
-| 6 | File size > 10 MB | Compare by chunks (streaming, early exit on first mismatch) |
+| Step | Condition                  | Action                                                      |
+| ---- | -------------------------- | ----------------------------------------------------------- |
+| 1    | Same path string (ordinal) | Return `true` immediately                                   |
+| 2    | File does not exist        | Return `false`                                              |
+| 3    | Different file sizes       | Return `false`                                              |
+| 4    | Both files empty           | Return `true`                                               |
+| 5    | File size ≤ 10 MB          | Compare by hash (two full reads, one comparison)            |
+| 6    | File size > 10 MB          | Compare by chunks (streaming, early exit on first mismatch) |
 
 The 10 MB threshold balances hash overhead against chunk comparison's early-exit advantage. For small files, hashing is more efficient because the hash comparison is a single fixed-size operation. For large files, chunk comparison can exit early without reading the entire file.
 
@@ -270,26 +273,26 @@ Converts a byte span to a lowercase hexadecimal string. Uses `stackalloc` for th
 
 ### Memory Strategy
 
-| Resource | Allocation Strategy | GC Pressure |
-|----------|-------------------|-------------|
-| Read buffer (64–128 KB) | `ArrayPool<byte>.Shared` rent/return | Zero |
-| Hash buffer (async) | `ArrayPool<byte>.Shared` rent/return | Zero |
-| Hash buffer (sync) | `stackalloc byte[]` | Zero |
-| Hex char buffer | `stackalloc char[]` (≤ 64 chars) | Zero |
-| Hex result string | `new string(Span<char>)` | 1 allocation (unavoidable) |
-| `XxHash64` (struct) | Stack-allocated, inline state | **Zero** |
-| `IncrementalHash` | `CreateHash()` per call | ~275 bytes/call (class instance) |
-| `FileStream` | `new FileStream(...)` per call | ~1,800 bytes/call (managed wrapper + kernel handle) |
+| Resource                | Allocation Strategy                  | GC Pressure                                         |
+| ----------------------- | ------------------------------------ | --------------------------------------------------- |
+| Read buffer (64–128 KB) | `ArrayPool<byte>.Shared` rent/return | Zero                                                |
+| Hash buffer (async)     | `ArrayPool<byte>.Shared` rent/return | Zero                                                |
+| Hash buffer (sync)      | `stackalloc byte[]`                  | Zero                                                |
+| Hex char buffer         | `stackalloc char[]` (≤ 64 chars)     | Zero                                                |
+| Hex result string       | `new string(Span<char>)`             | 1 allocation (unavoidable)                          |
+| `XxHash64` (struct)     | Stack-allocated, inline state        | **Zero**                                            |
+| `IncrementalHash`       | `CreateHash()` per call              | ~275 bytes/call (class instance)                    |
+| `FileStream`            | `new FileStream(...)` per call       | ~1,800 bytes/call (managed wrapper + kernel handle) |
 
 The `FileStream` internal buffer is set to 4096 bytes (`AsyncFileStreamBufferSize`) to avoid double-buffering with the external `ArrayPool` read buffer, saving ~60 KB per `FileStream` instance.
 
 ### Platform Behavior
 
-| Platform | Read Buffer Size | Notes |
-|----------|-----------------|-------|
-| iOS / Android | 81,920 bytes | Larger buffer reduces syscall overhead on flash storage |
-| WebGL | 131,072 bytes | Async runs on main thread; only `persistentDataPath` is reliable |
-| Desktop (Win/Mac/Linux) | 65,536 bytes | Standard buffer size |
+| Platform                | Read Buffer Size | Notes                                                            |
+| ----------------------- | ---------------- | ---------------------------------------------------------------- |
+| iOS / Android           | 81,920 bytes     | Larger buffer reduces syscall overhead on flash storage          |
+| WebGL                   | 131,072 bytes    | Async runs on main thread; only `persistentDataPath` is reliable |
+| Desktop (Win/Mac/Linux) | 65,536 bytes     | Standard buffer size                                             |
 
 **Platform-specific warnings:**
 
@@ -299,30 +302,31 @@ The `FileStream` internal buffer is set to 4096 bytes (`AsyncFileStreamBufferSiz
 **Yield interval (anti-freeze):**
 
 | Platform | `YieldIntervalChunks` | Yield every |
-|----------|----------------------|-------------|
-| WebGL | 4 | ~512 KB |
-| Other | 32 | ~2 MB |
+| -------- | --------------------- | ----------- |
+| WebGL    | 4                     | ~512 KB     |
+| Other    | 32                    | ~2 MB       |
 
 ### Performance Benchmarks
 
 Measured in Unity Editor (Windows, single-threaded, files cached in OS page cache):
 
-| Operation | Throughput | GC per Call |
-|-----------|-----------|-------------|
-| SHA256 Hash (async, 50 MB) | ~17 MB/s | ~8,400 bytes |
-| MD5 Hash (async, 50 MB) | ~244 MB/s | ~8,400 bytes |
-| XxHash64 Hash (async, 50 MB) | ~161 MB/s | ~8,000 bytes |
-| SHA256 Hash (sync, 1 MB) | ~17 MB/s | ~2,000 bytes |
-| XxHash64 Hash (sync, 1 MB) | ~188 MB/s | ~1,800 bytes |
-| Chunk Comparison (async, 50 MB) | ~193 MB/s | N/A |
-| `ToHexString` | N/A | ~26 bytes |
-| `AreByteArraysEqualByHash` (SHA256) | N/A | ~443 bytes |
-| `AreByteArraysEqualByHash` (XxHash64) | N/A | **~4 bytes** \* |
-| `XxHash64.HashToUInt64` (one-shot) | N/A | **~4 bytes** \* |
+| Operation                             | Throughput | GC per Call     |
+| ------------------------------------- | ---------- | --------------- |
+| SHA256 Hash (async, 50 MB)            | ~17 MB/s   | ~8,400 bytes    |
+| MD5 Hash (async, 50 MB)               | ~244 MB/s  | ~8,400 bytes    |
+| XxHash64 Hash (async, 50 MB)          | ~161 MB/s  | ~8,000 bytes    |
+| SHA256 Hash (sync, 1 MB)              | ~17 MB/s   | ~2,000 bytes    |
+| XxHash64 Hash (sync, 1 MB)            | ~188 MB/s  | ~1,800 bytes    |
+| Chunk Comparison (async, 50 MB)       | ~193 MB/s  | N/A             |
+| `ToHexString`                         | N/A        | ~26 bytes       |
+| `AreByteArraysEqualByHash` (SHA256)   | N/A        | ~443 bytes      |
+| `AreByteArraysEqualByHash` (XxHash64) | N/A        | **~4 bytes** \* |
+| `XxHash64.HashToUInt64` (one-shot)    | N/A        | **~4 bytes** \* |
 
 \* The ~4 bytes is profiler measurement noise — XxHash64 in-memory operations are true zero-allocation.
 
 > **Key takeaways:**
+>
 > - **Async GC** (~8,000–8,400 bytes/call) is dominated by `FileStream` (~1,800 bytes), `Task` state machine, and string allocation. XxHash64 saves ~400 bytes per async call by avoiding `IncrementalHash`.
 > - **Sync XxHash64 is ~10× faster than sync SHA256** on cached files because hash computation dominates I/O time.
 > - **Sync vs Async for XxHash64**: Sync (5.3 ms / 1 MB) is ~10× faster than async (51.6 ms) because `Task` overhead dominates the near-instant hash computation. Prefer the sync API in Editor tools and build scripts.
@@ -337,13 +341,13 @@ A pure C# implementation of the [xxHash64](https://github.com/Cyan4973/xxHash) n
 
 ### Why xxHash64
 
-| Property | xxHash64 | MD5 | SHA256 |
-|----------|----------|-----|--------|
-| Speed (native) | ~19 GB/s | ~0.6 GB/s | ~0.3 GB/s |
-| Output size | 64 bit | 128 bit | 256 bit |
+| Property                 | xxHash64             | MD5                | SHA256             |
+| ------------------------ | -------------------- | ------------------ | ------------------ |
+| Speed (native)           | ~19 GB/s             | ~0.6 GB/s          | ~0.3 GB/s          |
+| Output size              | 64 bit               | 128 bit            | 256 bit            |
 | GC per call (this impl.) | **0 bytes** (struct) | ~275 bytes (class) | ~275 bytes (class) |
-| Cryptographic | No | Broken | Yes |
-| Use case | Change detection | Legacy compat | Security |
+| Cryptographic            | No                   | Broken             | Yes                |
+| Use case                 | Change detection     | Legacy compat      | Security           |
 
 xxHash64 is ~30× faster than MD5 in native code. In this pure C# implementation (no SIMD), XxHash64 delivers ~160–190 MB/s — roughly on par with native MD5 (~244 MB/s via Windows CNG) and ~10× faster than SHA256 (~17 MB/s) for sync workloads. More importantly, the `struct` design eliminates all managed allocation overhead, making it the clear choice for in-memory and sync operations.
 
@@ -369,15 +373,15 @@ hasher.Append(byteArray, offset, count);
 
 ### Cryptographic vs Non-Cryptographic
 
-| Scenario | Recommended Algorithm |
-|----------|-----------------------|
-| Hot update manifests (CDN) | `SHA256` — tamper-proof |
-| AssetBundle download verification | `SHA256` or `MD5` — integrity + interop |
-| Local file change detection | `XxHash64` — fast, zero GC |
-| Editor incremental build | `XxHash64` — fast, zero GC |
-| Save file corruption check | `XxHash64` — sufficient for bit-flip detection |
-| Content deduplication | `XxHash64` — 64-bit collision space adequate for local use |
-| Mod file authentication | `SHA256` — must resist intentional collision |
+| Scenario                          | Recommended Algorithm                                      |
+| --------------------------------- | ---------------------------------------------------------- |
+| Hot update manifests (CDN)        | `SHA256` — tamper-proof                                    |
+| AssetBundle download verification | `SHA256` or `MD5` — integrity + interop                    |
+| Local file change detection       | `XxHash64` — fast, zero GC                                 |
+| Editor incremental build          | `XxHash64` — fast, zero GC                                 |
+| Save file corruption check        | `XxHash64` — sufficient for bit-flip detection             |
+| Content deduplication             | `XxHash64` — 64-bit collision space adequate for local use |
+| Mod file authentication           | `SHA256` — must resist intentional collision               |
 
 > **Rule of thumb:** Use `XxHash64` when you're asking "did this file change?" Use `SHA256` when you're asking "was this file tampered with?"
 
@@ -430,13 +434,13 @@ string uri = FilePathUtility.GetUnityWebRequestUri(
 
 ### Platform URI Formats
 
-| Platform | StreamingAssets Format | Conversion Method |
-|----------|----------------------|-------------------|
-| **Editor** | `file:///` + absolute path | `System.Uri` |
-| **Android** | `jar:file:///...apk!/assets/` + relative path | Direct concatenation |
-| **iOS** | `file:///` + app bundle path | `System.Uri` |
-| **WebGL** | Relative or absolute URL | `Path.Combine` |
-| **Standalone** | `file:///` + `_Data/StreamingAssets/` path | `System.Uri` |
+| Platform       | StreamingAssets Format                        | Conversion Method    |
+| -------------- | --------------------------------------------- | -------------------- |
+| **Editor**     | `file:///` + absolute path                    | `System.Uri`         |
+| **Android**    | `jar:file:///...apk!/assets/` + relative path | Direct concatenation |
+| **iOS**        | `file:///` + app bundle path                  | `System.Uri`         |
+| **WebGL**      | Relative or absolute URL                      | `Path.Combine`       |
+| **Standalone** | `file:///` + `_Data/StreamingAssets/` path    | `System.Uri`         |
 
 **Key behaviors:**
 
@@ -544,11 +548,11 @@ The solution: **every async loop in FileUtility performs a `Task.Yield()` every 
 
 **Recommendations for 500 MB+ files:**
 
-| Platform | Sync API | Async API |
-|----------|----------|----------|
-| Desktop | Safe (blocks calling thread) | Safe (runs off main thread) |
-| Android | Avoid on UI thread (ANR risk) | Safe (thread pool) |
-| WebGL | **Will freeze** — do not use | Safe with periodic yield |
+| Platform | Sync API                      | Async API                   |
+| -------- | ----------------------------- | --------------------------- |
+| Desktop  | Safe (blocks calling thread)  | Safe (runs off main thread) |
+| Android  | Avoid on UI thread (ANR risk) | Safe (thread pool)          |
+| WebGL    | **Will freeze** — do not use  | Safe with periodic yield    |
 
 > On WebGL, always use the async API. The sync methods (`ComputeFileHash`, `ComputeFileHashToHexString`) have no yield mechanism and will freeze the browser.
 
@@ -556,13 +560,13 @@ The solution: **every async loop in FileUtility performs a `Task.Yield()` every 
 
 ## Dependencies
 
-| Dependency | Usage |
-|---|---|
-| `CycloneGames.Logger` | `CLogger.LogDebug/LogInfo/LogWarning/LogError` for all diagnostic output |
-| `UnityEngine` | `Application.platform`, `Application.persistentDataPath`, `Application.streamingAssetsPath` |
-| `System.Buffers` | `ArrayPool<byte>.Shared` |
-| `System.Buffers.Binary` | `BinaryPrimitives` (used by `XxHash64` for endian-safe reads/writes) |
-| `System.Runtime.InteropServices` | `MemoryMarshal` (used by `XxHash64` for inline buffer access) |
-| `System.Security.Cryptography` | `IncrementalHash`, `HashAlgorithmName` (MD5/SHA256 only) |
+| Dependency                       | Usage                                                                                       |
+| -------------------------------- | ------------------------------------------------------------------------------------------- |
+| `CycloneGames.Logger`            | `CLogger.LogDebug/LogInfo/LogWarning/LogError` for all diagnostic output                    |
+| `UnityEngine`                    | `Application.platform`, `Application.persistentDataPath`, `Application.streamingAssetsPath` |
+| `System.Buffers`                 | `ArrayPool<byte>.Shared`                                                                    |
+| `System.Buffers.Binary`          | `BinaryPrimitives` (used by `XxHash64` for endian-safe reads/writes)                        |
+| `System.Runtime.InteropServices` | `MemoryMarshal` (used by `XxHash64` for inline buffer access)                               |
+| `System.Security.Cryptography`   | `IncrementalHash`, `HashAlgorithmName` (MD5/SHA256 only)                                    |
 
 No third-party packages required. Pure C# implementation, fully cross-platform including WebGL.
