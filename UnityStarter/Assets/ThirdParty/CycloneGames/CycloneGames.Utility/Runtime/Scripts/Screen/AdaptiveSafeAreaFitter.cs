@@ -7,7 +7,7 @@ using UnityEngine;
 namespace CycloneGames.Utility.Runtime
 {
     [RequireComponent(typeof(RectTransform))]
-    [ExecuteInEditMode]
+    [ExecuteAlways]
     public class AdaptiveSafeAreaFitter : MonoBehaviour
     {
         [Header("Behavior Settings")]
@@ -37,50 +37,112 @@ namespace CycloneGames.Utility.Runtime
         public float manualRightPadding = 0f;
 
 
-        private RectTransform rectTransform;
-        private Rect lastSafeArea;
-        private ScreenOrientation lastOrientation;
-        private DrivenRectTransformTracker tracker;
+        private RectTransform _rectTransform;
+        private Rect _lastSafeArea;
+        private int _lastScreenWidth;
+        private int _lastScreenHeight;
+        private ScreenOrientation _lastOrientation;
+        private DrivenRectTransformTracker _tracker;
+        private Vector2 _lastAppliedAnchorMin;
+        private Vector2 _lastAppliedAnchorMax;
 
         void OnEnable()
         {
-            rectTransform = GetComponent<RectTransform>();
-            lastSafeArea = new Rect(0, 0, 0, 0);
-            lastOrientation = Screen.orientation;
-            ApplySafeArea();
+            _rectTransform = GetComponent<RectTransform>();
+
+            // Set up tracker once — locks anchors and offsets in Inspector to prevent manual edits
+            _tracker.Clear();
+            _tracker.Add(this, _rectTransform,
+                DrivenTransformProperties.Anchors |
+                DrivenTransformProperties.SizeDelta |
+                DrivenTransformProperties.AnchoredPosition);
+
+            // Force initial apply by invalidating cached state
+            _lastSafeArea = new Rect(0, 0, 0, 0);
+            _lastScreenWidth = 0;
+            _lastScreenHeight = 0;
+            _lastOrientation = Screen.orientation;
+            Refresh();
         }
 
         void OnDisable()
         {
-            tracker.Clear();
+            _tracker.Clear();
         }
 
         void Update()
         {
-            Rect currentSafeArea = Screen.safeArea;
+            int sw = Screen.width;
+            int sh = Screen.height;
+            Rect sa = Screen.safeArea;
+            ScreenOrientation orient = Screen.orientation;
 
-            if (currentSafeArea != lastSafeArea || Screen.orientation != lastOrientation)
+            bool screenChanged = sa != _lastSafeArea || sw != _lastScreenWidth || sh != _lastScreenHeight || orient != _lastOrientation;
+
+            // Detect anchor tampering (e.g. user changed anchor preset via Inspector popup)
+            bool anchorTampered = _rectTransform != null &&
+                (_rectTransform.anchorMin != _lastAppliedAnchorMin ||
+                 _rectTransform.anchorMax != _lastAppliedAnchorMax ||
+                 _rectTransform.offsetMin != Vector2.zero ||
+                 _rectTransform.offsetMax != Vector2.zero);
+
+            if (screenChanged || anchorTampered)
             {
-                lastSafeArea = currentSafeArea;
-                lastOrientation = Screen.orientation;
-                ApplySafeArea();
+                _lastSafeArea = sa;
+                _lastScreenWidth = sw;
+                _lastScreenHeight = sh;
+                _lastOrientation = orient;
+                ApplySafeArea(sa, sw, sh);
             }
+        }
+
+#if UNITY_EDITOR
+        /// <summary>
+        /// Re-applies safe area when settings are changed in the Inspector.
+        /// </summary>
+        private void OnValidate()
+        {
+            // OnValidate can fire before OnEnable; guard against null
+            if (_rectTransform == null) return;
+            // Delay to avoid modifying transform during validation
+            UnityEditor.EditorApplication.delayCall += () =>
+            {
+                if (this != null && _rectTransform != null)
+                {
+                    Refresh();
+                }
+            };
+        }
+#endif
+
+        /// <summary>
+        /// Forces an immediate safe area recalculation. Call this after programmatic
+        /// resolution changes or when re-enabling UI panels at runtime.
+        /// </summary>
+        public void Refresh()
+        {
+            int sw = Screen.width;
+            int sh = Screen.height;
+            _lastSafeArea = Screen.safeArea;
+            _lastScreenWidth = sw;
+            _lastScreenHeight = sh;
+            _lastOrientation = Screen.orientation;
+            ApplySafeArea(_lastSafeArea, sw, sh);
         }
 
         /// <summary>
         /// Calculates and applies the safe area insets to the RectTransform's anchors.
         /// </summary>
-        private void ApplySafeArea()
+        private void ApplySafeArea(Rect safeArea, int screenWidth, int screenHeight)
         {
-            if (rectTransform == null) return;
-
-            Rect safeArea = Screen.safeArea;
+            if (_rectTransform == null) return;
+            if (screenWidth <= 0 || screenHeight <= 0) return;
 
             // Calculate initial pixel insets from screen edges.
-            float topInset = Screen.height - safeArea.yMax;
+            float topInset = screenHeight - safeArea.yMax;
             float bottomInset = safeArea.yMin;
             float leftInset = safeArea.xMin;
-            float rightInset = Screen.width - safeArea.xMax;
+            float rightInset = screenWidth - safeArea.xMax;
 
             #region Do not Change this pipe
             // On modern iPhones, the bottom safe area is reserved for the Home Indicator.
@@ -107,7 +169,7 @@ namespace CycloneGames.Utility.Runtime
 
             if (enforceHorizontalSymmetry)
             {
-                float maxHorizontal = Mathf.Max(leftInset, rightInset);
+                float maxHorizontal = leftInset > rightInset ? leftInset : rightInset;
                 leftInset = maxHorizontal;
                 rightInset = maxHorizontal;
             }
@@ -118,15 +180,28 @@ namespace CycloneGames.Utility.Runtime
             leftInset += manualLeftPadding;
             rightInset += manualRightPadding;
 
-            // Convert final pixel insets back to normalized anchor positions.
-            Vector2 anchorMin = new Vector2(leftInset / Screen.width, bottomInset / Screen.height);
-            Vector2 anchorMax = new Vector2(1f - (rightInset / Screen.width), 1f - (topInset / Screen.height));
+            // Convert final pixel insets to normalized anchor positions, clamped to [0,1].
+            float invW = 1f / screenWidth;
+            float invH = 1f / screenHeight;
 
-            tracker.Clear();
-            tracker.Add(this, rectTransform, DrivenTransformProperties.Anchors);
+            Vector2 anchorMin = new Vector2(
+                Mathf.Clamp01(leftInset * invW),
+                Mathf.Clamp01(bottomInset * invH));
+            Vector2 anchorMax = new Vector2(
+                Mathf.Clamp01(1f - rightInset * invW),
+                Mathf.Clamp01(1f - topInset * invH));
 
-            rectTransform.anchorMin = anchorMin;
-            rectTransform.anchorMax = anchorMax;
+            _rectTransform.anchorMin = anchorMin;
+            _rectTransform.anchorMax = anchorMax;
+            // Zero out offsets so the RectTransform exactly matches the anchor-defined area.
+            // Without this, pre-existing offset values would shift the element away from
+            // the computed safe area, which is the most common source of incorrect fitting.
+            _rectTransform.offsetMin = Vector2.zero;
+            _rectTransform.offsetMax = Vector2.zero;
+
+            // Cache applied values for tampering detection
+            _lastAppliedAnchorMin = anchorMin;
+            _lastAppliedAnchorMax = anchorMax;
         }
     }
 }

@@ -7,6 +7,7 @@ namespace CycloneGames.Utility.Editor
     /// <summary>
     /// Editor window displaying a visual preview of all CSS3 colors in the Colors class.
     /// Uses responsive layout that automatically adjusts columns based on window width.
+    /// Caches all GUIContent and strings to avoid per-frame GC allocations.
     /// </summary>
     public class ColorsPreviewWindow : EditorWindow
     {
@@ -17,6 +18,15 @@ namespace CycloneGames.Utility.Editor
         private GUIStyle _indexStyle;
         private bool _stylesInitialized;
 
+        // Cached data to avoid per-frame allocations
+        private GUIContent[] _cachedLabelContents;
+        private GUIContent[] _cachedIndexContents;
+        private string[] _cachedHexStrings;
+        private string[] _cachedIndexStrings;
+        private string[] _cachedCopyStrings;
+        private string _cachedSearchLower;
+        private bool _cacheBuilt;
+
         private static readonly string[] ColorNames =
         {
             "AliceBlue", "AntiqueWhite", "Aqua", "Aquamarine", "Azure", "Beige", "Bisque", "Black", "BlanchedAlmond", "Blue",
@@ -25,7 +35,7 @@ namespace CycloneGames.Utility.Editor
             "DarkOrchid", "DarkRed", "DarkSalmon", "DarkSeaGreen", "DarkSlateBlue", "DarkSlateGray", "DarkTurquoise", "DarkViolet", "DeepPink", "DeepSkyBlue",
             "DimGray", "DodgerBlue", "FireBrick", "FloralWhite", "ForestGreen", "Fuchsia", "Gainsboro", "GhostWhite", "Gold", "Goldenrod",
             "Gray", "Green", "GreenYellow", "Honeydew", "HotPink", "IndianRed", "Indigo", "Ivory", "Khaki", "Lavender",
-            "Lavenderblush", "LawnGreen", "LemonChiffon", "LightBlue", "LightCoral", "LightCyan", "LightGoldenodYellow", "LightGray", "LightGreen", "LightPink",
+            "Lavenderblush", "LawnGreen", "LemonChiffon", "LightBlue", "LightCoral", "LightCyan", "LightGoldenrodYellow", "LightGray", "LightGreen", "LightPink",
             "LightSalmon", "LightSeaGreen", "LightSkyBlue", "LightSlateGray", "LightSteelBlue", "LightYellow", "Lime", "LimeGreen", "Linen", "Magenta",
             "Maroon", "MediumAquamarine", "MediumBlue", "MediumOrchid", "MediumPurple", "MediumSeaGreen", "MediumSlateBlue", "MediumSpringGreen", "MediumTurquoise", "MediumVioletRed",
             "MidnightBlue", "Mintcream", "MistyRose", "Moccasin", "NavajoWhite", "Navy", "OldLace", "Olive", "Olivedrab", "Orange",
@@ -36,7 +46,7 @@ namespace CycloneGames.Utility.Editor
         };
 
         private const float SWATCH_PADDING = 6f;
-        private const float LABEL_HEIGHT = 28f;
+        private const float LABEL_HEIGHT = 36f;
         private const float SCROLLBAR_WIDTH = 16f;
 
         [MenuItem("Tools/CycloneGames/Colors Preview")]
@@ -45,6 +55,37 @@ namespace CycloneGames.Utility.Editor
             var window = GetWindow<ColorsPreviewWindow>("Colors Preview");
             window.minSize = new Vector2(300, 200);
             window.Show();
+        }
+
+        private void BuildCache()
+        {
+            if (_cacheBuilt) return;
+
+            int colorCount = Colors.ColorCount;
+            _cachedLabelContents = new GUIContent[colorCount];
+            _cachedIndexContents = new GUIContent[colorCount];
+            _cachedHexStrings = new string[colorCount];
+            _cachedIndexStrings = new string[colorCount];
+            _cachedCopyStrings = new string[colorCount];
+
+            for (int i = 0; i < colorCount; i++)
+            {
+                string colorName = i < ColorNames.Length ? ColorNames[i] : string.Concat("Color", i.ToString());
+                Color color = Colors.GetColorAt(i);
+                Color32 c32 = color;
+                string hex = string.Concat("#", c32.r.ToString("X2"), c32.g.ToString("X2"), c32.b.ToString("X2"));
+                string indexStr = i.ToString();
+                string copyStr = string.Concat("Colors.", colorName);
+                string tooltip = string.Concat(colorName, " [", indexStr, "]\n", hex, "\nClick to copy: ", copyStr);
+
+                _cachedHexStrings[i] = hex;
+                _cachedIndexStrings[i] = indexStr;
+                _cachedCopyStrings[i] = copyStr;
+                _cachedLabelContents[i] = new GUIContent(string.Concat(colorName, "\n", hex), tooltip);
+                _cachedIndexContents[i] = new GUIContent(indexStr);
+            }
+
+            _cacheBuilt = true;
         }
 
         private void InitStyles()
@@ -71,6 +112,7 @@ namespace CycloneGames.Utility.Editor
         private void OnGUI()
         {
             InitStyles();
+            BuildCache();
 
             DrawToolbar();
             DrawColorGrid();
@@ -81,7 +123,12 @@ namespace CycloneGames.Utility.Editor
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
             EditorGUILayout.LabelField("Search:", GUILayout.Width(50));
-            _searchFilter = EditorGUILayout.TextField(_searchFilter, EditorStyles.toolbarSearchField, GUILayout.MinWidth(100), GUILayout.MaxWidth(200));
+            string newFilter = EditorGUILayout.TextField(_searchFilter, EditorStyles.toolbarSearchField, GUILayout.MinWidth(100), GUILayout.MaxWidth(200));
+            if (newFilter != _searchFilter)
+            {
+                _searchFilter = newFilter;
+                _cachedSearchLower = string.IsNullOrEmpty(_searchFilter) ? null : _searchFilter.ToLowerInvariant();
+            }
 
             GUILayout.FlexibleSpace();
 
@@ -112,19 +159,19 @@ namespace CycloneGames.Utility.Editor
 
             for (int i = 0; i < colorCount; i++)
             {
-                string colorName = i < ColorNames.Length ? ColorNames[i] : $"Color{i}";
-
-                // Apply search filter
-                if (!string.IsNullOrEmpty(_searchFilter))
+                // Apply search filter (0GC: uses cached lowercase string)
+                if (_cachedSearchLower != null)
                 {
-                    if (!colorName.ToLowerInvariant().Contains(_searchFilter.ToLowerInvariant()) &&
-                        !i.ToString().Contains(_searchFilter))
+                    string colorName = i < ColorNames.Length ? ColorNames[i] : _cachedCopyStrings[i];
+                    if (colorName.IndexOf(_cachedSearchLower, System.StringComparison.OrdinalIgnoreCase) < 0 &&
+                        _cachedIndexStrings[i].IndexOf(_cachedSearchLower, System.StringComparison.OrdinalIgnoreCase) < 0 &&
+                        _cachedHexStrings[i].IndexOf(_cachedSearchLower, System.StringComparison.OrdinalIgnoreCase) < 0)
                     {
                         continue;
                     }
                 }
 
-                DrawColorSwatch(i, colorName, actualSwatchWidth);
+                DrawColorSwatch(i, actualSwatchWidth);
 
                 column++;
                 if (column >= columnsCount)
@@ -142,7 +189,7 @@ namespace CycloneGames.Utility.Editor
             EditorGUILayout.EndScrollView();
         }
 
-        private void DrawColorSwatch(int index, string colorName, float swatchWidth)
+        private void DrawColorSwatch(int index, float swatchWidth)
         {
             Color color = Colors.GetColorAt(index);
 
@@ -164,18 +211,19 @@ namespace CycloneGames.Utility.Editor
             Color textColor = GetContrastColor(color);
             _indexStyle.normal.textColor = textColor;
             Rect indexRect = new Rect(colorRect.x + 3, colorRect.y + 2, colorRect.width - 6, 18);
-            GUI.Label(indexRect, index.ToString(), _indexStyle);
+            GUI.Label(indexRect, _cachedIndexContents[index], _indexStyle);
 
-            // Draw color name below with tooltip for full name
+            // Draw color name + hex below with tooltip
             Rect labelRect = new Rect(swatchRect.x, colorRect.yMax + 2, swatchRect.width, LABEL_HEIGHT);
             _labelStyle.normal.textColor = EditorGUIUtility.isProSkin ? new Color(0.85f, 0.85f, 0.85f) : new Color(0.2f, 0.2f, 0.2f);
-            GUI.Label(labelRect, new GUIContent(colorName, $"{colorName} (Index: {index})\nClick to copy: Colors.{colorName}"), _labelStyle);
+            GUI.Label(labelRect, _cachedLabelContents[index], _labelStyle);
 
             // Handle click - copy to clipboard
             if (Event.current.type == EventType.MouseDown && colorRect.Contains(Event.current.mousePosition))
             {
-                EditorGUIUtility.systemCopyBuffer = $"Colors.{colorName}";
-                ShowNotification(new GUIContent($"Copied: Colors.{colorName} (Index: {index})"), 1.5f);
+                EditorGUIUtility.systemCopyBuffer = _cachedCopyStrings[index];
+                // GUIContent allocation here is acceptable (only on click, not per-frame)
+                ShowNotification(new GUIContent(string.Concat("Copied: ", _cachedCopyStrings[index])), 1.5f);
                 Event.current.Use();
             }
         }
@@ -190,8 +238,7 @@ namespace CycloneGames.Utility.Editor
 
         private static Color GetContrastColor(Color bgColor)
         {
-            float luminance = 0.299f * bgColor.r + 0.587f * bgColor.g + 0.114f * bgColor.b;
-            return luminance > 0.5f ? Color.black : Color.white;
+            return bgColor.GetLuminance() > 0.5f ? Color.black : Color.white;
         }
     }
 }
