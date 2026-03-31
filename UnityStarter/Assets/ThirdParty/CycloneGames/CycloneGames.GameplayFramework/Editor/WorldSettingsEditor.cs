@@ -27,6 +27,16 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             GUI.color = Color.white;
             EditorGUILayout.EndVertical();
+
+            if (GUILayout.Button("Validate Configuration"))
+            {
+                bool valid = ws.Validate();
+                if (valid)
+                {
+                    Debug.Log($"[WorldSettings] '{ws.name}': All required references are assigned.");
+                }
+            }
+
             EditorGUILayout.Space(8);
 
             DrawDefaultInspector();

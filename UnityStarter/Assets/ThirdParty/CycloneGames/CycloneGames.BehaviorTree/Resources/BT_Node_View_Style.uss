@@ -44,12 +44,10 @@
 }
 
 .bt-input-port {
-    z-index: 10;
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     flex-shrink: 0;
     width: 14px;
     height: 14px;
@@ -74,7 +72,6 @@
     margin: 0;
     margin-left: auto;
     margin-right: auto;
-    pointer-events: auto;
     transition-property: width, height, background-color, border-color;
     transition-duration: 0.15s;
     transition-timing-function: ease-out;
@@ -103,12 +100,10 @@
 }
 
 .bt-output-port {
-    z-index: 10;
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     min-width: 12px;
     min-height: 12px;
     width: 24px;
@@ -304,10 +299,7 @@
     padding-left: 6px;
     padding-right: 6px;
     background-color: rgba(0, 0, 0, 0.5);
-    text-transform: uppercase;
     letter-spacing: 0.5px;
-    pointer-events: none;
-    z-index: 10;
     margin-top: 0;
     margin-bottom: 0;
     align-self: center;
@@ -348,7 +340,6 @@
     padding-right: 0;
     margin-top: 0;
     margin-bottom: 1px;
-    pointer-events: none;
     border-bottom-width: 1px;
     border-bottom-color: rgba(255, 255, 255, 0.06);
 }
@@ -364,7 +355,6 @@
     background-color: rgba(0, 0, 0, 0.25);
     border-top-width: 1px;
     border-top-color: rgba(255, 255, 255, 0.06);
-    z-index: 1;
     position: relative;
 }
 
@@ -395,7 +385,6 @@
 }
 
 .running-edge .edge-path {
-    stroke-width: 4px;
 }
 
 .success-edge {
@@ -403,7 +392,6 @@
 }
 
 .success-edge .edge-path {
-    stroke-width: 3px;
 }
 
 .failure-edge {
@@ -411,7 +399,6 @@
 }
 
 .failure-edge .edge-path {
-    stroke-width: 3px;
 }
 
 .inactive-edge {
@@ -419,5 +406,4 @@
 }
 
 .inactive-edge .edge-path {
-    stroke-width: 2px;
 }

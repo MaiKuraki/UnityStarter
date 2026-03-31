@@ -566,6 +566,7 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 case BTState.RUNNING:
                     edge.AddToClassList("running-edge");
+                    edge.edgeControl.edgeWidth = 4;
                     edge.edgeControl.inputColor = new Color(0.27f, 0.56f, 0.29f, 1f);
                     edge.edgeControl.outputColor = new Color(0.27f, 0.56f, 0.29f, 1f);
                     if (edge is BTAnimatedEdge aeRun)
@@ -579,6 +580,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
                 case BTState.SUCCESS:
                     edge.AddToClassList("success-edge");
+                    edge.edgeControl.edgeWidth = 3;
                     edge.edgeControl.inputColor = new Color(0.24f, 0.86f, 0.12f, 0.85f);
                     edge.edgeControl.outputColor = new Color(0.24f, 0.86f, 0.12f, 0.85f);
                     if (edge is BTAnimatedEdge aeSucc) aeSucc.SetAnimating(false);
@@ -586,6 +588,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
                 case BTState.FAILURE:
                     edge.AddToClassList("failure-edge");
+                    edge.edgeControl.edgeWidth = 3;
                     edge.edgeControl.inputColor = new Color(0.86f, 0.2f, 0.2f, 0.85f);
                     edge.edgeControl.outputColor = new Color(0.86f, 0.2f, 0.2f, 0.85f);
                     if (edge is BTAnimatedEdge aeFail) aeFail.SetAnimating(false);
@@ -593,6 +596,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
                 default: // NOT_ENTERED
                     edge.AddToClassList("inactive-edge");
+                    edge.edgeControl.edgeWidth = 2;
                     edge.edgeControl.inputColor = new Color(0.4f, 0.4f, 0.4f, 0.35f);
                     edge.edgeControl.outputColor = new Color(0.4f, 0.4f, 0.4f, 0.35f);
                     if (edge is BTAnimatedEdge aeIdle) aeIdle.SetAnimating(false);
