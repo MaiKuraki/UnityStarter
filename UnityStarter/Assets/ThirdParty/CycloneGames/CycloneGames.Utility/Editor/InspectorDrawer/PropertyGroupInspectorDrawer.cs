@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Reflection;
 using UnityEditor;
 using UnityEngine;
+#if UNITY_6000_0_OR_NEWER
+using UnityEngine.UIElements;
+#endif
 using Object = UnityEngine.Object;
 using CycloneGames.Utility.Runtime;
 
@@ -22,6 +25,16 @@ namespace CycloneGames.Utility.Editor
 		{
 			_initialized = false;
 		}
+
+#if UNITY_6000_0_OR_NEWER
+		public override VisualElement CreateInspectorGUI()
+		{
+			// Unity 6+ uses UI Toolkit by default. Wrap our IMGUI inspector
+			// in an IMGUIContainer so the fallback editor is actually picked up.
+			var container = new IMGUIContainer(OnInspectorGUI);
+			return container;
+		}
+#endif
 
 		private void OnDisable()
 		{
@@ -272,39 +285,62 @@ namespace CycloneGames.Utility.Editor
 
 	internal static class StyleFramework
 	{
-		public static readonly GUIStyle Box;
-		public static readonly GUIStyle Foldout;
+		private static GUIStyle _box;
+		private static GUIStyle _foldout;
+		private static bool _initialized;
 		private const int IconLeftPadding = 16;
 
-		static StyleFramework()
+		public static GUIStyle Box
 		{
+			get
+			{
+				EnsureInitialized();
+				return _box;
+			}
+		}
+
+		public static GUIStyle Foldout
+		{
+			get
+			{
+				EnsureInitialized();
+				return _foldout;
+			}
+		}
+
+		private static void EnsureInitialized()
+		{
+			if (_initialized && _box != null && _foldout != null) return;
+
 			var uiTex_in = Resources.Load<Texture2D>("IN foldout focus-6510");
 			var uiTex_in_on = Resources.Load<Texture2D>("IN foldout focus on-5718");
 
 			var c_on = EditorGUIUtility.isProSkin ? Color.white : new Color(51 / 255f, 102 / 255f, 204 / 255f, 1);
 
-			Foldout = new GUIStyle(EditorStyles.foldout)
+			_foldout = new GUIStyle(EditorStyles.foldout)
 			{
 				padding = new RectOffset(IconLeftPadding, 0, -2, 0)
 			};
 
-			Foldout.active.textColor = c_on;
-			Foldout.active.background = uiTex_in;
-			Foldout.onActive.textColor = c_on;
-			Foldout.onActive.background = uiTex_in_on;
-			Foldout.focused.textColor = c_on;
-			Foldout.focused.background = uiTex_in;
-			Foldout.onFocused.textColor = c_on;
-			Foldout.onFocused.background = uiTex_in_on;
-			Foldout.hover.textColor = c_on;
-			Foldout.hover.background = uiTex_in;
-			Foldout.onHover.textColor = c_on;
-			Foldout.onHover.background = uiTex_in_on;
+			_foldout.active.textColor = c_on;
+			if (uiTex_in != null) _foldout.active.background = uiTex_in;
+			_foldout.onActive.textColor = c_on;
+			if (uiTex_in_on != null) _foldout.onActive.background = uiTex_in_on;
+			_foldout.focused.textColor = c_on;
+			if (uiTex_in != null) _foldout.focused.background = uiTex_in;
+			_foldout.onFocused.textColor = c_on;
+			if (uiTex_in_on != null) _foldout.onFocused.background = uiTex_in_on;
+			_foldout.hover.textColor = c_on;
+			if (uiTex_in != null) _foldout.hover.background = uiTex_in;
+			_foldout.onHover.textColor = c_on;
+			if (uiTex_in_on != null) _foldout.onHover.background = uiTex_in_on;
 
-			Box = new GUIStyle(GUI.skin.box)
+			_box = new GUIStyle(GUI.skin.box)
 			{
 				padding = new RectOffset(IconLeftPadding, 0, 6, 4)
 			};
+
+			_initialized = true;
 		}
 
 		public static string FirstLetterToUpperCase(this string s)

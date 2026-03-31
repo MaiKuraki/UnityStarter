@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using UnityEngine;
 
 namespace CycloneGames.Utility.Runtime
@@ -75,7 +76,7 @@ namespace CycloneGames.Utility.Runtime
         public static readonly Color LightBlue = new Color32(173, 216, 230, 255);
         public static readonly Color LightCoral = new Color32(240, 128, 128, 255);
         public static readonly Color LightCyan = new Color32(224, 255, 255, 255);
-        public static readonly Color LightGoldenodYellow = new Color32(250, 250, 210, 255);
+        public static readonly Color LightGoldenrodYellow = new Color32(250, 250, 210, 255);
         public static readonly Color LightGray = new Color32(211, 211, 211, 255);
         public static readonly Color LightGreen = new Color32(144, 238, 144, 255);
         public static readonly Color LightPink = new Color32(255, 182, 193, 255);
@@ -158,7 +159,7 @@ namespace CycloneGames.Utility.Runtime
             DarkOrchid, DarkRed, DarkSalmon, DarkSeaGreen, DarkSlateBlue, DarkSlateGray, DarkTurquoise, DarkViolet, DeepPink, DeepSkyBlue,
             DimGray, DodgerBlue, FireBrick, FloralWhite, ForestGreen, Fuchsia, Gainsboro, GhostWhite, Gold, Goldenrod,
             Gray, Green, GreenYellow, Honeydew, HotPink, IndianRed, Indigo, Ivory, Khaki, Lavender,
-            Lavenderblush, LawnGreen, LemonChiffon, LightBlue, LightCoral, LightCyan, LightGoldenodYellow, LightGray, LightGreen, LightPink,
+            Lavenderblush, LawnGreen, LemonChiffon, LightBlue, LightCoral, LightCyan, LightGoldenrodYellow, LightGray, LightGreen, LightPink,
             LightSalmon, LightSeaGreen, LightSkyBlue, LightSlateGray, LightSteelBlue, LightYellow, Lime, LimeGreen, Linen, Magenta,
             Maroon, MediumAquamarine, MediumBlue, MediumOrchid, MediumPurple, MediumSeaGreen, MediumSlateBlue, MediumSpringGreen, MediumTurquoise, MediumVioletRed,
             MidnightBlue, Mintcream, MistyRose, Moccasin, NavajoWhite, Navy, OldLace, Olive, Olivedrab, Orange,
@@ -191,9 +192,9 @@ namespace CycloneGames.Utility.Runtime
         }
 
         /// <summary>
-        /// Returns a random color between the two min/max specified.
+        /// Returns a random color with each channel randomized between min and max.
         /// </summary>
-        public static Color RandomColor(this Color color, Color min, Color max)
+        public static Color RandomColor(Color min, Color max)
         {
             return new Color
             {
@@ -202,6 +203,142 @@ namespace CycloneGames.Utility.Runtime
                 b = Random.Range(min.b, max.b),
                 a = Random.Range(min.a, max.a)
             };
+        }
+
+        // --- Common Color Utilities ---
+
+        /// <summary>
+        /// Returns a copy of the color with the specified alpha. 0GC (Color is a struct).
+        /// </summary>
+        public static Color WithAlpha(this Color color, float alpha)
+        {
+            color.a = alpha;
+            return color;
+        }
+
+        /// <summary>
+        /// Converts a Color to a hex string (e.g. "#FF00AAFF").
+        /// Allocates one string.
+        /// </summary>
+        public static string ToHexString(this Color color)
+        {
+            Color32 c32 = color;
+            return string.Concat("#",
+                c32.r.ToString("X2"),
+                c32.g.ToString("X2"),
+                c32.b.ToString("X2"),
+                c32.a.ToString("X2"));
+        }
+
+        /// <summary>
+        /// Parses a hex string ("#RRGGBB" or "#RRGGBBAA", with or without '#') into a Color.
+        /// Returns false if the format is invalid.
+        /// </summary>
+        public static bool TryParseHex(string hex, out Color color)
+        {
+            color = Color.white;
+            if (string.IsNullOrEmpty(hex)) return false;
+
+            if (hex[0] == '#') hex = hex.Substring(1);
+
+            if (hex.Length != 6 && hex.Length != 8) return false;
+
+            if (!byte.TryParse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out byte r)) return false;
+            if (!byte.TryParse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, null, out byte g)) return false;
+            if (!byte.TryParse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, null, out byte b)) return false;
+            byte a = 255;
+            if (hex.Length == 8)
+            {
+                if (!byte.TryParse(hex.Substring(6, 2), System.Globalization.NumberStyles.HexNumber, null, out a)) return false;
+            }
+
+            color = new Color32(r, g, b, a);
+            return true;
+        }
+
+        /// <summary>
+        /// Returns the perceived luminance of a color (BT.601 standard).
+        /// Useful for determining text color contrast, accessibility checks, etc.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float GetLuminance(this Color color)
+        {
+            return 0.299f * color.r + 0.587f * color.g + 0.114f * color.b;
+        }
+
+        /// <summary>
+        /// Packs a Color into a single uint (RGBA, 8 bits per channel).
+        /// Ideal for network serialization, ECS components, and compact storage. 0GC.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static uint ToUInt32(this Color color)
+        {
+            Color32 c = color;
+            return ((uint)c.r << 24) | ((uint)c.g << 16) | ((uint)c.b << 8) | c.a;
+        }
+
+        /// <summary>
+        /// Unpacks a uint (RGBA) back into a Color. 0GC.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Color FromUInt32(uint packed)
+        {
+            return new Color32(
+                (byte)(packed >> 24),
+                (byte)(packed >> 16),
+                (byte)(packed >> 8),
+                (byte)packed);
+        }
+
+        /// <summary>
+        /// Returns the inverted color (1-r, 1-g, 1-b), preserving alpha. 0GC.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Color Invert(this Color color)
+        {
+            return new Color(1f - color.r, 1f - color.g, 1f - color.b, color.a);
+        }
+
+        /// <summary>
+        /// Adjusts brightness in HSV space by multiplying the V channel.
+        /// More visually natural than multiplying RGB directly.
+        /// factor > 1 = brighter, factor &lt; 1 = darker. 0GC.
+        /// </summary>
+        public static Color AdjustBrightness(this Color color, float factor)
+        {
+            Color.RGBToHSV(color, out float h, out float s, out float v);
+            v = Mathf.Clamp01(v * factor);
+            Color result = Color.HSVToRGB(h, s, v);
+            result.a = color.a;
+            return result;
+        }
+
+        /// <summary>
+        /// Desaturates a color by the given amount (0 = original, 1 = full grayscale).
+        /// Uses luminance-preserving grayscale conversion. 0GC.
+        /// </summary>
+        public static Color Desaturate(this Color color, float amount)
+        {
+            float gray = 0.299f * color.r + 0.587f * color.g + 0.114f * color.b;
+            return new Color(
+                color.r + (gray - color.r) * amount,
+                color.g + (gray - color.g) * amount,
+                color.b + (gray - color.b) * amount,
+                color.a);
+        }
+
+        /// <summary>
+        /// Linearly interpolates between two colors without clamping t.
+        /// Allows overshoot for elastic/spring animations. 0GC.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Color LerpUnclamped(Color a, Color b, float t)
+        {
+            return new Color(
+                a.r + (b.r - a.r) * t,
+                a.g + (b.g - a.g) * t,
+                a.b + (b.b - a.b) * t,
+                a.a + (b.a - a.a) * t);
         }
 
         /// <summary>
