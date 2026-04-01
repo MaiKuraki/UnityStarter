@@ -11,9 +11,10 @@ namespace CycloneGames.Factory.Runtime
     /// - Smart auto-shrink logic based on usage peaks.
     /// - Minimal GC overhead.
     /// </summary>
-    public abstract class FastObjectPool<T> : IMemoryPool<T> where T : class
+    public abstract class FastObjectPool<T> : IMemoryPool<T>, IDisposable where T : class
     {
         protected readonly Stack<T> _pool;
+        private bool _disposed;
 
         public int NumTotal => NumActive + NumInactive;
         public int NumActive { get; protected set; }
@@ -54,6 +55,8 @@ namespace CycloneGames.Factory.Runtime
 
         public T Spawn()
         {
+            if (_disposed) throw new ObjectDisposedException(GetType().Name);
+
             T item;
             while (_pool.Count > 0)
             {
@@ -107,6 +110,13 @@ namespace CycloneGames.Factory.Runtime
             }
 
             NumActive--;
+
+            if (_disposed)
+            {
+                OnDespawn(item);
+                DestroyItem(item);
+                return;
+            }
 
             if (MaxCapacity > 0 && _pool.Count >= MaxCapacity)
             {
@@ -212,6 +222,11 @@ namespace CycloneGames.Factory.Runtime
 
         public void ExpandBy(int num)
         {
+            if (_disposed) throw new ObjectDisposedException(GetType().Name);
+            if (MaxCapacity > 0)
+            {
+                num = Math.Min(num, Math.Max(0, MaxCapacity - _pool.Count));
+            }
             for (int i = 0; i < num; i++)
             {
                 T item = CreateNew();
@@ -227,6 +242,35 @@ namespace CycloneGames.Factory.Runtime
                 T item = _pool.Pop();
                 if (IsValid(item)) DestroyItem(item);
             }
+        }
+
+        /// <summary>
+        /// Spreads pool warmup across multiple frames to avoid lag spikes on low-end devices.
+        /// Use with StartCoroutine in Unity or iterate manually in pure C#.
+        /// </summary>
+        public System.Collections.IEnumerator WarmupCoroutine(int count, int batchSize = 8)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                if (_disposed) yield break;
+                if (MaxCapacity > 0 && _pool.Count >= MaxCapacity) yield break;
+                T item = CreateNew();
+                OnDespawn(item);
+                _pool.Push(item);
+                if ((i + 1) % batchSize == 0) yield return null;
+            }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            Dispose(true);
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (disposing) Clear();
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
