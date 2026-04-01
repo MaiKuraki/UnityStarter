@@ -34,14 +34,14 @@ All tools are **standalone executables** - no installation required. Simply down
 
 ## Quick Reference
 
-| Tool                         | Purpose                                           | When to Use                                        | Location        |
-| ---------------------------- | ------------------------------------------------- | -------------------------------------------------- | --------------- |
-| **rename_project**           | Renames Unity project (folder, company, app name) | Starting a new project from template               | Project root    |
-| **remove_unity_packages**    | Removes unnecessary packages from manifest.json   | Creating minimal project template                  | Project root    |
-| **unity_project_full_clean** | Deletes temporary files, caches, build artifacts  | Before version control, archiving, troubleshooting | Project root    |
-| **audio_volume_normalizer**  | Batch normalizes audio files to -16 LUFS          | Processing audio assets for consistent loudness    | Audio directory |
-| **image_to_base64**          | Converts image to Base64 string                   | Embedding images in code/config files              | Anywhere        |
-| **generate_file_tree**       | Generates Markdown directory tree                 | Documenting project structure                      | Project root    |
+| Tool                         | Purpose                                                  | When to Use                                        | Location        |
+| ---------------------------- | -------------------------------------------------------- | -------------------------------------------------- | --------------- |
+| **rename_project**           | Renames Unity project (folder, company, app name)        | Starting a new project from template               | Project root    |
+| **remove_unity_packages**    | Removes unnecessary packages from manifest.json          | Creating minimal project template                  | Project root    |
+| **unity_project_full_clean** | Deletes temporary files, caches, build artifacts         | Before version control, archiving, troubleshooting | Project root    |
+| **audio_volume_normalizer**  | Batch normalizes audio files with category-aware targets | Processing audio assets for consistent loudness    | Audio directory |
+| **image_to_base64**          | Converts image to Base64 string                          | Embedding images in code/config files              | Anywhere        |
+| **generate_file_tree**       | Generates Markdown directory tree                        | Documenting project structure                      | Project root    |
 
 ## Tool Details
 
@@ -209,22 +209,52 @@ Files:
 
 ### 4. Audio Volume Normalizer `audio_volume_normalizer.exe`
 
-**Purpose**: Batch normalizes audio files to a consistent loudness level using FFmpeg.
+**Purpose**: Batch normalizes audio files to a consistent loudness level using FFmpeg, with game audio-optimized strategies.
 
 **What It Does**:
 
 - Recursively scans directory for audio files
-- Normalizes each file to **-16.0 LUFS** (Loudness Units Full Scale)
-- Sets True Peak to **-1.5 dBTP**
-- Creates new `.ogg` files with `_normalized` suffix
+- **Auto-detects audio category** from parent folder name (Music, SFX, Voice, Ambient)
+- **Dual normalization strategy**: LUFS for long audio (≥ 3s), Peak for short SFX (< 3s)
+- **Selectable output format**: WAV (lossless) or OGG (Vorbis VBR)
+- Uses two-pass linear mode loudnorm for highest quality
 - Skips files already within target range
+- Per-file timeout protection against corrupted files
 
-**Use Case**: Processing audio assets to ensure consistent volume levels across all files.
+**Category Auto-Detection**:
+
+The tool automatically detects the audio category based on parent folder names (case-insensitive):
+
+| Category | Matched Folders         | LUFS Target | True Peak | Peak Target (short SFX) |
+| -------- | ----------------------- | ----------- | --------- | ----------------------- |
+| Music    | `music`, `bgm`          | -14.0 LUFS  | -1.0 dBTP | -1.0 dB                 |
+| Voice    | `voice`, `dialog`, `vo` | -16.0 LUFS  | -1.5 dBTP | -1.0 dB                 |
+| SFX      | `sfx`, `se`, `sound`    | -14.0 LUFS  | -1.0 dBTP | -1.0 dB                 |
+| Ambient  | `ambient`, `env`        | -20.0 LUFS  | -1.5 dBTP | -3.0 dB                 |
+| Default  | _(any other)_           | -16.0 LUFS  | -1.5 dBTP | -1.0 dB                 |
+
+**Normalization Strategies**:
+
+- **Long audio (≥ 3s)**: Two-pass LUFS normalization with `linear=true` — preserves dynamic range while adjusting perceived loudness. Ideal for music, dialog, and ambient.
+- **Short audio (< 3s)**: Peak normalization — LUFS (ITU-R BS.1770) requires ≥ 400ms for reliable measurement, making it unsuitable for short SFX like button clicks, footsteps, and gunshots.
+
+**Output Format Selection**:
+
+At startup, you can choose the output format:
+
+| Format | Codec         | Best For                                                                             |
+| ------ | ------------- | ------------------------------------------------------------------------------------ |
+| WAV    | PCM 16-bit    | **Recommended**: Lossless, avoids double compression when Unity re-encodes on import |
+| OGG    | Vorbis VBR q6 | When disk space / Git repo size matters                                              |
+
+> **Note**: WAV vs OGG source files have **zero impact** on Unity runtime memory or CPU — Unity re-encodes all audio on import according to your AudioClip Import Settings. See the [Audio Best Practices Guide](../Docs/AudioBestPractices/AudioBestPractices.md) for details.
+
+**Use Case**: Processing audio assets to ensure consistent volume levels across all files, with category-aware loudness targets optimized for game audio.
 
 **Requirements**:
 
 - **FFmpeg** installed and accessible in system PATH
-- Audio files in directory (supports: `.wav`, `.mp3`, `.ogg`, `.flac`, etc.)
+- Audio files in directory (supports: `.wav`, `.mp3`, `.ogg`, `.flac`, `.m4a`, `.aac`, `.wma`, `.opus`)
 - Write permissions
 
 **Usage**:
@@ -234,30 +264,43 @@ Files:
 #    Download from: https://ffmpeg.org/download.html
 
 # 2. Place executable in directory containing audio files
+#    Organize files by category folders:
+#    Audio/
+#    ├── Music/        (auto-detected as Music)
+#    ├── SFX/          (auto-detected as SFX)
+#    ├── Voice/        (auto-detected as Voice)
+#    └── Ambient/      (auto-detected as Ambient)
 cd /path/to/audio/files
 
 # 3. Run the executable
 audio_volume_normalizer.exe
 
+# 4. Select output format (1=WAV, 2=OGG)
+# 5. Confirm to proceed
+
 # Tool will:
-# - Scan for audio files recursively
-# - Show preview of files to process
-# - Prompt for confirmation
-# - Process each file (creates _normalized.ogg files)
-# - Show summary (processed, skipped, failed)
+# - Auto-detect category from folder names
+# - Choose strategy based on audio duration
+# - Show progress bar during processing
+# - Show summary (processed, skipped, failed with error details)
 ```
 
 **Output**:
 
-- Original files: `sound_effect.wav`
-- Normalized files: `sound_effect_normalized.ogg`
+- Original file: `SFX/gunshot.wav`
+- Normalized file: `SFX/gunshot_normalized.wav` (or `.ogg`)
 
 **Features**:
 
-- Two-pass FFmpeg process for accurate normalization
-- Skips files already within target range (saves time)
-- Preserves original files (creates new normalized versions)
-- Detailed summary report
+- Category-aware loudness targets (auto-detected from folder structure)
+- Dual strategy: LUFS for long audio, Peak for short SFX
+- Two-pass FFmpeg with `linear=true` for highest quality
+- Selectable output format (WAV lossless / OGG Vorbis VBR)
+- Skips already-normalized files and silent files
+- Per-file timeout (10 min) to handle corrupted files
+- Concurrent processing with progress bar
+- Strips source metadata to prevent encoding issues (WAV does not support UTF-8 metadata)
+- Detailed summary with error messages for failed files
 
 **Safety**: Creates new files, never modifies originals. Safe to run multiple times.
 
@@ -439,23 +482,35 @@ unity_project_full_clean.exe
 
 ### Example 2: Processing Audio Assets
 
-**Scenario**: You have a folder of sound effects that need consistent volume.
+**Scenario**: You have audio files organized by category that need consistent volume.
 
 ```bash
-# Step 1: Navigate to audio directory
-cd Assets/Audio/SoundEffects
+# Step 1: Organize audio files by category in folders
+# Assets/Audio/
+# ├── BGM/           -> Music targets (-14 LUFS)
+# ├── SFX/           -> SFX targets (-14 LUFS / Peak -1.0 dB for short clips)
+# ├── Voice/         -> Voice targets (-16 LUFS)
+# └── Ambient/       -> Ambient targets (-20 LUFS)
 
-# Step 2: Run normalizer
+# Step 2: Navigate to audio root directory
+cd Assets/Audio
+
+# Step 3: Run normalizer
 audio_volume_normalizer.exe
+# Select output format: 1 (WAV) or 2 (OGG)
+# Confirm: Yes
 
-# Step 3: Review summary
-# - 15 files processed
+# Step 4: Review summary
+# - 15 files processed (category auto-detected from folder names)
 # - 3 files skipped (already normalized)
+# - 2 files skipped (short SFX, peak-normalized instead of LUFS)
 # - 0 files failed
 
-# Step 4: Use normalized files in your project
-# Files: sound_effect_normalized.ogg
+# Step 5: Use normalized files in your project
+# Files: gunshot_normalized.wav (or .ogg)
 ```
+
+For detailed Unity audio import settings and optimization recommendations, see the [Audio Best Practices Guide](../Docs/AudioBestPractices/AudioBestPractices.md).
 
 ### Example 3: Generating Project Documentation
 

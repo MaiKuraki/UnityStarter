@@ -117,10 +117,12 @@ namespace CycloneGames.Audio.Runtime
         private static int totalSteals;
 
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
         // Memory tracking - use struct-based approach for better cache coherence
         private static readonly Dictionary<AudioClip, int> activeClipRefCount = new Dictionary<AudioClip, int>();
         private static readonly Dictionary<AudioClip, long> clipMemoryCache = new Dictionary<AudioClip, long>();
         private static readonly HashSet<AudioClip> reusableClipSet = new HashSet<AudioClip>();
+#endif
 
         // O(1) lookup and removal for event names
         private static readonly ConcurrentDictionary<string, AudioEvent> eventNameMap = new ConcurrentDictionary<string, AudioEvent>();
@@ -132,9 +134,11 @@ namespace CycloneGames.Audio.Runtime
         private static readonly Dictionary<string, List<AudioEvent>> reusableDuplicateCheck = new Dictionary<string, List<AudioEvent>>();
         private static readonly HashSet<string> reusableBankRegisteredNames = new HashSet<string>();
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
         public static long TotalMemoryUsage { get; private set; }
         public static IReadOnlyDictionary<AudioClip, int> ActiveClipRefCount => activeClipRefCount;
         public static IReadOnlyDictionary<AudioClip, long> ClipMemoryCache => clipMemoryCache;
+#endif
 
         private static float globalVolume = 1f;
         private static bool globalPaused;
@@ -321,8 +325,10 @@ namespace CycloneGames.Audio.Runtime
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitterTransform);
             tempEvent.Play();
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (tempEvent.status != EventStatus.Error)
                 TrackMemory(tempEvent, true);
+#endif
 
             return tempEvent;
         }
@@ -341,8 +347,10 @@ namespace CycloneGames.Audio.Runtime
             tempEvent.Play();
             tempEvent.SetAllSourcePositions(position);
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (tempEvent.status != EventStatus.Error)
                 TrackMemory(tempEvent, true);
+#endif
 
             return tempEvent;
         }
@@ -441,8 +449,10 @@ namespace CycloneGames.Audio.Runtime
             tempEvent.scheduledDspTime = dspTime;
             tempEvent.Play();
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (tempEvent.status != EventStatus.Error)
                 TrackMemory(tempEvent, true);
+#endif
 
             return tempEvent;
         }
@@ -469,8 +479,10 @@ namespace CycloneGames.Audio.Runtime
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitter.transform);
             tempEvent.Play();
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (tempEvent.status != EventStatus.Error)
                 TrackMemory(tempEvent, true);
+#endif
 
             return tempEvent;
         }
@@ -542,8 +554,10 @@ namespace CycloneGames.Audio.Runtime
             int idx = ActiveEvents.IndexOf(stoppedEvent);
             if (idx < 0) return;
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             // Track memory BEFORE clearing clips, so TrackMemory can read source.clip
             TrackMemory(stoppedEvent, false);
+#endif
 
             // Clear AudioSource.clip before returning to pool.
             // This releases the clip reference so external asset management systems
@@ -608,7 +622,9 @@ namespace CycloneGames.Audio.Runtime
             public int SourcePoolSize;
             public long TotalEventsPlayed;
             public int PeakActiveEvents;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             public long TotalMemoryUsage;
+#endif
             public int LoadedBanksCount;
         }
 
@@ -622,7 +638,9 @@ namespace CycloneGames.Audio.Runtime
                 SourcePoolSize = sourcePool.Count,
                 TotalEventsPlayed = Interlocked.Read(ref totalEventsPlayed),
                 PeakActiveEvents = peakActiveEvents,
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
                 TotalMemoryUsage = TotalMemoryUsage,
+#endif
                 LoadedBanksCount = loadedBanks.Count
             };
         }
@@ -1167,10 +1185,22 @@ namespace CycloneGames.Audio.Runtime
             return null;
         }
 
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
         private static long CalculateAudioClipMemoryUsage(AudioClip clip)
         {
             if (clip == null) return 0;
-            return clip.samples * clip.channels * 2L; // 16-bit samples
+
+            // Use Unity Profiler API for accurate runtime memory measurement.
+            // This accounts for the actual load type and compression format:
+            //   - Decompress On Load: full PCM in memory (samples × channels × bytesPerSample)
+            //   - Compressed In Memory: compressed data only (much smaller than PCM)
+            //   - Streaming: only a small I/O buffer (a few KB)
+            // Fallback to PCM estimate (samples × channels × 2 bytes) if Profiler returns 0.
+            long profilerSize = UnityEngine.Profiling.Profiler.GetRuntimeMemorySizeLong(clip);
+            if (profilerSize > 0) return profilerSize;
+
+            // Fallback: assume 16-bit PCM (worst-case estimate for Decompress On Load)
+            return clip.samples * clip.channels * 2L;
         }
 
         private static void TrackMemory(ActiveEvent activeEvent, bool isAdding)
@@ -1215,6 +1245,7 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
         }
+#endif
 
         public static bool ValidateManager()
         {
