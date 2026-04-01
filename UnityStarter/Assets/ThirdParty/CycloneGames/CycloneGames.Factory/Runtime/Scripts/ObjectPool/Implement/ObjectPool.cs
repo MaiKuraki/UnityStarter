@@ -87,6 +87,7 @@ namespace CycloneGames.Factory.Runtime
 
         public TValue Spawn(TParam1 param)
         {
+            if (_disposed) throw new ObjectDisposedException(nameof(ObjectPool<TParam1, TValue>));
             _rwLock.EnterWriteLock();
             try
             {
@@ -99,20 +100,18 @@ namespace CycloneGames.Factory.Runtime
                 }
 
                 TValue item = _inactivePool.Pop();
-                Interlocked.Decrement(ref _numInactive);
+                _numInactive--;
                 
                 int index = _activeItems.Count;
                 _activeItems.Add(item);
                 _activeItemIndices[item] = index;
-                Interlocked.Increment(ref _numActive);
+                _numActive++;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Interlocked.Increment(ref _totalGets);
-                int active = _activeItems.Count;
-                int peak = Volatile.Read(ref _peakActive);
-                if (active > peak)
+                _totalGets++;
+                if (_activeItems.Count > _peakActive)
                 {
-                    Interlocked.CompareExchange(ref _peakActive, active, peak);
+                    _peakActive = _activeItems.Count;
                 }
 #endif
 
@@ -125,8 +124,8 @@ namespace CycloneGames.Factory.Runtime
                     _activeItems.RemoveAt(_activeItems.Count - 1);
                     _activeItemIndices.Remove(item);
                     _inactivePool.Push(item);
-                    Interlocked.Decrement(ref _numActive);
-                    Interlocked.Increment(ref _numInactive);
+                    _numActive--;
+                    _numInactive++;
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
                     UnityEngine.Debug.LogError($"[CycloneGames.Factory] OnSpawned failed for item of type {typeof(TValue).Name}. Reverting spawn. Error: {ex.Message}");
 #endif
@@ -144,7 +143,7 @@ namespace CycloneGames.Factory.Runtime
 
         public void Despawn(TValue item)
         {
-            if (item == null) return;
+            if (item == null || _disposed) return;
 
             // Deadlock prevention
             if (_rwLock.IsReadLockHeld)
@@ -257,9 +256,9 @@ namespace CycloneGames.Factory.Runtime
             finally
             {
                 _inactivePool.Push(item);
-                Interlocked.Increment(ref _numInactive);
+                _numInactive++;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Interlocked.Increment(ref _totalReturns);
+                _totalReturns++;
 #endif
             }
         }
@@ -277,7 +276,7 @@ namespace CycloneGames.Factory.Runtime
             {
                 (item as IDisposable)?.Dispose();
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Interlocked.Increment(ref _totalDiscards);
+                _totalDiscards++;
 #endif
             }
         }
@@ -291,7 +290,7 @@ namespace CycloneGames.Factory.Runtime
             _activeItemIndices[lastItem] = index;
             _activeItems.RemoveAt(_activeItems.Count - 1);
             _activeItemIndices.Remove(item);
-            Interlocked.Decrement(ref _numActive);
+            _numActive--;
             return true;
         }
 
@@ -390,7 +389,7 @@ namespace CycloneGames.Factory.Runtime
                     }
                     catch { }
                     _inactivePool.Push(created);
-                    Interlocked.Increment(ref _numInactive);
+                    _numInactive++;
                 }
             }
         }
@@ -401,7 +400,7 @@ namespace CycloneGames.Factory.Runtime
             for (int i = 0; i < numToActuallyRemove; i++)
             {
                 var item = _inactivePool.Pop();
-                Interlocked.Decrement(ref _numInactive);
+                _numInactive--;
                 (item as IDisposable)?.Dispose();
             }
         }
@@ -432,8 +431,8 @@ namespace CycloneGames.Factory.Runtime
                 _inactivePool.Clear();
                 _pendingDespawns.Clear();
 
-                Interlocked.Exchange(ref _numActive, 0);
-                Interlocked.Exchange(ref _numInactive, 0);
+                _numActive = 0;
+                _numInactive = 0;
                 ResetShrinkTracker();
             }
             finally
@@ -466,6 +465,28 @@ namespace CycloneGames.Factory.Runtime
             finally
             {
                 _rwLock.ExitWriteLock();
+            }
+        }
+
+        /// <summary>
+        /// Spreads pool warmup across multiple frames to avoid lag spikes on low-end devices.
+        /// Use with StartCoroutine in Unity or iterate manually in pure C#.
+        /// </summary>
+        public System.Collections.IEnumerator WarmupCoroutine(int count, int batchSize = 8)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                if (_disposed) yield break;
+                _rwLock.EnterWriteLock();
+                try
+                {
+                    ExpandPoolInternal(1);
+                }
+                finally
+                {
+                    _rwLock.ExitWriteLock();
+                }
+                if ((i + 1) % batchSize == 0) yield return null;
             }
         }
 

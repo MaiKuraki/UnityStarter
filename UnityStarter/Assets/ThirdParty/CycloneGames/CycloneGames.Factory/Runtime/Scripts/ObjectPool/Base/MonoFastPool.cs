@@ -19,15 +19,14 @@ namespace CycloneGames.Factory.Runtime
             _root = root;
             _autoSetActive = autoSetActive;
 
-            // Prewarm
             if (initialCapacity > 0) ExpandBy(initialCapacity);
         }
 
         protected override T CreateNew()
         {
-            T instance = Object.Instantiate(_prefab, _root);
-            // Initially false if autoSetActive is true, because OnDespawn logic puts it there, 
-            // but here we just created it.
+            T instance = _root != null
+                ? Object.Instantiate(_prefab, _root)
+                : Object.Instantiate(_prefab);
             if (_autoSetActive) instance.gameObject.SetActive(false);
             return instance;
         }
@@ -41,7 +40,6 @@ namespace CycloneGames.Factory.Runtime
         {
             if (_autoSetActive) item.gameObject.SetActive(false);
 
-            // Reset parent to root if it was moved
             if (_root != null && item.transform.parent != _root)
             {
                 item.transform.SetParent(_root, false);
@@ -49,13 +47,10 @@ namespace CycloneGames.Factory.Runtime
         }
 
         /// <summary>
-        /// Override IsValid to handle Unity's "Fake Null" for destroyed objects.
-        /// This prevents accessing destroyed GameObjects and causing MissingReferenceException.
+        /// Handles Unity's "Fake Null" for destroyed objects (e.g. from scene unload).
         /// </summary>
         protected override bool IsValid(T item)
         {
-            // Unity overloads != null to check if the native C++ object is alive.
-            // We also check gameObject access safety implicitly by checking the Component itself.
             return item != null;
         }
 
@@ -65,6 +60,19 @@ namespace CycloneGames.Factory.Runtime
             {
                 Object.Destroy(item.gameObject);
             }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // Destroy all pooled GameObjects before clearing the pool
+                foreach (var item in _pool)
+                {
+                    if (item != null) Object.Destroy(item.gameObject);
+                }
+            }
+            base.Dispose(disposing);
         }
     }
 }

@@ -62,16 +62,8 @@ namespace CycloneGames.Factory.ECS.Runtime
 
                 entityManager.SetEnabled(entity, false);
 
-                if (entityManager.IsEnabled(entity))
-                {
-                    Debug.LogError($"CRITICAL: Failed to disable entity {entity} during pool initialization! This will cause visual artifacts.");
-                    entityManager.SetEnabled(entity, false);
-                }
-
                 inactiveEntities.Push(entity);
             }
-
-            Debug.Log($"EntityPool initialized with {initialCapacity} entities. All entities should be disabled and off-screen.");
         }
 
         /// <summary>
@@ -150,7 +142,6 @@ namespace CycloneGames.Factory.ECS.Runtime
                     ecb.SetEnabled(entity, false);
                     if (entityManager.HasComponent<LocalTransform>(entity))
                     {
-                        ecb.SetEnabled(entity, false);
                         var transform = entityManager.GetComponentData<LocalTransform>(entity);
                         transform.Position = new float3(0, 0, 0);
                         transform.Scale = 0;

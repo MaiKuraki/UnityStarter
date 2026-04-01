@@ -158,7 +158,7 @@ namespace CycloneGames.Factory.OOPBullet
 
         private void OnDestroy()
         {
-            _bulletPool?.Clear();
+            _bulletPool?.Dispose();
         }
 
         private void OnDrawGizmosSelected()

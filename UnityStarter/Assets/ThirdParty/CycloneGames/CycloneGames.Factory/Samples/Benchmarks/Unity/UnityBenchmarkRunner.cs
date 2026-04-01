@@ -1084,6 +1084,17 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                         double ops = 1000.0 / bestDirect.AvgTimeMs;
                         sb.AppendLine($"| Direct/Factory | {bestDirect.Name} | {bestDirect.AvgTimeMs:F3} | {perUs:F2} | {ops:F0} |");
                     }
+                    if (bestPool != null && bestDirect != null)
+                    {
+                        double speedup = bestDirect.AvgTimeMs / bestPool.AvgTimeMs;
+                        sb.AppendLine();
+                        if (speedup > 1.1)
+                            sb.AppendLine($"> **Pool is {speedup:F1}x faster** than direct instantiation (best-in-category)");
+                        else if (speedup >= 0.9)
+                            sb.AppendLine($"> Pool ≈ Direct ({speedup:F2}x) — cold pool expansion invokes Instantiate internally; pre-warm pools for full speedup");
+                        else
+                            sb.AppendLine($"> Direct is {1.0 / speedup:F1}x faster (pool overhead exceeds benefit for this workload)");
+                    }
                     sb.AppendLine();
                 }
 
@@ -1212,6 +1223,9 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 }
             }
 
+            // Recommendations
+            GenerateMarkdownRecommendations(sb);
+
             return sb.ToString();
         }
 
@@ -1259,6 +1273,17 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                         double perUs = (bestDirect.AvgTimeMs * 1000.0) / Math.Max(1, b);
                         double ops = 1000.0 / bestDirect.AvgTimeMs;
                         sb.AppendLine($"| Direct/Factory | {bestDirect.Name} | {bestDirect.AvgTimeMs:F3} | {perUs:F2} | {ops:F0} |");
+                    }
+                    if (bestPool != null && bestDirect != null)
+                    {
+                        double speedup = bestDirect.AvgTimeMs / bestPool.AvgTimeMs;
+                        sb.AppendLine();
+                        if (speedup > 1.1)
+                            sb.AppendLine($"> **对象池快 {speedup:F1}x**（同类最佳对比）");
+                        else if (speedup >= 0.9)
+                            sb.AppendLine($"> 对象池 ≈ 直接创建（{speedup:F2}x）— 冷池扩容内部调用 Instantiate；预热池以获得完整加速");
+                        else
+                            sb.AppendLine($"> 直接创建快 {1.0 / speedup:F1}x（此负载下池开销超过收益）");
                     }
                     sb.AppendLine();
                 }
@@ -1384,6 +1409,9 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                     sb.AppendLine($"| {r.Name} | {r.Iterations} | {FormatBytes(totalMem)} | {FormatBytes(perOp)} | {r.GCCollections} |");
                 }
             }
+
+            // 建议
+            GenerateMarkdownRecommendationsZhCN(sb);
 
             return sb.ToString();
         }
@@ -1658,8 +1686,8 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
         {
             sb.AppendLine("─── PERFORMANCE RECOMMENDATIONS ───");
             
-            var highGCResults = _results.Where(r => r.GCCollections > r.Iterations / 100.0).ToList(); // More than 1 GC per 100 ops
-            var highMemoryResults = _results.Where(r => r.MemoryPerIteration > 1024).ToList(); // More than 1KB per op
+            var highGCResults = _results.Where(r => r.GCCollections > r.Iterations / 100.0).ToList();
+            var highMemoryResults = _results.Where(r => r.MemoryPerIteration > 1024).ToList();
             
             if (highGCResults.Any())
             {
@@ -1681,13 +1709,41 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 sb.AppendLine();
             }
             
-            var poolingVsInstantiation = FindPoolingComparison();
-            if (poolingVsInstantiation.HasValue)
+            var comparisons = FindAllPoolingComparisons();
+            if (comparisons.Count > 0)
             {
-                var speedup = poolingVsInstantiation.Value.instantiation / poolingVsInstantiation.Value.pooling;
                 sb.AppendLine($"✅ POOLING EFFECTIVENESS:");
-                sb.AppendLine($"  • Object pooling is {speedup:F1}x faster than direct instantiation");
-                sb.AppendLine($"  • Recommended: Use pooling for frequently created/destroyed objects");
+                foreach (var comp in comparisons)
+                {
+                    if (comp.ComparisonType == "PrewarmedVsCold")
+                    {
+                        sb.AppendLine($"  • [Pre-warm benefit] Prewarmed pool uses {comp.MemorySavingsRatio:F1}x less memory than cold pool");
+                        sb.AppendLine($"      {comp.PoolingName} vs {comp.InstantiationName}");
+                        sb.AppendLine($"      → Pre-warm pools during loading screens for minimal runtime allocation");
+                        continue;
+                    }
+                    string label = comp.ComparisonType switch
+                    {
+                        "Pairwise" => "Pairwise (apples-to-apples)",
+                        _ => "Best-in-category"
+                    };
+                    if (comp.Speedup > 1.1)
+                    {
+                        sb.AppendLine($"  • [{label}] Object pooling is {comp.Speedup:F1}x faster");
+                        sb.AppendLine($"      {comp.PoolingName} vs {comp.InstantiationName}");
+                    }
+                    else if (comp.Speedup >= 0.9)
+                    {
+                        sb.AppendLine($"  • [{label}] Pool ≈ Direct ({comp.Speedup:F2}x) — cold pool expansion invokes Instantiate internally");
+                        sb.AppendLine($"      {comp.PoolingName} vs {comp.InstantiationName}");
+                        sb.AppendLine($"      → Pre-warm pools to realize the full speedup advantage");
+                    }
+                    else
+                    {
+                        sb.AppendLine($"  • [{label}] Direct is {1.0 / comp.Speedup:F1}x faster than pooling");
+                        sb.AppendLine($"      {comp.InstantiationName} vs {comp.PoolingName}");
+                    }
+                }
                 sb.AppendLine();
             }
             
@@ -1699,18 +1755,228 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
             sb.AppendLine();
         }
 
-        private (double instantiation, double pooling)? FindPoolingComparison()
+        private void GenerateMarkdownRecommendations(StringBuilder sb)
         {
-            var instantiationResult = _results.FirstOrDefault(r => r.Name.ToLower().Contains("instantiat"));
-            var poolingResult = _results.FirstOrDefault(r => r.Name.ToLower().Contains("pool"));
-            
-            if (instantiationResult != null && poolingResult != null && 
-                instantiationResult.AverageTimeMs > 0 && poolingResult.AverageTimeMs > 0)
+            sb.AppendLine();
+            sb.AppendLine("### Recommendations");
+            sb.AppendLine();
+            var comparisons = FindAllPoolingComparisons();
+            if (comparisons.Count > 0)
             {
-                return (instantiationResult.AverageTimeMs, poolingResult.AverageTimeMs);
+                sb.AppendLine("**Pooling Effectiveness:**");
+                sb.AppendLine();
+                foreach (var comp in comparisons)
+                {
+                    if (comp.ComparisonType == "PrewarmedVsCold")
+                    {
+                        sb.AppendLine($"- **[Pre-warm benefit]** Prewarmed pool uses **{comp.MemorySavingsRatio:F1}x less memory**: `{comp.PoolingName}` vs `{comp.InstantiationName}`");
+                        continue;
+                    }
+                    string label = comp.ComparisonType switch
+                    {
+                        "Pairwise" => "Pairwise (apples-to-apples)",
+                        _ => "Best-in-category"
+                    };
+                    if (comp.Speedup > 1.1)
+                        sb.AppendLine($"- **[{label}]** Pool is **{comp.Speedup:F1}x faster**: `{comp.PoolingName}` vs `{comp.InstantiationName}`");
+                    else if (comp.Speedup >= 0.9)
+                        sb.AppendLine($"- **[{label}]** Pool ≈ Direct ({comp.Speedup:F2}x) — cold pool expansion invokes `Instantiate` internally. Pre-warm pools for full speedup.");
+                    else
+                        sb.AppendLine($"- **[{label}]** Direct is **{1.0 / comp.Speedup:F1}x faster**: `{comp.InstantiationName}` vs `{comp.PoolingName}`");
+                }
+                sb.AppendLine();
             }
-            
-            return null;
+
+            var highGCResults = _results.Where(r => r.GCCollections > r.Iterations / 100.0).ToList();
+            if (highGCResults.Any())
+            {
+                sb.AppendLine("**High GC Pressure:**");
+                sb.AppendLine();
+                foreach (var result in highGCResults)
+                    sb.AppendLine($"- `{result.Name}`: Consider using object pooling to reduce allocations");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("**General:**");
+            sb.AppendLine();
+            sb.AppendLine("- Use object pooling for objects with short lifespans");
+            sb.AppendLine("- Pre-warm pools during loading screens to avoid cold-start allocation cost");
+            sb.AppendLine("- Profile on target devices for accurate performance data");
+            sb.AppendLine();
+        }
+
+        private void GenerateMarkdownRecommendationsZhCN(StringBuilder sb)
+        {
+            sb.AppendLine();
+            sb.AppendLine("### 建议");
+            sb.AppendLine();
+            var comparisons = FindAllPoolingComparisons();
+            if (comparisons.Count > 0)
+            {
+                sb.AppendLine("**对象池效果：**");
+                sb.AppendLine();
+                foreach (var comp in comparisons)
+                {
+                    if (comp.ComparisonType == "PrewarmedVsCold")
+                    {
+                        sb.AppendLine($"- **[预热收益]** 预热池内存减少 **{comp.MemorySavingsRatio:F1}x**：`{comp.PoolingName}` vs `{comp.InstantiationName}`");
+                        continue;
+                    }
+                    string label = comp.ComparisonType switch
+                    {
+                        "Pairwise" => "成对对比（同口径）",
+                        _ => "同类最佳"
+                    };
+                    if (comp.Speedup > 1.1)
+                        sb.AppendLine($"- **[{label}]** 对象池快 **{comp.Speedup:F1}x**：`{comp.PoolingName}` vs `{comp.InstantiationName}`");
+                    else if (comp.Speedup >= 0.9)
+                        sb.AppendLine($"- **[{label}]** 对象池 ≈ 直接创建（{comp.Speedup:F2}x）— 冷池扩容内部调用 `Instantiate`。预热池可获得完整加速。");
+                    else
+                        sb.AppendLine($"- **[{label}]** 直接创建快 **{1.0 / comp.Speedup:F1}x**：`{comp.InstantiationName}` vs `{comp.PoolingName}`");
+                }
+                sb.AppendLine();
+            }
+
+            var highGCResults = _results.Where(r => r.GCCollections > r.Iterations / 100.0).ToList();
+            if (highGCResults.Any())
+            {
+                sb.AppendLine("**高 GC 压力：**");
+                sb.AppendLine();
+                foreach (var result in highGCResults)
+                    sb.AppendLine($"- `{result.Name}`：考虑使用对象池减少分配");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("**通用建议：**");
+            sb.AppendLine();
+            sb.AppendLine("- 对短生命周期对象使用对象池");
+            sb.AppendLine("- 在加载界面期间预热池，避免冷启动分配开销");
+            sb.AppendLine("- 在目标设备上进行性能分析以获得准确数据");
+            sb.AppendLine();
+        }
+
+        /// <summary>
+        /// Structured comparison result between pooling and direct instantiation.
+        /// </summary>
+        private struct PoolingComparisonResult
+        {
+            public double InstantiationMs;
+            public double PoolingMs;
+            public double Speedup;
+            public string InstantiationName;
+            public string PoolingName;
+            public string ComparisonType; // "Pairwise", "PrewarmedVsCold", "General"
+            public double MemorySavingsRatio; // >1 means cold uses more memory; 0 = N/A
+        }
+
+        /// <summary>
+        /// Finds all available pooling vs instantiation comparisons, ordered by reliability.
+        /// Priority: 1) Pairwise benchmarks, 2) Prewarmed vs Cold pool (same burst), 3) General category comparison.
+        /// </summary>
+        private List<PoolingComparisonResult> FindAllPoolingComparisons()
+        {
+            var comparisons = new List<PoolingComparisonResult>();
+
+            // Aggregate results by name
+            var aggregated = _results
+                .Where(r => r.AverageTimeMs > 0)
+                .GroupBy(r => r.Name)
+                .ToDictionary(g => g.Key, g => g.Average(x => x.AverageTimeMs));
+
+            // Memory aggregation for prewarmed vs cold comparison
+            var memAggregated = _results
+                .Where(r => r.AllocatedMemoryDelta != 0)
+                .GroupBy(r => r.Name)
+                .ToDictionary(g => g.Key, g => Math.Max(0, (long)g.Average(x => (double)x.AllocatedMemoryDelta)));
+
+            // Priority 1: Pairwise benchmarks (most reliable, apples-to-apples comparison)
+            var pairwiseDirect = aggregated.Keys.FirstOrDefault(k =>
+                k.IndexOf("pairwise", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                IsDirectOrFactory(k));
+            var pairwisePool = aggregated.Keys.FirstOrDefault(k =>
+                k.IndexOf("pairwise", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                IsPooling(k));
+            if (pairwiseDirect != null && pairwisePool != null)
+            {
+                double d = aggregated[pairwiseDirect];
+                double p = aggregated[pairwisePool];
+                if (d > 0 && p > 0)
+                {
+                    comparisons.Add(new PoolingComparisonResult
+                    {
+                        InstantiationMs = d, PoolingMs = p,
+                        Speedup = d / p,
+                        InstantiationName = pairwiseDirect, PoolingName = pairwisePool,
+                        ComparisonType = "Pairwise"
+                    });
+                }
+            }
+
+            // Priority 2: Prewarmed vs Cold pool (same burst size → shows pre-warming benefit)
+            var prewarmedPool = aggregated.Keys.FirstOrDefault(k =>
+                k.IndexOf("prewarm", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                IsPooling(k));
+            var coldPool = aggregated.Keys.FirstOrDefault(k =>
+                k.IndexOf("cold", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                IsPooling(k));
+            if (prewarmedPool != null && coldPool != null)
+            {
+                double cold = aggregated[coldPool];
+                double warm = aggregated[prewarmedPool];
+                double memorySavings = 0;
+                if (memAggregated.ContainsKey(coldPool) && memAggregated.ContainsKey(prewarmedPool))
+                {
+                    long coldMem = memAggregated[coldPool];
+                    long warmMem = memAggregated[prewarmedPool];
+                    if (warmMem > 0) memorySavings = (double)coldMem / warmMem;
+                }
+                if (cold > 0 && warm > 0)
+                {
+                    comparisons.Add(new PoolingComparisonResult
+                    {
+                        InstantiationMs = cold, PoolingMs = warm,
+                        Speedup = cold / warm,
+                        InstantiationName = coldPool, PoolingName = prewarmedPool,
+                        ComparisonType = "PrewarmedVsCold",
+                        MemorySavingsRatio = memorySavings
+                    });
+                }
+            }
+
+            // Priority 3: General best pool vs best direct (fallback)
+            var bestDirect = aggregated.Keys
+                .Where(k => IsDirectOrFactory(k) &&
+                            k.IndexOf("memory", StringComparison.OrdinalIgnoreCase) < 0)
+                .OrderBy(k => aggregated[k])
+                .FirstOrDefault();
+            var bestPool = aggregated.Keys
+                .Where(k => IsPooling(k) &&
+                            k.IndexOf("memory", StringComparison.OrdinalIgnoreCase) < 0)
+                .OrderBy(k => aggregated[k])
+                .FirstOrDefault();
+            if (bestDirect != null && bestPool != null)
+            {
+                double d = aggregated[bestDirect];
+                double p = aggregated[bestPool];
+                if (d > 0 && p > 0)
+                {
+                    // Only add if not already covered by priority 1
+                    bool alreadyCovered = comparisons.Any(c =>
+                        c.InstantiationName == bestDirect && c.PoolingName == bestPool);
+                    if (!alreadyCovered)
+                    {
+                        comparisons.Add(new PoolingComparisonResult
+                        {
+                            InstantiationMs = d, PoolingMs = p,
+                            Speedup = d / p,
+                            InstantiationName = bestDirect, PoolingName = bestPool,
+                            ComparisonType = "General"
+                        });
+                    }
+                }
+            }
+
+            return comparisons;
         }
 
         private static string TruncateString(string str, int maxLength)
