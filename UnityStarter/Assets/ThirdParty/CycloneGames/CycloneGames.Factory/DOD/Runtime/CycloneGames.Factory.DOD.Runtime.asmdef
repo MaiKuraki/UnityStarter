@@ -1,14 +1,9 @@
 {
-    "name": "CycloneGames.Factory.Samples",
+    "name": "CycloneGames.Factory.DOD.Runtime",
     "rootNamespace": "",
     "references": [
-        "UniTask",
-        "Unity.Burst",
-        "Unity.Mathematics",
         "Unity.Collections",
-        "Unio",
-        "CycloneGames.Factory.Runtime",
-        "CycloneGames.Factory.DOD.Runtime"
+        "Unity.Burst"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -18,11 +13,6 @@
     "autoReferenced": true,
     "defineConstraints": [],
     "versionDefines": [
-        {
-            "name": "com.unity.mathematics",
-            "expression": "",
-            "define": "PRESENT_MATHEMATICS"
-        },
         {
             "name": "com.unity.collections",
             "expression": "",
