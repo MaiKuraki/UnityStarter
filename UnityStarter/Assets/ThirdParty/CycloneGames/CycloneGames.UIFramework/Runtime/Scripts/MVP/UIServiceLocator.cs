@@ -101,9 +101,9 @@ namespace CycloneGames.UIFramework.Runtime
                             return resolved;
                         }
                     }
-                    catch
+                    catch (System.Exception ex)
                     {
-                        // Resolution failed, try next resolver
+                        CycloneGames.Logger.CLogger.LogWarning($"[UIServiceLocator] Resolver failed for {type.Name}: {ex.Message}");
                     }
                 }
 

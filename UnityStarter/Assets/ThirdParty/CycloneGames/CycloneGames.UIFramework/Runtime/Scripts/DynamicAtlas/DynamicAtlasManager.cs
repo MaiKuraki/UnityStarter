@@ -1,4 +1,5 @@
 using System;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 using CycloneGames.Logger;
 
@@ -32,7 +33,11 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     {
                         if (_instance == null)
                         {
-                            _instance = FindObjectOfType<DynamicAtlasManager>();
+    #if UNITY_2023_1_OR_NEWER
+                        _instance = FindAnyObjectByType<DynamicAtlasManager>();
+#else
+                        _instance = FindObjectOfType<DynamicAtlasManager>();
+#endif
                             if (_instance == null)
                             {
                                 GameObject go = new GameObject("DynamicAtlasManager");
@@ -60,11 +65,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private DynamicAtlasConfig _config;
         private Func<string, Texture2D> _loadDelegate;
         private Action<string, Texture2D> _unloadDelegate;
+        private Func<string, UniTask<Texture2D>> _loadDelegateAsync;
         private int _forcedSize = 0;
         private bool _autoScaleLargeTextures = true;
         private TextureFormat _targetFormat = TextureFormat.RGBA32;
         private bool _enableBlockAlignment = true;
         private bool _enablePlatformOptimizations = true;
+        private bool _enableBleed = true;
+        private bool _enableMipmap = false;
+        private int _maxPages = 0;
 
         public DynamicAtlasManager() { }
 
@@ -155,11 +164,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 _config = config;
                 _loadDelegate = config.loadFunc;
                 _unloadDelegate = config.unloadFunc;
+                _loadDelegateAsync = config.loadFuncAsync;
                 _forcedSize = config.pageSize;
                 _autoScaleLargeTextures = config.autoScaleLargeTextures;
                 _targetFormat = config.targetFormat;
                 _enableBlockAlignment = config.enableBlockAlignment;
                 _enablePlatformOptimizations = config.enablePlatformOptimizations;
+                _enableBleed = config.enableBleed;
+                _enableMipmap = config.enableMipmap;
+                _maxPages = config.maxPages;
             }
         }
 
@@ -233,7 +246,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 autoScaleLargeTextures = _autoScaleLargeTextures,
                 targetFormat = _targetFormat,
                 enableBlockAlignment = _enableBlockAlignment,
-                enablePlatformOptimizations = _enablePlatformOptimizations
+                enablePlatformOptimizations = _enablePlatformOptimizations,
+                enableBleed = _enableBleed,
+                enableMipmap = _enableMipmap,
+                maxPages = _maxPages
             };
         }
 
@@ -276,6 +292,36 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         public Sprite GetSpriteFromRegion(Texture2D sourceTexture, Rect sourceRect, string cacheKey)
         {
             return Service.GetSpriteFromRegion(sourceTexture, sourceRect, cacheKey);
+        }
+
+        /// <summary>
+        /// Asynchronously loads a texture and inserts it into the atlas.
+        /// Disk I/O runs off the main thread; atlas insertion runs on main thread.
+        /// Requires loadFuncAsync to be configured.
+        /// </summary>
+        public async UniTask<Sprite> GetSpriteAsync(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return null;
+
+            var asyncLoader = _config?.loadFuncAsync ?? _loadDelegateAsync;
+            if (asyncLoader == null)
+            {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                CLogger.LogError("[DynamicAtlasManager] loadFuncAsync not configured. Use Configure() with a DynamicAtlasConfig that has loadFuncAsync set.");
+#endif
+                return null;
+            }
+
+            Texture2D source = await asyncLoader(path);
+            if (source == null) return null;
+
+            // Atlas insertion must happen on main thread (GPU API requirement)
+            Sprite result = Service.GetSpriteFromRegion(source, new Rect(0, 0, source.width, source.height), path);
+
+            var unloader = _config?.unloadFunc ?? _unloadDelegate;
+            unloader?.Invoke(path, source);
+
+            return result;
         }
 
         /// <summary>

@@ -27,6 +27,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             public CompressedAtlasPage Page;
             public int RefCount;
             public string CacheKey;
+            public Vector2 Pivot;
+            public Vector4 Border;
         }
 
         private readonly List<CompressedAtlasPage> _pages = new List<CompressedAtlasPage>();
@@ -52,6 +54,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private readonly TextureFormat _format;
         private readonly int _blockSize;
         private readonly bool _gpuCopySupported;
+        private readonly int _maxPages;
 
         /// <summary>
         /// Creates a compressed dynamic atlas service.
@@ -59,11 +62,13 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// <param name="format">Compressed texture format (must match source textures)</param>
         /// <param name="pageSize">Page size in pixels (will be aligned to block size)</param>
         /// <param name="blockPadding">Padding between sprites in blocks (default: 1)</param>
-        public CompressedDynamicAtlasService(TextureFormat format, int pageSize = 2048, int blockPadding = 1)
+        /// <param name="maxPages">Maximum number of atlas pages (0 = unlimited)</param>
+        public CompressedDynamicAtlasService(TextureFormat format, int pageSize = 2048, int blockPadding = 1, int maxPages = 0)
         {
             _format = format;
             _blockSize = TextureFormatHelper.GetBlockSize(format);
             _blockPadding = blockPadding;
+            _maxPages = maxPages;
 
             if (_blockSize <= 1)
             {
@@ -169,8 +174,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 // Try insert into existing pages
                 if (!TryInsertIntoAnyPage(sourceSprite, key, out var item))
                 {
-                    CreateNewPage();
-                    if (!TryInsertIntoAnyPage(sourceSprite, key, out item))
+                    if (!CreateNewPage() || !TryInsertIntoAnyPage(sourceSprite, key, out item))
                     {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                         CLogger.LogError($"[CompressedDynamicAtlasService] Failed to insert sprite {key}. " +
@@ -240,8 +244,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
                 if (!TryInsertRegionIntoAnyPage(sourceTexture, sourceRect, cacheKey, out var item))
                 {
-                    CreateNewPage();
-                    if (!TryInsertRegionIntoAnyPage(sourceTexture, sourceRect, cacheKey, out item))
+                    if (!CreateNewPage() || !TryInsertRegionIntoAnyPage(sourceTexture, sourceRect, cacheKey, out item))
                     {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                         CLogger.LogError($"[CompressedDynamicAtlasService] Failed to insert region {cacheKey}.");
@@ -288,9 +291,11 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     {
                         _itemCache.Remove(cacheKey);
 
-                        if (item.Page != null)
+                        if (item.Page != null && item.Sprite != null)
                         {
-                            item.Page.DecrementActiveCount(Mathf.RoundToInt(item.Sprite.rect.width), Mathf.RoundToInt(item.Sprite.rect.height));
+                            int sw = Mathf.RoundToInt(item.Sprite.rect.width);
+                            int sh = Mathf.RoundToInt(item.Sprite.rect.height);
+                            item.Page.DecrementActiveCount(sw, sh);
                             TryReleasePage(item.Page);
                         }
 
@@ -318,14 +323,14 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 var page = _pages[i];
                 if (page.TryInsertSprite(sourceSprite, out Rect uvRect))
                 {
-                    item = CreateItem(page, sourceSprite.rect, uvRect, cacheKey);
+                    item = CreateItem(page, sourceSprite, uvRect, cacheKey);
                     return true;
                 }
             }
 
             if (_pages.Count == 0)
             {
-                CreateNewPage();
+                if (!CreateNewPage()) return false;
                 return TryInsertIntoAnyPage(sourceSprite, cacheKey, out item);
             }
 
@@ -348,20 +353,39 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
             if (_pages.Count == 0)
             {
-                CreateNewPage();
+                if (!CreateNewPage()) return false;
                 return TryInsertRegionIntoAnyPage(sourceTexture, sourceRect, cacheKey, out item);
             }
 
             return false;
         }
 
-        private void CreateNewPage()
+        private bool CreateNewPage()
         {
+            if (_maxPages > 0 && _pages.Count >= _maxPages)
+            {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                CLogger.LogError($"[CompressedDynamicAtlasService] Max page limit reached ({_maxPages}). Cannot allocate new page.");
+#endif
+                return false;
+            }
             var page = new CompressedAtlasPage(_pageSize, _format, _blockPadding);
             _pages.Add(page);
+            return true;
         }
 
-        private AtlasItem CreateItem(CompressedAtlasPage page, Rect sourceRect, Rect uvRect, string cacheKey)
+        private AtlasItem CreateItem(CompressedAtlasPage page, Sprite sourceSprite, Rect uvRect, string cacheKey)
+        {
+            Rect sourceRect = sourceSprite.rect;
+            Vector2 pivot = new Vector2(
+                sourceSprite.pivot.x / sourceRect.width,
+                sourceSprite.pivot.y / sourceRect.height);
+            Vector4 border = sourceSprite.border;
+            return CreateItem(page, sourceRect, uvRect, cacheKey, pivot, border);
+        }
+
+        private AtlasItem CreateItem(CompressedAtlasPage page, Rect sourceRect, Rect uvRect, string cacheKey,
+            Vector2? customPivot = null, Vector4? customBorder = null)
         {
             int width = Mathf.RoundToInt(sourceRect.width);
             int height = Mathf.RoundToInt(sourceRect.height);
@@ -372,9 +396,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 width,
                 height
             );
-            Vector2 pivot = new Vector2(0.5f, 0.5f);
+            Vector2 pivot = customPivot ?? new Vector2(0.5f, 0.5f);
+            Vector4 border = customBorder ?? Vector4.zero;
 
-            Sprite newSprite = Sprite.Create(page.Texture, spriteRect, pivot, 100.0f, 0, SpriteMeshType.FullRect);
+            Sprite newSprite = Sprite.Create(page.Texture, spriteRect, pivot, 100.0f, 0, SpriteMeshType.FullRect, border);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             int spriteId = Interlocked.Increment(ref _spriteIdCounter);
@@ -386,6 +411,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             item.Page = page;
             item.CacheKey = cacheKey;
             item.RefCount = 0;
+            item.Pivot = pivot;
+            item.Border = border;
 
             page.IncrementActiveCount(width, height);
 
@@ -492,7 +519,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                             int h = Mathf.RoundToInt(oldRect.height);
                             Rect newSpriteRect = new Rect(newUvRect.x * newPage.Width, newUvRect.y * newPage.Height, w, h);
 
-                            Sprite newSprite = Sprite.Create(newPage.Texture, newSpriteRect, new Vector2(0.5f, 0.5f), 100.0f, 0, SpriteMeshType.FullRect);
+                            Sprite newSprite = Sprite.Create(newPage.Texture, newSpriteRect, oldItem.Pivot, 100.0f, 0, SpriteMeshType.FullRect, oldItem.Border);
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                             newSprite.name = oldSprite.name + "_Defrag";
 #endif
