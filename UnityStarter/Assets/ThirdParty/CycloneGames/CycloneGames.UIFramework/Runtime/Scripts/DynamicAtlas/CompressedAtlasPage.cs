@@ -3,6 +3,11 @@ using UnityEngine;
 using UnityEngine.Rendering;
 using CycloneGames.Logger;
 
+#if !UNITY_WEBGL || UNITY_EDITOR
+using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
+#endif
+
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
     /// <summary>
@@ -28,7 +33,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private long _usedPixelArea;
         public long UsedPixelArea => _usedPixelArea;
 
-        public float FragmentationRatio => 1.0f - (float)_usedPixelArea / (_width * _height);
+        public float FragmentationRatio => 1.0f - (float)_usedPixelArea / ((long)_width * _height);
         public bool IsEmpty => _activeSpriteCount == 0;
 
         private readonly int _width;
@@ -91,28 +96,34 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private void InitializeTexture()
         {
-            // Create compressed texture
-            // For compressed formats, we need to allocate with raw data
             int blockCountX = _width / _blockSize;
             int blockCountY = _height / _blockSize;
             int bytesPerBlock = GetBytesPerBlock(_format);
             int dataSize = blockCountX * blockCountY * bytesPerBlock;
 
-            // Create texture and set raw data to zero (transparent)
             Texture = new Texture2D(_width, _height, _format, false);
             Texture.filterMode = FilterMode.Bilinear;
             Texture.wrapMode = TextureWrapMode.Clamp;
             Texture.name = $"CompressedAtlasPage_{_pageId}_{_format}";
 
-            // Initialize with transparent data
-            byte[] clearData = new byte[dataSize];
-            Texture.LoadRawTextureData(clearData);
-            Texture.Apply(false, false); // Don't make non-readable, we may need to update
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            CLogger.LogInfo($"[CompressedAtlasPage] Created {_width}x{_height} {_format} page. " +
-                $"Block size: {_blockSize}, Total blocks: {blockCountX}x{blockCountY}");
+            // Zero-initialize with NativeArray to avoid managed byte[] GC allocation
+#if !UNITY_WEBGL || UNITY_EDITOR
+            if (TextureFormatHelper.SupportsNativeArrays())
+            {
+                var rawData = Texture.GetRawTextureData<byte>();
+                unsafe
+                {
+                    UnsafeUtility.MemClear(NativeArrayUnsafeUtility.GetUnsafePtr(rawData), dataSize);
+                }
+                Texture.Apply(false, false);
+            }
+            else
 #endif
+            {
+                byte[] clearData = new byte[dataSize];
+                Texture.LoadRawTextureData(clearData);
+                Texture.Apply(false, false);
+            }
         }
 
         /// <summary>
@@ -304,7 +315,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         public void IncrementActiveCount(int width, int height)
         {
             System.Threading.Interlocked.Increment(ref _activeSpriteCount);
-            System.Threading.Interlocked.Add(ref _usedPixelArea, width * height);
+            System.Threading.Interlocked.Add(ref _usedPixelArea, (long)width * height);
         }
 
         public void DecrementActiveCount(int width, int height)
@@ -314,10 +325,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             {
                 System.Threading.Interlocked.CompareExchange(ref _activeSpriteCount, 0, newCount);
             }
-            System.Threading.Interlocked.Add(ref _usedPixelArea, -(width * height));
-            if (_usedPixelArea < 0)
+            long newArea = System.Threading.Interlocked.Add(ref _usedPixelArea, -((long)width * height));
+            if (newArea < 0)
             {
-                System.Threading.Interlocked.Exchange(ref _usedPixelArea, 0);
+                System.Threading.Interlocked.CompareExchange(ref _usedPixelArea, 0, newArea);
             }
         }
 

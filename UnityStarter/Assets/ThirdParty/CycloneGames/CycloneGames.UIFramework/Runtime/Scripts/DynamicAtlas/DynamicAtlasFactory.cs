@@ -102,6 +102,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                    a.targetFormat == b.targetFormat &&
                    a.enableBlockAlignment == b.enableBlockAlignment &&
                    a.padding == b.padding &&
+                   a.enableBleed == b.enableBleed &&
+                   a.enableMipmap == b.enableMipmap &&
+                   a.maxPages == b.maxPages &&
                    a.enablePlatformOptimizations == b.enablePlatformOptimizations &&
                    a.loadFunc == b.loadFunc &&
                    a.unloadFunc == b.unloadFunc;

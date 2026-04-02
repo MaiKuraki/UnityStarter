@@ -44,6 +44,11 @@
 | **Per-Frame Instantiation Throttle** | Spread heavy instantiation across frames to avoid spikes                                                                            |
 | **Dynamic Atlas System**             | Packs runtime sprites into a single GPU texture at open-time, dramatically reducing draw-calls for icon-heavy UIs                   |
 | **Compressed Atlas Variant**         | `CompressedDynamicAtlasService` uses ASTC/DXT/ETC to reduce VRAM footprint for mobile targets                                       |
+| **Bleed Pixel Support**              | Automatic 1-pixel border replication prevents texture filtering artifacts at sprite edges (GPU + CPU dual-path)                     |
+| **Sprite Metadata Preservation**     | `GetSpriteFromSprite()` preserves original pivot points and 9-slice borders automatically                                           |
+| **Async Atlas Loading**              | `GetSpriteAsync()` performs disk I/O off the main thread via `UniTask`; atlas insertion stays on the main thread                    |
+| **Page & Mipmap Control**            | Configurable `maxPages` limit prevents unbounded VRAM growth; optional mipmap generation for LOD-friendly UI                        |
+| **Thread-Safe Atomic Operations**    | `Interlocked` atomics for pixel-area tracking and ref counting eliminate TOCTOU races in concurrent scenarios                       |
 | **Async by Design**                  | Every load, instantiate, and open operation is `UniTask`-based — never blocks the main thread                                       |
 
 ### 🔒 Reliability & Safety
@@ -1135,6 +1140,7 @@ If you're using Addressables, YooAsset, or other asset management systems, you c
 ```csharp
 using CycloneGames.UIFramework.DynamicAtlas;
 using CycloneGames.AssetManagement.Runtime;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 public class GameInitializer : MonoBehaviour
@@ -1146,25 +1152,27 @@ public class GameInitializer : MonoBehaviour
         // Initialize your asset management system
         assetPackage = await InitializeYourAssetPackageAsync();
 
-        // Configure Dynamic Atlas with custom load/unload functions
-        DynamicAtlasManager.Instance.Configure(
-            load: async (path) =>
+        // Configure Dynamic Atlas with DynamicAtlasConfig (recommended)
+        DynamicAtlasManager.Instance.Configure(new DynamicAtlasConfig
+        {
+            loadFunc = (path) => assetPackage.LoadAssetSync<Texture2D>(path).Asset,
+            unloadFunc = (path, tex) => assetPackage.ReleaseAsset(path),
+            loadFuncAsync = async (path) =>
             {
-                // Load texture using your asset management system
                 var handle = await assetPackage.LoadAssetAsync<Texture2D>(path);
                 return handle.Asset;
             },
-            unload: (path, tex) =>
-            {
-                // Unload using your asset management system
-                assetPackage.ReleaseAsset(path);
-            },
-            size: 2048,
-            autoScaleLargeTextures: true
-        );
+            pageSize = 2048,
+            autoScaleLargeTextures = true,
+            enableBleed = true,         // Prevent edge filtering artifacts
+            enableMipmap = false,       // Enable for world-space UI
+            maxPages = 0,               // 0 = unlimited
+        });
     }
 }
 ```
+
+> **Async Loading**: When `loadFuncAsync` is configured, you can use `GetSpriteAsync()` (see [Step 9](#step-9-async-loading)) for non-blocking texture loading. Disk I/O runs on a background thread while atlas insertion stays on the main thread.
 
 ### Step 4: Best Practices and Tips
 
@@ -1191,22 +1199,31 @@ protected override void OnDestroy()
 
 4. **Enable Auto-Scaling**: Set `autoScaleLargeTextures: true` to automatically scale textures that are too large for the atlas. This prevents errors and ensures all textures can be packed.
 
-5. **Monitor Atlas Usage**: In development, you can check how many pages are in use:
+5. **Enable Bleed Pixels**: Keep `enableBleed: true` (default) to prevent visible seams when bilinear/trilinear filtering samples across sprite boundaries. The system automatically generates 1-pixel border replication using the GPU path (or CPU fallback when GPU CopyTexture is unavailable). Bleed is automatically disabled for compressed formats since sub-block pixel manipulation is not possible.
+
+6. **Use maxPages to Limit VRAM**: Set `maxPages` to a non-zero value to cap the number of atlas pages created. When the limit is reached, new sprite insertions will fail gracefully instead of allocating unbounded GPU memory.
+
+7. **Enable Mipmaps for World-Space UI**: Set `enableMipmap: true` if your atlas sprites are displayed on world-space UI or at varying camera distances. This allows the GPU to perform proper LOD filtering. Leave disabled for screen-space UI to save memory.
+
+8. **Sprite Metadata Preservation**: When using `GetSpriteFromSprite()`, the system automatically preserves the source sprite's pivot point and 9-slice border. No manual configuration is needed — your sliced sprites will work correctly in the atlas.
+
+9. **Monitor Atlas Usage**: In development, you can check how many pages are in use:
 
 ```csharp
 // This requires accessing internal state, so it's mainly for debugging
 // The system automatically creates new pages when needed
 ```
 
-6. **Texture Requirements**:
-   - Textures must be readable (enable "Read/Write Enabled" in texture import settings)
-   - Textures should be in a format that supports runtime modification (RGBA32, ARGB32, etc.)
-   - Compressed formats (DXT, ETC) may need to be converted
+10. **Texture Requirements**:
+    - Textures must be readable (enable "Read/Write Enabled" in texture import settings)
+    - Textures should be in a format that supports runtime modification (RGBA32, ARGB32, etc.)
+    - Compressed formats (DXT, ETC) may need to be converted
 
-7. **Performance Considerations**:
-   - Packing happens on the main thread, so avoid packing many large textures in a single frame
-   - Consider pre-loading commonly used icons during loading screens
-   - Use the atlas for small-to-medium textures (icons, buttons) rather than large background images
+11. **Performance Considerations**:
+    - Packing happens on the main thread, so avoid packing many large textures in a single frame
+    - Consider pre-loading commonly used icons during loading screens
+    - Use the atlas for small-to-medium textures (icons, buttons) rather than large background images
+    - Use `GetSpriteAsync()` with `loadFuncAsync` to avoid blocking the main thread during disk I/O
 
 ### Step 5: Troubleshooting
 
@@ -1329,6 +1346,9 @@ public class CompressedAtlasExample : MonoBehaviour
 | iOS               | ASTC 4×4 or ASTC 6×6                  |
 | Android           | ASTC 4×4 (modern) or ETC2 (legacy)    |
 | Windows/Mac/Linux | BC7 (quality) or DXT5 (compatibility) |
+| PS4 / PS5         | BC7 (quality) or DXT5 (compatibility) |
+| Xbox Series / One | BC7 (quality) or DXT5 (compatibility) |
+| Nintendo Switch   | ASTC 4×4 or ETC2                      |
 | WebGL             | Not supported (use uncompressed)      |
 
 ### Step 8: Editor Tools
@@ -1343,30 +1363,129 @@ This tool scans your SpriteAtlas assets and shows:
 - Compatibility with CompressedDynamicAtlasService
 - Recommendations for optimal format settings
 
+### Step 9: Async Loading
+
+For large UI screens with many icons, loading textures synchronously can cause frame spikes. Use `GetSpriteAsync()` to perform disk I/O on a background thread while keeping atlas insertion on the main thread.
+
+**Setup:**
+
+```csharp
+// Configure async loader (e.g., during game initialization)
+DynamicAtlasManager.Instance.Configure(new DynamicAtlasConfig
+{
+    loadFunc = (path) => Resources.Load<Texture2D>(path),      // Sync fallback
+    unloadFunc = (path, tex) => Resources.UnloadAsset(tex),
+    loadFuncAsync = async (path) =>
+    {
+        // Use your asset management system's async API
+        var handle = await assetPackage.LoadAssetAsync<Texture2D>(path);
+        return handle.Asset;
+    },
+    pageSize = 2048,
+});
+```
+
+**Usage:**
+
+```csharp
+using Cysharp.Threading.Tasks;
+
+public class IconLoader : MonoBehaviour
+{
+    [SerializeField] private UnityEngine.UI.Image iconImage;
+
+    public async UniTaskVoid LoadIconAsync(string iconPath)
+    {
+        // Disk I/O runs off main thread; atlas insertion runs on main thread
+        Sprite sprite = await DynamicAtlasManager.Instance.GetSpriteAsync(iconPath);
+        if (sprite != null)
+        {
+            iconImage.sprite = sprite;
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (iconImage.sprite != null)
+        {
+            DynamicAtlasManager.Instance.ReleaseSprite(iconImage.sprite.name);
+        }
+    }
+}
+```
+
+> **Note**: `GetSpriteAsync()` requires `loadFuncAsync` to be configured. If only `loadFunc` is set, use `GetSprite()` (synchronous) instead. The async API returns `null` and logs an error if `loadFuncAsync` is not configured.
+
 ### Advanced Architecture & Memory Management
 
 #### Memory & GC Strategy
 
 - **Zero-GC Copying:** The system exclusively relies on GPU-to-GPU copying (`Graphics.CopyTexture` and `Graphics.Blit`) to transfer texture data. Legacy CPU-bound methods (`Texture2D.SetPixels`, `GetRawTextureData`) that cause heavy GC spikes have been completely eliminated. Once the system is initialized, loading and packing sprites generates **0 Bytes of Garbage Collection**.
-- **Draw Call Reduction:** By packing discrete icons into large 2048x2048 or 4096x4096 pages, Unity can batch hundreds of different UI elements into a single Draw Call, significantly alleviating CPU pipeline pressure.
-- **Reference Counting:** Every sprite generated increments an `ActiveSpriteCount` and a `UsedPixelArea` tracker. When an icon is no longer rendered and released, the system automatically decrements its reference count. Once a page's `ActiveSpriteCount` drops to 0, the entire page (`Texture2D`) is immediately destroyed, returning the VRAM back to the system.
+- **Draw Call Reduction:** By packing discrete icons into large 2048×2048 or 4096×4096 pages, Unity can batch hundreds of different UI elements into a single Draw Call, significantly alleviating CPU pipeline pressure.
+- **Reference Counting with Atomic Safety:** Every sprite generated increments an `ActiveSpriteCount` and a `UsedPixelArea` tracker. All counters use `Interlocked` atomic operations to eliminate TOCTOU (Time-Of-Check-Time-Of-Use) races in multi-threaded scenarios. Integer overflow is guarded by casting to `(long)width * height` before comparison. Once a page's `ActiveSpriteCount` drops to 0, the entire page (`Texture2D`) is immediately destroyed, returning the VRAM back to the system.
+
+#### Bleed Pixel Support (Edge Bleeding / Gutter)
+
+When bilinear or trilinear texture filtering is enabled, sampling at sprite boundaries can accidentally read adjacent pixels from neighboring sprites, causing visible seams. The Dynamic Atlas system solves this with **automatic 1-pixel border replication (bleed)**:
+
+- **GPU Path (primary):** On platforms supporting `Graphics.CopyTexture` (all except WebGL), bleed pixels are generated by copying the edge rows/columns to the surrounding gutter region — zero-GC, executed entirely on GPU.
+- **CPU Path (fallback):** When texture data resides on the CPU side (e.g., after `RenderTexture` readback), `GetPixels`/`SetPixels` is used directly. This avoids unnecessary GPU↔CPU round trips that `Graphics.Blit` would introduce.
+- **Compressed Format Guard:** Bleed is automatically disabled when the atlas uses compressed formats (block size > 1), since sub-block pixel manipulation is physically impossible.
+- **Controlled by Config:** Set `enableBleed: true` (default) and ensure `padding > 0` for bleed to take effect.
+
+#### Sprite Metadata Preservation
+
+When copying sprites from a SpriteAtlas or other source via `GetSpriteFromSprite()`, the system preserves the original sprite's:
+
+- **Pivot point** — UI layout anchors remain correct
+- **9-slice border** — Sliced sprites render correctly without manual re-configuration
+
+This is critical for production UI pipelines where sprites carry rich metadata beyond raw pixels.
+
+#### Page Limits & Mipmap Support
+
+- **`maxPages`**: Set a non-zero value to cap the maximum number of atlas pages. When the limit is reached, `CreateNewPage()` returns `false` and the insertion is rejected instead of allocating unbounded VRAM. Set to `0` for unlimited pages (default).
+- **`enableMipmap`**: When `true`, atlas pages are created with mipmap support. This is essential for world-space UI elements rendered at varying camera distances, allowing the GPU to perform proper LOD filtering. Leave `false` for screen-space UI to save ~33% memory per page.
+
+#### Async Loading Convenience
+
+Disk I/O (loading source textures from AssetBundle/Addressable) can be fully asynchronous, but atlas insertion (`Graphics.CopyTexture` / `Blit`) **must** execute on the main thread. The `GetSpriteAsync()` API bridges this gap:
+
+1. `await loadFuncAsync(path)` — background thread loads the texture
+2. `Service.GetSpriteFromRegion()` — main thread inserts pixels into atlas
+3. `unloadFunc(path, tex)` — releases the source texture
+
+This integrates naturally with `CycloneGames.AssetManagement` via `LoadAssetAsync<Texture2D>`. No LRU/LFU is added at the atlas layer because source texture lifecycle is already managed by `AssetCacheService` (W-TinyLFU).
 
 #### Block Alignment for Compressed Formats
 
-When using `CompressedDynamicAtlasService`, hardware texture compression (ASTC, ETC2, BC7) is employed. However, compressed textures are not stored pixel-by-pixel, but in discrete blocks (e.g., 4x4, 6x6, 8x8 pixels per block).
+When using `CompressedDynamicAtlasService`, hardware texture compression (ASTC, ETC2, BC7) is employed. However, compressed textures are not stored pixel-by-pixel, but in discrete blocks (e.g., 4×4, 6×6, 8×8 pixels per block).
 
 - **Format Parity Requirement:** The source sprites and the atlas page MUST share the exact same compression format.
-- **Block Padding & Alignment:** To prevent block artifacts from bleeding across sprite boundaries, the system automatically queries `TextureFormatHelper.GetBlockSize()`. If you push an 11x11 pixel icon into an ASTC 4x4 atlas, the internal shelf-packing algorithm will automatically allocate a 12x12 (aligned to 4) footprint in the VRAM. This guarantees that GPU block samplers will not accidentally read neighbor pixels, ensuring crisp visuals even with high compression.
+- **Block Padding & Alignment:** To prevent block artifacts from bleeding across sprite boundaries, the system automatically queries `TextureFormatHelper.GetBlockSize()`. If you push an 11×11 pixel icon into an ASTC 4×4 atlas, the internal shelf-packing algorithm will automatically allocate a 12×12 (aligned to 4) footprint in the VRAM. This guarantees that GPU block samplers will not accidentally read neighbor pixels, ensuring crisp visuals even with high compression.
+- **NativeArray Zero-GC Initialization:** `CompressedAtlasPage` uses `NativeArray<byte>` for initial texture data instead of managed byte arrays, eliminating a large GC allocation during page creation.
 
 #### Memory Defragmentation (Seamless Repacking)
 
-Over time, as UI windows open and close, atlas pages can become "Swiss cheese"—fragmented with empty gaps holding unreleased, scattered sprites. To reclaim VRAM without causing frame stutters, the framework implements a **Double-Buffering Defragmentation Strategy**:
+Over time, as UI windows open and close, atlas pages can become "Swiss cheese" — fragmented with empty gaps holding unreleased, scattered sprites. To reclaim VRAM without causing frame stutters, the framework implements a **Double-Buffering Defragmentation Strategy**:
 
 1. **Trigger:** Call `DynamicAtlasManager.Instance.Defragment(0.5f)`. This targets pages that are at least 50% empty (`FragmentationRatio > 0.5f`).
 2. **Double Buffering:** The system silently allocates a new pristine Page in the background.
-3. **GPU Blit:** Using zero-GC `CopyTexture`, it tightly repacks all currently active sprites from the fragmented old page into the new page.
+3. **GPU Blit:** Using zero-GC `CopyTexture`, it tightly repacks all currently active sprites from the fragmented old page into the new page. `ApplyIfNeeded()` is called after repacking to ensure the new page's pixel data is committed.
 4. **Seamless Pointer Swapping:** Existing C# `Sprite` wrapper objects in the cache are remapped.
 5. **Event Notification:** The system broadcasts `DynamicAtlasManager.Instance.OnSpriteRepacked` with the new Sprite reference. Subscribed UI Image components can catch this event to instantly swap their `.sprite` property gracefully.
+
+#### Platform Support Matrix
+
+| Platform          | `Graphics.CopyTexture` | Compressed Atlas | Bleed Support | Recommended Format |
+| ----------------- | ---------------------- | ---------------- | ------------- | ------------------ |
+| Windows/Mac/Linux | ✅                     | ✅               | ✅            | BC7 / DXT5         |
+| iOS               | ✅                     | ✅               | ✅            | ASTC 4×4           |
+| Android           | ✅                     | ✅               | ✅            | ASTC 4×4 / ETC2    |
+| PS4 / PS5         | ✅                     | ✅               | ✅            | BC7 / DXT5         |
+| Xbox Series / One | ✅                     | ✅               | ✅            | BC7 / DXT5         |
+| Nintendo Switch   | ✅                     | ✅               | ✅            | ASTC 4×4 / ETC2    |
+| WebGL             | ❌ (Blit fallback)     | ❌               | ✅ (CPU only) | RGBA32             |
 
 ## Advanced Features
 

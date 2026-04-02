@@ -283,9 +283,6 @@ namespace CycloneGames.UIFramework.Runtime
             // Allow derived classes to await custom animations; here it's immediate
             if (ct.IsCancellationRequested) return;
             OnFinishedOpen();
-
-            // The task is completed, signaling that the window is fully open.
-            await Cysharp.Threading.Tasks.UniTask.CompletedTask;
         }
 
         /// <summary>
@@ -316,13 +313,12 @@ namespace CycloneGames.UIFramework.Runtime
             }
             if (ct.IsCancellationRequested) return;
             OnFinishedOpen();
-            await UniTask.CompletedTask;
         }
 
         // Opens the window through its full state lifecycle and notifies binders, but skips
         // any transition driver animation. Used by the coordinated transition path so the
         // entering window is ready and positioned before both animations fire simultaneously.
-        internal async UniTask OpenSilentAsync(CancellationToken ct)
+        internal UniTask OpenSilentAsync(CancellationToken ct)
         {
             closeCts?.Cancel();
             closeCts?.Dispose();
@@ -333,9 +329,9 @@ namespace CycloneGames.UIFramework.Runtime
                 : CancellationTokenSource.CreateLinkedTokenSource(ct);
 
             OnStartOpen();
-            if (openCts.Token.IsCancellationRequested) return;
+            if (openCts.Token.IsCancellationRequested) return UniTask.CompletedTask;
             OnFinishedOpen(); // Immediately mark as open — animator will take over from coordinator
-            await UniTask.CompletedTask;
+            return UniTask.CompletedTask;
         }
 
         protected virtual void Update()
