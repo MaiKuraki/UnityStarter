@@ -25,39 +25,52 @@
 
 ### 工具分类
 
-| 分类         | 工具                                         | 用途               |
-| ------------ | -------------------------------------------- | ------------------ |
-| **项目设置** | `rename_project`、`remove_unity_packages`    | 初始化和配置新项目 |
-| **项目维护** | `unity_project_full_clean`                   | 清理临时文件和缓存 |
-| **资源处理** | `audio_volume_normalizer`、`image_to_base64` | 处理和转换资源     |
-| **文档生成** | `generate_file_tree`                         | 生成项目文档       |
+| 分类         | 工具                                                | 用途               |
+| ------------ | --------------------------------------------------- | ------------------ |
+| **项目设置** | `rename_project`、`remove_unity_packages`           | 初始化和配置新项目 |
+| **项目维护** | `unity_project_full_clean`                          | 清理临时文件和缓存 |
+| **资源处理** | `audio_volume_normalizer`、`texture_channel_packer` | 处理和转换资源     |
+| **文档生成** | `generate_file_tree`                                | 生成项目文档       |
 
 ## 快速参考
 
-| 工具                         | 用途                                        | 何时使用                     | 位置       |
-| ---------------------------- | ------------------------------------------- | ---------------------------- | ---------- |
-| **rename_project**           | 重命名 Unity 项目（文件夹、公司、应用名称） | 从模板开始新项目时           | 项目根目录 |
-| **remove_unity_packages**    | 从 manifest.json 移除不必要的包             | 创建最小化项目模板时         | 项目根目录 |
-| **unity_project_full_clean** | 删除临时文件、缓存、构建产物                | 版本控制前、归档、故障排查   | 项目根目录 |
-| **audio_volume_normalizer**  | 批量标准化音频文件（分类别响度目标）        | 处理音频资源以保持一致的响度 | 音频目录   |
-| **image_to_base64**          | 将图像转换为 Base64 字符串                  | 在代码/配置文件中嵌入图像    | 任意位置   |
-| **generate_file_tree**       | 生成 Markdown 目录树                        | 记录项目结构                 | 项目根目录 |
+| 工具                         | 用途                                        | 何时使用                         | 位置       |
+| ---------------------------- | ------------------------------------------- | -------------------------------- | ---------- |
+| **rename_project**           | 重命名 Unity 项目（文件夹、公司、应用名称） | 从模板开始新项目时               | 项目根目录 |
+| **remove_unity_packages**    | 从 manifest.json 移除不必要的包             | 创建最小化项目模板时             | 项目根目录 |
+| **unity_project_full_clean** | 删除临时文件、缓存、构建产物                | 版本控制前、归档、故障排查       | 项目根目录 |
+| **audio_volume_normalizer**  | 批量标准化音频文件（分类别响度目标）        | 处理音频资源以保持一致的响度     | 音频目录   |
+| **texture_channel_packer**   | 将多张图片打包到一张纹理的 RGBA 通道        | 创建 HDRP/URP Mask Map、打包纹理 | 任意位置   |
+| **generate_file_tree**       | 生成 Markdown 目录树                        | 记录项目结构                     | 项目根目录 |
 
 ## 工具详情
 
 ### 1. 项目重命名 `rename_project.exe`
 
-**用途**: 自动重命名 Unity 项目，更新所有相关配置文件。
+**用途**: 自动重命名 Unity 项目，更新所有相关配置文件。专为**安全可重复执行**设计，适用于任何基于 UnityStarter 的派生项目。
 
 **功能**:
 
-- 重命名项目文件夹
-- 更新 `ProjectSettings.asset` 中的公司名称
-- 更新 `ProjectSettings.asset` 和 `EditorBuildSettings.asset` 中的应用名称
+- 重命名项目文件夹（`Assets/旧名称` → `Assets/新名称`）
+- 使用词边界匹配更新 `.asmdef` 文件（名称、引用）
+- 更新 `Assets/` 下**所有** `.asmdef` 的引用（不仅限于项目文件夹内）
+- 精确匹配 `BuildScript.cs` 中的常量声明
+- 更新 `ProjectSettings.asset`（companyName、productName、applicationIdentifier）
+- 更新 `EditorBuildSettings.asset`（场景路径）
 - 更新 `.meta` 文件引用
-- 更新构建脚本引用
 
-**使用场景**: 使用 UnityStarter 作为模板时，将其重命名为您的项目名称。
+**核心特性**:
+
+- **状态文件**（`.rename_project.json`）：每次重命名后记录当前项目标识，确保后续运行时可靠检测
+- **自动备份**：修改前自动创建所有受影响文件的时间戳备份（保留最近 5 次）
+- **变更预览**：执行前显示所有计划变更的详细预览
+- **即时输入验证**：输入时立即验证每个名称，而非确认后才验证
+- **保留当前值**：任何提示中按 Enter 即可保留当前值不变
+- **双输出日志**：所有操作同时输出到控制台和 `rename_project.log`
+- **精确替换**：asmdef 使用词边界正则（`\b`），BuildScript.cs 使用精确常量匹配，ProjectSettings 使用精确的 Bundle ID 匹配
+- **部分失败恢复**：执行过程中保存状态检查点，即使部分失败后重新运行也能正确恢复
+
+**使用场景**: 使用 UnityStarter 作为模板时，将其重命名为您的项目名称。后续可安全地再次运行以更改名称。
 
 **要求**:
 
@@ -72,21 +85,34 @@
 rename_project.exe
 
 # 3. 按照交互式提示操作：
-#    - 输入新的项目文件夹名称
-#    - 输入新的公司名称
-#    - 输入新的应用名称
-#    - 确认更改
+#    步骤 1：输入新的项目文件夹名称（按 Enter 保留当前值）
+#    步骤 2：输入新的公司名称（按 Enter 保留当前值）
+#    步骤 3：输入新的应用名称（按 Enter 保留当前值）
+#    查看变更预览 → 确认 (y/N)
 ```
 
 **更新的内容**:
 
-- 项目文件夹名称
-- `ProjectSettings/ProjectSettings.asset` (companyName, productName)
-- `ProjectSettings/EditorBuildSettings.asset` (productName)
-- `.meta` 文件（文件夹引用）
-- 构建脚本引用（如果使用 UnityStarter Build 模块）
+- 项目文件夹名称 + `.meta`
+- `.asmdef` 文件：名称字段、引用、文件名（词边界安全匹配）
+- `Assets/Build/Editor/BuildPipeline/BuildScript.cs`（CompanyName、ApplicationName 常量）
+- `ProjectSettings/ProjectSettings.asset`（companyName、productName、所有平台的 applicationIdentifier、metroPackageName、metroApplicationDescription）
+- `ProjectSettings/EditorBuildSettings.asset`（场景路径前缀）
 
-**安全性**: 在做出更改前会提示确认。可以安全地多次运行。
+**生成的文件**:
+
+- `.rename_project.json` — 状态文件，用于可靠的重复运行（建议提交到版本控制）
+- `.rename_backup/` — 时间戳备份目录（建议添加到 `.gitignore`）
+- `rename_project.log` — 操作日志
+
+**安全性**:
+
+- 修改前自动备份
+- 执行前完整的变更预览
+- 拒绝覆盖已存在的目标文件夹（无 `os.RemoveAll`）
+- 文件夹重命名后保存状态检查点，确保部分失败后也能安全重新运行
+- 词边界匹配防止意外的子字符串替换
+- asmdef 修改后进行 JSON 验证
 
 ---
 
@@ -96,45 +122,65 @@ rename_project.exe
 
 **功能**:
 
-- 读取 `Packages/manifest.json`
-- 移除预定义的非必要包列表（Timeline、Visual Scripting 等）
-- 将更新的清单写回文件
+- 读取 `Packages/manifest.json` 并展示可移除的包
+- 将包分为 8 个分类（Physics、AI、XR、Visual Scripting 等）
+- 使用基于文本的替换保留 JSON key 顺序（干净的 git diff）
+- 修改前自动创建 `.bak` 备份
+- 执行前显示分类预览
 
-**使用场景**: 通过移除未使用的 Unity 包来创建最小化的项目模板。
+**包分类**（8 个分类共 24 个包）:
 
-**移除的包**（默认列表）:
+| 分类 | 包 |
+|------|----|
+| 2D | `com.unity.2d.tilemap` |
+| AI / 导航 | `com.unity.ai.navigation`、`com.unity.modules.ai` |
+| 物理 | `com.unity.modules.physics`、`physics2d`、`cloth`、`vehicles`、`wind`、`terrain`、`terrainphysics` |
+| 可视化脚本 / 时间线 | `com.unity.timeline`、`com.unity.visualscripting` |
+| XR / VR | `com.unity.modules.vr`、`com.unity.modules.xr` |
+| 分析 / 服务 | `collab-proxy`、`multiplayer.center`、`unityanalytics` |
+| 测试 | `com.unity.test-framework` |
+| 其他模块 | `accessibility`、`jsonserialize`、`tilemap`、`uielements`、`umbra`、`video` |
 
-- `com.unity.timeline`
-- `com.unity.visualscripting`
-- `com.unity.modules.physics`
-- `com.unity.modules.physics2d`
-- `com.unity.modules.terrain`
-- 以及 20+ 个其他非必要包
-
-**要求**:
-
-- Unity 项目根目录
-- `Packages/manifest.json` 文件存在
-- 写入权限
-
-**使用方法**:
+**交互模式**（选择要移除的分类）:
 
 ```bash
-# 标准模式（应用更改）
-remove_unity_packages.exe
-
-# 试运行模式（预览更改而不应用）
-set DRY_RUN=1
-remove_unity_packages.exe
+remove_unity_packages -i
 ```
 
-**试运行模式**:
+**命令行模式**:
 
-- 在运行前设置环境变量 `DRY_RUN=1`
-- 显示将要移除的内容，但不修改文件
-- 用于预览更改
+```bash
+# 移除所有列表中的包（含预览 + 确认）
+remove_unity_packages
 
-**安全性**: 包含试运行模式。运行前始终备份 `manifest.json`。
+# 预演模式：仅预览不修改
+remove_unity_packages --dry-run
+
+# CI 模式：无提示，移除全部
+remove_unity_packages --ci
+
+# 列出所有可移除的包
+remove_unity_packages --list
+```
+
+**参数**:
+
+| 参数 | 说明 |
+|------|------|
+| `-i` | 交互式分类选择 |
+| `--dry-run` | 仅预览，不修改 |
+| `--ci` | 非交互模式 |
+| `--list` | 列出所有可移除的包并退出 |
+
+**安全特性**:
+
+- **Unity 项目验证** — 操作前验证
+- **自动 `.bak` 备份** manifest.json
+- **分类分组预览** — 执行前展示
+- **保序 JSON 编辑** — 不打乱 key 顺序
+- **确认提示** — 默认: No
+- **packages-lock.json 提示** — 提醒打开 Unity 重新生成
+- 兼容旧版 `DRY_RUN=1` 环境变量
 
 ---
 
@@ -145,7 +191,7 @@ remove_unity_packages.exe
 **删除的内容**:
 
 - **文件夹**: `Library/`、`Temp/`、`obj/`、`Build/`、`.vs/`、`.vscode/`、`Logs/` 等
-- **文件**: `.sln`、`.csproj`、`.user`、`.vsconfig` 等
+- **文件**: `.sln`、`.csproj`、`.user`、`.vsconfig`
 - **构建产物**: 所有生成的构建输出
 
 **使用场景**:
@@ -155,25 +201,34 @@ remove_unity_packages.exe
 - 故障排查 Unity 问题（干净状态）
 - 准备项目分发
 
+**核心特性**:
+
+- **Unity 项目验证**：删除前验证当前目录是否为 Unity 项目
+- **可靠的进程检测**：通过 `EditorInstance.json` + 实际 PID 验证检查 Unity 是否运行中（跨平台）
+- **带大小的变更预览**：执行前显示每个待删除项及其大小
+- **试运行模式**：`--dry-run` 参数只预览不删除
+- **CI 模式**：`--ci` 参数用于非交互自动化
+- **并发删除**：使用多个工作线程加速 I/O 密集型清理
+- **健壮重试**：通过递归 chmod + 重试处理只读文件和瞬态文件锁
+- **删除统计**：显示已删除项数、失败数、释放空间和耗时
+
 **要求**:
 
-- Unity 项目根目录
-- **必须关闭 Unity 编辑器**（会检查运行中的实例）
+- Unity 项目根目录（验证 `Assets/` 和 `ProjectSettings/` 存在）
+- **必须关闭 Unity 编辑器**（主动验证进程是否运行，而非仅依据文件存在）
 - 写入权限
 
 **使用方法**:
 
 ```bash
-# 1. 关闭 Unity 编辑器（工具会检查并在检测到运行时警告）
-# 2. 将可执行文件放置在 Unity 项目根目录
-# 3. 运行可执行文件
+# 标准模式（交互式）
 unity_project_full_clean.exe
 
-# 工具将：
-# - 检查 Unity 是否正在运行（如果检测到会警告）
-# - 列出要删除的文件/文件夹
-# - 提示确认
-# - 使用并发工作线程删除（快速）
+# 预览模式（查看将被删除的内容，不做更改）
+unity_project_full_clean.exe --dry-run
+
+# CI 模式（非交互式，无需确认）
+unity_project_full_clean.exe --ci
 ```
 
 **删除的内容**:
@@ -191,7 +246,7 @@ unity_project_full_clean.exe
 - Bundles/          (资源包)
 - 以及更多...
 
-文件:
+文件（仅根目录）:
 - *.sln             (解决方案文件)
 - *.csproj          (C# 项目文件)
 - *.user            (用户设置)
@@ -200,9 +255,10 @@ unity_project_full_clean.exe
 
 **安全性**:
 
-- 检查运行中的 Unity 编辑器
-- 删除前列出所有项目
-- 需要确认
+- 删除前验证 Unity 项目结构
+- 验证 Unity 编辑器进程实际存活（非仅依据过期的锁文件）
+- 执行前显示详细预览及文件大小
+- 需要明确的 `y` 确认（默认为不执行）
 - **警告**: 这是破坏性操作。确保 Unity 编辑器已关闭并已备份。
 
 ---
@@ -306,109 +362,181 @@ audio_volume_normalizer.exe
 
 ---
 
-### 5. 图像转 Base64 `image_to_base64.exe`
+### 5. 纹理通道打包 `texture_channel_packer.exe`
 
-**用途**: 将图像文件转换为 Base64 编码字符串，以便嵌入代码或配置文件。
+**用途**: 将多张源图片打包到一张输出纹理的 R/G/B/A 通道中。用于创建 HDRP/URP Mask Map 和其他打包纹理。
 
 **功能**:
 
-- 读取图像文件（支持常见格式）
-- 编码为 Base64 字符串
-- 自动将字符串复制到剪贴板
-- 将字符串保存到 `.txt` 文件作为备份
+- 将最多 4 张源图片（或常量填充值）合并为一张 RGBA 纹理
+- 从每张源图中提取指定通道（R/G/B/A/Gray）
+- 自动从源图检测输出分辨率
+- 源图尺寸不同时使用最近邻插值缩放
+- 内置 HDRP Mask Map 和 URP Mask Map 预设
+- 内存高效：逐张加载源图，顺序处理通道
 
 **使用场景**:
 
-- 在代码中嵌入图像（数据 URI）
-- 在 JSON/YAML 配置文件中存储图像
-- 创建内联图像资源
+- **HDRP/URP Mask Map**: Metallic(R) + AO(G) + DetailMask(B) + Smoothness(A)
+- 将多张灰度图打包为单张 RGBA 纹理
+- 减少纹理数量（4 张 → 1 张 = 减少 75% Draw Call）
+- CI/CD 纹理管线自动化
 
-**要求**:
-
-- 图像文件路径（支持拖放）
-- 剪贴板访问权限
-
-**使用方法**:
+**交互模式**（双击运行或不带参数）:
 
 ```bash
-# 1. 运行可执行文件
-image_to_base64.exe
-
-# 2. 提示时，将图像文件拖放到终端
-#    或输入/粘贴文件路径
-
-# 3. Base64 字符串自动：
-#    - 复制到剪贴板
-#    - 保存到 {filename}_base64.txt
+# 启动引导向导，可选择预设
+texture_channel_packer.exe
 ```
 
-**输出**:
+**命令行模式**:
 
-- 剪贴板: Base64 字符串（准备粘贴）
-- 文件: `{original_filename}_base64.txt`（备份）
+```bash
+# 自定义通道打包
+texture_channel_packer -r metallic.png -g ao.png -a smoothness.png:A -o mask_map.png --ci
 
-**支持的格式**: `.png`、`.jpg`、`.jpeg`、`.gif`、`.bmp`、`.webp` 等。
+# 使用预设标签（用于预览显示）
+texture_channel_packer -r metallic.png -g ao.png -b detail.png -a smoothness.png -o mask.png --preset hdrp-mask --ci
 
-**安全性**: 只读操作。从不修改原始图像。
+# 预览模式（不写入文件）
+texture_channel_packer -r metallic.png -g ao.png --dry-run
+
+# 用常量值填充通道
+texture_channel_packer -r metallic.png -g fill:128 -b 0 -a 255 -o packed.png --ci
+
+# 强制输出尺寸
+texture_channel_packer -r metallic.png -g ao.png -size 2048x2048 -o mask.png --ci
+```
+
+**通道指定符**: 在文件路径后追加 `:R`、`:G`、`:B`、`:A` 或 `:Gray`（默认: Gray）。
+
+**参数**:
+
+| 参数                   | 说明                                                |
+| ---------------------- | --------------------------------------------------- |
+| `-r`、`-g`、`-b`、`-a` | 各通道源: `file.png[:channel]`、`fill:N` 或 `0-255` |
+| `-o`                   | 输出文件路径（默认: `packed.png`）                  |
+| `-size`                | 强制输出尺寸 `WxH`（默认: 自动检测）                |
+| `-preset`              | 使用预设标签: `hdrp-mask`、`urp-mask`               |
+| `--ci`                 | 非交互模式（无确认提示）                            |
+| `--dry-run`            | 仅预览，不写入文件                                  |
+
+**支持输入**: PNG、JPEG。**输出**: PNG（无损、保留 Alpha 通道）。
+
+**性能**: 直接像素访问、顺序通道处理、缓冲 I/O、BestSpeed PNG 编码。
+
+**安全性**: 对源图只读。执行前预览。支持预演模式。
 
 ---
 
 ### 6. 生成文件树 `generate_file_tree.exe`
 
-**用途**: 生成表示项目目录结构的 Markdown 文件。
+**用途**: 生成表示项目目录结构的 Markdown 文件，支持多种详细程度配置。
 
 **功能**:
 
-- 递归扫描当前目录
-- 使用白名单（扩展名）和黑名单（文件夹）过滤文件
-- 生成带有树状视图的 `directory_structure.md`
-- 折叠排除的目录以获得更清晰的输出
+- 递归扫描目标目录，可配置深度限制
+- 基于 Profile 的扩展名白名单过滤文件
+- 内置 4 种 Profile 对应不同详细程度
+- 读取 `.treeignore` 文件实现项目级自定义排除
+- 排序输出：目录优先，然后文件，按字母排序
+- 被过滤内容显示 `...` 指示符
 
-**使用场景**:
+**Profile 预设**:
 
-- 记录项目结构
-- 创建 README 文件树
-- 可视化代码库组织
+| Profile    | 描述               | 显示文件                                            | 深度 |
+| ---------- | ------------------ | --------------------------------------------------- | ---- |
+| `minimal`  | 快速概览           | 仅文件夹                                            | 3 层 |
+| `standard` | 代码与文档（默认） | `.go`、`.cs`、`.md`、`.json`、`.yaml`、`.shader` 等 | 无限 |
+| `detailed` | 代码 + Unity 资源  | standard + `.asset`、`.prefab`、`.unity`、`.mat` 等 | 无限 |
+| `full`     | 全部文件           | 不过滤                                              | 无限 |
 
-**特性**:
-
-- **白名单**: 仅包含指定的文件扩展名（`.cs`、`.md`、`.go` 等）
-- **黑名单**: 排除常见文件夹（`.git/`、`node_modules/`、`Library/` 等）
-- **折叠**: 隐藏排除的目录以获得更清晰的视图
-
-**要求**:
-
-- 目录的读取权限
-- 输出文件的写入权限
-
-**使用方法**:
+**交互模式**（使用 `-i` 运行）:
 
 ```bash
-# 1. 将可执行文件放置在要映射的目录中
-cd /path/to/project
-
-# 2. 运行可执行文件
-generate_file_tree.exe
-
-# 3. 输出文件已创建: directory_structure.md
+generate_file_tree -i
 ```
+
+**命令行模式**:
+
+```bash
+# 默认: standard profile, 当前目录
+generate_file_tree
+
+# 指定 profile 和深度
+generate_file_tree -profile minimal -depth 4
+
+# 扫描指定目录
+generate_file_tree -target ./Assets -profile detailed -o assets_tree.md
+
+# 自定义扩展名（覆盖 profile）
+generate_file_tree -ext .cs,.shader,.hlsl -o code_tree.md
+
+# 添加额外忽略项
+generate_file_tree -ignore ThirdParty,Plugins
+
+# 显示文件大小和隐藏项数量
+generate_file_tree -profile full --show-size --show-count
+
+# CI 模式（无提示、无等待）
+generate_file_tree -profile standard --ci
+```
+
+**`.treeignore` 文件**（放在目标目录下）:
+
+```
+# 目录（带尾部斜杠）
+ThirdParty/
+InControl/
+
+# 文件扩展名
+*.meta
+*.asset
+
+# 精确名称
+temp
+```
+
+**参数**:
+
+| 参数           | 说明                                                                    |
+| -------------- | ----------------------------------------------------------------------- |
+| `-profile`     | `minimal`、`standard`、`detailed`、`full`（默认: standard）             |
+| `-target`      | 目标目录（默认: 当前目录）                                              |
+| `-o`           | 输出文件（默认: `directory_structure.md`，或 `FILE_TREE_OUT` 环境变量） |
+| `-depth`       | 最大深度，0=无限（默认: 来自 profile）                                  |
+| `-ext`         | 文件扩展名，逗号分隔（覆盖 profile）                                    |
+| `-ignore`      | 额外忽略的目录/名称，逗号分隔                                           |
+| `-i`           | 交互模式，带 profile 选择菜单                                           |
+| `--dirs-only`  | 仅显示目录                                                              |
+| `--show-size`  | 显示文件大小                                                            |
+| `--show-count` | 在 `...` 行显示隐藏项数量                                               |
+| `--ci`         | 非交互模式                                                              |
 
 **输出示例**:
 
-```markdown
-.
+````markdown
+# Directory Structure
+
+- **Generated**: 2026-04-02 12:00:00
+- **Profile**: standard
+
+​`
+MyProject/
 ├── Assets/
-│ ├── Scripts/
-│ │ └── Player.cs
-│ └── Scenes/
-│ └── Main.unity
-├── Packages/
+│   ├── Scripts/
+│   │   ├── Player.cs
+│   │   └── Enemy.cs
+│   ├── Scenes/
+│   └── ...
+├── Tools/
+│   └── Scripts/
+│       └── generate_file_tree.go
 └── README.md
-```
+​`
+````
 
-**自定义**: 编辑 Go 源代码以修改白名单/黑名单过滤器。
-
-**安全性**: 只读操作。仅创建新文件，从不修改现有文件。
+**安全性**: 对源目录只读。仅创建输出文件。
 
 ## 安装与设置
 
