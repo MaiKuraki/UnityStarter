@@ -1,4 +1,5 @@
 using System;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 namespace CycloneGames.UIFramework.DynamicAtlas
@@ -25,14 +26,26 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         [Tooltip("Padding between sprites in pixels")]
         public int padding = 2;
 
+        [Tooltip("Enable edge bleeding (gutter pixels) to prevent texture sampling artifacts at sprite boundaries")]
+        public bool enableBleed = true;
+
         [Tooltip("Enable platform-specific optimizations (NativeArray, unsafe code, etc.)")]
         public bool enablePlatformOptimizations = true;
+
+        [Tooltip("Maximum number of atlas pages (0 = unlimited)")]
+        public int maxPages = 0;
+
+        [Tooltip("Enable mipmap generation for atlas pages (needed for world-space UI or camera distance filtering)")]
+        public bool enableMipmap = false;
 
         [Tooltip("Custom texture loader (null = Resources.Load)")]
         public Func<string, Texture2D> loadFunc;
 
         [Tooltip("Custom texture unloader (null = Resources.UnloadAsset)")]
         public Action<string, Texture2D> unloadFunc;
+
+        [Tooltip("Async texture loader for non-blocking I/O (optional, used by GetSpriteAsync)")]
+        public Func<string, UniTask<Texture2D>> loadFuncAsync;
 
         public DynamicAtlasConfig()
         {
@@ -124,6 +137,18 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             if (padding < 0 || padding > 16)
             {
                 errorMessage = $"Padding {padding} is out of valid range (0-16).";
+                return false;
+            }
+
+            if (enableBleed && padding < 2 && !TextureFormatHelper.RequiresBlockAlignment(targetFormat))
+            {
+                errorMessage = $"enableBleed requires padding >= 2 to avoid inter-sprite bleed overlap. Current padding: {padding}.";
+                return false;
+            }
+
+            if (maxPages < 0)
+            {
+                errorMessage = $"maxPages {maxPages} cannot be negative.";
                 return false;
             }
 

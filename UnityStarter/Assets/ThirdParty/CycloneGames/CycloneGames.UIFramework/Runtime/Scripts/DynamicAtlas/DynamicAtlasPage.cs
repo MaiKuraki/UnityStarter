@@ -37,7 +37,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// <summary>
         /// Returns a value between 0 and 1, where 1 means completely empty/fragmented and 0 means optimally packed.
         /// </summary>
-        public float FragmentationRatio => 1.0f - (float)_usedPixelArea / (_width * _height);
+        public float FragmentationRatio => 1.0f - (float)_usedPixelArea / ((long)_width * _height);
 
         private readonly int _width;
         private readonly int _height;
@@ -47,6 +47,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private readonly CopyTextureSupport _copySupport;
         private readonly int _pageId;
         private readonly bool _enablePlatformOptimizations;
+        private readonly bool _enableBleed;
+        private readonly bool _enableMipmap;
         private bool _needsApply;
 
         public int PageId => _pageId;
@@ -62,27 +64,35 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private int _currentY;
         private int _maxYInRow;
 
-        public DynamicAtlasPage(int size) : this(size, TextureFormat.RGBA32, 2, true)
+        public DynamicAtlasPage(int size) : this(size, TextureFormat.RGBA32, 2, true, true, false)
         {
         }
 
-        public DynamicAtlasPage(int size, TextureFormat format, int padding = 2, bool enablePlatformOptimizations = true)
+        public DynamicAtlasPage(int size, TextureFormat format, int padding = 2, bool enablePlatformOptimizations = true, bool enableBleed = true, bool enableMipmap = false)
         {
             _width = size;
             _height = size;
             _format = format;
-            _padding = padding;
             _blockSize = TextureFormatHelper.GetBlockSize(format);
             _enablePlatformOptimizations = enablePlatformOptimizations;
+            _enableMipmap = enableMipmap;
             _copySupport = SystemInfo.copyTextureSupport;
             _pageId = System.Threading.Interlocked.Increment(ref _pageIdCounter);
+
+            // Bleed writes 1px outside sprite bounds; padding >= 2 prevents inter-sprite bleed overlap
+            if (enableBleed && padding < 2 && _blockSize <= 1)
+            {
+                padding = 2;
+            }
+            _padding = padding;
+            _enableBleed = enableBleed && (padding >= 2) && (_blockSize <= 1);
 
             InitializeTexture();
         }
 
         private void InitializeTexture()
         {
-            Texture = new Texture2D(_width, _height, _format, false);
+            Texture = new Texture2D(_width, _height, _format, _enableMipmap);
             Texture.filterMode = FilterMode.Bilinear;
             Texture.wrapMode = TextureWrapMode.Clamp;
             Texture.name = "DynamicAtlasPage_" + _pageId;
@@ -289,10 +299,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private bool CopyPixelsFromRegion(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
         {
-            bool useCopyTexture = (_copySupport & CopyTextureSupport.Basic) != 0;
+            // When mipmap enabled, use Blit+ReadPixels path so Apply() regenerates mip levels
+            bool useCopyTexture = (_copySupport & CopyTextureSupport.Basic) != 0 && !_enableMipmap;
             bool gpuCopySuccess = false;
 
-            // Attempt GPU copy (fastest, zero GC allocation)
             if (useCopyTexture && source.format == _format)
             {
                 try
@@ -306,10 +316,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 }
             }
 
-            if (gpuCopySuccess) return true;
+            if (gpuCopySuccess)
+            {
+                if (_enableBleed) GenerateBleedGPU(source, srcX, srcY, dstX, dstY, w, h);
+                return true;
+            }
 
-            // GPU Fallback via RT Bridge (always works regardless of readability)
-            return CopyPixelsFromRegionViaRT(source, srcX, srcY, dstX, dstY, w, h);
+            bool result = CopyPixelsFromRegionViaRT(source, srcX, srcY, dstX, dstY, w, h);
+            if (result && _enableBleed) GenerateBleedCPU(dstX, dstY, w, h);
+            return result;
         }
 
         private bool CopyPixelsFromRegionViaRT(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
@@ -336,6 +351,74 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         }
 
         /// <summary>
+        /// Generates 1px bleed (gutter) around a sprite via GPU CopyTexture.
+        /// Copies edge pixel rows/columns into the adjacent padding region to prevent
+        /// bilinear filtering artifacts at sprite boundaries.
+        /// </summary>
+        private void GenerateBleedGPU(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
+        {
+            try
+            {
+                // Left edge: copy 1px column from left side of sprite to padding area
+                if (dstX > 0)
+                    Graphics.CopyTexture(source, 0, 0, srcX, srcY, 1, h, Texture, 0, 0, dstX - 1, dstY);
+                // Right edge
+                if (dstX + w < _width)
+                    Graphics.CopyTexture(source, 0, 0, srcX + w - 1, srcY, 1, h, Texture, 0, 0, dstX + w, dstY);
+                // Bottom edge
+                if (dstY > 0)
+                    Graphics.CopyTexture(source, 0, 0, srcX, srcY, w, 1, Texture, 0, 0, dstX, dstY - 1);
+                // Top edge
+                if (dstY + h < _height)
+                    Graphics.CopyTexture(source, 0, 0, srcX, srcY + h - 1, w, 1, Texture, 0, 0, dstX, dstY + h);
+            }
+            catch
+            {
+                // Non-critical: bleed failure only causes minor visual artifacts
+            }
+        }
+
+        /// <summary>
+        /// Generates 1px bleed around a sprite in CPU/ReadPixels path.
+        /// Reads edge pixels from the already-written region in the atlas texture.
+        /// </summary>
+        private void GenerateBleedCPU(int dstX, int dstY, int w, int h)
+        {
+            try
+            {
+                // Left edge
+                if (dstX > 0)
+                {
+                    var col = Texture.GetPixels(dstX, dstY, 1, h);
+                    Texture.SetPixels(dstX - 1, dstY, 1, h, col);
+                }
+                // Right edge
+                if (dstX + w < _width)
+                {
+                    var col = Texture.GetPixels(dstX + w - 1, dstY, 1, h);
+                    Texture.SetPixels(dstX + w, dstY, 1, h, col);
+                }
+                // Bottom edge
+                if (dstY > 0)
+                {
+                    var row = Texture.GetPixels(dstX, dstY, w, 1);
+                    Texture.SetPixels(dstX, dstY - 1, w, 1, row);
+                }
+                // Top edge
+                if (dstY + h < _height)
+                {
+                    var row = Texture.GetPixels(dstX, dstY + h - 1, w, 1);
+                    Texture.SetPixels(dstX, dstY + h, w, 1, row);
+                }
+                _needsApply = true;
+            }
+            catch
+            {
+                // Non-critical: bleed failure only causes minor visual artifacts
+            }
+        }
+
+        /// <summary>
         /// Applies pending texture changes. Call after batch insertions for better performance.
         /// </summary>
         public void ApplyIfNeeded()
@@ -349,11 +432,11 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private bool CopyPixels(Texture2D source, int x, int y, int w, int h, int allocW, int allocH)
         {
-            bool useCopyTexture = (_copySupport & CopyTextureSupport.Basic) != 0;
+            // When mipmap enabled, use Blit+ReadPixels path so Apply() regenerates mip levels
+            bool useCopyTexture = (_copySupport & CopyTextureSupport.Basic) != 0 && !_enableMipmap;
             bool gpuCopySuccess = false;
 
             // Attempt GPU copy (fastest, zero GC allocation)
-            // Note: GPU copy only copies the source size, leaving padding as-is (transparent from init)
             if (useCopyTexture && source.format == _format)
             {
                 try
@@ -367,10 +450,16 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 }
             }
 
-            if (gpuCopySuccess) return true;
+            if (gpuCopySuccess)
+            {
+                if (_enableBleed) GenerateBleedGPU(source, 0, 0, x, y, w, h);
+                return true;
+            }
 
             // GPU Fallback via RT Bridge (always works regardless of readability)
-            return CopyPixelsViaRT(source, x, y, w, h);
+            bool result = CopyPixelsViaRT(source, x, y, w, h);
+            if (result && _enableBleed) GenerateBleedCPU(x, y, w, h);
+            return result;
         }
 
         private bool CopyPixelsViaRT(Texture2D source, int x, int y, int w, int h)
@@ -394,7 +483,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         public void IncrementActiveCount(int width, int height)
         {
             System.Threading.Interlocked.Increment(ref _activeSpriteCount);
-            System.Threading.Interlocked.Add(ref _usedPixelArea, width * height);
+            System.Threading.Interlocked.Add(ref _usedPixelArea, (long)width * height);
         }
 
         public void DecrementActiveCount(int width, int height)
@@ -404,10 +493,10 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             {
                 System.Threading.Interlocked.CompareExchange(ref _activeSpriteCount, 0, newCount);
             }
-            System.Threading.Interlocked.Add(ref _usedPixelArea, -(width * height));
-            if (_usedPixelArea < 0)
+            long newArea = System.Threading.Interlocked.Add(ref _usedPixelArea, -((long)width * height));
+            if (newArea < 0)
             {
-                System.Threading.Interlocked.Exchange(ref _usedPixelArea, 0);
+                System.Threading.Interlocked.CompareExchange(ref _usedPixelArea, 0, newArea);
             }
         }
 

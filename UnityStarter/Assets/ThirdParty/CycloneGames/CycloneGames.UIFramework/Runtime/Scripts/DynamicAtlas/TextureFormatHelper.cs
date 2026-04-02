@@ -158,23 +158,33 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         public static TextureFormat GetRecommendedCompressedFormat()
         {
 #if UNITY_ANDROID
-            // ASTC is widely supported on modern Android devices
             if (SystemInfo.SupportsTextureFormat(TextureFormat.ASTC_4x4))
                 return TextureFormat.ASTC_4x4;
-            // Fallback to ETC2
             if (SystemInfo.SupportsTextureFormat(TextureFormat.ETC2_RGBA8))
                 return TextureFormat.ETC2_RGBA8;
             return TextureFormat.RGBA32;
 #elif UNITY_IOS || UNITY_TVOS
-            // ASTC is supported on iOS 8+ (A8 chip and newer)
             if (SystemInfo.SupportsTextureFormat(TextureFormat.ASTC_4x4))
                 return TextureFormat.ASTC_4x4;
             return TextureFormat.RGBA32;
 #elif UNITY_WEBGL
-            // WebGL has limited format support
+            // WebGL 2.0 supports ETC2 via OpenGL ES 3.0, but CopyTexture is unavailable
+            return TextureFormat.RGBA32;
+#elif UNITY_PS4 || UNITY_PS5 || UNITY_GAMECORE_XBOXSERIES || UNITY_GAMECORE_XBOXONE || UNITY_XBOXONE
+            // Console platforms use BC7 (GNM/GDK) for best quality RGBA compression
+            if (SystemInfo.SupportsTextureFormat(TextureFormat.BC7))
+                return TextureFormat.BC7;
+            if (SystemInfo.SupportsTextureFormat(TextureFormat.DXT5))
+                return TextureFormat.DXT5;
+            return TextureFormat.RGBA32;
+#elif UNITY_SWITCH
+            // Nintendo Switch supports ASTC via Tegra GPU
+            if (SystemInfo.SupportsTextureFormat(TextureFormat.ASTC_4x4))
+                return TextureFormat.ASTC_4x4;
+            if (SystemInfo.SupportsTextureFormat(TextureFormat.BC7))
+                return TextureFormat.BC7;
             return TextureFormat.RGBA32;
 #elif UNITY_STANDALONE_WIN || UNITY_STANDALONE_OSX || UNITY_STANDALONE_LINUX
-            // Desktop platforms support BC7 (best quality) or DXT5
             if (SystemInfo.SupportsTextureFormat(TextureFormat.BC7))
                 return TextureFormat.BC7;
             if (SystemInfo.SupportsTextureFormat(TextureFormat.DXT5))
