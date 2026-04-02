@@ -38,13 +38,18 @@
 
 ### ⚡ 性能
 
-| 特性                 | 说明                                                                                                                  |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| **资产生命周期委托** | `UIManager` 每个资产持有一个 `IAssetHandle<T>`，生命周期（RefCount、驱逐）完全由 `AssetCacheService`（W-TinyLFU）管理 |
-| **逐帧实例化节流**   | 将密集实例化分散到多帧，避免帧峰值                                                                                    |
-| **动态图集系统**     | 运行时在窗口打开时将精灵打包到单张 GPU 纹理，大幅减少图标密集型 UI 的 DrawCall                                        |
-| **压缩图集变体**     | `CompressedDynamicAtlasService` 使用 ASTC/DXT/ETC 压缩格式降低 VRAM 占用，针对移动端优化                              |
-| **原生异步设计**     | 所有加载、实例化、打开操作均基于 `UniTask`，永不阻塞主线程                                                            |
+| 特性                   | 说明                                                                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| **资产生命周期委托**   | `UIManager` 每个资产持有一个 `IAssetHandle<T>`，生命周期（RefCount、驱逐）完全由 `AssetCacheService`（W-TinyLFU）管理 |
+| **逐帧实例化节流**     | 将密集实例化分散到多帧，避免帧峰值                                                                                    |
+| **动态图集系统**       | 运行时在窗口打开时将精灵打包到单张 GPU 纹理，大幅减少图标密集型 UI 的 DrawCall                                        |
+| **压缩图集变体**       | `CompressedDynamicAtlasService` 使用 ASTC/DXT/ETC 压缩格式降低 VRAM 占用，针对移动端优化                              |
+| **出血像素支持**       | 自动 1 像素边缘复制，防止双线性/三线性采样导致的精灵边界接缝（GPU + CPU 双路径）                                      |
+| **精灵元数据保留**     | `GetSpriteFromSprite()` 自动保留原始 pivot 锚点和 9-slice border 九宫格边距                                           |
+| **异步图集加载**       | `GetSpriteAsync()` 通过 `UniTask` 在后台线程执行磁盘 I/O，图集插入仍在主线程执行                                      |
+| **页数与 Mipmap 控制** | 可配置 `maxPages` 限制防止无限 VRAM 增长；可选 mipmap 生成支持 LOD 友好的世界空间 UI                                  |
+| **线程安全原子操作**   | 像素面积跟踪和引用计数使用 `Interlocked` 原子操作，消除并发场景下的 TOCTOU 竞态条件                                   |
+| **原生异步设计**       | 所有加载、实例化、打开操作均基于 `UniTask`，永不阻塞主线程                                                            |
 
 ### 🔒 可靠性与安全性
 
@@ -1132,6 +1137,7 @@ public class IconListWindow : UIWindow
 ```csharp
 using CycloneGames.UIFramework.DynamicAtlas;
 using CycloneGames.AssetManagement.Runtime;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 public class GameInitializer : MonoBehaviour
@@ -1143,25 +1149,27 @@ public class GameInitializer : MonoBehaviour
         // 初始化您的资源管理系统
         assetPackage = await InitializeYourAssetPackageAsync();
 
-        // 使用自定义加载/卸载函数配置动态图集
-        DynamicAtlasManager.Instance.Configure(
-            load: async (path) =>
+        // 使用 DynamicAtlasConfig 配置动态图集（推荐）
+        DynamicAtlasManager.Instance.Configure(new DynamicAtlasConfig
+        {
+            loadFunc = (path) => assetPackage.LoadAssetSync<Texture2D>(path).Asset,
+            unloadFunc = (path, tex) => assetPackage.ReleaseAsset(path),
+            loadFuncAsync = async (path) =>
             {
-                // 使用您的资源管理系统加载纹理
                 var handle = await assetPackage.LoadAssetAsync<Texture2D>(path);
                 return handle.Asset;
             },
-            unload: (path, tex) =>
-            {
-                // 使用您的资源管理系统卸载
-                assetPackage.ReleaseAsset(path);
-            },
-            size: 2048,
-            autoScaleLargeTextures: true
-        );
+            pageSize = 2048,
+            autoScaleLargeTextures = true,
+            enableBleed = true,         // 防止边缘采样伪影
+            enableMipmap = false,       // 世界空间 UI 时启用
+            maxPages = 0,               // 0 = 无限制
+        });
     }
 }
 ```
+
+> **异步加载**: 配置 `loadFuncAsync` 后，可使用 `GetSpriteAsync()`（参见[步骤 9](#步骤-9-异步加载)）实现非阻塞纹理加载。磁盘 I/O 在后台线程运行，图集插入仍在主线程执行。
 
 ### 步骤 4: 最佳实践和技巧
 
@@ -1188,22 +1196,31 @@ protected override void OnDestroy()
 
 4. **启用自动缩放**: 设置 `autoScaleLargeTextures: true` 以自动缩放对于图集来说太大的纹理。这可以防止错误并确保所有纹理都可以被打包。
 
-5. **监控图集使用情况**: 在开发中，您可以检查使用了多少页面：
+5. **启用出血像素**: 保持 `enableBleed: true`（默认值）以防止双线性/三线性纹理过滤在精灵边界采样时出现可见接缝。系统使用 GPU 路径（或在 GPU CopyTexture 不可用时使用 CPU 回退）自动生成 1 像素边框复制。压缩格式会自动禁用出血，因为子块像素操作在物理上不可行。
+
+6. **使用 maxPages 限制 VRAM**: 设置 `maxPages` 为非零值以限制创建的图集页数。当达到上限时，新的精灵插入将优雅地失败，而不是分配无限的 GPU 内存。
+
+7. **世界空间 UI 启用 Mipmap**: 如果图集精灵显示在世界空间 UI 或不同相机距离上，设置 `enableMipmap: true`。这允许 GPU 执行正确的 LOD 过滤。屏幕空间 UI 保持禁用以节省内存。
+
+8. **精灵元数据保留**: 使用 `GetSpriteFromSprite()` 时，系统自动保留源精灵的 pivot 锚点和 9-slice border 九宫格边距。无需手动配置——您的切片精灵在图集中可以正确工作。
+
+9. **监控图集使用情况**: 在开发中，您可以检查使用了多少页面：
 
 ```csharp
 // 这需要访问内部状态，因此主要用于调试
 // 系统在需要时会自动创建新页面
 ```
 
-6. **纹理要求**:
-   - 纹理必须是可读的（在纹理导入设置中启用 "Read/Write Enabled"）
-   - 纹理应该是支持运行时修改的格式（RGBA32、ARGB32 等）
-   - 压缩格式（DXT、ETC）可能需要转换
+10. **纹理要求**:
+    - 纹理必须是可读的（在纹理导入设置中启用 "Read/Write Enabled"）
+    - 纹理应该是支持运行时修改的格式（RGBA32、ARGB32 等）
+    - 压缩格式（DXT、ETC）可能需要转换
 
-7. **性能考虑**:
-   - 打包发生在主线程上，因此避免在单帧中打包许多大纹理
-   - 考虑在加载屏幕期间预加载常用图标
-   - 将图集用于中小型纹理（图标、按钮）而不是大型背景图像
+11. **性能考虑**:
+    - 打包发生在主线程上，因此避免在单帧中打包许多大纹理
+    - 考虑在加载屏幕期间预加载常用图标
+    - 将图集用于中小型纹理（图标、按钮）而不是大型背景图像
+    - 使用 `GetSpriteAsync()` 配合 `loadFuncAsync` 避免在磁盘 I/O 期间阻塞主线程
 
 ### 步骤 5: 故障排除
 
@@ -1326,6 +1343,9 @@ public class CompressedAtlasExample : MonoBehaviour
 | iOS               | ASTC 4×4 或 ASTC 6×6                  |
 | Android           | ASTC 4×4（现代设备）或 ETC2（旧设备） |
 | Windows/Mac/Linux | BC7（高质量）或 DXT5（兼容性）        |
+| PS4 / PS5         | BC7（高质量）或 DXT5（兼容性）        |
+| Xbox Series / One | BC7（高质量）或 DXT5（兼容性）        |
+| Nintendo Switch   | ASTC 4×4 或 ETC2                      |
 | WebGL             | 不支持（使用未压缩格式）              |
 
 ### 步骤 8: 编辑器工具
@@ -1340,13 +1360,99 @@ public class CompressedAtlasExample : MonoBehaviour
 - 与 CompressedDynamicAtlasService 的兼容性
 - 最佳格式设置建议
 
+### 步骤 9: 异步加载
+
+对于包含大量图标的 UI 界面，同步加载纹理可能导致帧率尖峰。使用 `GetSpriteAsync()` 在后台线程执行磁盘 I/O，同时保持图集插入在主线程执行。
+
+**配置：**
+
+```csharp
+// 配置异步加载器（例如在游戏初始化时）
+DynamicAtlasManager.Instance.Configure(new DynamicAtlasConfig
+{
+    loadFunc = (path) => Resources.Load<Texture2D>(path),      // 同步回退
+    unloadFunc = (path, tex) => Resources.UnloadAsset(tex),
+    loadFuncAsync = async (path) =>
+    {
+        // 使用您的资源管理系统的异步 API
+        var handle = await assetPackage.LoadAssetAsync<Texture2D>(path);
+        return handle.Asset;
+    },
+    pageSize = 2048,
+});
+```
+
+**使用方式：**
+
+```csharp
+using Cysharp.Threading.Tasks;
+
+public class IconLoader : MonoBehaviour
+{
+    [SerializeField] private UnityEngine.UI.Image iconImage;
+
+    public async UniTaskVoid LoadIconAsync(string iconPath)
+    {
+        // 磁盘 I/O 在后台线程运行；图集插入在主线程执行
+        Sprite sprite = await DynamicAtlasManager.Instance.GetSpriteAsync(iconPath);
+        if (sprite != null)
+        {
+            iconImage.sprite = sprite;
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (iconImage.sprite != null)
+        {
+            DynamicAtlasManager.Instance.ReleaseSprite(iconImage.sprite.name);
+        }
+    }
+}
+```
+
+> **注意**: `GetSpriteAsync()` 需要配置 `loadFuncAsync`。如果仅设置了 `loadFunc`，请使用 `GetSprite()`（同步方式）替代。如果未配置 `loadFuncAsync`，异步 API 将返回 `null` 并输出错误日志。
+
 ### 进阶架构与内存管理 (Advanced Architecture)
 
 #### 内存策略与 GC 表现
 
 - **零 GC 内存拷贝 (Zero-GC):** 系统彻底移除了传统的基于 CPU 的像素级拷贝操作（如 `GetRawTextureData`）。目前所有的图集重排、合并，均 100% 依赖底层的 GPU-To-GPU 通道 (`Graphics.CopyTexture` 或 `Graphics.Blit`)。这意味着在图集运行和动态合并的过程中，**产生 0 字节的 GC 分配**，彻底杜绝了因 UI 加载引发的卡顿。
-- **Draw Call 极小化:** 通过将散碎的各类图标集中打包进 2048x2048 的大图集页中，Unity 底层可以实现完美的动态批处理 (Dynamic Batching)。这能将动辄几百个散图的 Draw Call 压缩至个位数。
-- **引用计数自动回收:** 每当一个图标被提取，系统会精确记录其引用计数与真实占用的像素面积 (`UsedPixelArea`)。当界面销毁释放图标时，若某张 Page 的活跃引用归零，该整张 16MB 的纹理会被立刻 `Destroy` 回收给系统。
+- **Draw Call 极小化:** 通过将散碎的各类图标集中打包进 2048×2048 或 4096×4096 的大图集页中，Unity 底层可以实现完美的动态批处理 (Dynamic Batching)。这能将动辄几百个散图的 Draw Call 压缩至个位数。
+- **引用计数原子安全:** 每当一个图标被提取，系统会精确记录其引用计数与真实占用的像素面积 (`UsedPixelArea`)。所有计数器使用 `Interlocked` 原子操作，消除多线程场景下的 TOCTOU（检查时间与使用时间不一致）竞态条件。整数溢出通过 `(long)width * height` 类型提升进行防护。当界面销毁释放图标时，若某张 Page 的活跃引用归零，该整张纹理会被立刻 `Destroy` 回收给系统。
+
+#### 出血像素支持 (Edge Bleeding / Gutter)
+
+当启用双线性或三线性纹理过滤时，在精灵边界进行采样可能会意外读取相邻精灵的像素，导致可见接缝。动态图集系统通过**自动 1 像素边框复制（出血）**解决此问题：
+
+- **GPU 路径（主通道）:** 在支持 `Graphics.CopyTexture` 的平台（除 WebGL 以外的所有平台），出血像素通过将边缘行/列复制到周围的 gutter 区域来生成——零 GC，完全在 GPU 上执行。
+- **CPU 路径（回退）:** 当纹理数据驻留在 CPU 端时（例如 `RenderTexture` 回读后），直接使用 `GetPixels`/`SetPixels`。这避免了使用 `Graphics.Blit` 时引入的不必要 GPU↔CPU 往返开销。
+- **压缩格式守卫:** 当图集使用压缩格式时（块大小 > 1），出血自动禁用，因为子块像素操作在物理上不可行。
+- **由配置控制:** 设置 `enableBleed: true`（默认）并确保 `padding > 0` 即可生效。
+
+#### 精灵元数据保留
+
+当通过 `GetSpriteFromSprite()` 从 SpriteAtlas 或其他源复制精灵时，系统会保留原始精灵的：
+
+- **Pivot 锚点** —— UI 布局锚定保持正确
+- **9-slice Border 九宫格边距** —— 切片精灵在图集中正确渲染，无需手动重新配置
+
+这对于精灵携带丰富元数据（不仅仅是原始像素）的生产级 UI 管线至关重要。
+
+#### 页数限制与 Mipmap 支持
+
+- **`maxPages`**: 设置非零值以限制图集页的最大数量。当达到上限时，`CreateNewPage()` 返回 `false`，插入被拒绝，而不是分配无限的 VRAM。设置为 `0` 表示不限制（默认）。
+- **`enableMipmap`**: 设为 `true` 时，图集页创建时带有 mipmap 支持。这对于在不同相机距离下渲染的世界空间 UI 元素至关重要，允许 GPU 执行正确的 LOD 过滤。屏幕空间 UI 保持 `false` 可以每页节省约 33% 的内存。
+
+#### 异步加载便捷层
+
+磁盘 I/O（从 AssetBundle/Addressable 加载源纹理）可以完全异步，但图集插入（`Graphics.CopyTexture` / `Blit`）**必须**在主线程执行。`GetSpriteAsync()` API 弥合了这一差距：
+
+1. `await loadFuncAsync(path)` —— 后台线程加载纹理
+2. `Service.GetSpriteFromRegion()` —— 主线程将像素插入图集
+3. `unloadFunc(path, tex)` —— 释放源纹理
+
+该 API 通过 `LoadAssetAsync<Texture2D>` 与 `CycloneGames.AssetManagement` 自然集成。图集层**不添加 LRU/LFU**，因为源纹理的生命周期已由 `AssetCacheService`（W-TinyLFU）管理。
 
 #### 压缩纹理的矩阵块对齐 (Block Alignment)
 
@@ -1354,6 +1460,7 @@ public class CompressedAtlasExample : MonoBehaviour
 
 - **严格的格式匹配:** 源图片的压缩格式必须与图集格式 100% 一致。
 - **智能块对齐算法:** 框架内部实现了专门的边缘对齐逻辑。如果你试图将一张宽为 13 像素的图标塞入一个 `ASTC_4x4` 的压缩图集中，打包算法会自动将边界向上取整扩展至 16x16 (4的倍数)。这种物理级别的块隔离，可以 100% 杜绝因 GPU 采样插值导致的“相邻图标边缘像素污染/马赛克”问题，做到极限压缩下依然能保持画质清晰。
+- **NativeArray 零 GC 初始化:** `CompressedAtlasPage` 使用 `NativeArray<byte>` 而非托管 byte 数组进行初始纹理数据初始化，消除了页面创建时的大块 GC 分配。
 
 #### 内存碎片整理与无缝热重排 (Defragmentation)
 
@@ -1361,9 +1468,21 @@ public class CompressedAtlasExample : MonoBehaviour
 
 1. **触发扫描:** 业务层调用 `DynamicAtlasManager.Instance.Defragment(0.5f)`，引擎会挑出那些碎片空洞率 `>=50%` 的脏页。
 2. **后台双缓冲:** 悄悄在显存中开辟一张全新的干净 Page 图纸。
-3. **活体数据转移:** 利用 `CopyTexture` 极速将旧图纸上还活着的 UI 像素，紧凑地转移到新图纸上。
+3. **活体数据转移:** 利用 `CopyTexture` 极速将旧图纸上还活着的 UI 像素，紧凑地转移到新图纸上。重排后调用 `ApplyIfNeeded()` 确保新页面的像素数据已提交。
 4. **触发全服更新事件:** 在 C# 层重设图集引用，并向全框架广播 `OnSpriteRepacked` 全局事件。
 5. **UI 无缝替换:** 只需你的 UI 组件监听该事件并在收到时热更 `.sprite` 属性，玩家眼中不会看到任何一帧的屏幕闪烁或白块。
+
+#### 平台支持矩阵
+
+| 平台                  | 压缩图集 | 非压缩图集 | CopyTexture | GPU Blit 回退 | 出血(Bleed) |
+| --------------------- | -------- | ---------- | ----------- | ------------- | ----------- |
+| Windows (DX11/12)     | ✅       | ✅         | ✅          | ✅            | ✅          |
+| macOS (Metal)         | ✅       | ✅         | ✅          | ✅            | ✅          |
+| iOS (Metal)           | ✅       | ✅         | ✅          | ✅            | ✅          |
+| Android (Vulkan/GLES) | ✅       | ✅         | ✅          | ✅            | ✅          |
+| PS4 / PS5             | ✅       | ✅         | ✅          | ❌            | ✅          |
+| Xbox One / Series     | ✅       | ✅         | ✅          | ❌            | ✅          |
+| Nintendo Switch       | ✅       | ✅         | ✅          | ✅            | ✅          |
 
 ## 高级特性
 

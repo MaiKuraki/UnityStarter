@@ -15,12 +15,14 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// <param name="format">Compressed texture format (ASTC/ETC2/BC)</param>
         /// <param name="pageSize">Page size in pixels (will be aligned to block size)</param>
         /// <param name="blockPadding">Padding between sprites in blocks</param>
+        /// <param name="maxPages">Maximum number of atlas pages (0 = unlimited)</param>
         public CompressedDynamicAtlasService Create(
             UnityEngine.TextureFormat format,
             int pageSize = 2048,
-            int blockPadding = 1)
+            int blockPadding = 1,
+            int maxPages = 0)
         {
-            return new CompressedDynamicAtlasService(format, pageSize, blockPadding);
+            return new CompressedDynamicAtlasService(format, pageSize, blockPadding, maxPages);
         }
 
         /// <summary>
@@ -30,7 +32,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         public CompressedDynamicAtlasService GetSharedInstance(
             UnityEngine.TextureFormat format,
             int pageSize = 2048,
-            int blockPadding = 1)
+            int blockPadding = 1,
+            int maxPages = 0)
         {
             if (_sharedInstance == null || _sharedFormat != format)
             {
@@ -39,7 +42,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     if (_sharedInstance == null || _sharedFormat != format)
                     {
                         _sharedInstance?.Dispose();
-                        _sharedInstance = Create(format, pageSize, blockPadding);
+                        _sharedInstance = Create(format, pageSize, blockPadding, maxPages);
                         _sharedFormat = format;
                     }
                 }

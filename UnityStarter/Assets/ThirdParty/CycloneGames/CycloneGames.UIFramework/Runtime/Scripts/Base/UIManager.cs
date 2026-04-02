@@ -211,11 +211,16 @@ namespace CycloneGames.UIFramework.Runtime
         {
             CLogger.LogInfo($"{DEBUG_FLAG} Cleaning up all active windows due to scene unload.");
 
-            // Cancel all in-flight opens
-            foreach (var kv in _openCancellations) kv.Value?.Cancel();
+            // Cancel and dispose all in-flight opens
+            foreach (var kv in _openCancellations)
+            {
+                kv.Value?.Cancel();
+                kv.Value?.Dispose();
+            }
             _openCancellations.Clear();
 
             _coordinatedNavCts?.Cancel();
+            _coordinatedNavCts?.Dispose();
             _coordinatedNavCts = null;
 
             foreach (var kv in _configHandles) kv.Value?.Dispose();
@@ -492,12 +497,25 @@ namespace CycloneGames.UIFramework.Runtime
                 }
             }
 
-            await UniTask.Yield(ct);
+            try
+            {
+                await UniTask.Yield(ct);
 
-            if (silentOpen)
-                await uiWindowInstance.OpenSilentAsync(ct);
-            else
-                await uiWindowInstance.Open();
+                if (silentOpen)
+                    await uiWindowInstance.OpenSilentAsync(ct);
+                else
+                    await uiWindowInstance.OpenAsync(ct);
+            }
+            catch (System.OperationCanceledException)
+            {
+                CLogger.LogInfo($"{DEBUG_FLAG} Open UI operation for '{windowName}' was canceled during open transition.");
+                // Window is already in activeWindows/layer — tear it down
+                TearDownLeavingWindow(uiWindowInstance, windowName);
+                CleanupOpenState(windowName, openCts);
+                tcs.TrySetCanceled();
+                onUIWindowCreated?.Invoke(null);
+                return null;
+            }
 
             onUIWindowCreated?.Invoke(uiWindowInstance);
             tcs.TrySetResult(uiWindowInstance);
@@ -686,9 +704,14 @@ namespace CycloneGames.UIFramework.Runtime
 
             // Run the coordinator animation — this pair runs independently,
             // so other CardStack navigations can overlap.
-            await coordinator.TransitionAsync(leaving, entering, direction, navCt);
-
-            cts.Dispose();
+            try
+            {
+                await coordinator.TransitionAsync(leaving, entering, direction, navCt);
+            }
+            finally
+            {
+                cts.Dispose();
+            }
 
             if (navCt.IsCancellationRequested) return;
 
@@ -716,8 +739,24 @@ namespace CycloneGames.UIFramework.Runtime
             UILayer layer = leaving.ParentLayer;
             layer?.DetachWindow(windowName);
 
-            // Run close lifecycle synchronously (no transition animation needed)
+            // Run close lifecycle synchronously (no transition animation needed).
+            // Close() triggers OnStartClose/OnFinishedClose which deliver
+            // OnViewClosing/OnViewClosed to presenters via state-change binder callbacks.
             leaving.Close();
+
+            // Notify binders AFTER close lifecycle so Dispose runs after OnViewClosed.
+            var binders = _windowBindersCache;
+            if (binders != null)
+            {
+                for (int i = 0; i < binders.Length; i++)
+                {
+                    try { binders[i].OnWindowDestroying(leaving); }
+                    catch (System.Exception ex)
+                    {
+                        CLogger.LogError($"{DEBUG_FLAG} WindowBinder {binders[i].GetType().Name} failed during OnWindowDestroying for {windowName}: {ex.Message}");
+                    }
+                }
+            }
 
             if (activeWindows.ContainsKey(windowName))
             {
@@ -774,7 +813,25 @@ namespace CycloneGames.UIFramework.Runtime
 
                 CLogger.LogInfo($"{DEBUG_FLAG} Attempting to close UI: {windowName}");
 
-                // Trigger window binders for cleanup
+                // Always use async close path to ensure transition animations play
+                UILayer layer = windowToClose.ParentLayer;
+                if (layer != null)
+                {
+                    layer.DetachWindow(windowName);
+                }
+
+                await windowToClose.CloseAsync(cancellationToken);
+
+                // If the close transition was cancelled mid-animation, the window's
+                // OnFinishedClose was never called so the GameObject is still alive.
+                // Force-complete the close to prevent an orphaned zombie in the scene.
+                if (cancellationToken.IsCancellationRequested && windowToClose != null && windowToClose.gameObject != null)
+                {
+                    windowToClose.Close();
+                }
+
+                // Notify binders AFTER the close lifecycle completes so presenters receive
+                // OnViewClosing / OnViewClosed before Dispose().
                 for (int i = 0; i < windowBinders.Count; i++)
                 {
                     try
@@ -786,15 +843,6 @@ namespace CycloneGames.UIFramework.Runtime
                         CLogger.LogError($"{DEBUG_FLAG} WindowBinder {windowBinders[i].GetType().Name} failed during OnWindowDestroying for {windowName}: {ex.Message}");
                     }
                 }
-
-                // Always use async close path to ensure transition animations play
-                UILayer layer = windowToClose.ParentLayer;
-                if (layer != null)
-                {
-                    layer.DetachWindow(windowName);
-                }
-
-                await windowToClose.CloseAsync(cancellationToken);
 
                 // Cleanup
                 _navigationService?.Unregister(windowName);
@@ -879,9 +927,14 @@ namespace CycloneGames.UIFramework.Runtime
         {
             UnityEngine.Application.onBeforeRender -= ResetPerFrameBudget;
 
-            foreach (var kv in _openCancellations) kv.Value?.Cancel();
+            foreach (var kv in _openCancellations)
+            {
+                kv.Value?.Cancel();
+                kv.Value?.Dispose();
+            }
             _openCancellations.Clear();
             _coordinatedNavCts?.Cancel();
+            _coordinatedNavCts?.Dispose();
             _coordinatedNavCts = null;
             ClearInflightState();
 

@@ -17,13 +17,19 @@ namespace CycloneGames.UIFramework.Runtime
     /// </summary>
     public class UIPresenterBinder : IUIWindowBinder
     {
-        private readonly Dictionary<string, Type> _presenterMap = new Dictionary<string, Type>(32);
+        // Static scan cache — assembly reflection runs once per AppDomain, shared across all instances.
+        private static Dictionary<string, Type> _staticPresenterMap;
+        private static readonly object _scanLock = new object();
+
+        private readonly Dictionary<string, Type> _presenterMap;
         private readonly Dictionary<UIWindow, IUIPresenter> _activePresenters = new Dictionary<UIWindow, IUIPresenter>(16);
         private IUIService _uiService;
 
         public UIPresenterBinder()
         {
-            InitializeMap();
+            EnsureStaticMapInitialized();
+            // Instance map starts as a copy so per-instance RegisterMapping doesn't pollute the shared cache
+            _presenterMap = new Dictionary<string, Type>(_staticPresenterMap);
         }
 
         /// <summary>
@@ -43,44 +49,64 @@ namespace CycloneGames.UIFramework.Runtime
             _presenterMap[windowName] = typeof(TPresenter);
         }
 
-        private void InitializeMap()
+        private static void EnsureStaticMapInitialized()
         {
-            try
+            if (_staticPresenterMap != null) return;
+            lock (_scanLock)
             {
-                var assemblies = AppDomain.CurrentDomain.GetAssemblies();
-                foreach (var assembly in assemblies)
-                {
-                    // Skip generic system assemblies to speed up loading
-                    if (assembly.FullName.StartsWith("System.") || assembly.FullName.StartsWith("mscorlib") || assembly.FullName.StartsWith("UnityEngine")) continue;
-                    
-                    var types = assembly.GetTypes();
-                    foreach (var type in types)
-                    {
-                        var attrs = type.GetCustomAttributes(typeof(UIPresenterBindAttribute), false);
-                        if (attrs != null && attrs.Length > 0)
-                        {
-                            if (!typeof(IUIPresenter).IsAssignableFrom(type))
-                            {
-                                CLogger.LogWarning($"[UIPresenterBinder] Type {type.Name} has UIPresenterBindAttribute but does not implement IUIPresenter.");
-                                continue;
-                            }
+                if (_staticPresenterMap != null) return;
+                _staticPresenterMap = ScanAssemblies();
+            }
+        }
 
-                            foreach (UIPresenterBindAttribute attr in attrs)
+        private static Dictionary<string, Type> ScanAssemblies()
+        {
+            var map = new Dictionary<string, Type>(32);
+            var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            foreach (var assembly in assemblies)
+            {
+                // Skip generic system assemblies to speed up loading
+                if (assembly.FullName.StartsWith("System.") || assembly.FullName.StartsWith("mscorlib") || assembly.FullName.StartsWith("UnityEngine")) continue;
+
+                Type[] types;
+                try
+                {
+                    types = assembly.GetTypes();
+                }
+                catch (System.Reflection.ReflectionTypeLoadException rtle)
+                {
+                    // Common in Unity when optional packages are absent; scan the types that did load
+                    types = Array.FindAll(rtle.Types, t => t != null);
+                }
+                catch (Exception ex)
+                {
+                    CLogger.LogWarning($"[UIPresenterBinder] Skipping assembly {assembly.GetName().Name}: {ex.Message}");
+                    continue;
+                }
+
+                foreach (var type in types)
+                {
+                    var attrs = type.GetCustomAttributes(typeof(UIPresenterBindAttribute), false);
+                    if (attrs != null && attrs.Length > 0)
+                    {
+                        if (!typeof(IUIPresenter).IsAssignableFrom(type))
+                        {
+                            CLogger.LogWarning($"[UIPresenterBinder] Type {type.Name} has UIPresenterBindAttribute but does not implement IUIPresenter.");
+                            continue;
+                        }
+
+                        foreach (UIPresenterBindAttribute attr in attrs)
+                        {
+                            if (map.ContainsKey(attr.WindowName))
                             {
-                                if (_presenterMap.ContainsKey(attr.WindowName))
-                                {
-                                    CLogger.LogWarning($"[UIPresenterBinder] Multiple Presenters bound to window: {attr.WindowName}. Overwriting with {type.Name}.");
-                                }
-                                _presenterMap[attr.WindowName] = type;
+                                CLogger.LogWarning($"[UIPresenterBinder] Multiple Presenters bound to window: {attr.WindowName}. Overwriting with {type.Name}.");
                             }
+                            map[attr.WindowName] = type;
                         }
                     }
                 }
             }
-            catch (Exception ex)
-            {
-                CLogger.LogError($"[UIPresenterBinder] Failed to reflect assemblies for Presenter bindings: {ex.Message}");
-            }
+            return map;
         }
 
         public void OnWindowCreated(UIWindow window)

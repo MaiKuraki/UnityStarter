@@ -27,6 +27,7 @@ namespace CycloneGames.UIFramework.Runtime
         private readonly List<UINavigationEntry> _insertionOrder = new List<UINavigationEntry>(16);
 
         private readonly ReaderWriterLockSlim _lock = new ReaderWriterLockSlim(LockRecursionPolicy.NoRecursion);
+        private bool _disposed;
 
         // ── Internal node ──────────────────────────────────────────────────────
 
@@ -279,6 +280,13 @@ namespace CycloneGames.UIFramework.Runtime
                 return new List<UINavigationEntry>(_insertionOrder);
             }
             finally { _lock.ExitReadLock(); }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _lock.Dispose();
         }
     }
 }

@@ -7,7 +7,7 @@ namespace CycloneGames.UIFramework.Runtime
     /// All query methods are safe to call from any thread.
     /// All mutation methods (Register / Unregister / Clear) must be called from the main thread.
     /// </summary>
-    public interface IUINavigationService
+    public interface IUINavigationService : System.IDisposable
     {
         /// <summary>Returns the most recently opened window that is still alive, or null.</summary>
         string CurrentWindow { get; }

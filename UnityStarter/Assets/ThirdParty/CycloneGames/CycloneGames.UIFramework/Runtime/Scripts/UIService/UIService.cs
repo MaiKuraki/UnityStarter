@@ -295,6 +295,9 @@ namespace CycloneGames.UIFramework.Runtime
         public void Dispose()
         {
             CLogger.LogInfo($"{DEBUG_FLAG} Disposing UIService.");
+            _navigationService?.Dispose();
+            _navigationService = null;
+            _transitionCoordinator = null;
             if (uiManagerInstance != null)
             {
                 if (_ownsUIManager)
