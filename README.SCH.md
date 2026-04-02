@@ -44,6 +44,7 @@
 - ✅ 现代输入系统（支持上下文栈）
 - ✅ 层级式 UI 管理框架（支持 MVP 架构）
 - ✅ 跨平台设备反馈（触觉振动、手柄震动、灯光控制）
+- ✅ 本地化框架（BCP 47、CLDR 复数规则、伪本地化）
 - ✅ AI 行为树（可视化编辑器，支持 10,000+ 智能体扩展）
 - ✅ AI 感知系统（Jobs/Burst 优化）
 
@@ -152,24 +153,25 @@
 
 ### 🎮 游戏玩法系统
 
-| 模块                  | 路径                             | 描述                                                                               | 文档                                                                                                      |
-| --------------------- | -------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| **UIFramework**       | `CycloneGames.UIFramework`       | 层级式 UI 管理。基于层的组织、MVP 架构、转场动画、资源集成。                       | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md)       |
-| **GameplayFramework** | `CycloneGames.GameplayFramework` | UE 风格游戏架构（Actor/Pawn/Controller/GameMode）。支持 DI，可扩展的游戏项目基础。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.SCH.md) |
-| **GameplayAbilities** | `CycloneGames.GameplayAbilities` | 数据驱动能力系统（GAS 风格）。基于 ScriptableObject 的能力、属性、效果和状态管理。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.SCH.md) |
-| **GameplayTags**      | `CycloneGames.GameplayTags`      | 分层标签系统，用于解耦的游戏逻辑。运行时注册、自动生成和基于标签的查询。           | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.SCH.md)      |
-| **RPGFoundation**     | `CycloneGames.RPGFoundation`     | RPG 特定扩展（移动、战斗等）。RPG 类游戏的基础组件。                               | [查看模块目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)                    |
+| 模块                  | 路径                             | 描述                                                                                                                                                           | 文档                                                                                                      |
+| --------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| **UIFramework**       | `CycloneGames.UIFramework`       | 层级式 UI 管理。基于层的组织、MVP 架构、转场动画、资源集成。                                                                                                   | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md)       |
+| **GameplayFramework** | `CycloneGames.GameplayFramework` | UE 风格游戏架构（Actor/Pawn/Controller/GameMode）。支持 DI，可扩展的游戏项目基础。                                                                             | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.SCH.md) |
+| **GameplayAbilities** | `CycloneGames.GameplayAbilities` | 数据驱动能力系统（GAS 风格）。基于 ScriptableObject 的能力、属性、效果和状态管理。                                                                             | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.SCH.md) |
+| **GameplayTags**      | `CycloneGames.GameplayTags`      | 分层标签系统，用于解耦的游戏逻辑。运行时注册、自动生成和基于标签的查询。                                                                                       | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.SCH.md)      |
+| **RPGFoundation**     | `CycloneGames.RPGFoundation`     | RPG 特定扩展（移动、战斗等）。RPG 类游戏的基础组件。                                                                                                           | [查看模块目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)                    |
 | **BehaviorTree**      | `CycloneGames.BehaviorTree`      | 生产级 AI 行为树。双层 SO→Runtime 架构、30+ 内置节点、三级扩展（1–10,000+ 智能体）、多人网络同步、Burst/DOD 批量仿真、GraphView 编辑器（动画化运行时可视化）。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.SCH.md)      |
-| **AIPerception**      | `CycloneGames.AIPerception`      | 高性能 AI 感知系统。Jobs/Burst 优化的零 GC 传感器查询、可视化调试工具、可扩展类型系统。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.SCH.md)      |
+| **AIPerception**      | `CycloneGames.AIPerception`      | 高性能 AI 感知系统。Jobs/Burst 优化的零 GC 传感器查询、可视化调试工具、可扩展类型系统。                                                                        | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.SCH.md)      |
 
 ### 🏗️ 核心基础设施
 
-| 模块                | 路径                           | 描述                                                                                 | 文档                                                                                                    |
-| ------------------- | ------------------------------ | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| **Factory**         | `CycloneGames.Factory`         | 高性能对象池。线程安全、自动扩缩容池，O(1) 操作复杂度。零 GC 分配。                  | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.SCH.md)         |
-| **Logger**          | `CycloneGames.Logger`          | 零 GC 日志系统。多线程、文件轮转、跨平台（包括 WebGL）。可插拔处理器。               | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.SCH.md)          |
-| **AssetManagement** | `CycloneGames.AssetManagement` | DI 优先的资源加载抽象层（基于 W-TinyLFU 缓存），并无缝集成 YooAsset / Addressables。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
-| **Audio**           | `CycloneGames.Audio`           | 高性能音频管理。类似 Wwise 的 API、低 GC、使用 Unity 原生音频的高级功能。            | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)           |
+| 模块                | 路径                           | 描述                                                                                                                                              | 文档                                                                                                    |
+| ------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Factory**         | `CycloneGames.Factory`         | 高性能对象池。线程安全、自动扩缩容池，O(1) 操作复杂度。零 GC 分配。                                                                               | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.SCH.md)         |
+| **Logger**          | `CycloneGames.Logger`          | 零 GC 日志系统。多线程、文件轮转、跨平台（包括 WebGL）。可插拔处理器。                                                                            | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.SCH.md)          |
+| **AssetManagement** | `CycloneGames.AssetManagement` | DI 优先的资源加载抽象层（基于 W-TinyLFU 缓存），并无缝集成 YooAsset / Addressables。                                                              | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
+| **Audio**           | `CycloneGames.Audio`           | 高性能音频管理。类似 Wwise 的 API、低 GC、使用 Unity 原生音频的高级功能。                                                                         | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)           |
+| **Localization**    | `CycloneGames.Localization`    | 商业级本地化框架。BCP 47 语言标识、自动回退链、CLDR 复数规则（25+ 种语言）、伪本地化 QA、语言选择链、条目元数据、多语言编辑器工具、零 GC 运行时。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Localization/README.SCH.md)    |
 
 ### 🕹️ 输入与设备交互
 
@@ -195,8 +197,8 @@
 
 ### 🌐 网络
 
-| 模块           | 路径                      | 描述                                                       | 文档         |
-| -------------- | ------------------------- | ---------------------------------------------------------- | ------------ |
+| 模块           | 路径                      | 描述                                                                                                                         | 文档                                                                                               |
+| -------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | **Networking** | `CycloneGames.Networking` | 生产级网络抽象层。零 GC 运行时、可插拔序列化器（Json、MessagePack、ProtoBuf）、Mirror 适配器、线程安全跨线程消息、连接诊断。 | [README.SCH.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.SCH.md) |
 
 ### 🧰 工具
@@ -316,6 +318,7 @@ git clone https://github.com/MaiKuraki/UnityStarter.git
 - **[DeviceFeedback](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.SCH.md)** - 跨平台触觉振动、震动与灯光控制
 - **[BehaviorTree](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.SCH.md)** - AI 行为树双层架构与扩展指南
 - **[AIPerception](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.SCH.md)** - Burst 优化的 AI 感知系统
+- **[Localization](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Localization/README.SCH.md)** - BCP 47 本地化框架，支持 CLDR 复数规则与伪本地化
 - **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.SCH.md)** - 可插拔传输层的网络抽象层
 
 ---
