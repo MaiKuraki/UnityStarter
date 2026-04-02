@@ -19,6 +19,7 @@ Built on a **W-TinyLFU** inspired caching architecture, it provides deterministi
   - [Resources Provider](#resources-provider)
 - [Hot Update Workflow](#hot-update-workflow)
 - [Advanced Features](#advanced-features)
+- [Asset References (AssetRef / SceneRef)](#asset-references-assetref--sceneref)
 - [API Reference](#api-reference)
 
 ---
@@ -501,6 +502,154 @@ A microscopic view of every active handle allocation, cross-referenced against t
 <img src="./Documents~/Doc_03.png" style="width: 100%; height: auto; max-width: 900px;" />
 <img src="./Documents~/Doc_04.png" style="width: 100%; height: auto; max-width: 900px;" />
 <img src="./Documents~/Doc_05.png" style="width: 100%; height: auto; max-width: 900px;" />
+
+---
+
+## Asset References (AssetRef / SceneRef)
+
+### Why AssetRef?
+
+In a real project, referencing assets by raw strings like `"Prefabs/Enemy"` is fragile:
+
+- **No type safety** — nothing prevents you from passing a Texture path to a method expecting a Prefab.
+- **No rename tracking** — if an artist moves or renames the asset, you get a silent runtime failure.
+- **No Inspector support** — designers must type paths manually and can't drag-and-drop.
+- **Direct `UnityEngine.Object` references** in prefab/SO fields pull assets into the same bundle, bloating memory and preventing per-language/per-patch splitting.
+
+`AssetRef<T>` and `SceneRef` solve all of these while remaining **zero-cost at runtime** (they are `struct` types that store only two strings).
+
+### Design Principles
+
+| Principle                     | How                                                                                                                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Pure data key**             | `AssetRef` stores `location` + `guid`. It never loads, never caches, never holds a handle.                                                          |
+| **Zero GC**                   | `struct`, not `class`. 100k references = zero heap objects.                                                                                         |
+| **Loading via IAssetPackage** | `package.LoadAsync(assetRef)` returns `IAssetHandle<T>` — reusing the existing ARC + W-TinyLFU cache.                                               |
+| **GUID auto-heal**            | Editor PropertyDrawer resolves GUID → path on every frame. If the asset was moved/renamed, the stored location is updated automatically.            |
+| **SceneRef separation**       | `SceneAsset` is editor-only, and scenes use `LoadSceneAsync` instead of `LoadAssetAsync`. A separate `SceneRef` type carries the correct semantics. |
+| **Build validation**          | `AssetRefValidator` scans all Prefabs and ScriptableObjects for broken GUIDs before shipping.                                                       |
+
+### Available Types
+
+| Type          | Usage                                                                                                       |
+| ------------- | ----------------------------------------------------------------------------------------------------------- |
+| `AssetRef<T>` | Typed reference. Inspector ObjectField is filtered by `T` (e.g., `AssetRef<AudioClip>` only accepts audio). |
+| `AssetRef`    | Non-generic reference. For data-driven configs or runtime-resolved types.                                   |
+| `SceneRef`    | Scene reference. Inspector ObjectField is filtered to `SceneAsset`.                                         |
+
+### Quick Start
+
+#### 1. Declare References in Inspector
+
+```csharp
+using CycloneGames.AssetManagement.Runtime;
+using UnityEngine;
+
+public class EnemyConfig : ScriptableObject
+{
+    [Header("Visual")]
+    [SerializeField] private AssetRef<GameObject> prefab;
+    [SerializeField] private AssetRef<Material>   material;
+
+    [Header("Audio")]
+    [SerializeField] private AssetRef<AudioClip> spawnSound;
+    [SerializeField] private AssetRef<AudioClip> deathSound;
+
+    [Header("Scene")]
+    [SerializeField] private SceneRef bossArena;
+
+    // Read-only accessors for other systems
+    public AssetRef<GameObject> Prefab     => prefab;
+    public AssetRef<AudioClip>  SpawnSound => spawnSound;
+    public SceneRef             BossArena  => bossArena;
+}
+```
+
+In the Inspector, each field renders as a standard ObjectField — drag-and-drop from the Project window, type-filtered. No manual path entry required.
+
+#### 2. Load Assets at Runtime
+
+```csharp
+public class EnemySpawner
+{
+    private readonly IAssetPackage package;
+    private readonly EnemyConfig config;
+
+    public async UniTask SpawnEnemy(Vector3 position)
+    {
+        // AssetRef<T> → IAssetHandle<T>, fully integrated with ARC + cache
+        using (var handle = package.LoadAsync(config.Prefab, bucket: "Gameplay"))
+        {
+            await handle.Task;
+            var enemy = package.InstantiateSync(handle);
+            enemy.transform.position = position;
+        }
+    }
+}
+```
+
+#### 3. Load Scenes (with Navigathena Integration)
+
+```csharp
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.AssetManagement.Runtime.Integrations.Navigathena;
+
+public class LevelLoader
+{
+    private readonly IAssetPackage package;
+    private readonly ISceneNavigator navigator;
+
+    public async UniTask LoadBossArena(EnemyConfig config)
+    {
+        // Option A: Direct scene loading via IAssetPackage
+        var sceneHandle = package.LoadSceneAsync(config.BossArena);
+        await sceneHandle.Task;
+
+        // Option B: Navigathena scene navigation (push/pop/change)
+        await navigator.Push(config.BossArena.ToSceneIdentifier(package));
+    }
+}
+```
+
+#### 4. Backward Compatibility
+
+`AssetRef<T>`, `AssetRef`, and `SceneRef` all support `implicit operator string`, so they work directly with existing `string`-based APIs:
+
+```csharp
+// These are equivalent:
+package.LoadAssetAsync<GameObject>(config.Prefab.Location);
+package.LoadAssetAsync<GameObject>(config.Prefab);  // implicit string conversion
+package.LoadAsync(config.Prefab);                    // extension method (recommended)
+```
+
+#### 5. Works with Any Asset Type
+
+Any type inheriting from `UnityEngine.Object` is supported:
+
+```csharp
+[SerializeField] AssetRef<GameObject>       prefab;          // Prefab
+[SerializeField] AssetRef<ScriptableObject> config;          // Any ScriptableObject
+[SerializeField] AssetRef<YarnProject>      dialogue;        // Yarn Spinner project
+[SerializeField] AssetRef<Sprite>           icon;            // Sprite
+[SerializeField] AssetRef<AudioClip>        clip;            // Audio
+[SerializeField] AssetRef<Material>         mat;             // Material
+[SerializeField] AssetRef<AnimationClip>    anim;            // Animation
+[SerializeField] AssetRef<TextAsset>        textFile;        // TextAsset
+[SerializeField] SceneRef                   scene;           // Scene
+```
+
+### Build Validation
+
+Before shipping, validate all references via the menu:
+
+**`Tools > CycloneGames > AssetManagement > Validate All AssetRefs`**
+
+This scans every Prefab and ScriptableObject in the project:
+
+- **Broken refs**: GUID no longer resolves → logged as error.
+- **Stale locations**: Asset was moved/renamed but GUID is still valid → location auto-healed.
+
+Integrate this into your CI/CD pipeline by calling `AssetRefValidator.ValidateAll()` from a build script.
 
 ---
 

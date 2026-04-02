@@ -1,0 +1,24 @@
+{
+  "name": "com.cyclone-games.localization",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Localization",
+  "description": "Zero-GC, interface-first localization system for Unity. Supports string tables, per-locale asset variants, fallback chains, and hot-reload. Built on CycloneGames.AssetManagement for asset loading.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.0.0",
+    "com.cyclone-games.assetmanagement": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Localization",
+    "i18n",
+    "L10n"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

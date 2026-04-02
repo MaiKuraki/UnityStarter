@@ -38,13 +38,13 @@
 
 ### ⚡ Performance
 
-| Feature                              | Detail                                                                                                            |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| **Asset Lifecycle Delegation** | `UIManager` holds one `IAssetHandle<T>` per asset; lifecycle (RefCount, eviction) is fully owned by `AssetCacheService` (W-TinyLFU) | 
-| **Per-Frame Instantiation Throttle** | Spread heavy instantiation across frames to avoid spikes                                                          |
-| **Dynamic Atlas System**             | Packs runtime sprites into a single GPU texture at open-time, dramatically reducing draw-calls for icon-heavy UIs |
-| **Compressed Atlas Variant**         | `CompressedDynamicAtlasService` uses ASTC/DXT/ETC to reduce VRAM footprint for mobile targets                     |
-| **Async by Design**                  | Every load, instantiate, and open operation is `UniTask`-based — never blocks the main thread                     |
+| Feature                              | Detail                                                                                                                              |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Asset Lifecycle Delegation**       | `UIManager` holds one `IAssetHandle<T>` per asset; lifecycle (RefCount, eviction) is fully owned by `AssetCacheService` (W-TinyLFU) |
+| **Per-Frame Instantiation Throttle** | Spread heavy instantiation across frames to avoid spikes                                                                            |
+| **Dynamic Atlas System**             | Packs runtime sprites into a single GPU texture at open-time, dramatically reducing draw-calls for icon-heavy UIs                   |
+| **Compressed Atlas Variant**         | `CompressedDynamicAtlasService` uses ASTC/DXT/ETC to reduce VRAM footprint for mobile targets                                       |
+| **Async by Design**                  | Every load, instantiate, and open operation is `UniTask`-based — never blocks the main thread                                       |
 
 ### 🔒 Reliability & Safety
 
@@ -209,13 +209,13 @@ CloseUI("MyWindow")
 
 ### Key design properties
 
-| Property | Detail |
-|---|---|
-| **Single RefCount system** | No private counter in UIManager — AssetCacheService is the sole authority |
-| **`"UIFramework"` bucket** | All UI assets are tagged; visible in Cache Debugger under Buckets tab |
-| **Prefab sharing** | Multiple windows using the same prefab path share one handle; disposed only when the last window closes |
-| **Config handles** | One handle per window name (windowName → config path), released on `CloseUI` |
-| **Zero leak on scene unload** | `CleanupAllWindows()` `Dispose()`s every held handle, correctly draining AssetCacheService RefCounts |
+| Property                      | Detail                                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------- |
+| **Single RefCount system**    | No private counter in UIManager — AssetCacheService is the sole authority                               |
+| **`"UIFramework"` bucket**    | All UI assets are tagged; visible in Cache Debugger under Buckets tab                                   |
+| **Prefab sharing**            | Multiple windows using the same prefab path share one handle; disposed only when the last window closes |
+| **Config handles**            | One handle per window name (windowName → config path), released on `CloseUI`                            |
+| **Zero leak on scene unload** | `CleanupAllWindows()` `Dispose()`s every held handle, correctly draining AssetCacheService RefCounts    |
 
 ## Quick Start Guide
 
@@ -2086,3 +2086,163 @@ We chose the **Binder-Driven** approach specifically for the Unity engine enviro
 - **Thread-safe**: UIServiceLocator uses locking for concurrent access
 - **Memory-safe**: Presenters are disposed with their windows
 - **No forced DI**: Works without any DI framework
+
+---
+
+## Localization Integration (Optional)
+
+CycloneGames.UIFramework provides **optional** integration with [CycloneGames.Localization](../CycloneGames.Localization/README.md). When the `CycloneGames.Localization` package is detected, the scripting define `CYCLONE_LOCALIZATION` is emitted automatically — no manual setup required. If the package is absent, all localization code is compiled away with zero overhead.
+
+### Architecture
+
+```mermaid
+graph TD
+    subgraph UIFramework
+        LWB[LocalizationWindowBinder<br/><i>IUIWindowBinder</i>]
+        ULL[UILocaleLayout<br/><i>ILocaleResponder</i>]
+        ILR[ILocaleResponder]
+    end
+
+    subgraph Localization Package
+        LS[ILocalizationService]
+        LTT[LocalizeTMPText]
+        LI[LocalizeImage]
+    end
+
+    LS -- OnLocaleChanged --> LWB
+    LWB -- discovers ILocaleResponder<br/>in window hierarchy --> ILR
+    ULL -.implements.-> ILR
+    LTT -.implements.-> ILR
+    LWB -- OnWindowCreated --> ULL
+    ULL -- Apply snapshot --> RectTransform/TMP_Text
+```
+
+### Features at a Glance
+
+| Feature                         | Detail                                                                                                                                                                                             |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Per-Locale Layout Snapshots** | `UILocaleLayout` stores font size, line spacing, character spacing, anchored position, and size delta overrides per locale — the prefab's native state **is** the base locale (zero extra storage) |
+| **Automatic Window Binding**    | `LocalizationWindowBinder` implements `IUIWindowBinder`; register it once and every newly created `UIWindow` auto-discovers `ILocaleResponder` components                                          |
+| **Preview Mode**                | The editor lets you switch between locale snapshots in the Scene view without leaving Prefab mode — changes are fully reversible                                                                   |
+| **Auto-Capture on Save**        | When you press Ctrl+S in Prefab mode, unsaved layout changes are automatically captured into the active snapshot                                                                                   |
+| **Context Menu Tracking**       | Right-click any `TMP_Text`, `Image`, or `RectTransform` → _"Track Layout"_ to add it to the nearest `UILocaleLayout`                                                                               |
+| **Zero GC at Runtime**          | Baked parallel arrays (`RectTransform[]`, `TMP_Text[]`, `ElementSnapshot[]`) — no allocation on locale switch                                                                                      |
+
+### Quick Start
+
+#### Step 1: Add `UILocaleLayout` to Your Prefab
+
+Add the `UILocaleLayout` component to the root of your UI prefab (same level as `UIWindow`).
+
+```
+[UIWindow Prefab Root]
+ ├── UIWindow
+ ├── UILocaleLayout          ← add this
+ ├── Header (TMP_Text)
+ ├── BodyText (TMP_Text)
+ └── IconImage (Image)
+```
+
+#### Step 2: Scan & Add Override Locales
+
+1. Open the prefab in Prefab Mode.
+2. In the `UILocaleLayout` Inspector, click **Scan Hierarchy** — all `TMP_Text` and `Image` components are discovered.
+3. Select a **Base Locale** (the prefab's native language, e.g. `en`).
+4. Click **+ Add Override** to add locales like `zh-CN`, `ja`, `ko`, etc.
+
+#### Step 3: Adjust & Capture
+
+1. Select the override locale (e.g. `zh-CN`) from the dropdown.
+2. Modify font sizes, positions, or spacing directly in the Scene view.
+3. Click **Capture** (or just press Ctrl+S) — the snapshot is saved.
+4. Use **Preview** to compare locales side-by-side without affecting the saved prefab.
+
+#### Step 4: Register the Binder at Startup
+
+```csharp
+// VContainer example
+public class UIInstaller : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        builder.Register<LocalizationWindowBinder>(Lifetime.Singleton)
+               .AsImplementedInterfaces();
+    }
+}
+```
+
+Or register manually:
+
+```csharp
+var binder = new LocalizationWindowBinder(localizationService);
+uiManager.RegisterWindowBinder(binder);
+```
+
+Once registered, every `UIWindow` that opens will automatically propagate locale changes to all `ILocaleResponder` components in its hierarchy.
+
+### Key Components
+
+#### `UILocaleLayout` (MonoBehaviour, `ILocaleResponder`)
+
+Per-prefab locale layout manager. The prefab's natural state is the base locale — only override locales store snapshot data.
+
+| Member                      | Description                                                            |
+| --------------------------- | ---------------------------------------------------------------------- |
+| `_baseLocale`               | BCP 47 code for the prefab's design language                           |
+| `_elements`                 | Array of `TrackedElement` (RectTransform + optional TMP_Text)          |
+| `_snapshots`                | Array of `LocaleSnapshot` (one per override locale)                    |
+| `OnLocaleChanged(LocaleId)` | Applies the matching snapshot, or restores base layout if none matches |
+
+#### `LocalizationWindowBinder` (`IUIWindowBinder`)
+
+Bridges `ILocalizationService.OnLocaleChanged` to every `ILocaleResponder` in active windows.
+
+| Member                         | Description                                                                                       |
+| ------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `OnWindowCreated(UIWindow)`    | Scans the new window for `ILocaleResponder` components and immediately applies the current locale |
+| `OnWindowDestroying(UIWindow)` | Removes the window from tracking                                                                  |
+| `Dispose()`                    | Unsubscribes from the locale change event                                                         |
+
+#### `ILocaleResponder` (Interface)
+
+```csharp
+public interface ILocaleResponder
+{
+    void OnLocaleChanged(LocaleId newLocale);
+}
+```
+
+Implement on any MonoBehaviour inside a `UIWindow` hierarchy. The binder discovers all responders via `GetComponentsInChildren` using a shared cache (zero allocation).
+
+#### Data Structures
+
+| Type              | Description                                                               |
+| ----------------- | ------------------------------------------------------------------------- |
+| `TrackedElement`  | `RectTransform Target` + `TMP_Text Text` pair                             |
+| `ElementSnapshot` | Font size, line spacing, character spacing, anchored position, size delta |
+| `LocaleSnapshot`  | `string LocaleCode` + `ElementSnapshot[]`                                 |
+
+### Editor Workflow
+
+The `UILocaleLayoutEditor` custom inspector provides a comprehensive visual workflow:
+
+| Feature              | Description                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| **Locale dropdown**  | Auto-populated from `LocalizationSettings` asset                                     |
+| **Element grouping** | Hierarchical foldouts when tracked elements exceed 6                                 |
+| **Diff indicators**  | Green check = matches snapshot, orange dot = modified, red cross = missing reference |
+| **Preview mode**     | Blue banner, safe read-only switching between locales, auto-reverts on exit          |
+| **Auto-capture**     | Hooks into `PrefabStage.prefabSaving` to capture unsaved changes on Ctrl+S           |
+| **Close guard**      | Prompts Save/Discard/Cancel when closing prefab with unsaved layout changes          |
+
+### Context Menu
+
+Right-click any component in the Inspector header:
+
+| Menu Item                          | Action                                                      |
+| ---------------------------------- | ----------------------------------------------------------- |
+| `TMP_Text` → **Track Layout**      | Adds the text to the nearest `UILocaleLayout` tracking list |
+| `Image` → **Track Layout**         | Adds the image's RectTransform to the tracking list         |
+| `RectTransform` → **Track Layout** | Adds the transform directly                                 |
+
+If no `UILocaleLayout` exists on the prefab root, one is created automatically.
