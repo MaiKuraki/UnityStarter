@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.Localization.Editor",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.Localization.Runtime",
+        "CycloneGames.AssetManagement.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

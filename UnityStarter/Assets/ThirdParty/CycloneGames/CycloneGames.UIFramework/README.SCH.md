@@ -38,13 +38,13 @@
 
 ### ⚡ 性能
 
-| 特性               | 说明                                                                                     |
-| ------------------ | ---------------------------------------------------------------------------------------- |
+| 特性                 | 说明                                                                                                                  |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | **资产生命周期委托** | `UIManager` 每个资产持有一个 `IAssetHandle<T>`，生命周期（RefCount、驱逐）完全由 `AssetCacheService`（W-TinyLFU）管理 |
-| **逐帧实例化节流** | 将密集实例化分散到多帧，避免帧峰值                                                       |
-| **动态图集系统**   | 运行时在窗口打开时将精灵打包到单张 GPU 纹理，大幅减少图标密集型 UI 的 DrawCall           |
-| **压缩图集变体**   | `CompressedDynamicAtlasService` 使用 ASTC/DXT/ETC 压缩格式降低 VRAM 占用，针对移动端优化 |
-| **原生异步设计**   | 所有加载、实例化、打开操作均基于 `UniTask`，永不阻塞主线程                               |
+| **逐帧实例化节流**   | 将密集实例化分散到多帧，避免帧峰值                                                                                    |
+| **动态图集系统**     | 运行时在窗口打开时将精灵打包到单张 GPU 纹理，大幅减少图标密集型 UI 的 DrawCall                                        |
+| **压缩图集变体**     | `CompressedDynamicAtlasService` 使用 ASTC/DXT/ETC 压缩格式降低 VRAM 占用，针对移动端优化                              |
+| **原生异步设计**     | 所有加载、实例化、打开操作均基于 `UniTask`，永不阻塞主线程                                                            |
 
 ### 🔒 可靠性与安全性
 
@@ -209,13 +209,13 @@ CloseUI("MyWindow")
 
 ### 设计关键属性
 
-| 属性 | 说明 |
-|---|---|
-| **唯一 RefCount 体系** | UIManager 内部无私有计数器，`AssetCacheService` 是唯一权威 |
-| **`"UIFramework"` Bucket** | 所有 UI 资产统一打标签，可在 Cache Debugger 的 Buckets 标签页中隔离查看 |
-| **预制体共享** | 使用同一预制体路径的多个窗口共享同一句柄，最后一个窗口关闭时才释放 |
-| **Config 句柄** | 每个窗口名对应一个句柄（windowName → config 路径），`CloseUI` 时释放 |
-| **场景卸载零泄漏** | `CleanupAllWindows()` 批量 `Dispose()` 全部持有句柄，正确排空 AssetCacheService RefCount |
+| 属性                       | 说明                                                                                     |
+| -------------------------- | ---------------------------------------------------------------------------------------- |
+| **唯一 RefCount 体系**     | UIManager 内部无私有计数器，`AssetCacheService` 是唯一权威                               |
+| **`"UIFramework"` Bucket** | 所有 UI 资产统一打标签，可在 Cache Debugger 的 Buckets 标签页中隔离查看                  |
+| **预制体共享**             | 使用同一预制体路径的多个窗口共享同一句柄，最后一个窗口关闭时才释放                       |
+| **Config 句柄**            | 每个窗口名对应一个句柄（windowName → config 路径），`CloseUI` 时释放                     |
+| **场景卸载零泄漏**         | `CleanupAllWindows()` 批量 `Dispose()` 全部持有句柄，正确排空 AssetCacheService RefCount |
 
 ## 快速上手指南
 
@@ -2083,3 +2083,163 @@ public class GameController
 - **线程安全**：UIServiceLocator 使用锁保证并发访问
 - **内存安全**：Presenter 随窗口一起销毁
 - **无强制 DI**：无需任何 DI 框架即可工作
+
+---
+
+## 本地化集成（可选）
+
+CycloneGames.UIFramework 提供与 [CycloneGames.Localization](../CycloneGames.Localization/README.SCH.md) 的**可选集成**。当检测到 `CycloneGames.Localization` 包时，脚本定义符号 `CYCLONE_LOCALIZATION` 会自动添加 — 无需手动设置。如果该包不存在，所有本地化代码将被编译器剔除，零开销。
+
+### 架构
+
+```mermaid
+graph TD
+    subgraph UIFramework
+        LWB[LocalizationWindowBinder<br/><i>IUIWindowBinder</i>]
+        ULL[UILocaleLayout<br/><i>ILocaleResponder</i>]
+        ILR[ILocaleResponder]
+    end
+
+    subgraph Localization 包
+        LS[ILocalizationService]
+        LTT[LocalizeTMPText]
+        LI[LocalizeImage]
+    end
+
+    LS -- OnLocaleChanged --> LWB
+    LWB -- 在窗口层级中发现<br/>ILocaleResponder --> ILR
+    ULL -.实现.-> ILR
+    LTT -.实现.-> ILR
+    LWB -- OnWindowCreated --> ULL
+    ULL -- 应用快照 --> RectTransform/TMP_Text
+```
+
+### 功能概览
+
+| 功能               | 详情                                                                                                                        |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| **逐语言布局快照** | `UILocaleLayout` 为每个语言存储字号、行间距、字间距、锚点位置和尺寸偏差 — 预制体的原始状态**即为**基础语言（零额外存储）    |
+| **自动窗口绑定**   | `LocalizationWindowBinder` 实现 `IUIWindowBinder`；注册一次后，每个新创建的 `UIWindow` 都会自动发现 `ILocaleResponder` 组件 |
+| **预览模式**       | 编辑器允许在 Scene 视图中切换语言快照，无需离开 Prefab 模式 — 修改完全可逆                                                  |
+| **保存时自动捕获** | 在 Prefab 模式下按 Ctrl+S 时，未保存的布局变更会自动捕获到当前激活的快照                                                    |
+| **右键菜单追踪**   | 右键点击任意 `TMP_Text`、`Image` 或 `RectTransform` → _"Track Layout"_ 即可将其添加到最近的 `UILocaleLayout`                |
+| **运行时零 GC**    | 烘焙的并行数组（`RectTransform[]`、`TMP_Text[]`、`ElementSnapshot[]`）— 切换语言时无内存分配                                |
+
+### 快速上手
+
+#### 步骤 1：为预制体添加 `UILocaleLayout`
+
+在 UI 预制体的根节点添加 `UILocaleLayout` 组件（与 `UIWindow` 同级）。
+
+```
+[UIWindow 预制体根节点]
+ ├── UIWindow
+ ├── UILocaleLayout          ← 添加此组件
+ ├── Header (TMP_Text)
+ ├── BodyText (TMP_Text)
+ └── IconImage (Image)
+```
+
+#### 步骤 2：扫描并添加覆盖语言
+
+1. 在 Prefab 模式中打开预制体。
+2. 在 `UILocaleLayout` Inspector 中，点击 **Scan Hierarchy** — 自动发现所有 `TMP_Text` 和 `Image` 组件。
+3. 选择**基础语言**（预制体的原始设计语言，如 `en`）。
+4. 点击 **+ Add Override** 添加需要覆盖的语言，如 `zh-CN`、`ja`、`ko` 等。
+
+#### 步骤 3：调整并捕获
+
+1. 从下拉菜单中选择覆盖语言（如 `zh-CN`）。
+2. 直接在 Scene 视图中修改字号、位置或间距。
+3. 点击 **Capture**（或直接按 Ctrl+S）— 快照已保存。
+4. 使用 **Preview** 在不影响已保存预制体的情况下对比各语言布局。
+
+#### 步骤 4：在启动时注册绑定器
+
+```csharp
+// VContainer 示例
+public class UIInstaller : LifetimeScope
+{
+    protected override void Configure(IContainerBuilder builder)
+    {
+        builder.Register<LocalizationWindowBinder>(Lifetime.Singleton)
+               .AsImplementedInterfaces();
+    }
+}
+```
+
+或手动注册：
+
+```csharp
+var binder = new LocalizationWindowBinder(localizationService);
+uiManager.RegisterWindowBinder(binder);
+```
+
+注册后，每个打开的 `UIWindow` 都会自动将语言变更传播到其层级结构中的所有 `ILocaleResponder` 组件。
+
+### 核心组件
+
+#### `UILocaleLayout`（MonoBehaviour，`ILocaleResponder`）
+
+逐预制体的语言布局管理器。预制体的原始状态即为基础语言 — 仅覆盖语言存储快照数据。
+
+| 成员                        | 描述                                                   |
+| --------------------------- | ------------------------------------------------------ |
+| `_baseLocale`               | 预制体设计语言的 BCP 47 代码                           |
+| `_elements`                 | `TrackedElement` 数组（RectTransform + 可选 TMP_Text） |
+| `_snapshots`                | `LocaleSnapshot` 数组（每个覆盖语言一个）              |
+| `OnLocaleChanged(LocaleId)` | 应用匹配的快照，若无匹配则恢复基础布局                 |
+
+#### `LocalizationWindowBinder`（`IUIWindowBinder`）
+
+将 `ILocalizationService.OnLocaleChanged` 桥接到所有活跃窗口中的 `ILocaleResponder`。
+
+| 成员                           | 描述                                                     |
+| ------------------------------ | -------------------------------------------------------- |
+| `OnWindowCreated(UIWindow)`    | 扫描新窗口中的 `ILocaleResponder` 组件并立即应用当前语言 |
+| `OnWindowDestroying(UIWindow)` | 从追踪列表中移除窗口                                     |
+| `Dispose()`                    | 取消订阅语言变更事件                                     |
+
+#### `ILocaleResponder`（接口）
+
+```csharp
+public interface ILocaleResponder
+{
+    void OnLocaleChanged(LocaleId newLocale);
+}
+```
+
+在 `UIWindow` 层级结构中的任意 MonoBehaviour 上实现此接口。绑定器通过共享缓存的 `GetComponentsInChildren` 发现所有响应器（零内存分配）。
+
+#### 数据结构
+
+| 类型              | 描述                                          |
+| ----------------- | --------------------------------------------- |
+| `TrackedElement`  | `RectTransform Target` + `TMP_Text Text` 配对 |
+| `ElementSnapshot` | 字号、行间距、字间距、锚点位置、尺寸偏差      |
+| `LocaleSnapshot`  | `string LocaleCode` + `ElementSnapshot[]`     |
+
+### 编辑器工作流
+
+`UILocaleLayoutEditor` 自定义 Inspector 提供全面的可视化工作流：
+
+| 功能             | 描述                                                           |
+| ---------------- | -------------------------------------------------------------- |
+| **语言下拉菜单** | 从 `LocalizationSettings` 资产自动填充                         |
+| **元素分组**     | 当追踪元素超过 6 个时自动分层折叠显示                          |
+| **差异指示器**   | 绿色对勾 = 与快照一致，橙色圆点 = 已修改，红色叉号 = 引用丢失  |
+| **预览模式**     | 蓝色横幅，安全的只读语言切换，退出时自动恢复                   |
+| **自动捕获**     | 挂钩 `PrefabStage.prefabSaving`，Ctrl+S 时自动捕获未保存的变更 |
+| **关闭保护**     | 关闭有未保存布局变更的预制体时提示 保存/放弃/取消              |
+
+### 右键菜单
+
+在 Inspector 的组件标题上右键点击：
+
+| 菜单项                             | 操作                                           |
+| ---------------------------------- | ---------------------------------------------- |
+| `TMP_Text` → **Track Layout**      | 将该文本添加到最近的 `UILocaleLayout` 追踪列表 |
+| `Image` → **Track Layout**         | 将该图片的 RectTransform 添加到追踪列表        |
+| `RectTransform` → **Track Layout** | 直接添加该 Transform                           |
+
+如果预制体根节点上不存在 `UILocaleLayout`，系统会自动创建一个。
