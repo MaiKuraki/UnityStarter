@@ -25,12 +25,12 @@ All tools are **standalone executables** - no installation required. Simply down
 
 ### Tool Categories
 
-| Category             | Tools                                        | Purpose                               |
-| -------------------- | -------------------------------------------- | ------------------------------------- |
-| **Project Setup**    | `rename_project`, `remove_unity_packages`    | Initialize and configure new projects |
-| **Maintenance**      | `unity_project_full_clean`                   | Clean up temporary files and caches   |
-| **Asset Processing** | `audio_volume_normalizer`, `image_to_base64` | Process and convert assets            |
-| **Documentation**    | `generate_file_tree`                         | Generate project documentation        |
+| Category             | Tools                                               | Purpose                               |
+| -------------------- | --------------------------------------------------- | ------------------------------------- |
+| **Project Setup**    | `rename_project`, `remove_unity_packages`           | Initialize and configure new projects |
+| **Maintenance**      | `unity_project_full_clean`                          | Clean up temporary files and caches   |
+| **Asset Processing** | `audio_volume_normalizer`, `texture_channel_packer` | Process and convert assets            |
+| **Documentation**    | `generate_file_tree`                                | Generate project documentation        |
 
 ## Quick Reference
 
@@ -40,24 +40,37 @@ All tools are **standalone executables** - no installation required. Simply down
 | **remove_unity_packages**    | Removes unnecessary packages from manifest.json          | Creating minimal project template                  | Project root    |
 | **unity_project_full_clean** | Deletes temporary files, caches, build artifacts         | Before version control, archiving, troubleshooting | Project root    |
 | **audio_volume_normalizer**  | Batch normalizes audio files with category-aware targets | Processing audio assets for consistent loudness    | Audio directory |
-| **image_to_base64**          | Converts image to Base64 string                          | Embedding images in code/config files              | Anywhere        |
+| **texture_channel_packer**   | Packs multiple images into RGBA channels of one texture  | Creating HDRP/URP Mask Maps, packed textures       | Anywhere        |
 | **generate_file_tree**       | Generates Markdown directory tree                        | Documenting project structure                      | Project root    |
 
 ## Tool Details
 
 ### 1. Rename Project `rename_project.exe`
 
-**Purpose**: Automatically renames a Unity project, updating all related configuration files.
+**Purpose**: Automatically renames a Unity project, updating all related configuration files. Designed to be **safely re-runnable** on any project derived from UnityStarter.
 
 **What It Does**:
 
-- Renames project folder
-- Updates company name in `ProjectSettings.asset`
-- Updates application name in `ProjectSettings.asset` and `EditorBuildSettings.asset`
+- Renames project folder (`Assets/OldName` → `Assets/NewName`)
+- Updates `.asmdef` files (name, references) with word-boundary matching
+- Updates `.asmdef` references across **all** of `Assets/` (not just the project folder)
+- Updates `BuildScript.cs` constants (precise const-declaration matching)
+- Updates `ProjectSettings.asset` (companyName, productName, applicationIdentifier)
+- Updates `EditorBuildSettings.asset` (scene paths)
 - Updates `.meta` file references
-- Updates Build script references
 
-**Use Case**: When using UnityStarter as a template, rename it to your project name.
+**Key Features**:
+
+- **State file** (`.rename_project.json`): Records current project identity after each rename, ensuring reliable re-detection on subsequent runs
+- **Automatic backup**: Creates timestamped backups of all affected files before modification (keeps last 5)
+- **Change preview**: Shows a detailed dry-run of all planned changes before execution
+- **Immediate input validation**: Validates each name as you enter it, not after confirmation
+- **Keep current values**: Press Enter on any prompt to keep the current value unchanged
+- **Dual-output logging**: All operations logged to both console and `rename_project.log`
+- **Precise replacements**: Uses word-boundary regex (`\b`) for asmdef names, exact const matching for BuildScript.cs, and exact bundle ID matching for ProjectSettings
+- **Partial failure recovery**: Saves state checkpoints during execution so re-runs can resume correctly even after partial failures
+
+**Use Case**: When using UnityStarter as a template, rename it to your project name. Can be re-run safely to change names again later.
 
 **Requirements**:
 
@@ -72,21 +85,34 @@ All tools are **standalone executables** - no installation required. Simply down
 rename_project.exe
 
 # 3. Follow interactive prompts:
-#    - Enter new project folder name
-#    - Enter new company name
-#    - Enter new application name
-#    - Confirm changes
+#    Step 1: Enter new project folder name (or Enter to keep current)
+#    Step 2: Enter new company name (or Enter to keep current)
+#    Step 3: Enter new application name (or Enter to keep current)
+#    Review change preview → Confirm (y/N)
 ```
 
 **What Gets Updated**:
 
-- Project folder name
-- `ProjectSettings/ProjectSettings.asset` (companyName, productName)
-- `ProjectSettings/EditorBuildSettings.asset` (productName)
-- `.meta` files (folder references)
-- Build script references (if using UnityStarter Build module)
+- Project folder name + `.meta`
+- `.asmdef` files: name field, references, file names (word-boundary safe)
+- `Assets/Build/Editor/BuildPipeline/BuildScript.cs` (CompanyName, ApplicationName constants)
+- `ProjectSettings/ProjectSettings.asset` (companyName, productName, applicationIdentifier for all platforms, metroPackageName, metroApplicationDescription)
+- `ProjectSettings/EditorBuildSettings.asset` (scene path prefixes)
 
-**Safety**: Prompts for confirmation before making changes. Safe to run multiple times.
+**Generated Files**:
+
+- `.rename_project.json` — State file for reliable re-runs (commit to version control)
+- `.rename_backup/` — Timestamped backup directory (add to `.gitignore`)
+- `rename_project.log` — Operation log
+
+**Safety**:
+
+- Automatic backup before any changes
+- Full change preview before execution
+- Refuses to overwrite existing target folders (no `os.RemoveAll`)
+- State checkpoint after folder rename ensures safe re-runs even after partial failures
+- Word-boundary matching prevents accidental substring replacements
+- JSON validation after asmdef modifications
 
 ---
 
@@ -96,45 +122,65 @@ rename_project.exe
 
 **What It Does**:
 
-- Reads `Packages/manifest.json`
-- Removes predefined list of non-essential packages (Timeline, Visual Scripting, etc.)
-- Writes updated manifest back to file
+- Reads `Packages/manifest.json` and shows which packages can be removed
+- Groups packages into 8 categories (Physics, AI, XR, Visual Scripting, etc.)
+- Preserves JSON key order using text-based replacement (clean git diffs)
+- Creates `.bak` backup before any modification
+- Shows categorized preview before execution
 
-**Use Case**: Creating a minimal project template by removing unused Unity packages.
+**Package Categories** (24 packages across 8 categories):
 
-**Packages Removed** (default list):
+| Category | Packages |
+|----------|----------|
+| 2D | `com.unity.2d.tilemap` |
+| AI / Navigation | `com.unity.ai.navigation`, `com.unity.modules.ai` |
+| Physics | `com.unity.modules.physics`, `physics2d`, `cloth`, `vehicles`, `wind`, `terrain`, `terrainphysics` |
+| Visual Scripting / Timeline | `com.unity.timeline`, `com.unity.visualscripting` |
+| XR / VR | `com.unity.modules.vr`, `com.unity.modules.xr` |
+| Analytics / Services | `collab-proxy`, `multiplayer.center`, `unityanalytics` |
+| Testing | `com.unity.test-framework` |
+| Misc Modules | `accessibility`, `jsonserialize`, `tilemap`, `uielements`, `umbra`, `video` |
 
-- `com.unity.timeline`
-- `com.unity.visualscripting`
-- `com.unity.modules.physics`
-- `com.unity.modules.physics2d`
-- `com.unity.modules.terrain`
-- And 20+ more non-essential packages
-
-**Requirements**:
-
-- Unity project root directory
-- `Packages/manifest.json` file exists
-- Write permissions
-
-**Usage**:
+**Interactive Mode** (select which categories to remove):
 
 ```bash
-# Standard mode (applies changes)
-remove_unity_packages.exe
-
-# Dry run mode (preview changes without applying)
-set DRY_RUN=1
-remove_unity_packages.exe
+remove_unity_packages -i
 ```
 
-**Dry Run Mode**:
+**CLI Mode**:
 
-- Set environment variable `DRY_RUN=1` before running
-- Shows what would be removed without modifying files
-- Useful for previewing changes
+```bash
+# Remove all listed packages (with preview + confirmation)
+remove_unity_packages
 
-**Safety**: Includes dry run mode. Always backup `manifest.json` before running.
+# Dry-run: preview without modifying
+remove_unity_packages --dry-run
+
+# CI mode: no prompts, remove all
+remove_unity_packages --ci
+
+# List all removable packages
+remove_unity_packages --list
+```
+
+**Flags**:
+
+| Flag | Description |
+|------|-------------|
+| `-i` | Interactive category selection |
+| `--dry-run` | Preview only, no changes |
+| `--ci` | Non-interactive mode |
+| `--list` | List all removable packages and exit |
+
+**Safety Features**:
+
+- **Unity project validation** before any operation
+- **Automatic `.bak` backup** of manifest.json
+- **Preview with category grouping** before execution
+- **Order-preserving JSON edits** (no key reordering)
+- **Confirmation prompt** (default: No)
+- **packages-lock.json hint** — reminds to open Unity for regeneration
+- Legacy `DRY_RUN=1` env var still supported
 
 ---
 
@@ -145,7 +191,7 @@ remove_unity_packages.exe
 **What It Deletes**:
 
 - **Folders**: `Library/`, `Temp/`, `obj/`, `Build/`, `.vs/`, `.vscode/`, `Logs/`, etc.
-- **Files**: `.sln`, `.csproj`, `.user`, `.vsconfig`, etc.
+- **Files**: `.sln`, `.csproj`, `.user`, `.vsconfig`
 - **Build Artifacts**: All generated build outputs
 
 **Use Case**:
@@ -155,25 +201,34 @@ remove_unity_packages.exe
 - Troubleshooting Unity issues (clean slate)
 - Preparing project for distribution
 
+**Key Features**:
+
+- **Unity project validation**: Verifies current directory is a Unity project before any deletion
+- **Reliable process detection**: Checks if Unity Editor is running using `EditorInstance.json` + actual PID verification (cross-platform)
+- **Change preview with sizes**: Shows every item to be deleted and its size before execution
+- **Dry-run mode**: `--dry-run` flag to preview without deleting
+- **CI mode**: `--ci` flag for non-interactive automation
+- **Concurrent deletion**: Uses multiple workers for fast I/O-bound cleanup
+- **Robust retry**: Handles read-only files and transient locks with recursive chmod + retry
+- **Deletion summary**: Shows total items deleted, failures, freed space, and elapsed time
+
 **Requirements**:
 
-- Unity project root directory
-- **Unity Editor must be closed** (checks for running instance)
+- Unity project root directory (validates `Assets/` and `ProjectSettings/` exist)
+- **Unity Editor must be closed** (actively verifies process is running, not just file presence)
 - Write permissions
 
 **Usage**:
 
 ```bash
-# 1. Close Unity Editor (tool will check and warn if running)
-# 2. Place executable in Unity project root
-# 3. Run the executable
+# Standard mode (interactive)
 unity_project_full_clean.exe
 
-# Tool will:
-# - Check if Unity is running (warns if detected)
-# - List files/folders to be deleted
-# - Prompt for confirmation
-# - Delete using concurrent workers (fast)
+# Preview mode (see what would be deleted, no changes)
+unity_project_full_clean.exe --dry-run
+
+# CI mode (non-interactive, no confirmation)
+unity_project_full_clean.exe --ci
 ```
 
 **What Gets Deleted**:
@@ -191,7 +246,7 @@ Folders:
 - Bundles/          (Asset bundles)
 - And more...
 
-Files:
+Files (root level only):
 - *.sln             (Solution files)
 - *.csproj          (C# project files)
 - *.user            (User settings)
@@ -200,9 +255,10 @@ Files:
 
 **Safety**:
 
-- Checks for running Unity Editor
-- Lists all items before deletion
-- Requires confirmation
+- Validates Unity project structure before any deletion
+- Verifies Unity Editor process is actually alive (not just stale lock files)
+- Shows detailed preview with file sizes before execution
+- Requires explicit `y` confirmation (default is No)
 - **Warning**: This is destructive. Ensure Unity Editor is closed and you have backups.
 
 ---
@@ -306,109 +362,181 @@ audio_volume_normalizer.exe
 
 ---
 
-### 5. Image to Base64 `image_to_base64.exe`
+### 5. Texture Channel Packer `texture_channel_packer.exe`
 
-**Purpose**: Converts an image file to Base64 encoded string for embedding in code or config files.
+**Purpose**: Packs multiple source images into the R/G/B/A channels of a single output texture. Essential for creating HDRP/URP Mask Maps and other packed textures in Unity.
 
 **What It Does**:
 
-- Reads image file (supports common formats)
-- Encodes to Base64 string
-- Copies string to clipboard automatically
-- Saves string to `.txt` file for backup
+- Combine up to 4 source images (or constant fill values) into one RGBA texture
+- Extract specific channels (R/G/B/A/Gray) from each source
+- Auto-detect output resolution from source images
+- Nearest-neighbor resize when sources have different dimensions
+- Built-in presets for HDRP Mask Map and URP Mask Map
+- Memory-efficient: loads one source at a time, processes sequentially
 
 **Use Case**:
 
-- Embedding images in code (data URIs)
-- Storing images in JSON/YAML config files
-- Creating inline image resources
+- **HDRP/URP Mask Maps**: Metallic(R) + AO(G) + DetailMask(B) + Smoothness(A)
+- Packing multiple grayscale maps into a single RGBA texture
+- Reducing texture count (4 textures → 1 = 75% fewer draw calls)
+- CI/CD texture pipeline automation
 
-**Requirements**:
-
-- Image file path (supports drag-and-drop)
-- Clipboard access
-
-**Usage**:
+**Interactive Mode** (double-click or run without flags):
 
 ```bash
-# 1. Run the executable
-image_to_base64.exe
-
-# 2. When prompted, drag and drop image file onto terminal
-#    Or type/paste the file path
-
-# 3. Base64 string is automatically:
-#    - Copied to clipboard
-#    - Saved to {filename}_base64.txt
+# Launches guided wizard with preset selection
+texture_channel_packer.exe
 ```
 
-**Output**:
+**CLI Mode**:
 
-- Clipboard: Base64 string (ready to paste)
-- File: `{original_filename}_base64.txt` (backup)
+```bash
+# Custom channel packing
+texture_channel_packer -r metallic.png -g ao.png -a smoothness.png:A -o mask_map.png --ci
 
-**Supported Formats**: `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp`, etc.
+# With preset labels (for preview display)
+texture_channel_packer -r metallic.png -g ao.png -b detail.png -a smoothness.png -o mask.png --preset hdrp-mask --ci
 
-**Safety**: Read-only operation. Never modifies original image.
+# Dry-run (preview only)
+texture_channel_packer -r metallic.png -g ao.png --dry-run
+
+# Fill channels with constant values
+texture_channel_packer -r metallic.png -g fill:128 -b 0 -a 255 -o packed.png --ci
+
+# Force output size
+texture_channel_packer -r metallic.png -g ao.png -size 2048x2048 -o mask.png --ci
+```
+
+**Channel Specifiers**: Append `:R`, `:G`, `:B`, `:A`, or `:Gray` to file path (default: Gray).
+
+**Flags**:
+
+| Flag                   | Description                                                         |
+| ---------------------- | ------------------------------------------------------------------- |
+| `-r`, `-g`, `-b`, `-a` | Source for each channel: `file.png[:channel]`, `fill:N`, or `0-255` |
+| `-o`                   | Output file path (default: `packed.png`)                            |
+| `-size`                | Force output size `WxH` (default: auto from first source)           |
+| `-preset`              | Use preset labels: `hdrp-mask`, `urp-mask`                          |
+| `--ci`                 | Non-interactive mode (no prompts)                                   |
+| `--dry-run`            | Preview only, no output written                                     |
+
+**Supported Input**: PNG, JPEG. **Output**: PNG (lossless, alpha-preserving).
+
+**Performance**: Direct pixel access, sequential channel processing, buffered I/O, `BestSpeed` PNG encoding.
+
+**Safety**: Read-only on source images. Preview before execution. Dry-run support.
 
 ---
 
-### 6. Generate File Tree `generate_file_tree.go`
+### 6. Generate File Tree `generate_file_tree.exe`
 
-**Purpose**: Generates a Markdown file representing the project directory structure.
+**Purpose**: Generates a Markdown file representing the project directory structure with configurable detail levels.
 
 **What It Does**:
 
-- Scans current directory recursively
-- Filters files using whitelist (extensions) and blacklist (folders)
-- Generates `directory_structure.md` with tree view
-- Collapses excluded directories for cleaner output
+- Scans target directory recursively with configurable depth limits
+- Filters files using profile-based extension whitelists
+- Supports 4 built-in profiles for different detail levels
+- Reads `.treeignore` files for project-specific exclusions
+- Sorts output: directories first, then files, alphabetically
+- Shows `...` indicator for filtered content
 
-**Use Case**:
+**Profiles**:
 
-- Documenting project structure
-- Creating README file trees
-- Visualizing codebase organization
+| Profile    | Description           | Files Shown                                            | Depth     |
+| ---------- | --------------------- | ------------------------------------------------------ | --------- |
+| `minimal`  | Quick overview        | Folders only                                           | 3         |
+| `standard` | Code & docs (default) | `.go`, `.cs`, `.md`, `.json`, `.yaml`, `.shader`, etc. | Unlimited |
+| `detailed` | Code + Unity assets   | Standard + `.asset`, `.prefab`, `.unity`, `.mat`, etc. | Unlimited |
+| `full`     | Everything            | All files (no filter)                                  | Unlimited |
 
-**Features**:
-
-- **Whitelist**: Only includes specified file extensions (`.cs`, `.md`, `.go`, etc.)
-- **Blacklist**: Excludes common folders (`.git/`, `node_modules/`, `Library/`, etc.)
-- **Collapsing**: Hides excluded directories for cleaner view
-
-**Requirements**:
-
-- Read permissions for directory
-- Write permissions for output file
-
-**Usage**:
+**Interactive Mode** (run with `-i`):
 
 ```bash
-# 1. Place executable in directory you want to map
-cd /path/to/project
-
-# 2. Run the executable
-generate_file_tree.exe
-
-# 3. Output file created: directory_structure.md
+generate_file_tree -i
 ```
+
+**CLI Mode**:
+
+```bash
+# Default: standard profile, current directory
+generate_file_tree
+
+# Specific profile and depth
+generate_file_tree -profile minimal -depth 4
+
+# Target a specific directory
+generate_file_tree -target ./Assets -profile detailed -o assets_tree.md
+
+# Custom extensions (overrides profile)
+generate_file_tree -ext .cs,.shader,.hlsl -o code_tree.md
+
+# Add extra ignores
+generate_file_tree -ignore ThirdParty,Plugins
+
+# Show file sizes and hidden item counts
+generate_file_tree -profile full --show-size --show-count
+
+# CI mode (no prompts, no wait)
+generate_file_tree -profile standard --ci
+```
+
+**`.treeignore` File** (place in target directory):
+
+```
+# Directories (trailing slash)
+ThirdParty/
+InControl/
+
+# File extensions
+*.meta
+*.asset
+
+# Exact names
+temp
+```
+
+**Flags**:
+
+| Flag           | Description                                                             |
+| -------------- | ----------------------------------------------------------------------- |
+| `-profile`     | `minimal`, `standard`, `detailed`, `full` (default: standard)           |
+| `-target`      | Target directory (default: current directory)                           |
+| `-o`           | Output file (default: `directory_structure.md`, or `FILE_TREE_OUT` env) |
+| `-depth`       | Max depth, 0=unlimited (default: from profile)                          |
+| `-ext`         | File extensions, comma-separated (overrides profile)                    |
+| `-ignore`      | Additional dirs/names to ignore, comma-separated                        |
+| `-i`           | Interactive mode with profile selection                                 |
+| `--dirs-only`  | Show only directories                                                   |
+| `--show-size`  | Show file sizes                                                         |
+| `--show-count` | Show hidden item count in `...` lines                                   |
+| `--ci`         | Non-interactive mode                                                    |
 
 **Output Example**:
 
-```markdown
-.
+````markdown
+# Directory Structure
+
+- **Generated**: 2026-04-02 12:00:00
+- **Profile**: standard
+
+​`
+MyProject/
 ├── Assets/
-│ ├── Scripts/
-│ │ └── Player.cs
-│ └── Scenes/
-│ └── Main.unity
-├── Packages/
+│   ├── Scripts/
+│   │   ├── Player.cs
+│   │   └── Enemy.cs
+│   ├── Scenes/
+│   └── ...
+├── Tools/
+│   └── Scripts/
+│       └── generate_file_tree.go
 └── README.md
-```
+​`
+````
 
-**Customization**: Edit the Go source to modify whitelist/blacklist filters.
-
-**Safety**: Read-only operation. Only creates new file, never modifies existing files.
+**Safety**: Read-only on source directories. Only creates the output file.
 
 ## Installation & Setup
 
