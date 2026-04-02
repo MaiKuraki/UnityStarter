@@ -19,6 +19,7 @@
   - [Resources 提供器](#resources-提供器)
 - [热更新工作流](#热更新工作流)
 - [高级功能](#高级功能)
+- [资源引用 (AssetRef / SceneRef)](#资源引用-assetref--sceneref)
 - [API 参考](#api-参考)
 
 ---
@@ -501,6 +502,154 @@ var handle = package.LoadAssetAsync<GameObject>("Prefabs/Hero",
 <img src="./Documents~/Doc_03.png" style="width: 100%; height: auto; max-width: 900px;" />
 <img src="./Documents~/Doc_04.png" style="width: 100%; height: auto; max-width: 900px;" />
 <img src="./Documents~/Doc_05.png" style="width: 100%; height: auto; max-width: 900px;" />
+
+---
+
+## 资源引用 (AssetRef / SceneRef)
+
+### 为什么需要 AssetRef？
+
+在实际项目中，使用裸字符串 `"Prefabs/Enemy"` 来引用资源是脆弱的：
+
+- **没有类型安全** — 没有任何机制阻止你将一个 Texture 路径传给期望 Prefab 的方法。
+- **无法追踪重命名** — 如果美术移动或重命名了资源，你只会在运行时得到静默失败。
+- **不支持 Inspector** — 策划必须手动输入路径，无法拖拽。
+- **直接的 `UnityEngine.Object` 引用** 会将资源拉入同一个 bundle，导致内存膨胀，并且无法实现按语言/按版本分包。
+
+`AssetRef<T>` 和 `SceneRef` 解决了以上所有问题，同时在**运行时零开销**（struct 类型，仅存储两个字符串）。
+
+### 设计原则
+
+| 原则                        | 实现方式                                                                                                                |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **纯数据键**                | `AssetRef` 存储 `location` + `guid`。它永远不加载、不缓存、不持有句柄。                                                 |
+| **零 GC**                   | `struct` 而非 `class`。10 万个引用 = 零堆对象。                                                                         |
+| **通过 IAssetPackage 加载** | `package.LoadAsync(assetRef)` 返回 `IAssetHandle<T>`，复用已有的 ARC + W-TinyLFU 缓存。                                 |
+| **GUID 自动修复**           | 编辑器 PropertyDrawer 每次显示时从 GUID 反查路径。如果资源被移动/重命名，存储的 location 会自动更新。                   |
+| **SceneRef 独立类型**       | `SceneAsset` 是 editor-only 的，场景使用 `LoadSceneAsync` 而非 `LoadAssetAsync`。独立的 `SceneRef` 类型承载正确的语义。 |
+| **构建时验证**              | `AssetRefValidator` 在发包前扫描所有 Prefab 和 ScriptableObject，检测失效的 GUID。                                      |
+
+### 可用类型
+
+| 类型          | 用途                                                                                        |
+| ------------- | ------------------------------------------------------------------------------------------- |
+| `AssetRef<T>` | 带类型的引用。Inspector 的 ObjectField 按 `T` 过滤（如 `AssetRef<AudioClip>` 只接受音频）。 |
+| `AssetRef`    | 非泛型引用。用于数据驱动的配置表或运行时动态解析类型的场景。                                |
+| `SceneRef`    | 场景引用。Inspector 的 ObjectField 过滤为 `SceneAsset`。                                    |
+
+### 快速上手
+
+#### 1. 在 Inspector 中声明引用
+
+```csharp
+using CycloneGames.AssetManagement.Runtime;
+using UnityEngine;
+
+public class EnemyConfig : ScriptableObject
+{
+    [Header("视觉")]
+    [SerializeField] private AssetRef<GameObject> prefab;
+    [SerializeField] private AssetRef<Material>   material;
+
+    [Header("音频")]
+    [SerializeField] private AssetRef<AudioClip> spawnSound;
+    [SerializeField] private AssetRef<AudioClip> deathSound;
+
+    [Header("场景")]
+    [SerializeField] private SceneRef bossArena;
+
+    // 供其他系统读取的只读访问器
+    public AssetRef<GameObject> Prefab     => prefab;
+    public AssetRef<AudioClip>  SpawnSound => spawnSound;
+    public SceneRef             BossArena  => bossArena;
+}
+```
+
+在 Inspector 中，每个字段都渲染为标准的 ObjectField —— 直接从 Project 窗口拖拽即可，按类型自动过滤。无需手动输入路径。
+
+#### 2. 运行时加载资源
+
+```csharp
+public class EnemySpawner
+{
+    private readonly IAssetPackage package;
+    private readonly EnemyConfig config;
+
+    public async UniTask SpawnEnemy(Vector3 position)
+    {
+        // AssetRef<T> → IAssetHandle<T>，完全集成 ARC + 缓存
+        using (var handle = package.LoadAsync(config.Prefab, bucket: "Gameplay"))
+        {
+            await handle.Task;
+            var enemy = package.InstantiateSync(handle);
+            enemy.transform.position = position;
+        }
+    }
+}
+```
+
+#### 3. 加载场景（Navigathena 集成）
+
+```csharp
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.AssetManagement.Runtime.Integrations.Navigathena;
+
+public class LevelLoader
+{
+    private readonly IAssetPackage package;
+    private readonly ISceneNavigator navigator;
+
+    public async UniTask LoadBossArena(EnemyConfig config)
+    {
+        // 方式 A：通过 IAssetPackage 直接加载场景
+        var sceneHandle = package.LoadSceneAsync(config.BossArena);
+        await sceneHandle.Task;
+
+        // 方式 B：通过 Navigathena 进行场景导航（push/pop/change）
+        await navigator.Push(config.BossArena.ToSceneIdentifier(package));
+    }
+}
+```
+
+#### 4. 向后兼容
+
+`AssetRef<T>`、`AssetRef` 和 `SceneRef` 都支持 `implicit operator string`，因此可以直接用于已有的基于 `string` 的 API：
+
+```csharp
+// 以下写法完全等价：
+package.LoadAssetAsync<GameObject>(config.Prefab.Location);
+package.LoadAssetAsync<GameObject>(config.Prefab);  // 隐式 string 转换
+package.LoadAsync(config.Prefab);                    // 扩展方法（推荐）
+```
+
+#### 5. 支持所有资源类型
+
+任何继承自 `UnityEngine.Object` 的类型都可使用：
+
+```csharp
+[SerializeField] AssetRef<GameObject>       prefab;          // 预制体
+[SerializeField] AssetRef<ScriptableObject> config;          // 任意 ScriptableObject
+[SerializeField] AssetRef<YarnProject>      dialogue;        // Yarn Spinner 对话项目
+[SerializeField] AssetRef<Sprite>           icon;            // 精灵图
+[SerializeField] AssetRef<AudioClip>        clip;            // 音频
+[SerializeField] AssetRef<Material>         mat;             // 材质
+[SerializeField] AssetRef<AnimationClip>    anim;            // 动画片段
+[SerializeField] AssetRef<TextAsset>        textFile;        // 文本资源
+[SerializeField] SceneRef                   scene;           // 场景
+```
+
+### 构建验证
+
+发包前，通过菜单验证所有引用：
+
+**`Tools > CycloneGames > AssetManagement > Validate All AssetRefs`**
+
+该功能会扫描项目中的所有 Prefab 和 ScriptableObject：
+
+- **失效引用**: GUID 无法解析 → 以 Error 形式输出日志。
+- **过期路径**: 资源被移动/重命名但 GUID 仍然有效 → 自动修复 location。
+
+可通过在构建脚本中调用 `AssetRefValidator.ValidateAll()` 将其集成到 CI/CD 流水线。
 
 ---
 

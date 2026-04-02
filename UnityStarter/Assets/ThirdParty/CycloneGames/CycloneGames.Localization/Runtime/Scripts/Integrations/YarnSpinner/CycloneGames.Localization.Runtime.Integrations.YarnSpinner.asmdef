@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.Localization.Runtime.Integrations.YarnSpinner",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.Localization.Runtime",
+        "YarnSpinner.Unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "YARNSPINNER_PRESENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "dev.yarnspinner.unity",
+            "expression": "",
+            "define": "YARNSPINNER_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}

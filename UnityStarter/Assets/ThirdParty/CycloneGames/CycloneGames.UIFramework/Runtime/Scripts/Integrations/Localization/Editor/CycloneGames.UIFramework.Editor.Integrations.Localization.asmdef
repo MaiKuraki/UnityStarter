@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.UIFramework.Editor.Integrations.Localization",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.UIFramework.Runtime",
+        "CycloneGames.UIFramework.Runtime.Integrations.Localization",
+        "CycloneGames.Localization.Runtime",
+        "Unity.TextMeshPro"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONE_LOCALIZATION"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
