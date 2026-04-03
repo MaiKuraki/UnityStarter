@@ -110,8 +110,9 @@ namespace CycloneGames.AssetManagement.Runtime
         public override float Progress => Raw.PercentComplete;
         public override string Error => Raw.OperationException?.Message;
 
-        private UniTask _task;
-        public override UniTask Task => IsDone ? UniTask.CompletedTask : _task;
+        // Use AsyncOperationHandle.Task (System.Threading.Tasks.Task, supports multiple awaiters)
+        // instead of IEnumerator.ToUniTask() which creates a one-shot EnumeratorPromise.
+        public override UniTask Task => IsDone ? UniTask.CompletedTask : Raw.Task.AsUniTask();
 
         public TAsset Asset => Raw.Result;
         public UnityEngine.Object AssetObject => Raw.Result;
@@ -129,8 +130,6 @@ namespace CycloneGames.AssetManagement.Runtime
             SetId(id);
             _cacheKey = cacheKey;
             Raw = raw;
-            // Preserve() wraps the one-shot UniTask so handle.Task can be safely awaited multiple times.
-            _task = raw.ToUniTask(cancellationToken: cancellationToken).Preserve();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
@@ -177,7 +176,6 @@ namespace CycloneGames.AssetManagement.Runtime
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             if (Raw.IsValid()) Addressables.Release(Raw);
             Raw = default;
-            _task = default;
             _cacheKey = null;
             _onReleaseToCache = null;
             AdaptiveAddressablesPool<AddressableAssetHandle<TAsset>>.Release(this);
@@ -193,8 +191,9 @@ namespace CycloneGames.AssetManagement.Runtime
         public override float Progress => raw.PercentComplete;
         public override string Error => raw.OperationException?.Message;
 
-        private UniTask _task;
-        public override UniTask Task => IsDone ? UniTask.CompletedTask : _task;
+        // Use AsyncOperationHandle.Task (System.Threading.Tasks.Task, supports multiple awaiters)
+        // instead of IEnumerator.ToUniTask() which creates a one-shot EnumeratorPromise.
+        public override UniTask Task => IsDone ? UniTask.CompletedTask : raw.Task.AsUniTask();
 
         public IReadOnlyList<TAsset> Assets => (IReadOnlyList<TAsset>)raw.Result;
 
@@ -210,8 +209,6 @@ namespace CycloneGames.AssetManagement.Runtime
             SetId(id);
             _cacheKey = cacheKey;
             this.raw = raw;
-            // Preserve() wraps the one-shot UniTask so handle.Task can be safely awaited multiple times.
-            _task = raw.ToUniTask(cancellationToken: cancellationToken).Preserve();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
@@ -258,7 +255,6 @@ namespace CycloneGames.AssetManagement.Runtime
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             if (raw.IsValid()) Addressables.Release(raw);
             this.raw = default;
-            _task = default;
             _cacheKey = null;
             _onReleaseToCache = null;
             AdaptiveAddressablesPool<AddressableAllAssetsHandle<TAsset>>.Release(this);
@@ -274,8 +270,9 @@ namespace CycloneGames.AssetManagement.Runtime
         public override float Progress => raw.PercentComplete;
         public override string Error => raw.OperationException?.Message;
 
-        private UniTask _task;
-        public override UniTask Task => IsDone ? UniTask.CompletedTask : _task;
+        // Use AsyncOperationHandle.Task (System.Threading.Tasks.Task, supports multiple awaiters)
+        // instead of IEnumerator.ToUniTask() which creates a one-shot EnumeratorPromise.
+        public override UniTask Task => IsDone ? UniTask.CompletedTask : raw.Task.AsUniTask();
 
         public GameObject Instance => raw.Result;
 
@@ -289,8 +286,6 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             SetId(id);
             this.raw = raw;
-            // Preserve() wraps the one-shot UniTask so handle.Task can be safely awaited multiple times.
-            _task = raw.ToUniTask(cancellationToken: cancellationToken).Preserve();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
@@ -337,7 +332,6 @@ namespace CycloneGames.AssetManagement.Runtime
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             if (raw.IsValid()) Addressables.Release(raw);
             this.raw = default;
-            _task = default;
             _onReleaseToCache = null;
             AdaptiveAddressablesPool<AddressableInstantiateHandle>.Release(this);
         }
@@ -368,8 +362,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public override float Progress => Raw.PercentComplete;
         public override string Error => Raw.OperationException?.Message;
 
-        private UniTask _task;
-        public override UniTask Task => IsDone ? UniTask.CompletedTask : _task;
+        // Use AsyncOperationHandle.Task (System.Threading.Tasks.Task, supports multiple awaiters).
+        public override UniTask Task => IsDone ? UniTask.CompletedTask : Raw.Task.AsUniTask();
 
         public string ScenePath { get; private set; }
         public Scene Scene => Raw.Result.Scene;
@@ -385,10 +379,6 @@ namespace CycloneGames.AssetManagement.Runtime
             SetId(id);
             Raw = raw;
             ScenePath = raw.DebugName;
-            // AsyncOperationHandle<SceneInstance>.ToUniTask() triggers a warning ("yield SceneInstance
-            // is not supported on await IEnumerator"). Poll IsDone instead.
-            // Preserve() wraps the one-shot UniTask so handle.Task can be safely awaited multiple times.
-            _task = UniTask.WaitUntil(() => Raw.IsDone, cancellationToken: cancellationToken).Preserve();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
@@ -436,7 +426,6 @@ namespace CycloneGames.AssetManagement.Runtime
             if (Raw.IsValid()) Addressables.Release(Raw);
             Raw = default;
             ScenePath = null;
-            _task = default;
             _onReleaseToCache = null;
             AdaptiveAddressablesPool<AddressableSceneHandle>.Release(this);
         }
