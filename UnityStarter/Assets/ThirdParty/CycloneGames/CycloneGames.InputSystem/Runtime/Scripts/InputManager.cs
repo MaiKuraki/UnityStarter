@@ -31,6 +31,7 @@ namespace CycloneGames.InputSystem.Runtime
         private string _userConfigUri;
         private bool _isInitialized = false;
         private bool _isDeviceLockingOnJoinEnabled = false;
+        private IDisposable _cursorSubscription;
 
         public bool ManageCursorVisibility { get; set; } = true;
         public bool ResetCursorToCenter { get; set; } = false;
@@ -560,7 +561,8 @@ namespace CycloneGames.InputSystem.Runtime
 
         private void SetupCursorControl(IInputPlayer player)
         {
-            player.ActiveDeviceKind.Subscribe(OnDeviceChanged);
+            _cursorSubscription?.Dispose();
+            _cursorSubscription = player.ActiveDeviceKind.Subscribe(OnDeviceChanged);
             UpdateCursorState(player.ActiveDeviceKind.CurrentValue);
         }
 
@@ -687,8 +689,26 @@ namespace CycloneGames.InputSystem.Runtime
             return false;
         }
 
+        /// <summary>
+        /// Removes a player from the manager and disposes their input resources.
+        /// </summary>
+        public bool RemovePlayer(int playerId)
+        {
+            if (!_registerPlayers.TryGetValue(playerId, out var service))
+            {
+                return false;
+            }
+
+            (service as IDisposable)?.Dispose();
+            _registerPlayers.Remove(playerId);
+            CLogger.LogInfo($"{DEBUG_FLAG} Player {playerId} removed.");
+            return true;
+        }
+
         public void Dispose()
         {
+            _cursorSubscription?.Dispose();
+            _cursorSubscription = null;
             StopListeningForPlayers();
             foreach (var service in _registerPlayers.Values)
             {

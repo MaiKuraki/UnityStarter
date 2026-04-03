@@ -210,7 +210,8 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 var itemSetup = setupData[i];
                 // Use provided SliderConfig or fallback to Default if Slider exists but no config specified
-                SliderConfig resolvedSliderConfig = itemSetup.SliderConfig.Step > 0f
+                // Support smooth-only mode (Step=0, SmoothSpeed>0) without falling back to Default
+                SliderConfig resolvedSliderConfig = (itemSetup.SliderConfig.Step > 0f || itemSetup.SliderConfig.SmoothSpeed > 0f)
                     ? itemSetup.SliderConfig
                     : (itemSetup.Slider != null ? SliderConfig.Default : default);
 

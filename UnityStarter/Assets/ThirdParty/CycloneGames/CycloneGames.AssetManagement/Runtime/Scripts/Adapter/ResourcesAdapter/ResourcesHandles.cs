@@ -69,7 +69,8 @@ namespace CycloneGames.AssetManagement.Runtime
             _cacheKey = cacheKey;
             _request = request;
             _syncAsset = null;
-            _task = request.ToUniTask(cancellationToken: cancellationToken);
+            // Preserve() wraps the one-shot UniTask so handle.Task can be safely awaited multiple times.
+            _task = request.ToUniTask(cancellationToken: cancellationToken).Preserve();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
@@ -165,7 +166,8 @@ namespace CycloneGames.AssetManagement.Runtime
             SetId(id);
             _cacheKey = cacheKey;
             Assets = assets;
-            _task = SimulateAsync();
+            // Preserve() wraps the one-shot UniTask so handle.Task can be safely awaited multiple times.
+            _task = SimulateAsync().Preserve();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
