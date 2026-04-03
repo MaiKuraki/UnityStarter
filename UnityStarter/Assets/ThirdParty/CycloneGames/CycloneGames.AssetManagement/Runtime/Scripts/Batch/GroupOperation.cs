@@ -7,7 +7,7 @@ namespace CycloneGames.AssetManagement.Runtime.Batch
 {
 	public sealed class GroupOperation : IGroupOperation
 	{
-		private sealed class Item
+		private struct Item
 		{
 			public readonly IOperation Op;
 			public readonly float Weight;
