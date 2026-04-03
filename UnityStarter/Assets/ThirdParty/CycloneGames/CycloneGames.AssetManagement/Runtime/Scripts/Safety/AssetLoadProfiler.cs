@@ -17,7 +17,7 @@ namespace CycloneGames.AssetManagement.Runtime
         /// Loads exceeding this threshold (in milliseconds) will emit a warning log.
         /// Default 100ms (~6 frames at 60fps). Adjust per project as needed.
         /// </summary>
-        public static long SlowLoadThresholdMs = 100;
+        public static long SlowLoadThresholdMs = 300;
 
         /// <summary>
         /// Set to false to disable profiling without recompiling.
