@@ -9,7 +9,8 @@
     "com.unity.render-pipelines.universal": "14.0.0",
     "jp.hadashikick.vyaml": "1.2.0",
     "com.cysharp.unitask": "2.0.0",
-    "com.cyclone-games.logger": "1.0.0"
+    "com.cyclone-games.logger": "1.0.0",
+    "com.cyclone-games.utility": "1.0.0"
   },
   "keywords": [
     "CycloneGames",
