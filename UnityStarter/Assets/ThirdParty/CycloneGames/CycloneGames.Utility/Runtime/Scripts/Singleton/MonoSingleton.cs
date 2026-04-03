@@ -1,7 +1,31 @@
+using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace CycloneGames.Utility.Runtime
 {
+    internal static class MonoSingletonRuntimeReset
+    {
+        private static readonly HashSet<Action> ResetActions = new HashSet<Action>();
+
+        internal static void Register(Action resetAction)
+        {
+            if (resetAction != null)
+            {
+                ResetActions.Add(resetAction);
+            }
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStatics()
+        {
+            foreach (var resetAction in ResetActions)
+            {
+                resetAction();
+            }
+        }
+    }
+
     /// <summary>
     /// Thread-safe MonoBehaviour singleton base class with zero per-access GC.
     /// <para>Design decisions:</para>
@@ -28,6 +52,11 @@ namespace CycloneGames.Utility.Runtime
     /// </example>
     public abstract class MonoSingleton<T> : MonoBehaviour where T : MonoSingleton<T>
     {
+        static MonoSingleton()
+        {
+            MonoSingletonRuntimeReset.Register(ResetStaticsForType);
+        }
+
         private static T instance;
         private static bool applicationIsQuitting;
 
@@ -38,8 +67,7 @@ namespace CycloneGames.Utility.Runtime
         /// Ensures static state is clean on every fresh play-mode entry,
         /// even when Domain Reload is disabled in Editor.
         /// </summary>
-        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-        private static void ResetStatics()
+        private static void ResetStaticsForType()
         {
             instance = null;
             applicationIsQuitting = false;
