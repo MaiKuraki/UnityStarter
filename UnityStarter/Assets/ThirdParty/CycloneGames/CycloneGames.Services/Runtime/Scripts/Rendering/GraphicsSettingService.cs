@@ -8,7 +8,8 @@ using UnityEngine.Rendering.Universal;
 
 namespace CycloneGames.Service.Runtime
 {
-    public enum ScreenOrientation
+    // Renamed from ScreenOrientation to avoid conflict with UnityEngine.ScreenOrientation
+    public enum DisplayOrientation
     {
         Landscape = 0,
         Portrait = 1
@@ -23,11 +24,12 @@ namespace CycloneGames.Service.Runtime
         void SetTargetFrameRate(int targetFramerate);
         void SetVSyncCount(int vSyncCount);
 
-        // Resolution
-        void SetRenderResolution(int shortEdgeResolution, ScreenOrientation orientation = ScreenOrientation.Landscape);
+        // Resolution & Display
+        void SetRenderResolution(int shortEdgeResolution, DisplayOrientation orientation = DisplayOrientation.Landscape);
         Vector2Int TargetRenderResolution { get; }
         void SetRenderScale(float scale);
         float RenderScale { get; }
+        void SetFullScreenMode(FullScreenMode mode);
 
         // Anti-Aliasing
         void SetAntiAliasing(int msaaLevel);
@@ -53,6 +55,8 @@ namespace CycloneGames.Service.Runtime
 
         // Bulk Apply
         void ApplySettings(in GraphicsSettingsData settings, Camera camera = null);
+
+        event Action OnSettingsApplied;
     }
 
     public sealed class GraphicsSettingService : IGraphicsSettingService, IDisposable
@@ -83,6 +87,8 @@ namespace CycloneGames.Service.Runtime
         public float LodBias => QualitySettings.lodBias;
         public bool SoftParticlesEnabled => QualitySettings.softParticles;
 
+        public event Action OnSettingsApplied;
+
         public GraphicsSettingService()
         {
             _targetRenderResolution = new Vector2Int(Screen.width, Screen.height);
@@ -100,7 +106,6 @@ namespace CycloneGames.Service.Runtime
             }
             QualitySettings.SetQualityLevel(qualityLevel, true);
             _currentQualityLevel = qualityLevel;
-            CLogger.LogInfo($"{DEBUG_FLAG} Quality level set to: {qualityLevel}");
         }
 
         public void SetTargetFrameRate(int targetFramerate)
@@ -115,9 +120,9 @@ namespace CycloneGames.Service.Runtime
 
         #endregion
 
-        #region Resolution
+        #region Resolution & Display
 
-        public void SetRenderResolution(int shortEdgeResolution, ScreenOrientation orientation = ScreenOrientation.Landscape)
+        public void SetRenderResolution(int shortEdgeResolution, DisplayOrientation orientation = DisplayOrientation.Landscape)
         {
             CancelPendingResolutionChange();
             _resolutionCts = new CancellationTokenSource();
@@ -135,20 +140,22 @@ namespace CycloneGames.Service.Runtime
             asset.renderScale = Mathf.Clamp(scale, 0.1f, 2f);
         }
 
-        private async UniTaskVoid SetResolutionAsync(int shortEdge, ScreenOrientation orientation, CancellationToken ct)
+        public void SetFullScreenMode(FullScreenMode mode)
+        {
+            Screen.fullScreenMode = mode;
+        }
+
+        private async UniTaskVoid SetResolutionAsync(int shortEdge, DisplayOrientation orientation, CancellationToken ct)
         {
             try
             {
-                // Use Display.main.systemWidth/systemHeight to get the actual monitor resolution
-                // This is independent of the window's current size and correctly reflects the user's display
                 int displayWidth = Display.main.systemWidth;
                 int displayHeight = Display.main.systemHeight;
-                
-                // Fallback to 16:9 if display info is unavailable
+
                 float aspect = (displayWidth > 0 && displayHeight > 0)
                     ? (float)displayWidth / displayHeight
                     : 16f / 9f;
-                
+
                 var (w, h) = CalculateResolution(shortEdge, orientation, aspect);
                 _targetRenderResolution = new Vector2Int(w, h);
 
@@ -164,12 +171,12 @@ namespace CycloneGames.Service.Runtime
             }
         }
 
-        private static (int width, int height) CalculateResolution(int shortEdge, ScreenOrientation orientation, float aspect)
+        private static (int width, int height) CalculateResolution(int shortEdge, DisplayOrientation orientation, float aspect)
         {
             if (aspect <= 0) aspect = 16f / 9f;
 
             int w, h;
-            if (orientation == ScreenOrientation.Landscape)
+            if (orientation == DisplayOrientation.Landscape)
             {
                 h = shortEdge;
                 w = Mathf.RoundToInt(shortEdge * aspect);
@@ -198,7 +205,6 @@ namespace CycloneGames.Service.Runtime
 
         public void SetAntiAliasing(int msaaLevel)
         {
-            // Valid MSAA levels: 0, 2, 4, 8
             int validLevel = msaaLevel switch
             {
                 <= 0 => 0,
@@ -208,7 +214,6 @@ namespace CycloneGames.Service.Runtime
             };
             QualitySettings.antiAliasing = validLevel;
 
-            // Also set on URP asset if available
             var asset = UniversalRenderPipeline.asset;
             if (asset != null)
             {
@@ -220,9 +225,6 @@ namespace CycloneGames.Service.Runtime
 
         #region Shadows
 
-        /// <summary>
-        /// Sets shadow distance. For URP shadow resolution/cascades, modify the URP Asset directly or use Quality Levels.
-        /// </summary>
         public void SetShadowDistance(float distance)
         {
             QualitySettings.shadowDistance = Mathf.Max(0, distance);
@@ -234,7 +236,6 @@ namespace CycloneGames.Service.Runtime
 
         public void SetTextureQuality(int mipmapLimit)
         {
-            // 0=Full, 1=Half, 2=Quarter, 3=Eighth
             QualitySettings.globalTextureMipmapLimit = Mathf.Clamp(mipmapLimit, 0, 3);
         }
 
@@ -269,7 +270,6 @@ namespace CycloneGames.Service.Runtime
                 asset.supportsHDR = enabled;
             }
 
-            // Also set post-processing on specific camera if provided
             if (camera != null)
             {
                 var cameraData = camera.GetUniversalAdditionalCameraData();
@@ -286,7 +286,14 @@ namespace CycloneGames.Service.Runtime
 
         public void ApplySettings(in GraphicsSettingsData settings, Camera camera = null)
         {
-            SetQualityLevel(settings.QualityLevel);
+            // Set quality level base WITHOUT applying expensive changes,
+            // then override individual settings to avoid redundant work and visual flicker
+            if (settings.QualityLevel >= 0 && settings.QualityLevel < QualityLevels.Count)
+            {
+                QualitySettings.SetQualityLevel(settings.QualityLevel, false);
+                _currentQualityLevel = settings.QualityLevel;
+            }
+
             SetTargetFrameRate(settings.TargetFrameRate);
             SetVSyncCount(settings.VSyncCount);
             SetAntiAliasing(settings.AntiAliasingLevel);
@@ -297,12 +304,14 @@ namespace CycloneGames.Service.Runtime
             SetSoftParticles(settings.SoftParticles);
             SetRenderScale(settings.RenderScale);
             SetHDR(settings.HDREnabled, camera);
+            SetFullScreenMode((FullScreenMode)settings.FullScreenMode);
 
             if (settings.ShortEdgeResolution > 0)
             {
                 SetRenderResolution(settings.ShortEdgeResolution);
             }
 
+            OnSettingsApplied?.Invoke();
             CLogger.LogInfo($"{DEBUG_FLAG} All graphics settings applied");
         }
 

@@ -6,6 +6,7 @@
         "VYaml.Core",
         "Unio",
         "CycloneGames.Logger",
+        "CycloneGames.Utility.Runtime",
         "Unity.RenderPipelines.Universal.Runtime",
         "TND.Upscaling.Framework.Runtime.Core"
     ],

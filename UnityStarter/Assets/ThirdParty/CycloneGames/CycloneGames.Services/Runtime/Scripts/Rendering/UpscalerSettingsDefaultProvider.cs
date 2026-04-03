@@ -12,18 +12,19 @@ namespace CycloneGames.Service.Runtime
     {
         private const string DEBUG_FLAG = "[UpscalerDetection]";
 
+        public const int CURRENT_SETTINGS_VERSION = 1;
+
         public UpscalerSettingsData GetDefault()
         {
-            // Log device information
             LogDeviceInfo();
 
             var (technology, quality) = DetectOptimalUpscaler();
 
-            // Log selected strategy
             LogSelectedStrategy(technology, quality);
 
             return new UpscalerSettingsData
             {
+                SettingsVersion = CURRENT_SETTINGS_VERSION,
                 Technology = technology,
                 QualityPreset = quality,
                 CustomScaleFactor = 0.67f,

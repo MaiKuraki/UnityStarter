@@ -36,6 +36,9 @@ namespace CycloneGames.Service.Runtime
     [YamlObject]
     public partial struct UpscalerSettingsData
     {
+        // Schema version for forward-compatible migration. 0 = legacy (pre-versioning).
+        public int SettingsVersion;
+
         // Which upscaler technology to use. Check availability at runtime.
         public UpscalerTechnology Technology;
 
