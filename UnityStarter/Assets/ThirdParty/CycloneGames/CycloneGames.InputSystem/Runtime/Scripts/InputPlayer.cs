@@ -55,6 +55,7 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly ReactiveProperty<string> _activeContextName = new(null);
         private readonly ReactiveProperty<InputDeviceKind> _activeDeviceKind = new(InputDeviceKind.Unknown);
         private readonly Stack<InputContext> _contextStack = new();
+        private readonly HashSet<InputContext> _contextSet = new(); // O(1) membership test for PushContext dedup
         private readonly List<InputContext> _tempContextList = new(); // Pooled list for stack operations (Zero-GC)
 
         // Event Subjects (Keyed by zero-garbage struct InputActionKey)
@@ -266,6 +267,7 @@ namespace CycloneGames.InputSystem.Runtime
 
             if (found)
             {
+                _contextSet.Remove(context);
                 context.RemoveOwner(this);
             }
 
@@ -283,7 +285,7 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (context == null) return;
 
-            if (_contextStack.Contains(context))
+            if (_contextSet.Contains(context))
             {
                 _tempContextList.Clear();
 
@@ -305,6 +307,7 @@ namespace CycloneGames.InputSystem.Runtime
 
             DeactivateTopContext();
             _contextStack.Push(context);
+            _contextSet.Add(context);
             context.AddOwner(this);
             ActivateTopContext();
         }
@@ -323,6 +326,7 @@ namespace CycloneGames.InputSystem.Runtime
             var ctx = _contextStack.Peek();
             DeactivateTopContext();
             _contextStack.Pop();
+            _contextSet.Remove(ctx);
             ctx.RemoveOwner(this);
             ActivateTopContext();
         }
@@ -512,6 +516,14 @@ namespace CycloneGames.InputSystem.Runtime
                 if (Application.isPlaying) UnityEngine.Object.Destroy(assetToDestroy);
                 else UnityEngine.Object.DestroyImmediate(assetToDestroy);
             }
+
+            // Clean up context stack ownership to prevent stale references
+            while (_contextStack.Count > 0)
+            {
+                var ctx = _contextStack.Pop();
+                ctx.RemoveOwner(this);
+            }
+            _contextSet.Clear();
 
             foreach (var s in _buttonSubjects.Values) s.Dispose();
             foreach (var s in _longPressSubjects.Values) s.Dispose();
@@ -911,12 +923,9 @@ namespace CycloneGames.InputSystem.Runtime
 
             if (device is Keyboard keyboard)
             {
-                foreach (var key in keyboard.allKeys)
+                if (keyboard.anyKey.wasPressedThisFrame || keyboard.anyKey.isPressed)
                 {
-                    if (key.wasPressedThisFrame || key.isPressed)
-                    {
-                        return true;
-                    }
+                    return true;
                 }
             }
 
@@ -980,23 +989,14 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
-        /// Wires long-press detection for button actions. 
+        /// Wires long-press detection for button actions using async polling.
+        /// For InputActionType.Button, Started fires on press and Performed fires immediately after,
+        /// so time-diff detection is unreliable. Async polling with IsPressed() is the correct approach.
         /// </summary>
         private void WireLongPressDetection(InputAction action, int longPressMs, InputActionKey key, CancellationToken token)
         {
             var longPressSubject = new Subject<Unit>();
             float thresholdSec = longPressMs / 1000f;
-            float lastStartTime = 0f;
-
-            action.StartedAsObservable(token).Subscribe(_ => lastStartTime = Time.realtimeSinceStartup).AddTo(_actionWiringSubscriptions);
-            action.PerformedAsObservable(token).Subscribe(_ =>
-            {
-                float currentTime = Time.realtimeSinceStartup;
-                if (lastStartTime > 0f && currentTime - lastStartTime >= thresholdSec)
-                {
-                    longPressSubject.OnNext(Unit.Default);
-                }
-            }).AddTo(_actionWiringSubscriptions);
 
             action.StartedAsObservable(token).Subscribe(_ =>
             {

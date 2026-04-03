@@ -93,7 +93,6 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         private int _id;
         internal AssetHandle Raw;
-        private UniTask _task;
         private int _refCount;
         private volatile bool _disposed;
         private string _cacheKey;
@@ -107,7 +106,6 @@ namespace CycloneGames.AssetManagement.Runtime
             _cacheKey = cacheKey;
             Raw = raw;
             _onReleaseToCache = onReleaseToCache;
-            _task = raw.ToUniTask(cancellationToken: cancellationToken);
             _disposed = false;
             _refCount = 1;
         }
@@ -122,7 +120,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public bool IsDone => Raw == null || Raw.IsDone;
         public float Progress => Raw?.Progress ?? 0f;
         public string Error => Raw?.LastError ?? string.Empty;
-        public UniTask Task => IsDone ? UniTask.CompletedTask : _task;
+        // Use System.Threading.Tasks.Task (supports multiple awaiters) instead of IEnumerator.ToUniTask() (one-shot).
+        public UniTask Task => IsDone ? UniTask.CompletedTask : (Raw?.Task.AsUniTask() ?? UniTask.CompletedTask);
         public void WaitForAsyncComplete() => Raw?.WaitForAsyncComplete();
 
         public TAsset Asset => Raw != null ? Raw.GetAssetObject<TAsset>() : null;
@@ -162,7 +161,6 @@ namespace CycloneGames.AssetManagement.Runtime
             _cacheKey = null;
             _onReleaseToCache = null;
             if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
-            _task = default;
             AdaptiveHandlePool<YooAssetHandle<TAsset>>.Release(this);
         }
 
@@ -193,7 +191,6 @@ namespace CycloneGames.AssetManagement.Runtime
         private int _id;
         internal AllAssetsHandle Raw;
         private readonly ReadOnlyListAdapter _listAdapter = new ReadOnlyListAdapter();
-        private UniTask _task;
         private int _refCount;
         private volatile bool _disposed;
         private string _cacheKey;
@@ -206,7 +203,6 @@ namespace CycloneGames.AssetManagement.Runtime
             _id = id;
             _cacheKey = cacheKey;
             Raw = raw;
-            _task = raw.ToUniTask(cancellationToken: cancellationToken);
             _listAdapter.Clear();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
@@ -223,7 +219,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public bool IsDone => Raw == null || Raw.IsDone;
         public float Progress => Raw?.Progress ?? 0f;
         public string Error => Raw?.LastError ?? string.Empty;
-        public UniTask Task => IsDone ? UniTask.CompletedTask : _task;
+        // Use System.Threading.Tasks.Task (supports multiple awaiters) instead of IEnumerator.ToUniTask() (one-shot).
+        public UniTask Task => IsDone ? UniTask.CompletedTask : (Raw?.Task.AsUniTask() ?? UniTask.CompletedTask);
         public void WaitForAsyncComplete() => Raw?.WaitForAsyncComplete();
 
         public IReadOnlyList<TAsset> Assets
@@ -272,7 +269,6 @@ namespace CycloneGames.AssetManagement.Runtime
             _cacheKey = null;
             _onReleaseToCache = null;
             if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
-            _task = default;
             AdaptiveHandlePool<YooAllAssetsHandle<TAsset>>.Release(this);
         }
 
@@ -436,7 +432,6 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         private int _id;
         private RawFileHandle _raw;
-        private UniTask _task;
         private int _refCount;
         private string _cacheKey;
         private Action<string, IReferenceCounted> _onReleaseToCache;
@@ -449,7 +444,6 @@ namespace CycloneGames.AssetManagement.Runtime
             _id = id;
             _cacheKey = cacheKey;
             _raw = raw;
-            _task = raw.ToUniTask(cancellationToken: cancellationToken);
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
@@ -465,7 +459,8 @@ namespace CycloneGames.AssetManagement.Runtime
         public bool IsDone => _raw == null || _raw.IsDone;
         public float Progress => _raw?.Progress ?? 0f;
         public string Error => _raw?.LastError ?? string.Empty;
-        public UniTask Task => IsDone ? UniTask.CompletedTask : _task;
+        // Use System.Threading.Tasks.Task (supports multiple awaiters) instead of IEnumerator.ToUniTask() (one-shot).
+        public UniTask Task => IsDone ? UniTask.CompletedTask : (_raw?.Task.AsUniTask() ?? UniTask.CompletedTask);
         public void WaitForAsyncComplete() => _raw?.WaitForAsyncComplete();
 
         public string FilePath => _raw?.GetRawFilePath() ?? string.Empty;
@@ -516,7 +511,6 @@ namespace CycloneGames.AssetManagement.Runtime
             _cacheKey = null;
             _onReleaseToCache = null;
             if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
-            _task = default;
             AdaptiveHandlePool<YooRawFileHandle>.Release(this);
         }
 

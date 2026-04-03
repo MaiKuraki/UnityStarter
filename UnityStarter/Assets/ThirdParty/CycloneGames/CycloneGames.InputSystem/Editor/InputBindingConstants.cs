@@ -70,7 +70,19 @@ namespace CycloneGames.InputSystem.Editor
 
         public const string Mouse_LeftButton = "<Mouse>/leftButton";
         public const string Mouse_RightButton = "<Mouse>/rightButton";
+        public const string Mouse_MiddleButton = "<Mouse>/middleButton";
         public const string Mouse_Delta = "<Mouse>/delta";
+        public const string Mouse_Scroll = "<Mouse>/scroll";
+        public const string Mouse_Position = "<Mouse>/position";
+
+        #endregion
+
+        #region Touchscreen
+
+        public const string Touchscreen_PrimaryTouch_Position = "<Touchscreen>/primaryTouch/position";
+        public const string Touchscreen_PrimaryTouch_Delta = "<Touchscreen>/primaryTouch/delta";
+        public const string Touchscreen_PrimaryTouch_Press = "<Touchscreen>/primaryTouch/press";
+        public const string Touchscreen_PrimaryTouch_Tap = "<Touchscreen>/primaryTouch/tap";
 
         #endregion
 
@@ -93,6 +105,8 @@ namespace CycloneGames.InputSystem.Editor
         public const string Gamepad_DPad_Down = "<Gamepad>/dpad/down";
         public const string Gamepad_DPad_Left = "<Gamepad>/dpad/left";
         public const string Gamepad_DPad_Right = "<Gamepad>/dpad/right";
+        public const string Gamepad_LeftStickPress = "<Gamepad>/leftStickPress";
+        public const string Gamepad_RightStickPress = "<Gamepad>/rightStickPress";
 
         #endregion
 

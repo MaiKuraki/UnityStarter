@@ -35,6 +35,14 @@ namespace CycloneGames.InputSystem.Runtime
     [YamlObject]
     public partial class InputConfiguration
     {
+        /// <summary>
+        /// Schema fingerprint stamped at save time. Automatically computed from the [YamlMember] structure
+        /// via <see cref="InputSchemaFingerprint"/>. Changes whenever a field is added, removed, renamed,
+        /// retyped, or an enum value changes — no manual version bumping required.
+        /// </summary>
+        [YamlMember("schemaFingerprint")]
+        public string SchemaFingerprint { get; set; }
+
         // A template configuration for each possible player slot.
         [YamlMember("playerSlots")]
         public List<PlayerSlotConfig> PlayerSlots { get; set; }

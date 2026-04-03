@@ -129,7 +129,8 @@ namespace CycloneGames.AssetManagement.Runtime
             SetId(id);
             _cacheKey = cacheKey;
             Raw = raw;
-            _task = raw.ToUniTask(cancellationToken: cancellationToken);
+            // Preserve() wraps the one-shot UniTask so handle.Task can be safely awaited multiple times.
+            _task = raw.ToUniTask(cancellationToken: cancellationToken).Preserve();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
@@ -209,7 +210,8 @@ namespace CycloneGames.AssetManagement.Runtime
             SetId(id);
             _cacheKey = cacheKey;
             this.raw = raw;
-            _task = raw.ToUniTask(cancellationToken: cancellationToken);
+            // Preserve() wraps the one-shot UniTask so handle.Task can be safely awaited multiple times.
+            _task = raw.ToUniTask(cancellationToken: cancellationToken).Preserve();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
@@ -287,7 +289,8 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             SetId(id);
             this.raw = raw;
-            _task = raw.ToUniTask(cancellationToken: cancellationToken);
+            // Preserve() wraps the one-shot UniTask so handle.Task can be safely awaited multiple times.
+            _task = raw.ToUniTask(cancellationToken: cancellationToken).Preserve();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
@@ -384,7 +387,8 @@ namespace CycloneGames.AssetManagement.Runtime
             ScenePath = raw.DebugName;
             // AsyncOperationHandle<SceneInstance>.ToUniTask() triggers a warning ("yield SceneInstance
             // is not supported on await IEnumerator"). Poll IsDone instead.
-            _task = UniTask.WaitUntil(() => Raw.IsDone, cancellationToken: cancellationToken);
+            // Preserve() wraps the one-shot UniTask so handle.Task can be safely awaited multiple times.
+            _task = UniTask.WaitUntil(() => Raw.IsDone, cancellationToken: cancellationToken).Preserve();
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;

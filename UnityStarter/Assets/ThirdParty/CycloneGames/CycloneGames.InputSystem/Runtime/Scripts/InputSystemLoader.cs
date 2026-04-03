@@ -98,7 +98,18 @@ namespace CycloneGames.InputSystem.Runtime
                 
                 // Try to parse the YAML
                 var config = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(normalizedContent));
-                return config != null && config.PlayerSlots != null;
+                if (config == null || config.PlayerSlots == null) return false;
+
+#if UNITY_EDITOR
+                // Schema fingerprint check: editor-only, not needed in shipped builds
+                if (config.SchemaFingerprint != InputSchemaFingerprint.Current)
+                {
+                    CLogger.LogWarning($"{DEBUG_FLAG} Schema fingerprint mismatch: file has [{config.SchemaFingerprint ?? "none"}], current is [{InputSchemaFingerprint.Current}]. " +
+                                       "Some settings may use default values. Re-save in editor to upgrade.");
+                }
+#endif
+
+                return true;
             }
             catch (Exception e)
             {
@@ -225,12 +236,12 @@ namespace CycloneGames.InputSystem.Runtime
 
 #if UNITY_WEBGL && !UNITY_EDITOR
         /// <summary>
-        /// Generates a PlayerPrefs key from URI for WebGL storage.
+        /// Generates a deterministic PlayerPrefs key from URI for WebGL storage.
+        /// Uses FNV-1a instead of string.GetHashCode() which is non-deterministic across IL2CPP runs.
         /// </summary>
         private static string GetPlayerPrefsKeyFromUri(string uri)
         {
-            // Create a stable key from the URI
-            return $"InputConfig_{uri.GetHashCode():X8}";
+            return $"InputConfig_{InputHashUtility.GetDeterministicHashCode(uri):X8}";
         }
 #endif
 
