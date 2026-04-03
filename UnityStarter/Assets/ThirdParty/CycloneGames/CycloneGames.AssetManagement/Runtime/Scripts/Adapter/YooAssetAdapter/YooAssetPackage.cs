@@ -17,6 +17,12 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private readonly Cache.AssetCacheService _cacheService;
 
+        // Cached delegates to avoid per-call lambda allocation for non-cached handle types.
+        private static readonly Action<string, IReferenceCounted> _sceneReleaseCallback =
+            (_, h) => ((YooSceneHandle)h).DisposeInternal();
+        private static readonly Action<string, IReferenceCounted> _instantiateReleaseCallback =
+            (_, h) => ((YooInstantiateHandle)h).DisposeInternal();
+
         public YooAssetPackage(ResourcePackage rawPackage)
         {
             _rawPackage = rawPackage;
@@ -111,6 +117,9 @@ namespace CycloneGames.AssetManagement.Runtime
             var wrapped = YooAssetHandle<TAsset>.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"AssetAsync {typeof(TAsset).Name} : {location}");
             _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(wrapped, location);
+#endif
             return wrapped;
         }
 
@@ -125,6 +134,9 @@ namespace CycloneGames.AssetManagement.Runtime
             var wrapped = YooAllAssetsHandle<TAsset>.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"AllAssets {typeof(TAsset).Name} : {location}");
             _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(wrapped, location);
+#endif
             return wrapped;
         }
 
@@ -153,6 +165,9 @@ namespace CycloneGames.AssetManagement.Runtime
             var wrapped = YooRawFileHandle.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"RawFileAsync : {location}");
             _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(wrapped, location);
+#endif
             return wrapped;
         }
 
@@ -161,7 +176,7 @@ namespace CycloneGames.AssetManagement.Runtime
             var handle = _rawPackage.LoadSceneSync(sceneLocation, loadMode);
             var id = RegisterHandle();
             // SceneHandle is not cached; pass null key.
-            var wrapped = YooSceneHandle.Create(id, handle, (_, h) => ((YooSceneHandle)h).DisposeInternal());
+            var wrapped = YooSceneHandle.Create(id, handle, _sceneReleaseCallback);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"SceneSync : {sceneLocation}");
             return wrapped;
         }
@@ -171,8 +186,11 @@ namespace CycloneGames.AssetManagement.Runtime
             var handle = _rawPackage.LoadSceneAsync(sceneLocation, loadMode, suspendLoad: !activateOnLoad, priority: (uint)priority);
             var id = RegisterHandle();
             // SceneHandle is not cached; pass null key.
-            var wrapped = YooSceneHandle.Create(id, handle, (_, h) => ((YooSceneHandle)h).DisposeInternal());
+            var wrapped = YooSceneHandle.Create(id, handle, _sceneReleaseCallback);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"SceneAsync : {sceneLocation}");
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(wrapped, sceneLocation);
+#endif
             return wrapped;
         }
 
@@ -264,8 +282,11 @@ namespace CycloneGames.AssetManagement.Runtime
             var op = yooHandle.Raw.InstantiateAsync(parent, worldPositionStays);
             var id = RegisterHandle();
             // InstantiateHandle is not cached; pass null key.
-            var wrapped = YooInstantiateHandle.Create(id, op, (_, h) => ((YooInstantiateHandle)h).DisposeInternal());
+            var wrapped = YooInstantiateHandle.Create(id, op, _instantiateReleaseCallback);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"InstantiateAsync : {yooHandle.Raw.GetAssetInfo().AssetPath}");
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(wrapped, yooHandle.Raw.GetAssetInfo().AssetPath);
+#endif
             return wrapped;
         }
         public async UniTask UnloadUnusedAssetsAsync()

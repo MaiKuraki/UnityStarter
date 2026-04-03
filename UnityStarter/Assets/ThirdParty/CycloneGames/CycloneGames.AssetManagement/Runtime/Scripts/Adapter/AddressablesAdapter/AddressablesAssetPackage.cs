@@ -24,6 +24,12 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private readonly Cache.AssetCacheService _cacheService;
 
+        // Cached delegates to avoid per-call lambda allocation for non-cached handle types.
+        private static readonly Action<string, IReferenceCounted> _instantiateReleaseCallback =
+            (_, h) => ((AddressableInstantiateHandle)h).DisposeInternal();
+        private static readonly Action<string, IReferenceCounted> _sceneReleaseCallback =
+            (_, h) => ((AddressableSceneHandle)h).DisposeInternal();
+
         public AddressablesAssetPackage(string name)
         {
             packageName = name;
@@ -463,6 +469,9 @@ namespace CycloneGames.AssetManagement.Runtime
             var wrapped = AddressableAssetHandle<TAsset>.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
             _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(wrapped, location);
+#endif
             return wrapped;
         }
 
@@ -477,6 +486,9 @@ namespace CycloneGames.AssetManagement.Runtime
             var wrapped = AddressableAllAssetsHandle<TAsset>.Create(id, cacheKey, handle, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
             _cacheService.RegisterNew(cacheKey, bucket, tag, owner, wrapped);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(wrapped, location);
+#endif
             return wrapped;
         }
 
@@ -506,8 +518,11 @@ namespace CycloneGames.AssetManagement.Runtime
             var op = Addressables.InstantiateAsync(handle.AssetObject, parent, worldPositionStays, setActive);
             var id = RegisterHandle();
             // InstantiateHandle is not cached; pass null key. Cancellation deferred to handle release.
-            var wrapped = AddressableInstantiateHandle.Create(id, op, (_, h) => ((AddressableInstantiateHandle)h).DisposeInternal(), CancellationToken.None);
+            var wrapped = AddressableInstantiateHandle.Create(id, op, _instantiateReleaseCallback, CancellationToken.None);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle.AssetObject.name}");
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(wrapped, handle.AssetObject.name);
+#endif
             return wrapped;
         }
 
@@ -516,8 +531,11 @@ namespace CycloneGames.AssetManagement.Runtime
             var op = Addressables.LoadSceneAsync(sceneLocation, loadMode, activateOnLoad, priority);
             var id = RegisterHandle();
             // SceneHandle is not cached; pass null key.
-            var h = AddressableSceneHandle.Create(id, op, (_, h2) => ((AddressableSceneHandle)h2).DisposeInternal(), CancellationToken.None);
+            var h = AddressableSceneHandle.Create(id, op, _sceneReleaseCallback, CancellationToken.None);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"SceneAsync : {sceneLocation}");
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(h, sceneLocation);
+#endif
             return h;
         }
 

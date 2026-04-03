@@ -16,6 +16,10 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private readonly Cache.AssetCacheService _cacheService;
 
+        // Cached delegate to avoid per-call lambda allocation for non-cached handle types.
+        private static readonly Action<string, IReferenceCounted> _instantiateReleaseCallback =
+            (_, h) => ((ResourcesInstantiateHandle)h).DisposeInternal();
+
         public ResourcesAssetPackage(string name)
         {
             packageName = name;
@@ -103,6 +107,9 @@ namespace CycloneGames.AssetManagement.Runtime
             var handle = ResourcesAssetHandle<TAsset>.Create(id, cacheKey, request, _cacheService.OnHandleReleased, cancellationToken);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
             _cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(handle, location);
+#endif
             return handle;
         }
 
@@ -117,6 +124,9 @@ namespace CycloneGames.AssetManagement.Runtime
             var handle = ResourcesAllAssetsHandle<TAsset>.Create(id, cacheKey, assets, _cacheService.OnHandleReleased);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
             _cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(handle, location);
+#endif
             return handle;
         }
 
@@ -149,8 +159,11 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             var id = RegisterHandle();
             // InstantiateHandle is not cached; pass null key.
-            var wrapped = ResourcesInstantiateHandle.Create(id, instance, (_, h) => ((ResourcesInstantiateHandle)h).DisposeInternal());
+            var wrapped = ResourcesInstantiateHandle.Create(id, instance, _instantiateReleaseCallback);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle?.AssetObject?.name ?? "null"}");
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            AssetLoadProfiler.TrackAsync(wrapped, handle?.AssetObject?.name ?? "unknown");
+#endif
             return wrapped;
         }
 

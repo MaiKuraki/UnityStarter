@@ -14,6 +14,13 @@ namespace CycloneGames.AssetManagement.Runtime.Preload
 		public bool IsDone { get; private set; }
 		public string Error { get; private set; }
 		private readonly List<IAssetHandle<Object>> _retained = new List<IAssetHandle<Object>>(8);
+		private CancellationTokenSource _destroyCts;
+
+		/// <summary>
+		/// Maximum number of handles to dispose per frame during cleanup.
+		/// Prevents frame spikes when releasing large preload batches.
+		/// </summary>
+		private const int RELEASE_BATCH_SIZE = 8;
 
 		public async UniTask RunAsync(CancellationToken cancellationToken = default)
 		{
@@ -52,12 +59,56 @@ namespace CycloneGames.AssetManagement.Runtime.Preload
 
 		private void OnDestroy()
 		{
-			// Release retained handles when runner is destroyed by ScenePreloadManager.OnAfterLoadScene
+			_destroyCts?.Cancel();
+			_destroyCts?.Dispose();
+			_destroyCts = null;
+
+			// Release remaining handles synchronously on destroy.
+			// Most handles should already be released by ReleaseRetainedAsync;
+			// this is a safety net for any stragglers.
 			for (int i = 0; i < _retained.Count; i++)
 			{
 				_retained[i]?.Dispose();
 			}
 			_retained.Clear();
+		}
+
+		/// <summary>
+		/// Releases retained handles spread across multiple frames to avoid frame spikes.
+		/// Call this instead of waiting for OnDestroy when you want amortized cleanup
+		/// (e.g. after the loading screen is shown but before the runner is destroyed).
+		/// </summary>
+		public async UniTask ReleaseRetainedAsync(CancellationToken cancellationToken = default)
+		{
+			if (_retained.Count == 0) return;
+
+			_destroyCts?.Cancel();
+			_destroyCts?.Dispose();
+			_destroyCts = new CancellationTokenSource();
+
+			var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _destroyCts.Token);
+			try
+			{
+				int count = 0;
+				for (int i = _retained.Count - 1; i >= 0; i--)
+				{
+					_retained[i]?.Dispose();
+					_retained[i] = null;
+					count++;
+
+					if (count >= RELEASE_BATCH_SIZE)
+					{
+						count = 0;
+						await UniTask.Yield(linked.Token);
+					}
+				}
+				_retained.Clear();
+			}
+			catch (System.OperationCanceledException) { /* OnDestroy will clean up */ }
+			finally
+			{
+				linked.Dispose();
+			}
 		}
 	}
 }
