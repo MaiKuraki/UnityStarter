@@ -8,7 +8,10 @@ namespace CycloneGames.Service.Runtime
     /// </summary>
     public class GraphicsSettingsDefaultProvider : IDefaultProvider<GraphicsSettingsData>
     {
+        public const int CURRENT_SETTINGS_VERSION = 1;
+
         private const int FRAME_RATE_MOBILE = 60;
+        private const int FRAME_RATE_CONSOLE = 60;
         private const int FRAME_RATE_DESKTOP = -1;  // Uncapped
 
         public GraphicsSettingsData GetDefault()
@@ -40,14 +43,25 @@ namespace CycloneGames.Service.Runtime
             if (Application.platform == RuntimePlatform.WebGLPlayer)
                 return DeviceTier.Low;
 
-            // Desktop/Console
+            if (IsConsolePlatform())
+            {
+                // Current-gen consoles (PS5, Xbox Series X) = High/Ultra
+                // Last-gen (PS4, Xbox One, Switch) = Medium/High
+                if (systemMemory >= 12288)
+                    return DeviceTier.Ultra;
+                if (systemMemory >= 8192)
+                    return DeviceTier.High;
+                return DeviceTier.Medium;
+            }
+
+            // Desktop
             if (gpuMemory >= 8192 && processorCount >= 8 && systemMemory >= 16384)
                 return DeviceTier.Ultra;
             if (gpuMemory >= 4096 && processorCount >= 6 && systemMemory >= 8192)
                 return DeviceTier.High;
             if (gpuMemory >= 2048 && processorCount >= 4 && systemMemory >= 4096)
                 return DeviceTier.Medium;
-            
+
             return DeviceTier.Low;
 #endif
         }
@@ -68,6 +82,7 @@ namespace CycloneGames.Service.Runtime
         {
             return new GraphicsSettingsData
             {
+                SettingsVersion = CURRENT_SETTINGS_VERSION,
                 QualityLevel = 0,
                 TargetFrameRate = GetDefaultFrameRate(),
                 VSyncCount = 0,
@@ -79,7 +94,8 @@ namespace CycloneGames.Service.Runtime
                 SoftParticles = false,
                 RenderScale = 0.75f,
                 HDREnabled = false,
-                ShortEdgeResolution = 540
+                ShortEdgeResolution = 540,
+                FullScreenMode = GetDefaultFullScreenMode()
             };
         }
 
@@ -87,6 +103,7 @@ namespace CycloneGames.Service.Runtime
         {
             return new GraphicsSettingsData
             {
+                SettingsVersion = CURRENT_SETTINGS_VERSION,
                 QualityLevel = 1,
                 TargetFrameRate = GetDefaultFrameRate(),
                 VSyncCount = Application.isMobilePlatform ? 0 : 1,
@@ -98,7 +115,8 @@ namespace CycloneGames.Service.Runtime
                 SoftParticles = true,
                 RenderScale = 1.0f,
                 HDREnabled = false,
-                ShortEdgeResolution = 720
+                ShortEdgeResolution = 720,
+                FullScreenMode = GetDefaultFullScreenMode()
             };
         }
 
@@ -106,6 +124,7 @@ namespace CycloneGames.Service.Runtime
         {
             return new GraphicsSettingsData
             {
+                SettingsVersion = CURRENT_SETTINGS_VERSION,
                 QualityLevel = 2,
                 TargetFrameRate = GetDefaultFrameRate(),
                 VSyncCount = 1,
@@ -117,7 +136,8 @@ namespace CycloneGames.Service.Runtime
                 SoftParticles = true,
                 RenderScale = 1.0f,
                 HDREnabled = true,
-                ShortEdgeResolution = 1080
+                ShortEdgeResolution = 1080,
+                FullScreenMode = GetDefaultFullScreenMode()
             };
         }
 
@@ -125,6 +145,7 @@ namespace CycloneGames.Service.Runtime
         {
             return new GraphicsSettingsData
             {
+                SettingsVersion = CURRENT_SETTINGS_VERSION,
                 QualityLevel = QualitySettings.names.Length - 1,
                 TargetFrameRate = -1,       // Uncapped
                 VSyncCount = 1,
@@ -136,17 +157,39 @@ namespace CycloneGames.Service.Runtime
                 SoftParticles = true,
                 RenderScale = 1.0f,
                 HDREnabled = true,
-                ShortEdgeResolution = 2160   // 4K
+                ShortEdgeResolution = 2160,  // 4K
+                FullScreenMode = GetDefaultFullScreenMode()
             };
         }
 
-        private int GetDefaultFrameRate()
+        private static int GetDefaultFrameRate()
         {
             if (Application.isMobilePlatform)
                 return FRAME_RATE_MOBILE;
             if (Application.platform == RuntimePlatform.WebGLPlayer)
                 return FRAME_RATE_MOBILE;
+            if (IsConsolePlatform())
+                return FRAME_RATE_CONSOLE;
             return FRAME_RATE_DESKTOP;
+        }
+
+        // 0=ExclusiveFullScreen (desktop default), 1=FullScreenWindow (borderless)
+        // Mobile/console/WebGL always use native fullscreen
+        private static int GetDefaultFullScreenMode()
+        {
+            if (Application.isMobilePlatform || IsConsolePlatform() ||
+                Application.platform == RuntimePlatform.WebGLPlayer)
+                return 0; // ExclusiveFullScreen
+            return 1; // FullScreenWindow (borderless — preferred for modern desktop)
+        }
+
+        private static bool IsConsolePlatform()
+        {
+            var p = Application.platform;
+            return p == RuntimePlatform.PS4 || p == RuntimePlatform.PS5 ||
+                   p == RuntimePlatform.XboxOne ||
+                   p == RuntimePlatform.GameCoreXboxOne || p == RuntimePlatform.GameCoreXboxSeries ||
+                   p == RuntimePlatform.Switch;
         }
     }
 }

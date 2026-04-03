@@ -9,6 +9,9 @@ namespace CycloneGames.Service.Runtime
     [YamlObject]
     public partial struct GraphicsSettingsData
     {
+        // Schema version for forward-compatible migration. 0 = legacy (pre-versioning).
+        public int SettingsVersion;
+
         // Higher = better quality. Maps to Unity's Quality Settings index.
         public int QualityLevel;
 
@@ -44,5 +47,9 @@ namespace CycloneGames.Service.Runtime
 
         // Short edge resolution in pixels (e.g., 720, 1080, 1440). Aspect ratio is auto-detected from device.
         public int ShortEdgeResolution;
+
+        // 0=ExclusiveFullScreen, 1=FullScreenWindow, 2=MaximizedWindow, 3=Windowed.
+        // Maps to UnityEngine.FullScreenMode. Mobile/console always fullscreen.
+        public int FullScreenMode;
     }
 }

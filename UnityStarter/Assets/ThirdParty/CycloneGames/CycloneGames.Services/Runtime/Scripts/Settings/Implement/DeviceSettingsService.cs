@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.IO;
 using CycloneGames.Logger;
+using CycloneGames.Utility.Runtime;
 using UnityEngine;
 using VYaml.Parser;
 using VYaml.Emitter;
@@ -12,49 +13,46 @@ using Unity.Collections;
 namespace CycloneGames.Service.Runtime
 {
     /// <summary>
-    /// Generic service for managing device-specific settings with YAML persistence.
-    /// 
+    /// Generic device-settings persistence with YAML serialization, version migration, and integrity checking.
+    ///
     /// Usage:
-    ///   // Initialize with auto device detection
     ///   var provider = new GraphicsSettingsDefaultProvider();
     ///   var service = new DeviceSettingsService<GraphicsSettingsData>("graphics.yaml", provider, "Settings");
     ///   service.LoadSettings();
-    ///   
-    ///   // Modify single property (zero-GC via ref)
+    ///
     ///   service.UpdateSettings((ref GraphicsSettingsData s) => s.AntiAliasingLevel = 4);
-    ///   service.SaveSettings();
-    ///   
-    ///   // Modify multiple properties
-    ///   service.UpdateSettings((ref GraphicsSettingsData s) => {
-    ///       s.TextureQuality = 0;
-    ///       s.RenderScale = 1.5f;
-    ///   });
     ///   service.SaveSettings();
     /// </summary>
     public class DeviceSettingsService<T> : ISettingsService<T> where T : struct
     {
         private const string DEBUG_FLAG = "[DeviceSettings]";
 
-        public delegate void RefAction(ref T settings);
-
         private T _settings;
         private string _filePath;
         private string _tempFilePath;
+        private string _checksumFilePath;
         private YamlSerializerOptions _serializerOptions;
         private IDefaultProvider<T> _defaultProvider;
+        private ISettingsVersionMigrator<T> _migrator;
         private string _cachedTypeName;
 
         public bool IsInitialized { get; private set; }
         public T Settings => _settings;
+        public SettingsIntegrity LastLoadIntegrity { get; private set; } = SettingsIntegrity.Missing;
 
+        public event Action<T> OnSettingsChanged;
+
+        // Parameterless for DI containers that require post-construction initialization
         public DeviceSettingsService() { }
 
-        public DeviceSettingsService(string fileName, IDefaultProvider<T> defaultProvider, string subDirectory = null)
+        public DeviceSettingsService(string fileName, IDefaultProvider<T> defaultProvider,
+            string subDirectory = null, ISettingsVersionMigrator<T> migrator = null)
         {
-            Initialize(fileName, defaultProvider, subDirectory);
+            Initialize(fileName, defaultProvider, subDirectory, migrator);
         }
 
-        public void Initialize(string fileName, IDefaultProvider<T> defaultProvider, string subDirectory = null)
+        public void Initialize(string fileName, IDefaultProvider<T> defaultProvider,
+            string subDirectory = null, ISettingsVersionMigrator<T> migrator = null)
         {
             if (IsInitialized)
             {
@@ -67,6 +65,7 @@ namespace CycloneGames.Service.Runtime
 
             _serializerOptions = new YamlSerializerOptions { Resolver = SettingsYamlResolver.Instance };
             _cachedTypeName = typeof(T).Name;
+            _migrator = migrator;
 
             string directory = string.IsNullOrEmpty(subDirectory)
                 ? Application.persistentDataPath
@@ -74,6 +73,7 @@ namespace CycloneGames.Service.Runtime
 
             _filePath = Path.Combine(directory, fileName);
             _tempFilePath = _filePath + ".tmp";
+            _checksumFilePath = _filePath + ".checksum";
             _defaultProvider = defaultProvider;
             _settings = _defaultProvider.GetDefault();
 
@@ -82,10 +82,9 @@ namespace CycloneGames.Service.Runtime
         }
 
         /// <summary>
-        /// Modify settings via ref delegate. Zero-GC, no struct copy.
-        /// Example: service.UpdateSettings((ref T s) => s.SomeProperty = value);
+        /// Zero-GC mutation via ref delegate — no struct copy.
         /// </summary>
-        public void UpdateSettings(RefAction updateAction)
+        public void UpdateSettings(SettingsRefAction<T> updateAction)
         {
             if (!IsInitialized)
             {
@@ -93,6 +92,19 @@ namespace CycloneGames.Service.Runtime
                 return;
             }
             updateAction(ref _settings);
+            OnSettingsChanged?.Invoke(_settings);
+        }
+
+        public void ResetToDefaults()
+        {
+            if (!IsInitialized)
+            {
+                CLogger.LogError($"{DEBUG_FLAG} Not initialized, cannot reset '{_cachedTypeName}'");
+                return;
+            }
+            _settings = _defaultProvider.GetDefault();
+            OnSettingsChanged?.Invoke(_settings);
+            CLogger.LogInfo($"{DEBUG_FLAG} Reset to defaults for '{_cachedTypeName}'");
         }
 
         public void LoadSettings()
@@ -106,6 +118,7 @@ namespace CycloneGames.Service.Runtime
             if (!File.Exists(_filePath))
             {
                 CLogger.LogInfo($"{DEBUG_FLAG} Settings file not found for '{_cachedTypeName}', creating with defaults");
+                LastLoadIntegrity = SettingsIntegrity.Missing;
                 SaveSettings();
                 return;
             }
@@ -113,19 +126,31 @@ namespace CycloneGames.Service.Runtime
             try
             {
                 using var nativeBytes = NativeFile.ReadAllBytes(_filePath);
-                byte[] fileBytes = nativeBytes.ToArray();
+                byte[] fileBytes = NormalizeLineEndings(nativeBytes.ToArray());
 
-                // Normalize line endings for cross-platform compatibility
-                string yamlContent = System.Text.Encoding.UTF8.GetString(fileBytes);
-                yamlContent = yamlContent.Replace("\r\n", "\n").Replace("\r", "\n");
-                fileBytes = System.Text.Encoding.UTF8.GetBytes(yamlContent);
+                LastLoadIntegrity = VerifyChecksum(fileBytes);
+                if (LastLoadIntegrity == SettingsIntegrity.Modified)
+                {
+                    CLogger.LogWarning($"{DEBUG_FLAG} Settings file for '{_cachedTypeName}' was modified externally (checksum mismatch)");
+                }
 
                 var parser = new YamlParser(new ReadOnlySequence<byte>(fileBytes));
                 _settings = YamlSerializer.Deserialize<T>(ref parser, _serializerOptions);
+
+                // Run version migration if migrator is provided and data needs it
+                if (_migrator != null && _migrator.NeedsMigration(in _settings))
+                {
+                    CLogger.LogInfo($"{DEBUG_FLAG} Migrating '{_cachedTypeName}' to version {_migrator.CurrentVersion}");
+                    _migrator.Migrate(ref _settings);
+                    SaveSettings();
+                }
+
+                OnSettingsChanged?.Invoke(_settings);
             }
             catch (Exception ex)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to parse '{_filePath}': {ex.Message}. Resetting to default.");
+                LastLoadIntegrity = SettingsIntegrity.Corrupted;
                 _settings = _defaultProvider.GetDefault();
                 SaveSettings();
             }
@@ -147,42 +172,110 @@ namespace CycloneGames.Service.Runtime
                     Directory.CreateDirectory(directory);
                 }
 
-                // Clean up any leftover temp file from previous failed save
-                if (File.Exists(_tempFilePath))
-                {
-                    try { File.Delete(_tempFilePath); }
-                    catch { /* Ignore cleanup errors */ }
-                }
+                CleanupTempFile();
 
                 var bufferWriter = new ArrayBufferWriter<byte>();
                 var emitter = new Utf8YamlEmitter(bufferWriter);
 
                 YamlSerializer.Serialize(ref emitter, _settings, _serializerOptions);
 
-                // Normalize line endings for cross-platform compatibility
-                byte[] yamlBytes = bufferWriter.WrittenSpan.ToArray();
-                string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
-                yamlContent = yamlContent.Replace("\r\n", "\n").Replace("\r", "\n");
-                yamlBytes = System.Text.Encoding.UTF8.GetBytes(yamlContent);
+                byte[] yamlBytes = NormalizeLineEndings(bufferWriter.WrittenSpan.ToArray());
 
-                using var nativeBytes = new NativeArray<byte>(yamlBytes, Allocator.Temp);
-                NativeFile.WriteAllBytes(_tempFilePath, nativeBytes);
+                using var nativeArray = new NativeArray<byte>(yamlBytes, Allocator.Temp);
+                NativeFile.WriteAllBytes(_tempFilePath, nativeArray);
 
-                // Atomic replace: copy temp to target with overwrite, then delete temp
-                // Using Copy+Delete instead of Move because Move doesn't support overwrite in older .NET
+                // Atomic replace: Copy+Delete because Move lacks overwrite in older .NET
                 File.Copy(_tempFilePath, _filePath, overwrite: true);
                 File.Delete(_tempFilePath);
+
+                WriteChecksum(yamlBytes);
             }
             catch (Exception ex)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to save '{_cachedTypeName}': {ex.Message}");
+                CleanupTempFile();
+            }
+        }
 
-                // Clean up temp file on error
-                if (File.Exists(_tempFilePath))
+        #region Line Ending Normalization (byte-level, avoids string allocation)
+
+        private static byte[] NormalizeLineEndings(byte[] data)
+        {
+            bool hasCR = false;
+            for (int i = 0; i < data.Length; i++)
+            {
+                if (data[i] == 0x0D) { hasCR = true; break; }
+            }
+            if (!hasCR) return data;
+
+            byte[] buffer = new byte[data.Length];
+            int j = 0;
+            for (int i = 0; i < data.Length; i++)
+            {
+                if (data[i] == 0x0D) // \r
                 {
-                    try { File.Delete(_tempFilePath); }
-                    catch { /* Ignore cleanup errors */ }
+                    buffer[j++] = 0x0A; // -> \n
+                    if (i + 1 < data.Length && data[i + 1] == 0x0A) i++; // skip \n in \r\n
                 }
+                else
+                {
+                    buffer[j++] = data[i];
+                }
+            }
+
+            if (j == data.Length) return buffer;
+            byte[] result = new byte[j];
+            Buffer.BlockCopy(buffer, 0, result, 0, j);
+            return result;
+        }
+
+        #endregion
+
+        #region Integrity (xxHash64 checksum sidecar file)
+
+        private SettingsIntegrity VerifyChecksum(byte[] data)
+        {
+            if (!File.Exists(_checksumFilePath))
+                return SettingsIntegrity.Missing;
+
+            try
+            {
+                string storedHash = File.ReadAllText(_checksumFilePath).Trim();
+                string computedHash = ComputeHash(data);
+                return storedHash == computedHash ? SettingsIntegrity.Valid : SettingsIntegrity.Modified;
+            }
+            catch
+            {
+                return SettingsIntegrity.Missing;
+            }
+        }
+
+        private void WriteChecksum(byte[] data)
+        {
+            try
+            {
+                File.WriteAllText(_checksumFilePath, ComputeHash(data));
+            }
+            catch (Exception ex)
+            {
+                CLogger.LogWarning($"{DEBUG_FLAG} Failed to write checksum for '{_cachedTypeName}': {ex.Message}");
+            }
+        }
+
+        private static string ComputeHash(byte[] data)
+        {
+            ulong hash = XxHash64.HashToUInt64(data);
+            return hash.ToString("X16");
+        }
+
+        #endregion
+
+        private void CleanupTempFile()
+        {
+            if (File.Exists(_tempFilePath))
+            {
+                try { File.Delete(_tempFilePath); }
+                catch { /* Ignore cleanup errors */ }
             }
         }
     }
