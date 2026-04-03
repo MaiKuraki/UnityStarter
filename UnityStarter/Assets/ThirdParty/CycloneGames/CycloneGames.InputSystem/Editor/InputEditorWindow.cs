@@ -920,6 +920,23 @@ namespace CycloneGames.InputSystem.Editor
                 string yamlContent = NativeFile.ReadAllText(path);
                 var configModel = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(yamlContent));
 
+                // Schema fingerprint mismatch detection: warn developer if loaded config is outdated
+                if (configModel.SchemaFingerprint != InputSchemaFingerprint.Current)
+                {
+                    bool upgrade = EditorUtility.DisplayDialog(
+                        "Schema Fingerprint Mismatch",
+                        $"Loaded config fingerprint [{configModel.SchemaFingerprint ?? "none"}] does not match current schema [{InputSchemaFingerprint.Current}].\n\n" +
+                        "New fields will use default values. Removed or renamed fields may have been lost.\n\n" +
+                        "Save the config to stamp the current fingerprint.",
+                        "OK (Continue)", "Cancel");
+                    if (!upgrade)
+                    {
+                        ClearEditor();
+                        return;
+                    }
+                    status = $"⚠ Schema mismatch — save to update fingerprint.";
+                }
+
                 _configSO = CreateInstance<InputConfigurationSO>();
                 _configSO.FromData(configModel);
 
@@ -963,6 +980,7 @@ namespace CycloneGames.InputSystem.Editor
             try
             {
                 InputConfiguration configModel = _configSO.ToData();
+                configModel.SchemaFingerprint = InputSchemaFingerprint.Current;
                 byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(configModel);
                 string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
 
@@ -1068,6 +1086,7 @@ namespace CycloneGames.InputSystem.Editor
             try
             {
                 InputConfiguration configModel = _configSO.ToData();
+                configModel.SchemaFingerprint = InputSchemaFingerprint.Current;
                 byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(configModel);
                 string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
 
@@ -1537,6 +1556,7 @@ namespace CycloneGames.InputSystem.Editor
         {
             return new InputConfiguration
             {
+                SchemaFingerprint = InputSchemaFingerprint.Current,
                 PlayerSlots = new System.Collections.Generic.List<PlayerSlotConfig>
                 {
                     new PlayerSlotConfig
