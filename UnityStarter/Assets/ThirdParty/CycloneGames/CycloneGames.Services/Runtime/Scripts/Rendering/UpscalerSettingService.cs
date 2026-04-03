@@ -1,3 +1,4 @@
+using System;
 using CycloneGames.Logger;
 
 #if TND_UPSCALING_PRESENT
@@ -8,7 +9,7 @@ namespace CycloneGames.Service.Runtime
 {
     /// <summary>
     /// Manages upscaler settings and provides TndQuality for UpscalerController_URP.
-    /// 
+    ///
     /// Usage:
     ///   var provider = new UpscalerSettingsDefaultProvider();
     ///   upscalerService.ApplySettings(provider.GetDefault());
@@ -23,10 +24,9 @@ namespace CycloneGames.Service.Runtime
         float CurrentScaleFactor { get; }
         UpscalerTechnology[] GetSupportedTechnologies();
 
+        event Action OnSettingsChanged;
+
 #if TND_UPSCALING_PRESENT
-        /// <summary>
-        /// TND UpscalerQuality enum value to use with UpscalerController_URP.
-        /// </summary>
         UpscalerQuality TndQuality { get; }
 #endif
     }
@@ -39,6 +39,8 @@ namespace CycloneGames.Service.Runtime
         public UpscalerTechnology CurrentTechnology { get; private set; } = UpscalerTechnology.None;
         public UpscalerQualityPreset CurrentQuality { get; private set; } = UpscalerQualityPreset.Off;
         public float CurrentScaleFactor { get; private set; } = 1f;
+
+        public event Action OnSettingsChanged;
 
 #if TND_UPSCALING_PRESENT
         public UpscalerQuality TndQuality { get; private set; } = UpscalerQuality.Off;
@@ -62,6 +64,7 @@ namespace CycloneGames.Service.Runtime
                 TndQuality = UpscalerQuality.Off;
 #endif
                 CLogger.LogInfo($"{DEBUG_FLAG} Upscaler disabled");
+                OnSettingsChanged?.Invoke();
                 return;
             }
 
@@ -73,6 +76,7 @@ namespace CycloneGames.Service.Runtime
             IsUpscalerActive = false;
             CLogger.LogWarning($"{DEBUG_FLAG} TND Upscaling Framework not present");
 #endif
+            OnSettingsChanged?.Invoke();
         }
 
 #if TND_UPSCALING_PRESENT
