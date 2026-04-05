@@ -3,20 +3,11 @@ using System.Runtime.CompilerServices;
 
 namespace CycloneGames.Cheat.Runtime
 {
-    /// <summary>
-    /// Base interface for all cheat commands. Commands are dispatched via VitalRouter.
-    /// </summary>
     public interface ICheatCommand : VitalRouter.ICommand
     {
-        /// <summary>
-        /// Unique command identifier. Used for de-duplication and cancellation.
-        /// </summary>
         string CommandID { get; }
     }
 
-    /// <summary>
-    /// Zero-argument cheat command.
-    /// </summary>
     public readonly struct CheatCommand : ICheatCommand
     {
         public string CommandID { get; }
@@ -28,9 +19,6 @@ namespace CycloneGames.Cheat.Runtime
         }
     }
 
-    /// <summary>
-    /// Struct-argument cheat command.
-    /// </summary>
     public readonly struct CheatCommand<T> : ICheatCommand where T : struct
     {
         public string CommandID { get; }
@@ -45,7 +33,7 @@ namespace CycloneGames.Cheat.Runtime
     }
 
     /// <summary>
-    /// Class-argument cheat command. Allocates on heap but provides reference semantics.
+    /// Class-argument command. Heap-allocated - prefer struct variants when possible.
     /// </summary>
     public sealed class CheatCommandClass<T> : ICheatCommand where T : class
     {
@@ -60,9 +48,6 @@ namespace CycloneGames.Cheat.Runtime
         }
     }
 
-    /// <summary>
-    /// Two struct-argument cheat command.
-    /// </summary>
     public readonly struct CheatCommand<T1, T2> : ICheatCommand
         where T1 : struct where T2 : struct
     {
@@ -79,9 +64,6 @@ namespace CycloneGames.Cheat.Runtime
         }
     }
 
-    /// <summary>
-    /// Three struct-argument cheat command.
-    /// </summary>
     public readonly struct CheatCommand<T1, T2, T3> : ICheatCommand
         where T1 : struct where T2 : struct where T3 : struct
     {
