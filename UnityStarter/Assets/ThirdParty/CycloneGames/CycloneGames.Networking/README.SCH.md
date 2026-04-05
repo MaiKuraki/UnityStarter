@@ -2,39 +2,63 @@
 
 <div align="left"><a href="./README.md">English</a> | 简体中文</div>
 
-一个为 Unity 设计的**生产级网络抽象层**，支持状态同步、帧同步（Lockstep）、回滚（Rollback）、客户端预测等多种网络同步模式。具备**零 GC 运行时性能**、**线程安全**与**跨平台兼容**特性。
+一个为 Unity 设计的**生产级网络抽象层**，支持状态同步、帧同步（Lockstep）、回滚（Rollback）、客户端预测等多种网络同步模式。具备**低分配运行时性能**、**适配器感知的线程安全**与**跨平台兼容**特性。
 
 ---
 
 ## 目录
 
-- [架构概览](#架构概览)
-- [快速开始](#快速开始)
-- [模块详解](#模块详解)
-  - [核心抽象层](#1-核心抽象层-core)
-  - [缓冲区系统](#2-缓冲区系统-buffers)
-  - [服务注册](#3-服务注册-services)
-  - [序列化系统](#4-序列化系统-serialization)
-  - [网络模拟时钟](#5-网络模拟时钟-simulation)
-  - [客户端预测](#6-客户端预测-prediction)
-  - [兴趣管理](#7-兴趣管理-interest-management)
-  - [状态同步变量](#8-状态同步变量-statesync)
-  - [远程过程调用](#9-远程过程调用-rpc)
-  - [帧同步与确定性模拟](#10-帧同步与确定性模拟-lockstep)
-  - [安全模块](#11-安全模块-security)
-  - [会话与重连](#12-会话与重连-session)
-  - [回放系统](#13-回放系统-replay)
-  - [网络生成管理](#14-网络生成管理-spawning)
-  - [场景管理](#15-场景管理-scene)
-  - [数据压缩](#16-数据压缩-compression)
-  - [诊断工具](#17-诊断工具-diagnostics)
-  - [GAS 集成](#18-gameplay-abilities-集成-gas)
-  - [身份验证](#19-身份验证-authentication)
-  - [平台配置](#20-平台配置-platform)
-  - [传输适配器](#21-传输适配器-adapters)
-- [游戏类型适配指南](#游戏类型适配指南)
-- [进阶教程](#进阶教程)
-- [API 速查表](#api-速查表)
+- [CycloneGames.Networking](#cyclonegamesnetworking)
+  - [目录](#目录)
+  - [架构概览](#架构概览)
+    - [设计原则](#设计原则)
+  - [快速开始](#快速开始)
+    - [前置条件](#前置条件)
+    - [最小示例：发送和接收消息](#最小示例发送和接收消息)
+    - [最小示例：使用 Mirror 适配器](#最小示例使用-mirror-适配器)
+  - [模块详解](#模块详解)
+    - [1. 核心抽象层 (Core)](#1-核心抽象层-core)
+      - [关键枚举](#关键枚举)
+    - [2. 缓冲区系统 (Buffers)](#2-缓冲区系统-buffers)
+    - [3. 服务注册 (Services)](#3-服务注册-services)
+    - [4. 序列化系统 (Serialization)](#4-序列化系统-serialization)
+    - [5. 网络模拟时钟 (Simulation)](#5-网络模拟时钟-simulation)
+    - [6. 客户端预测 (Prediction)](#6-客户端预测-prediction)
+      - [快照插值](#快照插值)
+      - [滞后补偿](#滞后补偿)
+    - [7. 兴趣管理 (Interest Management)](#7-兴趣管理-interest-management)
+    - [8. 状态同步变量 (StateSync)](#8-状态同步变量-statesync)
+    - [9. 远程过程调用 (RPC)](#9-远程过程调用-rpc)
+    - [10. 帧同步与确定性模拟 (Lockstep)](#10-帧同步与确定性模拟-lockstep)
+      - [帧同步最小示例](#帧同步最小示例)
+      - [定点数学](#定点数学)
+      - [GGPO 风格回滚](#ggpo-风格回滚)
+    - [11. 安全模块 (Security)](#11-安全模块-security)
+    - [12. 会话与重连 (Session)](#12-会话与重连-session)
+    - [13. 回放系统 (Replay)](#13-回放系统-replay)
+    - [14. 网络生成管理 (Spawning)](#14-网络生成管理-spawning)
+    - [15. 场景管理 (Scene)](#15-场景管理-scene)
+    - [16. 数据压缩 (Compression)](#16-数据压缩-compression)
+    - [17. 诊断工具 (Diagnostics)](#17-诊断工具-diagnostics)
+    - [18. Gameplay Abilities 集成 (GAS)](#18-gameplay-abilities-集成-gas)
+      - [消息 ID 分配](#消息-id-分配)
+    - [19. 身份验证 (Authentication)](#19-身份验证-authentication)
+    - [20. 平台配置 (Platform)](#20-平台配置-platform)
+    - [21. 传输适配器 (Adapters)](#21-传输适配器-adapters)
+  - [游戏类型适配指南](#游戏类型适配指南)
+  - [进阶教程](#进阶教程)
+    - [教程 1：从零搭建 FPS 网络同步](#教程-1从零搭建-fps-网络同步)
+    - [教程 2：实现 RTS 帧同步](#教程-2实现-rts-帧同步)
+    - [教程 3：实现团队可见性管理](#教程-3实现团队可见性管理)
+  - [API 速查表](#api-速查表)
+    - [核心](#核心)
+    - [序列化](#序列化)
+    - [同步](#同步)
+    - [帧同步](#帧同步)
+    - [兴趣管理](#兴趣管理)
+    - [GAS 集成（📦 独立包：`CycloneGames.Networking.GAS`）](#gas-集成-独立包cyclonegamesnetworkinggas)
+  - [目录结构](#目录结构)
+  - [许可证](#许可证)
 
 ---
 
@@ -122,15 +146,15 @@ flowchart TB
 
 ### 设计原则
 
-| 原则 | 说明 |
-|------|------|
-| **接口驱动** | 所有子系统通过接口定义（`INetTransport`、`INetSerializer`、`IInterestManager` 等） |
-| **零 GC 稳态** | `ArrayPool`、`ConcurrentQueue` 对象池、环形缓冲区，运行时零分配 |
-| **模块化** | 序列化器、传输层、兴趣管理均可插拔替换 |
-| **确定性支持** | Q32.32 定点数学、帧同步、回滚，适用于竞技游戏 |
-| **可插拔哈希** | `IStateHasher` struct 泛型约束，零成本哈希算法注入 |
-| **线程安全** | `Interlocked` 原子操作、`ConcurrentQueue`、线程安全的缓冲区池 |
-| **条件编译** | `#if MIRROR`、`#if MIRAGE`、`#if MESSAGEPACK` 等按需启用功能 |
+| 原则           | 说明                                                                                                |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| **接口驱动**   | 所有子系统通过接口定义（`INetTransport`、`INetSerializer`、`IInterestManager` 等）                  |
+| **零 GC 稳态** | `ArrayPool`、`ConcurrentQueue` 对象池、环形缓冲区，运行时零分配                                     |
+| **模块化**     | 序列化器、传输层、兴趣管理均可插拔替换                                                              |
+| **确定性支持** | Q32.32 定点数学、帧同步、回滚，适用于竞技游戏                                                       |
+| **可插拔哈希** | `IStateHasher` struct 泛型约束，零成本哈希算法注入                                                  |
+| **线程安全**   | Mirror 适配器提供跨线程发送队列（`ConcurrentQueue`）与 `Interlocked` 统计；其他适配器默认主线程发送 |
+| **条件编译**   | `#if MIRROR`、`#if MIRAGE`、`#if MESSAGEPACK` 等按需启用功能                                        |
 
 ---
 
@@ -267,12 +291,12 @@ classDiagram
 
 #### 关键枚举
 
-| 枚举 | 值 | 说明 |
-|------|-----|------|
-| `NetworkMode` | Offline, Client, Server, Host, ListenServer, DedicatedServer, Relay | 网络运行模式 |
-| `NetworkChannel` | Reliable, Unreliable, ReliableUnordered, UnreliableSequenced | 传输通道类型 |
-| `ConnectionQuality` | Excellent, Good, Fair, Poor, Disconnected | 连接质量等级 |
-| `TransportError` | None, DnsResolve, Refused, Timeout, Congestion, ... | 传输错误类型 |
+| 枚举                | 值                                                                  | 说明         |
+| ------------------- | ------------------------------------------------------------------- | ------------ |
+| `NetworkMode`       | Offline, Client, Server, Host, ListenServer, DedicatedServer, Relay | 网络运行模式 |
+| `NetworkChannel`    | Reliable, Unreliable, ReliableUnordered, UnreliableSequenced        | 传输通道类型 |
+| `ConnectionQuality` | Excellent, Good, Fair, Poor, Disconnected                           | 连接质量等级 |
+| `TransportError`    | None, DnsResolve, Refused, Timeout, Congestion, ...                 | 传输错误类型 |
 
 ---
 
@@ -355,13 +379,13 @@ flowchart TB
     Factory --> Serializers
 ```
 
-| 序列化器 | 编译符号 | 格式 | 推荐场景 |
-|----------|---------|------|----------|
-| Json (Unity) | 无（默认） | 文本 | 开发调试 |
-| Newtonsoft Json | `NEWTONSOFT_JSON` | 文本 | 复杂数据结构 |
-| MessagePack | `MESSAGEPACK` | 二进制 | **生产环境推荐** |
-| ProtoBuf | `PROTOBUF` | 二进制 | Schema 驱动开发 |
-| FlatBuffers | `FLATBUFFERS` | 二进制 | 超高性能零拷贝 |
+| 序列化器        | 编译符号          | 格式   | 推荐场景         |
+| --------------- | ----------------- | ------ | ---------------- |
+| Json (Unity)    | 无（默认）        | 文本   | 开发调试         |
+| Newtonsoft Json | `NEWTONSOFT_JSON` | 文本   | 复杂数据结构     |
+| MessagePack     | `MESSAGEPACK`     | 二进制 | **生产环境推荐** |
+| ProtoBuf        | `PROTOBUF`        | 二进制 | Schema 驱动开发  |
+| FlatBuffers     | `FLATBUFFERS`     | 二进制 | 超高性能零拷贝   |
 
 ```csharp
 // 获取推荐序列化器（优先级：MessagePack > Newtonsoft > Json）
@@ -846,16 +870,14 @@ flowchart LR
 
 ```csharp
 // 重连管理器
-var reconnect = new ReconnectionManager(
-    reconnectWindowSeconds: 300, // 5 分钟内可重连
-    catchUp: myStateCatchUpImpl
-);
+var reconnect = new ReconnectionManager(myStateCatchUpImpl);
+reconnect.ReconnectWindow = 300f; // 5 分钟内可重连
 
-reconnect.OnClientReconnected += (conn, state) =>
-    Debug.Log($"玩家 {conn.PlayerId} 重连成功");
+reconnect.OnClientReconnected += (originalConnectionId, newConnection) =>
+    Debug.Log($"玩家重连成功，原连接={originalConnectionId}，新连接={newConnection.ConnectionId}");
 
-reconnect.OnReconnectWindowExpired += playerId =>
-    Debug.Log($"玩家 {playerId} 重连窗口过期");
+reconnect.OnReconnectWindowExpired += originalConnectionId =>
+    Debug.Log($"连接 {originalConnectionId} 的重连窗口过期");
 ```
 
 ---
@@ -1037,40 +1059,104 @@ using CycloneGames.Networking.GAS; // 📦 需引用 GAS 独立包
 var bridge = new NetworkedAbilityBridge(networkManager);
 
 // 注册 ASC（AbilitySystemComponent）
-bridge.RegisterASC(networkId, myASC);
+bridge.RegisterASC(networkId, ownerConnectionId, myASC);
+
+// 可选：自定义完整状态请求鉴权（默认仅所有者可请求）
+bridge.FullStateRequestAuthorizer = (sender, targetId) => sender.ConnectionId == ownerConnectionId;
+
+// 生产环境推荐策略：仅所有者或当前观察者可请求完整状态
+bridge.FullStateRequestAuthorizer = (sender, targetId) =>
+{
+    if (TryGetAscOwnerConnectionId(targetId, out int ascOwnerId) && sender.ConnectionId == ascOwnerId)
+        return true;
+
+    var observers = GetObservers(targetId);
+    if (observers == null) return false;
+
+    for (int i = 0; i < observers.Count; i++)
+    {
+        if (observers[i].ConnectionId == sender.ConnectionId)
+            return true;
+    }
+
+    return false;
+};
 
 // 客户端请求激活技能
 bridge.ClientRequestActivateAbility(
-    abilityTag: 1001,
+    abilityIndex: 1001,
+    predictionKey: nextPredictionKey++,
+    targetPos: targetPos,
+    direction: direction,
     targetNetworkId: targetId,
-    predictionKey: nextPredictionKey++
 );
 
 // 属性同步管理器
 var attrSync = new AttributeSyncManager(bridge);
-attrSync.RegisterPublicAttribute(networkId, "Health");
-attrSync.RegisterPublicAttribute(networkId, "MaxHealth");
-attrSync.MarkDirty(networkId, "Health");
-attrSync.FlushDirty(); // 发送脏属性
+attrSync.RegisterPublicAttribute(healthAttrId);
+attrSync.RegisterPublicAttribute(maxHealthAttrId);
+attrSync.MarkDirty(networkId, healthAttrId, baseValue: 100f, currentValue: 75f);
+attrSync.FlushDirty(getOwnerConnectionId: GetOwnerConnectionId, getObservers: GetObservers, getConnectionById: GetConnectionById); // 发送脏属性
 
 // 效果复制管理器
 var effectRepl = new EffectReplicationManager(bridge);
-int instanceId = effectRepl.OnEffectApplied(targetNetworkId, effectTag, level, stacks);
-effectRepl.OnStackChanged(targetNetworkId, instanceId, newStacks);
-effectRepl.OnEffectRemoved(targetNetworkId, instanceId);
+int instanceId = effectRepl.OnEffectApplied(
+    targetNetworkId,
+    sourceNetworkId,
+    effectDefinitionId,
+    level,
+    stackCount,
+    duration,
+    predictionKey: nextPredictionKey,
+    setByCallerEntries: null,
+    getObservers: GetObservers
+);
+effectRepl.OnStackChanged(instanceId, newStacks, GetObservers);
+effectRepl.OnEffectRemoved(instanceId, GetObservers);
+```
+
+生产环境常用加固建议：
+
+1. 对完整状态请求按连接限频（例如每 2-5 秒最多 1 次）。
+2. 对拒绝请求做安全审计日志（记录 sender、targetId、原因）。
+3. 对观察者返回脱敏快照（隐藏私有属性/私有效果）。
+
+```csharp
+var fullStateLimiter = new TokenBucketRateLimiter(capacity: 2, refillPerSecond: 0.5f);
+
+bridge.FullStateRequestAuthorizer = (sender, targetId) =>
+{
+    if (!fullStateLimiter.TryConsume(sender.ConnectionId, 1))
+    {
+        AuditSecurity("GAS.FullState.RateLimited", sender.ConnectionId, targetId);
+        return false;
+    }
+
+    bool isOwner = TryGetAscOwnerConnectionId(targetId, out int ownerId) && sender.ConnectionId == ownerId;
+    bool isObserver = IsObserver(sender.ConnectionId, targetId);
+    bool allowed = isOwner || isObserver;
+
+    if (!allowed)
+        AuditSecurity("GAS.FullState.Unauthorized", sender.ConnectionId, targetId);
+
+    return allowed;
+};
+
+// 在 ASC 实现中：owner 返回全量快照，observer 返回脱敏快照。
 ```
 
 #### 消息 ID 分配
 
-| 范围 | 用途 |
-|------|------|
-| 200 | 技能激活请求 |
-| 201 | 技能激活确认 |
-| 202 | 技能激活拒绝 |
-| 203 | 技能结束 |
+| 范围    | 用途                   |
+| ------- | ---------------------- |
+| 200     | 技能激活请求           |
+| 201     | 技能激活确认           |
+| 202     | 技能激活拒绝           |
+| 203     | 技能结束               |
+| 204     | 技能取消               |
 | 210-212 | 效果应用/移除/堆叠变更 |
-| 220-221 | 属性更新/批量更新 |
-| 240-241 | 完整状态快照 |
+| 220     | 属性更新               |
+| 240-241 | 完整状态快照           |
 
 ---
 
@@ -1118,15 +1204,15 @@ var consoleConfig = NetworkPlatformConfig.PlayStation();
 var webConfig = NetworkPlatformConfig.WebGL(); // WebSocket only
 ```
 
-| 平台 | MTU | 最大连接 | IPv6 | WebSocket | 加密 |
-|------|-----|---------|------|-----------|------|
-| Windows | 1200 | 200 | ✅ | ❌ | ❌ |
-| WebGL | 1200 | 1 | ❌ | ✅ | ❌ |
-| iOS | 1200 | 8 | ✅ | ❌ | ❌ |
-| Android | 1200 | 8 | ✅ | ❌ | ❌ |
-| PS4/PS5 | 1200 | 100 | ✅ | ❌ | ✅ |
-| Xbox | 1200 | 100 | ✅ | ❌ | ✅ |
-| Switch | 1200 | 16 | ✅ | ❌ | ❌ |
+| 平台    | MTU  | 最大连接 | IPv6 | WebSocket | 加密 |
+| ------- | ---- | -------- | ---- | --------- | ---- |
+| Windows | 1200 | 200      | ✅   | ❌        | ❌   |
+| WebGL   | 1200 | 1        | ❌   | ✅        | ❌   |
+| iOS     | 1200 | 8        | ✅   | ❌        | ❌   |
+| Android | 1200 | 8        | ✅   | ❌        | ❌   |
+| PS4/PS5 | 1200 | 100      | ✅   | ❌        | ✅   |
+| Xbox    | 1200 | 100      | ✅   | ❌        | ✅   |
+| Switch  | 1200 | 16       | ✅   | ❌        | ❌   |
 
 ---
 
@@ -1195,14 +1281,14 @@ flowchart TB
     TurnBased --> Turn_Modules["• RPC ✅</br>• SessionManagement ✅</br>• ReconnectionManager ✅</br>• NetworkVariable ✅"]
 ```
 
-| 游戏类型 | 同步模式 | 核心模块 | 延迟策略 |
-|----------|---------|---------|---------|
-| FPS/TPS | 状态同步 | ClientPrediction + LagCompensation | 客户端预测 + 服务器回退 |
-| MOBA (LoL) | 状态同步 | TeamVisibility + GAS + Reconnect + Replay | 服务器权威 + 兴趣管理 |
-| RTS (Red Alert) | 帧同步 | Lockstep + FPInt64 + DesyncDetector\<THasher\> + TeamVisibility | 确定性模拟 |
-| MMO | 状态同步 | Grid/Group Interest + Scene + Spawn | AOI 裁剪 |
-| 格斗 (Street Fighter) | 回滚 | RollbackNetcode + FPInt64 | GGPO 回滚重放 |
-| 回合制 | 请求响应 | RPC + Session | 无需实时同步 |
+| 游戏类型              | 同步模式 | 核心模块                                                        | 延迟策略                |
+| --------------------- | -------- | --------------------------------------------------------------- | ----------------------- |
+| FPS/TPS               | 状态同步 | ClientPrediction + LagCompensation                              | 客户端预测 + 服务器回退 |
+| MOBA (LoL)            | 状态同步 | TeamVisibility + GAS + Reconnect + Replay                       | 服务器权威 + 兴趣管理   |
+| RTS (Red Alert)       | 帧同步   | Lockstep + FPInt64 + DesyncDetector\<THasher\> + TeamVisibility | 确定性模拟              |
+| MMO                   | 状态同步 | Grid/Group Interest + Scene + Spawn                             | AOI 裁剪                |
+| 格斗 (Street Fighter) | 回滚     | RollbackNetcode + FPInt64                                       | GGPO 回滚重放           |
+| 回合制                | 请求响应 | RPC + Session                                                   | 无需实时同步            |
 
 ---
 
@@ -1443,61 +1529,61 @@ public class TeamVisionController : MonoBehaviour
 
 ### 核心
 
-| 类/接口 | 说明 | 关键方法 |
-|---------|------|---------|
-| `NetServices` | 全局服务定位器 | `Instance`, `Register`, `IsAvailable` |
-| `INetTransport` | 传输层接口 | `StartServer`, `Send`, `Broadcast`, `GetStatistics` |
-| `INetworkManager` | 高级网络接口 | `RegisterHandler<T>`, `SendToServer<T>`, `BroadcastToClients<T>` |
-| `INetConnection` | 连接抽象 | `ConnectionId`, `Ping`, `Quality`, `IsAuthenticated` |
+| 类/接口           | 说明           | 关键方法                                                         |
+| ----------------- | -------------- | ---------------------------------------------------------------- |
+| `NetServices`     | 全局服务定位器 | `Instance`, `Register`, `IsAvailable`                            |
+| `INetTransport`   | 传输层接口     | `StartServer`, `Send`, `Broadcast`, `GetStatistics`              |
+| `INetworkManager` | 高级网络接口   | `RegisterHandler<T>`, `SendToServer<T>`, `BroadcastToClients<T>` |
+| `INetConnection`  | 连接抽象       | `ConnectionId`, `Ping`, `Quality`, `IsAuthenticated`             |
 
 ### 序列化
 
-| 类 | 说明 |
-|----|------|
-| `SerializerFactory` | 创建序列化器实例 |
-| `JsonSerializerAdapter` | Unity JsonUtility（默认） |
+| 类                             | 说明                        |
+| ------------------------------ | --------------------------- |
+| `SerializerFactory`            | 创建序列化器实例            |
+| `JsonSerializerAdapter`        | Unity JsonUtility（默认）   |
 | `MessagePackSerializerAdapter` | MessagePack（推荐生产环境） |
-| `ProtoBufSerializerAdapter` | Protocol Buffers |
+| `ProtoBufSerializerAdapter`    | Protocol Buffers            |
 
 ### 同步
 
-| 类 | 说明 | 关键方法 |
-|----|------|---------|
-| `NetworkTickSystem` | 固定帧驱动 | `Update(dt)`, `OnTick`, `TickRate` |
-| `ClientPredictionSystem<I,S>` | 客户端预测 | `RecordPrediction`, `ProcessServerState` |
-| `NetworkVariable<T>` | 自动同步变量 | `Value`, `OnChanged`, `IsDirty` |
-| `RpcProcessor` | RPC 处理器 | `Register<T>`, `Send<T>` |
+| 类                            | 说明         | 关键方法                                 |
+| ----------------------------- | ------------ | ---------------------------------------- |
+| `NetworkTickSystem`           | 固定帧驱动   | `Update(dt)`, `OnTick`, `TickRate`       |
+| `ClientPredictionSystem<I,S>` | 客户端预测   | `RecordPrediction`, `ProcessServerState` |
+| `NetworkVariable<T>`          | 自动同步变量 | `Value`, `OnChanged`, `IsDirty`          |
+| `RpcProcessor`                | RPC 处理器   | `Register<T>`, `Send<T>`                 |
 
 ### 帧同步
 
-| 类 | 说明 | 关键方法 |
-|----|------|---------|
-| `LockstepManager<T>` | 帧同步管理器 | `SubmitLocalInput`, `Tick`, `OnSimulateFrame` |
-| `RollbackNetcode<I,S>` | GGPO 回滚 | `AdvanceFrame`, `ReceiveConfirmedInput` |
-| `FPInt64` | Q32.32 定点数 | `FromFloat`, `ToFloat`, `Sqrt` |
-| `DesyncDetector<THasher>` | 不同步检测（可插拔哈希） | `BeginFrame`, `HashFPVector3`, `EndFrame` |
-| `DesyncDetector` | 默认别名（FNV-1a） | `new DesyncDetector()` |
-| `IStateHasher` | 哈希算法接口 | `Reset`, `HashInt`, `HashLong`, `GetDigest` |
-| `Fnv1aHasher` | FNV-1a 64-bit（默认） | 内置，零分配 |
+| 类                        | 说明                     | 关键方法                                      |
+| ------------------------- | ------------------------ | --------------------------------------------- |
+| `LockstepManager<T>`      | 帧同步管理器             | `SubmitLocalInput`, `Tick`, `OnSimulateFrame` |
+| `RollbackNetcode<I,S>`    | GGPO 回滚                | `AdvanceFrame`, `ReceiveConfirmedInput`       |
+| `FPInt64`                 | Q32.32 定点数            | `FromFloat`, `ToFloat`, `Sqrt`                |
+| `DesyncDetector<THasher>` | 不同步检测（可插拔哈希） | `BeginFrame`, `HashFPVector3`, `EndFrame`     |
+| `DesyncDetector`          | 默认别名（FNV-1a）       | `new DesyncDetector()`                        |
+| `IStateHasher`            | 哈希算法接口             | `Reset`, `HashInt`, `HashLong`, `GetDigest`   |
+| `Fnv1aHasher`             | FNV-1a 64-bit（默认）    | 内置，零分配                                  |
 
 ### 兴趣管理
 
-| 类 | 适用场景 |
-|----|---------|
-| `GridInterestManager` | 开放世界 MMO |
-| `GroupInterestManager` | 副本、房间 |
-| `TeamVisibilityInterestManager` | MOBA、RTS |
-| `CompositeInterestManager` | 组合多种策略 |
-| `BurstGridInterestManager` | 开放世界 MMO（5k+ 实体，DOD） |
-| `BurstTeamVisibilityInterestManager` | MOBA、RTS（5k+ 实体，DOD） |
+| 类                                   | 适用场景                      |
+| ------------------------------------ | ----------------------------- |
+| `GridInterestManager`                | 开放世界 MMO                  |
+| `GroupInterestManager`               | 副本、房间                    |
+| `TeamVisibilityInterestManager`      | MOBA、RTS                     |
+| `CompositeInterestManager`           | 组合多种策略                  |
+| `BurstGridInterestManager`           | 开放世界 MMO（5k+ 实体，DOD） |
+| `BurstTeamVisibilityInterestManager` | MOBA、RTS（5k+ 实体，DOD）    |
 
 ### GAS 集成（📦 独立包：`CycloneGames.Networking.GAS`）
 
-| 类 | 说明 |
-|----|------|
-| `NetworkedAbilityBridge` | 技能激活/确认/拒绝的网络传输 |
-| `AttributeSyncManager` | 属性脏追踪与同步 |
-| `EffectReplicationManager` | 效果实例复制 |
+| 类                         | 说明                         |
+| -------------------------- | ---------------------------- |
+| `NetworkedAbilityBridge`   | 技能激活/确认/拒绝的网络传输 |
+| `AttributeSyncManager`     | 属性脏追踪与同步             |
+| `EffectReplicationManager` | 效果实例复制                 |
 
 ---
 

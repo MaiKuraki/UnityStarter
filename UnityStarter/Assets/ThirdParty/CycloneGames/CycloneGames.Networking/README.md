@@ -2,7 +2,7 @@
 
 <div align="left">English | <a href="./README.SCH.md">简体中文</a></div>
 
-A **production-grade networking abstraction layer** for Unity supporting state synchronization, lockstep, rollback netcode, client prediction, and more. Designed for **zero-GC runtime performance**, **thread safety**, and **cross-platform compatibility**.
+A **production-grade networking abstraction layer** for Unity supporting state synchronization, lockstep, rollback netcode, client prediction, and more. Designed for **low-allocation runtime performance**, **adapter-aware thread safety**, and **cross-platform compatibility**.
 
 ## Features
 
@@ -13,10 +13,10 @@ A **production-grade networking abstraction layer** for Unity supporting state s
 - **Deterministic Simulation**: Q32.32 fixed-point math, deterministic RNG, pluggable desync detection (`IStateHasher`)
 - **Interest Management**: Grid AOI, manual groups, team visibility, composite strategies
 - **GAS Integration**: First-class GameplayAbilities networking (abilities, effects, attributes)
-- **Session Management**: Lobby, matchmaking, host migration, reconnection with state catch-up
+- **Session Management**: Lobby/matchmaking/host migration abstractions plus reconnection with state catch-up hooks
 - **Security**: Token-bucket rate limiting, message validation
 - **Diagnostics**: Network profiler, condition simulator (LAN/4G/Satellite presets)
-- **Thread Safety**: Cross-thread message queue with `ArrayPool` for safe off-main-thread sends
+- **Thread Safety**: Mirror adapter includes cross-thread send queue with `ArrayPool`; other adapters should send on main thread unless extended similarly
 
 ## Table of Contents
 
@@ -155,15 +155,15 @@ flowchart TB
 
 ### Design Principles
 
-| Principle | Description |
-|-----------|-------------|
-| **Interface-Driven** | All subsystems defined via interfaces (`INetTransport`, `INetSerializer`, `IInterestManager`, etc.) |
-| **Zero-GC Steady State** | `ArrayPool`, `ConcurrentQueue` pools, ring buffers — no runtime allocations |
-| **Modular** | Serializers, transports, interest managers are all pluggable |
-| **Deterministic** | Q32.32 fixed-point math, lockstep, rollback for competitive games |
-| **Pluggable Hashing** | `IStateHasher` struct-generic for zero-cost hash algorithm injection |
-| **Thread-Safe** | `Interlocked` atomics, `ConcurrentQueue`, thread-safe buffer pool |
-| **Conditional Compilation** | `#if MIRROR`, `#if MIRAGE`, `#if MESSAGEPACK`, etc. |
+| Principle                   | Description                                                                                         |
+| --------------------------- | --------------------------------------------------------------------------------------------------- |
+| **Interface-Driven**        | All subsystems defined via interfaces (`INetTransport`, `INetSerializer`, `IInterestManager`, etc.) |
+| **Zero-GC Steady State**    | `ArrayPool`, `ConcurrentQueue` pools, ring buffers — no runtime allocations                         |
+| **Modular**                 | Serializers, transports, interest managers are all pluggable                                        |
+| **Deterministic**           | Q32.32 fixed-point math, lockstep, rollback for competitive games                                   |
+| **Pluggable Hashing**       | `IStateHasher` struct-generic for zero-cost hash algorithm injection                                |
+| **Thread-Safe**             | Mirror adapter provides cross-thread send queue (`ConcurrentQueue`) and `Interlocked` accounting    |
+| **Conditional Compilation** | `#if MIRROR`, `#if MIRAGE`, `#if MESSAGEPACK`, etc.                                                 |
 
 ---
 
@@ -284,12 +284,12 @@ classDiagram
     INetworkManager --> INetConnection
 ```
 
-| Enum | Values | Purpose |
-|------|--------|---------|
-| `NetworkMode` | Offline, Client, Server, Host, ListenServer, DedicatedServer, Relay | Runtime mode |
-| `NetworkChannel` | Reliable, Unreliable, ReliableUnordered, UnreliableSequenced | Channel types |
-| `ConnectionQuality` | Excellent, Good, Fair, Poor, Disconnected | Connection grade |
-| `TransportError` | None, DnsResolve, Refused, Timeout, Congestion, ... | Error types |
+| Enum                | Values                                                              | Purpose          |
+| ------------------- | ------------------------------------------------------------------- | ---------------- |
+| `NetworkMode`       | Offline, Client, Server, Host, ListenServer, DedicatedServer, Relay | Runtime mode     |
+| `NetworkChannel`    | Reliable, Unreliable, ReliableUnordered, UnreliableSequenced        | Channel types    |
+| `ConnectionQuality` | Excellent, Good, Fair, Poor, Disconnected                           | Connection grade |
+| `TransportError`    | None, DnsResolve, Refused, Timeout, Congestion, ...                 | Error types      |
 
 ---
 
@@ -341,13 +341,13 @@ if (NetServices.IsAvailable)
 
 Pluggable serialization with conditional compilation.
 
-| Serializer | Define Symbol | Format | Recommended For |
-|------------|--------------|--------|-----------------|
-| Json (Unity) | *(default)* | Text | Dev/Debug |
-| Newtonsoft Json | `NEWTONSOFT_JSON` | Text | Complex structures |
-| MessagePack | `MESSAGEPACK` | Binary | **Production** |
-| ProtoBuf | `PROTOBUF` | Binary | Schema-driven |
-| FlatBuffers | `FLATBUFFERS` | Binary | Zero-copy perf |
+| Serializer      | Define Symbol     | Format | Recommended For    |
+| --------------- | ----------------- | ------ | ------------------ |
+| Json (Unity)    | _(default)_       | Text   | Dev/Debug          |
+| Newtonsoft Json | `NEWTONSOFT_JSON` | Text   | Complex structures |
+| MessagePack     | `MESSAGEPACK`     | Binary | **Production**     |
+| ProtoBuf        | `PROTOBUF`        | Binary | Schema-driven      |
+| FlatBuffers     | `FLATBUFFERS`     | Binary | Zero-copy perf     |
 
 ```csharp
 // Get recommended serializer (priority: MessagePack > Newtonsoft > Json)
@@ -687,20 +687,18 @@ if (result != ValidationResult.Valid)
 
 **Path**: `Runtime/Scripts/Session/`
 
-Lobby, matchmaking, host migration, and reconnection with state catch-up.
+Provides interfaces for lobby/matchmaking/host migration, plus a concrete reconnection manager with state catch-up hooks.
 
 ```csharp
 // Reconnection manager
-var reconnect = new ReconnectionManager(
-    reconnectWindowSeconds: 300, // 5-minute window
-    catchUp: myStateCatchUpImpl
-);
+var reconnect = new ReconnectionManager(myStateCatchUpImpl);
+reconnect.ReconnectWindow = 300f; // 5-minute window
 
-reconnect.OnClientReconnected += (conn, state) =>
-    Debug.Log($"Player {conn.PlayerId} reconnected");
+reconnect.OnClientReconnected += (originalConnectionId, newConnection) =>
+    Debug.Log($"Player reconnected. originalId={originalConnectionId}, newConn={newConnection.ConnectionId}");
 
-reconnect.OnReconnectWindowExpired += playerId =>
-    Debug.Log($"Reservation expired for {playerId}");
+reconnect.OnReconnectWindowExpired += originalConnectionId =>
+    Debug.Log($"Reservation expired for {originalConnectionId}");
 ```
 
 Interfaces: `ILobbyManager`, `IMatchmaker`, `IHostMigration`, `IReconnectionManager`.
@@ -854,28 +852,97 @@ flowchart TB
 using CycloneGames.Networking.GAS; // 📦 Required: GAS separate package
 
 var bridge = new NetworkedAbilityBridge(networkManager);
-bridge.RegisterASC(networkId, myASC);
+bridge.RegisterASC(networkId, ownerConnectionId, myASC);
+
+// Optional: customize authorization for full-state requests (default: owner-only)
+bridge.FullStateRequestAuthorizer = (sender, targetId) => sender.ConnectionId == ownerConnectionId;
+
+// Recommended production policy: owner or current observer only
+bridge.FullStateRequestAuthorizer = (sender, targetId) =>
+{
+    if (TryGetAscOwnerConnectionId(targetId, out int ascOwnerId) && sender.ConnectionId == ascOwnerId)
+        return true;
+
+    var observers = GetObservers(targetId);
+    if (observers == null) return false;
+
+    for (int i = 0; i < observers.Count; i++)
+    {
+        if (observers[i].ConnectionId == sender.ConnectionId)
+            return true;
+    }
+
+    return false;
+};
 
 // Client: request ability activation
-bridge.ClientRequestActivateAbility(abilityTag: 1001, targetNetworkId: targetId, predictionKey: key);
+bridge.ClientRequestActivateAbility(
+    abilityIndex: 1001,
+    predictionKey: key,
+    targetPos: targetPos,
+    direction: direction,
+    targetNetworkId: targetId
+);
 
 // Attribute sync
 var attrSync = new AttributeSyncManager(bridge);
-attrSync.RegisterPublicAttribute(networkId, "Health");
-attrSync.MarkDirty(networkId, "Health");
-attrSync.FlushDirty();
+attrSync.RegisterPublicAttribute(healthAttrId);
+attrSync.MarkDirty(networkId, healthAttrId, baseValue: 100f, currentValue: 75f);
+attrSync.FlushDirty(getOwnerConnectionId: GetOwnerConnectionId, getObservers: GetObservers, getConnectionById: GetConnectionById);
 
 // Effect replication
 var effectRepl = new EffectReplicationManager(bridge);
-int instanceId = effectRepl.OnEffectApplied(targetNetworkId, effectTag, level, stacks);
+int instanceId = effectRepl.OnEffectApplied(
+    targetNetworkId,
+    sourceNetworkId,
+    effectDefinitionId,
+    level,
+    stackCount,
+    duration,
+    predictionKey: key,
+    setByCallerEntries: null,
+    getObservers: GetObservers
+);
+effectRepl.OnStackChanged(instanceId, newStackCount, GetObservers);
+effectRepl.OnEffectRemoved(instanceId, GetObservers);
 ```
 
-| Message ID Range | Purpose |
-|-----------------|---------|
-| 200-203 | Ability activate / confirm / reject / end |
-| 210-212 | Effect applied / removed / stack changed |
-| 220-221 | Attribute update / batch update |
-| 240-241 | Full state snapshot |
+Production hardening recommendations (commonly used):
+
+1. Rate-limit full-state requests per connection (for example, 1 request per 2-5 seconds).
+2. Audit denied requests with sender, targetId, and reason.
+3. Return redacted snapshots for observers (hide private attributes/effects).
+
+```csharp
+var fullStateLimiter = new TokenBucketRateLimiter(capacity: 2, refillPerSecond: 0.5f);
+
+bridge.FullStateRequestAuthorizer = (sender, targetId) =>
+{
+    if (!fullStateLimiter.TryConsume(sender.ConnectionId, 1))
+    {
+        AuditSecurity("GAS.FullState.RateLimited", sender.ConnectionId, targetId);
+        return false;
+    }
+
+    bool isOwner = TryGetAscOwnerConnectionId(targetId, out int ownerId) && sender.ConnectionId == ownerId;
+    bool isObserver = IsObserver(sender.ConnectionId, targetId);
+    bool allowed = isOwner || isObserver;
+
+    if (!allowed)
+        AuditSecurity("GAS.FullState.Unauthorized", sender.ConnectionId, targetId);
+
+    return allowed;
+};
+
+// In your ASC implementation: return full snapshot for owner, redacted snapshot for observers.
+```
+
+| Message ID Range | Purpose                                            |
+| ---------------- | -------------------------------------------------- |
+| 200-204          | Ability activate / confirm / reject / end / cancel |
+| 210-212          | Effect applied / removed / stack changed           |
+| 220              | Attribute update                                   |
+| 240-241          | Full state snapshot                                |
 
 ---
 
@@ -909,15 +976,15 @@ var config = NetworkPlatformConfig.GetForCurrentPlatform();
 // Or manually: NetworkPlatformConfig.Android(), .PlayStation(), .WebGL(), etc.
 ```
 
-| Platform | MTU | Max Connections | IPv6 | WebSocket | Encryption |
-|----------|-----|----------------|------|-----------|------------|
-| Windows | 1200 | 200 | ✅ | ❌ | ❌ |
-| WebGL | 1200 | 1 | ❌ | ✅ | ❌ |
-| iOS | 1200 | 8 | ✅ | ❌ | ❌ |
-| Android | 1200 | 8 | ✅ | ❌ | ❌ |
-| PS4/PS5 | 1200 | 100 | ✅ | ❌ | ✅ |
-| Xbox | 1200 | 100 | ✅ | ❌ | ✅ |
-| Switch | 1200 | 16 | ✅ | ❌ | ❌ |
+| Platform | MTU  | Max Connections | IPv6 | WebSocket | Encryption |
+| -------- | ---- | --------------- | ---- | --------- | ---------- |
+| Windows  | 1200 | 200             | ✅   | ❌        | ❌         |
+| WebGL    | 1200 | 1               | ❌   | ✅        | ❌         |
+| iOS      | 1200 | 8               | ✅   | ❌        | ❌         |
+| Android  | 1200 | 8               | ✅   | ❌        | ❌         |
+| PS4/PS5  | 1200 | 100             | ✅   | ❌        | ✅         |
+| Xbox     | 1200 | 100             | ✅   | ❌        | ✅         |
+| Switch   | 1200 | 16              | ✅   | ❌        | ❌         |
 
 ---
 
@@ -951,11 +1018,11 @@ flowchart LR
     INetworkManager2 --> MirageNet
 ```
 
-| Adapter | Define Symbol | Description |
-|---------|--------------|-------------|
-| `MirrorNetAdapter` | `#if MIRROR` | Mirror transport + manager adapter |
-| `MirageNetAdapter` | `#if MIRAGE` | Mirage transport + manager adapter |
-| `NoopNetTransport` | *(always)* | No-op fallback for testing |
+| Adapter            | Define Symbol | Description                        |
+| ------------------ | ------------- | ---------------------------------- |
+| `MirrorNetAdapter` | `#if MIRROR`  | Mirror transport + manager adapter |
+| `MirageNetAdapter` | `#if MIRAGE`  | Mirage transport + manager adapter |
+| `NoopNetTransport` | _(always)_    | No-op fallback for testing         |
 
 Both adapters implement `INetTransport` and `INetworkManager` simultaneously and register themselves with `NetServices` on `Awake`.
 
@@ -994,14 +1061,14 @@ flowchart TB
     TurnBased --> Turn_Modules["• RPC ✅</br>• SessionManagement ✅</br>• ReconnectionManager ✅</br>• NetworkVariable ✅"]
 ```
 
-| Game Type | Sync Model | Core Modules | Latency Strategy |
-|-----------|-----------|--------------|-----------------|
-| FPS/TPS | State sync | ClientPrediction + LagCompensation + SnapshotInterpolation | Client prediction + server rewind |
-| MOBA (LoL/Dota2) | State sync | TeamVisibility + GAS + Reconnect + Replay | Server authority + interest management |
-| RTS (C&C/StarCraft) | Lockstep | LockstepManager + FPInt64 + DesyncDetector\<THasher\> + TeamVisibility | Deterministic simulation |
-| MMO | State sync | Grid/Group Interest + Scene + Spawn | AOI culling |
-| Fighting (Street Fighter) | Rollback | RollbackNetcode + FPInt64 | GGPO rollback + replay |
-| Turn-based | Request/Response | RPC + Session | No real-time sync needed |
+| Game Type                 | Sync Model       | Core Modules                                                           | Latency Strategy                       |
+| ------------------------- | ---------------- | ---------------------------------------------------------------------- | -------------------------------------- |
+| FPS/TPS                   | State sync       | ClientPrediction + LagCompensation + SnapshotInterpolation             | Client prediction + server rewind      |
+| MOBA (LoL/Dota2)          | State sync       | TeamVisibility + GAS + Reconnect + Replay                              | Server authority + interest management |
+| RTS (C&C/StarCraft)       | Lockstep         | LockstepManager + FPInt64 + DesyncDetector\<THasher\> + TeamVisibility | Deterministic simulation               |
+| MMO                       | State sync       | Grid/Group Interest + Scene + Spawn                                    | AOI culling                            |
+| Fighting (Street Fighter) | Rollback         | RollbackNetcode + FPInt64                                              | GGPO rollback + replay                 |
+| Turn-based                | Request/Response | RPC + Session                                                          | No real-time sync needed               |
 
 ---
 
@@ -1159,52 +1226,52 @@ public class TeamVisionController : MonoBehaviour
 
 ### Core
 
-| Class/Interface | Purpose | Key Members |
-|----------------|---------|-------------|
-| `NetServices` | Service locator | `Instance`, `Register`, `IsAvailable` |
-| `INetTransport` | Transport layer | `StartServer`, `Send`, `Broadcast`, `GetStatistics` |
-| `INetworkManager` | High-level API | `RegisterHandler<T>`, `SendToServer<T>`, `BroadcastToClients<T>` |
-| `INetConnection` | Connection | `ConnectionId`, `Ping`, `Quality`, `IsAuthenticated` |
+| Class/Interface   | Purpose         | Key Members                                                      |
+| ----------------- | --------------- | ---------------------------------------------------------------- |
+| `NetServices`     | Service locator | `Instance`, `Register`, `IsAvailable`                            |
+| `INetTransport`   | Transport layer | `StartServer`, `Send`, `Broadcast`, `GetStatistics`              |
+| `INetworkManager` | High-level API  | `RegisterHandler<T>`, `SendToServer<T>`, `BroadcastToClients<T>` |
+| `INetConnection`  | Connection      | `ConnectionId`, `Ping`, `Quality`, `IsAuthenticated`             |
 
 ### Synchronization
 
-| Class | Purpose | Key Members |
-|-------|---------|-------------|
-| `NetworkTickSystem` | Fixed-rate driver | `Update(dt)`, `OnTick`, `TickRate` |
-| `ClientPredictionSystem<I,S>` | Client prediction | `RecordPrediction`, `ProcessServerState` |
-| `NetworkVariable<T>` | Auto-sync variable | `Value`, `OnChanged`, `IsDirty` |
-| `RpcProcessor` | RPC processor | `Register<T>`, `Send<T>` |
+| Class                         | Purpose            | Key Members                              |
+| ----------------------------- | ------------------ | ---------------------------------------- |
+| `NetworkTickSystem`           | Fixed-rate driver  | `Update(dt)`, `OnTick`, `TickRate`       |
+| `ClientPredictionSystem<I,S>` | Client prediction  | `RecordPrediction`, `ProcessServerState` |
+| `NetworkVariable<T>`          | Auto-sync variable | `Value`, `OnChanged`, `IsDirty`          |
+| `RpcProcessor`                | RPC processor      | `Register<T>`, `Send<T>`                 |
 
 ### Deterministic
 
-| Class | Purpose | Key Members |
-|-------|---------|-------------|
-| `LockstepManager<T>` | Lockstep driver | `SubmitLocalInput`, `Tick`, `OnSimulateFrame` |
-| `RollbackNetcode<I,S>` | GGPO rollback | `AdvanceFrame`, `ReceiveConfirmedInput` |
-| `FPInt64` | Q32.32 fixed-point | `FromFloat`, `ToFloat`, `Sqrt` |
-| `DesyncDetector<THasher>` | Desync detection (pluggable hash) | `BeginFrame`, `HashFPVector3`, `EndFrame` |
-| `DesyncDetector` | Default (FNV-1a) alias | `new DesyncDetector()` |
-| `IStateHasher` | Hash algorithm interface | `Reset`, `HashInt`, `HashLong`, `GetDigest` |
-| `Fnv1aHasher` | FNV-1a 64-bit (default) | Built-in, zero-alloc |
+| Class                     | Purpose                           | Key Members                                   |
+| ------------------------- | --------------------------------- | --------------------------------------------- |
+| `LockstepManager<T>`      | Lockstep driver                   | `SubmitLocalInput`, `Tick`, `OnSimulateFrame` |
+| `RollbackNetcode<I,S>`    | GGPO rollback                     | `AdvanceFrame`, `ReceiveConfirmedInput`       |
+| `FPInt64`                 | Q32.32 fixed-point                | `FromFloat`, `ToFloat`, `Sqrt`                |
+| `DesyncDetector<THasher>` | Desync detection (pluggable hash) | `BeginFrame`, `HashFPVector3`, `EndFrame`     |
+| `DesyncDetector`          | Default (FNV-1a) alias            | `new DesyncDetector()`                        |
+| `IStateHasher`            | Hash algorithm interface          | `Reset`, `HashInt`, `HashLong`, `GetDigest`   |
+| `Fnv1aHasher`             | FNV-1a 64-bit (default)           | Built-in, zero-alloc                          |
 
 ### Interest Management
 
-| Class | Best For |
-|-------|---------|
-| `GridInterestManager` | Open world MMO |
-| `GroupInterestManager` | Dungeons, rooms |
-| `TeamVisibilityInterestManager` | MOBA, RTS |
-| `CompositeInterestManager` | Combine strategies |
-| `BurstGridInterestManager` | Open world MMO (5k+ entities, DOD) |
-| `BurstTeamVisibilityInterestManager` | MOBA, RTS (5k+ entities, DOD) |
+| Class                                | Best For                           |
+| ------------------------------------ | ---------------------------------- |
+| `GridInterestManager`                | Open world MMO                     |
+| `GroupInterestManager`               | Dungeons, rooms                    |
+| `TeamVisibilityInterestManager`      | MOBA, RTS                          |
+| `CompositeInterestManager`           | Combine strategies                 |
+| `BurstGridInterestManager`           | Open world MMO (5k+ entities, DOD) |
+| `BurstTeamVisibilityInterestManager` | MOBA, RTS (5k+ entities, DOD)      |
 
 ### GAS Integration (📦 Separate Package: `CycloneGames.Networking.GAS`)
 
-| Class | Purpose |
-|-------|---------|
-| `NetworkedAbilityBridge` | Ability activation/confirm/reject networking |
-| `AttributeSyncManager` | Attribute dirty tracking & sync |
-| `EffectReplicationManager` | Effect instance replication |
+| Class                      | Purpose                                      |
+| -------------------------- | -------------------------------------------- |
+| `NetworkedAbilityBridge`   | Ability activation/confirm/reject networking |
+| `AttributeSyncManager`     | Attribute dirty tracking & sync              |
+| `EffectReplicationManager` | Effect instance replication                  |
 
 ---
 

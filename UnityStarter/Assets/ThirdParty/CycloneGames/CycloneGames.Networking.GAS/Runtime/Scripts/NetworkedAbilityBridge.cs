@@ -44,6 +44,13 @@ namespace CycloneGames.Networking.GAS
 
         public INetworkManager NetworkManager => _networkManager;
 
+        /// <summary>
+        /// Optional server-side authorization callback for full-state requests.
+        /// Return true to allow the sender to receive the target ASC snapshot.
+        /// Default policy (when null): owner-only access.
+        /// </summary>
+        public Func<INetConnection, uint, bool> FullStateRequestAuthorizer { get; set; }
+
         // --- Events for game layer to subscribe ---
         public event Action<int, AbilityActivateRequest> OnAbilityActivateRequested;
         public event Action<uint, EffectReplicationData> OnEffectApplied;
@@ -363,11 +370,18 @@ namespace CycloneGames.Networking.GAS
 
         private void OnRecvFullStateRequest(INetConnection sender, FullStateRequest msg)
         {
-            if (_ascByNetworkId.TryGetValue(msg.TargetNetworkId, out var asc))
-            {
-                var snapshot = asc.CaptureFullState();
-                ServerSendFullState(sender, snapshot);
-            }
+            if (!_ascByNetworkId.TryGetValue(msg.TargetNetworkId, out var asc))
+                return;
+
+            bool isAuthorized = FullStateRequestAuthorizer != null
+                ? FullStateRequestAuthorizer(sender, msg.TargetNetworkId)
+                : sender.ConnectionId == asc.OwnerConnectionId;
+
+            if (!isAuthorized)
+                return;
+
+            var snapshot = asc.CaptureFullState();
+            ServerSendFullState(sender, snapshot);
         }
     }
 

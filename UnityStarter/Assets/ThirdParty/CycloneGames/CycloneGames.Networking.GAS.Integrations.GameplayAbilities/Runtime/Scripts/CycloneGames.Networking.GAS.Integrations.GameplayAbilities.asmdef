@@ -1,0 +1,20 @@
+{
+    "name": "CycloneGames.Networking.GAS.Integrations.GameplayAbilities",
+    "rootNamespace": "CycloneGames.Networking.GAS.Integrations.GameplayAbilities",
+    "references": [
+        "CycloneGames.Networking.Runtime",
+        "CycloneGames.Networking.GAS",
+        "CycloneGames.GameplayAbilities.Core",
+        "CycloneGames.GameplayAbilities.Runtime",
+        "CycloneGames.GameplayTags.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
