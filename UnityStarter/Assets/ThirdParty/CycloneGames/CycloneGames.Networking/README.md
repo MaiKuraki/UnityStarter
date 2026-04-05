@@ -2,696 +2,1256 @@
 
 <div align="left">English | <a href="./README.SCH.md">简体中文</a></div>
 
-A production-grade networking abstraction layer for Unity, designed for **zero-GC runtime performance**, **thread safety**, and **cross-platform compatibility**. It provides clean interfaces that decouple your gameplay code from specific networking implementations like Mirror or Nakama.
+A **production-grade networking abstraction layer** for Unity supporting state synchronization, lockstep, rollback netcode, client prediction, and more. Designed for **zero-GC runtime performance**, **thread safety**, and **cross-platform compatibility**.
 
 ## Features
 
-- **Flexible Serialization**: Pluggable serializers (Json, MessagePack, ProtoBuf, FlatBuffers) with cross-platform support
+- **Multiple Sync Models**: State sync, lockstep, GGPO-style rollback — pick the right one for your game
+- **Flexible Serialization**: Pluggable serializers (Json, MessagePack, ProtoBuf, FlatBuffers)
 - **Clean Abstractions**: Transport-agnostic interfaces (`INetTransport`, `INetworkManager`, `INetConnection`)
-- **Adapter Pattern**: Swap underlying transports (Mirror, Nakama, custom) without changing gameplay code
+- **Client Prediction**: Full predict → authorize → reconcile pipeline with rollback
+- **Deterministic Simulation**: Q32.32 fixed-point math, deterministic RNG, pluggable desync detection (`IStateHasher`)
+- **Interest Management**: Grid AOI, manual groups, team visibility, composite strategies
+- **GAS Integration**: First-class GameplayAbilities networking (abilities, effects, attributes)
+- **Session Management**: Lobby, matchmaking, host migration, reconnection with state catch-up
+- **Security**: Token-bucket rate limiting, message validation
+- **Diagnostics**: Network profiler, condition simulator (LAN/4G/Satellite presets)
 - **Thread Safety**: Cross-thread message queue with `ArrayPool` for safe off-main-thread sends
-- **Comprehensive Diagnostics**: Connection quality metrics, statistics tracking, and error events
 
-## Core Architecture
+## Table of Contents
 
-The framework is built upon several key components that work together to provide a comprehensive networking solution.
+- [CycloneGames.Networking](#cyclonegamesnetworking)
+  - [Features](#features)
+  - [Table of Contents](#table-of-contents)
+  - [Architecture Overview](#architecture-overview)
+    - [Design Principles](#design-principles)
+  - [Quick Start](#quick-start)
+    - [Prerequisites](#prerequisites)
+    - [Minimal Example: Send and Receive Messages](#minimal-example-send-and-receive-messages)
+  - [Module Reference](#module-reference)
+    - [1. Core Abstractions](#1-core-abstractions)
+    - [2. Buffer System](#2-buffer-system)
+    - [3. Service Locator](#3-service-locator)
+    - [4. Serialization](#4-serialization)
+    - [5. Tick System](#5-tick-system)
+    - [6. Client Prediction](#6-client-prediction)
+      - [Snapshot Interpolation](#snapshot-interpolation)
+      - [Lag Compensation](#lag-compensation)
+    - [7. Interest Management](#7-interest-management)
+    - [8. State Synchronization](#8-state-synchronization)
+    - [9. Remote Procedure Calls](#9-remote-procedure-calls)
+    - [10. Lockstep \& Deterministic Simulation](#10-lockstep--deterministic-simulation)
+      - [Lockstep Example](#lockstep-example)
+      - [Fixed-Point Math](#fixed-point-math)
+      - [GGPO-Style Rollback](#ggpo-style-rollback)
+    - [11. Security](#11-security)
+    - [12. Session \& Reconnection](#12-session--reconnection)
+    - [13. Replay System](#13-replay-system)
+    - [14. Network Spawning](#14-network-spawning)
+    - [15. Scene Management](#15-scene-management)
+    - [16. Compression](#16-compression)
+    - [17. Diagnostics](#17-diagnostics)
+    - [18. Gameplay Abilities Integration](#18-gameplay-abilities-integration)
+    - [19. Authentication](#19-authentication)
+    - [20. Platform Configuration](#20-platform-configuration)
+    - [21. Transport Adapters](#21-transport-adapters)
+  - [Game Type Guide](#game-type-guide)
+  - [Tutorials](#tutorials)
+    - [Tutorial 1: FPS Network Sync from Scratch](#tutorial-1-fps-network-sync-from-scratch)
+    - [Tutorial 2: RTS Lockstep](#tutorial-2-rts-lockstep)
+    - [Tutorial 3: Team Visibility](#tutorial-3-team-visibility)
+  - [API Quick Reference](#api-quick-reference)
+    - [Core](#core)
+    - [Synchronization](#synchronization)
+    - [Deterministic](#deterministic)
+    - [Interest Management](#interest-management)
+    - [GAS Integration (📦 Separate Package: `CycloneGames.Networking.GAS`)](#gas-integration--separate-package-cyclonegamesnetworkinggas)
+  - [Directory Structure](#directory-structure)
+  - [License](#license)
+
+---
+
+## Architecture Overview
 
 ```mermaid
 flowchart TB
-    subgraph GameCode["🎮 Game Code"]
+    subgraph GameLayer["🎮 Game Layer"]
         GameLogic["Game Logic"]
+        GAS["GameplayAbilities</br>(GAS)"]
     end
 
-    subgraph Facade["📦 Public API"]
-        NetServices["NetServices<br/>• Instance (locator)<br/>• Register/Unregister"]
+    subgraph API["📦 Public API"]
+        NetServices["NetServices</br>• Instance</br>• Register / Unregister"]
     end
 
-    subgraph HighLevel["⚙️ High-Level Interface"]
-        INetworkManager["INetworkManager<br/>• RegisterHandler<br/>• SendToServer/Client<br/>• BroadcastToClients"]
+    subgraph HighLevel["⚙️ High-Level Systems"]
+        RPC["RpcProcessor</br>Remote Procedure Calls"]
+        StateSync["NetworkVariable</br>State Sync"]
+        Prediction["ClientPrediction</br>Predict + Reconcile"]
+        Lockstep["LockstepManager</br>Deterministic Lockstep"]
+        Rollback["RollbackNetcode</br>GGPO-style Rollback"]
+        Interest["InterestManager</br>AOI / Visibility"]
+        Spawn["SpawnManager</br>Object Spawning"]
+        Scene["SceneManager</br>Scene Loading"]
     end
 
-    subgraph LowLevel["🔌 Low-Level Interface"]
-        INetTransport["INetTransport<br/>• StartServer/Client<br/>• Send/Broadcast<br/>• GetStatistics"]
+    subgraph Bridge["🔗 GAS Bridge (CycloneGames.Networking.GAS separate package)"]
+        AbilityBridge["NetworkedAbilityBridge"]
+        AttrSync["AttributeSyncManager"]
+        EffectRepl["EffectReplicationManager"]
     end
 
-    subgraph Adapters["🔄 Transport Adapters"]
-        MirrorAdapter["MirrorNetAdapter"]
-        NakamaAdapter["NakamaAdapter<br/>(Planned)"]
-        CustomAdapter["Custom Adapter"]
+    subgraph Mid["📡 Middle Layer"]
+        INetworkManager["INetworkManager</br>• RegisterHandler</br>• Send / Broadcast"]
+        TickSystem["NetworkTickSystem</br>• Fixed timestep</br>• 1-128 Hz"]
+        Serializer["INetSerializer</br>• Json / MsgPack / ProtoBuf"]
+        Compression["NetworkCompression</br>• Quantized Vector3</br>• Smallest-three Quaternion"]
     end
 
-    subgraph Serialization["📝 Serialization"]
-        INetSerializer["INetSerializer"]
-        JsonSerializer["JsonSerializerAdapter<br/>(Unity JsonUtility)"]
-        NewtonsoftSerializer["NewtonsoftJsonSerializerAdapter<br/>(Full JSON features)"]
-        MessagePackSerializer["MessagePackSerializerAdapter<br/>(Binary, recommended)"]
+    subgraph Low["🔌 Transport Layer"]
+        INetTransport["INetTransport</br>• StartServer / StartClient</br>• Send / Broadcast"]
     end
 
-    subgraph BufferSystem["💾 Buffer System"]
-        NetworkBuffer["NetworkBuffer<br/>• INetWriter<br/>• INetReader"]
-        NetworkBufferPool["NetworkBufferPool<br/>(Thread-safe)"]
+    subgraph Adapters["🔄 Adapters"]
+        Mirror["MirrorNetAdapter"]
+        Mirage["MirageNetAdapter"]
+        Custom["Custom Adapter"]
+    end
+
+    subgraph Security["🔒 Security"]
+        RateLimiter["RateLimiter</br>Token Bucket"]
+        Validator["MessageValidator</br>Payload Validation"]
+    end
+
+    subgraph Diagnostics["📊 Diagnostics"]
+        Profiler["NetworkProfiler"]
+        CondSim["ConditionSimulator</br>Latency / Loss Injection"]
     end
 
     GameLogic --> NetServices
+    GAS --> AbilityBridge
+    AbilityBridge --> AttrSync
+    AbilityBridge --> EffectRepl
+    AbilityBridge --> INetworkManager
     NetServices --> INetworkManager
+    INetworkManager --> RPC
+    INetworkManager --> StateSync
+    INetworkManager --> Prediction
+    INetworkManager --> Lockstep
+    INetworkManager --> Rollback
+    INetworkManager --> Interest
+    INetworkManager --> Spawn
+    INetworkManager --> Scene
+    INetworkManager --> Serializer
+    INetworkManager --> TickSystem
+    Serializer --> Compression
     INetworkManager --> INetTransport
-    INetTransport --> MirrorAdapter
-    INetTransport --> NakamaAdapter
-    INetTransport --> CustomAdapter
-
-    INetworkManager --> INetSerializer
-    INetSerializer --> JsonSerializer
-    INetSerializer --> NewtonsoftSerializer
-    INetSerializer --> MessagePackSerializer
-
-    JsonSerializer --> NetworkBuffer
-    NewtonsoftSerializer --> NetworkBuffer
-    MessagePackSerializer --> NetworkBuffer
-    NetworkBuffer --> NetworkBufferPool
+    INetTransport --> Mirror
+    INetTransport --> Mirage
+    INetTransport --> Custom
+    INetTransport --> Security
+    INetTransport --> Diagnostics
 ```
 
-### 1. `NetServices` (Service Locator)
+### Design Principles
 
-The static service locator provides global access to your active `INetworkManager`. Supports both Dependency Injection and Service Locator patterns.
+| Principle | Description |
+|-----------|-------------|
+| **Interface-Driven** | All subsystems defined via interfaces (`INetTransport`, `INetSerializer`, `IInterestManager`, etc.) |
+| **Zero-GC Steady State** | `ArrayPool`, `ConcurrentQueue` pools, ring buffers — no runtime allocations |
+| **Modular** | Serializers, transports, interest managers are all pluggable |
+| **Deterministic** | Q32.32 fixed-point math, lockstep, rollback for competitive games |
+| **Pluggable Hashing** | `IStateHasher` struct-generic for zero-cost hash algorithm injection |
+| **Thread-Safe** | `Interlocked` atomics, `ConcurrentQueue`, thread-safe buffer pool |
+| **Conditional Compilation** | `#if MIRROR`, `#if MIRAGE`, `#if MESSAGEPACK`, etc. |
+
+---
+
+## Quick Start
+
+### Prerequisites
+
+- Unity 2022.3+
+- A transport implementation (e.g., [Mirror](https://github.com/MirrorNetworking/Mirror))
+
+### Minimal Example: Send and Receive Messages
 
 ```csharp
-// Access via service locator
-var net = NetServices.Instance;
-net.SendToServer(1001, new MyMessage { Value = 42 });
+using CycloneGames.Networking;
+using CycloneGames.Networking.Services;
+using UnityEngine;
+
+// ① Define message struct (value type, zero-GC)
+public struct ChatMsg
+{
+    public int SenderId;
+    public int MessageType;
+}
+
+// ② Sender
+public class ChatSender : MonoBehaviour
+{
+    private const ushort MSG_CHAT = 1001;
+
+    void Update()
+    {
+        if (Input.GetKeyDown(KeyCode.Return))
+        {
+            NetServices.Instance.SendToServer(MSG_CHAT, new ChatMsg
+            {
+                SenderId = 1,
+                MessageType = 0
+            });
+        }
+    }
+}
+
+// ③ Receiver
+public class ChatReceiver : MonoBehaviour
+{
+    private const ushort MSG_CHAT = 1001;
+
+    void Start()
+    {
+        NetServices.Instance.RegisterHandler<ChatMsg>(MSG_CHAT, OnChat);
+    }
+
+    void OnChat(INetConnection conn, ChatMsg msg)
+    {
+        Debug.Log($"Message from player {msg.SenderId}");
+    }
+
+    void OnDestroy()
+    {
+        NetServices.Instance.UnregisterHandler(MSG_CHAT);
+    }
+}
 ```
 
-### 2. `INetworkManager` (High-Level Interface)
+---
 
-The main interface for gameplay code. Handles message registration, typed serialization, and routing.
+## Module Reference
 
-**Key Methods:**
+### 1. Core Abstractions
 
-- `RegisterHandler<T>()` - Register message handlers
-- `SendToServer<T>()` / `SendToClient<T>()` - Send typed messages
-- `BroadcastToClients<T>()` - Broadcast to all clients
-
-### 3. `INetTransport` (Low-Level Interface)
-
-The transport abstraction layer. Handles raw byte I/O, connection lifecycle, and transport-specific features.
-
-**Key Properties:**
-
-- `IsServer` / `IsClient` / `IsRunning`
-- `Available` - Platform availability check
-- `GetMaxPacketSize()` - Maximum payload size
-- `GetStatistics()` - Transport diagnostics
-
-### 4. `INetConnection` (Connection Representation)
-
-Represents an individual network connection with comprehensive metrics.
+**Path**: `Runtime/Scripts/Core/`
 
 ```mermaid
 classDiagram
+    class INetTransport {
+        <<interface>>
+        +bool IsServer
+        +bool IsClient
+        +bool IsRunning
+        +StartServer(port)
+        +StartClient(address, port)
+        +Stop()
+        +Send(conn, data, channelId)
+        +Broadcast(data, channelId)
+        +GetStatistics() NetworkStatistics
+    }
+
+    class INetworkManager {
+        <<interface>>
+        +INetTransport Transport
+        +INetSerializer Serializer
+        +RegisterHandler~T~(msgId, handler)
+        +SendToServer~T~(msgId, message)
+        +SendToClient~T~(conn, msgId, message)
+        +BroadcastToClients~T~(msgId, message)
+    }
+
     class INetConnection {
+        <<interface>>
         +int ConnectionId
         +string RemoteAddress
         +bool IsConnected
-        +bool IsAuthenticated
         +int Ping
         +ConnectionQuality Quality
         +double Jitter
-        +long BytesSent
-        +long BytesReceived
-        +ulong PlayerId
     }
 
-    class ConnectionQuality {
-        <<enumeration>>
-        Excellent
-        Good
-        Fair
-        Poor
-        Disconnected
+    class INetworkPeer {
+        <<interface>>
+        +NetworkMode Mode
+        +DateTime ConnectedAt
+        +SetMetadata(key, value)
+        +GetMetadata~T~(key)
     }
 
-    INetConnection --> ConnectionQuality
+    INetworkPeer --|> INetConnection
+    INetworkManager --> INetTransport
+    INetworkManager --> INetConnection
 ```
 
-### 5. Serialization System
+| Enum | Values | Purpose |
+|------|--------|---------|
+| `NetworkMode` | Offline, Client, Server, Host, ListenServer, DedicatedServer, Relay | Runtime mode |
+| `NetworkChannel` | Reliable, Unreliable, ReliableUnordered, UnreliableSequenced | Channel types |
+| `ConnectionQuality` | Excellent, Good, Fair, Poor, Disconnected | Connection grade |
+| `TransportError` | None, DnsResolve, Refused, Timeout, Congestion, ... | Error types |
 
-The framework supports multiple serialization adapters with cross-platform compatibility:
+---
+
+### 2. Buffer System
+
+**Path**: `Runtime/Scripts/Buffers/`
+
+Thread-safe, zero-allocation buffer pool for message serialization.
+
+```csharp
+// Zero-allocation buffer usage
+using (var buffer = NetworkBufferPool.Get())
+{
+    buffer.WriteInt(playerId);
+    buffer.WriteFloat(health);
+    buffer.WriteBlittable(position); // unmanaged types only
+
+    var segment = buffer.ToArraySegment();
+    transport.Send(conn, segment, channelId);
+}
+// Automatically returned to pool on Dispose
+```
+
+---
+
+### 3. Service Locator
+
+**Path**: `Runtime/Scripts/Services/`
+
+Global access to the active `INetworkManager`.
+
+```csharp
+// Registration (usually automatic in adapter Awake)
+NetServices.Register(myNetworkManager);
+
+// Global access
+var net = NetServices.Instance;
+
+// Safe access
+if (NetServices.IsAvailable)
+    net.SendToServer(msgId, data);
+```
+
+---
+
+### 4. Serialization
+
+**Path**: `Runtime/Scripts/Serialization/` + `Runtime/Scripts/Serializers/`
+
+Pluggable serialization with conditional compilation.
+
+| Serializer | Define Symbol | Format | Recommended For |
+|------------|--------------|--------|-----------------|
+| Json (Unity) | *(default)* | Text | Dev/Debug |
+| Newtonsoft Json | `NEWTONSOFT_JSON` | Text | Complex structures |
+| MessagePack | `MESSAGEPACK` | Binary | **Production** |
+| ProtoBuf | `PROTOBUF` | Binary | Schema-driven |
+| FlatBuffers | `FLATBUFFERS` | Binary | Zero-copy perf |
+
+```csharp
+// Get recommended serializer (priority: MessagePack > Newtonsoft > Json)
+var serializer = SerializerFactory.GetRecommended();
+
+// Or create specific
+if (SerializerFactory.IsAvailable(SerializerType.MessagePack))
+    serializer = SerializerFactory.Create(SerializerType.MessagePack);
+```
+
+---
+
+### 5. Tick System
+
+**Path**: `Runtime/Scripts/Simulation/`
+
+Deterministic fixed-timestep tick driver — the foundation for prediction, lockstep, and rollback.
+
+```csharp
+// Create tick system (30 Hz)
+var tickSystem = new NetworkTickSystem(30);
+
+// Register tick callback
+tickSystem.OnTick += tick =>
+{
+    SimulateGameplay(tick);
+};
+
+// Drive in Update (max 5 ticks/frame to prevent spiral-of-death)
+void Update() => tickSystem.Update(Time.deltaTime);
+
+// Time synchronization (NTP-style)
+var timeSync = new NetworkTimeSync();
+timeSync.ProcessTimeSample(clientSendTime, serverTime, clientReceiveTime);
+double serverNow = timeSync.LocalToServerTime(Time.timeAsDouble);
+```
+
+---
+
+### 6. Client Prediction
+
+**Path**: `Runtime/Scripts/Prediction/`
+
+Full **client-side prediction + server authority + rollback reconciliation** pipeline.
 
 ```mermaid
-flowchart LR
-    subgraph Input["Message Types"]
-        AnyStruct["Any Struct"]
+sequenceDiagram
+    participant Client
+    participant Server
+
+    Client->>Client: CaptureInput
+    Client->>Client: Predict locally (SimulateStep)
+    Client->>Client: Save prediction (RecordPrediction)
+    Client->>Server: Send input
+    Server->>Server: Authoritative simulation
+    Server-->>Client: Return authoritative state
+    Client->>Client: Compare prediction vs authority
+    alt Match
+        Client->>Client: Continue (no correction)
+    else Mismatch
+        Client->>Client: Rollback to authority
+        Client->>Client: Re-simulate subsequent frames
     end
-
-    subgraph Serializers["Serializers"]
-        Json["JsonSerializerAdapter<br/>✅ Default, Cross-platform"]
-        MessagePack["MessagePackSerializerAdapter<br/>⚡ High Performance"]
-        ProtoBuf["ProtoBufSerializerAdapter<br/>🌐 Schema-based"]
-    end
-
-    subgraph Output["Output"]
-        Buffer["NetworkBuffer<br/>(Pooled)"]
-    end
-
-    AnyStruct --> Json
-    AnyStruct --> MessagePack
-    AnyStruct --> ProtoBuf
-    Json --> Buffer
-    MessagePack --> Buffer
-    ProtoBuf --> Buffer
 ```
-
-## Dependencies
-
-- `Mirror` (Optional, via conditional compilation `#if MIRROR`)
-- `Nakama` (Planned, via conditional compilation)
-
-## Quick Start Guide
-
-### Step 1: Scene Setup (Mirror)
-
-1. **Ensure Mirror is installed** in your project
-2. **Add MirrorNetAdapter** to a GameObject in your scene:
-   - Create a new GameObject named "NetworkManager"
-   - Add the `MirrorNetAdapter` component
-   - Configure your Mirror transport as usual
 
 ```csharp
-// MirrorNetAdapter automatically registers itself on Awake
-// Access via NetServices anywhere in your code
-var net = NetServices.Instance;
+// ① Implement IPredictable
+public class PlayerMovement : IPredictable<MoveInput, PlayerState>
+{
+    public MoveInput CaptureInput()
+        => new MoveInput { Horizontal = Input.GetAxis("Horizontal") };
+
+    public PlayerState CaptureState()
+        => new PlayerState { X = transform.position.x };
+
+    public void ApplyState(in PlayerState state)
+        => transform.position = new Vector3(state.X, 0, 0);
+
+    public void SimulateStep(in MoveInput input, float deltaTime)
+        => transform.position += Vector3.right * input.Horizontal * deltaTime;
+
+    public bool StatesMatch(in PlayerState a, in PlayerState b)
+        => Mathf.Abs(a.X - b.X) < 0.01f;
+}
+
+// ② Use the prediction system
+var prediction = new ClientPredictionSystem<MoveInput, PlayerState>(player);
+prediction.RecordPrediction(currentTick, deltaTime);
+prediction.ProcessServerState(serverTick, serverState); // auto-rollback on mismatch
 ```
 
-### Step 2: Define Network Messages
+#### Snapshot Interpolation
+
+Smooth display of remote entities:
 
 ```csharp
-// ✅ Zero-GC message - only primitive types, no references
-public struct PositionUpdate
-{
-    public int EntityId;
-    public float X;
-    public float Y;
-    public float Z;
-}
-
-// ✅ Zero-GC message - fixed-size arrays are OK
-public unsafe struct ChatMessage
-{
-    public int SenderId;
-    public fixed char Content[64]; // Fixed buffer, no allocation
-}
-
-// ⚠️ NOT zero-GC - contains managed type (string)
-// Use FallbackJsonSerializer for these
-public struct PlayerInfo
-{
-    public int Id;
-    // string is a reference type - causes allocation!
-}
+var interp = new SnapshotInterpolation<TransformSnapshot>(
+    TransformSnapshot.Lerp, TransformSnapshot.GetTimestamp
+);
+interp.AddSnapshot(new TransformSnapshot { Timestamp = serverTime, Position = pos, Rotation = rot });
+var result = interp.Update(currentTime);
 ```
 
-### Step 3: Register Message Handlers
+#### Lag Compensation
+
+Server-side historical hit detection:
 
 ```csharp
-using CycloneGames.Networking;
-using UnityEngine;
+var lagComp = new LagCompensationBuffer(capacity: 128);
+lagComp.Record(tick, position, rotation, bounds);
 
-public class NetworkExample : MonoBehaviour
-{
-    // Message IDs - use constants for consistency
-    private const ushort MSG_POSITION = 1001;
-    private const ushort MSG_CHAT = 1002;
-
-    private void Start()
-    {
-        var net = NetServices.Instance;
-
-        // Register handlers for incoming messages
-        net.RegisterHandler<PositionUpdate>(MSG_POSITION, OnPositionReceived);
-        net.RegisterHandler<ChatMessage>(MSG_CHAT, OnChatReceived);
-    }
-
-    private void OnPositionReceived(INetConnection conn, PositionUpdate msg)
-    {
-        Debug.Log($"Player {conn.ConnectionId} moved to ({msg.X}, {msg.Y}, {msg.Z})");
-        Debug.Log($"Connection quality: {conn.Quality}, Ping: {conn.Ping}ms");
-    }
-
-    private void OnChatReceived(INetConnection conn, ChatMessage msg)
-    {
-        // Handle chat message
-    }
-
-    private void OnDestroy()
-    {
-        var net = NetServices.Instance;
-        net.UnregisterHandler(MSG_POSITION);
-        net.UnregisterHandler(MSG_CHAT);
-    }
-}
+if (lagComp.HitTest(clientTick, shootRay, maxDist, out float hitDist))
+    ConfirmHit();
 ```
 
-### Step 4: Send Messages
+---
 
-```csharp
-public class PlayerController : MonoBehaviour
-{
-    private const ushort MSG_POSITION = 1001;
+### 7. Interest Management
 
-    private void Update()
-    {
-        // Only send on input or position change
-        if (PositionChanged())
-        {
-            SendPosition();
-        }
-    }
+**Path**: `Runtime/Scripts/Interest/`
 
-    private void SendPosition()
-    {
-        var net = NetServices.Instance;
-        var pos = transform.position;
-
-        // Send message using configured serializer (Json by default, MessagePack if available)
-        net.SendToServer(MSG_POSITION, new PositionUpdate
-        {
-            EntityId = gameObject.GetInstanceID(),
-            X = pos.x,
-            Y = pos.y,
-            Z = pos.z
-        });
-    }
-
-    private bool PositionChanged() => true; // Your logic here
-}
-```
-
-### Step 5: Server-Side Broadcasting
-
-```csharp
-public class GameServer : MonoBehaviour
-{
-    private const ushort MSG_SPAWN = 1003;
-
-    private void Start()
-    {
-        var net = NetServices.Instance;
-
-        // Listen for transport events
-        net.Transport.OnClientConnected += OnClientConnected;
-        net.Transport.OnClientDisconnected += OnClientDisconnected;
-        net.Transport.OnError += OnNetworkError;
-    }
-
-    private void OnClientConnected(INetConnection conn)
-    {
-        Debug.Log($"Client connected: {conn.ConnectionId} from {conn.RemoteAddress}");
-
-        // Send spawn message to all clients
-        net.BroadcastToClients(MSG_SPAWN, new SpawnMessage
-        {
-            EntityId = conn.ConnectionId,
-            X = 0, Y = 0, Z = 0
-        });
-    }
-
-    private void OnClientDisconnected(INetConnection conn)
-    {
-        Debug.Log($"Client disconnected: {conn.ConnectionId}");
-    }
-
-    private void OnNetworkError(INetConnection conn, TransportError error, string message)
-    {
-        Debug.LogError($"Network error for {conn?.ConnectionId}: {error} - {message}");
-    }
-}
-```
-
-## Advanced Usage
-
-### Using Pooled Buffers Directly
-
-For maximum control over serialization:
-
-```csharp
-using CycloneGames.Networking;
-
-public class AdvancedNetworking : MonoBehaviour
-{
-    private void SendCustomData()
-    {
-        // Get pooled buffer (zero-allocation)
-        using (var buffer = NetworkBufferPool.Get())
-        {
-            // Write data manually
-            buffer.WriteInt(42);
-            buffer.WriteFloat(3.14f);
-            buffer.WriteBlittable(new Vector3(1, 2, 3)); // Only unmanaged types!
-
-            // Send raw bytes
-            var transport = NetServices.Instance.Transport;
-            int channelId = transport.GetChannelId(NetworkChannel.Reliable);
-            transport.Send(connection, buffer.ToArraySegment(), channelId);
-        }
-        // Buffer automatically returned to pool on Dispose
-    }
-}
-```
-
-### Connection Quality Monitoring
-
-```csharp
-public class ConnectionMonitor : MonoBehaviour
-{
-    private void Update()
-    {
-        if (!NetServices.IsAvailable) return;
-
-        var stats = NetServices.Instance.Transport.GetStatistics();
-
-        // Display statistics
-        Debug.Log($"Bytes Sent: {stats.BytesSent}");
-        Debug.Log($"Bytes Received: {stats.BytesReceived}");
-        Debug.Log($"Packets Sent: {stats.PacketsSent}");
-        Debug.Log($"Active Connections: {stats.ConnectionCount}");
-    }
-
-    private void MonitorConnectionQuality(INetConnection conn)
-    {
-        switch (conn.Quality)
-        {
-            case ConnectionQuality.Excellent:
-                // < 50ms RTT, very stable
-                break;
-            case ConnectionQuality.Good:
-                // 50-100ms RTT
-                break;
-            case ConnectionQuality.Fair:
-                // 100-200ms RTT
-                break;
-            case ConnectionQuality.Poor:
-                // > 200ms RTT or unstable
-                ShowWarning("Poor connection detected!");
-                break;
-        }
-
-        // Jitter indicates connection stability
-        if (conn.Jitter > 50)
-        {
-            ShowWarning("High jitter - consider reducing send rate");
-        }
-    }
-}
-```
-
-### Serializer Adapters
-
-The framework supports multiple serialization libraries via the adapter pattern. Each serializer is automatically enabled when its package is installed.
+Controls which entities are visible to which connections — **critical for bandwidth**.
 
 ```mermaid
 flowchart TB
-    subgraph Core["Core Serializers"]
-        Json["JsonSerializerAdapter<br/>✅ Always Available<br/>Unity JsonUtility"]
-        NewtonsoftJson["NewtonsoftJsonSerializerAdapter<br/>📦 com.unity.nuget.newtonsoft-json<br/>Full JSON features"]
+    subgraph Managers["Interest Managers"]
+        Grid["GridInterestManager</br>Spatial Grid AOI</br>Open Worlds"]
+        Group["GroupInterestManager</br>Manual Groups</br>Dungeons / Rooms"]
+        TeamVis["TeamVisibilityInterestManager</br>Team Detection</br>MOBA / RTS"]
+        Composite["CompositeInterestManager</br>Combine Strategies</br>Union of results"]
     end
 
-    subgraph Binary["Binary Serializers"]
-        MessagePack["MessagePackSerializerAdapter<br/>📦 com.github.messagepack-csharp"]
-        ProtoBuf["ProtoBufSerializerAdapter<br/>📦 com.google.protobuf"]
-        FlatBuffers["FlatBuffersSerializerAdapter<br/>📦 com.google.flatbuffers"]
+    subgraph Entity["INetworkEntity"]
+        Props["• NetworkId</br>• Position</br>• OwnerConnectionId</br>• AlwaysRelevant</br>• RelevanceGroup"]
     end
 
-    subgraph Factory["SerializerFactory"]
-        Create["Create(SerializerType)"]
-        IsAvailable["IsAvailable(SerializerType)"]
-        GetRecommended["GetRecommended()"]
+    Composite --> Grid
+    Composite --> Group
+    Composite --> TeamVis
+    Grid --> Entity
+    Group --> Entity
+    TeamVis --> Entity
+```
+
+```csharp
+// Grid AOI (open world MMO)
+var grid = new GridInterestManager(cellSize: 50f, visibilityRange: 150f);
+grid.SetObserverPosition(connectionId, playerPosition);
+
+// Manual groups (dungeons, rooms)
+var group = new GroupInterestManager();
+group.AddEntityToGroup("dungeon_1", entity);
+group.AddConnectionToGroup("dungeon_1", connectionId);
+
+// Team Visibility (MOBA/RTS)
+var visibility = new TeamVisibilityInterestManager(defaultDetectionRange: 30f);
+visibility.SetConnectionTeam(connectionId, teamId: 1);
+visibility.SetEntityDetectionRange(entity, 25f);
+visibility.SetHidden(entity, true);           // hidden
+visibility.AddRevealZone(position, radius);   // reveal zone
+
+// Combine strategies (union of visibility)
+var composite = new CompositeInterestManager();
+composite.Add(grid);
+composite.Add(visibility);
+```
+
+---
+
+### 8. State Synchronization
+
+**Path**: `Runtime/Scripts/StateSync/`
+
+Automatic dirty tracking and change synchronization.
+
+```csharp
+// Value-type variable (zero-GC, T : unmanaged, IEquatable<T>)
+var health = new NetworkVariable<int>(100);
+health.Value = 80; // auto-marks dirty, fires OnChanged
+
+health.OnChanged += (oldVal, newVal) =>
+    Debug.Log($"Health: {oldVal} → {newVal}");
+
+// Managed-type variable
+var name = new NetworkVariableManaged<string>("Player1", serializer);
+
+// Variable set (up to 64 variables, bit-mask dirty tracking)
+var varSet = new NetworkVariableSet();
+varSet.Register(health);
+if (varSet.IsAnyDirty)
+{
+    varSet.WriteDirty(writer);
+    varSet.ClearAllDirty();
+}
+```
+
+---
+
+### 9. Remote Procedure Calls
+
+**Path**: `Runtime/Scripts/Rpc/`
+
+Attribute-based RPC system.
+
+```csharp
+[ServerRpc(requiresOwnership: true)]
+void CmdAttack(int targetId) { /* runs on server */ }
+
+[ClientRpc(target: RpcTarget.AllClients)]
+void RpcDamaged(int damage) { /* runs on all clients */ }
+
+// Processor-based usage
+var rpc = new RpcProcessor(networkManager);
+rpc.Register<DamageMsg>(1, OnDamageReceived);
+rpc.Send(1, new DamageMsg { TargetId = 5, Amount = 20 }, RpcTarget.AllClients);
+```
+
+`RpcTarget` options: `Server`, `Owner`, `AllClients`, `Observers`, `AllExceptOwner`, `AllExceptSender`.
+
+---
+
+### 10. Lockstep & Deterministic Simulation
+
+**Path**: `Runtime/Scripts/Lockstep/`
+
+Full deterministic lockstep and GGPO-style rollback.
+
+```mermaid
+flowchart TB
+    subgraph Lockstep["Lockstep (LockstepManager)"]
+        Input["Collect all player inputs"]
+        Wait["Wait for consensus</br>All peers ready"]
+        Advance["Advance frame"]
+        Stall["Timeout → Stall detection"]
     end
 
-    Factory --> Core
-    Factory --> Binary
+    subgraph Deterministic["Deterministic Math"]
+        FP["FPInt64</br>Q32.32 Fixed-Point"]
+        Vec["FPVector2 / FPVector3"]
+        Rand["DeterministicRandom</br>xoshiro256**"]
+    end
+
+    subgraph Desync["Anti-Cheat"]
+        Hash["DesyncDetector&lt;THasher&gt;</br>Pluggable State Hashing</br>(default: FNV-1a)"]
+        Compare["Frame Hash Comparison"]
+    end
+
+    subgraph RB["Rollback Netcode (GGPO)"]
+        Predict["Predict missing inputs"]
+        Confirm["Receive confirmed input"]
+        Roll["Mismatch → Rollback"]
+        Resim["Re-simulate"]
+    end
+
+    Input --> Wait --> Advance
+    Wait -->|"timeout"| Stall
+    Advance --> Hash --> Compare
+    Predict --> Confirm --> Roll --> Resim
 ```
 
-#### Recommended Strategy
-
-| Phase           | Serializer     | Reason                                             |
-| --------------- | -------------- | -------------------------------------------------- |
-| **Development** | NewtonsoftJson | Human-readable, easy debugging, full JSON features |
-| **Production**  | MessagePack    | Binary format, smaller size, faster parsing        |
+#### Lockstep Example
 
 ```csharp
-// Configure based on build type
-#if DEVELOPMENT_BUILD || UNITY_EDITOR
-    adapter.SetSerializer(SerializerFactory.Create(SerializerType.NewtonsoftJson));
-#else
-    adapter.SetSerializer(SerializerFactory.GetRecommended()); // MessagePack if available
-#endif
-```
+var lockstep = new LockstepManager<GameInput>(
+    peerCount: 2, localPeerId: 0, inputDelay: 2
+);
 
-#### Using SerializerFactory
-
-```csharp
-using CycloneGames.Networking;
-
-public class GameInitializer : MonoBehaviour
+lockstep.OnSimulateFrame += (frame, inputs) =>
 {
-    private void Start()
+    foreach (var (peerId, input) in inputs)
+        SimulatePlayer(peerId, input);
+};
+
+void FixedUpdate()
+{
+    lockstep.SubmitLocalInput(CaptureInput());
+    lockstep.Tick(); // advances when all inputs received
+}
+```
+
+#### Fixed-Point Math
+
+Cross-platform deterministic calculations (floating-point varies across CPU architectures):
+
+```csharp
+FPInt64 a = FPInt64.FromFloat(3.14f);
+FPInt64 b = FPInt64.FromInt(2);
+FPInt64 c = a * b; // exact multiplication (no float drift)
+
+var v = new FPVector3(FPInt64.FromFloat(1f), FPInt64.Zero, FPInt64.Zero);
+FPInt64 len = FPVector3.Distance(v, FPVector3.Zero);
+
+// Deterministic RNG (same seed → same results on all clients)
+var rng = new DeterministicRandom(seed: 12345);
+int roll = rng.NextInt(1, 7);
+```
+
+#### GGPO-Style Rollback
+
+```csharp
+public class MySimulation : IRollbackSimulation<GameInput, GameState>
+{
+    public GameInput PredictInput(int frame) => default;
+    public GameState SaveState() => currentState;
+    public void LoadState(in GameState state) => currentState = state;
+    public void Simulate(in GameInput input) { /* one frame */ }
+    public void OnRollback(int fromFrame, int toFrame) => Debug.Log("Rollback!");
+}
+
+var rollback = new RollbackNetcode<GameInput, GameState>(simulation, maxRollbackFrames: 8);
+rollback.AdvanceFrame(localInput);
+rollback.ReceiveConfirmedInput(frame, confirmedInput); // auto-rollback if mismatch
+```
+
+---
+
+### 11. Security
+
+**Path**: `Runtime/Scripts/Security/`
+
+```csharp
+// Token-bucket rate limiter
+var limiter = new RateLimiter(maxMessagesPerSecond: 60, maxBytesPerSecond: 32768, burstLimit: 10);
+if (!limiter.TryConsume(connectionId, messageSize))
+    return; // over limit
+
+// Message validator
+var validator = new MessageValidator(maxPayloadSize: 1024, maxMessageId: 9999);
+var result = validator.Validate(msgId, payloadSize);
+if (result != ValidationResult.Valid)
+    Debug.LogWarning($"Invalid message: {result}");
+```
+
+---
+
+### 12. Session & Reconnection
+
+**Path**: `Runtime/Scripts/Session/`
+
+Lobby, matchmaking, host migration, and reconnection with state catch-up.
+
+```csharp
+// Reconnection manager
+var reconnect = new ReconnectionManager(
+    reconnectWindowSeconds: 300, // 5-minute window
+    catchUp: myStateCatchUpImpl
+);
+
+reconnect.OnClientReconnected += (conn, state) =>
+    Debug.Log($"Player {conn.PlayerId} reconnected");
+
+reconnect.OnReconnectWindowExpired += playerId =>
+    Debug.Log($"Reservation expired for {playerId}");
+```
+
+Interfaces: `ILobbyManager`, `IMatchmaker`, `IHostMigration`, `IReconnectionManager`.
+
+---
+
+### 13. Replay System
+
+**Path**: `Runtime/Scripts/Replay/`
+
+```csharp
+// Recording
+var recorder = new ReplayRecorder(keyframeInterval: 300);
+recorder.StartRecording();
+recorder.RecordFrame(tick, inputData);
+recorder.RecordKeyframe(tick, fullState);
+recorder.StopRecording();
+
+// Playback
+var player = new ReplayPlayer(recorder.GetAllFrames());
+player.Play();
+player.SetSpeed(2.0f);
+player.Seek(targetTick);
+
+// Spectator mode (with delay)
+var spectator = new SpectatorManager(delayTicks: 90); // 3s delay @30Hz
+```
+
+---
+
+### 14. Network Spawning
+
+**Path**: `Runtime/Scripts/Spawning/`
+
+```csharp
+var spawnManager = new NetworkSpawnManager(networkManager);
+spawnManager.Spawn(prefabId: 1, position, rotation, ownerConnectionId);
+
+spawnManager.OnSpawned += obj =>
+    Debug.Log($"Spawned: NetworkId={obj.NetworkId}");
+
+spawnManager.TransferOwnership(networkId, newOwnerConnectionId);
+```
+
+---
+
+### 15. Scene Management
+
+**Path**: `Runtime/Scripts/Scene/`
+
+```csharp
+var sceneManager = new NetworkSceneManager(networkManager);
+
+sceneManager.ServerLoadScene("BattleArena");
+sceneManager.ServerLoadScene("Dungeon_01", additive: true);
+sceneManager.ServerLoadSceneForConnections("PrivateDungeon", new[] { conn1, conn2 });
+
+sceneManager.OnSceneLoaded += sceneName => Debug.Log($"Loaded: {sceneName}");
+```
+
+---
+
+### 16. Compression
+
+**Path**: `Runtime/Scripts/Compression/`
+
+```csharp
+// Vector3 quantization (ZigZag + variable-length integer encoding)
+var qv = QuantizedVector3.FromVector3(transform.position, precision: 100);
+qv.WriteTo(writer);
+Vector3 pos = QuantizedVector3.ReadFrom(reader).ToVector3(precision: 100);
+
+// Quaternion smallest-three compression (4 bytes, 10 bits per component)
+var qq = QuantizedQuaternion.FromQuaternion(transform.rotation);
+```
+
+---
+
+### 17. Diagnostics
+
+**Path**: `Runtime/Scripts/Diagnostics/`
+
+```csharp
+// Network profiler
+var profiler = new NetworkProfiler();
+profiler.RecordSend(msgId, byteCount);
+profiler.Update(deltaTime);
+
+var snapshot = profiler.TakeSnapshot();
+Debug.Log($"Upload: {snapshot.BytesSentPerSecond} B/s");
+Debug.Log($"Download: {snapshot.BytesReceivedPerSecond} B/s");
+
+// Per-message-type stats
+var stats = profiler.GetMessageStats(msgId);
+
+// Network condition simulator (for testing)
+var simulator = new NetworkConditionSimulator(realTransport);
+simulator.ApplyPreset(NetworkConditionSimulator.Preset.Mobile4G);
+// Presets: LAN, Broadband, WiFi, Mobile4G, Mobile3G, Satellite, Terrible
+
+simulator.LatencyMs = 150;
+simulator.JitterMs = 30;
+simulator.PacketLossPercent = 5f;
+simulator.Enabled = true;
+```
+
+---
+
+### 18. Gameplay Abilities Integration
+
+**Path**: 📦 **Separate Package** — `CycloneGames.Networking.GAS` (sibling directory)  
+**Asmdef**: `CycloneGames.Networking.GAS`  
+**Reference**: `CycloneGames.Networking.Runtime`  
+**Namespace**: `CycloneGames.Networking.GAS`
+
+Deep integration with `CycloneGames.GameplayAbilities` for networked abilities, effects, and attributes.
+
+> ⚠️ **Breaking Change**: GAS classes have been moved from core package to a separate package. Add a reference to `CycloneGames.Networking.GAS` in your asmdef.
+
+```mermaid
+flowchart TB
+    subgraph Client["Client"]
+        PredictLocal["Local prediction"]
+        Request["Request activate ability</br>MsgId: 200"]
+    end
+
+    subgraph Server["Server"]
+        Validate["Validate request"]
+        Execute["Execute ability"]
+        ApplyEffect["Apply effect</br>MsgId: 210"]
+        SyncAttr["Sync attributes</br>MsgId: 220"]
+    end
+
+    subgraph Clients["All Clients"]
+        Confirm["Confirm activation</br>MsgId: 201"]
+        Reject["Reject activation</br>MsgId: 202"]
+        EffectSync["Effect sync"]
+        AttrUpdate["Attribute update"]
+    end
+
+    Request -->|"ClientRequestActivateAbility"| Validate
+    Validate -->|"pass"| Execute
+    Validate -->|"fail"| Reject
+    Execute --> Confirm
+    Execute --> ApplyEffect
+    ApplyEffect --> EffectSync
+    SyncAttr --> AttrUpdate
+```
+
+```csharp
+using CycloneGames.Networking.GAS; // 📦 Required: GAS separate package
+
+var bridge = new NetworkedAbilityBridge(networkManager);
+bridge.RegisterASC(networkId, myASC);
+
+// Client: request ability activation
+bridge.ClientRequestActivateAbility(abilityTag: 1001, targetNetworkId: targetId, predictionKey: key);
+
+// Attribute sync
+var attrSync = new AttributeSyncManager(bridge);
+attrSync.RegisterPublicAttribute(networkId, "Health");
+attrSync.MarkDirty(networkId, "Health");
+attrSync.FlushDirty();
+
+// Effect replication
+var effectRepl = new EffectReplicationManager(bridge);
+int instanceId = effectRepl.OnEffectApplied(targetNetworkId, effectTag, level, stacks);
+```
+
+| Message ID Range | Purpose |
+|-----------------|---------|
+| 200-203 | Ability activate / confirm / reject / end |
+| 210-212 | Effect applied / removed / stack changed |
+| 220-221 | Attribute update / batch update |
+| 240-241 | Full state snapshot |
+
+---
+
+### 19. Authentication
+
+**Path**: `Runtime/Scripts/Authentication/`
+
+```csharp
+public class MyAuthenticator : INetAuthenticator
+{
+    public void OnClientAuthenticate(INetConnection conn, ReadOnlySpan<byte> authData)
     {
-        // Check which serializers are available
-        Debug.Log($"MessagePack: {SerializerFactory.IsAvailable(SerializerType.MessagePack)}");
-        Debug.Log($"ProtoBuf: {SerializerFactory.IsAvailable(SerializerType.ProtoBuf)}");
-        Debug.Log($"FlatBuffers: {SerializerFactory.IsAvailable(SerializerType.FlatBuffers)}");
-
-        // Get recommended serializer (MessagePack > NewtonsoftJson > Json)
-        INetSerializer serializer = SerializerFactory.GetRecommended();
-
-        // Or create a specific serializer
-        if (SerializerFactory.IsAvailable(SerializerType.MessagePack))
-        {
-            serializer = SerializerFactory.Create(SerializerType.MessagePack);
-        }
-
-        // Inject into adapter
-        var adapter = FindObjectOfType<MirrorNetAdapter>();
-        adapter.SetSerializer(serializer);
+        if (ValidateToken(authData))
+            AcceptClient(conn);
+        else
+            RejectClient(conn, "Invalid token");
     }
 }
 ```
 
-#### MessagePack Integration
+---
 
-[MessagePack-CSharp](https://github.com/MessagePack-CSharp/MessagePack-CSharp) provides excellent performance with minimal allocations.
+### 20. Platform Configuration
 
-**Setup:**
+**Path**: `Runtime/Scripts/Platform/`
 
-1. Install `com.github.messagepack-csharp` package
-2. The `MESSAGEPACK` define is automatically set
-3. Add `[MessagePackObject]` attribute to your message types
+Auto-adjusts networking parameters per target platform.
 
 ```csharp
-using MessagePack;
+var config = NetworkPlatformConfig.GetForCurrentPlatform();
+// Or manually: NetworkPlatformConfig.Android(), .PlayStation(), .WebGL(), etc.
+```
 
-// MessagePack message definition
-[MessagePackObject]
-public struct PlayerState
+| Platform | MTU | Max Connections | IPv6 | WebSocket | Encryption |
+|----------|-----|----------------|------|-----------|------------|
+| Windows | 1200 | 200 | ✅ | ❌ | ❌ |
+| WebGL | 1200 | 1 | ❌ | ✅ | ❌ |
+| iOS | 1200 | 8 | ✅ | ❌ | ❌ |
+| Android | 1200 | 8 | ✅ | ❌ | ❌ |
+| PS4/PS5 | 1200 | 100 | ✅ | ❌ | ✅ |
+| Xbox | 1200 | 100 | ✅ | ❌ | ✅ |
+| Switch | 1200 | 16 | ✅ | ❌ | ❌ |
+
+---
+
+### 21. Transport Adapters
+
+**Path**: `Runtime/Scripts/Adapters/`
+
+```mermaid
+flowchart LR
+    subgraph YourCode["Your Code"]
+        INetTransport2["INetTransport"]
+        INetworkManager2["INetworkManager"]
+    end
+
+    subgraph MirrorAdapter["Mirror Adapter</br>#if MIRROR"]
+        MirrorNet["MirrorNetAdapter</br>MonoBehaviour"]
+    end
+
+    subgraph MirageAdapter["Mirage Adapter</br>#if MIRAGE"]
+        MirageNet["MirageNetAdapter</br>MonoBehaviour"]
+    end
+
+    subgraph NoopAdapter["No-op Fallback"]
+        Noop["NoopNetTransport"]
+    end
+
+    INetTransport2 --> MirrorNet
+    INetTransport2 --> MirageNet
+    INetTransport2 --> Noop
+    INetworkManager2 --> MirrorNet
+    INetworkManager2 --> MirageNet
+```
+
+| Adapter | Define Symbol | Description |
+|---------|--------------|-------------|
+| `MirrorNetAdapter` | `#if MIRROR` | Mirror transport + manager adapter |
+| `MirageNetAdapter` | `#if MIRAGE` | Mirage transport + manager adapter |
+| `NoopNetTransport` | *(always)* | No-op fallback for testing |
+
+Both adapters implement `INetTransport` and `INetworkManager` simultaneously and register themselves with `NetServices` on `Awake`.
+
+---
+
+## Game Type Guide
+
+Choose the right modules for your game:
+
+```mermaid
+flowchart TB
+    Start["Choose Your Game Type"] --> FPS
+    Start --> MOBA
+    Start --> RTS
+    Start --> MMO
+    Start --> Fighting
+    Start --> TurnBased
+
+    FPS["FPS / TPS</br>Shooters"]
+    MOBA["MOBA</br>LoL / Dota2"]
+    RTS["RTS</br>Real-Time Strategy"]
+    MMO["MMO</br>Massive Multiplayer"]
+    Fighting["Fighting</br>FGC"]
+    TurnBased["Turn-Based"]
+
+    FPS --> FPS_Modules["• ClientPrediction ✅</br>• LagCompensation ✅</br>• SnapshotInterpolation ✅</br>• GridInterestManager ✅</br>• NetworkVariable ✅</br>• RPC ✅"]
+
+    MOBA --> MOBA_Modules["• NetworkTickSystem ✅</br>• TeamVisibilityInterestManager ✅</br>• ReconnectionManager ✅</br>• ReplaySystem ✅</br>• GAS Integration (separate pkg) ✅</br>• NetworkVariable ✅"]
+
+    RTS --> RTS_Modules["• LockstepManager ✅</br>• DeterministicMath ✅</br>• DesyncDetector&lt;THasher&gt; ✅</br>• TeamVisibilityInterestManager ✅</br>• ReplaySystem ✅"]
+
+    MMO --> MMO_Modules["• GridInterestManager ✅</br>• GroupInterestManager ✅</br>• NetworkSceneManager ✅</br>• NetworkSpawnManager ✅</br>• SessionManagement ✅</br>• NetworkVariable ✅"]
+
+    Fighting --> Fighting_Modules["• RollbackNetcode ✅</br>• DeterministicMath ✅</br>• PredictionBuffer ✅</br>• DesyncDetector&lt;THasher&gt; ✅"]
+
+    TurnBased --> Turn_Modules["• RPC ✅</br>• SessionManagement ✅</br>• ReconnectionManager ✅</br>• NetworkVariable ✅"]
+```
+
+| Game Type | Sync Model | Core Modules | Latency Strategy |
+|-----------|-----------|--------------|-----------------|
+| FPS/TPS | State sync | ClientPrediction + LagCompensation + SnapshotInterpolation | Client prediction + server rewind |
+| MOBA (LoL/Dota2) | State sync | TeamVisibility + GAS + Reconnect + Replay | Server authority + interest management |
+| RTS (C&C/StarCraft) | Lockstep | LockstepManager + FPInt64 + DesyncDetector\<THasher\> + TeamVisibility | Deterministic simulation |
+| MMO | State sync | Grid/Group Interest + Scene + Spawn | AOI culling |
+| Fighting (Street Fighter) | Rollback | RollbackNetcode + FPInt64 | GGPO rollback + replay |
+| Turn-based | Request/Response | RPC + Session | No real-time sync needed |
+
+---
+
+## Tutorials
+
+### Tutorial 1: FPS Network Sync from Scratch
+
+```csharp
+// Step 1: Define data structures
+public struct FpsInput : IEquatable<FpsInput>
 {
-    [Key(0)] public int PlayerId;
-    [Key(1)] public float X;
-    [Key(2)] public float Y;
-    [Key(3)] public float Z;
-    [Key(4)] public float Health;
+    public float MoveX, MoveZ;
+    public bool Fire;
+    public bool Equals(FpsInput other) =>
+        MoveX == other.MoveX && MoveZ == other.MoveZ && Fire == other.Fire;
 }
 
-// Usage
-var serializer = SerializerFactory.Create(SerializerType.MessagePack);
-adapter.SetSerializer(serializer);
-
-// Now messages are serialized with MessagePack
-net.SendToServer(1001, new PlayerState { PlayerId = 1, X = 10, Y = 0, Z = 5, Health = 100 });
-```
-
-#### ProtoBuf Integration (Planned)
-
-[Protocol Buffers](https://developers.google.com/protocol-buffers) for schema-based serialization.
-
-**Setup:**
-
-1. Install Google.Protobuf package
-2. Add `PROTOBUF` to Scripting Define Symbols
-3. Define `.proto` schema and generate C# code with `protoc`
-
-```protobuf
-// player.proto
-syntax = "proto3";
-message PlayerState {
-    int32 player_id = 1;
-    float x = 2;
-    float y = 3;
-    float z = 4;
-    float health = 5;
-}
-```
-
-```csharp
-// Generated code usage
-var serializer = SerializerFactory.Create(SerializerType.ProtoBuf);
-adapter.SetSerializer(serializer);
-```
-
-#### FlatBuffers Integration (Planned)
-
-[FlatBuffers](https://google.github.io/flatbuffers/) for zero-copy deserialization.
-
-**Setup:**
-
-1. Install com.google.flatbuffers package
-2. Add `FLATBUFFERS` to Scripting Define Symbols
-3. Define `.fbs` schema and generate C# code with `flatc`
-
-```csharp
-// FlatBuffers provides zero-copy access to underlying buffer
-using CycloneGames.Networking.Serializer.FlatBuffers;
-
-// Wrap received buffer for zero-copy access
-var byteBuffer = FlatBuffersSerializerAdapter.WrapBuffer(receivedData);
-var playerState = PlayerState.GetRootAsPlayerState(byteBuffer);
-
-// Access fields directly from buffer - no deserialization cost!
-float x = playerState.X;
-float y = playerState.Y;
-```
-
-#### Custom Serializer Implementation
-
-If you need to integrate a different serialization library:
-
-```csharp
-public class MemoryPackSerializerAdapter : INetSerializer
+public struct FpsState : IEquatable<FpsState>
 {
-    public void Serialize<T>(in T value, byte[] buffer, int offset, out int writtenBytes)
-        where T : struct
-    {
-        var span = buffer.AsSpan(offset);
-        writtenBytes = MemoryPackSerializer.Serialize(span, value);
-    }
-
-    public void Serialize<T>(in T value, INetWriter writer) where T : struct
-    {
-        // Use stackalloc for small messages
-        Span<byte> temp = stackalloc byte[256];
-        int written = MemoryPackSerializer.Serialize(temp, value);
-        writer.WriteBytes(temp.Slice(0, written));
-    }
-
-    public T Deserialize<T>(ReadOnlySpan<byte> data) where T : struct
-    {
-        return MemoryPackSerializer.Deserialize<T>(data);
-    }
-
-    public T Deserialize<T>(INetReader reader) where T : struct
-    {
-        var span = reader.ReadBytesSpan(reader.Remaining);
-        return Deserialize<T>(span);
-    }
-}
-
-// Register custom serializer
-adapter.SetSerializer(new MemoryPackSerializerAdapter());
-```
-
-#### Serializer Comparison
-
-| Serializer         | Zero-GC | Format              | Speed  |  Size  | Cross-Platform | Best For                  |
-| ------------------ | :-----: | ------------------- | :----: | :----: | :------------: | ------------------------- |
-| **Json**           |   ❌    | Text                |   ⚡   | Large  |     ✅ All     | Simple structs            |
-| **NewtonsoftJson** |   ❌    | Text                |   ⚡   | Large  |     ✅ All     | Development, debugging    |
-| **MessagePack**    |  ✅\*   | Binary + Attributes |  ⚡⚡  | Small  |     ✅ All     | Production (recommended)  |
-| **ProtoBuf**       |  ✅\*   | Binary + Schema     |  ⚡⚡  | Small  |     ✅ All     | Cross-language services   |
-| **FlatBuffers**    |   ✅    | Binary + Schema     | ⚡⚡⚡ | Medium |     ✅ All     | Zero-copy, high-frequency |
-
-> **Notes:**
->
-> - \*With proper usage; complex types may have some allocations
-> - **Cross-Platform**: All = Supports Unity/C#, Go, Rust, Java, Python, C++, etc.
-> - **Json** uses Unity's JsonUtility (no Dictionary support)
-> - **NewtonsoftJson** supports Dictionary, polymorphism, custom converters
-
-## Transport Adapters
-
-### Mirror Adapter
-
-**Activation:**
-Add `MIRROR` to your project's Scripting Define Symbols.
-
-**Features:**
-
-- Uses recommended serializer (MessagePack if available, else Json)
-- Thread-safe message queue for cross-thread sends
-- Full statistics tracking
-- Error event forwarding
-
-### Creating Custom Adapters
-
-Implement `INetTransport` and `INetworkManager` for custom transports:
-
-```csharp
-public class CustomNetAdapter : MonoBehaviour, INetTransport, INetworkManager
-{
-    // Implement all interface members
-    // Register with NetServices.Register(this) on Awake
-}
-```
-
-## Best Practices
-
-### 1. Message Design
-
-```csharp
-// ✅ DO: Use small, focused messages
-public struct PositionUpdate
-{
-    public int EntityId;
     public float X, Y, Z;
-} // 16 bytes
+    public bool Equals(FpsState other) =>
+        Math.Abs(X - other.X) < 0.01f && Math.Abs(Z - other.Z) < 0.01f;
+}
 
-// ❌ DON'T: Create large monolithic messages
-public struct BadGameState
+// Step 2: Implement IPredictable
+public class FpsPlayer : MonoBehaviour, IPredictable<FpsInput, FpsState>
 {
-    public fixed byte Data[4096]; // Too large, may exceed MTU
+    public float Speed = 5f;
+
+    public FpsInput CaptureInput() => new FpsInput
+    {
+        MoveX = Input.GetAxis("Horizontal"),
+        MoveZ = Input.GetAxis("Vertical"),
+        Fire = Input.GetMouseButton(0)
+    };
+
+    public FpsState CaptureState() => new FpsState
+    { X = transform.position.x, Y = transform.position.y, Z = transform.position.z };
+
+    public void ApplyState(in FpsState state) =>
+        transform.position = new Vector3(state.X, state.Y, state.Z);
+
+    public void SimulateStep(in FpsInput input, float deltaTime) =>
+        transform.position += new Vector3(input.MoveX, 0, input.MoveZ) * Speed * deltaTime;
+
+    public bool StatesMatch(in FpsState a, in FpsState b) => a.Equals(b);
+}
+
+// Step 3: Wire it up
+public class FpsNetworkController : MonoBehaviour
+{
+    ClientPredictionSystem<FpsInput, FpsState> _prediction;
+    NetworkTickSystem _tickSystem;
+
+    void Start()
+    {
+        var player = GetComponent<FpsPlayer>();
+        _tickSystem = new NetworkTickSystem(60);
+        _prediction = new ClientPredictionSystem<FpsInput, FpsState>(player);
+
+        _tickSystem.OnTick += tick =>
+        {
+            _prediction.RecordPrediction(tick, _tickSystem.TickInterval);
+            NetServices.Instance.SendToServer(2000, player.CaptureInput());
+        };
+
+        NetServices.Instance.RegisterHandler<FpsState>(2001, (conn, state) =>
+            _prediction.ProcessServerState(_tickSystem.CurrentTick, state));
+    }
+
+    void Update() => _tickSystem.Update(Time.deltaTime);
 }
 ```
 
-### 2. Send Rate Control
+### Tutorial 2: RTS Lockstep
 
 ```csharp
-private float _lastSendTime;
-private const float SendInterval = 0.05f; // 20 Hz
-
-private void Update()
+public struct RtsInput
 {
-    if (Time.time - _lastSendTime >= SendInterval)
+    public int SelectedUnitId;
+    public int TargetX, TargetY;
+    public byte CommandType;
+}
+
+public class RtsNetworkController : MonoBehaviour
+{
+    LockstepManager<RtsInput> _lockstep;
+    DesyncDetector _desyncDetector;
+
+    void Start()
     {
-        SendPositionUpdate();
-        _lastSendTime = Time.time;
+        _desyncDetector = new DesyncDetector();
+        _lockstep = new LockstepManager<RtsInput>(peerCount: 4, localPeerId: myId, inputDelay: 3);
+
+        _lockstep.OnSimulateFrame += (frame, inputs) =>
+        {
+            // Deterministic simulation using fixed-point math
+            foreach (var (peerId, input) in inputs)
+            {
+                var target = new FPVector3(
+                    FPInt64.FromInt(input.TargetX), FPInt64.Zero, FPInt64.FromInt(input.TargetY));
+                // Move unit deterministically...
+            }
+
+            _desyncDetector.BeginFrame(frame);
+            // Hash state for desync detection
+        };
+
+        _lockstep.OnDesyncDetected += frame =>
+            Debug.LogError($"Desync at frame {frame}!");
+    }
+
+    void FixedUpdate()
+    {
+        _lockstep.SubmitLocalInput(GetPlayerInput());
+        _lockstep.Tick();
     }
 }
 ```
 
-### 3. Error Handling
+### Tutorial 3: Team Visibility
 
 ```csharp
-private void Start()
+using CycloneGames.Networking.Interest;
+
+public class TeamVisionController : MonoBehaviour
 {
-    var transport = NetServices.Instance.Transport;
-    transport.OnError += (conn, error, msg) =>
+    TeamVisibilityInterestManager _visibility;
+
+    void Start()
     {
-        switch (error)
-        {
-            case TransportError.Timeout:
-                AttemptReconnect();
-                break;
-            case TransportError.ConnectionClosed:
-                ReturnToMainMenu();
-                break;
-        }
-    };
+        _visibility = new TeamVisibilityInterestManager(defaultDetectionRange: 30f);
+
+        // Set teams
+        _visibility.SetConnectionTeam(bluePlayer.ConnectionId, teamId: 1);
+        _visibility.SetConnectionTeam(redPlayer.ConnectionId, teamId: 2);
+
+        // Set entity detection range
+        _visibility.SetEntityTeam(blueHero, teamId: 1);
+        _visibility.SetEntityDetectionRange(blueHero, 25f);
+
+        // Hidden unit
+        _visibility.SetHidden(stealthUnit, true);
+        // Invisible to enemies unless deep-reveal zone is nearby
+
+        // Place reveal zone (deep-reveal)
+        _visibility.AddRevealZone(wardPosition, radius: 15f, teamId: 1, isDeepReveal: true);
+    }
 }
 ```
+
+---
+
+## API Quick Reference
+
+### Core
+
+| Class/Interface | Purpose | Key Members |
+|----------------|---------|-------------|
+| `NetServices` | Service locator | `Instance`, `Register`, `IsAvailable` |
+| `INetTransport` | Transport layer | `StartServer`, `Send`, `Broadcast`, `GetStatistics` |
+| `INetworkManager` | High-level API | `RegisterHandler<T>`, `SendToServer<T>`, `BroadcastToClients<T>` |
+| `INetConnection` | Connection | `ConnectionId`, `Ping`, `Quality`, `IsAuthenticated` |
+
+### Synchronization
+
+| Class | Purpose | Key Members |
+|-------|---------|-------------|
+| `NetworkTickSystem` | Fixed-rate driver | `Update(dt)`, `OnTick`, `TickRate` |
+| `ClientPredictionSystem<I,S>` | Client prediction | `RecordPrediction`, `ProcessServerState` |
+| `NetworkVariable<T>` | Auto-sync variable | `Value`, `OnChanged`, `IsDirty` |
+| `RpcProcessor` | RPC processor | `Register<T>`, `Send<T>` |
+
+### Deterministic
+
+| Class | Purpose | Key Members |
+|-------|---------|-------------|
+| `LockstepManager<T>` | Lockstep driver | `SubmitLocalInput`, `Tick`, `OnSimulateFrame` |
+| `RollbackNetcode<I,S>` | GGPO rollback | `AdvanceFrame`, `ReceiveConfirmedInput` |
+| `FPInt64` | Q32.32 fixed-point | `FromFloat`, `ToFloat`, `Sqrt` |
+| `DesyncDetector<THasher>` | Desync detection (pluggable hash) | `BeginFrame`, `HashFPVector3`, `EndFrame` |
+| `DesyncDetector` | Default (FNV-1a) alias | `new DesyncDetector()` |
+| `IStateHasher` | Hash algorithm interface | `Reset`, `HashInt`, `HashLong`, `GetDigest` |
+| `Fnv1aHasher` | FNV-1a 64-bit (default) | Built-in, zero-alloc |
+
+### Interest Management
+
+| Class | Best For |
+|-------|---------|
+| `GridInterestManager` | Open world MMO |
+| `GroupInterestManager` | Dungeons, rooms |
+| `TeamVisibilityInterestManager` | MOBA, RTS |
+| `CompositeInterestManager` | Combine strategies |
+| `BurstGridInterestManager` | Open world MMO (5k+ entities, DOD) |
+| `BurstTeamVisibilityInterestManager` | MOBA, RTS (5k+ entities, DOD) |
+
+### GAS Integration (📦 Separate Package: `CycloneGames.Networking.GAS`)
+
+| Class | Purpose |
+|-------|---------|
+| `NetworkedAbilityBridge` | Ability activation/confirm/reject networking |
+| `AttributeSyncManager` | Attribute dirty tracking & sync |
+| `EffectReplicationManager` | Effect instance replication |
+
+---
+
+## Directory Structure
+
+```
+Runtime/Scripts/
+├── Core/                 # Core interfaces and types
+├── Buffers/              # Buffer system and pool
+├── Services/             # Service locator
+├── Serialization/        # Serialization interfaces and factory
+├── Serializers/          # Serializer adapter implementations
+├── Simulation/           # Tick system and time sync
+├── Prediction/           # Client prediction, interpolation, lag compensation
+├── Interest/             # Interest management (Grid/Group/TeamVisibility/Composite)
+├── StateSync/            # NetworkVariable state synchronization
+├── Rpc/                  # RPC attributes and processor
+├── Lockstep/             # Lockstep, fixed-point math, rollback, IStateHasher
+├── Security/             # Rate limiter, message validator
+├── Session/              # Lobby, matchmaking, reconnection
+├── Replay/               # Recording and playback
+├── Spawning/             # Network object spawning
+├── Scene/                # Network scene management
+├── Compression/          # Vector3/Quaternion compression
+├── Diagnostics/          # Profiler, network condition simulator
+├── Authentication/       # Authentication interface
+├── Platform/             # Platform-specific configuration
+├── Adapters/             # Mirror/Mirage adapters
+└── Stubs/                # No-op implementations (testing)
+
+DOD/Runtime/                      # Data-Oriented Design variants (Burst/Jobs)
+├── BurstGridInterestManager.cs   # Sort-based spatial hash, NativeList + IntroSort
+└── BurstTeamVisibilityInterestManager.cs  # Flat NativeList detection sources
+
+📦 CycloneGames.Networking.GAS/    # GAS Integration (separate package)
+└── Runtime/Scripts/
+    ├── IAbilityNetAdapter.cs
+    ├── NoopAbilityNetAdapter.cs
+    ├── NetworkedAbilityBridge.cs
+    ├── AttributeSyncManager.cs
+    └── EffectReplicationManager.cs
+```
+
+**Total**: 68 C# source files, 20+ subsystems
+
+---
+
+## License
+
+This project is licensed under the terms specified in the root LICENSE file.

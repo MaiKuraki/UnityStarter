@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 
 namespace CycloneGames.Networking.Services
 {
@@ -8,7 +9,7 @@ namespace CycloneGames.Networking.Services
     /// </summary>
     public static class NetServices
     {
-        private static INetworkManager _instance;
+        private static volatile INetworkManager _instance;
 
         /// <summary>
         /// Access the active NetworkManager.
@@ -18,12 +19,13 @@ namespace CycloneGames.Networking.Services
         {
             get
             {
-                if (_instance == null)
+                var inst = _instance;
+                if (inst == null)
                 {
                     throw new InvalidOperationException(
                         "NetServices.Instance is null! Ensure a NetworkAdapter is present in the scene or has registered itself.");
                 }
-                return _instance;
+                return inst;
             }
         }
 
@@ -38,7 +40,7 @@ namespace CycloneGames.Networking.Services
         /// </summary>
         public static void Register(INetworkManager manager)
         {
-            _instance = manager;
+            Interlocked.Exchange(ref _instance, manager);
         }
 
         /// <summary>
@@ -47,10 +49,7 @@ namespace CycloneGames.Networking.Services
         /// </summary>
         public static void Unregister(INetworkManager manager)
         {
-            if (_instance == manager)
-            {
-                _instance = null;
-            }
+            Interlocked.CompareExchange(ref _instance, null, manager);
         }
     }
 }
