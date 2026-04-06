@@ -1,97 +1,126 @@
 using System;
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using Cysharp.Threading.Tasks;
 using VitalRouter;
-using UnityEngine;
-
-#if UNITY_WEBGL
+#if ENABLE_CHEAT
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Threading;
 #endif
 
 namespace CycloneGames.Cheat.Runtime
 {
+    public interface ICheatLogger
+    {
+        void LogError(string message);
+        void LogException(Exception exception);
+    }
+
+#if ENABLE_CHEAT
+
     /// <summary>
-    /// Static utility for publishing cheat commands with built-in de-duplication and cancellation support.
-    /// Optimized for zero/minimal GC allocation and cross-platform compatibility.
+    /// Cheat command dispatcher with de-duplication and cancellation.
+    /// Compile-gated by ENABLE_CHEAT — when undefined, all methods become no-op stubs that IL2CPP inlines to zero cost.
+    /// Call sites never need #if guards.
     /// </summary>
     public static class CheatCommandUtility
     {
-#if UNITY_WEBGL
-        private static readonly Dictionary<string, CancellationTokenSource> commandStates = 
-            new Dictionary<string, CancellationTokenSource>(StringComparer.Ordinal);
-        private static readonly Queue<CancellationTokenSource> ctsPool = new Queue<CancellationTokenSource>();
-#else
-        private static readonly ConcurrentDictionary<string, CancellationTokenSource> commandStates =
-            new ConcurrentDictionary<string, CancellationTokenSource>(StringComparer.Ordinal);
-        private static readonly ConcurrentQueue<CancellationTokenSource> ctsPool = new ConcurrentQueue<CancellationTokenSource>();
-#endif
-
-        private const int POOL_CAPACITY = 32;
-
-        /// <summary>
-        /// Optional logger interface for flexible integration. 
-        /// Defaults to UnityDebugCheatLogger (Unity Debug API). Set to null to disable logging.
-        /// </summary>
-        public static ICheatLogger Logger { get; set; } = new UnityDebugCheatLogger();
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static CancellationTokenSource GetCts()
+        private readonly struct CommandStateKey : IEquatable<CommandStateKey>
         {
+            public readonly string CommandId;
+            public readonly Router Router;
+            public readonly RuntimeTypeHandle CommandTypeHandle;
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public CommandStateKey(string commandId, Router router, RuntimeTypeHandle commandTypeHandle)
+            {
+                CommandId = commandId;
+                Router = router;
+                CommandTypeHandle = commandTypeHandle;
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool Equals(CommandStateKey other)
+            {
+                return string.Equals(CommandId, other.CommandId, StringComparison.Ordinal)
+                    && ReferenceEquals(Router, other.Router)
+                    && CommandTypeHandle.Equals(other.CommandTypeHandle);
+            }
+
+            public override bool Equals(object obj)
+            {
+                return obj is CommandStateKey other && Equals(other);
+            }
+
+            public override int GetHashCode()
+            {
+                unchecked
+                {
+                    var hash = 17;
+                    hash = (hash * 31) + StringComparer.Ordinal.GetHashCode(CommandId);
+                    hash = (hash * 31) + (Router != null ? RuntimeHelpers.GetHashCode(Router) : 0);
+                    hash = (hash * 31) + CommandTypeHandle.GetHashCode();
+                    return hash;
+                }
+            }
+        }
+
+        private const string ErrCommandIdNullOrEmpty = "[CheatCommandUtility] CommandID cannot be null or empty.";
+        private const string ErrPrefix = "[CheatCommandUtility] Argument for command '";
+        private const string ErrSuffix = "' cannot be null.";
+
 #if UNITY_WEBGL
-            if (ctsPool.Count > 0)
-            {
-                var cts = ctsPool.Dequeue();
-                if (!cts.IsCancellationRequested)
-                {
-                    return cts;
-                }
-                cts.Dispose();
-            }
+        private static readonly Dictionary<CommandStateKey, CancellationTokenSource> commandStates =
+            new Dictionary<CommandStateKey, CancellationTokenSource>();
+        private static readonly object webGlLock = new object();
+        private static readonly List<CommandStateKey> s_cancelBuffer = new List<CommandStateKey>(16);
 #else
-            if (ctsPool.TryDequeue(out var cts))
-            {
-                if (!cts.IsCancellationRequested)
-                {
-                    return cts;
-                }
-                cts.Dispose();
-            }
+        private static readonly ConcurrentDictionary<CommandStateKey, CancellationTokenSource> commandStates =
+            new ConcurrentDictionary<CommandStateKey, CancellationTokenSource>();
 #endif
-            return new CancellationTokenSource();
+
+        private static ICheatLogger s_logger = new UnityDebugCheatLogger();
+
+        public static ICheatLogger Logger
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => Volatile.Read(ref s_logger);
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            set => Volatile.Write(ref s_logger, value);
+        }
+
+        public static int RunningCommandCount
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get
+            {
+#if UNITY_WEBGL
+                lock (webGlLock) { return commandStates.Count; }
+#else
+                return commandStates.Count;
+#endif
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void ReturnCts(CancellationTokenSource cts)
+        private static void CancelAndDispose(CancellationTokenSource cts)
         {
             if (cts == null) return;
 
-            if (ctsPool.Count >= POOL_CAPACITY)
-            {
-                cts.Dispose();
-                return;
-            }
-
             if (!cts.IsCancellationRequested)
             {
-                ctsPool.Enqueue(cts);
+                cts.Cancel();
             }
-            else
-            {
-                cts.Dispose();
-            }
+
+            cts.Dispose();
         }
 
-        /// <summary>
-        /// Publishes a zero-argument cheat command. Returns immediately if command is already running.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static UniTask PublishCheatCommand(string commandId, Router router = null)
         {
             if (string.IsNullOrEmpty(commandId))
             {
-                Logger?.LogError($"[CheatCommandUtility] CommandID cannot be null or empty.");
+                Logger?.LogError(ErrCommandIdNullOrEmpty);
                 return UniTask.CompletedTask;
             }
 
@@ -99,15 +128,12 @@ namespace CycloneGames.Cheat.Runtime
             return PublishInternal(command, router);
         }
 
-        /// <summary>
-        /// Publishes a struct-argument cheat command. Zero-allocation for value types.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static UniTask PublishCheatCommand<T>(string commandId, T inArg, Router router = null) where T : struct
         {
             if (string.IsNullOrEmpty(commandId))
             {
-                Logger?.LogError($"[CheatCommandUtility] CommandID cannot be null or empty.");
+                Logger?.LogError(ErrCommandIdNullOrEmpty);
                 return UniTask.CompletedTask;
             }
 
@@ -115,21 +141,58 @@ namespace CycloneGames.Cheat.Runtime
             return PublishInternal(command, router);
         }
 
-        /// <summary>
-        /// Publishes a class-argument cheat command. Allocates on heap - use sparingly.
-        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static UniTask PublishCheatCommand<T1, T2>(
+            string commandId,
+            T1 inArg1,
+            T2 inArg2,
+            Router router = null)
+            where T1 : struct
+            where T2 : struct
+        {
+            if (string.IsNullOrEmpty(commandId))
+            {
+                Logger?.LogError(ErrCommandIdNullOrEmpty);
+                return UniTask.CompletedTask;
+            }
+
+            var command = new CheatCommand<T1, T2>(commandId, inArg1, inArg2);
+            return PublishInternal(command, router);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static UniTask PublishCheatCommand<T1, T2, T3>(
+            string commandId,
+            T1 inArg1,
+            T2 inArg2,
+            T3 inArg3,
+            Router router = null)
+            where T1 : struct
+            where T2 : struct
+            where T3 : struct
+        {
+            if (string.IsNullOrEmpty(commandId))
+            {
+                Logger?.LogError(ErrCommandIdNullOrEmpty);
+                return UniTask.CompletedTask;
+            }
+
+            var command = new CheatCommand<T1, T2, T3>(commandId, inArg1, inArg2, inArg3);
+            return PublishInternal(command, router);
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static UniTask PublishCheatCommandWithClass<T>(string commandId, T inArg, Router router = null) where T : class
         {
             if (string.IsNullOrEmpty(commandId))
             {
-                Logger?.LogError($"[CheatCommandUtility] CommandID cannot be null or empty.");
+                Logger?.LogError(ErrCommandIdNullOrEmpty);
                 return UniTask.CompletedTask;
             }
 
             if (inArg == null)
             {
-                Logger?.LogError($"[CheatCommandUtility] Argument for command '{commandId}' cannot be null.");
+                Logger?.LogError(string.Concat(ErrPrefix, commandId, ErrSuffix));
                 return UniTask.CompletedTask;
             }
 
@@ -138,22 +201,52 @@ namespace CycloneGames.Cheat.Runtime
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsCommandRunning(string commandId)
+        {
+            if (string.IsNullOrEmpty(commandId)) return false;
+
+#if UNITY_WEBGL
+            lock (webGlLock)
+            {
+                foreach (var kvp in commandStates)
+                {
+                    if (string.Equals(kvp.Key.CommandId, commandId, StringComparison.Ordinal))
+                        return true;
+                }
+                return false;
+            }
+#else
+            foreach (var kvp in commandStates)
+            {
+                if (string.Equals(kvp.Key.CommandId, commandId, StringComparison.Ordinal))
+                    return true;
+            }
+            return false;
+#endif
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static async UniTask PublishInternal<T>(T command, Router router) where T : ICheatCommand
         {
             var targetRouter = router ?? Router.Default;
-            var cts = GetCts();
+            var cts = new CancellationTokenSource();
+            var key = new CommandStateKey(command.CommandID, targetRouter, typeof(T).TypeHandle);
 
 #if UNITY_WEBGL
-            if (commandStates.ContainsKey(command.CommandID))
+            lock (webGlLock)
             {
-                ReturnCts(cts);
-                return;
+                if (commandStates.ContainsKey(key))
+                {
+                    CancelAndDispose(cts);
+                    return;
+                }
+
+                commandStates[key] = cts;
             }
-            commandStates[command.CommandID] = cts;
 #else
-            if (!commandStates.TryAdd(command.CommandID, cts))
+            if (!commandStates.TryAdd(key, cts))
             {
-                ReturnCts(cts);
+                CancelAndDispose(cts);
                 return;
             }
 #endif
@@ -162,10 +255,7 @@ namespace CycloneGames.Cheat.Runtime
             {
                 await targetRouter.PublishAsync(command, cts.Token);
             }
-            catch (OperationCanceledException)
-            {
-                // Expected when command is cancelled
-            }
+            catch (OperationCanceledException) { }
             catch (Exception ex)
             {
                 Logger?.LogException(ex);
@@ -173,106 +263,175 @@ namespace CycloneGames.Cheat.Runtime
             finally
             {
 #if UNITY_WEBGL
-                if (commandStates.TryGetValue(command.CommandID, out var existingCts) && 
-                    ReferenceEquals(existingCts, cts))
+                CancellationTokenSource existingCts = null;
+                lock (webGlLock)
                 {
-                    commandStates.Remove(command.CommandID);
-                    if (!existingCts.IsCancellationRequested)
+                    if (commandStates.TryGetValue(key, out var registeredCts) && ReferenceEquals(registeredCts, cts))
                     {
-                        existingCts.Cancel();
+                        existingCts = registeredCts;
+                        commandStates.Remove(key);
                     }
-                    ReturnCts(existingCts);
+                }
+
+                if (existingCts != null)
+                {
+                    CancelAndDispose(existingCts);
                 }
 #else
-                if (commandStates.TryRemove(command.CommandID, out var existingCts))
+                if (commandStates.TryRemove(key, out var existingCts))
                 {
-                    if (!existingCts.IsCancellationRequested)
-                    {
-                        existingCts.Cancel();
-                    }
-                    ReturnCts(existingCts);
+                    CancelAndDispose(existingCts);
                 }
 #endif
             }
         }
 
-        /// <summary>
-        /// Cancels a running command with the given commandId. Safe to call if command is not running.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void CancelCheatCommand(string commandId)
         {
             if (string.IsNullOrEmpty(commandId)) return;
 
+            CancelCheatCommand(commandId, null);
+        }
+
+        /// <summary>
+        /// Cancels all running commands matching commandId. If router is null, cancels across all routers.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void CancelCheatCommand(string commandId, Router router)
+        {
+            if (string.IsNullOrEmpty(commandId)) return;
+
 #if UNITY_WEBGL
-            if (commandStates.TryGetValue(commandId, out var cts))
+            lock (webGlLock)
             {
-                commandStates.Remove(commandId);
-                if (!cts.IsCancellationRequested)
+                s_cancelBuffer.Clear();
+
+                foreach (var kvp in commandStates)
                 {
-                    cts.Cancel();
+                    if (!string.Equals(kvp.Key.CommandId, commandId, StringComparison.Ordinal))
+                        continue;
+                    if (router != null && !ReferenceEquals(kvp.Key.Router, router))
+                        continue;
+
+                    s_cancelBuffer.Add(kvp.Key);
                 }
-                ReturnCts(cts);
+
+                for (int i = 0; i < s_cancelBuffer.Count; i++)
+                {
+                    var key = s_cancelBuffer[i];
+                    if (commandStates.TryGetValue(key, out var cts))
+                    {
+                        commandStates.Remove(key);
+                        CancelAndDispose(cts);
+                    }
+                }
+
+                s_cancelBuffer.Clear();
             }
 #else
-            if (commandStates.TryRemove(commandId, out var cts))
+            foreach (var kvp in commandStates)
             {
-                if (!cts.IsCancellationRequested)
+                if (!string.Equals(kvp.Key.CommandId, commandId, StringComparison.Ordinal))
+                    continue;
+                if (router != null && !ReferenceEquals(kvp.Key.Router, router))
+                    continue;
+
+                if (commandStates.TryRemove(kvp.Key, out var cts))
                 {
-                    cts.Cancel();
+                    CancelAndDispose(cts);
                 }
-                ReturnCts(cts);
             }
 #endif
         }
 
         /// <summary>
-        /// Clears all running commands and resets the internal state. Use with caution.
+        /// Cancels and disposes all running commands. Use with caution (e.g. scene teardown).
         /// </summary>
         public static void ClearAll()
         {
 #if UNITY_WEBGL
-            foreach (var kvp in commandStates)
+            lock (webGlLock)
             {
-                if (!kvp.Value.IsCancellationRequested)
+                foreach (var kvp in commandStates)
                 {
-                    kvp.Value.Cancel();
+                    CancelAndDispose(kvp.Value);
                 }
-                kvp.Value.Dispose();
-            }
-            commandStates.Clear();
-#else
-            foreach (var kvp in commandStates)
-            {
-                if (!kvp.Value.IsCancellationRequested)
-                {
-                    kvp.Value.Cancel();
-                }
-                kvp.Value.Dispose();
-            }
-            commandStates.Clear();
-#endif
 
-            while (ctsPool.Count > 0)
-            {
-#if UNITY_WEBGL
-                ctsPool.Dequeue()?.Dispose();
-#else
-                if (ctsPool.TryDequeue(out var cts))
-                {
-                    cts.Dispose();
-                }
-#endif
+                commandStates.Clear();
             }
+#else
+            foreach (var kvp in commandStates)
+            {
+                if (commandStates.TryRemove(kvp.Key, out var cts))
+                {
+                    CancelAndDispose(cts);
+                }
+            }
+
+            commandStates.Clear();
+#endif
         }
     }
 
+#else // !ENABLE_CHEAT
+
     /// <summary>
-    /// Optional logger interface for flexible integration. Implement to customize logging behavior.
+    /// No-op stub when ENABLE_CHEAT is not defined. All methods inline to nothing under IL2CPP.
+    /// Call sites compile without #if guards — API surface is identical to the active implementation.
     /// </summary>
-    public interface ICheatLogger
+    public static class CheatCommandUtility
     {
-        void LogError(string message);
-        void LogException(Exception exception);
+        private static ICheatLogger s_logger;
+
+        public static ICheatLogger Logger
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => s_logger;
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            set => s_logger = value;
+        }
+
+        public static int RunningCommandCount
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => 0;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static UniTask PublishCheatCommand(string commandId, Router router = null)
+            => UniTask.CompletedTask;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static UniTask PublishCheatCommand<T>(string commandId, T inArg, Router router = null) where T : struct
+            => UniTask.CompletedTask;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static UniTask PublishCheatCommand<T1, T2>(string commandId, T1 inArg1, T2 inArg2, Router router = null)
+            where T1 : struct where T2 : struct
+            => UniTask.CompletedTask;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static UniTask PublishCheatCommand<T1, T2, T3>(string commandId, T1 inArg1, T2 inArg2, T3 inArg3, Router router = null)
+            where T1 : struct where T2 : struct where T3 : struct
+            => UniTask.CompletedTask;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static UniTask PublishCheatCommandWithClass<T>(string commandId, T inArg, Router router = null) where T : class
+            => UniTask.CompletedTask;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool IsCommandRunning(string commandId) => false;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void CancelCheatCommand(string commandId) { }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void CancelCheatCommand(string commandId, Router router) { }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void ClearAll() { }
     }
+
+#endif
 }

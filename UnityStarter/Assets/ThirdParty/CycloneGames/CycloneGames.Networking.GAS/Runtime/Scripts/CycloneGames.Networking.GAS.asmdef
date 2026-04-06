@@ -1,0 +1,16 @@
+{
+    "name": "CycloneGames.Networking.GAS",
+    "rootNamespace": "CycloneGames.Networking.GAS",
+    "references": [
+        "CycloneGames.Networking.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
