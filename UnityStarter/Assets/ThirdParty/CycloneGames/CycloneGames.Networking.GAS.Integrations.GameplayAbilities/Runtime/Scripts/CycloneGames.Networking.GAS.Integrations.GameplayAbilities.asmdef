@@ -1,6 +1,6 @@
 {
     "name": "CycloneGames.Networking.GAS.Integrations.GameplayAbilities",
-    "rootNamespace": "CycloneGames.Networking.GAS.Integrations.GameplayAbilities",
+    "rootNamespace": "",
     "references": [
         "CycloneGames.Networking.Runtime",
         "CycloneGames.Networking.GAS",

@@ -4,11 +4,26 @@
 
 一个为 Unity 设计的**生产级网络抽象层**，支持状态同步、帧同步（Lockstep）、回滚（Rollback）、客户端预测等多种网络同步模式。具备**低分配运行时性能**、**适配器感知的线程安全**与**跨平台兼容**特性。
 
+## 特性
+
+- **多种同步模式**：状态同步、帧同步、GGPO 风格回滚 — 按需选择
+- **灵活序列化**：可插拔序列化器（Json、MessagePack、ProtoBuf、FlatBuffers）
+- **清晰抽象层**：传输无关接口（`INetTransport`、`INetworkManager`、`INetConnection`）
+- **客户端预测**：完整的预测 → 授权 → 回滚纠正流水线
+- **确定性模拟**：Q32.32 定点数学、确定性随机数、可插拔不同步检测（`IStateHasher`）
+- **兴趣管理**：空间网格 AOI、手动分组、团队可见性、组合策略
+- **GAS 集成**：GameplayAbilities 网络化一等支持（技能、效果、属性）
+- **会话管理**：大厅/匹配/主机迁移抽象接口，以及带状态追赶的重连管理
+- **安全**：令牌桶限流、消息校验
+- **诊断工具**：网络性能分析器、网络条件模拟器（LAN/4G/卫星预设）
+- **线程安全**：Mirror 适配器内置跨线程发送队列（`ArrayPool`）；其他适配器默认主线程发送
+
 ---
 
 ## 目录
 
 - [CycloneGames.Networking](#cyclonegamesnetworking)
+  - [特性](#特性)
   - [目录](#目录)
   - [架构概览](#架构概览)
     - [设计原则](#设计原则)
@@ -1018,6 +1033,11 @@ simulator.Enabled = true;
 **引用**: `CycloneGames.Networking.Runtime`  
 **命名空间**: `CycloneGames.Networking.GAS`
 
+> **包结构说明**：本模块分为两层。
+>
+> - `CycloneGames.Networking.GAS` — 纯协议层：消息 ID、`IAbilityNetAdapter` 接口、`NetworkedAbilityBridge`、`AttributeSyncManager`、`EffectReplicationManager`。不依赖任何具体 GAS 实现。
+> - `CycloneGames.Networking.GAS.Integrations.GameplayAbilities` — 与 `CycloneGames.GameplayAbilities` 的具体胶水层。使用 `CycloneGames.GameplayAbilities` 时引入此包；自定义 GAS 实现时可忽略。
+
 与 `CycloneGames.GameplayAbilities` 模块的深度集成，支持技能激活、效果复制、属性同步。
 
 > ⚠️ **Breaking Change**: GAS 相关类已从核心包移至独立包。请在 asmdef 中添加对 `CycloneGames.Networking.GAS` 的引用。
@@ -1245,6 +1265,14 @@ flowchart LR
     INetworkManager2 --> MirrorNet
     INetworkManager2 --> MirageNet
 ```
+
+| 适配器             | 编译符号     | 说明                         |
+| ------------------ | ------------ | ---------------------------- |
+| `MirrorNetAdapter` | `#if MIRROR` | Mirror 传输层 + 管理器适配器 |
+| `MirageNetAdapter` | `#if MIRAGE` | Mirage 传输层 + 管理器适配器 |
+| `NoopNetTransport` | _（始终）_   | 空实现，用于测试             |
+
+两个适配器均同时实现 `INetTransport` 和 `INetworkManager`，并在 `Awake` 时自动向 `NetServices` 注册。
 
 ---
 
@@ -1479,12 +1507,11 @@ public class RtsNetworkController : MonoBehaviour
 **目标**: 团队可见性控制，隐藏/揭示机制。
 
 ```csharp
-using CycloneGames.Networking.GAS; // 📦 GAS 独立包
+using CycloneGames.Networking.Interest;
 
 public class TeamVisionController : MonoBehaviour
 {
     private TeamVisibilityInterestManager _visibility;
-    private NetworkedAbilityBridge _abilityBridge;
 
     void Start()
     {
@@ -1503,9 +1530,6 @@ public class TeamVisionController : MonoBehaviour
 
         // 放置揭示区域（深度揭示）
         _visibility.AddRevealZone(wardPosition, radius: 15f, teamId: 1, isDeepReveal: true);
-
-        // GAS 集成：技能造成属性变化自动同步
-        _abilityBridge = new NetworkedAbilityBridge(NetServices.Instance);
     }
 
     void OnHiddenAbilityUsed(INetworkEntity entity)
@@ -1626,8 +1650,6 @@ DOD/Runtime/                      # 面向数据设计变体（Burst/Jobs 加速
     ├── AttributeSyncManager.cs
     └── EffectReplicationManager.cs
 ```
-
-**总计**: 68 个 C# 源文件，20+ 子系统
 
 ---
 

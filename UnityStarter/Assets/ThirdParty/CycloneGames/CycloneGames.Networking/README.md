@@ -28,6 +28,7 @@ A **production-grade networking abstraction layer** for Unity supporting state s
   - [Quick Start](#quick-start)
     - [Prerequisites](#prerequisites)
     - [Minimal Example: Send and Receive Messages](#minimal-example-send-and-receive-messages)
+    - [Minimal Example: Using Mirror Adapter](#minimal-example-using-mirror-adapter)
   - [Module Reference](#module-reference)
     - [1. Core Abstractions](#1-core-abstractions)
     - [2. Buffer System](#2-buffer-system)
@@ -228,6 +229,17 @@ public class ChatReceiver : MonoBehaviour
 }
 ```
 
+### Minimal Example: Using Mirror Adapter
+
+```csharp
+// Add a MirrorNetAdapter component to a GameObject in the scene.
+// MirrorNetAdapter automatically registers itself with NetServices on Awake.
+
+// Then access the network manager from anywhere:
+var net = NetServices.Instance;
+bool isAvailable = NetServices.IsAvailable; // true after adapter registers
+```
+
 ---
 
 ## Module Reference
@@ -299,6 +311,13 @@ classDiagram
 
 Thread-safe, zero-allocation buffer pool for message serialization.
 
+```mermaid
+flowchart LR
+    Code["Game Code"] -->|"Get()"| Pool["NetworkBufferPool</br>ConcurrentQueue</br>Max 32 entries"]
+    Pool -->|"return buffer"| Buffer["NetworkBuffer</br>\u2022 INetWriter</br>\u2022 INetReader</br>\u2022 IDisposable"]
+    Buffer -->|"using / Dispose"| Pool
+```
+
 ```csharp
 // Zero-allocation buffer usage
 using (var buffer = NetworkBufferPool.Get())
@@ -331,6 +350,9 @@ var net = NetServices.Instance;
 // Safe access
 if (NetServices.IsAvailable)
     net.SendToServer(msgId, data);
+
+// Unregister
+NetServices.Unregister(myNetworkManager);
 ```
 
 ---
@@ -340,6 +362,25 @@ if (NetServices.IsAvailable)
 **Path**: `Runtime/Scripts/Serialization/` + `Runtime/Scripts/Serializers/`
 
 Pluggable serialization with conditional compilation.
+
+```mermaid
+flowchart TB
+    subgraph Factory["SerializerFactory"]
+        Create["Create(type)"]
+        GetRec["GetRecommended()"]
+        IsAvail["IsAvailable(type)"]
+    end
+
+    subgraph Serializers["Available Serializers"]
+        Json["JsonSerializerAdapter</br>\u2705 Default, Unity JsonUtility"]
+        Newtonsoft["NewtonsoftJsonSerializerAdapter</br>#if NEWTONSOFT_JSON"]
+        MsgPack["MessagePackSerializerAdapter</br>#if MESSAGEPACK"]
+        ProtoBuf["ProtoBufSerializerAdapter</br>#if PROTOBUF"]
+        FlatBuf["FlatBuffersSerializerAdapter</br>#if FLATBUFFERS"]
+    end
+
+    Factory --> Serializers
+```
 
 | Serializer      | Define Symbol     | Format | Recommended For    |
 | --------------- | ----------------- | ------ | ------------------ |
@@ -365,6 +406,30 @@ if (SerializerFactory.IsAvailable(SerializerType.MessagePack))
 **Path**: `Runtime/Scripts/Simulation/`
 
 Deterministic fixed-timestep tick driver — the foundation for prediction, lockstep, and rollback.
+
+```mermaid
+flowchart LR
+    subgraph TickSystem["NetworkTickSystem"]
+        Accumulator["Accumulator</br>deltaTime accumulation"]
+        Tick["NetworkTick</br>uint overflow-safe"]
+        Rate["Configurable rate</br>1-128 Hz"]
+    end
+
+    subgraph Events["Events"]
+        PreTick["OnPreTick"]
+        OnTick["OnTick"]
+        PostTick["OnPostTick"]
+    end
+
+    subgraph TimeSync["NetworkTimeSync"]
+        NTP["NTP-style sampling"]
+        EMA["Exponential moving avg</br>SmoothFactor=0.1"]
+        Offset["ServerTime offset"]
+    end
+
+    TickSystem --> Events
+    TimeSync --> TickSystem
+```
 
 ```csharp
 // Create tick system (30 Hz)
@@ -434,7 +499,7 @@ public class PlayerMovement : IPredictable<MoveInput, PlayerState>
 }
 
 // ② Use the prediction system
-var prediction = new ClientPredictionSystem<MoveInput, PlayerState>(player);
+var prediction = new ClientPredictionSystem<MoveInput, PlayerState>(player, capacity: 128);
 prediction.RecordPrediction(currentTick, deltaTime);
 prediction.ProcessServerState(serverTick, serverState); // auto-rollback on mismatch
 ```
@@ -447,8 +512,15 @@ Smooth display of remote entities:
 var interp = new SnapshotInterpolation<TransformSnapshot>(
     TransformSnapshot.Lerp, TransformSnapshot.GetTimestamp
 );
-interp.AddSnapshot(new TransformSnapshot { Timestamp = serverTime, Position = pos, Rotation = rot });
+interp.AddSnapshot(new TransformSnapshot
+{
+    Timestamp = serverTime,
+    Position = pos,
+    Rotation = rot
+});
 var result = interp.Update(currentTime);
+transform.position = result.Position;
+transform.rotation = result.Rotation;
 ```
 
 #### Lag Compensation
@@ -689,6 +761,25 @@ if (result != ValidationResult.Valid)
 
 Provides interfaces for lobby/matchmaking/host migration, plus a concrete reconnection manager with state catch-up hooks.
 
+```mermaid
+flowchart LR
+    subgraph Session["Session Management"]
+        Lobby["ILobbyManager</br>Lobby"]
+        Match["IMatchmaker</br>Matchmaking"]
+        Host["IHostMigration</br>Host migration"]
+    end
+
+    subgraph Reconnect["Reconnection"]
+        Detect["Disconnect detection"]
+        Reserve["Reserve slot</br>Default 5 minutes"]
+        CatchUp["State catch-up</br>IStateCatchUp"]
+        Rejoin["Rejoin"]
+    end
+
+    Lobby --> Match
+    Detect --> Reserve --> CatchUp --> Rejoin
+```
+
 ```csharp
 // Reconnection manager
 var reconnect = new ReconnectionManager(myStateCatchUpImpl);
@@ -722,6 +813,7 @@ var player = new ReplayPlayer(recorder.GetAllFrames());
 player.Play();
 player.SetSpeed(2.0f);
 player.Seek(targetTick);
+player.Pause();
 
 // Spectator mode (with delay)
 var spectator = new SpectatorManager(delayTicks: 90); // 3s delay @30Hz
@@ -813,6 +905,11 @@ simulator.Enabled = true;
 **Asmdef**: `CycloneGames.Networking.GAS`  
 **Reference**: `CycloneGames.Networking.Runtime`  
 **Namespace**: `CycloneGames.Networking.GAS`
+
+> **Package structure**: This module is split into two layers.
+>
+> - `CycloneGames.Networking.GAS` — Protocol layer only: message IDs, `IAbilityNetAdapter` interface, `NetworkedAbilityBridge`, `AttributeSyncManager`, `EffectReplicationManager`. Has no dependency on any specific GAS implementation.
+> - `CycloneGames.Networking.GAS.Integrations.GameplayAbilities` — Concrete wiring to `CycloneGames.GameplayAbilities`. Include this when using `CycloneGames.GameplayAbilities`; omit it for custom GAS implementations.
 
 Deep integration with `CycloneGames.GameplayAbilities` for networked abilities, effects, and attributes.
 
@@ -959,6 +1056,11 @@ public class MyAuthenticator : INetAuthenticator
             AcceptClient(conn);
         else
             RejectClient(conn, "Invalid token");
+    }
+
+    public void OnServerAuthenticate(INetConnection conn, ReadOnlySpan<byte> authData)
+    {
+        // Server-side authentication logic
     }
 }
 ```
@@ -1314,8 +1416,6 @@ DOD/Runtime/                      # Data-Oriented Design variants (Burst/Jobs)
     ├── AttributeSyncManager.cs
     └── EffectReplicationManager.cs
 ```
-
-**Total**: 68 C# source files, 20+ subsystems
 
 ---
 
