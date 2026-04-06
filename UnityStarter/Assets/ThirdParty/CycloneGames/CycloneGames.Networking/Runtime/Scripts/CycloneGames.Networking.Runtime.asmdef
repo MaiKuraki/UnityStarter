@@ -1,6 +1,6 @@
 {
     "name": "CycloneGames.Networking.Runtime",
-    "rootNamespace": "CycloneGames.Networking",
+    "rootNamespace": "",
     "references": [
         "CycloneGames.Logger"
     ],
