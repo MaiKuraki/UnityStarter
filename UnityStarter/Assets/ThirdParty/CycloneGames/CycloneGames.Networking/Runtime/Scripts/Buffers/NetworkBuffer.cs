@@ -204,11 +204,10 @@ namespace CycloneGames.Networking.Buffers
         {
             if (_buffer.Length >= required) return;
 
-            int newCapacity = Math.Max(required, _buffer.Length * 2);
-            if (newCapacity > MaxCapacity) newCapacity = MaxCapacity;
             if (required > MaxCapacity)
                 throw new InvalidOperationException($"Buffer capacity exceeded maximum of {MaxCapacity}");
 
+            int newCapacity = Math.Min(Math.Max(required, _buffer.Length * 2), MaxCapacity);
             byte[] newBuffer = ArrayPool<byte>.Shared.Rent(newCapacity);
             Buffer.BlockCopy(_buffer, 0, newBuffer, 0, _position);
             ArrayPool<byte>.Shared.Return(_buffer);

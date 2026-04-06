@@ -4,7 +4,9 @@ namespace CycloneGames.Networking.Serialization
 {
     /// <summary>
     /// Simple JSON serializer using Unity's JsonUtility.
-    /// Fallback for managed types - allocates memory.
+    /// Fallback for managed types. Allocates string + byte[] per operation due to
+    /// JsonUtility/UTF8 encoding limitations — not suitable for hot paths.
+    /// Use blittable serialization or MessagePack for performance-critical messages.
     /// </summary>
     public sealed class JsonSerializerAdapter : INetSerializer
     {
