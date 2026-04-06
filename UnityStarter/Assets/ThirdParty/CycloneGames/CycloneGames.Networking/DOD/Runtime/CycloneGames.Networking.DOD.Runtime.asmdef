@@ -1,6 +1,6 @@
 {
     "name": "CycloneGames.Networking.DOD.Runtime",
-    "rootNamespace": "CycloneGames.Networking.DOD",
+    "rootNamespace": "",
     "references": [
         "CycloneGames.Networking.Runtime",
         "Unity.Burst",
