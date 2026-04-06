@@ -302,7 +302,7 @@ namespace CycloneGames.Utility.Runtime
         /// <summary>
         /// Adjusts brightness in HSV space by multiplying the V channel.
         /// More visually natural than multiplying RGB directly.
-        /// factor > 1 = brighter, factor &lt; 1 = darker. 0GC.
+        /// factor > 1 = brighter, factor < 1 = darker. 0GC.
         /// </summary>
         public static Color AdjustBrightness(this Color color, float factor)
         {

@@ -2,14 +2,21 @@
   "name": "com.cyclone-games.networking",
   "version": "1.0.0",
   "displayName": "CycloneGames.Networking",
-  "description": "Core networking abstractions and service registry for pluggable adapters (e.g., Mirror, Mirage). Keeps gameplay decoupled from concrete transports.",
+  "description": "Comprehensive networking framework with pluggable transport adapters (Mirror, Mirage), tick-based simulation, client prediction & reconciliation, snapshot interpolation, lag compensation, interest management (grid/group/composite), network variable sync, RPC system, session/lobby/matchmaking, compression (delta/quantized), security (rate limiting, validation), platform-specific configuration, and full diagnostics.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
   },
   "keywords": [
     "CycloneGames",
-    "Networking"
+    "Networking",
+    "Multiplayer",
+    "Transport",
+    "Mirror",
+    "Mirage",
+    "Prediction",
+    "Interpolation",
+    "SyncVar"
   ],
   "author": {
     "name": "CycloneGames",

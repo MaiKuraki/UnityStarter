@@ -643,6 +643,16 @@ namespace CycloneGames.Networking.Adapter.Mirror
         {
             return other != null && ConnectionId == other.ConnectionId;
         }
+
+        public override bool Equals(object obj)
+        {
+            return obj is INetConnection other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            return ConnectionId;
+        }
     }
 }
 #endif

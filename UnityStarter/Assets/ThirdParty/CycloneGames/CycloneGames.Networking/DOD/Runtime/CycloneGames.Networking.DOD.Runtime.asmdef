@@ -1,0 +1,20 @@
+{
+    "name": "CycloneGames.Networking.DOD.Runtime",
+    "rootNamespace": "CycloneGames.Networking.DOD",
+    "references": [
+        "CycloneGames.Networking.Runtime",
+        "Unity.Burst",
+        "Unity.Collections",
+        "Unity.Mathematics",
+        "Unity.Jobs"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

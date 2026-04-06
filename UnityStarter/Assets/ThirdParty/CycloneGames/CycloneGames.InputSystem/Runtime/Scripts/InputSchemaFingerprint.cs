@@ -84,7 +84,7 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
-        /// Gets a stable type name for fingerprinting. Handles generics like List&lt;T&gt;.
+        /// Gets a stable type name for fingerprinting. Handles generics like List<T>.
         /// </summary>
         private static string GetTypeName(Type type)
         {
@@ -104,7 +104,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         /// <summary>
         /// Extracts the element type if it's a [YamlObject] or enum that should be included in fingerprint.
-        /// Handles direct types, List&lt;T&gt;, and enums.
+        /// Handles direct types, List<T>, and enums.
         /// </summary>
         private static Type GetYamlElementType(Type type)
         {

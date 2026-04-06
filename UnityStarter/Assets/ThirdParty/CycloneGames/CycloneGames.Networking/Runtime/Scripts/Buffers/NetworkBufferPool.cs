@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading;
 
 namespace CycloneGames.Networking.Buffers
 {
@@ -7,25 +8,22 @@ namespace CycloneGames.Networking.Buffers
     /// </summary>
     public static class NetworkBufferPool
     {
-        private static readonly ConcurrentBag<NetworkBuffer> _pool = new ConcurrentBag<NetworkBuffer>();
+        private static readonly ConcurrentQueue<NetworkBuffer> _pool = new ConcurrentQueue<NetworkBuffer>();
+        private static int _count;
         private const int MaxPoolSize = 32;
+        private static readonly object _returnLock = new object();
 
-        /// <summary>
-        /// Get a pooled NetworkBuffer instance. Reset before use. Returns via Dispose().
-        /// </summary>
         public static NetworkBuffer Get()
         {
-            if (_pool.TryTake(out var buffer))
+            if (_pool.TryDequeue(out var buffer))
             {
+                Interlocked.Decrement(ref _count);
                 buffer.Reset();
                 return buffer;
             }
             return new NetworkBuffer();
         }
 
-        /// <summary>
-        /// Get a pooled NetworkBuffer initialized with the given data for reading.
-        /// </summary>
         public static NetworkBuffer GetWithData(System.ArraySegment<byte> data)
         {
             var buffer = Get();
@@ -33,33 +31,30 @@ namespace CycloneGames.Networking.Buffers
             return buffer;
         }
 
-        /// <summary>
-        /// Return a buffer to the pool. Called automatically by NetworkBuffer.Dispose().
-        /// </summary>
         public static void Return(NetworkBuffer buffer)
         {
             if (buffer == null) return;
 
             buffer.ReturnToPool();
 
-            if (_pool.Count < MaxPoolSize)
+            lock (_returnLock)
             {
-                _pool.Add(buffer);
+                if (_count < MaxPoolSize)
+                {
+                    _count++;
+                    _pool.Enqueue(buffer);
+                    return;
+                }
             }
-            else
-            {
-                // Pool is full, release the underlying array
-                buffer.ReleaseBuffer();
-            }
+
+            buffer.ReleaseBuffer();
         }
 
-        /// <summary>
-        /// Clear the pool and release all buffers. Call during scene transitions or shutdown.
-        /// </summary>
         public static void Clear()
         {
-            while (_pool.TryTake(out var buffer))
+            while (_pool.TryDequeue(out var buffer))
             {
+                Interlocked.Decrement(ref _count);
                 buffer.ReleaseBuffer();
             }
         }
