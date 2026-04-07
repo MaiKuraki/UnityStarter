@@ -244,7 +244,7 @@ namespace CycloneGames.Audio.Runtime
 
         public void Stop()
         {
-            if (rootEvent.FadeOut <= 0)
+            if (rootEvent == null || rootEvent.FadeOut <= 0)
             {
                 StopImmediate();
             }
