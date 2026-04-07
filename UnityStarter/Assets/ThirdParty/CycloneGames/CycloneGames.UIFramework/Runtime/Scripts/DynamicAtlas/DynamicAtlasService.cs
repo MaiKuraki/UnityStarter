@@ -31,7 +31,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private readonly List<DynamicAtlasPage> _pages = new List<DynamicAtlasPage>();
         private readonly Dictionary<string, AtlasItem> _itemCache = new Dictionary<string, AtlasItem>();
         private readonly ReaderWriterLockSlim _lock = new ReaderWriterLockSlim(LockRecursionPolicy.NoRecursion);
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
         private static int _spriteIdCounter = 0;
+#endif
 
 #if UNITY_EDITOR
         public class EditorAtlasItem

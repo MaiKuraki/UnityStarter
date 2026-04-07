@@ -119,7 +119,9 @@ namespace CycloneGames.Factory.Runtime
                 {
                     item.OnSpawned(param, this);
                 }
+#pragma warning disable CS0168
                 catch (Exception ex)
+#pragma warning restore CS0168
                 {
                     _activeItems.RemoveAt(_activeItems.Count - 1);
                     _activeItemIndices.Remove(item);
@@ -247,7 +249,9 @@ namespace CycloneGames.Factory.Runtime
             {
                 item.OnDespawned();
             }
+#pragma warning disable CS0168
             catch (Exception ex)
+#pragma warning restore CS0168
             {
 #if DEVELOPMENT_BUILD || UNITY_EDITOR
                 UnityEngine.Debug.LogError($"[CycloneGames.Factory] OnDespawned failed. Error: {ex.Message}");
