@@ -763,9 +763,11 @@ namespace CycloneGames.Audio.Runtime
 
             eventNameMap.Clear();
             loadedBanks.Clear();
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
             activeClipRefCount.Clear();
             clipMemoryCache.Clear();
             TotalMemoryUsage = 0;
+#endif
             activeEventPool.Clear();
             availableSources.Clear();
             globalVolume = 1f;
