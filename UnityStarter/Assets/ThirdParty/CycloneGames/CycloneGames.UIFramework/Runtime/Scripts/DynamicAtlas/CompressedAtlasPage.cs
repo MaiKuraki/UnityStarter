@@ -265,7 +265,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     dstPixelX, dstPixelY
                 );
             }
+#pragma warning disable CS0168
             catch (Exception e)
+#pragma warning restore CS0168
             {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                 CLogger.LogError($"[CompressedAtlasPage] GPU CopyTexture failed: {e.Message}");
