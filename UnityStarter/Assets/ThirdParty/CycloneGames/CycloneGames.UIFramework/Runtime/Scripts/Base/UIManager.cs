@@ -12,6 +12,7 @@ namespace CycloneGames.UIFramework.Runtime
     public class UIManager : MonoBehaviour
     {
         private const string DEBUG_FLAG = "[UIManager]";
+        [SerializeField] private bool enableAssetLifecycleDebugLog = false;
         private IAssetPathBuilder assetPathBuilder;
         private IUnityObjectSpawner objectSpawner;
         private IMainCameraService mainCameraService;
@@ -26,6 +27,8 @@ namespace CycloneGames.UIFramework.Runtime
         private readonly Dictionary<string, IAssetHandle<GameObject>> _prefabHandles = new Dictionary<string, IAssetHandle<GameObject>>(16);
         // Track per-window prefab location so we can release when the window closes.
         private readonly Dictionary<string, string> _windowToPrefabLocation = new Dictionary<string, string>(16);
+        // Reusable scratch list for release scans to avoid per-call allocations.
+        private readonly List<string> _releaseScratchWindowNames = new List<string>(8);
 
         // Throttling instantiate per frame
         private int maxInstantiatesPerFrame = 2;
@@ -62,6 +65,22 @@ namespace CycloneGames.UIFramework.Runtime
         private UIWindow _inflightLeaving;
         private string _inflightEnteringName;
         private UIWindow _inflightEntering;
+
+        /// <summary>
+        /// Enables verbose asset lifecycle diagnostics (source mode, shared-handle release decisions).
+        /// Default is false to keep runtime log and string-format overhead minimal.
+        /// </summary>
+        public bool EnableAssetLifecycleDebugLog
+        {
+            get => enableAssetLifecycleDebugLog;
+            set => enableAssetLifecycleDebugLog = value;
+        }
+
+        private void LogAssetLifecycleDebug(string message)
+        {
+            if (!enableAssetLifecycleDebugLog || string.IsNullOrEmpty(message)) return;
+            CLogger.LogInfo($"{DEBUG_FLAG} [AssetLifecycle] {message}");
+        }
 
 
         /// <summary>
@@ -332,7 +351,7 @@ namespace CycloneGames.UIFramework.Runtime
                 if (!_configHandles.TryGetValue(windowName, out var configHandle))
                 {
                     configHandle = assetPackage.LoadAssetAsync<UIWindowConfiguration>(configPath, "UIFramework", cancellationToken: ct);
-                    await configHandle.Task;
+                    await WaitForOperationCompletedAsync(configHandle, ct);
 
                     if (!string.IsNullOrEmpty(configHandle.Error) || configHandle.Asset == null)
                     {
@@ -349,12 +368,12 @@ namespace CycloneGames.UIFramework.Runtime
 
                 windowConfig = configHandle.Asset;
 
-                if (windowConfig.Source == UIWindowConfiguration.PrefabSource.PrefabReference && windowConfig.WindowPrefab == null)
+                if (!windowConfig.IsConfigured)
                 {
-                    CLogger.LogError($"{DEBUG_FLAG} WindowPrefab is null in WindowConfig for: {windowName}");
+                    CLogger.LogError($"{DEBUG_FLAG} WindowConfig for '{windowName}' is not configured (Source={windowConfig.Source}).");
                     CleanupOpenState(windowName, openCts);
                     ReleaseConfigHandle(windowName);
-                    tcs.TrySetException(new System.NullReferenceException($"WindowPrefab null for {windowName}"));
+                    tcs.TrySetException(new System.NullReferenceException($"WindowConfig not configured for {windowName}"));
                     onUIWindowCreated?.Invoke(null);
                     return null;
                 }
@@ -413,26 +432,45 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             UIWindow uiWindowInstance = null;
+            string managedPrefabLocation = null;
             try
             {
-                if (windowConfig.Source == UIWindowConfiguration.PrefabSource.Location)
+                if (windowConfig.Source == UIWindowConfiguration.PrefabSource.PrefabReference)
                 {
-                    if (string.IsNullOrEmpty(windowConfig.PrefabLocation) || assetPackage == null)
+                    LogAssetLifecycleDebug($"Opening UIWindow '{windowName}' with source mode: PrefabReference (direct prefab reference).");
+                }
+                else
+                {
+                    LogAssetLifecycleDebug($"Opening UIWindow '{windowName}' with source mode: {windowConfig.Source} (location='{windowConfig.EffectiveLocation}').");
+                }
+
+                if (windowConfig.Source != UIWindowConfiguration.PrefabSource.PrefabReference)
+                {
+                    // Handles both AssetReference (AssetRef<GameObject>.Location) and
+                    // PathLocation (plain string) — EffectiveLocation unifies both.
+                    string effectiveLocation = windowConfig.EffectiveLocation;
+                    managedPrefabLocation = effectiveLocation;
+                    if (string.IsNullOrEmpty(effectiveLocation) || assetPackage == null)
                     {
-                        throw new System.InvalidOperationException("Prefab source is 'Location' but PrefabLocation or AssetPackage is not available.");
+                        throw new System.InvalidOperationException($"Prefab source is '{windowConfig.Source}' but EffectiveLocation is empty or AssetPackage is not available.");
                     }
-                    if (!_prefabHandles.TryGetValue(windowConfig.PrefabLocation, out var prefabHandle))
+                    if (!_prefabHandles.TryGetValue(effectiveLocation, out var prefabHandle))
                     {
-                        prefabHandle = assetPackage.LoadAssetAsync<GameObject>(windowConfig.PrefabLocation, "UIFramework", cancellationToken: ct);
-                        await prefabHandle.Task;
+                        prefabHandle = assetPackage.LoadAssetAsync<GameObject>(effectiveLocation, "UIFramework", cancellationToken: ct);
+                        await WaitForOperationCompletedAsync(prefabHandle, ct);
 
                         if (!string.IsNullOrEmpty(prefabHandle.Error) || prefabHandle.Asset == null)
                         {
                             prefabHandle.Dispose();
-                            throw new System.Exception($"Failed to load UI prefab at '{windowConfig.PrefabLocation}': {prefabHandle?.Error}");
+                            throw new System.Exception($"Failed to load UI prefab at '{effectiveLocation}': {prefabHandle?.Error}");
                         }
 
-                        _prefabHandles[windowConfig.PrefabLocation] = prefabHandle;
+                        _prefabHandles[effectiveLocation] = prefabHandle;
+                        LogAssetLifecycleDebug($"Loaded prefab handle for location '{effectiveLocation}'.");
+                    }
+                    else
+                    {
+                        LogAssetLifecycleDebug($"Reusing cached prefab handle for location '{effectiveLocation}'.");
                     }
 
                     var go = prefabHandle.Asset;
@@ -442,7 +480,7 @@ namespace CycloneGames.UIFramework.Runtime
 
                     if (uiWindowInstance != null)
                     {
-                        _windowToPrefabLocation[windowName] = windowConfig.PrefabLocation;
+                        _windowToPrefabLocation[windowName] = effectiveLocation;
                     }
                 }
                 else // PrefabReference
@@ -454,6 +492,19 @@ namespace CycloneGames.UIFramework.Runtime
                 if (uiWindowInstance == null)
                 {
                     throw new System.NullReferenceException($"Spawned GameObject for {windowName} does not have a UIWindow component.");
+                }
+
+                // External-destroy safety net: if a window is destroyed outside UIManager flow,
+                // UIWindow.OnDestroy can still trigger an idempotent location-based release.
+                if (!string.IsNullOrEmpty(managedPrefabLocation))
+                {
+                    uiWindowInstance.SetSourceAssetPath(managedPrefabLocation);
+                    uiWindowInstance.OnReleaseAssetReference = OnWindowReleaseAssetReference;
+                }
+                else
+                {
+                    uiWindowInstance.SetSourceAssetPath(null);
+                    uiWindowInstance.OnReleaseAssetReference = null;
                 }
 
                 if (transitionDriver != null)
@@ -579,11 +630,11 @@ namespace CycloneGames.UIFramework.Runtime
             CancellationToken ct)
         {
             // --- Phase 1: Cancel previous nav, claim generation, determine effective leaving ---
-            var prevLeavingName  = _inflightLeavingName;
-            var prevLeaving      = _inflightLeaving;
+            var prevLeavingName = _inflightLeavingName;
+            var prevLeaving = _inflightLeaving;
             var prevEnteringName = _inflightEnteringName;
-            var prevEntering     = _inflightEntering;
-            bool hadInFlight     = _inflightLeaving != null;
+            var prevEntering = _inflightEntering;
+            bool hadInFlight = _inflightLeaving != null;
 
             int myGeneration = ++_coordinatedNavGeneration;
 
@@ -600,7 +651,7 @@ namespace CycloneGames.UIFramework.Runtime
             if (hadInFlight)
             {
                 effectiveFromName = prevLeavingName;
-                effectiveLeaving  = prevLeaving;
+                effectiveLeaving = prevLeaving;
 
                 // Tear down the intermediate entering window if it was already loaded
                 if (prevEntering != null)
@@ -620,10 +671,10 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             // --- Phase 2: Track this nav's in-flight state ---
-            _inflightLeavingName  = effectiveFromName;
-            _inflightLeaving      = effectiveLeaving;
+            _inflightLeavingName = effectiveFromName;
+            _inflightLeaving = effectiveLeaving;
             _inflightEnteringName = toName;
-            _inflightEntering     = null;
+            _inflightEntering = null;
 
             // --- Phase 3: Load entering window ---
             UIWindow entering;
@@ -721,10 +772,10 @@ namespace CycloneGames.UIFramework.Runtime
 
         private void ClearInflightState()
         {
-            _inflightLeavingName  = null;
-            _inflightLeaving      = null;
+            _inflightLeavingName = null;
+            _inflightLeaving = null;
             _inflightEnteringName = null;
-            _inflightEntering     = null;
+            _inflightEntering = null;
         }
 
         /// <summary>
@@ -807,7 +858,11 @@ namespace CycloneGames.UIFramework.Runtime
                 if (windowToClose == null || windowToClose.gameObject == null)
                 {
                     CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' is null or destroyed. Cannot close.");
+                    _navigationService?.Unregister(windowName);
                     activeWindows.Remove(windowName);
+                    uiOpenTCS.Remove(windowName);
+                    ReleaseConfigHandle(windowName);
+                    ReleaseWindowAsset(windowName);
                     return;
                 }
 
@@ -960,17 +1015,64 @@ namespace CycloneGames.UIFramework.Runtime
             if (!_windowToPrefabLocation.TryGetValue(windowName, out var prefabLocation)) return;
             _windowToPrefabLocation.Remove(windowName);
 
+            LogAssetLifecycleDebug($"Release request by window '{windowName}' for location '{prefabLocation}'.");
+
+            ReleaseWindowAssetByLocation(prefabLocation);
+        }
+
+        private void OnWindowReleaseAssetReference(string prefabLocation)
+        {
+            LogAssetLifecycleDebug($"Release request from UIWindow.OnDestroy callback for location '{prefabLocation}'.");
+            ReleaseWindowAssetByLocation(prefabLocation);
+        }
+
+        private void ReleaseWindowAssetByLocation(string prefabLocation)
+        {
+            if (string.IsNullOrEmpty(prefabLocation)) return;
+
+            // Prune stale mappings for this location (destroyed externally or already invalid)
+            // before checking if the location is still in use.
+            _releaseScratchWindowNames.Clear();
+            foreach (var kv in _windowToPrefabLocation)
+            {
+                if (!string.Equals(kv.Value, prefabLocation, System.StringComparison.Ordinal)) continue;
+
+                if (!activeWindows.TryGetValue(kv.Key, out var w) || w == null || w.gameObject == null)
+                {
+                    _releaseScratchWindowNames.Add(kv.Key);
+                }
+            }
+
+            for (int i = 0; i < _releaseScratchWindowNames.Count; i++)
+            {
+                _windowToPrefabLocation.Remove(_releaseScratchWindowNames[i]);
+            }
+            if (_releaseScratchWindowNames.Count > 0)
+            {
+                LogAssetLifecycleDebug($"Pruned {_releaseScratchWindowNames.Count} stale window->location mappings for '{prefabLocation}'.");
+            }
+            _releaseScratchWindowNames.Clear();
+
             // Check if any other open window still shares this prefab
             bool stillInUse = false;
             foreach (var kv in _windowToPrefabLocation)
             {
-                if (kv.Value == prefabLocation) { stillInUse = true; break; }
+                if (string.Equals(kv.Value, prefabLocation, System.StringComparison.Ordinal))
+                {
+                    stillInUse = true;
+                    break;
+                }
             }
 
             if (!stillInUse && _prefabHandles.TryGetValue(prefabLocation, out var handle))
             {
                 handle.Dispose();
                 _prefabHandles.Remove(prefabLocation);
+                LogAssetLifecycleDebug($"Disposed prefab handle for location '{prefabLocation}' (no active users).");
+            }
+            else if (stillInUse)
+            {
+                LogAssetLifecycleDebug($"Kept prefab handle for location '{prefabLocation}' (still in use).");
             }
         }
 
@@ -989,6 +1091,20 @@ namespace CycloneGames.UIFramework.Runtime
             uiOpenTCS.Remove(windowName);
             _openCancellations.Remove(windowName);
             openCts?.Dispose();
+        }
+
+        private async UniTask WaitForOperationCompletedAsync(IOperation operation, CancellationToken cancellationToken)
+        {
+            if (operation == null)
+            {
+                throw new System.ArgumentNullException(nameof(operation));
+            }
+
+            while (!operation.IsDone)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
+            }
         }
 
         private async UniTask ThrottleInstantiate(CancellationToken cancellationToken = default)
