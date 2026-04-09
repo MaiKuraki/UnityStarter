@@ -57,14 +57,15 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private static async UniTaskVoid AwaitAndReport(IOperation handle, string location, long startTicks)
         {
-            try
+            // Poll IsDone instead of awaiting handle.Task directly.
+            // ResourcesAssetHandle and YooAssetHandle both use single-slot continuations
+            // (Preserve/MemoizeSource or YooAsset's internal TCS). Awaiting the same Task
+            // from two callers simultaneously causes "Already continuation registered" crashes.
+            // Polling never occupies the continuation slot, so callers that do await handle.Task
+            // remain unaffected.
+            while (!handle.IsDone)
             {
-                await handle.Task;
-            }
-            catch
-            {
-                // Swallow — error handling is the caller's responsibility.
-                // We still want to report timing for failed loads.
+                await UniTask.Yield(PlayerLoopTiming.Update);
             }
 
             long elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000 / Stopwatch.Frequency;

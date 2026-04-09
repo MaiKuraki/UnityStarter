@@ -176,6 +176,21 @@ stateDiagram-v2
 
 A `ScriptableObject` defining the prefab source, target layer, and optional per-window overrides. Designers configure windows without touching code.
 
+Supported prefab source modes:
+
+| Mode              | Serialized Field                          | Typical Backend                                   | Notes                                                                                        |
+| ----------------- | ----------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `PrefabReference` | `windowPrefab`                            | Direct Unity prefab reference                     | Fastest authoring path. Best for local/static UI prefabs.                                    |
+| `AssetReference`  | `prefabAssetRef` (`AssetRef<GameObject>`) | Addressables, YooAsset, or any `AssetRef` backend | Recommended for hot-update pipelines; keeps runtime loading location in `AssetRef.Location`. |
+| `PathLocation`    | `prefabLocation` (string)                 | xAsset/custom loaders                             | Maximum compatibility for legacy or custom pipelines.                                        |
+
+Runtime behavior and safety guarantees:
+
+- Non-direct modes (`AssetReference` / `PathLocation`) are loaded by location through `IAssetPackage`.
+- `UIWindowConfiguration.OnValidate()` clears `windowPrefab` in non-direct modes to avoid accidental strong references.
+- `UIManager` uses shared prefab handles keyed by location, so windows targeting the same location reuse one handle.
+- Window destroy callbacks are wired to an idempotent release path, so external destroys do not leak shared handles.
+
 ### 6. `IUIWindowTransitionDriver` (Per-Window Animation)
 
 Controls a **single** window's open/close animation. Use this for per-window effects: popups, tooltips, toast notifications. Works independently of and alongside the Transition Coordinator.
@@ -221,6 +236,39 @@ CloseUI("MyWindow")
 | **Prefab sharing**            | Multiple windows using the same prefab path share one handle; disposed only when the last window closes |
 | **Config handles**            | One handle per window name (windowName → config path), released on `CloseUI`                            |
 | **Zero leak on scene unload** | `CleanupAllWindows()` `Dispose()`s every held handle, correctly draining AssetCacheService RefCounts    |
+
+### Recommended strategy with W-TinyLFU
+
+To get the best cache quality and memory stability:
+
+1. Prefer `AssetReference` for production and hot-update windows.
+2. Keep location strings stable across sessions (avoid per-build randomization) so W-TinyLFU can learn access frequency accurately.
+3. Use `PathLocation` only for legacy/custom integration points where `AssetRef` is not available yet.
+4. Reserve `PrefabReference` mainly for always-local windows (bootstrap/debug/offline-only UI).
+5. If you need lifecycle diagnostics, enable `UIManager.EnableAssetLifecycleDebugLog` to emit `CLogger` info logs for source mode and release decisions.
+
+### Debug log toggle example
+
+`UIManager` keeps asset lifecycle debug logs disabled by default. Enable it only in development or profiling builds:
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
+
+public class UIDebugBootstrap : MonoBehaviour
+{
+    [SerializeField] private bool enableAssetLifecycleLogsInDev = true;
+
+    void Start()
+    {
+        var manager = FindFirstObjectByType<UIManager>();
+        if (manager == null) return;
+
+        // Keep production logs clean; only enable when you need diagnostics.
+        manager.EnableAssetLifecycleDebugLog = Debug.isDebugBuild && enableAssetLifecycleLogsInDev;
+    }
+}
+```
 
 ## Quick Start Guide
 
