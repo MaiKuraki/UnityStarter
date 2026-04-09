@@ -176,6 +176,21 @@ stateDiagram-v2
 
 定义预制体来源、目标层级及可选覆盖参数的 `ScriptableObject`。设计师无需修改代码即可配置窗口行为。
 
+支持的预制体来源模式：
+
+| 模式              | 序列化字段                                 | 典型后端                                      | 说明                                                  |
+| ----------------- | ------------------------------------------ | --------------------------------------------- | ----------------------------------------------------- |
+| `PrefabReference` | `windowPrefab`                             | Unity 直接预制体引用                          | 配置最直接，适合本地静态 UI。                         |
+| `AssetReference`  | `prefabAssetRef`（`AssetRef<GameObject>`） | Addressables、YooAsset 或任意 `AssetRef` 后端 | 热更新场景推荐，运行时通过 `AssetRef.Location` 加载。 |
+| `PathLocation`    | `prefabLocation`（string）                 | xAsset / 自定义加载器                         | 兼容性最高，适合历史项目或自研管线。                  |
+
+运行时行为与安全保证：
+
+- 非直引模式（`AssetReference` / `PathLocation`）统一通过 `IAssetPackage` 按 location 加载。
+- `UIWindowConfiguration.OnValidate()` 会在非直引模式下清空 `windowPrefab`，避免误持有强引用。
+- `UIManager` 以 location 为键共享预制体句柄，相同 location 的窗口复用同一 handle。
+- 窗口销毁回调已接入幂等释放路径，即使外部销毁窗口也不会泄漏共享句柄。
+
 ### 6. `IUIWindowTransitionDriver`（单窗口动画）
 
 控制**单个**窗口的开关动画。适用于弹窗、提示、Toast 等各自独立的效果，与过渡协调器并行工作互不干扰。
@@ -221,6 +236,39 @@ CloseUI("MyWindow")
 | **预制体共享**             | 使用同一预制体路径的多个窗口共享同一句柄，最后一个窗口关闭时才释放                       |
 | **Config 句柄**            | 每个窗口名对应一个句柄（windowName → config 路径），`CloseUI` 时释放                     |
 | **场景卸载零泄漏**         | `CleanupAllWindows()` 批量 `Dispose()` 全部持有句柄，正确排空 AssetCacheService RefCount |
+
+### 与 W-TinyLFU 搭配的推荐策略
+
+为了获得更好的缓存命中质量和内存稳定性：
+
+1. 生产与热更新窗口优先使用 `AssetReference`。
+2. 保持 location 字符串长期稳定（避免每次构建都变更），让 W-TinyLFU 更准确学习访问频率。
+3. `PathLocation` 建议用于 `AssetRef` 尚未接入的历史/自定义链路。
+4. `PrefabReference` 建议主要用于常驻本地窗口（启动、调试、离线 UI）。
+5. 如需观察生命周期细节，可启用 `UIManager.EnableAssetLifecycleDebugLog`，通过 `CLogger` 输出来源模式与释放决策日志。
+
+### Debug 日志开关示例
+
+`UIManager` 默认关闭资源生命周期调试日志。建议只在开发或性能分析构建中启用：
+
+```csharp
+using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
+
+public class UIDebugBootstrap : MonoBehaviour
+{
+    [SerializeField] private bool enableAssetLifecycleLogsInDev = true;
+
+    void Start()
+    {
+        var manager = FindFirstObjectByType<UIManager>();
+        if (manager == null) return;
+
+        // 生产环境保持日志干净，仅在需要诊断时开启。
+        manager.EnableAssetLifecycleDebugLog = Debug.isDebugBuild && enableAssetLifecycleLogsInDev;
+    }
+}
+```
 
 ## 快速上手指南
 

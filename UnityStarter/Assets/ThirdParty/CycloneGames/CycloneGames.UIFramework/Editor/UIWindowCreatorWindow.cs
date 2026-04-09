@@ -18,12 +18,16 @@ namespace CycloneGames.UIFramework.Editor
         public string presenterFolderPath = "";
         public string namespaceName = "";
         public bool useMVP = false;
+        public int configSourceMode = (int)UIWindowConfiguration.PrefabSource.PrefabReference;
+        public bool autoFillLocationFromPrefabPath = true;
     }
 
     public class UIWindowCreatorWindow : EditorWindow
     {
         private const string DEFAULT_TEMPLATE_GUID = "37c32b368ca8d4841b923d1b37cf97b9";
         private const string SETTINGS_FILE_NAME = "UIWindowCreatorSettings.json";
+        private const string PREFS_KEY_SOURCE_MODE = "CycloneGames.UIFramework.UIWindowCreator.SourceMode";
+        private const string PREFS_KEY_AUTOFILL_LOCATION = "CycloneGames.UIFramework.UIWindowCreator.AutoFillLocation";
 
         private string namespaceName = "";
         private DefaultAsset scriptFolder;
@@ -35,6 +39,8 @@ namespace CycloneGames.UIFramework.Editor
         private GameObject templatePrefab;
         private Vector2 scrollPosition;
         private bool useMVP = false;
+        private UIWindowConfiguration.PrefabSource configSourceMode = UIWindowConfiguration.PrefabSource.PrefabReference;
+        private bool autoFillLocationFromPrefabPath = true;
 
         private string settingsPath;
 
@@ -95,6 +101,7 @@ namespace CycloneGames.UIFramework.Editor
             settingsPath = Path.Combine(userSettingsDir, SETTINGS_FILE_NAME);
 
             LoadSettings();
+            LoadEditorPrefsSelection();
 
             // Try to load default template using GUID (works across different project structures)
             string templatePath = AssetDatabase.GUIDToAssetPath(DEFAULT_TEMPLATE_GUID);
@@ -139,6 +146,13 @@ namespace CycloneGames.UIFramework.Editor
                     {
                         namespaceName = settings.namespaceName ?? "";
                         useMVP = settings.useMVP;
+                        configSourceMode = (UIWindowConfiguration.PrefabSource)settings.configSourceMode;
+                        autoFillLocationFromPrefabPath = settings.autoFillLocationFromPrefabPath;
+
+                        if (!Enum.IsDefined(typeof(UIWindowConfiguration.PrefabSource), configSourceMode))
+                        {
+                            configSourceMode = UIWindowConfiguration.PrefabSource.PrefabReference;
+                        }
 
                         if (!string.IsNullOrEmpty(settings.scriptFolderPath))
                         {
@@ -176,18 +190,46 @@ namespace CycloneGames.UIFramework.Editor
                     prefabFolderPath = prefabFolder != null ? AssetDatabase.GetAssetPath(prefabFolder) : "",
                     configFolderPath = soFolder != null ? AssetDatabase.GetAssetPath(soFolder) : "",
                     presenterFolderPath = presenterFolder != null ? AssetDatabase.GetAssetPath(presenterFolder) : "",
-                    useMVP = useMVP
+                    useMVP = useMVP,
+                    configSourceMode = (int)configSourceMode,
+                    autoFillLocationFromPrefabPath = autoFillLocationFromPrefabPath
                 };
 
                 string json = JsonUtility.ToJson(settings, true);
                 byte[] bytes = Encoding.UTF8.GetBytes(json);
                 using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
                 NativeFile.WriteAllBytes(settingsPath, nativeBytes);
+                SaveEditorPrefsSelection();
             }
             catch (Exception e)
             {
                 Debug.LogWarning($"Failed to save UIWindowCreator settings: {e.Message}");
             }
+        }
+
+        private void LoadEditorPrefsSelection()
+        {
+            if (EditorPrefs.HasKey(PREFS_KEY_SOURCE_MODE))
+            {
+                var savedSource = (UIWindowConfiguration.PrefabSource)EditorPrefs.GetInt(
+                    PREFS_KEY_SOURCE_MODE,
+                    (int)UIWindowConfiguration.PrefabSource.PrefabReference);
+                if (Enum.IsDefined(typeof(UIWindowConfiguration.PrefabSource), savedSource))
+                {
+                    configSourceMode = savedSource;
+                }
+            }
+
+            if (EditorPrefs.HasKey(PREFS_KEY_AUTOFILL_LOCATION))
+            {
+                autoFillLocationFromPrefabPath = EditorPrefs.GetBool(PREFS_KEY_AUTOFILL_LOCATION, true);
+            }
+        }
+
+        private void SaveEditorPrefsSelection()
+        {
+            EditorPrefs.SetInt(PREFS_KEY_SOURCE_MODE, (int)configSourceMode);
+            EditorPrefs.SetBool(PREFS_KEY_AUTOFILL_LOCATION, autoFillLocationFromPrefabPath);
         }
 
         private void OnGUI()
@@ -335,6 +377,38 @@ namespace CycloneGames.UIFramework.Editor
                 EditorGUILayout.LabelField($"Layer Name: {selectedLayer.LayerName}", EditorStyles.miniLabel);
                 string layerPath = AssetDatabase.GetAssetPath(selectedLayer);
                 EditorGUILayout.LabelField($"Path: {layerPath}", EditorStyles.miniLabel);
+            }
+
+            EditorGUILayout.Space(5);
+            EditorGUILayout.LabelField("UIWindow Source Mode", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox("Choose how UIWindowConfiguration manages the prefab source after creation.", MessageType.None);
+            var newSourceMode = (UIWindowConfiguration.PrefabSource)EditorGUILayout.EnumPopup(configSourceMode);
+            if (newSourceMode != configSourceMode)
+            {
+                configSourceMode = newSourceMode;
+                SaveSettings();
+            }
+
+            bool newAutoFill = EditorGUILayout.ToggleLeft(
+                new GUIContent("Auto Fill Location From Prefab Path", "When enabled, creator pre-fills location/address from generated prefab asset path."),
+                autoFillLocationFromPrefabPath);
+            if (newAutoFill != autoFillLocationFromPrefabPath)
+            {
+                autoFillLocationFromPrefabPath = newAutoFill;
+                SaveSettings();
+            }
+
+            if (configSourceMode == UIWindowConfiguration.PrefabSource.PrefabReference)
+            {
+                EditorGUILayout.HelpBox("PrefabReference: config stores direct prefab reference.", MessageType.Info);
+            }
+            else if (configSourceMode == UIWindowConfiguration.PrefabSource.AssetReference)
+            {
+                EditorGUILayout.HelpBox("AssetReference: config stores AssetRef<GameObject> (GUID + path).", MessageType.Info);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("PathLocation: config stores plain string location.", MessageType.Info);
             }
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(10);
@@ -757,7 +831,7 @@ namespace CycloneGames.UIFramework.Editor
                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
 
                 GameObject prefabInstance = CreatePrefab(fullPrefabPath, scriptName, null);
-                CreateConfiguration(fullSoPath, prefabInstance, selectedLayer);
+                CreateConfiguration(fullSoPath, prefabInstance, selectedLayer, configSourceMode, autoFillLocationFromPrefabPath);
 
                 System.Type scriptType = GetScriptType(scriptName, namespaceName);
 
@@ -766,14 +840,14 @@ namespace CycloneGames.UIFramework.Editor
                 {
                     scriptAdded = AddScriptComponentToPrefab(fullPrefabPath, scriptType, scriptName);
 
-                    if (scriptAdded)
+                    if (scriptAdded && configSourceMode == UIWindowConfiguration.PrefabSource.PrefabReference)
                     {
                         UpdateConfigurationPrefabReference(fullSoPath, fullPrefabPath);
                     }
                 }
                 else
                 {
-                    ScheduleAsyncScriptCheck(scriptName, namespaceName, fullPrefabPath, fullSoPath);
+                    ScheduleAsyncScriptCheck(scriptName, namespaceName, fullPrefabPath, fullSoPath, configSourceMode);
                 }
 
                 AssetDatabase.Refresh();
@@ -1107,15 +1181,17 @@ namespace {namespaceName}
         private string pendingNamespaceName;
         private string pendingPrefabPath;
         private string pendingConfigPath;
+        private UIWindowConfiguration.PrefabSource pendingConfigSourceMode;
         private int asyncCheckAttempts = 0;
         private const int MAX_ASYNC_ATTEMPTS = 100; // Check for up to 20 seconds (100 * 0.2s)
 
-        private void ScheduleAsyncScriptCheck(string scriptName, string namespaceName, string prefabPath, string configPath)
+        private void ScheduleAsyncScriptCheck(string scriptName, string namespaceName, string prefabPath, string configPath, UIWindowConfiguration.PrefabSource sourceMode)
         {
             pendingScriptName = scriptName;
             pendingNamespaceName = namespaceName;
             pendingPrefabPath = prefabPath;
             pendingConfigPath = configPath;
+            pendingConfigSourceMode = sourceMode;
             asyncCheckAttempts = 0;
 
             EditorApplication.update += OnAsyncScriptCheck;
@@ -1133,7 +1209,7 @@ namespace {namespaceName}
 
                 bool scriptAdded = AddScriptComponentToPrefab(pendingPrefabPath, scriptType, pendingScriptName);
 
-                if (scriptAdded)
+                if (scriptAdded && pendingConfigSourceMode == UIWindowConfiguration.PrefabSource.PrefabReference)
                 {
                     UpdateConfigurationPrefabReference(pendingConfigPath, pendingPrefabPath);
                     Debug.Log($"✓ Script {pendingScriptName} compiled and component added successfully!");
@@ -1143,6 +1219,7 @@ namespace {namespaceName}
                 pendingNamespaceName = null;
                 pendingPrefabPath = null;
                 pendingConfigPath = null;
+                pendingConfigSourceMode = UIWindowConfiguration.PrefabSource.PrefabReference;
                 asyncCheckAttempts = 0;
             }
             else if (asyncCheckAttempts >= MAX_ASYNC_ATTEMPTS)
@@ -1154,6 +1231,7 @@ namespace {namespaceName}
                 pendingNamespaceName = null;
                 pendingPrefabPath = null;
                 pendingConfigPath = null;
+                pendingConfigSourceMode = UIWindowConfiguration.PrefabSource.PrefabReference;
                 asyncCheckAttempts = 0;
             }
         }
@@ -1283,7 +1361,12 @@ namespace {namespaceName}
             }
         }
 
-        private void CreateConfiguration(string soPath, GameObject prefab, UILayerConfiguration layer)
+        private void CreateConfiguration(
+            string soPath,
+            GameObject prefab,
+            UILayerConfiguration layer,
+            UIWindowConfiguration.PrefabSource sourceMode,
+            bool autoFillLocation)
         {
             string directory = Path.GetDirectoryName(soPath);
             if (!Directory.Exists(directory))
@@ -1318,8 +1401,47 @@ namespace {namespaceName}
             UIWindowConfiguration config = ScriptableObject.CreateInstance<UIWindowConfiguration>();
 
             SerializedObject serializedConfig = new SerializedObject(config);
-            serializedConfig.FindProperty("windowPrefab").objectReferenceValue = reloadedPrefab;
-            serializedConfig.FindProperty("source").enumValueIndex = (int)UIWindowConfiguration.PrefabSource.PrefabReference;
+            var sourceProp = serializedConfig.FindProperty("source");
+            var prefabRefProp = serializedConfig.FindProperty("windowPrefab");
+            var assetRefProp = serializedConfig.FindProperty("prefabAssetRef");
+            var locationProp = serializedConfig.FindProperty("prefabLocation");
+
+            sourceProp.enumValueIndex = (int)sourceMode;
+
+            string prefabAssetPath = AssetDatabase.GetAssetPath(reloadedPrefab);
+            string guid = AssetDatabase.AssetPathToGUID(prefabAssetPath);
+
+            if (sourceMode == UIWindowConfiguration.PrefabSource.PrefabReference)
+            {
+                prefabRefProp.objectReferenceValue = reloadedPrefab;
+                if (assetRefProp != null)
+                {
+                    assetRefProp.FindPropertyRelative("m_Location").stringValue = string.Empty;
+                    assetRefProp.FindPropertyRelative("m_GUID").stringValue = string.Empty;
+                }
+                locationProp.stringValue = string.Empty;
+            }
+            else if (sourceMode == UIWindowConfiguration.PrefabSource.AssetReference)
+            {
+                prefabRefProp.objectReferenceValue = null;
+                if (assetRefProp != null)
+                {
+                    assetRefProp.FindPropertyRelative("m_Location").stringValue = autoFillLocation ? prefabAssetPath : string.Empty;
+                    assetRefProp.FindPropertyRelative("m_GUID").stringValue = autoFillLocation ? guid : string.Empty;
+                }
+                locationProp.stringValue = string.Empty;
+            }
+            else // PathLocation
+            {
+                prefabRefProp.objectReferenceValue = null;
+                if (assetRefProp != null)
+                {
+                    assetRefProp.FindPropertyRelative("m_Location").stringValue = string.Empty;
+                    assetRefProp.FindPropertyRelative("m_GUID").stringValue = string.Empty;
+                }
+                locationProp.stringValue = autoFillLocation ? prefabAssetPath : string.Empty;
+            }
+
             serializedConfig.FindProperty("layer").objectReferenceValue = layer;
             serializedConfig.ApplyModifiedProperties();
 
@@ -1328,13 +1450,12 @@ namespace {namespaceName}
             AssetDatabase.Refresh();
 
             UIWindowConfiguration loadedConfig = AssetDatabase.LoadAssetAtPath<UIWindowConfiguration>(soPath);
-            if (loadedConfig != null && loadedConfig.WindowPrefab == reloadedPrefab)
+            if (loadedConfig != null)
             {
-                Debug.Log($"✓ Successfully created UIWindowConfiguration with prefab reference: {reloadedPrefab.name}");
-            }
-            else
-            {
-                Debug.LogWarning($"⚠ UIWindowConfiguration created but prefab reference may not be set correctly.");
+                string details = loadedConfig.Source == UIWindowConfiguration.PrefabSource.PrefabReference
+                    ? $"prefab='{loadedConfig.WindowPrefab?.name ?? "null"}'"
+                    : $"location='{loadedConfig.EffectiveLocation}'";
+                Debug.Log($"✓ Successfully created UIWindowConfiguration with source mode: {loadedConfig.Source} ({details}).");
             }
         }
     }
