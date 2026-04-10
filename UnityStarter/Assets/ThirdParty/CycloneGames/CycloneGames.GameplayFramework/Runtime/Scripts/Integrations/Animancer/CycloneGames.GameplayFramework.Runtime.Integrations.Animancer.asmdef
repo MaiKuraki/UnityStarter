@@ -1,0 +1,31 @@
+{
+    "name": "CycloneGames.GameplayFramework.Runtime.Integrations.Animancer",
+    "rootNamespace": "",
+    "references": [
+        "Kybernetik.Animancer",
+        "CycloneGames.GameplayFramework.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "GAMEPLAY_FRAMEWORK_PRESENT",
+        "ANIMANCER_PRESENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.gameplay-framework",
+            "expression": "",
+            "define": "GAMEPLAY_FRAMEWORK_PRESENT"
+        },
+        {
+            "name": "com.kybernetik.animancer",
+            "expression": "",
+            "define": "ANIMANCER_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}
