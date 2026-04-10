@@ -43,6 +43,7 @@ The package is intended for projects that need a reusable gameplay architecture 
     - [DamageType System](#damagetype-system)
     - [World \& WorldSettings](#world--worldsettings)
     - [CameraManager](#cameramanager)
+    - [GameplayAbility Integration with Skill Camera](#gameplayability-integration-with-skill-camera)
     - [PlayerStart](#playerstart)
     - [SpectatorPawn](#spectatorpawn)
     - [KillZVolume](#killzvolume)
@@ -815,7 +816,8 @@ public void SwitchToSpectateTarget(Actor target)
 
 public void EnableCombatCamera()
 {
-    PushCameraMode(new ThirdPersonFollowCameraMode
+    // MyThirdPersonCameraMode is your game-layer CameraMode subclass — see the pattern below
+    PushCameraMode(new MyThirdPersonCameraMode
     {
         FollowDistance = 5.5f,
         PivotHeight = 1.8f,
@@ -830,6 +832,44 @@ public void DisableCombatCamera(CameraMode combatMode)
 }
 ```
 
+**Pattern — Creating a game-layer third-person CameraMode**:
+
+`ThirdPersonFollowCameraMode` in `Samples/Sample.CameraModes` is a reference implementation you can study or copy. For production use, create your own `CameraMode` subclass in your game project layer so the framing parameters belong to your code:
+
+```csharp
+// Assets/Game/Scripts/Camera/MyThirdPersonCameraMode.cs
+using UnityEngine;
+using CycloneGames.GameplayFramework.Runtime;
+
+public sealed class MyThirdPersonCameraMode : CameraMode
+{
+    public float FollowDistance { get; set; } = 4.5f;
+    public float PivotHeight    { get; set; } = 1.6f;
+    public float LookAtHeight   { get; set; } = 1.1f;
+    public float OverrideFov    { get; set; } = 60f;
+
+    public override float BlendDuration => 0.25f;
+
+    public override CameraPose Evaluate(CameraContext context, in CameraPose basePose, float deltaTime)
+    {
+        Actor target = context?.CurrentViewTarget;
+        if (target == null) return basePose;
+
+        target.CalcCamera(deltaTime, out CameraPose targetPose, basePose.Fov);
+
+        Vector3 pivot    = targetPose.Position + Vector3.up * PivotHeight;
+        Vector3 position = pivot + (targetPose.Rotation * Vector3.back) * FollowDistance;
+        Vector3 lookAt   = targetPose.Position + Vector3.up * LookAtHeight;
+        Quaternion rot   = Quaternion.LookRotation((lookAt - position).normalized, Vector3.up);
+        float fov        = OverrideFov > 0f ? OverrideFov : basePose.Fov;
+
+        return new CameraPose(position, rot, fov);
+    }
+}
+```
+
+Add position/rotation lag, angular dead zone, or collision avoidance by extending this base. The `Sample.CameraModes` package includes a full-featured reference (`ThirdPersonFollowCameraMode`, `ThirdPersonCollisionPostProcessor`) that you can import from the Package Manager Samples tab.
+
 **Reference pattern — Composing third-person and skill cameras in the game layer**:
 
 ```csharp
@@ -839,14 +879,16 @@ using CycloneGames.GameplayFramework.Runtime;
 // Game-layer PlayerController extension
 public class MyGamePlayerController : PlayerController
 {
-    private readonly ThirdPersonFollowCameraMode thirdPersonMode = new ThirdPersonFollowCameraMode
-    {
-        FollowDistance = 4.5f,
-        PivotHeight = 1.6f,
-        LookAtHeight = 1.1f,
-        OverrideFov = 60f
-    };
+    // Configure third-person parameters from the Inspector rather than hard-coding them.
+    // MyThirdPersonCameraMode is a plain C# class and cannot be serialized directly,
+    // so intermediate SerializeField values are used and assigned to the instance at possess time.
+    [SerializeField] private float followDistance = 4.5f;
+    [SerializeField] private float pivotHeight    = 1.6f;
+    [SerializeField] private float lookAtHeight   = 1.1f;
+    [SerializeField] private float overrideFov    = 60f;
 
+    // Reuse the same instance to avoid GC allocations on every Possess.
+    private readonly MyThirdPersonCameraMode thirdPersonMode = new MyThirdPersonCameraMode();
     private readonly SkillCameraMode skillMode = new SkillCameraMode();
 
     // Keep framework default neutral and opt into project framing explicitly.
@@ -855,8 +897,27 @@ public class MyGamePlayerController : PlayerController
         return new ViewTargetCameraMode();
     }
 
-    public void EnterGameplayCamera()
+    // Called by the framework when a Pawn is possessed — switch to third-person framing here.
+    protected override void OnPossess(Pawn inPawn)
     {
+        base.OnPossess(inPawn); // calls AutoManageActiveCameraTarget internally
+        EnterGameplayCamera();
+    }
+
+    // Revert to neutral framing when the Pawn is lost (death, spectator, etc.).
+    protected override void OnUnPossess()
+    {
+        base.OnUnPossess();
+        SetBaseCameraMode(new ViewTargetCameraMode());
+    }
+
+    private void EnterGameplayCamera()
+    {
+        // Write Inspector values into the reused instance — supports runtime hot-change.
+        thirdPersonMode.FollowDistance = followDistance;
+        thirdPersonMode.PivotHeight    = pivotHeight;
+        thirdPersonMode.LookAtHeight   = lookAtHeight;
+        thirdPersonMode.OverrideFov    = overrideFov;
         SetBaseCameraMode(thirdPersonMode);
     }
 
@@ -925,6 +986,229 @@ public sealed class SkillCameraMode : CameraMode
 2. Keep framework runtime focused on neutral contracts and extension seams (`ViewTargetCameraMode`, `SetBaseCameraMode`, `PushCameraMode`, `RemoveCameraMode`).
 3. Implement third-person, lock-on, and skill cinematic behavior by composing game-layer `CameraMode` classes.
 4. Reuse `CameraMode` instances for high-frequency skill events to reduce runtime allocations.
+
+### GameplayAbility Integration with Skill Camera
+
+When authoring skills with the GameplayAbility system, camera animations should be coordinated by the Ability using the `CameraMode` stack. This approach provides several benefits:
+
+- **Unified lifecycle**: Push CameraMode on Ability activation, auto-remove on Ability completion
+- **Reusability**: The same camera effect can be reused across multiple abilities
+- **No conflict**: CameraMode and Ability System are fully decoupled
+- **Zero-GC**: Reuse CameraMode instances for high-frequency abilities
+
+**Implementing multi-stage skill camera (example: charge → release-push)**:
+
+```csharp
+// Assets/Game/Scripts/Camera/AbilityCameraClip.cs
+[CreateAssetMenu(menuName = "Game/Ability/AbilityCameraClip")]
+public class AbilityCameraClip : ScriptableObject
+{
+    [System.Serializable]
+    public struct CameraStage
+    {
+        public float duration;               // Stage duration in seconds
+        public AnimationCurve localOffsetX;  // Camera-local right offset
+        public AnimationCurve localOffsetY;  // Camera-local up offset
+        public AnimationCurve localOffsetZ;  // Camera-local forward offset: positive = pull in, negative = push out
+        public AnimationCurve fov;           // FOV curve for this stage
+    }
+
+    [SerializeField] public CameraStage[] stages = new CameraStage[2]
+    {
+        // Stage 1: Charge (pull back + lower)
+        new CameraStage
+        {
+            duration = 0.6f,
+            localOffsetY = AnimationCurve.EaseInOut(0, 0f, 1, -0.35f),
+            localOffsetZ = AnimationCurve.EaseInOut(0, 0f, 1, 1.0f),
+            fov = AnimationCurve.EaseInOut(0, 60f, 1, 54f)
+        },
+        // Stage 2: Release (return to the default follow position)
+        new CameraStage
+        {
+            duration = 0.4f,
+            localOffsetY = AnimationCurve.EaseInOut(0, -0.35f, 1, 0f),
+            localOffsetZ = AnimationCurve.EaseInOut(0, 1.0f, 1, 0f),
+            fov = AnimationCurve.EaseInOut(0, 54f, 1, 60f)
+        }
+    };
+}
+```
+
+```csharp
+// Assets/Game/Scripts/Camera/AbilityCinematicMode.cs
+using UnityEngine;
+using CycloneGames.GameplayFramework.Runtime;
+
+public sealed class AbilityCinematicMode : CameraMode
+{
+    private AbilityCameraClip clip;
+    private float totalElapsed;
+    private int currentStageIndex;
+    private float stageElapsed;
+    private bool finished;
+
+    public bool IsFinished => finished;
+    public override float BlendDuration => 0.15f;
+
+    public void Setup(AbilityCameraClip inClip)
+    {
+        clip = inClip;
+        totalElapsed = 0f;
+        currentStageIndex = 0;
+        stageElapsed = 0f;
+        finished = false;
+    }
+
+    public override void Tick(CameraContext context, float deltaTime)
+    {
+        if (clip == null || clip.stages.Length == 0 || finished) return;
+
+        totalElapsed += deltaTime;
+        stageElapsed += deltaTime;
+
+        // Advance to next stage when current stage duration is exceeded
+        while (currentStageIndex < clip.stages.Length && stageElapsed >= clip.stages[currentStageIndex].duration)
+        {
+            stageElapsed -= clip.stages[currentStageIndex].duration;
+            currentStageIndex++;
+        }
+
+        // All stages complete
+        if (currentStageIndex >= clip.stages.Length)
+        {
+            finished = true;
+        }
+    }
+
+    public override CameraPose Evaluate(CameraContext context, in CameraPose basePose, float deltaTime)
+    {
+        if (clip == null || clip.stages.Length == 0 || currentStageIndex >= clip.stages.Length)
+            return basePose;
+
+        AbilityCameraClip.CameraStage stage = clip.stages[currentStageIndex];
+        float t = stage.duration > 0f ? Mathf.Clamp01(stageElapsed / stage.duration) : 1f;
+
+        // Apply offsets in the current third-person basePose local space.
+        // This means ability camera motion is always relative to the existing gameplay camera,
+        // regardless of the default third-person distance configured by the project.
+        float offsetX = stage.localOffsetX != null ? stage.localOffsetX.Evaluate(t) : 0f;
+        float offsetY = stage.localOffsetY != null ? stage.localOffsetY.Evaluate(t) : 0f;
+        float offsetZ = stage.localOffsetZ != null ? stage.localOffsetZ.Evaluate(t) : 0f;
+        Vector3 localOffset = basePose.Rotation * new Vector3(offsetX, offsetY, offsetZ);
+        Vector3 position = basePose.Position + localOffset;
+
+        float fov = stage.fov.Evaluate(t);
+
+        return new CameraPose(position, basePose.Rotation, fov);
+    }
+}
+```
+
+```csharp
+// Using it in your Ability
+public sealed class PowerStrikeAbility : GameplayAbility
+{
+    [SerializeField] private AbilityCameraClip cameraClip;
+
+    private AbilityCinematicMode cameraModeInstance = new AbilityCinematicMode();
+    private bool isSkillCameraActive;
+
+    protected override void OnActivate()
+    {
+        base.OnActivate();
+
+        // Start ability montage
+        PlayAbilityMontage("PowerStrike");
+
+        StartSkillCamera();
+    }
+
+    protected override void OnAbilityEnds(bool wasCancelled)
+    {
+        StopSkillCamera();
+
+        base.OnAbilityEnds(wasCancelled);
+    }
+
+    private void StartSkillCamera()
+    {
+        if (isSkillCameraActive || cameraClip == null || avatarPawn == null)
+        {
+            return;
+        }
+
+        var playerController = avatarPawn.Controller as PlayerController;
+        if (playerController == null)
+        {
+            return;
+        }
+
+        cameraModeInstance.Setup(cameraClip);
+        if (playerController.TryPushCameraMode(cameraModeInstance))
+        {
+            isSkillCameraActive = true;
+        }
+    }
+
+    private void StopSkillCamera()
+    {
+        if (!isSkillCameraActive || avatarPawn == null)
+        {
+            return;
+        }
+
+        var playerController = avatarPawn.Controller as PlayerController;
+        if (playerController != null && playerController.RemoveCameraMode(cameraModeInstance))
+        {
+            isSkillCameraActive = false;
+        }
+    }
+
+    // Optional: additional camera feedback at specific moments (e.g., damage hit)
+    public void OnDamageHit()
+    {
+        // If needed, trigger screen shake or other PostProcessor feedback here
+    }
+}
+```
+
+**Workflow summary**:
+
+1. **Create `AbilityCameraClip` asset** — Configure camera parameters for each skill (assign to Ability's clip field)
+2. **On Ability activation** → `cameraModeInstance.Setup(cameraClip)` and `PushCameraMode()`
+3. **Each frame** → CameraMode's `Tick()` advances stage progress, `Evaluate()` computes current Pose
+4. **On Ability end** → `RemoveCameraMode()` automatically reverts to the previous CameraMode (typically third-person)
+
+**Important rule for temporary skill cameras**:
+
+- If a `CameraMode` is meant to be removed when the skill ends, its final stage should **converge back to `basePose`**, meaning local offsets return to `0,0,0` and FOV returns to the default follow value.
+- Otherwise, when `RemoveCameraMode()` runs, the camera will visibly snap from an offset pose back to the normal third-person follow pose, which feels like a reset.
+- For that reason, the sample's second stage now returns to the default follow position instead of overshooting to another extra position.
+- If you intentionally want a dramatic overshoot and then settle, add a third `settle-back` stage that smoothly brings all offsets back to `0` before removing the `CameraMode`.
+
+**Common pitfall: why does it get faster every time**:
+
+- `CameraContext` does not automatically deduplicate stacked modes. If the same `CameraMode` instance is pushed multiple times, it will exist in the stack multiple times.
+- `CameraManager` calls `Tick()` and `Evaluate()` once per stacked entry each frame. If the same instance is stacked 2 or 3 times, its internal time advances 2 or 3 times per frame, which looks like the camera animation is accelerating.
+- This usually happens when an Ability is re-triggered, an AnimationEvent fires more than once, or the mode is not successfully removed when the skill ends.
+- The fix is the same as in the sample above: guard with `isSkillCameraActive` so the same instance is pushed only once until it is removed.
+
+**Synchronization with animation**:
+
+Align the **animation montage length** with **total stage durations**. For example, if the montage is 1.0 second and consists of 0.6s charge + 0.4s release, both timelines stay naturally synchronized.
+
+**Position vs FOV**:
+
+- **Position** changes the real spatial relationship between the camera and the character. It produces stronger perspective, occlusion, and acceleration cues. If you want the camera to physically push toward the character and then return to the default follow distance, Position should be the primary tool.
+- **FOV** changes lens language rather than true distance. It is better for emphasis, pressure, focus, or release, but by itself it can feel like numerical zoom rather than a physical camera move.
+- **Recommended for action games**: use small-to-medium Position offsets as the primary effect, then layer in a moderate FOV change as seasoning. That usually gives the most convincing sense of power without hurting readability.
+- If you want a pure dolly-in without changing FOV, animate only `localOffsetY/Z`. For the current third-person basePose, `localOffsetZ > 0` moves the camera forward toward the target, while `localOffsetZ < 0` moves it backward away from the target. If the mode will be removed at skill end, make sure the final curve returns to `0` so the camera naturally settles back to the default follow pose.
+
+For event-driven camera feedback at specific points (e.g., damage hit), you can:
+
+- Use AnimationEvent to call a method on the Ability (e.g., `OnDamageHit()`)
+- That method can temporarily register an `ICameraPostProcessor` for screen shake or other effects
 
 **Note**: `ThirdPersonFollowCameraMode`, `FirstPersonCameraMode`, and `OrbitalCameraMode` are optional reference implementations and are now located in `Samples/Sample.CameraModes`. The runtime core contract remains centered on `ViewTargetCameraMode`, `CameraMode`, and the camera stack APIs.
 
