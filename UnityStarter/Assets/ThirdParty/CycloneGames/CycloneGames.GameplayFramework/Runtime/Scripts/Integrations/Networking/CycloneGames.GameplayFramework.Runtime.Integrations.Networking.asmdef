@@ -1,0 +1,31 @@
+{
+    "name": "CycloneGames.GameplayFramework.Runtime.Integrations.Networking",
+    "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Integrations.Networking",
+    "references": [
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.Networking.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "GAMEPLAY_FRAMEWORK_PRESENT",
+        "NETWORKING_PRESENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.gameplay-framework",
+            "expression": "",
+            "define": "GAMEPLAY_FRAMEWORK_PRESENT"
+        },
+        {
+            "name": "com.cyclone-games.networking",
+            "expression": "",
+            "define": "NETWORKING_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}

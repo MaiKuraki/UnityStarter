@@ -1,0 +1,31 @@
+{
+    "name": "CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities",
+    "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities",
+    "references": [
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayAbilities.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "GAMEPLAY_FRAMEWORK_PRESENT",
+        "GAMEPLAY_ABILITIES_PRESENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.gameplay-framework",
+            "expression": "",
+            "define": "GAMEPLAY_FRAMEWORK_PRESENT"
+        },
+        {
+            "name": "com.cyclone-games.gameplay-abilities",
+            "expression": "",
+            "define": "GAMEPLAY_ABILITIES_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}
