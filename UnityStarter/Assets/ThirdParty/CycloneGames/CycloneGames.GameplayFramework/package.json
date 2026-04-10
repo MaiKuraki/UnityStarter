@@ -25,8 +25,8 @@
   },
   "samples": [
     {
-      "displayName": "Gameplay Framework Sample",
-      "description": "Gameplay Framework Sample",
+      "displayName": "Gameplay Framework Samples",
+      "description": "All samples under the Samples folder.",
       "path": "Samples"
     }
   ]
