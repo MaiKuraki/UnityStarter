@@ -95,11 +95,20 @@ namespace CycloneGames.GameplayFramework.Runtime
             return new CycloneGames.GameplayFramework.Runtime.ViewTargetCameraMode();
         }
 
+        /// <summary>
+        /// Maximum number of stacked CameraModes in <see cref="CycloneGames.GameplayFramework.Runtime.CameraContext"/>.
+        /// Override in project layer for camera-heavy games.
+        /// </summary>
+        protected virtual int GetCameraModeStackCapacity()
+        {
+            return 8;
+        }
+
         private void EnsureCameraContextCreated()
         {
             if (cameraContext != null) return;
 
-            cameraContext = new CycloneGames.GameplayFramework.Runtime.CameraContext(this);
+            cameraContext = new CycloneGames.GameplayFramework.Runtime.CameraContext(this, GetCameraModeStackCapacity());
             cameraContext.SetViewTargetPolicy(CreateDefaultViewTargetPolicy());
             cameraContext.SetBaseCameraMode(CreateDefaultCameraMode());
             cameraContext.SetResolvedViewTarget(GetAutoManagedViewTarget());
@@ -124,8 +133,36 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             if (cameraMode == null) return;
 
-            GetCameraContext().PushCameraMode(cameraMode);
-            cameraManager?.NotifyCameraStateChanged();
+            if (GetCameraContext().TryPushCameraMode(cameraMode))
+            {
+                cameraManager?.NotifyCameraStateChanged();
+            }
+        }
+
+        public virtual bool TryPushCameraMode(CycloneGames.GameplayFramework.Runtime.CameraMode cameraMode)
+        {
+            if (cameraMode == null) return false;
+
+            bool pushed = GetCameraContext().TryPushCameraMode(cameraMode);
+            if (pushed)
+            {
+                cameraManager?.NotifyCameraStateChanged();
+            }
+
+            return pushed;
+        }
+
+        public virtual bool TryPushOrReplaceOldestCameraMode(CycloneGames.GameplayFramework.Runtime.CameraMode cameraMode)
+        {
+            if (cameraMode == null) return false;
+
+            bool applied = GetCameraContext().TryPushOrReplaceOldest(cameraMode);
+            if (applied)
+            {
+                cameraManager?.NotifyCameraStateChanged();
+            }
+
+            return applied;
         }
 
         public virtual bool RemoveCameraMode(CycloneGames.GameplayFramework.Runtime.CameraMode cameraMode)
