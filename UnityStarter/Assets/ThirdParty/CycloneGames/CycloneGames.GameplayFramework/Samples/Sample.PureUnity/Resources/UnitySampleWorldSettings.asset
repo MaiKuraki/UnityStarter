@@ -14,13 +14,31 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   gameModeClass: {fileID: 5441401193615185144, guid: fa506f2a75318d047805357c754a5529,
     type: 3}
+  gameModeSource: 0
+  gameModeAssetLocation: 
+  gameModeAssetGuid: 
   playerControllerClass: {fileID: 6624734826815063554, guid: 7fa6440aaf52cd242a7a336dcb4d1b16,
     type: 3}
+  playerControllerSource: 0
+  playerControllerAssetLocation: 
+  playerControllerAssetGuid: 
   pawnClass: {fileID: 1320795803974720323, guid: 68ce904ec701fa244ae9b6293603b3ca,
     type: 3}
+  pawnSource: 0
+  pawnAssetLocation: 
+  pawnAssetGuid: 
   playerStateClass: {fileID: 2294852402867437646, guid: 5f32b3dc971e3ca4089bda68cfed9ea1,
     type: 3}
+  playerStateSource: 0
+  playerStateAssetLocation: 
+  playerStateAssetGuid: 
   cameraManagerClass: {fileID: 5629420044122895474, guid: b4d721692cc08944a8bde5c2d8258887,
     type: 3}
+  cameraManagerSource: 0
+  cameraManagerAssetLocation: 
+  cameraManagerAssetGuid: 
   spectatorPawnClass: {fileID: 1587810061556121190, guid: 2037c07e2d6e4bf4ea65b9bde5b7061f,
     type: 3}
+  spectatorPawnSource: 0
+  spectatorPawnAssetLocation: 
+  spectatorPawnAssetGuid: 

@@ -24,7 +24,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Sample.PureUnity
                 CLogger.LogError("Invalid prefab to spawn");
                 return null;
             }
-            
+
             return UnityEngine.Object.Instantiate(origin, parent);
         }
     }
