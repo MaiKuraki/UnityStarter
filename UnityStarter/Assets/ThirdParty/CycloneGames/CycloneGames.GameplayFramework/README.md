@@ -760,6 +760,25 @@ Pawn pawn = world.GetPlayerPawn();
 
 **Requirements**: Main Camera must have `CinemachineBrain`. At least one `CinemachineCamera` must exist in the scene.
 
+**Setup guidance (recommended)**:
+
+1. Set `Bootstrap Virtual Camera` on the `CameraManager` prefab (typically the same object's `CinemachineCamera`).
+2. `Bootstrap Brain` is optional:
+   - If `CameraManager` is scene-placed, you can drag the scene `MainCamera`'s `CinemachineBrain` directly.
+   - If `CameraManager` is runtime-spawned (common), prefab assets cannot hold scene references. This is expected. Bind at runtime via `SetBootstrapBrain(...)`, or call `TryResolveAndBindBrain()` for auto-discovery.
+3. If your scene has multiple `CinemachineBrain` instances, prefer explicit binding to avoid ambiguity.
+
+**Runtime binding API**:
+
+- `SetBootstrapBrain(CinemachineBrain brain, bool rebindImmediately = true)`
+- `SetBootStartpBrain(...)` (backward-compatible alias)
+- `TryResolveAndBindBrain()`
+
+**Behavior when no Brain is present**:
+
+- `CameraManager` still evaluates `CameraPose`, but final camera output is not driven (a warning is logged).
+- Core gameplay can continue, but camera-module features will not be visible.
+
 **Key API**: `InitializeFor(PlayerController)`, `UpdateCamera(float)`, `NotifyCameraStateChanged()`, `SetActiveVirtualCamera()`, `SetFOV(float)`.
 
 **Extended camera hooks**:
@@ -1358,6 +1377,20 @@ public class SimpleObjectSpawner : IUnityObjectSpawner
 1. Add a `PlayerStart` component to an empty GameObject and position it.
 2. Ensure the Main Camera has `CinemachineBrain` and the scene has at least one `CinemachineCamera`.
 3. Add the `GameBootstrap` component to a GameObject and assign your `WorldSettings`.
+
+If `CameraManager` is runtime-spawned and you want deterministic Brain binding, set it explicitly at runtime:
+
+```csharp
+var pc = gameMode.GetPlayerController();
+var cm = pc != null ? pc.GetCameraManager() : null;
+if (cm != null)
+{
+    var brain = Camera.main != null ? Camera.main.GetComponent<CinemachineBrain>() : null;
+    cm.SetBootstrapBrain(brain, rebindImmediately: true);
+}
+```
+
+For multi-camera or multi-brain projects, avoid relying on `Camera.main`; inject the exact target `CinemachineBrain` from your own camera routing layer.
 
 #### 5. Validate the startup flow
 

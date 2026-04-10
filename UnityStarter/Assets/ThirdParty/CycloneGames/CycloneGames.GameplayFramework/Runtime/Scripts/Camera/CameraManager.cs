@@ -10,6 +10,8 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         [SerializeField] protected float DefaultFOV = 60.0f;
         [SerializeField] private float defaultBlendDuration = 0.15f;
+        [SerializeField] private CinemachineCamera bootstrapVirtualCamera;
+        [SerializeField] private CinemachineBrain bootstrapBrain;
 
         public CinemachineCamera ActiveVirtualCamera { get; private set; }
         public float DefaultBlendDuration => defaultBlendDuration;
@@ -23,6 +25,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         public Actor LastViewTarget => lastViewTarget;
         public CameraMode LastPrimaryMode => lastPrimaryMode;
         public CameraBlendState BlendState => blendState;
+        public CinemachineBrain ActiveBrain => activeBrain;
 
         private PlayerController PCOwner;
         public PlayerController OwnerController => PCOwner;
@@ -42,6 +45,17 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         // Cached to avoid FindObjectsByType GC allocation on every initialization
         private static CinemachineCamera[] s_cameraBuffer;
+        private static CinemachineBrain[] s_brainBuffer;
+
+        // Brain reference kept so we can drive ManualUpdate and restore on destroy
+        private CinemachineBrain activeBrain;
+        private CinemachineBrain.UpdateMethods previousBrainUpdateMethod;
+        private bool hasBrainUpdateMethodSnapshot;
+
+        // Fixed-capacity array keeps registration allocation-free after construction.
+        private const int MAX_POST_PROCESSORS = 16;
+        private readonly ICameraPostProcessor[] postProcessors = new ICameraPostProcessor[MAX_POST_PROCESSORS];
+        private int postProcessorCount;
 
         public virtual void SetActiveVirtualCamera(CinemachineCamera newActiveCamera)
         {
@@ -51,6 +65,40 @@ namespace CycloneGames.GameplayFramework.Runtime
                 ActiveVirtualCamera.Follow = null;
                 ActiveVirtualCamera.LookAt = null;
             }
+        }
+
+        /// <summary>
+        /// Set the preferred CinemachineBrain for this manager.
+        /// Useful when CameraManager is instantiated at runtime and cannot serialize scene references.
+        /// </summary>
+        public virtual void SetBootstrapBrain(CinemachineBrain brain, bool rebindImmediately = true)
+        {
+            bootstrapBrain = brain;
+            if (!rebindImmediately) return;
+
+            // If explicit brain is null, fall back to runtime discovery.
+            BindBrain(bootstrapBrain != null ? bootstrapBrain : ResolveCinemachineBrain());
+        }
+
+        /// <summary>
+        /// Backward-compatible typo alias kept for API discoverability.
+        /// </summary>
+        public virtual void SetBootStartpBrain(CinemachineBrain brain, bool rebindImmediately = true)
+        {
+            SetBootstrapBrain(brain, rebindImmediately);
+        }
+
+        /// <summary>
+        /// Re-resolve a CinemachineBrain using current discovery rules and bind it immediately.
+        /// Returns false when no brain could be resolved.
+        /// </summary>
+        public virtual bool TryResolveAndBindBrain()
+        {
+            CinemachineBrain resolved = ResolveCinemachineBrain();
+            if (resolved == null) return false;
+
+            BindBrain(resolved);
+            return true;
         }
 
         public virtual void SetFOV(float NewFOV)
@@ -119,20 +167,21 @@ namespace CycloneGames.GameplayFramework.Runtime
             lockedFOV = DefaultFOV;
             hasExplicitFovOverride = false;
 
+            BindBrain(ResolveCinemachineBrain());
+
             if (ActiveVirtualCamera == null)
             {
-                var mainCam = Camera.main;
-                if (mainCam != null)
+                if (bootstrapVirtualCamera != null)
                 {
-                    var brain = mainCam.GetComponent<CinemachineBrain>();
-                    if (brain != null)
+                    SetActiveVirtualCamera(bootstrapVirtualCamera);
+                }
+                else
+                {
+                    // Reuse static buffer to avoid repeated GC from FindObjectsByType.
+                    s_cameraBuffer = FindObjectsByType<CinemachineCamera>(FindObjectsSortMode.None);
+                    if (s_cameraBuffer != null && s_cameraBuffer.Length > 0)
                     {
-                        // Reuse static buffer to avoid GC from FindObjectsByType
-                        s_cameraBuffer = FindObjectsByType<CinemachineCamera>(FindObjectsSortMode.None);
-                        if (s_cameraBuffer != null && s_cameraBuffer.Length > 0)
-                        {
-                            SetActiveVirtualCamera(s_cameraBuffer[0]);
-                        }
+                        SetActiveVirtualCamera(s_cameraBuffer[0]);
                     }
                 }
             }
@@ -141,6 +190,91 @@ namespace CycloneGames.GameplayFramework.Runtime
             PendingViewTargetTF = currentViewTarget != null ? currentViewTarget.transform : PlayerController?.transform;
             NotifyCameraStateChanged();
             IsInitialized = true;
+        }
+
+        private void BindBrain(CinemachineBrain newBrain)
+        {
+            if (ReferenceEquals(activeBrain, newBrain))
+            {
+                if (activeBrain != null)
+                {
+                    activeBrain.UpdateMethod = CinemachineBrain.UpdateMethods.ManualUpdate;
+                }
+                return;
+            }
+
+            RestoreActiveBrainUpdateMethod();
+
+            activeBrain = newBrain;
+            if (activeBrain == null)
+            {
+                return;
+            }
+
+            // Take ownership of update timing so our pose write and Brain read
+            // happen in a deterministic order within the same LateUpdate.
+            previousBrainUpdateMethod = activeBrain.UpdateMethod;
+            hasBrainUpdateMethodSnapshot = true;
+            activeBrain.UpdateMethod = CinemachineBrain.UpdateMethods.ManualUpdate;
+        }
+
+        private void RestoreActiveBrainUpdateMethod()
+        {
+            if (activeBrain != null && hasBrainUpdateMethodSnapshot)
+            {
+                activeBrain.UpdateMethod = previousBrainUpdateMethod;
+            }
+
+            hasBrainUpdateMethodSnapshot = false;
+        }
+
+        private CinemachineBrain ResolveCinemachineBrain()
+        {
+            if (bootstrapBrain != null)
+            {
+                return bootstrapBrain;
+            }
+
+            if (ActiveVirtualCamera != null)
+            {
+                CinemachineBrain vcamBrain = ActiveVirtualCamera.GetComponentInParent<CinemachineBrain>();
+                if (vcamBrain != null)
+                {
+                    return vcamBrain;
+                }
+            }
+
+            s_brainBuffer = FindObjectsByType<CinemachineBrain>(FindObjectsSortMode.None);
+            if (s_brainBuffer == null || s_brainBuffer.Length <= 0)
+            {
+                CLogger.LogWarning($"{DEBUG_FLAG} No CinemachineBrain found. Camera output will not be driven.");
+                return null;
+            }
+
+            CinemachineBrain chosen = null;
+            for (int i = 0; i < s_brainBuffer.Length; i++)
+            {
+                CinemachineBrain brain = s_brainBuffer[i];
+                if (brain == null) continue;
+                if (!brain.isActiveAndEnabled) continue;
+                if (!brain.gameObject.activeInHierarchy) continue;
+
+                chosen = brain;
+                break;
+            }
+
+            if (chosen == null)
+            {
+                chosen = s_brainBuffer[0];
+            }
+
+            if (s_brainBuffer.Length > 1)
+            {
+                CLogger.LogWarning($"{DEBUG_FLAG} Multiple CinemachineBrain instances detected ({s_brainBuffer.Length}). " +
+                                   $"Using '{chosen.name}'. Assign Bootstrap Brain for deterministic binding.");
+            }
+
+            return chosen;
         }
 
         public virtual void UpdateCamera(float deltaTime)
@@ -223,6 +357,14 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
             }
 
+            // Post-processors run after all CameraModes (e.g. collision avoidance, screen shake)
+            for (int i = 0; i < postProcessorCount; i++)
+            {
+                ICameraPostProcessor proc = postProcessors[i];
+                if (proc != null)
+                    desiredPose = proc.Process(desiredPose, context, deltaTime);
+            }
+
             if (hasExplicitFovOverride)
             {
                 desiredPose.Fov = lockedFOV;
@@ -243,10 +385,55 @@ namespace CycloneGames.GameplayFramework.Runtime
             transform.SetPositionAndRotation(pose.Position, pose.Rotation);
             if (ActiveVirtualCamera != null)
             {
-                ActiveVirtualCamera.Follow = null;
-                ActiveVirtualCamera.LookAt = null;
                 ActiveVirtualCamera.transform.SetPositionAndRotation(pose.Position, pose.Rotation);
                 ActiveVirtualCamera.Lens.FieldOfView = pose.Fov;
+            }
+
+            // Trigger Brain after we have written the final VCam pose, guaranteeing
+            // the Brain always reads the pose we just set — no frame-behind artefacts.
+            activeBrain?.ManualUpdate();
+        }
+
+        /// <summary>Add a post-processor to the evaluation chain. No-op if already registered.</summary>
+        public void RegisterPostProcessor(ICameraPostProcessor processor)
+        {
+            if (processor == null) return;
+
+            for (int i = 0; i < postProcessorCount; i++)
+            {
+                if (ReferenceEquals(postProcessors[i], processor))
+                {
+                    return;
+                }
+            }
+
+            if (postProcessorCount >= MAX_POST_PROCESSORS)
+            {
+                CLogger.LogWarning($"{DEBUG_FLAG} Max post-processors reached ({MAX_POST_PROCESSORS}).");
+                return;
+            }
+
+            postProcessors[postProcessorCount++] = processor;
+        }
+
+        /// <summary>Remove a previously registered post-processor.</summary>
+        public void UnregisterPostProcessor(ICameraPostProcessor processor)
+        {
+            if (processor == null) return;
+
+            for (int i = 0; i < postProcessorCount; i++)
+            {
+                if (!ReferenceEquals(postProcessors[i], processor)) continue;
+
+                int moveCount = postProcessorCount - i - 1;
+                if (moveCount > 0)
+                {
+                    System.Array.Copy(postProcessors, i + 1, postProcessors, i, moveCount);
+                }
+
+                postProcessorCount--;
+                postProcessors[postProcessorCount] = null;
+                return;
             }
         }
 
@@ -264,6 +451,15 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         protected override void OnDestroy()
         {
+            // Restore Brain to autonomous update so it keeps working after this
+            // CameraManager is destroyed (e.g. during scene reload).
+            RestoreActiveBrainUpdateMethod();
+            activeBrain = null;
+            for (int i = 0; i < postProcessorCount; i++)
+            {
+                postProcessors[i] = null;
+            }
+            postProcessorCount = 0;
             lastViewTarget = null;
             lastPrimaryMode = null;
             PendingViewTargetTF = null;

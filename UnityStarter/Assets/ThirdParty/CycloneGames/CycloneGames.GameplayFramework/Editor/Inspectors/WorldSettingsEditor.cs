@@ -90,6 +90,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             {
                 EditorGUILayout.BeginVertical(GUI.skin.box);
                 InspectorUiUtility.DrawSectionHeader("Configuration Status", "Direct references remain supported. Asset reference mode stores location strings and resolves them at runtime through CycloneGames.AssetManagement when available.", new Color(0.42f, 0.78f, 1f, 1f));
+                DrawRequirementLegend();
                 DrawValidationStatus("GameMode", ws.HasConfiguredGameMode, true, ws.GameModeSource);
                 DrawValidationStatus("PlayerController", ws.HasConfiguredPlayerController, true, ws.PlayerControllerSource);
                 DrawValidationStatus("Pawn", ws.HasConfiguredPawn, true, ws.PawnSource);
@@ -126,7 +127,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 bool valid = ws.Validate();
                 if (valid)
                 {
-                    Debug.Log($"[WorldSettings] '{ws.name}': All required references are assigned.");
+                    Debug.Log($"[WorldSettings] '{ws.name}': Required references are valid. Optional references (PlayerState/CameraManager/SpectatorPawn) may be left empty.");
                 }
             }
 
@@ -168,6 +169,15 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField(label, EditorStyles.boldLabel);
+            if (!required)
+            {
+                EditorGUILayout.HelpBox($"{label} is optional. Leaving it empty will not block core gameplay framework initialization.", MessageType.Info);
+
+                if (label == "CameraManager")
+                {
+                    EditorGUILayout.HelpBox("CameraManager is optional by design (similar to Unreal-style setups). If left empty, gameplay logic can still run but this camera module will not drive view blending/poses.", MessageType.None);
+                }
+            }
 
             WorldSettingsReferenceSource source = (WorldSettingsReferenceSource)sourceProp.enumValueIndex;
             EditorGUILayout.BeginHorizontal();
@@ -209,6 +219,11 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(4f);
+        }
+
+        private static void DrawRequirementLegend()
+        {
+            EditorGUILayout.HelpBox("Legend: Required entries must be configured to boot the gameplay loop. Optional entries may be omitted depending on your project architecture.", MessageType.None);
         }
 
         private void DrawAssetReferenceField<T>(SerializedProperty assetLocationProp, SerializedProperty assetGuidProp, bool assetManagementAvailable) where T : Object
