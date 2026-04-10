@@ -760,6 +760,25 @@ Pawn pawn = world.GetPlayerPawn();
 
 **前提**：主摄像机需要 `CinemachineBrain`。场景中至少需要一个 `CinemachineCamera`。
 
+**配置要点（推荐）**：
+
+1. `CameraManager` 预制体上设置 `Bootstrap Virtual Camera`（通常拖同物体上的 `CinemachineCamera`）。
+2. `Bootstrap Brain` 可选：
+   - 若 `CameraManager` 是场景内预放对象，可直接拖场景 `MainCamera` 上的 `CinemachineBrain`。
+   - 若 `CameraManager` 是运行时生成对象（常见），预制体无法直接持有场景引用，这是正常现象。可在运行时调用 `SetBootstrapBrain(...)` 显式绑定，或调用 `TryResolveAndBindBrain()` 自动解析。
+3. 如果场景中有多个 `CinemachineBrain`，建议始终显式绑定，避免歧义。
+
+**运行时绑定 API**：
+
+- `SetBootstrapBrain(CinemachineBrain brain, bool rebindImmediately = true)`
+- `SetBootStartpBrain(...)`（兼容别名）
+- `TryResolveAndBindBrain()`
+
+**无 Brain 时的行为**：
+
+- `CameraManager` 仍会计算 `CameraPose`，但不会驱动最终输出相机（会打印警告）。
+- 框架 Gameplay 主逻辑可继续运行，但 Camera 模块效果不会生效。
+
 **核心 API**：`InitializeFor(PlayerController)`、`UpdateCamera(float)`、`NotifyCameraStateChanged()`、`SetActiveVirtualCamera()`、`SetFOV(float)`。
 
 **扩展后的相机接缝**：
@@ -1358,6 +1377,20 @@ public class SimpleObjectSpawner : IUnityObjectSpawner
 1. 在空 GameObject 上添加 `PlayerStart` 组件并定位。
 2. 确保主摄像机有 `CinemachineBrain`，场景中有至少一个 `CinemachineCamera`。
 3. 在 GameObject 上添加 `GameBootstrap` 组件并分配你的 `WorldSettings`。
+
+如果 `CameraManager` 是运行时生成，且你希望固定绑定某个 Brain，可在运行时显式设置：
+
+```csharp
+var pc = gameMode.GetPlayerController();
+var cm = pc != null ? pc.GetCameraManager() : null;
+if (cm != null)
+{
+    var brain = Camera.main != null ? Camera.main.GetComponent<CinemachineBrain>() : null;
+    cm.SetBootstrapBrain(brain, rebindImmediately: true);
+}
+```
+
+如为多相机/多 Brain 项目，建议不要依赖 `Camera.main`，而是通过你自己的相机路由系统传入目标 `CinemachineBrain`。
 
 #### 5. 验证启动流程
 
