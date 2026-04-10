@@ -121,5 +121,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   initialLifeSpanSec: 0
-  VirtualCamera: {fileID: 8359560675816526690}
+  bCanBeDamaged: 1
+  bHidden: 0
+  tags: []
   DefaultFOV: 60
+  defaultBlendDuration: 0.15
+  bootstrapVirtualCamera: {fileID: 8359560675816526690}

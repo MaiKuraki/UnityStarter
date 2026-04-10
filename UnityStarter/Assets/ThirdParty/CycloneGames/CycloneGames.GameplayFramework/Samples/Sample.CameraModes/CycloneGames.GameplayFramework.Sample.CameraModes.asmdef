@@ -2,7 +2,8 @@
     "name": "CycloneGames.GameplayFramework.Sample.CameraModes",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.GameplayFramework.Runtime"
+        "CycloneGames.GameplayFramework.Runtime",
+        "Unity.Mathematics"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
