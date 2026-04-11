@@ -1,4 +1,4 @@
-﻿# Unity 项目启动模板
+﻿![Unity Project Starter](<https://capsule-render.vercel.app/api?type=waving&height=220&color=gradient&text=Unity%20Project%20Starter&section=header&reversal=false&textBg=false&desc=GameplayFramework%20│%20GameplayAbility(GAS)%20│%20UIFramework%20│%20HotUpdate%20Ready%20(HybridCLR)%20│%20CI/CD%20Ready&descAlign=50&descAlignY=58&descSize=16&fontAlignY=30&fontSize=72&strokeWidth=1&stroke=ff00ff>)
 
 一个生产就绪、模块化的 Unity 项目模板，为游戏开发提供坚实的基础。借鉴**虚幻引擎**架构模式，本模板集成了经过验证的游戏系统、高性能基础设施和现代开发工作流。
 
