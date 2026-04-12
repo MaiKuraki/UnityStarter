@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.Foundation2D.Runtime",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.Logger",
+        "Unity.Burst"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.burst",
+            "expression": "",
+            "define": "BURST_JOBS"
+        }
+    ],
+    "noEngineReferences": false
+}
