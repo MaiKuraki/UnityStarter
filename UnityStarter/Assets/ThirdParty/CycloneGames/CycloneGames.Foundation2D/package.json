@@ -1,0 +1,29 @@
+{
+  "name": "com.cyclone-games.foundation2d",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Foundation2D",
+  "description": "CycloneGames Foundation2D",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.logger": "1.0.0",
+    "com.cyclone-games.factory": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Foundation",
+    "2D"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": [
+    {
+      "displayName": "Pure C# Benchmarks",
+      "description": "Performance benchmarks for pure C# factory and object pooling scenarios",
+      "path": "Samples"
+    }
+  ]
+}
