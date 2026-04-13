@@ -1,0 +1,18 @@
+{
+    "name": "CycloneGames.Foundation2D.Editor",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.Foundation2D.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
