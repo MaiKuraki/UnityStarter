@@ -74,12 +74,18 @@ namespace CycloneGames.Foundation2D.Runtime
 
         private void OnEnable()
         {
+            SpriteSequenceBurstManager.RegisterKnownController(this);
             _loggedBurstFallbackWarning = false;
             _speedRangeWarningIssued = false;
             if (playOnEnable)
             {
                 Play();
             }
+        }
+
+        private void OnDisable()
+        {
+            SpriteSequenceBurstManager.UnregisterKnownController(this);
         }
 
         private void Update()

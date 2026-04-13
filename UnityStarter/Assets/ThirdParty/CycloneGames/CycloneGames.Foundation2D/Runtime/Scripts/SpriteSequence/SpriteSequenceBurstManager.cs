@@ -31,6 +31,7 @@ namespace CycloneGames.Foundation2D.Runtime
     public sealed class SpriteSequenceBurstManager : MonoBehaviour
     {
         private static readonly Dictionary<SpriteSequenceController, int> ManagedRefCounts = new(256);
+        private static readonly HashSet<SpriteSequenceController> KnownControllers = new(512);
         private static int _activeManagerCount;
 
         public static bool HasActiveManager => _activeManagerCount > 0;
@@ -45,8 +46,33 @@ namespace CycloneGames.Foundation2D.Runtime
             return ManagedRefCounts.TryGetValue(controller, out int refCount) && refCount > 0;
         }
 
+        public static void RegisterKnownController(SpriteSequenceController controller)
+        {
+            if (controller == null)
+            {
+                return;
+            }
+
+            KnownControllers.Add(controller);
+        }
+
+        public static void UnregisterKnownController(SpriteSequenceController controller)
+        {
+            if (controller == null)
+            {
+                return;
+            }
+
+            KnownControllers.Remove(controller);
+        }
+
         [SerializeField] private List<SpriteSequenceController> controllers = new();
         [SerializeField] private bool autoCollectChildren = true;
+        [SerializeField, Min(0f)] private float emptyRefreshIntervalSeconds = 0.5f;
+        [SerializeField] private bool useKnownControllerRegistry = true;
+        [SerializeField] private bool enableGlobalFindFallback = true;
+        [SerializeField, Min(1)] private int jobBatchSize = 32;
+        [SerializeField, Min(1)] private int minParallelJobCount = 32;
 
         private sealed class JobBuffer
         {
@@ -63,10 +89,12 @@ namespace CycloneGames.Foundation2D.Runtime
         private readonly JobBuffer[] _buffers = { new JobBuffer(), new JobBuffer() };
         private int _writeBufferIndex;
         private readonly HashSet<SpriteSequenceController> _registeredControllers = new(256);
+        private float _nextAutoRefreshTime;
 
         private void OnEnable()
         {
             _activeManagerCount++;
+            _nextAutoRefreshTime = 0f;
             RefreshControllers();
             EnsureCapacity(_buffers[0], controllers.Count);
             EnsureCapacity(_buffers[1], controllers.Count);
@@ -88,9 +116,14 @@ namespace CycloneGames.Foundation2D.Runtime
         {
             if (autoCollectChildren && (controllers == null || controllers.Count == 0))
             {
-                RefreshControllers();
-                EnsureCapacity(_buffers[0], controllers.Count);
-                EnsureCapacity(_buffers[1], controllers.Count);
+                float now = Time.unscaledTime;
+                if (now >= _nextAutoRefreshTime)
+                {
+                    RefreshControllers();
+                    EnsureCapacity(_buffers[0], controllers.Count);
+                    EnsureCapacity(_buffers[1], controllers.Count);
+                    _nextAutoRefreshTime = now + Mathf.Max(0f, emptyRefreshIntervalSeconds);
+                }
             }
 
             int count = controllers.Count;
@@ -113,6 +146,12 @@ namespace CycloneGames.Foundation2D.Runtime
                 return;
             }
 
+            if (writeBuffer.Count < minParallelJobCount)
+            {
+                ProcessInline(writeBuffer);
+                return;
+            }
+
             EnsureCapacity(writeBuffer, writeBuffer.Count);
 
             for (int i = 0; i < writeBuffer.Count; i++)
@@ -123,9 +162,9 @@ namespace CycloneGames.Foundation2D.Runtime
             }
 
 #if UNITY_2020_2_OR_NEWER
-            double now = Time.timeAsDouble;
+            double nowTime = Time.timeAsDouble;
 #else
-        double now = Time.time;
+            double nowTime = Time.time;
 #endif
 
             var job = new SpriteSequenceBatchUpdateJob
@@ -133,10 +172,10 @@ namespace CycloneGames.Foundation2D.Runtime
                 States = writeBuffer.States,
                 FrameChanged = writeBuffer.Changed,
                 DeltaTimes = writeBuffer.Deltas,
-                NowTime = now
+                NowTime = nowTime
             };
 
-            writeBuffer.Handle = job.Schedule(writeBuffer.Count, 32);
+            writeBuffer.Handle = job.Schedule(writeBuffer.Count, jobBatchSize);
             writeBuffer.Scheduled = true;
             _writeBufferIndex = readBufferIndex;
         }
@@ -146,10 +185,21 @@ namespace CycloneGames.Foundation2D.Runtime
             controllers.Clear();
             GetComponentsInChildren(true, controllers);
 
-            if (controllers.Count == 0)
+            if (controllers.Count == 0 && useKnownControllerRegistry)
+            {
+                foreach (var c in KnownControllers)
+                {
+                    if (c != null)
+                    {
+                        controllers.Add(c);
+                    }
+                }
+            }
+
+            if (controllers.Count == 0 && enableGlobalFindFallback)
             {
 #if UNITY_2023_1_OR_NEWER
-            var allControllers = FindObjectsByType<SpriteSequenceController>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+                var allControllers = FindObjectsByType<SpriteSequenceController>(FindObjectsInactive.Include, FindObjectsSortMode.None);
 #else
                 var allControllers = FindObjectsOfType<SpriteSequenceController>(true);
 #endif
@@ -160,6 +210,32 @@ namespace CycloneGames.Foundation2D.Runtime
             }
 
             RegisterManagedControllers();
+        }
+
+        private void ProcessInline(JobBuffer buffer)
+        {
+#if UNITY_2020_2_OR_NEWER
+            double nowTime = Time.timeAsDouble;
+#else
+            double nowTime = Time.time;
+#endif
+
+            for (int i = 0; i < buffer.Count; i++)
+            {
+                SpriteSequenceController c = buffer.Controllers[i];
+                if (c == null || !c.IsBurstDriven)
+                {
+                    continue;
+                }
+
+                SpriteSequencePlaybackState state = c.GetPlaybackState();
+                double delta = c.IgnoreTimeScale ? Time.unscaledDeltaTime : Time.deltaTime;
+                bool changed = state.Update(delta, nowTime);
+                c.SetPlaybackStateFromJob(state, changed);
+            }
+
+            buffer.Count = 0;
+            buffer.Controllers.Clear();
         }
 
         private void CollectActiveControllerSnapshot(JobBuffer buffer, int controllerCount)
@@ -312,5 +388,14 @@ namespace CycloneGames.Foundation2D.Runtime
 
             _registeredControllers.Clear();
         }
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            emptyRefreshIntervalSeconds = Mathf.Max(0f, emptyRefreshIntervalSeconds);
+            jobBatchSize = Mathf.Max(1, jobBatchSize);
+            minParallelJobCount = Mathf.Max(1, minParallelJobCount);
+        }
+#endif
     }
 }
