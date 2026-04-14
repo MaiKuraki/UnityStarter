@@ -50,8 +50,18 @@ namespace CycloneGames.UIFramework.Runtime
         private CanvasGroup canvasGroup;
         private string sourceAssetPath;
         public System.Action<string> OnReleaseAssetReference;
+        private bool isSceneBound;
+        private int boundSceneHandle = -1;
 
         public void SetSourceAssetPath(string path) => sourceAssetPath = path;
+        public bool IsSceneBound => isSceneBound;
+        public int BoundSceneHandle => boundSceneHandle;
+
+        public void ConfigureSceneBinding(bool sceneBound, int sceneHandle)
+        {
+            isSceneBound = sceneBound;
+            boundSceneHandle = sceneBound ? sceneHandle : -1;
+        }
 
         private bool _isDestroying = false; // Flag to prevent multiple destruction logic paths
 

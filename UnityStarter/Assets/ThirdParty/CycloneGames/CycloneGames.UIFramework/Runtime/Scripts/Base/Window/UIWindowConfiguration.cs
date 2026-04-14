@@ -52,6 +52,7 @@ namespace CycloneGames.UIFramework.Runtime
         // Common configuration
         [SerializeField] private UILayerConfiguration layer;
         [SerializeField, Range(-100, 400)] private int priority = 0;
+        [SerializeField] private bool isSceneBound = false;
 
         // ── Public API ─────────────────────────────────────────────────────────────────────
 
@@ -110,6 +111,12 @@ namespace CycloneGames.UIFramework.Runtime
 
         /// <summary>Render order within the same layer. Higher = closer to camera.</summary>
         public int Priority => priority;
+
+        /// <summary>
+        /// When true, the window is automatically closed after the active scene changes
+        /// unless an explicit open-time override is provided.
+        /// </summary>
+        public bool IsSceneBound => isSceneBound;
 
 #if UNITY_EDITOR
         private void OnValidate()
