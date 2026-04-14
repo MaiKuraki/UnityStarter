@@ -29,10 +29,18 @@ namespace CycloneGames.UIFramework.Runtime
         private readonly Dictionary<string, string> _windowToPrefabLocation = new Dictionary<string, string>(16);
         // Reusable scratch list for release scans to avoid per-call allocations.
         private readonly List<string> _releaseScratchWindowNames = new List<string>(8);
+        // Low-allocation tracking of windows that should auto-close after a scene switch.
+        private readonly List<UIWindow> _sceneBoundWindows = new List<UIWindow>(8);
+        private readonly Dictionary<UIWindow, int> _sceneBoundWindowIndices = new Dictionary<UIWindow, int>(8);
+        private readonly List<UIWindow> _sceneBoundSweepScratch = new List<UIWindow>(8);
 
         // Throttling instantiate per frame
         private int maxInstantiatesPerFrame = 2;
         private int instantiatesThisFrame = 0;
+        private int _currentActiveSceneHandle = -1;
+        private int _pendingSceneSweepTargetHandle = -1;
+        private bool _hasPendingSceneBoundSweep;
+        private int _pendingSceneBoundSweepDelayFrames;
 
         // Tracks ongoing opening operations to prevent duplicate concurrent opens
         private Dictionary<string, UniTaskCompletionSource<UIWindow>> uiOpenTCS = new Dictionary<string, UniTaskCompletionSource<UIWindow>>();
@@ -158,6 +166,7 @@ namespace CycloneGames.UIFramework.Runtime
         private void Awake()
         {
             UnityEngine.Application.onBeforeRender += ResetPerFrameBudget;
+            _currentActiveSceneHandle = UnityEngine.SceneManagement.SceneManager.GetActiveScene().handle;
             // It's better to get UIRoot in Initialize if UIManager is created and initialized from code.
             // If UIManager is a scene object and Initialize is called later, Awake can find UIRoot.
             TryGetUIRoot();
@@ -166,11 +175,13 @@ namespace CycloneGames.UIFramework.Runtime
         private void OnEnable()
         {
             UnityEngine.SceneManagement.SceneManager.sceneUnloaded += OnSceneUnloaded;
+            UnityEngine.SceneManagement.SceneManager.activeSceneChanged += OnActiveSceneChanged;
         }
 
         private void OnDisable()
         {
             UnityEngine.SceneManagement.SceneManager.sceneUnloaded -= OnSceneUnloaded;
+            UnityEngine.SceneManagement.SceneManager.activeSceneChanged -= OnActiveSceneChanged;
         }
 
         private void OnSceneUnloaded(UnityEngine.SceneManagement.Scene scene)
@@ -180,6 +191,12 @@ namespace CycloneGames.UIFramework.Runtime
             {
                 CleanupAllWindows();
             }
+        }
+
+        private void OnActiveSceneChanged(UnityEngine.SceneManagement.Scene previousScene, UnityEngine.SceneManagement.Scene newScene)
+        {
+            _currentActiveSceneHandle = newScene.handle;
+            RequestSceneBoundSweep(newScene.handle);
         }
 
         /// <summary>
@@ -248,6 +265,12 @@ namespace CycloneGames.UIFramework.Runtime
             foreach (var kv in _prefabHandles) kv.Value?.Dispose();
             _prefabHandles.Clear();
             _windowToPrefabLocation.Clear();
+            _sceneBoundWindows.Clear();
+            _sceneBoundWindowIndices.Clear();
+            _sceneBoundSweepScratch.Clear();
+            _hasPendingSceneBoundSweep = false;
+            _pendingSceneBoundSweepDelayFrames = 0;
+            _pendingSceneSweepTargetHandle = -1;
 
             activeWindows.Clear();
             _navigationService?.Clear();
@@ -262,6 +285,20 @@ namespace CycloneGames.UIFramework.Runtime
             instantiatesThisFrame = 0;
         }
 
+        private void LateUpdate()
+        {
+            if (!_hasPendingSceneBoundSweep) return;
+
+            if (_pendingSceneBoundSweepDelayFrames > 0)
+            {
+                _pendingSceneBoundSweepDelayFrames--;
+                return;
+            }
+
+            ProcessSceneBoundSweep(_pendingSceneSweepTargetHandle);
+            _hasPendingSceneBoundSweep = false;
+        }
+
         // Start is not typically used if Initialize sets up dependencies.
         // private void Start() { }
 
@@ -270,7 +307,7 @@ namespace CycloneGames.UIFramework.Runtime
         /// </summary>
         /// <param name="windowName">The unique name of the window (often matches configuration file name).</param>
         /// <param name="onUIWindowCreated">Optional callback when the window is instantiated and added.</param>
-        public void OpenUI(string windowName, System.Action<UIWindow> onUIWindowCreated = null)
+        public void OpenUI(string windowName, System.Action<UIWindow> onUIWindowCreated = null, bool? isSceneBoundOverride = null)
         {
             if (uiRoot == null || assetPathBuilder == null || objectSpawner == null)
             {
@@ -278,7 +315,7 @@ namespace CycloneGames.UIFramework.Runtime
                 onUIWindowCreated?.Invoke(null); // Notify failure
                 return;
             }
-            OpenUIAsync(windowName, onUIWindowCreated).Forget(); // Fire and forget UniTask
+            OpenUIAsync(windowName, onUIWindowCreated, default, false, isSceneBoundOverride).Forget(); // Fire and forget UniTask
         }
 
         /// <summary>
@@ -294,7 +331,7 @@ namespace CycloneGames.UIFramework.Runtime
             CloseUIAsync(windowName).Forget(); // Fire and forget UniTask
         }
 
-        internal async UniTask<UIWindow> OpenUIAsync(string windowName, System.Action<UIWindow> onUIWindowCreated = null, CancellationToken cancellationToken = default, bool silentOpen = false)
+        internal async UniTask<UIWindow> OpenUIAsync(string windowName, System.Action<UIWindow> onUIWindowCreated = null, CancellationToken cancellationToken = default, bool silentOpen = false, bool? isSceneBoundOverride = null)
         {
             if (string.IsNullOrEmpty(windowName))
             {
@@ -305,10 +342,29 @@ namespace CycloneGames.UIFramework.Runtime
 
             if (activeWindows.ContainsKey(windowName))
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' is already open or opening.");
                 UIWindow existingWindow = activeWindows[windowName];
-                onUIWindowCreated?.Invoke(existingWindow);
-                return existingWindow;
+
+                // Guard: window may have been destroyed externally (e.g. mid-scene-unload) while
+                // UIManager still held the dictionary entry. Clean up the stale state and fall
+                // through to open a fresh instance rather than returning a dead reference.
+                if (existingWindow == null || existingWindow.gameObject == null)
+                {
+                    CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' was externally destroyed. " +
+                                       "Cleaning up stale entry and re-opening.");
+                    UnregisterSceneBoundWindow(existingWindow);
+                    _navigationService?.Unregister(windowName);
+                    activeWindows.Remove(windowName);
+                    uiOpenTCS.Remove(windowName);
+                    ReleaseConfigHandle(windowName);
+                    ReleaseWindowAsset(windowName);
+                    // fall through — open a fresh instance below
+                }
+                else
+                {
+                    CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' is already open or opening.");
+                    onUIWindowCreated?.Invoke(existingWindow);
+                    return existingWindow;
+                }
             }
 
             // Check if an opening operation is already in progress
@@ -322,6 +378,11 @@ namespace CycloneGames.UIFramework.Runtime
 
             var tcs = new UniTaskCompletionSource<UIWindow>();
             uiOpenTCS[windowName] = tcs;
+
+            // Capture the active scene at the moment of this open request.
+            // This handle is used to bind scene-bound windows to the scene that requested them,
+            // even if the scene changes asynchronously before the prefab finishes loading.
+            int openRequestedSceneHandle = _currentActiveSceneHandle;
 
             // Create a linked CTS so CloseUI can cancel this open mid-flight
             var openCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -531,9 +592,15 @@ namespace CycloneGames.UIFramework.Runtime
 
             uiWindowInstance.SetWindowName(windowName);
             uiWindowInstance.SetConfiguration(windowConfig);
+            bool isSceneBound = isSceneBoundOverride ?? windowConfig.IsSceneBound;
+            // Bind to the scene that was active when OpenUI was called, NOT the current scene.
+            // This ensures windows that finish loading after a scene change are still correctly
+            // identified as belonging to the old scene and will be swept by the next scene-change.
+            uiWindowInstance.ConfigureSceneBinding(isSceneBound, isSceneBound ? openRequestedSceneHandle : -1);
             uiWindowInstance._binders = _windowBindersCache;
             uiLayer.AddWindow(uiWindowInstance);
             activeWindows[windowName] = uiWindowInstance;
+            RegisterSceneBoundWindow(uiWindowInstance);
             _navigationService?.Register(windowName);
 
             for (int i = 0; i < windowBinders.Count; i++)
@@ -571,12 +638,25 @@ namespace CycloneGames.UIFramework.Runtime
             onUIWindowCreated?.Invoke(uiWindowInstance);
             tcs.TrySetResult(uiWindowInstance);
             CleanupOpenState(windowName, openCts);
+
+            // Post-open scene-change guard: if the active scene changed between the moment
+            // OpenUI was called and now (e.g. async loading took long enough to straddle a
+            // scene transition), the pending sweep has already run and missed this window.
+            // Close it immediately to honour the scene-bound contract.
+            if (isSceneBound && _currentActiveSceneHandle != openRequestedSceneHandle)
+            {
+                CLogger.LogWarning($"{DEBUG_FLAG} Scene changed while '{windowName}' was opening " +
+                                   $"(requested in scene {openRequestedSceneHandle}, " +
+                                   $"current scene {_currentActiveSceneHandle}). " +
+                                   "Auto-closing scene-bound window.");
+                CloseUI(windowName);
+            }
             return uiWindowInstance;
         }
 
-        internal UniTask<UIWindow> OpenUIAndWait(string windowName, System.Threading.CancellationToken cancellationToken = default)
+        internal UniTask<UIWindow> OpenUIAndWait(string windowName, System.Threading.CancellationToken cancellationToken = default, bool? isSceneBoundOverride = null)
         {
-            return OpenUIAsync(windowName, null, cancellationToken);
+            return OpenUIAsync(windowName, null, cancellationToken, false, isSceneBoundOverride);
         }
 
         // Loads, instantiates, and initialises the window (including binders/MVP), but
@@ -787,6 +867,8 @@ namespace CycloneGames.UIFramework.Runtime
         {
             if (leaving == null) return;
 
+            UnregisterSceneBoundWindow(leaving);
+
             UILayer layer = leaving.ParentLayer;
             layer?.DetachWindow(windowName);
 
@@ -842,11 +924,11 @@ namespace CycloneGames.UIFramework.Runtime
                         try { await openTcs.Task.SuppressCancellationThrow(); } catch { /* swallow */ }
                     }
                     // If the open was cancelled before instantiation, there's nothing to close
-                    if (!activeWindows.ContainsKey(windowName))
-                    {
-                        CLogger.LogInfo($"{DEBUG_FLAG} Open for '{windowName}' was cancelled before it was ready. Nothing to close.");
-                        return;
-                    }
+                if (!activeWindows.ContainsKey(windowName))
+                {
+                    CLogger.LogInfo($"{DEBUG_FLAG} Open for '{windowName}' was cancelled before it was ready. Nothing to close.");
+                    return;
+                }
                 }
 
                 if (!activeWindows.TryGetValue(windowName, out UIWindow windowToClose))
@@ -858,6 +940,7 @@ namespace CycloneGames.UIFramework.Runtime
                 if (windowToClose == null || windowToClose.gameObject == null)
                 {
                     CLogger.LogWarning($"{DEBUG_FLAG} Window '{windowName}' is null or destroyed. Cannot close.");
+                    if (windowToClose != null) UnregisterSceneBoundWindow(windowToClose);
                     _navigationService?.Unregister(windowName);
                     activeWindows.Remove(windowName);
                     uiOpenTCS.Remove(windowName);
@@ -900,6 +983,7 @@ namespace CycloneGames.UIFramework.Runtime
                 }
 
                 // Cleanup
+                UnregisterSceneBoundWindow(windowToClose);
                 _navigationService?.Unregister(windowName);
                 activeWindows.Remove(windowName);
                 uiOpenTCS.Remove(windowName);
@@ -999,6 +1083,12 @@ namespace CycloneGames.UIFramework.Runtime
             foreach (var kv in _prefabHandles) kv.Value?.Dispose();
             _prefabHandles.Clear();
             _windowToPrefabLocation.Clear();
+            _sceneBoundWindows.Clear();
+            _sceneBoundWindowIndices.Clear();
+            _sceneBoundSweepScratch.Clear();
+            _hasPendingSceneBoundSweep = false;
+            _pendingSceneBoundSweepDelayFrames = 0;
+            _pendingSceneSweepTargetHandle = -1;
 
             activeWindows.Clear();
             uiOpenTCS.Clear();
@@ -1091,6 +1181,94 @@ namespace CycloneGames.UIFramework.Runtime
             uiOpenTCS.Remove(windowName);
             _openCancellations.Remove(windowName);
             openCts?.Dispose();
+        }
+
+        private void RequestSceneBoundSweep(int targetSceneHandle)
+        {
+            _pendingSceneSweepTargetHandle = targetSceneHandle;
+            _hasPendingSceneBoundSweep = true;
+            _pendingSceneBoundSweepDelayFrames = 1;
+        }
+
+        private void RegisterSceneBoundWindow(UIWindow window)
+        {
+            if (ReferenceEquals(window, null) || !window.IsSceneBound) return;
+            if (_sceneBoundWindowIndices.ContainsKey(window)) return;
+
+            int index = _sceneBoundWindows.Count;
+            _sceneBoundWindows.Add(window);
+            _sceneBoundWindowIndices[window] = index;
+        }
+
+        private void UnregisterSceneBoundWindow(UIWindow window)
+        {
+            if (ReferenceEquals(window, null)) return;
+            if (!_sceneBoundWindowIndices.TryGetValue(window, out int index)) return;
+
+            int lastIndex = _sceneBoundWindows.Count - 1;
+            UIWindow lastWindow = _sceneBoundWindows[lastIndex];
+            _sceneBoundWindows[index] = lastWindow;
+            _sceneBoundWindows.RemoveAt(lastIndex);
+            _sceneBoundWindowIndices.Remove(window);
+
+            if (index < _sceneBoundWindows.Count && lastWindow != null)
+            {
+                _sceneBoundWindowIndices[lastWindow] = index;
+            }
+        }
+
+        private void ProcessSceneBoundSweep(int targetSceneHandle)
+        {
+            if (_sceneBoundWindows.Count == 0) return;
+
+            _sceneBoundSweepScratch.Clear();
+
+            for (int i = 0; i < _sceneBoundWindows.Count; i++)
+            {
+                UIWindow window = _sceneBoundWindows[i];
+                if (ReferenceEquals(window, null) || window == null || window.gameObject == null)
+                {
+                    _sceneBoundSweepScratch.Add(window);
+                    continue;
+                }
+
+                if (!window.IsSceneBound) continue;
+                if (window.BoundSceneHandle == targetSceneHandle) continue;
+
+                _sceneBoundSweepScratch.Add(window);
+            }
+
+            for (int i = 0; i < _sceneBoundSweepScratch.Count; i++)
+            {
+                UIWindow window = _sceneBoundSweepScratch[i];
+                if (ReferenceEquals(window, null))
+                {
+                    continue;
+                }
+
+                if (window == null || window.gameObject == null)
+                {
+                    // Already destroyed externally — just clean the tracking list.
+                    UnregisterSceneBoundWindow(window);
+                    continue;
+                }
+
+                string windowName = window.WindowName;
+                if (string.IsNullOrEmpty(windowName)) continue;
+
+                // Guard: a previous async sweep may have already issued CloseUI() for this
+                // window and it hasn't finished (UnregisterSceneBoundWindow runs at the end
+                // of CloseUIAsync). Skip to avoid double-close / double-teardown.
+                if (!activeWindows.ContainsKey(windowName))
+                {
+                    UnregisterSceneBoundWindow(window);
+                    continue;
+                }
+
+                CloseUI(windowName);
+            }
+
+            _sceneBoundSweepScratch.Clear();
         }
 
         private async UniTask WaitForOperationCompletedAsync(IOperation operation, CancellationToken cancellationToken)
