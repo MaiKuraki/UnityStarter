@@ -26,7 +26,10 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
 
         public MackySoft.Navigathena.SceneManagement.ISceneHandle CreateHandle()
         {
-            var sceneHandle = assetPackage.LoadSceneAsync(location, loadSceneMode, activateOnLoad);
+            var sceneHandle = assetPackage.LoadSceneAsync(
+                location,
+                loadSceneMode,
+                activateOnLoad ? SceneActivationMode.ActivateOnLoad : SceneActivationMode.Manual);
             return new NavigathenaSceneHandleAdapter(sceneHandle, assetPackage);
         }
     }

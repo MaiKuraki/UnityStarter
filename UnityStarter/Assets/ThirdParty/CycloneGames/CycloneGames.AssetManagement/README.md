@@ -407,6 +407,27 @@ await sceneHandle.Task;
 await package.UnloadSceneAsync(sceneHandle);
 ```
 
+Manual activation is also supported when the provider can defer scene entry:
+
+```csharp
+var sceneHandle = package.LoadSceneAsync(
+    "Assets/Scenes/Gameplay.unity",
+    LoadSceneMode.Single,
+    SceneActivationMode.Manual);
+
+// Wait for the provider-controlled preload phase.
+await sceneHandle.Task;
+
+// Complete the final activation step when your fade-out is finished.
+await sceneHandle.ActivateAsync();
+```
+
+Notes:
+
+- `SceneActivationState` is a normalized cross-provider status, not a promise that every provider exposes the same intermediate state.
+- Addressables can report `WaitingForActivation` after load completion.
+- YooAsset deferred entry is implemented by suspended loading, so the handle may remain in `Loading` until `ActivateAsync()` resumes and completes the load.
+
 ### Batch Loading
 
 Load multiple assets with progress tracking:

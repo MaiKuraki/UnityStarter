@@ -81,6 +81,11 @@ namespace CycloneGames.AssetManagement.Runtime
             return _package.LoadSceneSync(sceneLocation, loadMode, _bucket);
         }
 
+        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode, SceneActivationMode activationMode, int priority = 100)
+        {
+            return _package.LoadSceneAsync(sceneLocation, loadMode, activationMode, priority, _bucket);
+        }
+
         public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100)
         {
             return _package.LoadSceneAsync(sceneLocation, loadMode, activateOnLoad, priority, _bucket);
