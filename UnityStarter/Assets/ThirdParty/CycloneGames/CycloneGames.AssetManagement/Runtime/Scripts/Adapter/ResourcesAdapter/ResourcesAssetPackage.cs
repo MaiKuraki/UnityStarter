@@ -172,6 +172,11 @@ namespace CycloneGames.AssetManagement.Runtime
             throw new NotSupportedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
         }
 
+        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode, SceneActivationMode activationMode, int priority = 100, string bucket = null)
+        {
+            throw new NotSupportedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
+        }
+
         public ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, string bucket = null)
         {
             throw new NotSupportedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
@@ -182,11 +187,11 @@ namespace CycloneGames.AssetManagement.Runtime
             return UniTask.FromException(new NotSupportedException("Unloading scenes from Resources is not supported via this API."));
         }
 
-        public UniTask UnloadUnusedAssetsAsync()
+        public async UniTask UnloadUnusedAssetsAsync()
         {
             _cacheService.ClearAll();
-            CLogger.LogWarning("[ResourcesAssetPackage] UnloadUnusedAssetsAsync is not recommended for Resources. Assets loaded from Resources cannot be unloaded individually and this call can cause performance hitches.");
-            return UniTask.CompletedTask;
+            CLogger.LogWarning("[ResourcesAssetPackage] UnloadUnusedAssetsAsync triggers Resources.UnloadUnusedAssets(). This can cause hitches on the main thread, so prefer explicit handle release and bucket clears whenever possible.");
+            await Resources.UnloadUnusedAssets().ToUniTask();
         }
 
         public void ClearBucket(string bucket)

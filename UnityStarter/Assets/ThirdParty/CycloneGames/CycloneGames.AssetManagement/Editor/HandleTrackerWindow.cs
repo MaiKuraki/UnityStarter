@@ -31,6 +31,7 @@ namespace CycloneGames.AssetManagement.Editor
         private string _searchFilter = string.Empty;
         private Vector2 _scrollPos;
         private double _nextRepaint;
+        private bool _hasSnapshot;
 
         // ── Lazy styles ──────────────────────────────────────────────────────────
         private GUIStyle _monoStyle;
@@ -67,7 +68,11 @@ namespace CycloneGames.AssetManagement.Editor
             w.Show();
         }
 
-        private void OnEnable() => EditorApplication.update += OnEditorUpdate;
+        private void OnEnable()
+        {
+            EditorApplication.update += OnEditorUpdate;
+            RefreshSnapshot();
+        }
         private void OnDisable() => EditorApplication.update -= OnEditorUpdate;
 
         private void OnEditorUpdate()
@@ -76,6 +81,7 @@ namespace CycloneGames.AssetManagement.Editor
             if (EditorApplication.timeSinceStartup >= _nextRepaint)
             {
                 _nextRepaint = EditorApplication.timeSinceStartup + 0.1;
+                RefreshSnapshot();
                 Repaint();
             }
         }
@@ -115,6 +121,12 @@ namespace CycloneGames.AssetManagement.Editor
             // ── Top controls ─────────────────────────────────────────────────────
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
+                if (GUILayout.Button("Scenes", EditorStyles.toolbarButton, GUILayout.Width(54f)))
+                    SceneTrackerWindow.ShowWindow();
+                if (GUILayout.Button("Governance", EditorStyles.toolbarButton, GUILayout.Width(82f)))
+                    AssetRuntimeGovernanceWindow.ShowWindow();
+                GUILayout.Space(8f);
+
                 bool wasEnabled = HandleTracker.Enabled;
                 HandleTracker.Enabled = GUILayout.Toggle(wasEnabled, "  Enable Tracking",
                     EditorStyles.toolbarButton, GUILayout.Width(130f));
@@ -123,7 +135,7 @@ namespace CycloneGames.AssetManagement.Editor
 
                 GUILayout.Space(8f);
                 if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(60f)))
-                    PollHandles();
+                    RefreshSnapshot();
 
                 GUILayout.FlexibleSpace();
                 GUILayout.Label("Filter:", GUILayout.Width(36f));
@@ -139,9 +151,7 @@ namespace CycloneGames.AssetManagement.Editor
                 return;
             }
 
-            // Rebuild idle-location set from AssetCacheService diagnostics.
-            RebuildIdleLocationSet();
-            PollHandles();
+            if (!_hasSnapshot) RefreshSnapshot();
             BuildFiltered();
 
             // ── Stats bar ────────────────────────────────────────────────────────
@@ -195,6 +205,13 @@ namespace CycloneGames.AssetManagement.Editor
         {
             double lifeSeconds = (DateTime.UtcNow - info.RegistrationTime).TotalSeconds;
             if (lifeSeconds < 300.0) return HandleStatus.Normal;
+
+            if (!string.IsNullOrEmpty(info.Description) &&
+                (info.Description.StartsWith("SceneAsync", StringComparison.Ordinal) ||
+                 info.Description.StartsWith("SceneSync", StringComparison.Ordinal)))
+            {
+                return HandleStatus.Normal;
+            }
 
             // Long-lived — check if AssetCacheService is intentionally holding it.
             // Extract the asset location from the description (format: "TypeName : location")
@@ -393,12 +410,14 @@ namespace CycloneGames.AssetManagement.Editor
         }
 
         // ── Helpers ──────────────────────────────────────────────────────────────
-        private void PollHandles()
+        private void RefreshSnapshot()
         {
+            RebuildIdleLocationSet();
             _snapshot.Clear();
             var active = HandleTracker.GetActiveHandles();
             if (active != null)
                 for (int i = 0; i < active.Count; i++) _snapshot.Add(active[i]);
+            _hasSnapshot = true;
         }
 
         private void BuildFiltered()

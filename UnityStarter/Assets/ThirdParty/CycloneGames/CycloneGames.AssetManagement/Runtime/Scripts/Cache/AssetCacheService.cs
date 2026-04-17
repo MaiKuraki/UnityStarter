@@ -30,6 +30,14 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             public bool IsInMainPool;
         }
 
+        private sealed class CacheKeyPoolNode
+        {
+            public (string Location, Type AssetType) Key;
+            public string CacheKey;
+            public CacheKeyPoolNode Prev;
+            public CacheKeyPoolNode Next;
+        }
+
         private static class NodePool
         {
             private const int MAX_POOL_SIZE = 512;
@@ -72,6 +80,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         // Reverse index: bucket name → set of CacheNodes in that bucket (idle only).
         // Enables O(1) bucket lookup in ClearBucket instead of O(N) linked-list scan.
         private readonly Dictionary<string, HashSet<CacheNode>> _bucketIndex;
+        private readonly List<CacheNode> _nodesToClearScratch;
+        private readonly List<string> _matchedBucketsScratch;
 
         private CacheNode _trialHead;
         private CacheNode _trialTail;
@@ -111,6 +121,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             _activeMap = new Dictionary<string, CacheNode>(128, StringComparer.Ordinal);
             _idleMap = new Dictionary<string, CacheNode>(_maxTrialEntries + _maxMainEntries, StringComparer.Ordinal);
             _bucketIndex = new Dictionary<string, HashSet<CacheNode>>(16, StringComparer.Ordinal);
+            _nodesToClearScratch = new List<CacheNode>(16);
+            _matchedBucketsScratch = new List<string>(8);
 
 #if UNITY_EDITOR
             lock (_globalInstancesLock) { GlobalInstances.Add(this); }
@@ -119,33 +131,103 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
         /// <summary>
         /// Builds a cache key that includes type information to prevent cross-type collisions.
-        /// E.g. LoadAssetAsync<Texture2D>("atlas") and LoadAssetAsync<Sprite>("atlas")
+        /// E.g. LoadAssetAsync&lt;Texture2D&gt;("atlas") and LoadAssetAsync&lt;Sprite&gt;("atlas")
         /// must map to different cache entries.
         /// Results are cached so that repeated loads of the same (location, type) pair
         /// produce zero string allocations after the first call.
+        /// A bounded LRU is used instead of an unbounded dictionary so long-lived sessions
+        /// do not accumulate metadata forever.
         /// </summary>
-        private static readonly Dictionary<(string, System.Type), string> _cacheKeyPool =
-            new Dictionary<(string, System.Type), string>(128);
+        private static readonly Dictionary<(string, Type), CacheKeyPoolNode> _cacheKeyPool =
+            new Dictionary<(string, Type), CacheKeyPoolNode>(128);
         private static readonly object _cacheKeyPoolLock = new object();
+        private const int MAX_CACHE_KEY_POOL_SIZE = 4096;
+        private static CacheKeyPoolNode _cacheKeyPoolHead;
+        private static CacheKeyPoolNode _cacheKeyPoolTail;
+        private static int _cacheKeyPoolCount;
 
-        internal static string BuildCacheKey(string location, System.Type assetType)
+        internal static string BuildCacheKey(string location, Type assetType)
         {
             // For the common single-type case, avoid allocation by returning location directly
             // when the caller passes null (e.g. RawFile which has no type ambiguity).
             if (assetType == null) return location;
 
-            var tuple = (location, assetType);
+            var key = (location, assetType);
             lock (_cacheKeyPoolLock)
             {
-                if (_cacheKeyPool.TryGetValue(tuple, out var cached)) return cached;
+                if (_cacheKeyPool.TryGetValue(key, out var node))
+                {
+                    MoveCacheKeyNodeToHead(node);
+                    return node.CacheKey;
+                }
             }
 
             var result = string.Concat(location, "|", assetType.FullName);
             lock (_cacheKeyPoolLock)
             {
-                _cacheKeyPool[tuple] = result;
+                if (_cacheKeyPool.TryGetValue(key, out var existingNode))
+                {
+                    MoveCacheKeyNodeToHead(existingNode);
+                    return existingNode.CacheKey;
+                }
+
+                var node = new CacheKeyPoolNode
+                {
+                    Key = key,
+                    CacheKey = result
+                };
+
+                AddCacheKeyNodeToHead(node);
+                _cacheKeyPool[key] = node;
+                _cacheKeyPoolCount++;
+
+                if (_cacheKeyPoolCount > MAX_CACHE_KEY_POOL_SIZE)
+                {
+                    EvictOldestCacheKeyNode();
+                }
             }
             return result;
+        }
+
+        private static void AddCacheKeyNodeToHead(CacheKeyPoolNode node)
+        {
+            node.Prev = null;
+            node.Next = _cacheKeyPoolHead;
+
+            if (_cacheKeyPoolHead != null) _cacheKeyPoolHead.Prev = node;
+            _cacheKeyPoolHead = node;
+
+            if (_cacheKeyPoolTail == null) _cacheKeyPoolTail = node;
+        }
+
+        private static void MoveCacheKeyNodeToHead(CacheKeyPoolNode node)
+        {
+            if (ReferenceEquals(node, _cacheKeyPoolHead)) return;
+
+            RemoveCacheKeyNode(node);
+            AddCacheKeyNodeToHead(node);
+        }
+
+        private static void RemoveCacheKeyNode(CacheKeyPoolNode node)
+        {
+            if (node.Prev != null) node.Prev.Next = node.Next;
+            else _cacheKeyPoolHead = node.Next;
+
+            if (node.Next != null) node.Next.Prev = node.Prev;
+            else _cacheKeyPoolTail = node.Prev;
+
+            node.Prev = null;
+            node.Next = null;
+        }
+
+        private static void EvictOldestCacheKeyNode()
+        {
+            var victim = _cacheKeyPoolTail;
+            if (victim == null) return;
+
+            RemoveCacheKeyNode(victim);
+            _cacheKeyPool.Remove(victim.Key);
+            _cacheKeyPoolCount--;
         }
 
         /// <summary>
@@ -383,8 +465,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         {
             if (_bucketIndex.Count == 0) return;
 
-            var nodesToClear = new List<CacheNode>(8);
-            var matchedBuckets = new List<string>(4);
+            _nodesToClearScratch.Clear();
+            _matchedBucketsScratch.Clear();
 
             foreach (var kvp in _bucketIndex)
             {
@@ -394,28 +476,31 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
                 if (!matches) continue;
 
-                matchedBuckets.Add(kvp.Key);
+                _matchedBucketsScratch.Add(kvp.Key);
                 foreach (var node in kvp.Value)
                 {
-                    nodesToClear.Add(node);
+                    _nodesToClearScratch.Add(node);
                 }
             }
 
-            if (matchedBuckets.Count == 0) return;
+            if (_matchedBucketsScratch.Count == 0) return;
 
-            for (int i = 0; i < matchedBuckets.Count; i++)
+            for (int i = 0; i < _matchedBucketsScratch.Count; i++)
             {
-                _bucketIndex.Remove(matchedBuckets[i]);
+                _bucketIndex.Remove(_matchedBucketsScratch[i]);
             }
 
-            for (int i = 0; i < nodesToClear.Count; i++)
+            for (int i = 0; i < _nodesToClearScratch.Count; i++)
             {
-                var node = nodesToClear[i];
+                var node = _nodesToClearScratch[i];
                 RemoveFromLru(node);
                 _idleMap.Remove(node.Location);
                 ForceDisposeHandle(node.Handle);
                 NodePool.Release(node);
             }
+
+            _nodesToClearScratch.Clear();
+            _matchedBucketsScratch.Clear();
         }
 
         /// <summary>
