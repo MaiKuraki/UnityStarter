@@ -184,7 +184,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// <param name="useCompression">Whether to use compressed texture format (ASTC/ETC2/BC7)</param>
         public void ConfigurePlatformOptimized(Func<string, Texture2D> load = null, Action<string, Texture2D> unload = null, bool useCompression = false)
         {
-            var config = DynamicAtlasConfig.CreatePlatformOptimized(load, unload, useCompression);
+            var config = DynamicAtlasConfig.CreateForCurrentPlatform(load, unload, useCompression);
             Configure(config);
         }
 
@@ -258,6 +258,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// </summary>
         public Sprite GetSprite(string path)
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetSprite))) return null;
             return Service.GetSprite(path);
         }
 
@@ -266,6 +267,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// </summary>
         public void ReleaseSprite(string path)
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(ReleaseSprite))) return;
             Service.ReleaseSprite(path);
         }
 
@@ -278,6 +280,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// <returns>A new sprite referencing the dynamic atlas</returns>
         public Sprite GetSpriteFromSprite(Sprite sourceSprite, string cacheKey = null)
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetSpriteFromSprite))) return null;
             return Service.GetSpriteFromSprite(sourceSprite, cacheKey);
         }
 
@@ -291,6 +294,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// <returns>A new sprite referencing the dynamic atlas</returns>
         public Sprite GetSpriteFromRegion(Texture2D sourceTexture, Rect sourceRect, string cacheKey)
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetSpriteFromRegion))) return null;
             return Service.GetSpriteFromRegion(sourceTexture, sourceRect, cacheKey);
         }
 
@@ -316,6 +320,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             if (source == null) return null;
 
             // Atlas insertion must happen on main thread (GPU API requirement)
+            await UniTask.SwitchToMainThread();
             Sprite result = Service.GetSpriteFromRegion(source, new Rect(0, 0, source.width, source.height), path);
 
             var unloader = _config?.unloadFunc ?? _unloadDelegate;
@@ -380,6 +385,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// </summary>
         public int Defragment(float fragmentationThreshold = 0.5f)
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(Defragment))) return 0;
             return Service?.Defragment(fragmentationThreshold) ?? 0;
         }
 

@@ -300,6 +300,11 @@ namespace CycloneGames.AssetManagement.Runtime
             _cacheService.ClearBucket(bucket);
         }
 
+        public void ClearBucketsByPrefix(string bucketPrefix)
+        {
+            _cacheService.ClearBucketsByPrefix(bucketPrefix);
+        }
+
         private int RegisterHandle()
         {
             return Interlocked.Increment(ref _nextId);

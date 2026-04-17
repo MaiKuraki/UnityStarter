@@ -11,6 +11,14 @@ namespace CycloneGames.UIFramework.DynamicAtlas
     [Serializable]
     public class DynamicAtlasConfig
     {
+        public enum PlatformTier
+        {
+            DesktopHighEnd = 0,
+            MobileHighEnd = 1,
+            MobileLowEnd = 2,
+            WebGL = 3,
+        }
+
         [Tooltip("Page size in pixels (0 = auto-detect based on device capabilities)")]
         public int pageSize = 0;
 
@@ -99,6 +107,82 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             config.autoScaleLargeTextures = true;
 
             return config;
+        }
+
+        /// <summary>
+        /// Creates a configuration tuned for a specific runtime capability tier.
+        /// </summary>
+        public static DynamicAtlasConfig CreateForTier(
+            PlatformTier tier,
+            Func<string, Texture2D> loadFunc = null,
+            Action<string, Texture2D> unloadFunc = null,
+            bool useCompression = false)
+        {
+            var config = new DynamicAtlasConfig
+            {
+                loadFunc = loadFunc,
+                unloadFunc = unloadFunc,
+                autoScaleLargeTextures = true,
+                enablePlatformOptimizations = tier != PlatformTier.WebGL,
+                enableBlockAlignment = useCompression,
+                targetFormat = useCompression ? TextureFormatHelper.GetRecommendedCompressedFormat() : TextureFormatHelper.GetRecommendedUncompressedFormat()
+            };
+
+            switch (tier)
+            {
+                case PlatformTier.DesktopHighEnd:
+                    config.pageSize = 4096;
+                    config.maxPages = 0;
+                    config.enableBleed = true;
+                    config.enableMipmap = false;
+                    break;
+
+                case PlatformTier.MobileHighEnd:
+                    config.pageSize = 2048;
+                    config.maxPages = 8;
+                    config.enableBleed = true;
+                    config.enableMipmap = false;
+                    break;
+
+                case PlatformTier.MobileLowEnd:
+                    config.pageSize = 1024;
+                    config.maxPages = 4;
+                    config.enableBleed = false;
+                    config.enableMipmap = false;
+                    config.targetFormat = TextureFormatHelper.GetRecommendedUncompressedFormat();
+                    config.enableBlockAlignment = false;
+                    break;
+
+                case PlatformTier.WebGL:
+                    config.pageSize = 1024;
+                    config.maxPages = 2;
+                    config.enableBleed = false;
+                    config.enableMipmap = false;
+                    config.targetFormat = TextureFormat.RGBA32;
+                    config.enablePlatformOptimizations = false;
+                    config.enableBlockAlignment = false;
+                    break;
+            }
+
+            return config;
+        }
+
+        /// <summary>
+        /// Creates a configuration based on the current runtime platform class.
+        /// </summary>
+        public static DynamicAtlasConfig CreateForCurrentPlatform(
+            Func<string, Texture2D> loadFunc = null,
+            Action<string, Texture2D> unloadFunc = null,
+            bool useCompression = false,
+            bool preferLowMemoryProfile = false)
+        {
+#if UNITY_WEBGL
+            return CreateForTier(PlatformTier.WebGL, loadFunc, unloadFunc, false);
+#elif UNITY_ANDROID || UNITY_IOS || UNITY_TVOS
+            return CreateForTier(preferLowMemoryProfile ? PlatformTier.MobileLowEnd : PlatformTier.MobileHighEnd, loadFunc, unloadFunc, useCompression);
+#else
+            return CreateForTier(preferLowMemoryProfile ? PlatformTier.MobileHighEnd : PlatformTier.DesktopHighEnd, loadFunc, unloadFunc, useCompression);
+#endif
         }
 
         /// <summary>

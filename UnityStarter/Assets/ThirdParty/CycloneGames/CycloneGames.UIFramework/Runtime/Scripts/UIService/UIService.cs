@@ -14,8 +14,8 @@ namespace CycloneGames.UIFramework.Runtime
         /// </summary>
         /// <param name="windowName">The name of the UI window to open.</param>
         /// <param name="onWindowCreated">Optional callback invoked when the window is created.</param>
-        void OpenUI(string windowName, System.Action<UIWindow> onWindowCreated = null, bool? isSceneBoundOverride = null);
-        UniTask<UIWindow> OpenUIAsync(string windowName, System.Threading.CancellationToken cancellationToken = default, bool? isSceneBoundOverride = null);
+        void OpenUI(string windowName, System.Action<UIWindow> onWindowCreated = null, bool? isSceneBoundOverride = null, UIAssetLoadContext assetLoadContext = default);
+        UniTask<UIWindow> OpenUIAsync(string windowName, System.Threading.CancellationToken cancellationToken = default, bool? isSceneBoundOverride = null, UIAssetLoadContext assetLoadContext = default);
 
         /// <summary>
         /// Closes a UI by its registered name.
@@ -233,20 +233,20 @@ namespace CycloneGames.UIFramework.Runtime
             return uiManagerInstance.IsUIWindowValid(windowName);
         }
 
-        public void OpenUI(string windowName, Action<UIWindow> onWindowCreated = null, bool? isSceneBoundOverride = null)
+        public void OpenUI(string windowName, Action<UIWindow> onWindowCreated = null, bool? isSceneBoundOverride = null, UIAssetLoadContext assetLoadContext = default)
         {
             if (!CheckInitialization())
             {
                 onWindowCreated?.Invoke(null); // Notify failure
                 return;
             }
-            uiManagerInstance.OpenUI(windowName, onWindowCreated, isSceneBoundOverride);
+            uiManagerInstance.OpenUI(windowName, onWindowCreated, isSceneBoundOverride, assetLoadContext);
         }
 
-        public UniTask<UIWindow> OpenUIAsync(string windowName, System.Threading.CancellationToken cancellationToken = default, bool? isSceneBoundOverride = null)
+        public UniTask<UIWindow> OpenUIAsync(string windowName, System.Threading.CancellationToken cancellationToken = default, bool? isSceneBoundOverride = null, UIAssetLoadContext assetLoadContext = default)
         {
             if (!CheckInitialization()) return UniTask.FromResult<UIWindow>(null);
-            return uiManagerInstance.OpenUIAndWait(windowName, cancellationToken, isSceneBoundOverride);
+            return uiManagerInstance.OpenUIAndWait(windowName, cancellationToken, isSceneBoundOverride, assetLoadContext);
         }
 
         public void CloseUI(string windowName)
@@ -264,12 +264,12 @@ namespace CycloneGames.UIFramework.Runtime
         /// <summary>
         /// Optionally open and await until the window reports Opened (strict sequencing use-cases).
         /// </summary>
-        public UniTask<UIWindow> OpenUIAndWait(string windowName, System.Threading.CancellationToken cancellationToken = default, bool? isSceneBoundOverride = null)
+        public UniTask<UIWindow> OpenUIAndWait(string windowName, System.Threading.CancellationToken cancellationToken = default, bool? isSceneBoundOverride = null, UIAssetLoadContext assetLoadContext = default)
         {
             if (!CheckInitialization()) return UniTask.FromResult<UIWindow>(null);
             // This method is now just a wrapper for OpenUIAsync.
             // The original implementation with UniTaskCompletionSource is redundant if OpenUIAsync is already awaitable.
-            return uiManagerInstance.OpenUIAndWait(windowName, cancellationToken, isSceneBoundOverride);
+            return uiManagerInstance.OpenUIAndWait(windowName, cancellationToken, isSceneBoundOverride, assetLoadContext);
         }
 
         public UIWindow GetUIWindow(string windowName)

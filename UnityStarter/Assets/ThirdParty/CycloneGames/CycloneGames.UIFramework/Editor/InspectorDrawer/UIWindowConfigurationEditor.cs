@@ -3,6 +3,7 @@
 
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UI;
 using CycloneGames.UIFramework.Runtime;
 using CycloneGames.AssetManagement.Runtime;
 
@@ -35,6 +36,7 @@ namespace CycloneGames.UIFramework.Editor
         private SerializedProperty layerProp;
         private SerializedProperty priorityProp;
         private SerializedProperty isSceneBoundProp;
+        private SerializedProperty subCanvasPolicyProp;
 
         // ── Foldout states ────────────────────────────────────────────────────────────────
         private bool showPrefabSource        = true;
@@ -62,6 +64,7 @@ namespace CycloneGames.UIFramework.Editor
             layerProp          = serializedObject.FindProperty("layer");
             priorityProp       = serializedObject.FindProperty("priority");
             isSceneBoundProp   = serializedObject.FindProperty("isSceneBound");
+            subCanvasPolicyProp = serializedObject.FindProperty("subCanvasPolicy");
 
             hasCheckedForDuplicates = false;
             _stylesInitialized      = false;
@@ -289,6 +292,35 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.LabelField(GetPriorityHint(priority), EditorStyles.centeredGreyMiniLabel);
+            EditorGUILayout.Space(5);
+
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField(new GUIContent("Sub Canvas", "Add a nested Canvas on the window root to isolate UGUI rebuild cost for this window."), GUILayout.Width(80));
+            EditorGUILayout.PropertyField(subCanvasPolicyProp, GUIContent.none);
+            EditorGUILayout.EndHorizontal();
+
+            UIWindowConfiguration.SubCanvasPolicy policy = (UIWindowConfiguration.SubCanvasPolicy)subCanvasPolicyProp.enumValueIndex;
+            if (policy == UIWindowConfiguration.SubCanvasPolicy.ForceOwnSubCanvas)
+            {
+                EditorGUILayout.HelpBox(
+                    "FORCE OWN SUB CANVAS: improves rebuild isolation for high-churn windows, but may reduce batching and increase draw call fragmentation.",
+                    MessageType.Info);
+            }
+            else if (policy == UIWindowConfiguration.SubCanvasPolicy.AutoDetect)
+            {
+                EditorGUILayout.HelpBox(
+                    "AUTO DETECT: UIManager inspects the instantiated window and adds a nested Canvas only when it finds high-churn markers such as Animator, ScrollRect, LayoutGroup, ContentSizeFitter or Mask components.",
+                    MessageType.Info);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox(
+                    "INHERIT LAYER CANVAS: best batching behaviour, but rebuilds from this window can affect the whole UILayer canvas.",
+                    MessageType.None);
+            }
+
+            DrawCanvasIsolationAudit(config, policy);
+
             EditorGUILayout.Space(3);
             EditorGUILayout.HelpBox(
                 "Priority determines render order within the same Layer.\n" +
@@ -298,6 +330,72 @@ namespace CycloneGames.UIFramework.Editor
                 MessageType.None);
 
             EditorGUILayout.EndVertical();
+        }
+
+        private void DrawCanvasIsolationAudit(UIWindowConfiguration config, UIWindowConfiguration.SubCanvasPolicy policy)
+        {
+            GameObject prefab = ResolveInspectionPrefab(config);
+            if (prefab == null)
+            {
+                return;
+            }
+
+            bool hasAnimator = PrefabHasMarker<Animator>(prefab) || PrefabHasMarker<Animation>(prefab);
+            bool hasScroll = PrefabHasMarker<ScrollRect>(prefab);
+            bool hasLayout = PrefabHasMarker<LayoutGroup>(prefab) || PrefabHasMarker<ContentSizeFitter>(prefab);
+            bool hasMask = PrefabHasMarker<Mask>(prefab) || PrefabHasMarker<RectMask2D>(prefab);
+
+            if (!hasAnimator && !hasScroll && !hasLayout && !hasMask)
+            {
+                return;
+            }
+
+            string riskSummary =
+                (hasAnimator ? "Animator/Animation " : string.Empty) +
+                (hasScroll ? "ScrollRect " : string.Empty) +
+                (hasLayout ? "LayoutGroup/ContentSizeFitter " : string.Empty) +
+                (hasMask ? "Mask/RectMask2D " : string.Empty);
+
+            if (policy == UIWindowConfiguration.SubCanvasPolicy.InheritLayerCanvas)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Prefab audit detected high-churn UI markers: {riskSummary.Trim()}.\n" +
+                    "Consider AutoDetect or ForceOwnSubCanvas to keep this window from rebuilding the entire UILayer canvas.",
+                    MessageType.Warning);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox(
+                    $"Prefab audit detected high-churn UI markers: {riskSummary.Trim()}.\n" +
+                    "Current Sub Canvas policy is already configured to isolate this window when appropriate.",
+                    MessageType.None);
+            }
+        }
+
+        private static GameObject ResolveInspectionPrefab(UIWindowConfiguration config)
+        {
+            if (config == null)
+            {
+                return null;
+            }
+
+            if (config.Source == UIWindowConfiguration.PrefabSource.PrefabReference)
+            {
+                return config.WindowPrefab != null ? config.WindowPrefab.gameObject : null;
+            }
+
+            string location = config.EffectiveLocation;
+            if (string.IsNullOrEmpty(location) || !location.StartsWith("Assets/", System.StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return AssetDatabase.LoadAssetAtPath<GameObject>(location);
+        }
+
+        private static bool PrefabHasMarker<T>(GameObject prefab) where T : Component
+        {
+            return prefab != null && prefab.GetComponentInChildren<T>(true) != null;
         }
 
         // ── Prefab source section ─────────────────────────────────────────────────────────
@@ -641,6 +739,11 @@ namespace CycloneGames.UIFramework.Editor
                 case UIWindowConfiguration.PrefabSource.PathLocation: return "Path";
                 default: return source.ToString();
             }
+        }
+
+        private static string GetDisplayValue(string value)
+        {
+            return string.IsNullOrEmpty(value) ? "<empty>" : value;
         }
 
         private void SetAssetRefFromPath(string assetPath)

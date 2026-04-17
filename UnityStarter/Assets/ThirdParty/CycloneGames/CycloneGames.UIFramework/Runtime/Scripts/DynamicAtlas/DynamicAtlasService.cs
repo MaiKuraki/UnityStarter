@@ -166,6 +166,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         public Sprite GetSprite(string path)
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetSprite))) return null;
             if (string.IsNullOrEmpty(path)) return null;
 
             _lock.EnterReadLock();
@@ -426,6 +427,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         public void ReleaseSprite(string path)
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(ReleaseSprite))) return;
             if (string.IsNullOrEmpty(path)) return;
 
             _lock.EnterReadLock();
@@ -488,6 +490,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// <returns>A new sprite referencing the dynamic atlas</returns>
         public Sprite GetSpriteFromSprite(Sprite sourceSprite, string cacheKey = null)
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetSpriteFromSprite))) return null;
             if (sourceSprite == null) return null;
 
             string key = cacheKey ?? sourceSprite.name;
@@ -535,6 +538,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// <returns>A new sprite referencing the dynamic atlas</returns>
         public Sprite GetSpriteFromRegion(Texture2D sourceTexture, Rect sourceRect, string cacheKey)
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetSpriteFromRegion))) return null;
             if (sourceTexture == null || string.IsNullOrEmpty(cacheKey)) return null;
 
             // Check cache first
@@ -830,6 +834,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         /// <returns>The number of pages successfully destroyed and reclaimed.</returns>
         public int Defragment(float fragmentationThreshold = 0.5f)
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(Defragment))) return 0;
             _lock.EnterWriteLock();
             try
             {
@@ -862,6 +867,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     // Create a pristine new page matching the config
                     var newPage = new DynamicAtlasPage(_pageSize, _targetFormat, _padding, _enablePlatformOptimizations, _enableBleed, _enableMipmap);
                     _pages.Add(newPage);
+                    var stagedUpdates = new List<PendingDefragUpdate>(itemsToMove.Count);
 
                     bool allMovedSuccessfully = true;
 
@@ -882,16 +888,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                             newSprite.name = oldSprite.name + "_Defrag";
 #endif
-
-                            oldItem.Sprite = newSprite;
-                            oldItem.Page = newPage;
-
-                            newPage.IncrementActiveCount(w, h);
-
-                            OnSpriteRepacked?.Invoke(oldItem.Path, newSprite);
-
-                            // Explicitly destroy the old sprite shell
-                            UnityEngine.Object.Destroy(oldSprite);
+                            stagedUpdates.Add(new PendingDefragUpdate(oldItem, oldSprite, newSprite, w, h));
                         }
                         else
                         {
@@ -902,12 +899,33 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
                     if (allMovedSuccessfully)
                     {
+                        for (int i = 0; i < stagedUpdates.Count; i++)
+                        {
+                            var update = stagedUpdates[i];
+                            update.Item.Sprite = update.NewSprite;
+                            update.Item.Page = newPage;
+                            newPage.IncrementActiveCount(update.Width, update.Height);
+                            OnSpriteRepacked?.Invoke(update.Item.Path, update.NewSprite);
+                            UnityEngine.Object.Destroy(update.OldSprite);
+                        }
                         newPage.ApplyIfNeeded();
 
                         // The old page is now effectively useless and stripped of its inhabitants
                         oldPage.Dispose();
                         _pages.Remove(oldPage);
                         reclaimedPagesCount++;
+                    }
+                    else
+                    {
+                        for (int i = 0; i < stagedUpdates.Count; i++)
+                        {
+                            if (stagedUpdates[i].NewSprite != null)
+                            {
+                                UnityEngine.Object.Destroy(stagedUpdates[i].NewSprite);
+                            }
+                        }
+                        newPage.Dispose();
+                        _pages.Remove(newPage);
                     }
                 }
 
@@ -921,6 +939,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         public void Reset()
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(Reset))) return;
             _lock.EnterWriteLock();
             try
             {
@@ -950,8 +969,27 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         public void Dispose()
         {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(Dispose))) return;
             Reset();
             _lock?.Dispose();
+        }
+
+        private readonly struct PendingDefragUpdate
+        {
+            public readonly AtlasItem Item;
+            public readonly Sprite OldSprite;
+            public readonly Sprite NewSprite;
+            public readonly int Width;
+            public readonly int Height;
+
+            public PendingDefragUpdate(AtlasItem item, Sprite oldSprite, Sprite newSprite, int width, int height)
+            {
+                Item = item;
+                OldSprite = oldSprite;
+                NewSprite = newSprite;
+                Width = width;
+                Height = height;
+            }
         }
     }
 }

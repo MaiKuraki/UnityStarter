@@ -152,6 +152,12 @@ namespace CycloneGames.AssetManagement.Runtime
 		/// Handles belonging to this bucket that have RefCount == 0 will be immediately purged, bypassing LRU delays.
 		/// </summary>
 		void ClearBucket(string bucket);
+
+		/// <summary>
+		/// Clears every idle handle whose bucket matches the specified prefix or any of its descendants.
+		/// Useful for hierarchical lifetime domains such as "UI.Scene" or "Gameplay.Levels.BossRoom".
+		/// </summary>
+		void ClearBucketsByPrefix(string bucketPrefix);
 	}
 
 	public interface IDownloader
