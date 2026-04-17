@@ -259,5 +259,13 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             return true;
 #endif
         }
+
+        /// <summary>
+        /// Checks whether a format can be copied safely through Color32 raw buffers.
+        /// </summary>
+        public static bool SupportsRawColor32Copy(TextureFormat format)
+        {
+            return format == TextureFormat.RGBA32;
+        }
     }
 }

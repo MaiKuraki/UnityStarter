@@ -198,7 +198,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: ff0412f766467f848adad9f592e751dd, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  layerName: Layer6000
+  layerName: Layer_6000
   expansionAmount: 3
 --- !u!114 &2911650373100054099
 MonoBehaviour:
@@ -322,6 +322,7 @@ GameObject:
   - component: {fileID: 4681971604556566979}
   - component: {fileID: 3797676701801197298}
   - component: {fileID: 991449866392288410}
+  - component: {fileID: 8073872372649991342}
   m_Layer: 5
   m_Name: UIRoot
   m_TagString: Untagged
@@ -444,6 +445,24 @@ MonoBehaviour:
   - {fileID: 5715378636395324106}
   - {fileID: 62219603539505310}
   - {fileID: 9081819234169563764}
+--- !u!114 &8073872372649991342
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5188188379178170098}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 6d29085c8ce6436c93db1590e2f55f7d, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  sourceMode: 0
+  contextAsset: {fileID: 0}
+  contextAssetRef:
+    m_Location: 
+    m_GUID: 
+  contextAssetLocation: 
 --- !u!1 &5233463464711557999
 GameObject:
   m_ObjectHideFlags: 0

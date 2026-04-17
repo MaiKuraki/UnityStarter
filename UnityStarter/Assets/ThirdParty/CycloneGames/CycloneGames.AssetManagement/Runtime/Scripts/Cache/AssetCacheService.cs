@@ -318,23 +318,22 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             _rwLock.EnterWriteLock();
             try
             {
-                if (!_bucketIndex.TryGetValue(bucket, out var nodes)) return;
+                ClearBucketsInternal(bucket, includeChildren: false);
+            }
+            finally
+            {
+                _rwLock.ExitWriteLock();
+            }
+        }
 
-                // Snapshot to avoid modifying collection during iteration
-                // Use stackalloc-style approach: for small sets iterate directly,
-                // nodes.Count is bounded by _maxTrialEntries + _maxMainEntries.
-                var snapshot = new List<CacheNode>(nodes.Count);
-                foreach (var n in nodes) snapshot.Add(n);
-                _bucketIndex.Remove(bucket);
+        public void ClearBucketsByPrefix(string bucketPrefix)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(bucketPrefix)) return;
 
-                for (int i = 0; i < snapshot.Count; i++)
-                {
-                    var node = snapshot[i];
-                    RemoveFromLru(node);
-                    _idleMap.Remove(node.Location);
-                    ForceDisposeHandle(node.Handle);
-                    NodePool.Release(node);
-                }
+            _rwLock.EnterWriteLock();
+            try
+            {
+                ClearBucketsInternal(bucketPrefix, includeChildren: true);
             }
             finally
             {
@@ -377,6 +376,45 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 ForceDisposeHandle(current.Handle);
                 NodePool.Release(current);
                 current = next;
+            }
+        }
+
+        private void ClearBucketsInternal(string bucketOrPrefix, bool includeChildren)
+        {
+            if (_bucketIndex.Count == 0) return;
+
+            var nodesToClear = new List<CacheNode>(8);
+            var matchedBuckets = new List<string>(4);
+
+            foreach (var kvp in _bucketIndex)
+            {
+                bool matches = includeChildren
+                    ? AssetBucketPath.IsPrefixMatch(kvp.Key, bucketOrPrefix)
+                    : string.Equals(kvp.Key, bucketOrPrefix, StringComparison.Ordinal);
+
+                if (!matches) continue;
+
+                matchedBuckets.Add(kvp.Key);
+                foreach (var node in kvp.Value)
+                {
+                    nodesToClear.Add(node);
+                }
+            }
+
+            if (matchedBuckets.Count == 0) return;
+
+            for (int i = 0; i < matchedBuckets.Count; i++)
+            {
+                _bucketIndex.Remove(matchedBuckets[i]);
+            }
+
+            for (int i = 0; i < nodesToClear.Count; i++)
+            {
+                var node = nodesToClear[i];
+                RemoveFromLru(node);
+                _idleMap.Remove(node.Location);
+                ForceDisposeHandle(node.Handle);
+                NodePool.Release(node);
             }
         }
 

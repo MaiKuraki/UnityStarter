@@ -444,7 +444,7 @@ async UniTask TrackProgress(GroupOperation op)
 - **Trial (试用池 - LRU)**: 被释放资产的观察期缓存池。
 - **Main (主池 - LFU/LRU)**: 经过试用期且被频繁访问的"热"资源缓存。
 
-你可以通过 **Bucket (内存桶)** 来控制特定的缓存容量及实现确定性的内存释放：
+你可以通过 **Bucket (内存桶)** 来实现确定性的分组内存释放：
 
 ```csharp
 // 加载资源并将其分配到 "UI" 桶中
@@ -453,8 +453,58 @@ using (var handle = package.LoadAssetAsync<GameObject>("Prefabs/MainMenu", bucke
     // ...
 }
 
-// 稍后，仅清理 "UI" 桶中的资源来强制释放内存
-package.UnloadUnusedAssets(bucket: "UI");
+// 稍后，仅清理 "UI" 桶中的空闲资源来强制释放内存
+package.ClearBucket("UI");
+```
+
+> [!NOTE]
+> `ClearBucket` / `ClearBucketsByPrefix` 只会驱逐 `RefCount` 已归零的空闲句柄（位于 Trial 或 Main 池中）。仍在使用中的 Active 句柄**永远不会**被桶清理操作驱逐 —— 这是为了从设计上避免悬垂引用。
+
+#### 层级式桶路径
+
+桶名称支持**以 `.` 分隔的层级命名**（如 `"UI.Scene.MainCity"`）。使用 `AssetBucketPath` 安全地组合和匹配路径：
+
+```csharp
+using CycloneGames.AssetManagement.Runtime;
+
+// 组合层级桶名称（非空段时零分配）
+string bucket = AssetBucketPath.Combine("UI", "Scene");           // → "UI.Scene"
+string sub    = AssetBucketPath.Combine("UI", "Scene", "MainCity"); // → "UI.Scene.MainCity"
+
+// 清理单个精确匹配的桶
+package.ClearBucket("UI.Scene.MainCity");
+
+// 一次性清理某个桶及其所有后代
+package.ClearBucketsByPrefix("UI");
+// → 清理 "UI"、"UI.Scene"、"UI.Scene.MainCity" 等
+```
+
+#### AssetBucketScope（作用域加载）
+
+`AssetBucketScope` 是一个轻量包装器，会为所有加载调用**预填充** `bucket`、`tag` 和 `owner`，消除重复的参数传递：
+
+```csharp
+// 创建作用域 —— 所有加载自动继承其 bucket/tag/owner
+var uiScope = package.CreateBucketScope("UI", tag: "UIAsset", owner: "UIManager");
+
+// 通过作用域加载 —— 无需重复传递 bucket/tag/owner
+using (var handle = uiScope.LoadAssetAsync<GameObject>("Prefabs/MainMenu"))
+{
+    await handle.Task;
+    var menu = uiScope.Package.InstantiateSync(handle);
+}
+
+// 为子系统创建子作用域（桶名变为 "UI.Shop"）
+var shopScope = uiScope.CreateChild("Shop", owner: "ShopUI");
+using (var handle = shopScope.LoadAssetAsync<Sprite>("Icons/Coin"))
+{
+    await handle.Task;
+}
+
+// 离开 UI 时，仅清理该作用域的桶层级
+uiScope.ClearHierarchy();  // 清理 "UI" 及所有后代
+// 或者只清理精确匹配的桶：
+shopScope.Clear();          // 仅清理 "UI.Shop"
 ```
 
 ### 资源追踪与元数据 (Metadata Tracking)
@@ -668,19 +718,21 @@ package.LoadAsync(config.Prefab);                    // 扩展方法（推荐）
 
 ### IAssetPackage
 
-| 方法                         | 说明                                        |
-| ---------------------------- | ------------------------------------------- |
-| `InitializeAsync(options)`   | 初始化资源包                                |
-| `DestroyAsync()`             | 销毁资源包                                  |
-| `LoadAssetAsync<T>(...)`     | 异步加载资源 (支持 `tag`/`owner`)           |
-| `LoadAssetSync<T>(...)`      | 同步加载资源 (支持 `tag`/`owner`)           |
-| `LoadAllAssetsAsync<T>(...)` | 加载指定位置的所有资源 (支持 `tag`/`owner`) |
-| `InstantiateAsync(handle)`   | 异步实例化预制体                            |
-| `InstantiateSync(handle)`    | 同步实例化（零 GC）                         |
-| `LoadSceneAsync(location)`   | 加载场景                                    |
-| `UnloadSceneAsync(handle)`   | 卸载场景                                    |
-| `LoadRawFileAsync(location)` | 加载原生文件                                |
-| `UnloadUnusedAssets()`       | 卸载未使用的资源                            |
+| 方法                           | 说明                                                 |
+| ------------------------------ | ---------------------------------------------------- |
+| `InitializeAsync(options)`     | 初始化资源包                                         |
+| `DestroyAsync()`               | 销毁资源包                                           |
+| `LoadAssetAsync<T>(...)`       | 异步加载资源 (支持 `bucket`/`tag`/`owner`)           |
+| `LoadAssetSync<T>(...)`        | 同步加载资源 (支持 `bucket`/`tag`/`owner`)           |
+| `LoadAllAssetsAsync<T>(...)`   | 加载指定位置的所有资源 (支持 `bucket`/`tag`/`owner`) |
+| `InstantiateAsync(handle)`     | 异步实例化预制体                                     |
+| `InstantiateSync(handle)`      | 同步实例化（零 GC）                                  |
+| `LoadSceneAsync(location)`     | 加载场景                                             |
+| `UnloadSceneAsync(handle)`     | 卸载场景                                             |
+| `LoadRawFileAsync(location)`   | 加载原生文件                                         |
+| `UnloadUnusedAssetsAsync()`    | 全局清扫所有未使用的资源                             |
+| `ClearBucket(bucket)`          | 驱逐精确匹配桶名的空闲句柄                           |
+| `ClearBucketsByPrefix(prefix)` | 驱逐匹配桶前缀及其所有后代的空闲句柄                 |
 
 ### 脚本定义符号
 

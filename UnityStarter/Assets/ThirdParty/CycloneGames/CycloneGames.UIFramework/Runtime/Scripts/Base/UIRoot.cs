@@ -14,6 +14,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         public Camera UICamera => uiCamera;
         public Canvas UIRootCanvas => rootCanvas;
+        public UIAssetContextProvider AssetContextProvider =>
+            GetComponent<UIAssetContextProvider>() ?? GetComponentInParent<UIAssetContextProvider>();
         private RectTransform uiRootRTF;
         private CanvasScaler uiRootCanvasScaler;
         private GraphicRaycaster graphicRaycaster;
