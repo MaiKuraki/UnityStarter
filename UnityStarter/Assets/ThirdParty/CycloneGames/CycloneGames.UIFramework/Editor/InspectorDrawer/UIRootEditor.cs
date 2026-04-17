@@ -229,6 +229,9 @@ namespace CycloneGames.UIFramework.Editor
             {
                 EditorGUI.indentLevel++;
                 EditorGUILayout.LabelField($"Source Mode: {contextProvider.SourceMode}", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"Uses Embedded Snapshot: {contextProvider.UseEmbeddedSnapshot}", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"Preload Package Context: {contextProvider.PreloadPackageBackedContext}", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"Has Snapshot Metadata: {contextProvider.HasEmbeddedSnapshot}", EditorStyles.miniLabel);
 
                 if (contextProvider.UsesDirectReference)
                 {
@@ -261,10 +264,10 @@ namespace CycloneGames.UIFramework.Editor
                     else
                     {
                         EditorGUILayout.LabelField($"Custom Path: {GetDisplayValue(contextProvider.ContextAssetLocation)}", EditorStyles.miniLabel);
-                        EditorGUILayout.HelpBox(
-                            "This provider will resolve its context asset through IAssetPackage.LoadAssetAsync<UIAssetContextAsset>(path) on the first OpenUI call.\n" +
-                            "If the package is unavailable or the path fails to load, UI loading will safely fall back to an empty default context.",
-                            MessageType.None);
+                        EditorGUILayout.HelpBox(contextProvider.UseEmbeddedSnapshot
+                                ? "This provider can serve its embedded metadata snapshot immediately and only uses the package-backed context if you explicitly enable preload or later resolve it.\nThis is the recommended default for Addressables-style projects because it avoids auto-pulling the package just to fetch default metadata."
+                                : "This provider will resolve its context asset through IAssetPackage.LoadAssetAsync<UIAssetContextAsset>(path) on first use.\nIf the package is unavailable or the path fails to load, UI loading will safely fall back to an empty default context.",
+                            contextProvider.UseEmbeddedSnapshot ? MessageType.Info : MessageType.None);
                     }
                 }
                 else
@@ -286,10 +289,10 @@ namespace CycloneGames.UIFramework.Editor
                         }
                         else
                         {
-                            EditorGUILayout.HelpBox(
-                                "This provider will resolve its context asset through AssetManagement on the first OpenUI call.\n" +
-                                "If the package is unavailable or the reference fails to load, UI loading will safely fall back to an empty default context.",
-                                MessageType.None);
+                            EditorGUILayout.HelpBox(contextProvider.UseEmbeddedSnapshot
+                                    ? "This provider can serve its embedded metadata snapshot immediately and only touches the AssetManagement reference if you explicitly enable preload or later resolve it.\nThis is the recommended default for Addressables-style projects because it avoids auto-pulling the package just to fetch default metadata."
+                                    : "This provider will resolve its context asset through AssetManagement on first use.\nIf the package is unavailable or the reference fails to load, UI loading will safely fall back to an empty default context.",
+                                contextProvider.UseEmbeddedSnapshot ? MessageType.Info : MessageType.None);
                         }
                     }
                 }
@@ -512,9 +515,23 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
             // Run Validation button
+            EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("Run Validation Check", GUILayout.Height(25)))
             {
                 RunValidation(uiRoot);
+            }
+            if (GUILayout.Button("Open Performance Auditor", GUILayout.Height(25)))
+            {
+                UIPerformanceAuditWindow.ShowWindow();
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (Application.isPlaying)
+            {
+                if (GUILayout.Button("Open Runtime Monitor", GUILayout.Height(22)))
+                {
+                    UIRuntimeMonitorWindow.ShowWindow();
+                }
             }
 
             if (validationRun)
@@ -701,17 +718,33 @@ namespace CycloneGames.UIFramework.Editor
 
             EditorGUILayout.LabelField("[Runtime Mode]", _runtimeStyle);
 
-            // Total windows across all layers
-            int totalWindows = 0;
-            for (int i = 0; i < layerListProp.arraySize; i++)
+            UIManager manager = UnityEngine.Object.FindFirstObjectByType<UIManager>();
+            if (manager != null)
             {
-                var layerProp = layerListProp.GetArrayElementAtIndex(i);
-                if (layerProp.objectReferenceValue is UILayer layer)
+                UIPerformanceStats stats = manager.GetPerformanceStats();
+                EditorGUILayout.LabelField($"Total Active Windows: {stats.ActiveWindowCount}");
+                EditorGUILayout.LabelField($"Scene-Bound Windows: {stats.SceneBoundWindowCount}");
+                EditorGUILayout.LabelField($"Cached Config Handles: {stats.CachedConfigHandleCount}");
+                EditorGUILayout.LabelField($"Cached Prefab Handles: {stats.CachedPrefabHandleCount}");
+                EditorGUILayout.LabelField($"Isolated Window Canvases: {stats.IsolatedWindowCanvasCount}");
+                EditorGUILayout.LabelField($"Pending Scene Sweep: {stats.HasPendingSceneSweep}");
+
+                EditorGUILayout.Space(4);
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("Open Runtime Monitor", GUILayout.Height(22)))
                 {
-                    totalWindows += layer.WindowCount;
+                    UIRuntimeMonitorWindow.ShowWindow();
                 }
+                if (GUILayout.Button("Open Performance Auditor", GUILayout.Height(22)))
+                {
+                    UIPerformanceAuditWindow.ShowWindow();
+                }
+                EditorGUILayout.EndHorizontal();
             }
-            EditorGUILayout.LabelField($"Total Active Windows: {totalWindows}");
+            else
+            {
+                EditorGUILayout.LabelField("Total Active Windows: <UIManager not found>");
+            }
 
             EditorGUILayout.EndVertical();
 

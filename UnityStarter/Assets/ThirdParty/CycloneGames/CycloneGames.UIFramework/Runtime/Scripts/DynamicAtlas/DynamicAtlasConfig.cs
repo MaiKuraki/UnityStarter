@@ -46,6 +46,12 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         [Tooltip("Enable mipmap generation for atlas pages (needed for world-space UI or camera distance filtering)")]
         public bool enableMipmap = false;
 
+        [Tooltip("Allow CPU fallback copy paths (ReadPixels / RenderTexture bridge) when GPU copy and raw buffer copy are unavailable.")]
+        public bool allowCpuReadPixelsFallback = true;
+
+        [Tooltip("Allow CPU-side bleed generation on fallback paths. Disable this on constrained platforms to avoid GetPixels/SetPixels overhead.")]
+        public bool allowCpuBleedFallback = true;
+
         [Tooltip("Custom texture loader (null = Resources.Load)")]
         public Func<string, Texture2D> loadFunc;
 
@@ -135,6 +141,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     config.maxPages = 0;
                     config.enableBleed = true;
                     config.enableMipmap = false;
+                    config.allowCpuReadPixelsFallback = true;
+                    config.allowCpuBleedFallback = true;
                     break;
 
                 case PlatformTier.MobileHighEnd:
@@ -142,6 +150,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     config.maxPages = 8;
                     config.enableBleed = true;
                     config.enableMipmap = false;
+                    config.allowCpuReadPixelsFallback = true;
+                    config.allowCpuBleedFallback = false;
                     break;
 
                 case PlatformTier.MobileLowEnd:
@@ -151,6 +161,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     config.enableMipmap = false;
                     config.targetFormat = TextureFormatHelper.GetRecommendedUncompressedFormat();
                     config.enableBlockAlignment = false;
+                    config.allowCpuReadPixelsFallback = false;
+                    config.allowCpuBleedFallback = false;
                     break;
 
                 case PlatformTier.WebGL:
@@ -161,6 +173,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     config.targetFormat = TextureFormat.RGBA32;
                     config.enablePlatformOptimizations = false;
                     config.enableBlockAlignment = false;
+                    config.allowCpuReadPixelsFallback = false;
+                    config.allowCpuBleedFallback = false;
                     break;
             }
 
@@ -233,6 +247,12 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             if (maxPages < 0)
             {
                 errorMessage = $"maxPages {maxPages} cannot be negative.";
+                return false;
+            }
+
+            if (!allowCpuReadPixelsFallback && allowCpuBleedFallback)
+            {
+                errorMessage = "allowCpuBleedFallback requires allowCpuReadPixelsFallback because CPU bleed depends on CPU-side atlas writes.";
                 return false;
             }
 

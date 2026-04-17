@@ -27,6 +27,16 @@ namespace CycloneGames.UIFramework.Runtime
         [SerializeField] private UIAssetContextAsset contextAsset;
         [SerializeField] private AssetRef<UIAssetContextAsset> contextAssetRef;
         [SerializeField] private string contextAssetLocation;
+        [SerializeField] private bool useEmbeddedSnapshot = true;
+        [SerializeField] private bool preloadPackageBackedContext = false;
+
+        [Header("Embedded Metadata Snapshot")]
+        [SerializeField] private string snapshotConfigBucket;
+        [SerializeField] private string snapshotConfigTag;
+        [SerializeField] private string snapshotConfigOwner;
+        [SerializeField] private string snapshotPrefabBucket;
+        [SerializeField] private string snapshotPrefabTag;
+        [SerializeField] private string snapshotPrefabOwner;
 
         private IAssetHandle<UIAssetContextAsset> _resolvedHandle;
         private UIAssetLoadContext _resolvedContext;
@@ -54,9 +64,12 @@ namespace CycloneGames.UIFramework.Runtime
         public bool UsesDirectReference => sourceMode == ContextSourceMode.DirectReference;
         public bool UsesPathLocation => sourceMode == ContextSourceMode.PathLocation;
         public bool UsesAssetReference => sourceMode == ContextSourceMode.AssetReference;
+        public bool UseEmbeddedSnapshot => useEmbeddedSnapshot;
+        public bool PreloadPackageBackedContext => preloadPackageBackedContext;
         public bool HasAssignedContextAsset => contextAsset != null;
         public bool HasAssignedAssetReference => contextAssetRef.IsValid;
         public bool HasAssignedPathLocation => !string.IsNullOrEmpty(contextAssetLocation);
+        public bool HasEmbeddedSnapshot => GetEmbeddedSnapshotContext().HasAnyMetadata;
         public bool HasConfiguredSource
         {
             get
@@ -85,12 +98,24 @@ namespace CycloneGames.UIFramework.Runtime
             {
                 return contextAsset != null
                     ? contextAsset.ToLoadContext()
-                    : default;
+                    : GetEmbeddedSnapshotContext();
             }
 
-            return _hasResolvedContext
-                ? _resolvedContext
-                : default;
+            if (_hasResolvedContext)
+            {
+                return _resolvedContext;
+            }
+
+            if (useEmbeddedSnapshot)
+            {
+                UIAssetLoadContext snapshot = GetEmbeddedSnapshotContext();
+                if (snapshot.HasAnyMetadata)
+                {
+                    return snapshot;
+                }
+            }
+
+            return default;
         }
 
         public async UniTask<UIAssetLoadContext> ResolveLoadContextAsync(IAssetPackage package, CancellationToken cancellationToken = default)
@@ -105,18 +130,58 @@ namespace CycloneGames.UIFramework.Runtime
                 return _resolvedContext;
             }
 
+            UIAssetLoadContext snapshotContext = useEmbeddedSnapshot
+                ? GetEmbeddedSnapshotContext()
+                : default;
+
+            if (snapshotContext.HasAnyMetadata)
+            {
+                BeginWarmup(package);
+                return snapshotContext;
+            }
+
+            return await EnsureResolvedContextAsync(package, cancellationToken);
+        }
+
+        public void BeginWarmup(IAssetPackage package)
+        {
+            if (UsesDirectReference || !preloadPackageBackedContext || _hasResolvedContext || _resolveTcs != null)
+            {
+                return;
+            }
+
+            if (!HasConfiguredSource || package == null)
+            {
+                return;
+            }
+
+            EnsureResolvedContextAsync(package, default).Forget();
+        }
+
+        public void SyncEmbeddedSnapshotFromAsset()
+        {
+            UIAssetLoadContext context = contextAsset != null
+                ? contextAsset.ToLoadContext()
+                : _resolvedHandle?.Asset != null
+                    ? _resolvedHandle.Asset.ToLoadContext()
+                    : default;
+            ApplyEmbeddedSnapshot(context);
+        }
+
+        public void ClearEmbeddedSnapshot()
+        {
+            ApplyEmbeddedSnapshot(default);
+        }
+
+        private async UniTask<UIAssetLoadContext> EnsureResolvedContextAsync(IAssetPackage package, CancellationToken cancellationToken)
+        {
             if (_resolveTcs != null)
             {
                 return await _resolveTcs.Task.AttachExternalCancellation(cancellationToken);
             }
 
-            if (!contextAssetRef.IsValid)
-            {
-                return default;
-            }
-
             string location = EffectiveLocation;
-            if (string.IsNullOrEmpty(location))
+            if (!HasConfiguredSource || string.IsNullOrEmpty(location))
             {
                 return default;
             }
@@ -156,6 +221,10 @@ namespace CycloneGames.UIFramework.Runtime
                 _resolvedHandle = handle;
                 _resolvedContext = handle.Asset.ToLoadContext();
                 _hasResolvedContext = true;
+                if (!useEmbeddedSnapshot || !GetEmbeddedSnapshotContext().HasAnyMetadata)
+                {
+                    ApplyEmbeddedSnapshot(_resolvedContext);
+                }
                 _resolveTcs.TrySetResult(_resolvedContext);
                 return _resolvedContext;
             }
@@ -200,6 +269,15 @@ namespace CycloneGames.UIFramework.Runtime
                 contextAsset = null;
             }
 
+            if (sourceMode == ContextSourceMode.DirectReference && contextAsset != null)
+            {
+                ApplyEmbeddedSnapshot(contextAsset.ToLoadContext());
+            }
+            else if (!useEmbeddedSnapshot)
+            {
+                ClearEmbeddedSnapshot();
+            }
+
             ReleaseResolvedHandle();
             _resolvedContext = default;
             _hasResolvedContext = false;
@@ -229,6 +307,27 @@ namespace CycloneGames.UIFramework.Runtime
                 cancellationToken.ThrowIfCancellationRequested();
                 await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
             }
+        }
+
+        private UIAssetLoadContext GetEmbeddedSnapshotContext()
+        {
+            return new UIAssetLoadContext(
+                snapshotConfigBucket,
+                snapshotConfigTag,
+                snapshotConfigOwner,
+                snapshotPrefabBucket,
+                snapshotPrefabTag,
+                snapshotPrefabOwner);
+        }
+
+        private void ApplyEmbeddedSnapshot(in UIAssetLoadContext context)
+        {
+            snapshotConfigBucket = context.ConfigBucket;
+            snapshotConfigTag = context.ConfigTag;
+            snapshotConfigOwner = context.ConfigOwner;
+            snapshotPrefabBucket = context.PrefabBucket;
+            snapshotPrefabTag = context.PrefabTag;
+            snapshotPrefabOwner = context.PrefabOwner;
         }
     }
 }
