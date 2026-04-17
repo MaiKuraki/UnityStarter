@@ -52,6 +52,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private readonly bool _enablePlatformOptimizations;
         private readonly bool _enableBleed;
         private readonly bool _enableMipmap;
+        private readonly bool _allowCpuReadPixelsFallback;
+        private readonly bool _allowCpuBleedFallback;
         private bool _needsApply;
 
         public int PageId => _pageId;
@@ -67,11 +69,11 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private int _currentY;
         private int _maxYInRow;
 
-        public DynamicAtlasPage(int size) : this(size, TextureFormat.RGBA32, 2, true, true, false)
+        public DynamicAtlasPage(int size) : this(size, TextureFormat.RGBA32, 2, true, true, false, true, true)
         {
         }
 
-        public DynamicAtlasPage(int size, TextureFormat format, int padding = 2, bool enablePlatformOptimizations = true, bool enableBleed = true, bool enableMipmap = false)
+        public DynamicAtlasPage(int size, TextureFormat format, int padding = 2, bool enablePlatformOptimizations = true, bool enableBleed = true, bool enableMipmap = false, bool allowCpuReadPixelsFallback = true, bool allowCpuBleedFallback = true)
         {
             _width = size;
             _height = size;
@@ -79,6 +81,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _blockSize = TextureFormatHelper.GetBlockSize(format);
             _enablePlatformOptimizations = enablePlatformOptimizations;
             _enableMipmap = enableMipmap;
+            _allowCpuReadPixelsFallback = allowCpuReadPixelsFallback;
+            _allowCpuBleedFallback = allowCpuBleedFallback;
             _copySupport = SystemInfo.copyTextureSupport;
             _pageId = System.Threading.Interlocked.Increment(ref _pageIdCounter);
 
@@ -343,8 +347,13 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 return true;
             }
 
+            if (!_allowCpuReadPixelsFallback)
+            {
+                return false;
+            }
+
             bool result = CopyPixelsFromRegionViaRT(source, srcX, srcY, dstX, dstY, w, h);
-            if (result && _enableBleed) GenerateBleedCPU(dstX, dstY, w, h);
+            if (result && _enableBleed && _allowCpuBleedFallback) GenerateBleedCPU(dstX, dstY, w, h);
             return result;
         }
 
@@ -483,8 +492,13 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             }
 
             // GPU Fallback via RT Bridge (always works regardless of readability)
+            if (!_allowCpuReadPixelsFallback)
+            {
+                return false;
+            }
+
             bool result = CopyPixelsViaRT(source, x, y, w, h);
-            if (result && _enableBleed) GenerateBleedCPU(x, y, w, h);
+            if (result && _enableBleed && _allowCpuBleedFallback) GenerateBleedCPU(x, y, w, h);
             return result;
         }
 
