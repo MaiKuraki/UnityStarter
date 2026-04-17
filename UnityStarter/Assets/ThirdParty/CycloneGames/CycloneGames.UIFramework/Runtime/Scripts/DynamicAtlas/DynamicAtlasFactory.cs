@@ -105,6 +105,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                    a.enableBleed == b.enableBleed &&
                    a.enableMipmap == b.enableMipmap &&
                    a.maxPages == b.maxPages &&
+                   a.allowCpuReadPixelsFallback == b.allowCpuReadPixelsFallback &&
+                   a.allowCpuBleedFallback == b.allowCpuBleedFallback &&
                    a.enablePlatformOptimizations == b.enablePlatformOptimizations &&
                    a.loadFunc == b.loadFunc &&
                    a.unloadFunc == b.unloadFunc;

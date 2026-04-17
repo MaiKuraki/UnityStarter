@@ -38,18 +38,22 @@
 
 ### ⚡ Performance
 
-| Feature                              | Detail                                                                                                                              |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **Asset Lifecycle Delegation**       | `UIManager` holds one `IAssetHandle<T>` per asset; lifecycle (RefCount, eviction) is fully owned by `AssetCacheService` (W-TinyLFU) |
-| **Per-Frame Instantiation Throttle** | Spread heavy instantiation across frames to avoid spikes                                                                            |
-| **Dynamic Atlas System**             | Packs runtime sprites into a single GPU texture at open-time, dramatically reducing draw-calls for icon-heavy UIs                   |
-| **Compressed Atlas Variant**         | `CompressedDynamicAtlasService` uses ASTC/DXT/ETC to reduce VRAM footprint for mobile targets                                       |
-| **Bleed Pixel Support**              | Automatic 1-pixel border replication prevents texture filtering artifacts at sprite edges (GPU + CPU dual-path)                     |
-| **Sprite Metadata Preservation**     | `GetSpriteFromSprite()` preserves original pivot points and 9-slice borders automatically                                           |
-| **Async Atlas Loading**              | `GetSpriteAsync()` performs disk I/O off the main thread via `UniTask`; atlas insertion stays on the main thread                    |
-| **Page & Mipmap Control**            | Configurable `maxPages` limit prevents unbounded VRAM growth; optional mipmap generation for LOD-friendly UI                        |
-| **Thread-Safe Atomic Operations**    | `Interlocked` atomics for pixel-area tracking and ref counting eliminate TOCTOU races in concurrent scenarios                       |
-| **Async by Design**                  | Every load, instantiate, and open operation is `UniTask`-based — never blocks the main thread                                       |
+| Feature                              | Detail                                                                                                                                     |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Asset Lifecycle Delegation**       | `UIManager` holds one `IAssetHandle<T>` per asset; lifecycle (RefCount, eviction) is fully owned by `AssetCacheService` (W-TinyLFU)        |
+| **Per-Frame Instantiation Throttle** | Spread heavy instantiation across frames to avoid spikes                                                                                   |
+| **Dynamic Atlas System**             | Packs runtime sprites into a single GPU texture at open-time, dramatically reducing draw-calls for icon-heavy UIs                          |
+| **Compressed Atlas Variant**         | `CompressedDynamicAtlasService` uses ASTC/DXT/ETC to reduce VRAM footprint for mobile targets                                              |
+| **Bleed Pixel Support**              | Automatic 1-pixel border replication prevents texture filtering artifacts at sprite edges (GPU + CPU dual-path)                            |
+| **Sprite Metadata Preservation**     | `GetSpriteFromSprite()` preserves original pivot points and 9-slice borders automatically                                                  |
+| **Async Atlas Loading**              | `GetSpriteAsync()` performs disk I/O off the main thread via `UniTask`; atlas insertion stays on the main thread                           |
+| **Page & Mipmap Control**            | Configurable `maxPages` limit prevents unbounded VRAM growth; optional mipmap generation for LOD-friendly UI                               |
+| **Thread-Safe Atomic Operations**    | `Interlocked` atomics for pixel-area tracking and ref counting eliminate TOCTOU races in concurrent scenarios                              |
+| **Async by Design**                  | Every load, instantiate, and open operation is `UniTask`-based — never blocks the main thread                                              |
+| **Runtime Monitor**                  | Live Play-mode editor dashboard (`UIRuntimeMonitorWindow`) showing active windows, in-flight opens, handle counts, and per-layer breakdown |
+| **Performance Auditor**              | Static-analysis tool (`UIPerformanceAuditWindow`) that scans UI prefabs for layout thrashing, excessive raycasts, material bloat, and more |
+| **Embedded Context Snapshot**        | `UIAssetContextProvider` caches serialized metadata inline — zero-latency first-frame resolution without blocking on async loads           |
+| **Context Preload Warmup**           | `BeginWarmup(IAssetPackage)` kicks off async context resolution in the background during scene init                                        |
 
 ### 🔒 Reliability & Safety
 
@@ -175,6 +179,8 @@ stateDiagram-v2
 ### 5. `UIWindowConfiguration` (Data-Driven Configuration)
 
 A `ScriptableObject` defining the prefab source, target layer, and optional per-window overrides. Designers configure windows without touching code.
+
+The configuration also includes a **`SubCanvasPolicy`** (`InheritLayerCanvas` / `ForceOwnSubCanvas` / `AutoDetect`) that controls whether the window gets an isolated sub-Canvas for rebuild-cost isolation.
 
 Supported prefab source modes:
 
@@ -326,7 +332,7 @@ await uiService.OpenUIAsync("UIWindow_Shop", assetLoadContext: new UIAssetLoadCo
 
 ### UIAssetContextProvider (Scene-Level Default)
 
-`UIAssetContextProvider` is a `MonoBehaviour` attached to the same `GameObject` as `UIRoot` (or any parent). It provides the **framework-wide default** `UIAssetLoadContext` for all windows that don't specify one at the call site.
+`UIAssetContextProvider` is a `sealed MonoBehaviour` attached to the same `GameObject` as `UIRoot` (or any parent). It provides the **framework-wide default** `UIAssetLoadContext` for all windows that don't specify one at the call site.
 
 It supports three source modes:
 
@@ -339,6 +345,45 @@ It supports three source modes:
 - **Direct mode** returns the context synchronously — ideal for local/static setups.
 - **Async modes** (`AssetReference` / `PathLocation`) are resolved once via `ResolveLoadContextAsync()` and cached for all subsequent calls.
 - `OnValidate()` clears `contextAsset` in non-direct modes to prevent phantom memory retention.
+
+#### Embedded Snapshot (Zero-Latency First Frame)
+
+Enable `useEmbeddedSnapshot` in the Inspector to cache metadata fields (`configBucket`, `configTag`, etc.) directly on the component. The synchronous `GetLoadContext()` method returns this snapshot immediately — no async await needed on the first frame.
+
+```csharp
+// Synchronous path — uses embedded snapshot, never blocks
+UIAssetLoadContext ctx = provider.GetLoadContext();
+```
+
+The snapshot is populated from the linked `UIAssetContextAsset` via **Sync Embedded Snapshot** in the Inspector (or `SyncEmbeddedSnapshotFromAsset()` in code). Clear it with `ClearEmbeddedSnapshot()`.
+
+#### Preload Warmup
+
+For `AssetReference` or `PathLocation` modes, call `BeginWarmup(IAssetPackage)` during scene initialization to start resolving the asset in the background. By the time the first `OpenUI` call arrives, the context is already cached:
+
+```csharp
+// During scene boot
+provider.BeginWarmup(assetPackage);
+
+// Later — resolves instantly from cache
+await uiService.OpenUIAsync("MyWindow");
+```
+
+You can also toggle `preloadPackageBackedContext` in the Inspector so the framework calls `BeginWarmup` automatically when an `IAssetPackage` becomes available.
+
+#### Public API
+
+| Method / Property                 | Description                                                                     |
+| --------------------------------- | ------------------------------------------------------------------------------- |
+| `GetLoadContext()`                | Synchronous — returns embedded snapshot or direct-reference context immediately |
+| `ResolveLoadContextAsync()`       | Async — resolves from package, caches result; deduplicates concurrent calls     |
+| `BeginWarmup(IAssetPackage)`      | Fire-and-forget background resolution for package-backed modes                  |
+| `SyncEmbeddedSnapshotFromAsset()` | Copies current asset's fields into the embedded snapshot                        |
+| `ClearEmbeddedSnapshot()`         | Resets all embedded fields to `null`                                            |
+| `HasConfiguredSource`             | `true` if any source mode has a valid reference/path                            |
+| `HasResolvedAssetReference`       | `true` if an async resolution has completed and is cached                       |
+| `HasEmbeddedSnapshot`             | `true` if at least one embedded field is non-empty                              |
+| `HasEffectiveMetadata`            | `true` if any path (direct, resolved, or snapshot) can provide metadata         |
 
 ### UIAssetContextAsset (Designer-Friendly Configuration)
 
@@ -1627,15 +1672,24 @@ CompressedDynamicAtlasFactory.ClearSharedInstance();
 
 ### Step 8: Editor Tools
 
-The framework includes an editor tool to validate SpriteAtlas format compatibility:
+The framework ships with multiple editor windows for diagnostics and validation:
+
+#### Atlas Format Validator
 
 **Menu**: `Tools > CycloneGames > Dynamic Atlas > Atlas Format Validator`
 
-This tool scans your SpriteAtlas assets and shows:
+Scans `SpriteAtlas` assets and validates compression format compatibility with `CompressedDynamicAtlasService`. Shows per-platform format, validity status, and recommendations.
 
-- Current texture format per platform
-- Compatibility with CompressedDynamicAtlasService
-- Recommendations for optimal format settings
+#### Dynamic Atlas Debugger
+
+**Menu**: `Tools > CycloneGames > Dynamic Atlas > Dynamic Atlas Debugger`
+
+Play-mode visual debugger for the Dynamic Atlas system:
+
+- Sidebar lists all atlas pages with VRAM usage and fill-ratio progress bars
+- Main area renders the atlas texture with zoomable scroll view
+- Overlay draws sprite rects and names on top of the texture
+- Per-page sprite item list for detailed inspection
 
 ### Step 9: Async Loading
 
@@ -1979,6 +2033,81 @@ gameObject.SetActive(false);
 // Use:
 SetVisible(false);
 ```
+
+### Runtime Monitor
+
+**Menu**: `Tools > CycloneGames > UI Framework > Runtime Monitor`
+
+A live Play-mode editor dashboard that auto-repaints every tick. Displays the full `UIPerformanceStats` snapshot:
+
+| Metric                      | Description                                       |
+| --------------------------- | ------------------------------------------------- |
+| `ActiveWindowCount`         | Total open windows                                |
+| `SceneBoundWindowCount`     | Windows bound to the current scene                |
+| `InFlightOpenCount`         | Opens currently in progress (loading / animating) |
+| `CachedConfigHandleCount`   | Configuration asset handles held by UIManager     |
+| `CachedPrefabHandleCount`   | Prefab asset handles held by UIManager            |
+| `LayerCount`                | Active UI layers                                  |
+| `TotalLayerWindowCount`     | Sum of windows across all layers                  |
+| `IsolatedWindowCanvasCount` | Windows with their own sub-Canvas                 |
+| `HasPendingSceneSweep`      | Whether a scene-bound sweep is pending            |
+
+Below the summary, a **Layer Breakdown** table shows each layer's name, sorting order, and window count.
+
+```csharp
+// You can also query these stats from code:
+UIPerformanceStats stats = uiManager.GetPerformanceStats();
+
+var layerStats = new List<UILayerRuntimeStats>();
+uiManager.CopyLayerRuntimeStats(layerStats);
+```
+
+### Performance Auditor (Static Analysis)
+
+**Menu**: `Tools > CycloneGames > UI Framework > Performance Auditor`
+
+Offline tool that scans all `UIWindowConfiguration` assets (or a selection) and produces per-window audit reports. Features:
+
+- **Scan All / Scan Selection** for targeted or project-wide analysis
+- **Severity filter**: Info, Warning, Error
+- **Sort modes**: by warning count, name, graphics count, material variants
+- **Color-coded summary bar** with chip counts
+
+Metrics collected per window:
+
+| Metric                      | Description                                                         |
+| --------------------------- | ------------------------------------------------------------------- |
+| Graphics count              | Total `Graphic` components in the prefab                            |
+| Raycast targets             | `RaycastTarget` enabled count                                       |
+| Non-interactive raycasts    | Raycasts on elements with no `Selectable` / event handler           |
+| Layout groups               | `HorizontalLayoutGroup` / `VerticalLayoutGroup` / `GridLayoutGroup` |
+| Content size fitters        | `ContentSizeFitter` components (layout-rebuild cost)                |
+| Masks / Rect masks          | `Mask` and `RectMask2D` components                                  |
+| Canvas count                | Nested `Canvas` components                                          |
+| Material / texture variants | Distinct materials and textures (draw-call impact)                  |
+| Scroll rects                | `ScrollRect` components                                             |
+
+Issues flagged automatically:
+
+- `LayoutGroup` + `ContentSizeFitter` on the same object (Warning)
+- ≥3 layout components (Warning — likely over-nesting)
+- ≥2 `Mask` components (Warning — stencil cost)
+- ≥3 distinct materials (Warning — draw-call bloat)
+- ≥6 non-interactive raycast targets (Warning)
+- `ScrollRect` without nested sub-Canvas (Info)
+- ≥80 `Graphic` components (Info — consider splitting)
+
+### SubCanvasPolicy
+
+`UIWindowConfiguration` exposes a `SubCanvasPolicy` enum to control whether each window gets its own sub-Canvas:
+
+| Policy               | Behaviour                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------ |
+| `InheritLayerCanvas` | Share the layer's Canvas — maximum batching, best for static windows                       |
+| `ForceOwnSubCanvas`  | Always create an isolated sub-Canvas — limits rebuild cost to this window only             |
+| `AutoDetect`         | Framework auto-isolates windows that contain high-churn markers (animations, scroll rects) |
+
+The Performance Auditor suggests an optimal policy for each window based on its component makeup.
 
 ---
 
