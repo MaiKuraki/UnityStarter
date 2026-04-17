@@ -35,6 +35,30 @@ namespace CycloneGames.UIFramework.Runtime
             PathLocation = 1,
         }
 
+        /// <summary>
+        /// Controls whether the framework should add a nested Canvas to isolate
+        /// UGUI rebuild cost for this window.
+        /// </summary>
+        public enum SubCanvasPolicy
+        {
+            /// <summary>
+            /// Use the layer canvas directly. Best for static windows and maximum batching.
+            /// </summary>
+            InheritLayerCanvas = 0,
+
+            /// <summary>
+            /// Ensure the window root has its own nested Canvas to isolate rebuild cost.
+            /// Best for high-churn or frequently animated windows.
+            /// </summary>
+            ForceOwnSubCanvas = 1,
+
+            /// <summary>
+            /// Inspect the instantiated window and isolate automatically when high-churn
+            /// UI markers are detected.
+            /// </summary>
+            AutoDetect = 2,
+        }
+
         // ── Serialized fields ──────────────────────────────────────────────────────────────
 
         /// <summary>Active loading strategy. Serialized as an integer for forward compatibility.</summary>
@@ -53,6 +77,7 @@ namespace CycloneGames.UIFramework.Runtime
         [SerializeField] private UILayerConfiguration layer;
         [SerializeField, Range(-100, 400)] private int priority = 0;
         [SerializeField] private bool isSceneBound = false;
+        [SerializeField] private SubCanvasPolicy subCanvasPolicy = SubCanvasPolicy.InheritLayerCanvas;
 
         // ── Public API ─────────────────────────────────────────────────────────────────────
 
@@ -117,6 +142,11 @@ namespace CycloneGames.UIFramework.Runtime
         /// unless an explicit open-time override is provided.
         /// </summary>
         public bool IsSceneBound => isSceneBound;
+
+        /// <summary>
+        /// Determines whether this window should isolate UGUI rebuild work with a nested Canvas.
+        /// </summary>
+        public SubCanvasPolicy CanvasIsolationPolicy => subCanvasPolicy;
 
 #if UNITY_EDITOR
         private void OnValidate()
