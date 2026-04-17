@@ -463,6 +463,14 @@ MonoBehaviour:
     m_Location: 
     m_GUID: 
   contextAssetLocation: 
+  useEmbeddedSnapshot: 1
+  preloadPackageBackedContext: 0
+  snapshotConfigBucket: 
+  snapshotConfigTag: 
+  snapshotConfigOwner: 
+  snapshotPrefabBucket: 
+  snapshotPrefabTag: 
+  snapshotPrefabOwner: 
 --- !u!1 &5233463464711557999
 GameObject:
   m_ObjectHideFlags: 0

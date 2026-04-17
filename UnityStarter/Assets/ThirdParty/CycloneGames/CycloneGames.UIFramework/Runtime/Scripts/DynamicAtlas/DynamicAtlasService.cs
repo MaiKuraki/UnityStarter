@@ -106,6 +106,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private readonly bool _enablePlatformOptimizations;
         private readonly bool _enableBleed;
         private readonly bool _enableMipmap;
+        private readonly bool _allowCpuReadPixelsFallback;
+        private readonly bool _allowCpuBleedFallback;
         private readonly int _blockSize;
         private readonly int _maxPages;
 
@@ -136,6 +138,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _enablePlatformOptimizations = config.enablePlatformOptimizations;
             _enableBleed = config.enableBleed;
             _enableMipmap = config.enableMipmap;
+            _allowCpuReadPixelsFallback = config.allowCpuReadPixelsFallback;
+            _allowCpuBleedFallback = config.allowCpuBleedFallback;
             _padding = config.padding;
             _blockSize = TextureFormatHelper.GetBlockSize(_targetFormat);
             _maxPages = config.maxPages;
@@ -709,7 +713,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 #endif
                 return false;
             }
-            var page = new DynamicAtlasPage(_pageSize, _targetFormat, _padding, _enablePlatformOptimizations, _enableBleed, _enableMipmap);
+            var page = new DynamicAtlasPage(_pageSize, _targetFormat, _padding, _enablePlatformOptimizations, _enableBleed, _enableMipmap, _allowCpuReadPixelsFallback, _allowCpuBleedFallback);
             _pages.Add(page);
             return true;
         }
@@ -865,7 +869,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                     }
 
                     // Create a pristine new page matching the config
-                    var newPage = new DynamicAtlasPage(_pageSize, _targetFormat, _padding, _enablePlatformOptimizations, _enableBleed, _enableMipmap);
+                    var newPage = new DynamicAtlasPage(_pageSize, _targetFormat, _padding, _enablePlatformOptimizations, _enableBleed, _enableMipmap, _allowCpuReadPixelsFallback, _allowCpuBleedFallback);
                     _pages.Add(newPage);
                     var stagedUpdates = new List<PendingDefragUpdate>(itemsToMove.Count);
 

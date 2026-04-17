@@ -409,6 +409,8 @@ namespace CycloneGames.UIFramework.Editor
                 EditorGUILayout.HelpBox("PathLocation: config stores plain string location.", MessageType.Info);
             }
 
+            DrawCreatorPerformanceGuidance();
+
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(10);
 
@@ -491,6 +493,7 @@ namespace CycloneGames.UIFramework.Editor
                     EditorGUILayout.HelpBox("✓ Template prefab will be used as base for the new prefab.", MessageType.Info);
                 }
             }
+            DrawTemplateAuditSummary();
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(15);
 
@@ -518,6 +521,54 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.Space(5);
             EditorGUILayout.LabelField(title, _sectionStyle);
             EditorGUILayout.Space(3);
+        }
+
+        private void DrawCreatorPerformanceGuidance()
+        {
+            if (configSourceMode == UIWindowConfiguration.PrefabSource.PrefabReference)
+            {
+                EditorGUILayout.HelpBox("Direct Ref is the lowest-friction setup. Best for test scenes, built-in UI, and windows that do not need package-backed loading.", MessageType.None);
+            }
+            else if (configSourceMode == UIWindowConfiguration.PrefabSource.AssetReference)
+            {
+                EditorGUILayout.HelpBox("Asset Ref is recommended for Addressables / YooAsset style projects. It aligns best with AssetManagement caching and package ownership.", MessageType.None);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("Path mode is flexible for custom loaders, but validation depends on your runtime loader contract. Prefer it only when your project intentionally uses path-driven resolution.", MessageType.None);
+            }
+        }
+
+        private void DrawTemplateAuditSummary()
+        {
+            if (templatePrefab == null) return;
+
+            var report = UIPerformanceAuditUtility.AuditPrefab(templatePrefab);
+            if (report == null) return;
+
+            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("Template Performance Audit", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(
+                $"Graphics {report.GraphicsCount}  |  Layout {report.LayoutGroupCount}/{report.ContentSizeFitterCount}  |  Masks {report.MaskCount + report.RectMaskCount}  |  Suggested {report.SuggestedSubCanvasPolicy}",
+                EditorStyles.miniLabel);
+
+            for (int i = 0; i < report.Issues.Count; i++)
+            {
+                MessageType type = report.Issues[i].Severity == UIPerformanceAuditUtility.AuditSeverity.Warning
+                    ? MessageType.Warning
+                    : report.Issues[i].Severity == UIPerformanceAuditUtility.AuditSeverity.Error
+                        ? MessageType.Error
+                        : MessageType.None;
+                EditorGUILayout.HelpBox(report.Issues[i].Message, type);
+            }
+
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Open Performance Auditor", GUILayout.Width(170)))
+            {
+                UIPerformanceAuditWindow.ShowWindow();
+            }
+            EditorGUILayout.EndHorizontal();
         }
 
         private System.Type GetScriptType(string scriptName, string namespaceName)

@@ -334,68 +334,43 @@ namespace CycloneGames.UIFramework.Editor
 
         private void DrawCanvasIsolationAudit(UIWindowConfiguration config, UIWindowConfiguration.SubCanvasPolicy policy)
         {
-            GameObject prefab = ResolveInspectionPrefab(config);
-            if (prefab == null)
+            var report = UIPerformanceAuditUtility.AuditWindowConfiguration(config);
+            if (report == null || report.Prefab == null)
             {
                 return;
             }
 
-            bool hasAnimator = PrefabHasMarker<Animator>(prefab) || PrefabHasMarker<Animation>(prefab);
-            bool hasScroll = PrefabHasMarker<ScrollRect>(prefab);
-            bool hasLayout = PrefabHasMarker<LayoutGroup>(prefab) || PrefabHasMarker<ContentSizeFitter>(prefab);
-            bool hasMask = PrefabHasMarker<Mask>(prefab) || PrefabHasMarker<RectMask2D>(prefab);
-
-            if (!hasAnimator && !hasScroll && !hasLayout && !hasMask)
+            if (!report.HasIssues && report.SuggestedSubCanvasPolicy == UIWindowConfiguration.SubCanvasPolicy.InheritLayerCanvas)
             {
                 return;
             }
 
-            string riskSummary =
-                (hasAnimator ? "Animator/Animation " : string.Empty) +
-                (hasScroll ? "ScrollRect " : string.Empty) +
-                (hasLayout ? "LayoutGroup/ContentSizeFitter " : string.Empty) +
-                (hasMask ? "Mask/RectMask2D " : string.Empty);
-
-            if (policy == UIWindowConfiguration.SubCanvasPolicy.InheritLayerCanvas)
+            if (policy == UIWindowConfiguration.SubCanvasPolicy.InheritLayerCanvas &&
+                report.SuggestedSubCanvasPolicy != UIWindowConfiguration.SubCanvasPolicy.InheritLayerCanvas)
             {
                 EditorGUILayout.HelpBox(
-                    $"Prefab audit detected high-churn UI markers: {riskSummary.Trim()}.\n" +
-                    "Consider AutoDetect or ForceOwnSubCanvas to keep this window from rebuilding the entire UILayer canvas.",
+                    $"Prefab audit suggests {report.SuggestedSubCanvasPolicy} for better rebuild isolation.\n" +
+                    "This window contains high-churn UI markers that can expand LayoutRebuild / Graphic rebuild cost across the whole UILayer.",
                     MessageType.Warning);
             }
-            else
-            {
-                EditorGUILayout.HelpBox(
-                    $"Prefab audit detected high-churn UI markers: {riskSummary.Trim()}.\n" +
-                    "Current Sub Canvas policy is already configured to isolate this window when appropriate.",
-                    MessageType.None);
-            }
-        }
 
-        private static GameObject ResolveInspectionPrefab(UIWindowConfiguration config)
-        {
-            if (config == null)
+            for (int i = 0; i < report.Issues.Count; i++)
             {
-                return null;
+                MessageType type = report.Issues[i].Severity == UIPerformanceAuditUtility.AuditSeverity.Warning
+                    ? MessageType.Warning
+                    : report.Issues[i].Severity == UIPerformanceAuditUtility.AuditSeverity.Error
+                        ? MessageType.Error
+                        : MessageType.None;
+                EditorGUILayout.HelpBox(report.Issues[i].Message, type);
             }
 
-            if (config.Source == UIWindowConfiguration.PrefabSource.PrefabReference)
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button("Open Performance Auditor", GUILayout.Width(170)))
             {
-                return config.WindowPrefab != null ? config.WindowPrefab.gameObject : null;
+                UIPerformanceAuditWindow.ShowWindow();
             }
-
-            string location = config.EffectiveLocation;
-            if (string.IsNullOrEmpty(location) || !location.StartsWith("Assets/", System.StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            return AssetDatabase.LoadAssetAtPath<GameObject>(location);
-        }
-
-        private static bool PrefabHasMarker<T>(GameObject prefab) where T : Component
-        {
-            return prefab != null && prefab.GetComponentInChildren<T>(true) != null;
+            EditorGUILayout.EndHorizontal();
         }
 
         // ── Prefab source section ─────────────────────────────────────────────────────────

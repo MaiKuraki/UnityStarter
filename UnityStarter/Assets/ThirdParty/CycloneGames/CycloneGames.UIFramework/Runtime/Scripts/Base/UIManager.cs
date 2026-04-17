@@ -140,6 +140,7 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             AddUICameraToMainCameraStack();
+            WarmupDefaultAssetLoadContext();
         }
 
         private UIRoot TryGetUIRoot()
@@ -1071,6 +1072,69 @@ namespace CycloneGames.UIFramework.Runtime
             return TryGetUIRoot()?.GetRootCanvasSize() ?? default;
         }
 
+        public UIPerformanceStats GetPerformanceStats()
+        {
+            UIRoot root = TryGetUIRoot();
+            int layerCount = 0;
+            int totalLayerWindowCount = 0;
+            if (root != null)
+            {
+                for (int i = 0; i < root.transform.childCount; i++)
+                {
+                    Transform child = root.transform.GetChild(i);
+                    if (child == null) continue;
+                    UILayer layer = child.GetComponent<UILayer>();
+                    if (layer == null) continue;
+
+                    layerCount++;
+                    totalLayerWindowCount += layer.WindowCount;
+                }
+            }
+
+            int isolatedWindowCanvasCount = 0;
+            foreach (var kv in activeWindows)
+            {
+                UIWindow window = kv.Value;
+                if (window == null || window.gameObject == null) continue;
+                if (window.GetComponent<Canvas>() != null)
+                {
+                    isolatedWindowCanvasCount++;
+                }
+            }
+
+            return new UIPerformanceStats(
+                activeWindows.Count,
+                _sceneBoundWindows.Count,
+                _openCancellations.Count,
+                _configHandles.Count,
+                _prefabHandles.Count,
+                layerCount,
+                totalLayerWindowCount,
+                isolatedWindowCanvasCount,
+                _hasPendingSceneBoundSweep);
+        }
+
+        public void CopyLayerRuntimeStats(List<UILayerRuntimeStats> results)
+        {
+            if (results == null) return;
+            results.Clear();
+
+            UIRoot root = TryGetUIRoot();
+            if (root == null) return;
+
+            for (int i = 0; i < root.transform.childCount; i++)
+            {
+                Transform child = root.transform.GetChild(i);
+                if (child == null) continue;
+
+                UILayer layer = child.GetComponent<UILayer>();
+                if (layer == null) continue;
+
+                int sortingOrder = layer.UICanvas != null ? layer.UICanvas.sortingOrder : 0;
+                results.Add(new UILayerRuntimeStats(layer.LayerName, sortingOrder, layer.WindowCount));
+            }
+        }
+
         public Camera GetUICamera()
         {
             return TryGetUIRoot()?.UICamera;
@@ -1230,6 +1294,17 @@ namespace CycloneGames.UIFramework.Runtime
             }
 
             return default;
+        }
+
+        private void WarmupDefaultAssetLoadContext()
+        {
+            UIRoot root = TryGetUIRoot();
+            if (root == null || root.AssetContextProvider == null)
+            {
+                return;
+            }
+
+            root.AssetContextProvider.BeginWarmup(assetPackage);
         }
 
         private static bool ShouldIsolateWindowCanvas(UIWindow window, UIWindowConfiguration config)

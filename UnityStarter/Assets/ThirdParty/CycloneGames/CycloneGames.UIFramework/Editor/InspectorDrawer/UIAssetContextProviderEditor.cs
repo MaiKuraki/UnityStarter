@@ -16,6 +16,8 @@ namespace CycloneGames.UIFramework.Editor
         private SerializedProperty contextAssetProp;
         private SerializedProperty contextAssetRefProp;
         private SerializedProperty contextAssetLocationProp;
+        private SerializedProperty useEmbeddedSnapshotProp;
+        private SerializedProperty preloadPackageBackedContextProp;
 
         private GUIStyle _titleStyle;
         private GUIStyle _statusBoxStyle;
@@ -28,6 +30,8 @@ namespace CycloneGames.UIFramework.Editor
             contextAssetProp = serializedObject.FindProperty("contextAsset");
             contextAssetRefProp = serializedObject.FindProperty("contextAssetRef");
             contextAssetLocationProp = serializedObject.FindProperty("contextAssetLocation");
+            useEmbeddedSnapshotProp = serializedObject.FindProperty("useEmbeddedSnapshot");
+            preloadPackageBackedContextProp = serializedObject.FindProperty("preloadPackageBackedContext");
         }
 
         public override void OnInspectorGUI()
@@ -43,6 +47,8 @@ namespace CycloneGames.UIFramework.Editor
             DrawSourceModeSelector(provider);
             EditorGUILayout.Space(6);
             DrawSourceBody(provider);
+            EditorGUILayout.Space(6);
+            DrawSnapshotControls(provider);
             EditorGUILayout.Space(6);
             DrawSummary(provider);
 
@@ -170,10 +176,64 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.EndVertical();
         }
 
+        private void DrawSnapshotControls(UIAssetContextProvider provider)
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Embedded Snapshot", _sectionLabelStyle);
+            EditorGUILayout.PropertyField(useEmbeddedSnapshotProp, new GUIContent("Use Embedded Snapshot"));
+            EditorGUILayout.PropertyField(preloadPackageBackedContextProp, new GUIContent("Preload Package Context"));
+
+            if (provider.UsesDirectReference)
+            {
+                EditorGUILayout.HelpBox(
+                    "Direct Reference mode already resolves immediately. The embedded snapshot mainly helps keep summary data and fallback metadata aligned.",
+                    MessageType.None);
+            }
+            else if (provider.UseEmbeddedSnapshot)
+            {
+                EditorGUILayout.HelpBox(
+                    "The embedded snapshot is used immediately on the first OpenUI call, so package-backed modes do not need to block on metadata resolution before opening the window.\n" +
+                    "Recommended default for Addressables/YooAsset projects: keep Snapshot enabled and Preload Package Context disabled.",
+                    MessageType.Info);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox(
+                    "Embedded snapshot is disabled. Package-backed modes will wait for the context asset to load on first use.",
+                    MessageType.Warning);
+            }
+
+            EditorGUILayout.BeginHorizontal();
+            using (new EditorGUI.DisabledScope(!CanSyncSnapshot(provider)))
+            {
+                if (GUILayout.Button("Sync Snapshot", GUILayout.Height(22f)))
+                {
+                    Undo.RecordObject(provider, "Sync UI Asset Context Snapshot");
+                    provider.SyncEmbeddedSnapshotFromAsset();
+                    EditorUtility.SetDirty(provider);
+                }
+            }
+
+            using (new EditorGUI.DisabledScope(!provider.HasEmbeddedSnapshot))
+            {
+                if (GUILayout.Button("Clear Snapshot", GUILayout.Height(22f)))
+                {
+                    Undo.RecordObject(provider, "Clear UI Asset Context Snapshot");
+                    provider.ClearEmbeddedSnapshot();
+                    EditorUtility.SetDirty(provider);
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.EndVertical();
+        }
+
         private void DrawSummary(UIAssetContextProvider provider)
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField("Resolved Summary", _sectionLabelStyle);
+            EditorGUILayout.LabelField($"Uses Snapshot: {(provider.UseEmbeddedSnapshot ? "Yes" : "No")}", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField($"Has Snapshot Metadata: {(provider.HasEmbeddedSnapshot ? "Yes" : "No")}", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField($"Preload Enabled: {(provider.PreloadPackageBackedContext ? "Yes" : "No")}", EditorStyles.miniLabel);
             EditorGUILayout.LabelField($"Effective Location: {GetDisplayValue(provider.EffectiveLocation)}", EditorStyles.miniLabel);
             EditorGUILayout.LabelField($"Config Bucket: {GetDisplayValue(provider.ConfigBucket)}", EditorStyles.miniLabel);
             EditorGUILayout.LabelField($"Config Tag: {GetDisplayValue(provider.ConfigTag)}", EditorStyles.miniLabel);
@@ -194,7 +254,7 @@ namespace CycloneGames.UIFramework.Editor
                 case UIAssetContextProvider.ContextSourceMode.PathLocation:
                     return "Custom address string. Best when your package pipeline resolves assets from a plain path or address.";
                 case UIAssetContextProvider.ContextSourceMode.AssetReference:
-                    return "Typed AssetRef<UIAssetContextAsset>. Best for Addressables / YooAsset style package-backed projects.";
+                    return "Typed AssetRef<UIAssetContextAsset>. Best for Addressables / YooAsset style package-backed projects. Recommended with Snapshot enabled and Preload disabled by default.";
                 default:
                     return string.Empty;
             }
@@ -214,6 +274,13 @@ namespace CycloneGames.UIFramework.Editor
         private static string GetDisplayValue(string value)
         {
             return string.IsNullOrEmpty(value) ? "<none>" : value;
+        }
+
+        private static bool CanSyncSnapshot(UIAssetContextProvider provider)
+        {
+            return provider.UsesDirectReference
+                ? provider.ContextAsset != null
+                : provider.HasResolvedAssetReference;
         }
     }
 }
