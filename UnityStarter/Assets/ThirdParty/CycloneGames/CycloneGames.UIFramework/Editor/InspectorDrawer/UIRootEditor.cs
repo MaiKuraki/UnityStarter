@@ -3,6 +3,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Generic;
+using System.IO;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
@@ -186,6 +187,15 @@ namespace CycloneGames.UIFramework.Editor
 
             EditorGUILayout.EndHorizontal();
 
+            UIAssetContextProvider contextProvider = uiRoot.AssetContextProvider;
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Asset Context", GUILayout.Width(100));
+            EditorGUILayout.ObjectField(contextProvider, typeof(UIAssetContextProvider), true);
+            DrawStatusIndicator(contextProvider != null);
+            EditorGUILayout.EndHorizontal();
+
+            DrawAssetContextControls(uiRoot, contextProvider);
+
             // Canvas info
             if (hasCanvas)
             {
@@ -208,7 +218,165 @@ namespace CycloneGames.UIFramework.Editor
                 }
             }
 
+            if (contextProvider == null)
+            {
+                EditorGUILayout.HelpBox(
+                    "No UIAssetContextProvider found on UIRoot or its parents.\n" +
+                    "UI windows can still open, but default bucket/tag/owner metadata must then come from explicit OpenUI(...) overrides.",
+                    MessageType.Info);
+            }
+            else
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.LabelField($"Source Mode: {contextProvider.SourceMode}", EditorStyles.miniLabel);
+
+                if (contextProvider.UsesDirectReference)
+                {
+                    if (!contextProvider.HasAssignedContextAsset)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "UIAssetContextProvider is in DirectReference mode, but no UIAssetContextAsset is assigned.\n" +
+                            "This is still a safe empty-context configuration and will not block UI loading.",
+                            MessageType.Info);
+                    }
+                    else if (!contextProvider.HasEffectiveMetadata)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "A UIAssetContextAsset is assigned, but all metadata fields are currently empty.\n" +
+                            "Loads will still succeed and simply behave like an empty default context until the project config fills these values.",
+                            MessageType.None);
+                    }
+
+                    EditorGUILayout.ObjectField("Context Asset", contextProvider.ContextAsset, typeof(UIAssetContextAsset), false);
+                }
+                else if (contextProvider.UsesPathLocation)
+                {
+                    if (!contextProvider.HasAssignedPathLocation)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "UIAssetContextProvider is in PathLocation mode, but Custom Path is empty.\n" +
+                            "This is still a safe empty-context configuration and will not block UI loading.",
+                            MessageType.Info);
+                    }
+                    else
+                    {
+                        EditorGUILayout.LabelField($"Custom Path: {GetDisplayValue(contextProvider.ContextAssetLocation)}", EditorStyles.miniLabel);
+                        EditorGUILayout.HelpBox(
+                            "This provider will resolve its context asset through IAssetPackage.LoadAssetAsync<UIAssetContextAsset>(path) on the first OpenUI call.\n" +
+                            "If the package is unavailable or the path fails to load, UI loading will safely fall back to an empty default context.",
+                            MessageType.None);
+                    }
+                }
+                else
+                {
+                    if (!contextProvider.HasAssignedAssetReference)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "UIAssetContextProvider is in AssetReference mode, but no AssetRef is configured.\n" +
+                        "This is still a safe empty-context configuration and will not block UI loading.",
+                            MessageType.Info);
+                    }
+                    else
+                    {
+                        EditorGUILayout.LabelField($"AssetRef Location: {GetDisplayValue(contextProvider.ContextAssetLocation)}", EditorStyles.miniLabel);
+
+                        if (contextProvider.HasResolvedAssetReference)
+                        {
+                            EditorGUILayout.ObjectField("Resolved Asset", contextProvider.ContextAsset, typeof(UIAssetContextAsset), false);
+                        }
+                        else
+                        {
+                            EditorGUILayout.HelpBox(
+                                "This provider will resolve its context asset through AssetManagement on the first OpenUI call.\n" +
+                                "If the package is unavailable or the reference fails to load, UI loading will safely fall back to an empty default context.",
+                                MessageType.None);
+                        }
+                    }
+                }
+
+                EditorGUILayout.LabelField($"Config Bucket: {GetDisplayValue(contextProvider.ConfigBucket)}", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"Config Tag: {GetDisplayValue(contextProvider.ConfigTag)}", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"Config Owner: {GetDisplayValue(contextProvider.ConfigOwner)}", EditorStyles.miniLabel);
+                EditorGUILayout.Space(2);
+                EditorGUILayout.LabelField($"Prefab Bucket: {GetDisplayValue(contextProvider.PrefabBucket)}", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"Prefab Tag: {GetDisplayValue(contextProvider.PrefabTag)}", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"Prefab Owner: {GetDisplayValue(contextProvider.PrefabOwner)}", EditorStyles.miniLabel);
+                EditorGUI.indentLevel--;
+            }
+
             EditorGUILayout.EndVertical();
+        }
+
+        private static string GetDisplayValue(string value)
+        {
+            return string.IsNullOrEmpty(value) ? "<none>" : value;
+        }
+
+        private void DrawAssetContextControls(UIRoot uiRoot, UIAssetContextProvider contextProvider)
+        {
+            EditorGUILayout.BeginHorizontal();
+
+            if (contextProvider == null)
+            {
+                if (GUILayout.Button("Add Provider", GUILayout.Height(22)))
+                {
+                    Undo.AddComponent<UIAssetContextProvider>(uiRoot.gameObject);
+                    EditorUtility.SetDirty(uiRoot.gameObject);
+                }
+            }
+            else
+            {
+                if (GUILayout.Button("Select Provider", GUILayout.Height(22)))
+                {
+                    Selection.activeObject = contextProvider;
+                    EditorGUIUtility.PingObject(contextProvider);
+                }
+
+                if (contextProvider.UsesDirectReference && contextProvider.ContextAsset == null)
+                {
+                    if (GUILayout.Button("Create Context Asset", GUILayout.Height(22)))
+                    {
+                        CreateAndAssignContextAsset(uiRoot, contextProvider);
+                    }
+                }
+                else if (contextProvider.UsesDirectReference && contextProvider.ContextAsset != null)
+                {
+                    if (GUILayout.Button("Select Context Asset", GUILayout.Height(22)))
+                    {
+                        Selection.activeObject = contextProvider.ContextAsset;
+                        EditorGUIUtility.PingObject(contextProvider.ContextAsset);
+                    }
+                }
+            }
+
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private static void CreateAndAssignContextAsset(UIRoot uiRoot, UIAssetContextProvider contextProvider)
+        {
+            string rootPrefabPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(uiRoot.gameObject);
+            string baseFolder = !string.IsNullOrEmpty(rootPrefabPath)
+                ? Path.GetDirectoryName(rootPrefabPath)?.Replace("\\", "/")
+                : "Assets";
+            if (string.IsNullOrEmpty(baseFolder) || !AssetDatabase.IsValidFolder(baseFolder))
+            {
+                baseFolder = "Assets";
+            }
+
+            string assetPath = AssetDatabase.GenerateUniqueAssetPath($"{baseFolder}/UIAssetContext_Default.asset");
+            UIAssetContextAsset asset = ScriptableObject.CreateInstance<UIAssetContextAsset>();
+            AssetDatabase.CreateAsset(asset, assetPath);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            SerializedObject serializedProvider = new SerializedObject(contextProvider);
+            SerializedProperty contextAssetProp = serializedProvider.FindProperty("contextAsset");
+            contextAssetProp.objectReferenceValue = asset;
+            serializedProvider.ApplyModifiedProperties();
+
+            EditorUtility.SetDirty(contextProvider);
+            Selection.activeObject = asset;
+            EditorGUIUtility.PingObject(asset);
         }
 
         private void DrawStatusIndicator(bool isOk)

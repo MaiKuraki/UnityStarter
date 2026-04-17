@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 using CycloneGames.Logger;
@@ -17,6 +18,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
     public class DynamicAtlasPage : IDisposable
     {
         private static int _pageIdCounter = 0;
+        private static readonly Dictionary<int, Color32[]> ClearBufferCache = new Dictionary<int, Color32[]>(4);
+        private static readonly object ClearBufferCacheLock = new object();
 
         public Texture2D Texture { get; private set; }
         public int Width => _width;
@@ -125,9 +128,22 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             }
 #endif
             // Managed fallback (WebGL or when unsafe fails)
-            var clearPixels = new Color32[_width * _height];
+            var clearPixels = GetSharedClearBuffer(_width * _height);
             Texture.SetPixels32(clearPixels);
             Texture.Apply();
+        }
+
+        private static Color32[] GetSharedClearBuffer(int size)
+        {
+            lock (ClearBufferCacheLock)
+            {
+                if (!ClearBufferCache.TryGetValue(size, out var buffer))
+                {
+                    buffer = new Color32[size];
+                    ClearBufferCache[size] = buffer;
+                }
+                return buffer;
+            }
         }
 
         /// <summary>
@@ -322,6 +338,11 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 return true;
             }
 
+            if (TryCopyPixelsFromRaw(source, srcX, srcY, dstX, dstY, w, h))
+            {
+                return true;
+            }
+
             bool result = CopyPixelsFromRegionViaRT(source, srcX, srcY, dstX, dstY, w, h);
             if (result && _enableBleed) GenerateBleedCPU(dstX, dstY, w, h);
             return result;
@@ -456,11 +477,117 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 return true;
             }
 
+            if (TryCopyPixelsFromRaw(source, 0, 0, x, y, w, h))
+            {
+                return true;
+            }
+
             // GPU Fallback via RT Bridge (always works regardless of readability)
             bool result = CopyPixelsViaRT(source, x, y, w, h);
             if (result && _enableBleed) GenerateBleedCPU(x, y, w, h);
             return result;
         }
+
+        private bool TryCopyPixelsFromRaw(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
+        {
+#if !UNITY_WEBGL || UNITY_EDITOR
+            if (!_enablePlatformOptimizations || !TextureFormatHelper.SupportsNativeArrays())
+            {
+                return false;
+            }
+
+            if (!source.isReadable ||
+                !TextureFormatHelper.SupportsRawColor32Copy(source.format) ||
+                !TextureFormatHelper.SupportsRawColor32Copy(_format))
+            {
+                return false;
+            }
+
+            try
+            {
+                NativeArray<Color32> sourcePixels = source.GetRawTextureData<Color32>();
+                NativeArray<Color32> atlasPixels = Texture.GetRawTextureData<Color32>();
+
+                int sourceWidth = source.width;
+                for (int row = 0; row < h; row++)
+                {
+                    int sourceRowStart = (srcY + row) * sourceWidth + srcX;
+                    int atlasRowStart = (dstY + row) * _width + dstX;
+                    for (int col = 0; col < w; col++)
+                    {
+                        atlasPixels[atlasRowStart + col] = sourcePixels[sourceRowStart + col];
+                    }
+                }
+
+                if (_enableBleed)
+                {
+                    CopyBleedFromRaw(sourcePixels, sourceWidth, srcX, srcY, atlasPixels, dstX, dstY, w, h);
+                }
+
+                _needsApply = true;
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+#else
+            return false;
+#endif
+        }
+
+#if !UNITY_WEBGL || UNITY_EDITOR
+        private void CopyBleedFromRaw(
+            NativeArray<Color32> sourcePixels,
+            int sourceWidth,
+            int srcX,
+            int srcY,
+            NativeArray<Color32> atlasPixels,
+            int dstX,
+            int dstY,
+            int w,
+            int h)
+        {
+            if (dstX > 0)
+            {
+                for (int row = 0; row < h; row++)
+                {
+                    Color32 leftPixel = sourcePixels[(srcY + row) * sourceWidth + srcX];
+                    atlasPixels[(dstY + row) * _width + (dstX - 1)] = leftPixel;
+                }
+            }
+
+            if (dstX + w < _width)
+            {
+                int srcRight = srcX + w - 1;
+                for (int row = 0; row < h; row++)
+                {
+                    Color32 rightPixel = sourcePixels[(srcY + row) * sourceWidth + srcRight];
+                    atlasPixels[(dstY + row) * _width + (dstX + w)] = rightPixel;
+                }
+            }
+
+            if (dstY > 0)
+            {
+                int sourceBottom = srcY * sourceWidth + srcX;
+                int atlasBottom = (dstY - 1) * _width + dstX;
+                for (int col = 0; col < w; col++)
+                {
+                    atlasPixels[atlasBottom + col] = sourcePixels[sourceBottom + col];
+                }
+            }
+
+            if (dstY + h < _height)
+            {
+                int sourceTop = (srcY + h - 1) * sourceWidth + srcX;
+                int atlasTop = (dstY + h) * _width + dstX;
+                for (int col = 0; col < w; col++)
+                {
+                    atlasPixels[atlasTop + col] = sourcePixels[sourceTop + col];
+                }
+            }
+        }
+#endif
 
         private bool CopyPixelsViaRT(Texture2D source, int x, int y, int w, int h)
         {

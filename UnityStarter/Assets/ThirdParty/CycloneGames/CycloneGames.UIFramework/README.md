@@ -270,6 +270,100 @@ public class UIDebugBootstrap : MonoBehaviour
 }
 ```
 
+## Asset Load Context (Per-Window Asset Metadata)
+
+**`UIAssetLoadContext`** lets you attach custom metadata (bucket, tag, owner) to every UI asset load — giving you fine-grained control over how `AssetCacheService` tracks, profiles, and evicts UI resources.
+
+### Why use it?
+
+- **Per-feature isolation**: Tag main-menu assets with `"MainMenu"` and battle-HUD assets with `"Battle"` so the Cache Debugger shows them separately.
+- **Owner-based eviction**: Assign an `Owner` value (e.g. a level ID) so all UI assets tied to that owner can be bulk-released on scene unload.
+- **Separate config and prefab lifecycles**: Give configuration assets a long-lived bucket while keeping prefab assets in a more aggressively evicted pool.
+
+### The struct
+
+`UIAssetLoadContext` is a `readonly struct` (zero heap allocation):
+
+```csharp
+// Shared bucket/tag/owner for both config and prefab
+var ctx = new UIAssetLoadContext(
+    sharedBucket: "Battle",
+    sharedTag:    "hud",
+    sharedOwner:  "level_3"
+);
+
+// Or separate metadata for config vs. prefab
+var ctx = new UIAssetLoadContext(
+    configBucket: "ui_configs",  configTag: "menu",  configOwner: "global",
+    prefabBucket: "ui_prefabs",  prefabTag: "menu",  prefabOwner: "level_1"
+);
+
+// From AssetBucketScope
+var ctx = UIAssetLoadContext.FromScope(myScope);
+var ctx = UIAssetLoadContext.FromScopes(configScope, prefabScope);
+
+// Check if any field is set
+if (ctx.HasAnyMetadata) { /* ... */ }
+```
+
+### Two-level merge hierarchy
+
+When you call `OpenUI` / `OpenUIAsync`, the final metadata is resolved by merging two layers (first non-null field wins):
+
+1. **Call-site parameter** — passed directly to `OpenUI("Window", assetLoadContext: ctx)`
+2. **UIAssetContextProvider** — the default context resolved from the `UIRoot`'s `UIAssetContextProvider` component
+
+```csharp
+// The provider is auto-discovered on UIRoot (or any parent)
+// All OpenUI calls without an explicit context fall back to the provider's metadata.
+
+// Override per-call
+await uiService.OpenUIAsync("UIWindow_Shop", assetLoadContext: new UIAssetLoadContext(
+    sharedBucket: "Shop",
+    sharedOwner:  "shop_v2"
+));
+```
+
+### UIAssetContextProvider (Scene-Level Default)
+
+`UIAssetContextProvider` is a `MonoBehaviour` attached to the same `GameObject` as `UIRoot` (or any parent). It provides the **framework-wide default** `UIAssetLoadContext` for all windows that don't specify one at the call site.
+
+It supports three source modes:
+
+| Mode              | Serialized Field       | Description                                                         |
+| ----------------- | ---------------------- | ------------------------------------------------------------------- |
+| `DirectReference` | `contextAsset`         | Directly references a `UIAssetContextAsset` ScriptableObject        |
+| `AssetReference`  | `contextAssetRef`      | Uses an `AssetRef<UIAssetContextAsset>` (Addressables / hot-update) |
+| `PathLocation`    | `contextAssetLocation` | Loads by string path via `IAssetPackage`                            |
+
+- **Direct mode** returns the context synchronously — ideal for local/static setups.
+- **Async modes** (`AssetReference` / `PathLocation`) are resolved once via `ResolveLoadContextAsync()` and cached for all subsequent calls.
+- `OnValidate()` clears `contextAsset` in non-direct modes to prevent phantom memory retention.
+
+### UIAssetContextAsset (Designer-Friendly Configuration)
+
+For designers who prefer the Inspector, create a `UIAssetContextAsset` ScriptableObject:
+
+**Create** → `CycloneGames > UIFramework > UI Asset Context Asset`
+
+The asset exposes `configBucket / configTag / configOwner` and `prefabBucket / prefabTag / prefabOwner` fields in the Inspector. Convert to a runtime struct with `asset.ToLoadContext()`.
+
+### Resolution flow diagram
+
+```
+OpenUI("MyWindow", assetLoadContext: callSiteCtx)
+  │
+  ├─ 1. callSiteCtx (explicit per-call override)
+  │
+  └─ 2. UIRoot.AssetContextProvider.ResolveLoadContextAsync()
+       ├─ DirectReference  → contextAsset.ToLoadContext()       (sync)
+       ├─ AssetReference   → package.LoadAsync(ref).ToLoadContext()  (async, cached)
+       └─ PathLocation     → package.LoadAssetAsync(path).ToLoadContext() (async, cached)
+  │
+  └─ Merge: callSiteCtx.Merge(providerCtx)  →  resolvedContext
+       └─ Each field: callSite ?? provider
+```
+
 ## Quick Start Guide
 
 This guide will walk you through setting up and using the UIFramework step by step. Follow along to create your first UI window!
@@ -826,6 +920,39 @@ uiService.SetTransitionCoordinator(new ZoomFadeCoordinator());
 
 > **Note**: If no coordinator is registered, `NavigateToAsync` automatically falls back to the same behaviour as `NavigateTo` (fire-and-forget, sequential). Existing code never breaks.
 
+### Coordinated Navigation Strategies
+
+When the user triggers rapid sequential navigations (e.g. tapping two tabs in quick succession while the first transition is still animating), the framework needs a policy for handling the overlap. `CoordinatedNavStrategy` controls this behaviour:
+
+```csharp
+// Set at startup (default is DirectJump)
+uiService.SetCoordinatedNavStrategy(CoordinatedNavStrategy.DirectJump);
+```
+
+| Strategy     | Behaviour                                                                                                                                                               | Best For                                         |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `DirectJump` | Cancels the in-flight transition and jumps directly from the **original** source to the **latest** destination. A→B mid-animation + B→C request = animate A→C directly. | Tab bars, flat navigation, bottom nav            |
+| `CardStack`  | Allows multiple transitions to **overlap** independently, producing a cascading stacked-card visual. A→B continues while B→C starts on top.                             | Drill-down flows, settings pages, detail screens |
+
+**DirectJump example:**
+
+```
+User taps Tab1 → Tab2 (A→B starts animating)
+User quickly taps Tab3 (before A→B finishes)
+  └─ Framework cancels A→B, tears down B
+  └─ Starts A→C directly (smooth skip)
+```
+
+**CardStack example:**
+
+```
+User opens Settings → Audio (A→B starts animating)
+User quickly taps EQ Detail (before A→B finishes)
+  └─ B→C starts immediately, overlapping A→B
+  └─ Both transitions run independently
+  └─ A is torn down when A→B finishes; B when B→C finishes
+```
+
 ## Dynamic Atlas System Tutorial
 
 After mastering the basics of creating and opening UI windows, you can optimize your UI performance using the **Dynamic Atlas System**. This system reduces draw calls by combining multiple UI textures into a single atlas at runtime.
@@ -1222,6 +1349,77 @@ public class GameInitializer : MonoBehaviour
 
 > **Async Loading**: When `loadFuncAsync` is configured, you can use `GetSpriteAsync()` (see [Step 9](#step-9-async-loading)) for non-blocking texture loading. Disk I/O runs on a background thread while atlas insertion stays on the main thread.
 
+### Step 3b: Platform Tier Configuration
+
+Instead of manually setting every field, use the built-in `PlatformTier` presets to get recommended defaults for your target hardware:
+
+```csharp
+// Auto-detect based on current runtime platform
+var config = DynamicAtlasConfig.CreateForCurrentPlatform(
+    loadFunc:  path => assetPackage.LoadAssetSync<Texture2D>(path).Asset,
+    unloadFunc: (path, tex) => assetPackage.ReleaseAsset(path),
+    useCompression: true,              // Use ASTC/ETC2/BC7 instead of RGBA32
+    preferLowMemoryProfile: false      // true = smaller pages, stricter limits
+);
+DynamicAtlasManager.Instance.Configure(config);
+```
+
+**Available tiers:**
+
+| Tier                          | Page Size | Max Pages | Bleed | Mipmap | Notes                               |
+| ----------------------------- | --------- | --------- | ----- | ------ | ----------------------------------- |
+| `PlatformTier.DesktopHighEnd` | 4096      | Unlimited | ✅    | ❌     | PC / Mac / Console                  |
+| `PlatformTier.MobileHighEnd`  | 2048      | 8         | ✅    | ❌     | Modern phones / tablets             |
+| `PlatformTier.MobileLowEnd`   | 1024      | 4         | ❌    | ❌     | Budget devices, forces uncompressed |
+| `PlatformTier.WebGL`          | 1024      | 2         | ❌    | ❌     | No CopyTexture, RGBA32 only         |
+
+Or select a specific tier directly:
+
+```csharp
+// Target a specific hardware tier
+var config = DynamicAtlasConfig.CreateForTier(
+    DynamicAtlasConfig.PlatformTier.MobileHighEnd,
+    loadFunc:  path => Resources.Load<Texture2D>(path),
+    unloadFunc: (path, tex) => Resources.UnloadAsset(tex),
+    useCompression: true
+);
+DynamicAtlasManager.Instance.Configure(config);
+
+// One-liner convenience on DynamicAtlasManager
+DynamicAtlasManager.Instance.ConfigurePlatformOptimized(
+    load: path => Resources.Load<Texture2D>(path),
+    unload: (path, tex) => Resources.UnloadAsset(tex),
+    useCompression: true
+);
+```
+
+### Step 3c: Configuration Validation
+
+`DynamicAtlasConfig` includes a `Validate()` method that catches common misconfigurations before they become runtime issues:
+
+```csharp
+var config = new DynamicAtlasConfig
+{
+    pageSize = 8192,
+    padding = 1,
+    enableBleed = true,
+};
+
+if (!config.Validate(out string error))
+{
+    Debug.LogWarning($"Atlas config issue: {error}");
+    // Falls back to safe defaults
+}
+```
+
+Validation checks:
+
+- Texture format support on current platform
+- Page size vs. `SystemInfo.maxTextureSize`
+- Padding range (0–16)
+- Bleed requires `padding >= 2` (for uncompressed formats)
+- `maxPages` must be non-negative
+
 ### Step 4: Best Practices and Tips
 
 1. **Always Release Sprites**: When a sprite is no longer needed, call `ReleaseSprite()` to decrement the reference count. This allows the atlas to free space when the count reaches zero.
@@ -1398,6 +1596,34 @@ public class CompressedAtlasExample : MonoBehaviour
 | Xbox Series / One | BC7 (quality) or DXT5 (compatibility) |
 | Nintendo Switch   | ASTC 4×4 or ETC2                      |
 | WebGL             | Not supported (use uncompressed)      |
+
+### CompressedDynamicAtlasFactory
+
+Instead of constructing `CompressedDynamicAtlasService` directly, you can use `CompressedDynamicAtlasFactory` for convenience and shared-instance management:
+
+```csharp
+var factory = new CompressedDynamicAtlasFactory();
+
+// 1. Create a new instance with explicit format
+var atlas = factory.Create(TextureFormat.ASTC_4x4, pageSize: 2048);
+
+// 2. Shared singleton — same format reuses one instance (thread-safe)
+var shared = factory.GetSharedInstance(TextureFormat.ASTC_4x4);
+
+// 3. Auto-detect best format for the current platform
+var optimized = factory.CreatePlatformOptimized(pageSize: 2048);
+// Returns null when no suitable compressed format is available (e.g. WebGL).
+
+// Release the shared instance when no longer needed
+CompressedDynamicAtlasFactory.ClearSharedInstance();
+```
+
+| Method                      | Description                                                                                                                                   |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Create()`                  | Creates a new atlas for the given `TextureFormat`                                                                                             |
+| `GetSharedInstance()`       | Thread-safe singleton; recreates if the requested format changes                                                                              |
+| `CreatePlatformOptimized()` | Picks the recommended compressed format via `TextureFormatHelper` and creates an atlas. Returns `null` if the platform has no suitable format |
+| `ClearSharedInstance()`     | Disposes and clears the shared singleton (static)                                                                                             |
 
 ### Step 8: Editor Tools
 

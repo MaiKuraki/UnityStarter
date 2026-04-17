@@ -22,3 +22,5 @@ MonoBehaviour:
   layer: {fileID: 11400000, guid: ba5952d225fc36646a190ee3fda7c68a, type: 2}
   priority: 0
   isSceneBound: 0
+  subCanvasPolicy: 0
+  defaultAssetLoadContextProfile: {fileID: 0}

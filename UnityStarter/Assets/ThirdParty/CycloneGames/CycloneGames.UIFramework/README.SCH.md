@@ -270,6 +270,100 @@ public class UIDebugBootstrap : MonoBehaviour
 }
 ```
 
+## 资产加载上下文（逐窗口资产元数据）
+
+**`UIAssetLoadContext`** 允许你为每个 UI 资产加载附加自定义元数据（bucket、tag、owner），从而精细控制 `AssetCacheService` 如何跟踪、分析和驱逐 UI 资源。
+
+### 为什么需要它？
+
+- **按功能模块隔离**：将主菜单资产标记为 `"MainMenu"`，战斗 HUD 标记为 `"Battle"`，Cache Debugger 中一目了然。
+- **基于 Owner 的驱逐**：分配 `Owner` 值（如关卡 ID），场景卸载时可批量释放该 Owner 下的所有 UI 资产。
+- **Config 与 Prefab 分离管理**：给配置资产分配长生命周期 bucket，预制体资产放入更激进的驱逐池。
+
+### 结构体
+
+`UIAssetLoadContext` 是 `readonly struct`（零堆分配）：
+
+```csharp
+// Config 和 Prefab 共用同一组 bucket/tag/owner
+var ctx = new UIAssetLoadContext(
+    sharedBucket: "Battle",
+    sharedTag:    "hud",
+    sharedOwner:  "level_3"
+);
+
+// 或者为 Config 和 Prefab 分别指定不同的元数据
+var ctx = new UIAssetLoadContext(
+    configBucket: "ui_configs",  configTag: "menu",  configOwner: "global",
+    prefabBucket: "ui_prefabs",  prefabTag: "menu",  prefabOwner: "level_1"
+);
+
+// 从 AssetBucketScope 构造
+var ctx = UIAssetLoadContext.FromScope(myScope);
+var ctx = UIAssetLoadContext.FromScopes(configScope, prefabScope);
+
+// 检查是否设置了任何字段
+if (ctx.HasAnyMetadata) { /* ... */ }
+```
+
+### 两级合并层级
+
+调用 `OpenUI` / `OpenUIAsync` 时，最终元数据按以下两层合并（每个字段优先取首个非空值）：
+
+1. **调用点参数** — 直接传给 `OpenUI("Window", assetLoadContext: ctx)`
+2. **UIAssetContextProvider** — 从 `UIRoot` 上的 `UIAssetContextProvider` 组件解析的默认上下文
+
+```csharp
+// Provider 会自动从 UIRoot（或其父级）上查找
+// 所有未显式传入 context 的 OpenUI 调用都会回退到 Provider 提供的元数据。
+
+// 按调用覆盖
+await uiService.OpenUIAsync("UIWindow_Shop", assetLoadContext: new UIAssetLoadContext(
+    sharedBucket: "Shop",
+    sharedOwner:  "shop_v2"
+));
+```
+
+### UIAssetContextProvider（场景级默认）
+
+`UIAssetContextProvider` 是一个 `MonoBehaviour`，挂载在与 `UIRoot` 相同的 `GameObject` 上（或其父级）。它为所有未在调用点指定上下文的窗口提供**框架全局默认**的 `UIAssetLoadContext`。
+
+支持三种来源模式：
+
+| 模式              | 序列化字段             | 说明                                                          |
+| ----------------- | ---------------------- | ------------------------------------------------------------- |
+| `DirectReference` | `contextAsset`         | 直接引用一个 `UIAssetContextAsset` ScriptableObject           |
+| `AssetReference`  | `contextAssetRef`      | 使用 `AssetRef<UIAssetContextAsset>`（Addressables / 热更新） |
+| `PathLocation`    | `contextAssetLocation` | 通过 `IAssetPackage` 按字符串路径加载                         |
+
+- **Direct 模式**同步返回上下文 — 适用于本地/静态配置。
+- **异步模式**（`AssetReference` / `PathLocation`）通过 `ResolveLoadContextAsync()` 解析一次后缓存，后续调用直接使用缓存。
+- `OnValidate()` 在非 Direct 模式下会清除 `contextAsset` 字段，防止产生意外的内存引用。
+
+### UIAssetContextAsset（设计师友好配置）
+
+对于偏好 Inspector 操作的设计师，可创建 `UIAssetContextAsset` ScriptableObject：
+
+**创建路径** → `CycloneGames > UIFramework > UI Asset Context Asset`
+
+该资产在 Inspector 中暴露 `configBucket / configTag / configOwner` 和 `prefabBucket / prefabTag / prefabOwner` 字段。运行时通过 `asset.ToLoadContext()` 转换为结构体。
+
+### 解析流程图
+
+```
+OpenUI("MyWindow", assetLoadContext: callSiteCtx)
+  │
+  ├─ 1. callSiteCtx（显式的逐调用覆盖）
+  │
+  └─ 2. UIRoot.AssetContextProvider.ResolveLoadContextAsync()
+       ├─ DirectReference  → contextAsset.ToLoadContext()            (同步)
+       ├─ AssetReference   → package.LoadAsync(ref).ToLoadContext()  (异步，已缓存)
+       └─ PathLocation     → package.LoadAssetAsync(path).ToLoadContext() (异步，已缓存)
+  │
+  └─ 合并：callSiteCtx.Merge(providerCtx)  →  resolvedContext
+       └─ 每个字段：callSite ?? provider
+```
+
 ## 快速上手指南
 
 本指南将逐步引导您设置和使用 UIFramework。跟随步骤创建您的第一个 UI 窗口！
@@ -823,6 +917,39 @@ uiService.SetTransitionCoordinator(new ZoomFadeCoordinator());
 
 > **注意**：如果没有注册协调器，`NavigateToAsync` 会自动退化为与 `NavigateTo` 相同的串行行为，不会影响任何现有代码。
 
+### 协调导航策略
+
+当用户在动画进行中快速触发连续导航（例如在第一个过渡动画播放时快速点击两个 Tab），框架需要一种策略处理重叠。`CoordinatedNavStrategy` 控制此行为：
+
+```csharp
+// 启动时设置（默认为 DirectJump）
+uiService.SetCoordinatedNavStrategy(CoordinatedNavStrategy.DirectJump);
+```
+
+| 策略         | 行为                                                                                          | 适用场景                     |
+| ------------ | --------------------------------------------------------------------------------------------- | ---------------------------- |
+| `DirectJump` | 取消进行中的过渡，从**原始**源直接跳转到**最新**目标。A→B 动画中 + B→C 请求 = 直接播放 A→C。  | Tab 栏、扁平导航、底部导航   |
+| `CardStack`  | 允许多个过渡**独立重叠**运行，产生层叠式卡片堆叠视觉效果。A→B 继续播放的同时 B→C 在上层开始。 | 钻取流程、设置页面、详情页面 |
+
+**DirectJump 示例：**
+
+```
+用户点击 Tab1 → Tab2（A→B 开始播放动画）
+用户快速点击 Tab3（A→B 尚未完成）
+  └─ 框架取消 A→B，销毁 B
+  └─ 直接开始 A→C（平滑跳过）
+```
+
+**CardStack 示例：**
+
+```
+用户打开 设置 → 音频（A→B 开始播放动画）
+用户快速点击 EQ 详情（A→B 尚未完成）
+  └─ B→C 立即开始，与 A→B 重叠
+  └─ 两个过渡独立运行
+  └─ A→B 完成时销毁 A；B→C 完成时销毁 B
+```
+
 ## 动态图集系统教程
 
 在掌握了创建和打开 UI 窗口的基础知识后，您可以使用**动态图集系统**来优化 UI 性能。该系统通过在运行时将多个 UI 纹理合并到单个图集中来减少 Draw Call。
@@ -1219,6 +1346,77 @@ public class GameInitializer : MonoBehaviour
 
 > **异步加载**: 配置 `loadFuncAsync` 后，可使用 `GetSpriteAsync()`（参见[步骤 9](#步骤-9-异步加载)）实现非阻塞纹理加载。磁盘 I/O 在后台线程运行，图集插入仍在主线程执行。
 
+### 步骤 3b: 平台层级配置
+
+无需手动设置每个字段，使用内置的 `PlatformTier` 预设即可获取目标硬件的推荐默认值：
+
+```csharp
+// 根据当前运行时平台自动检测
+var config = DynamicAtlasConfig.CreateForCurrentPlatform(
+    loadFunc:  path => assetPackage.LoadAssetSync<Texture2D>(path).Asset,
+    unloadFunc: (path, tex) => assetPackage.ReleaseAsset(path),
+    useCompression: true,              // 使用 ASTC/ETC2/BC7 替代 RGBA32
+    preferLowMemoryProfile: false      // true = 更小页面、更严格限制
+);
+DynamicAtlasManager.Instance.Configure(config);
+```
+
+**可选层级：**
+
+| 层级                          | 页面大小 | 最大页数 | 出血 | Mipmap | 说明                         |
+| ----------------------------- | -------- | -------- | ---- | ------ | ---------------------------- |
+| `PlatformTier.DesktopHighEnd` | 4096     | 无限制   | ✅   | ❌     | PC / Mac / 主机              |
+| `PlatformTier.MobileHighEnd`  | 2048     | 8        | ✅   | ❌     | 现代手机 / 平板              |
+| `PlatformTier.MobileLowEnd`   | 1024     | 4        | ❌   | ❌     | 低端设备，强制使用未压缩格式 |
+| `PlatformTier.WebGL`          | 1024     | 2        | ❌   | ❌     | 无 CopyTexture，仅 RGBA32    |
+
+也可以直接指定特定层级：
+
+```csharp
+// 指定硬件层级
+var config = DynamicAtlasConfig.CreateForTier(
+    DynamicAtlasConfig.PlatformTier.MobileHighEnd,
+    loadFunc:  path => Resources.Load<Texture2D>(path),
+    unloadFunc: (path, tex) => Resources.UnloadAsset(tex),
+    useCompression: true
+);
+DynamicAtlasManager.Instance.Configure(config);
+
+// DynamicAtlasManager 上的一行式便捷方法
+DynamicAtlasManager.Instance.ConfigurePlatformOptimized(
+    load: path => Resources.Load<Texture2D>(path),
+    unload: (path, tex) => Resources.UnloadAsset(tex),
+    useCompression: true
+);
+```
+
+### 步骤 3c: 配置验证
+
+`DynamicAtlasConfig` 包含 `Validate()` 方法，可在运行时问题出现之前捕获常见的错误配置：
+
+```csharp
+var config = new DynamicAtlasConfig
+{
+    pageSize = 8192,
+    padding = 1,
+    enableBleed = true,
+};
+
+if (!config.Validate(out string error))
+{
+    Debug.LogWarning($"图集配置问题: {error}");
+    // 回退到安全默认值
+}
+```
+
+验证检查项：
+
+- 当前平台是否支持指定纹理格式
+- 页面大小 vs. `SystemInfo.maxTextureSize`
+- Padding 范围（0–16）
+- 出血像素要求 `padding >= 2`（未压缩格式）
+- `maxPages` 不可为负值
+
 ### 步骤 4: 最佳实践和技巧
 
 1. **始终释放精灵**: 当精灵不再需要时，调用 `ReleaseSprite()` 来减少引用计数。这允许图集在计数达到零时释放空间。
@@ -1395,6 +1593,34 @@ public class CompressedAtlasExample : MonoBehaviour
 | Xbox Series / One | BC7（高质量）或 DXT5（兼容性）        |
 | Nintendo Switch   | ASTC 4×4 或 ETC2                      |
 | WebGL             | 不支持（使用未压缩格式）              |
+
+### CompressedDynamicAtlasFactory
+
+相比直接构造 `CompressedDynamicAtlasService`，可以使用 `CompressedDynamicAtlasFactory` 简化创建和管理共享实例：
+
+```csharp
+var factory = new CompressedDynamicAtlasFactory();
+
+// 1. 指定格式创建新实例
+var atlas = factory.Create(TextureFormat.ASTC_4x4, pageSize: 2048);
+
+// 2. 共享单例 — 相同格式复用同一个实例（线程安全）
+var shared = factory.GetSharedInstance(TextureFormat.ASTC_4x4);
+
+// 3. 自动检测当前平台最佳格式
+var optimized = factory.CreatePlatformOptimized(pageSize: 2048);
+// 当没有合适的压缩格式时返回 null（例如 WebGL）。
+
+// 不再需要时释放共享实例
+CompressedDynamicAtlasFactory.ClearSharedInstance();
+```
+
+| 方法                        | 说明                                                                                   |
+| --------------------------- | -------------------------------------------------------------------------------------- |
+| `Create()`                  | 按指定 `TextureFormat` 创建新图集                                                      |
+| `GetSharedInstance()`       | 线程安全单例；如果请求的格式改变则重新创建                                             |
+| `CreatePlatformOptimized()` | 通过 `TextureFormatHelper` 自动选择推荐压缩格式并创建图集。平台无合适格式时返回 `null` |
+| `ClearSharedInstance()`     | 释放并清除共享单例（静态方法）                                                         |
 
 ### 步骤 8: 编辑器工具
 

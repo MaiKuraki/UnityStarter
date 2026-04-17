@@ -41,7 +41,6 @@ namespace CycloneGames.UIFramework.Editor
         private bool useMVP = false;
         private UIWindowConfiguration.PrefabSource configSourceMode = UIWindowConfiguration.PrefabSource.PrefabReference;
         private bool autoFillLocationFromPrefabPath = true;
-
         private string settingsPath;
 
         private static bool _stylesInitialized = false;
@@ -148,7 +147,6 @@ namespace CycloneGames.UIFramework.Editor
                         useMVP = settings.useMVP;
                         configSourceMode = (UIWindowConfiguration.PrefabSource)settings.configSourceMode;
                         autoFillLocationFromPrefabPath = settings.autoFillLocationFromPrefabPath;
-
                         if (!Enum.IsDefined(typeof(UIWindowConfiguration.PrefabSource), configSourceMode))
                         {
                             configSourceMode = UIWindowConfiguration.PrefabSource.PrefabReference;
@@ -410,6 +408,7 @@ namespace CycloneGames.UIFramework.Editor
             {
                 EditorGUILayout.HelpBox("PathLocation: config stores plain string location.", MessageType.Info);
             }
+
             EditorGUILayout.EndVertical();
             EditorGUILayout.Space(10);
 
@@ -831,7 +830,12 @@ namespace CycloneGames.UIFramework.Editor
                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
 
                 GameObject prefabInstance = CreatePrefab(fullPrefabPath, scriptName, null);
-                CreateConfiguration(fullSoPath, prefabInstance, selectedLayer, configSourceMode, autoFillLocationFromPrefabPath);
+                CreateConfiguration(
+                    fullSoPath,
+                    prefabInstance,
+                    selectedLayer,
+                    configSourceMode,
+                    autoFillLocationFromPrefabPath);
 
                 System.Type scriptType = GetScriptType(scriptName, namespaceName);
 
@@ -1458,5 +1462,6 @@ namespace {namespaceName}
                 Debug.Log($"✓ Successfully created UIWindowConfiguration with source mode: {loadedConfig.Source} ({details}).");
             }
         }
+
     }
 }

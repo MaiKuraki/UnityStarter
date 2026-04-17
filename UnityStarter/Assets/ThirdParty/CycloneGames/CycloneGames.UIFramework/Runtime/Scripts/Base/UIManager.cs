@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.UI;
 using CycloneGames.Logger;
 using CycloneGames.Service.Runtime;         // For IMainCameraService
 using CycloneGames.Factory.Runtime;         // For IUnityObjectSpawner
@@ -307,7 +308,7 @@ namespace CycloneGames.UIFramework.Runtime
         /// </summary>
         /// <param name="windowName">The unique name of the window (often matches configuration file name).</param>
         /// <param name="onUIWindowCreated">Optional callback when the window is instantiated and added.</param>
-        public void OpenUI(string windowName, System.Action<UIWindow> onUIWindowCreated = null, bool? isSceneBoundOverride = null)
+        public void OpenUI(string windowName, System.Action<UIWindow> onUIWindowCreated = null, bool? isSceneBoundOverride = null, UIAssetLoadContext assetLoadContext = default)
         {
             if (uiRoot == null || assetPathBuilder == null || objectSpawner == null)
             {
@@ -315,7 +316,7 @@ namespace CycloneGames.UIFramework.Runtime
                 onUIWindowCreated?.Invoke(null); // Notify failure
                 return;
             }
-            OpenUIAsync(windowName, onUIWindowCreated, default, false, isSceneBoundOverride).Forget(); // Fire and forget UniTask
+            OpenUIAsync(windowName, onUIWindowCreated, default, false, isSceneBoundOverride, assetLoadContext).Forget(); // Fire and forget UniTask
         }
 
         /// <summary>
@@ -331,7 +332,7 @@ namespace CycloneGames.UIFramework.Runtime
             CloseUIAsync(windowName).Forget(); // Fire and forget UniTask
         }
 
-        internal async UniTask<UIWindow> OpenUIAsync(string windowName, System.Action<UIWindow> onUIWindowCreated = null, CancellationToken cancellationToken = default, bool silentOpen = false, bool? isSceneBoundOverride = null)
+        internal async UniTask<UIWindow> OpenUIAsync(string windowName, System.Action<UIWindow> onUIWindowCreated = null, CancellationToken cancellationToken = default, bool silentOpen = false, bool? isSceneBoundOverride = null, UIAssetLoadContext assetLoadContext = default)
         {
             if (string.IsNullOrEmpty(windowName))
             {
@@ -388,6 +389,8 @@ namespace CycloneGames.UIFramework.Runtime
             var openCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _openCancellations[windowName] = openCts;
             var ct = openCts.Token;
+            UIAssetLoadContext resolvedAssetLoadContext = assetLoadContext
+                .Merge(await ResolveDefaultAssetLoadContextAsync(ct));
 
             CLogger.LogInfo($"{DEBUG_FLAG} Attempting to open UI: {windowName}");
             string configPath = assetPathBuilder.GetAssetPath(windowName);
@@ -411,7 +414,12 @@ namespace CycloneGames.UIFramework.Runtime
 
                 if (!_configHandles.TryGetValue(windowName, out var configHandle))
                 {
-                    configHandle = assetPackage.LoadAssetAsync<UIWindowConfiguration>(configPath, "UIFramework", cancellationToken: ct);
+                    configHandle = assetPackage.LoadAssetAsync<UIWindowConfiguration>(
+                        configPath,
+                        resolvedAssetLoadContext.ConfigBucket,
+                        resolvedAssetLoadContext.ConfigTag,
+                        resolvedAssetLoadContext.ConfigOwner,
+                        ct);
                     await WaitForOperationCompletedAsync(configHandle, ct);
 
                     if (!string.IsNullOrEmpty(configHandle.Error) || configHandle.Asset == null)
@@ -517,7 +525,12 @@ namespace CycloneGames.UIFramework.Runtime
                     }
                     if (!_prefabHandles.TryGetValue(effectiveLocation, out var prefabHandle))
                     {
-                        prefabHandle = assetPackage.LoadAssetAsync<GameObject>(effectiveLocation, "UIFramework", cancellationToken: ct);
+                        prefabHandle = assetPackage.LoadAssetAsync<GameObject>(
+                            effectiveLocation,
+                            resolvedAssetLoadContext.PrefabBucket,
+                            resolvedAssetLoadContext.PrefabTag,
+                            resolvedAssetLoadContext.PrefabOwner,
+                            ct);
                         await WaitForOperationCompletedAsync(prefabHandle, ct);
 
                         if (!string.IsNullOrEmpty(prefabHandle.Error) || prefabHandle.Asset == null)
@@ -597,6 +610,7 @@ namespace CycloneGames.UIFramework.Runtime
             // This ensures windows that finish loading after a scene change are still correctly
             // identified as belonging to the old scene and will be swept by the next scene-change.
             uiWindowInstance.ConfigureSceneBinding(isSceneBound, isSceneBound ? openRequestedSceneHandle : -1);
+            ApplyWindowCanvasIsolation(uiWindowInstance, windowConfig, uiLayer);
             uiWindowInstance._binders = _windowBindersCache;
             uiLayer.AddWindow(uiWindowInstance);
             activeWindows[windowName] = uiWindowInstance;
@@ -654,9 +668,9 @@ namespace CycloneGames.UIFramework.Runtime
             return uiWindowInstance;
         }
 
-        internal UniTask<UIWindow> OpenUIAndWait(string windowName, System.Threading.CancellationToken cancellationToken = default, bool? isSceneBoundOverride = null)
+        internal UniTask<UIWindow> OpenUIAndWait(string windowName, System.Threading.CancellationToken cancellationToken = default, bool? isSceneBoundOverride = null, UIAssetLoadContext assetLoadContext = default)
         {
-            return OpenUIAsync(windowName, null, cancellationToken, false, isSceneBoundOverride);
+            return OpenUIAsync(windowName, null, cancellationToken, false, isSceneBoundOverride, assetLoadContext);
         }
 
         // Loads, instantiates, and initialises the window (including binders/MVP), but
@@ -664,7 +678,7 @@ namespace CycloneGames.UIFramework.Runtime
         // The window is ready for the coordinator to animate both sides simultaneously.
         internal async UniTask<UIWindow> OpenUIReadyAsync(string windowName, System.Threading.CancellationToken ct = default)
         {
-            UIWindow window = await OpenUIAsync(windowName, null, ct, silentOpen: true);
+            UIWindow window = await OpenUIAsync(windowName, null, ct, silentOpen: true, assetLoadContext: default);
             return window;
         }
 
@@ -1181,6 +1195,65 @@ namespace CycloneGames.UIFramework.Runtime
             uiOpenTCS.Remove(windowName);
             _openCancellations.Remove(windowName);
             openCts?.Dispose();
+        }
+
+        private void ApplyWindowCanvasIsolation(UIWindow window, UIWindowConfiguration config, UILayer layer)
+        {
+            if (window == null || config == null || layer == null) return;
+            if (!ShouldIsolateWindowCanvas(window, config)) return;
+
+            Canvas parentCanvas = layer.UICanvas;
+            if (parentCanvas == null) return;
+
+            Canvas nestedCanvas = window.GetComponent<Canvas>();
+            if (nestedCanvas == null)
+            {
+                nestedCanvas = window.gameObject.AddComponent<Canvas>();
+            }
+
+            nestedCanvas.overrideSorting = false;
+            nestedCanvas.additionalShaderChannels = parentCanvas.additionalShaderChannels;
+            nestedCanvas.pixelPerfect = parentCanvas.pixelPerfect;
+
+            if (window.GetComponent<GraphicRaycaster>() == null)
+            {
+                window.gameObject.AddComponent<GraphicRaycaster>();
+            }
+        }
+
+        private async UniTask<UIAssetLoadContext> ResolveDefaultAssetLoadContextAsync(CancellationToken cancellationToken)
+        {
+            UIRoot root = TryGetUIRoot();
+            if (root != null && root.AssetContextProvider != null)
+            {
+                return await root.AssetContextProvider.ResolveLoadContextAsync(assetPackage, cancellationToken);
+            }
+
+            return default;
+        }
+
+        private static bool ShouldIsolateWindowCanvas(UIWindow window, UIWindowConfiguration config)
+        {
+            switch (config.CanvasIsolationPolicy)
+            {
+                case UIWindowConfiguration.SubCanvasPolicy.ForceOwnSubCanvas:
+                    return true;
+                case UIWindowConfiguration.SubCanvasPolicy.AutoDetect:
+                    return HasHighChurnUiMarkers(window);
+                default:
+                    return false;
+            }
+        }
+
+        private static bool HasHighChurnUiMarkers(UIWindow window)
+        {
+            return window.GetComponentInChildren<Animator>(true) != null ||
+                   window.GetComponentInChildren<Animation>(true) != null ||
+                   window.GetComponentInChildren<ScrollRect>(true) != null ||
+                   window.GetComponentInChildren<LayoutGroup>(true) != null ||
+                   window.GetComponentInChildren<ContentSizeFitter>(true) != null ||
+                   window.GetComponentInChildren<Mask>(true) != null ||
+                   window.GetComponentInChildren<RectMask2D>(true) != null;
         }
 
         private void RequestSceneBoundSweep(int targetSceneHandle)
