@@ -407,6 +407,27 @@ await sceneHandle.Task;
 await package.UnloadSceneAsync(sceneHandle);
 ```
 
+当底层提供器支持延迟进入场景时，也可以使用手动激活模式：
+
+```csharp
+var sceneHandle = package.LoadSceneAsync(
+    "Assets/Scenes/Gameplay.unity",
+    LoadSceneMode.Single,
+    SceneActivationMode.Manual);
+
+// 等待提供器控制的预加载阶段。
+await sceneHandle.Task;
+
+// 当 FadeOut 或其他过渡完成后，再执行最终激活。
+await sceneHandle.ActivateAsync();
+```
+
+说明：
+
+- `SceneActivationState` 是跨 Provider 统一后的归一化状态，不保证与底层 SDK 的原始状态一一对应。
+- Addressables 在加载完成后，通常可以报告 `WaitingForActivation`。
+- YooAsset 的延迟进入本质上是“挂起加载再恢复”，因此在调用 `ActivateAsync()` 之前，句柄可能一直保持在 `Loading`。
+
 ### 批量加载
 
 加载多个资源并追踪进度：

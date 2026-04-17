@@ -328,8 +328,9 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             if (newCount == 0)
             {
-                if (_onReleaseToCache != null) _onReleaseToCache(null, this);
-                else DisposeInternal();
+                // Scene lifetimes are explicitly controlled via IAssetPackage.UnloadSceneAsync.
+                // Reaching RefCount == 0 only means the caller released the wrapper; it must not
+                // implicitly unload the scene or mutate provider state in a provider-specific way.
             }
         }
 
@@ -350,26 +351,43 @@ namespace CycloneGames.AssetManagement.Runtime
     public sealed class YooSceneHandle : ISceneHandle, IInternalCacheable
     {
         private int _id;
+        internal int DebugId => _id;
         public YooAsset.SceneHandle Raw;
         private int _refCount;
         private volatile bool _disposed;
         private Action<string, IReferenceCounted> _onReleaseToCache;
+        private SceneActivationState _activationState;
+
+        public static bool SupportsDeferredActivation => true;
+        public SceneActivationMode ActivationMode { get; private set; }
+        public SceneActivationState ActivationState
+        {
+            get
+            {
+                RefreshActivationState();
+                return _activationState;
+            }
+        }
+
+        public bool SupportsManualActivation => true;
 
         public YooSceneHandle() { }
 
-        internal void Initialize(int id, YooAsset.SceneHandle raw, Action<string, IReferenceCounted> onReleaseToCache)
+        internal void Initialize(int id, YooAsset.SceneHandle raw, bool activateOnLoad, bool isActivated, Action<string, IReferenceCounted> onReleaseToCache)
         {
             _id = id;
             Raw = raw;
+            ActivationMode = activateOnLoad ? SceneActivationMode.ActivateOnLoad : SceneActivationMode.Manual;
+            _activationState = isActivated ? SceneActivationState.Activated : SceneActivationState.Loading;
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
         }
 
-        public static YooSceneHandle Create(int id, YooAsset.SceneHandle raw, Action<string, IReferenceCounted> onReleaseToCache)
+        public static YooSceneHandle Create(int id, YooAsset.SceneHandle raw, bool activateOnLoad, bool isActivated, Action<string, IReferenceCounted> onReleaseToCache)
         {
             var h = AdaptiveHandlePool<YooSceneHandle>.Get();
-            h.Initialize(id, raw, onReleaseToCache);
+            h.Initialize(id, raw, activateOnLoad, isActivated, onReleaseToCache);
             return h;
         }
 
@@ -379,8 +397,54 @@ namespace CycloneGames.AssetManagement.Runtime
         public UniTask Task => IsDone ? UniTask.CompletedTask : (Raw?.Task.AsUniTask() ?? UniTask.CompletedTask);
         public void WaitForAsyncComplete() { }
 
+        public async UniTask ActivateAsync(CancellationToken cancellationToken = default)
+        {
+            RefreshActivationState();
+            if (_activationState == SceneActivationState.Activated)
+            {
+                return;
+            }
+
+            if (!IsDone)
+            {
+                await Task.AttachExternalCancellation(cancellationToken);
+            }
+
+            RefreshActivationState();
+            if (_activationState == SceneActivationState.Activated)
+            {
+                return;
+            }
+
+            if (Raw == null)
+            {
+                return;
+            }
+
+            if (ActivationMode == SceneActivationMode.ActivateOnLoad)
+            {
+                _activationState = SceneActivationState.Activated;
+                return;
+            }
+
+            Raw.UnSuspend();
+            await Task.AttachExternalCancellation(cancellationToken);
+
+            _activationState = SceneActivationState.Activated;
+        }
+
         public string ScenePath => Raw?.SceneName;
         public Scene Scene => Raw?.SceneObject ?? default;
+
+        private void RefreshActivationState()
+        {
+            if (_activationState != SceneActivationState.Loading || !IsDone)
+            {
+                return;
+            }
+
+            _activationState = SceneActivationState.Activated;
+        }
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
@@ -411,15 +475,17 @@ namespace CycloneGames.AssetManagement.Runtime
         internal void DisposeInternal()
         {
             _disposed = true;
+            SceneTracker.Unregister(_id);
             if (Raw != null)
             {
                 if (Raw.IsValid)
                 {
-                    Raw.UnloadAsync();
                     Raw.Dispose();
                 }
                 Raw = null;
             }
+            ActivationMode = SceneActivationMode.ActivateOnLoad;
+            _activationState = SceneActivationState.Loading;
             _onReleaseToCache = null;
             if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
             AdaptiveHandlePool<YooSceneHandle>.Release(this);

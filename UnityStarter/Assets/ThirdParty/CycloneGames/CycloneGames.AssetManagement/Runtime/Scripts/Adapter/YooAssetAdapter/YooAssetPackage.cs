@@ -176,9 +176,15 @@ namespace CycloneGames.AssetManagement.Runtime
             var handle = _rawPackage.LoadSceneSync(sceneLocation, loadMode);
             var id = RegisterHandle();
             // SceneHandle is not cached; pass null key.
-            var wrapped = YooSceneHandle.Create(id, handle, _sceneReleaseCallback);
+            var wrapped = YooSceneHandle.Create(id, handle, activateOnLoad: true, isActivated: true, _sceneReleaseCallback);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"SceneSync : {sceneLocation}");
+            SceneTracker.Register(id, Name, "YooAsset", sceneLocation, bucket, loadMode, wrapped);
             return wrapped;
+        }
+
+        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode, SceneActivationMode activationMode, int priority = 100, string bucket = null)
+        {
+            return LoadSceneAsync(sceneLocation, loadMode, activationMode == SceneActivationMode.ActivateOnLoad, priority, bucket);
         }
 
         public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100, string bucket = null)
@@ -186,8 +192,9 @@ namespace CycloneGames.AssetManagement.Runtime
             var handle = _rawPackage.LoadSceneAsync(sceneLocation, loadMode, suspendLoad: !activateOnLoad, priority: (uint)priority);
             var id = RegisterHandle();
             // SceneHandle is not cached; pass null key.
-            var wrapped = YooSceneHandle.Create(id, handle, _sceneReleaseCallback);
+            var wrapped = YooSceneHandle.Create(id, handle, activateOnLoad, isActivated: false, _sceneReleaseCallback);
             if (HandleTracker.Enabled) HandleTracker.Register(id, Name, $"SceneAsync : {sceneLocation}");
+            SceneTracker.Register(id, Name, "YooAsset", sceneLocation, bucket, loadMode, wrapped);
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             AssetLoadProfiler.TrackAsync(wrapped, sceneLocation);
 #endif
@@ -198,6 +205,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (sceneHandle is YooSceneHandle yooHandle)
             {
+                SceneTracker.MarkUnloadRequested(yooHandle.DebugId);
                 var raw = yooHandle.Raw;
                 // Null out Raw BEFORE awaiting to prevent DisposeInternal from calling UnloadAsync a second time.
                 yooHandle.Raw = null;
@@ -229,37 +237,27 @@ namespace CycloneGames.AssetManagement.Runtime
             return YooDownloader.Create(op);
         }
 
-        private async UniTask<IDownloader> CreatePreDownloaderInternal(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken, string[] tags = null)
+        private UniTask<IDownloader> CreatePreDownloaderNotSupported(string packageVersion)
         {
-            var updateOp = _rawPackage.UpdatePackageManifestAsync(packageVersion, 30);
-            await updateOp.WithCancellation(cancellationToken);
-
-            if (updateOp.Status != EOperationStatus.Succeed)
-            {
-                CLogger.LogError($"[YooAssetPackage] Failed to update manifest for pre-downloading version {packageVersion}. Error: {updateOp.Error}");
-                return null;
-            }
-
-            var downloaderOp = tags == null
-                ? _rawPackage.CreateResourceDownloader(downloadingMaxNumber, failedTryAgain)
-                : _rawPackage.CreateResourceDownloader(tags, downloadingMaxNumber, failedTryAgain);
-
-            return YooDownloader.Create(downloaderOp);
+            return UniTask.FromException<IDownloader>(
+                new NotSupportedException(
+                    $"YooAsset provider does not support isolated pre-downloading for manifest version '{packageVersion}' without mutating the active manifest. " +
+                    "Use UpdatePackageManifestAsync(...) explicitly before creating normal downloaders, or keep the current manifest active and avoid version-specific pre-download requests."));
         }
 
-        public async UniTask<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
+        public UniTask<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            return await CreatePreDownloaderInternal(packageVersion, downloadingMaxNumber, failedTryAgain, cancellationToken);
+            return CreatePreDownloaderNotSupported(packageVersion);
         }
 
-        public async UniTask<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
+        public UniTask<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            return await CreatePreDownloaderInternal(packageVersion, downloadingMaxNumber, failedTryAgain, cancellationToken, tags);
+            return CreatePreDownloaderNotSupported(packageVersion);
         }
 
         public UniTask<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
         {
-            return UniTask.FromException<IDownloader>(new NotImplementedException("Pre-downloading by locations is not supported by the YooAsset provider."));
+            return CreatePreDownloaderNotSupported(packageVersion);
         }
 
         public GameObject InstantiateSync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false)

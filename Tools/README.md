@@ -29,7 +29,7 @@ All tools are **standalone executables** - no installation required. Simply down
 | -------------------- | --------------------------------------------------- | ------------------------------------- |
 | **Project Setup**    | `rename_project`, `remove_unity_packages`           | Initialize and configure new projects |
 | **Maintenance**      | `unity_project_full_clean`                          | Clean up temporary files and caches   |
-| **Asset Processing** | `audio_volume_normalizer`, `texture_channel_packer` | Process and convert assets            |
+| **Asset Processing** | `audio_volume_normalizer`, `texture_channel_packer`, `unity_video_webm_converter` | Process and convert assets            |
 | **Documentation**    | `generate_file_tree`                                | Generate project documentation        |
 
 ## Quick Reference
@@ -41,6 +41,7 @@ All tools are **standalone executables** - no installation required. Simply down
 | **unity_project_full_clean** | Deletes temporary files, caches, build artifacts         | Before version control, archiving, troubleshooting | Project root    |
 | **audio_volume_normalizer**  | Batch normalizes audio files with category-aware targets | Processing audio assets for consistent loudness    | Audio directory |
 | **texture_channel_packer**   | Packs multiple images into RGBA channels of one texture  | Creating HDRP/URP Mask Maps, packed textures       | Anywhere        |
+| **unity_video_webm_converter** | Converts videos to Unity-friendly VP8 WebM with presets | Preparing runtime videos for multi-platform playback with normalized audio | Anywhere      |
 | **generate_file_tree**       | Generates Markdown directory tree                        | Documenting project structure                      | Project root    |
 
 ## Tool Details

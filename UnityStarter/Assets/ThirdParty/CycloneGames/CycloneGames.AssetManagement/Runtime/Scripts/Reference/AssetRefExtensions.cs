@@ -102,6 +102,17 @@ namespace CycloneGames.AssetManagement.Runtime
         public static ISceneHandle LoadSceneAsync(
             this IAssetPackage package,
             SceneRef sceneRef,
+            LoadSceneMode loadMode,
+            SceneActivationMode activationMode,
+            int priority = 100,
+            string bucket = null)
+        {
+            return package.LoadSceneAsync(sceneRef.Location, loadMode, activationMode, priority, bucket);
+        }
+
+        public static ISceneHandle LoadSceneAsync(
+            this IAssetPackage package,
+            SceneRef sceneRef,
             LoadSceneMode loadMode = LoadSceneMode.Single,
             bool activateOnLoad = true,
             int priority = 100,
@@ -117,6 +128,16 @@ namespace CycloneGames.AssetManagement.Runtime
             string bucket = null)
         {
             return package.LoadSceneSync(sceneRef.Location, loadMode, bucket);
+        }
+
+        public static ISceneHandle LoadSceneAsync(
+            this AssetBucketScope scope,
+            SceneRef sceneRef,
+            LoadSceneMode loadMode,
+            SceneActivationMode activationMode,
+            int priority = 100)
+        {
+            return scope.LoadSceneAsync(sceneRef.Location, loadMode, activationMode, priority);
         }
 
         public static ISceneHandle LoadSceneAsync(

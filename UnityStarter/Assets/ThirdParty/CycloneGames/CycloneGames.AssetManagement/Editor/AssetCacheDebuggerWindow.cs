@@ -46,6 +46,7 @@ namespace CycloneGames.AssetManagement.Editor
 
         // ── Scroll ──────────────────────────────────────────────────────────────
         private Vector2 _scrollPos;
+        private bool _hasSnapshot;
 
         // ── Alternating row colors ───────────────────────────────────────────────
         private static readonly Color _rowEven = new Color(0.22f, 0.22f, 0.22f, 1f);
@@ -69,7 +70,11 @@ namespace CycloneGames.AssetManagement.Editor
             w.Show();
         }
 
-        private void OnEnable() => EditorApplication.update += OnEditorUpdate;
+        private void OnEnable()
+        {
+            EditorApplication.update += OnEditorUpdate;
+            RefreshSnapshot();
+        }
         private void OnDisable() => EditorApplication.update -= OnEditorUpdate;
 
         // Repaint at ~10 fps to keep the display live without burning CPU.
@@ -80,6 +85,7 @@ namespace CycloneGames.AssetManagement.Editor
             if (EditorApplication.timeSinceStartup >= _nextRepaint)
             {
                 _nextRepaint = EditorApplication.timeSinceStartup + 0.1;
+                RefreshSnapshot();
                 Repaint();
             }
         }
@@ -147,21 +153,19 @@ namespace CycloneGames.AssetManagement.Editor
                 var names = new string[instances.Count];
                 for (int i = 0; i < instances.Count; i++) names[i] = $"Instance #{i}";
                 _selectedInstanceIndex = Mathf.Clamp(_selectedInstanceIndex, 0, instances.Count - 1);
-                _selectedInstanceIndex = EditorGUILayout.Popup("Cache Instance", _selectedInstanceIndex, names);
+                int newIndex = EditorGUILayout.Popup("Cache Instance", _selectedInstanceIndex, names);
+                if (newIndex != _selectedInstanceIndex)
+                {
+                    _selectedInstanceIndex = newIndex;
+                    RefreshSnapshot();
+                }
             }
             else
             {
                 _selectedInstanceIndex = 0;
             }
 
-            var svc = instances[_selectedInstanceIndex];
-            svc.GetDiagnostics(_activeList, _trialList, _mainList);
-
-            // Rebuild merged list for Bucket / Summary tabs without allocating.
-            _allList.Clear();
-            for (int i = 0; i < _activeList.Count; i++) _allList.Add(_activeList[i]);
-            for (int i = 0; i < _trialList.Count; i++) _allList.Add(_trialList[i]);
-            for (int i = 0; i < _mainList.Count; i++) _allList.Add(_mainList[i]);
+            if (!_hasSnapshot) RefreshSnapshot();
 
             // ── Top bar: stats + search ──────────────────────────────────────────
             DrawTopBar();
@@ -184,13 +188,31 @@ namespace CycloneGames.AssetManagement.Editor
 
             EditorGUILayout.EndScrollView();
 
-            // Clear pre-allocated lists at end of Repaint to ready them for next poll.
-            if (Event.current.type == EventType.Repaint)
+        }
+
+        private void RefreshSnapshot()
+        {
+            _activeList.Clear();
+            _trialList.Clear();
+            _mainList.Clear();
+            _allList.Clear();
+
+            var instances = AssetCacheService.GlobalInstances;
+            if (instances == null || instances.Count == 0)
             {
-                _activeList.Clear();
-                _trialList.Clear();
-                _mainList.Clear();
+                _hasSnapshot = true;
+                return;
             }
+
+            _selectedInstanceIndex = Mathf.Clamp(_selectedInstanceIndex, 0, instances.Count - 1);
+            var svc = instances[_selectedInstanceIndex];
+            svc.GetDiagnostics(_activeList, _trialList, _mainList);
+
+            for (int i = 0; i < _activeList.Count; i++) _allList.Add(_activeList[i]);
+            for (int i = 0; i < _trialList.Count; i++) _allList.Add(_trialList[i]);
+            for (int i = 0; i < _mainList.Count; i++) _allList.Add(_mainList[i]);
+
+            _hasSnapshot = true;
         }
 
         // ── Top statistics + search bar ──────────────────────────────────────────
@@ -198,6 +220,12 @@ namespace CycloneGames.AssetManagement.Editor
         {
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
+                if (GUILayout.Button("Scenes", EditorStyles.toolbarButton, GUILayout.Width(54f)))
+                    SceneTrackerWindow.ShowWindow();
+                if (GUILayout.Button("Governance", EditorStyles.toolbarButton, GUILayout.Width(82f)))
+                    AssetRuntimeGovernanceWindow.ShowWindow();
+                GUILayout.Space(8f);
+
                 // Stats pills
                 DrawStatPill("Active", _activeList.Count, new Color(0.2f, 0.7f, 0.3f));
                 GUILayout.Space(4f);

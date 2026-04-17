@@ -319,8 +319,9 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             if (newCount == 0)
             {
-                if (_onReleaseToCache != null) _onReleaseToCache(null, this);
-                else DisposeInternal();
+                // Scene lifetimes are explicitly controlled via IAssetPackage.UnloadSceneAsync.
+                // Reaching RefCount == 0 only means the caller released the wrapper; it must not
+                // implicitly unload or detach the underlying scene in a provider-specific way.
             }
         }
 
@@ -358,6 +359,7 @@ namespace CycloneGames.AssetManagement.Runtime
     internal sealed class AddressableSceneHandle : AddressablesOperationHandle, ISceneHandle, IInternalCacheable
     {
         internal AsyncOperationHandle<SceneInstance> Raw;
+        internal int DebugId => Id;
         public override bool IsDone => Raw.IsDone;
         public override float Progress => Raw.PercentComplete;
         public override string Error => Raw.OperationException?.Message;
@@ -367,31 +369,97 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public string ScenePath { get; private set; }
         public Scene Scene => Raw.Result.Scene;
+        public SceneActivationMode ActivationMode { get; private set; }
+        public SceneActivationState ActivationState
+        {
+            get
+            {
+                RefreshActivationState();
+                return _activationState;
+            }
+        }
+
+        public bool SupportsManualActivation => true;
 
         private int _refCount;
         private volatile bool _disposed;
         private Action<string, IReferenceCounted> _onReleaseToCache;
+        private SceneActivationState _activationState;
 
         public AddressableSceneHandle() { }
 
-        public void Initialize(int id, AsyncOperationHandle<SceneInstance> raw, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
+        public void Initialize(int id, AsyncOperationHandle<SceneInstance> raw, bool activateOnLoad, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
         {
             SetId(id);
             Raw = raw;
             ScenePath = raw.DebugName;
+            ActivationMode = activateOnLoad ? SceneActivationMode.ActivateOnLoad : SceneActivationMode.Manual;
+            _activationState = SceneActivationState.Loading;
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
         }
 
-        public static AddressableSceneHandle Create(int id, AsyncOperationHandle<SceneInstance> raw, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
+        public static AddressableSceneHandle Create(int id, AsyncOperationHandle<SceneInstance> raw, bool activateOnLoad, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
         {
             var h = AdaptiveAddressablesPool<AddressableSceneHandle>.Get();
-            h.Initialize(id, raw, onReleaseToCache, cancellationToken);
+            h.Initialize(id, raw, activateOnLoad, onReleaseToCache, cancellationToken);
             return h;
         }
 
         public override void WaitForAsyncComplete() => Raw.WaitForCompletion();
+
+        public async UniTask ActivateAsync(CancellationToken cancellationToken = default)
+        {
+            RefreshActivationState();
+            if (_activationState == SceneActivationState.Activated)
+            {
+                return;
+            }
+
+            if (!IsDone)
+            {
+                await Task.AttachExternalCancellation(cancellationToken);
+            }
+
+            RefreshActivationState();
+            if (_activationState == SceneActivationState.Activated)
+            {
+                return;
+            }
+
+            if (!Raw.IsValid())
+            {
+                return;
+            }
+
+            if (ActivationMode == SceneActivationMode.ActivateOnLoad)
+            {
+                _activationState = SceneActivationState.Activated;
+                return;
+            }
+
+            AsyncOperation activateOperation = Raw.Result.ActivateAsync();
+            while (activateOperation != null && !activateOperation.isDone)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await UniTask.Yield(cancellationToken);
+            }
+
+            _activationState = SceneActivationState.Activated;
+        }
+
+        private void RefreshActivationState()
+        {
+            if (_activationState != SceneActivationState.Loading || !IsDone)
+            {
+                return;
+            }
+
+            _activationState = ActivationMode == SceneActivationMode.Manual
+                ? SceneActivationState.WaitingForActivation
+                : SceneActivationState.Activated;
+        }
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
@@ -422,10 +490,13 @@ namespace CycloneGames.AssetManagement.Runtime
         internal void DisposeInternal()
         {
             _disposed = true;
+            SceneTracker.Unregister(Id);
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
             if (Raw.IsValid()) Addressables.Release(Raw);
             Raw = default;
             ScenePath = null;
+            ActivationMode = SceneActivationMode.ActivateOnLoad;
+            _activationState = SceneActivationState.Loading;
             _onReleaseToCache = null;
             AdaptiveAddressablesPool<AddressableSceneHandle>.Release(this);
         }
