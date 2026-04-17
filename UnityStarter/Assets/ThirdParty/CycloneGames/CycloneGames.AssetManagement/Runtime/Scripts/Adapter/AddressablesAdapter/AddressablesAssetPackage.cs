@@ -526,13 +526,19 @@ namespace CycloneGames.AssetManagement.Runtime
             return wrapped;
         }
 
+        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode, SceneActivationMode activationMode, int priority = 100, string bucket = null)
+        {
+            return LoadSceneAsync(sceneLocation, loadMode, activationMode == SceneActivationMode.ActivateOnLoad, priority, bucket);
+        }
+
         public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100, string bucket = null)
         {
             var op = Addressables.LoadSceneAsync(sceneLocation, loadMode, activateOnLoad, priority);
             var id = RegisterHandle();
             // SceneHandle is not cached; pass null key.
-            var h = AddressableSceneHandle.Create(id, op, _sceneReleaseCallback, CancellationToken.None);
+            var h = AddressableSceneHandle.Create(id, op, activateOnLoad, _sceneReleaseCallback, CancellationToken.None);
             if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"SceneAsync : {sceneLocation}");
+            SceneTracker.Register(id, packageName, "Addressables", sceneLocation, bucket, loadMode, h);
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             AssetLoadProfiler.TrackAsync(h, sceneLocation);
 #endif
@@ -549,6 +555,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (sceneHandle is AddressableSceneHandle sh)
             {
+                SceneTracker.MarkUnloadRequested(sh.DebugId);
                 if (sh.Raw.IsValid())
                 {
                     // NOTE: AsyncOperationHandle<SceneInstance>.ToUniTask() triggers a warning because

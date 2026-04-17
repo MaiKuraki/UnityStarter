@@ -141,6 +141,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
 		// --- Scene Loading ---
 		ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, string bucket = null);
+		ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode, SceneActivationMode activationMode, int priority = 100, string bucket = null);
 		ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100, string bucket = null);
 		UniTask UnloadSceneAsync(ISceneHandle sceneHandle);
 
@@ -204,10 +205,64 @@ namespace CycloneGames.AssetManagement.Runtime
 		GameObject Instance { get; }
 	}
 
+	/// <summary>
+	/// Defines whether a scene should become interactive as soon as loading completes,
+	/// or remain suspended until <see cref="ISceneHandle.ActivateAsync"/> is called.
+	/// </summary>
+	public enum SceneActivationMode : byte
+	{
+		ActivateOnLoad = 0,
+		Manual = 1,
+	}
+
+	/// <summary>
+	/// Runtime state of a scene handle's activation lifecycle.
+	/// This is a provider-normalized state rather than a guaranteed one-to-one mirror of the underlying SDK.
+	/// Providers that do not expose an observable "loaded but not yet activatable" phase may remain in
+	/// <see cref="Loading"/> until <see cref="ISceneHandle.ActivateAsync"/> completes.
+	/// </summary>
+	public enum SceneActivationState : byte
+	{
+		Loading = 0,
+		/// <summary>
+		/// The scene load is complete and the provider is waiting for an explicit activation step.
+		/// This state is only reported when the underlying provider exposes that barrier explicitly.
+		/// </summary>
+		WaitingForActivation = 1,
+		Activated = 2,
+	}
+
 	public interface ISceneHandle : IOperation, IReferenceCounted
 	{
 		string ScenePath { get; }
 		Scene Scene { get; }
+		/// <summary>
+		/// Scene handles use explicit unload semantics.
+		/// Calling <see cref="IReferenceCounted.Release"/> / <see cref="IDisposable.Dispose"/> only releases
+		/// the caller's ownership of the handle wrapper; it does NOT unload the scene itself.
+		/// Use <see cref="IAssetPackage.UnloadSceneAsync"/> as the single cross-provider unload path.
+		/// </summary>
+		SceneActivationMode ActivationMode { get; }
+		/// <summary>
+		/// Current normalized activation state.
+		/// This value is best-effort across providers and should not be used as the sole source of truth
+		/// for gameplay sequencing when <see cref="Task"/> or <see cref="ActivateAsync"/> completion is available.
+		/// </summary>
+		SceneActivationState ActivationState { get; }
+		/// <summary>
+		/// Whether this provider accepts scenes loaded with <see cref="SceneActivationMode.Manual"/>.
+		/// This does not imply that every intermediate activation state can be observed.
+		/// </summary>
+		bool SupportsManualActivation { get; }
+
+		/// <summary>
+		/// Activates a scene that was loaded with <see cref="SceneActivationMode.Manual"/>.
+		/// This call must be idempotent: if the scene is already activated it should complete immediately.
+		/// Implementations may internally resume suspended loading rather than calling a distinct provider API
+		/// literally named "activate".
+		/// If manual activation is unsupported, implementations should throw <see cref="NotSupportedException"/>.
+		/// </summary>
+		UniTask ActivateAsync(CancellationToken cancellationToken = default);
 	}
 
 	/// <summary>
