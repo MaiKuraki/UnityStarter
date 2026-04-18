@@ -24,30 +24,9 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public ParameterType paramType;
 
-        /// <summary>
-        /// The current value of the parameter before being evaluated by the response curve
-        /// </summary>
-        public float CurrentValue { get; private set; }
-        /// <summary>
-        /// The resulting value from evaluating the CurrentValue on the response curve
-        /// </summary>
-        public float CurrentResult { get; private set; }
-
-        /// <summary>
-        /// Reset the parameter to sync it back with the root parameter
-        /// </summary>
-        public void SyncParameter()
+        public float Evaluate(float value)
         {
-            this.CurrentValue = this.parameter.CurrentValue;
-            ProcessParameter();
-        }
-
-        /// <summary>
-        /// Evaluate the result of the current value on the response curve
-        /// </summary>
-        public void ProcessParameter()
-        {
-            this.CurrentResult = this.responseCurve.Evaluate(this.parameter.CurrentValue);
+            return this.responseCurve.Evaluate(value);
         }
 
         /// <summary>
@@ -57,7 +36,7 @@ namespace CycloneGames.Audio.Runtime
         /// <returns>The result of the newValue on the parameter's response curve</returns>
         public float ProcessParameter(float newValue)
         {
-            return this.responseCurve.Evaluate(newValue);
+            return Evaluate(newValue);
         }
     }
 

@@ -37,11 +37,34 @@ namespace CycloneGames.Audio.Runtime
             get { return this.audioEvents; }
         }
 
+        public IReadOnlyList<AudioParameter> Parameters => this.parameters;
+        public IReadOnlyList<AudioSwitch> Switches => this.switches;
+
         private void OnEnable()
         {
             if (this.audioEvents == null)
             {
                 this.audioEvents = new List<AudioEvent>();
+            }
+
+            if (this.parameters == null)
+            {
+                this.parameters = new List<AudioParameter>();
+            }
+
+            if (this.switches == null)
+            {
+                this.switches = new List<AudioSwitch>();
+            }
+
+            for (int i = 0; i < this.parameters.Count; i++)
+            {
+                this.parameters[i]?.ResetParameter();
+            }
+
+            for (int i = 0; i < this.switches.Count; i++)
+            {
+                this.switches[i]?.ResetSwitch();
             }
         }
 

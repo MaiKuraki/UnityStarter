@@ -17,28 +17,45 @@ namespace CycloneGames.Audio.Runtime
     /// </summary>
     public struct AudioHandle
     {
-        private ActiveEvent internalEvent;
+        private int slot;
         private int generation;
 
         public AudioHandle(ActiveEvent activeEvent)
         {
-            this.internalEvent = activeEvent;
+            this.slot = activeEvent != null ? activeEvent.handleSlot : -1;
             this.generation = activeEvent != null ? activeEvent.generation : 0;
         }
 
-        public bool IsValid => internalEvent != null && internalEvent.generation == generation && internalEvent.status != EventStatus.Stopped;
+        private ActiveEvent Resolve()
+        {
+            return AudioManager.TryGetActiveEventByHandle(slot, generation, out ActiveEvent activeEvent)
+                ? activeEvent
+                : null;
+        }
+
+        public bool IsValid => Resolve() != null;
 
         public void Stop()
         {
-            if (IsValid) internalEvent.Stop();
+            ActiveEvent activeEvent = Resolve();
+            if (activeEvent != null) activeEvent.Stop();
         }
 
         public void StopImmediate()
         {
-            if (IsValid) internalEvent.StopImmediate();
+            ActiveEvent activeEvent = Resolve();
+            if (activeEvent != null) activeEvent.StopImmediate();
         }
 
-        public float EstimatedRemainingTime => IsValid ? internalEvent.EstimatedRemainingTime : 0f;
+        public float EstimatedRemainingTime
+        {
+            get
+            {
+                ActiveEvent activeEvent = Resolve();
+                return activeEvent != null ? activeEvent.EstimatedRemainingTime : 0f;
+            }
+        }
+
         public bool IsPlaying => IsValid;
     }
 
@@ -51,6 +68,7 @@ namespace CycloneGames.Audio.Runtime
         public AudioParameter parameter;
         public AnimationCurve responseCurve;
         public float startTime;
+        public IAudioClipHandle clipHandle;
 
         public bool IsValid => source != null;
     }
@@ -62,6 +80,7 @@ namespace CycloneGames.Audio.Runtime
     public class ActiveEvent
     {
         internal int generation;
+        internal int handleSlot = -1;
 
         private static Camera mainCamera;
         private static int mainCameraCacheFrame = -1;
@@ -114,6 +133,7 @@ namespace CycloneGames.Audio.Runtime
         public float EstimatedRemainingTime { get; private set; }
         public bool Muted { get; private set; }
         public bool Soloed { get; private set; }
+        public AudioHandle Handle => new AudioHandle(this);
 
         public delegate void EventCompleted();
         public event EventCompleted CompletionCallback;
@@ -314,10 +334,11 @@ namespace CycloneGames.Audio.Runtime
             return cancellationTokenSource?.Token ?? CancellationToken.None;
         }
 
-        public bool AddEventSource(AudioClip clip, AudioParameter parameter = null, AnimationCurve responseCurve = null, float startTime = 0)
+        public bool AddEventSource(AudioClip clip, AudioParameter parameter = null, AnimationCurve responseCurve = null, float startTime = 0, IAudioClipHandle clipHandle = null)
         {
             if (rootEvent == null)
             {
+                clipHandle?.Release();
                 Debug.LogWarning($"AudioManager: Can't find audio event for {name}!");
                 StopImmediate();
                 return false;
@@ -325,6 +346,7 @@ namespace CycloneGames.Audio.Runtime
 
             if (sourceCount >= MaxSourcesPerEvent)
             {
+                clipHandle?.Release();
                 Debug.LogWarning($"AudioManager: Max sources ({MaxSourcesPerEvent}) reached for event {name}");
                 return false;
             }
@@ -333,6 +355,7 @@ namespace CycloneGames.Audio.Runtime
             if (source == null)
             {
                 Debug.LogWarning($"AudioManager: Can't find unused audio source for event {name}!");
+                clipHandle?.Release();
                 StopImmediate();
                 return false;
             }
@@ -345,7 +368,8 @@ namespace CycloneGames.Audio.Runtime
                 source = source,
                 parameter = parameter,
                 responseCurve = responseCurve,
-                startTime = startTime
+                startTime = startTime,
+                clipHandle = clipHandle
             };
             sourceCount++;
 
@@ -519,13 +543,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 var ap = activeParameters[i];
                 if (ap?.rootParameter?.parameter == null) continue;
-
-                ap.rootParameter.parameter.UpdateInterpolation(dt);
-
-                if (ap.rootParameter.CurrentValue != ap.rootParameter.parameter.CurrentValue)
-                {
-                    ap.rootParameter.SyncParameter();
-                }
+                ap.Update(dt);
             }
         }
 
@@ -574,7 +592,7 @@ namespace CycloneGames.Audio.Runtime
                 es.source.pitch = tempPitch;
                 if (es.parameter != null && es.responseCurve != null)
                 {
-                    float volumeScale = es.responseCurve.Evaluate(es.parameter.CurrentValue);
+                    float volumeScale = es.responseCurve.Evaluate(es.parameter.EvaluateCurrentValue());
                     es.source.volume = eventVolume * volumeScale;
                 }
                 else
@@ -628,6 +646,7 @@ namespace CycloneGames.Audio.Runtime
             // Clear sources without reallocating
             for (int i = 0; i < sourceCount; i++)
             {
+                sourcesArray[i].clipHandle?.Release();
                 sourcesArray[i] = default;
             }
             sourceCount = 0;
@@ -661,6 +680,7 @@ namespace CycloneGames.Audio.Runtime
             hasTimeAdvanced = false;
             hasSnapshotTransition = false;
             scheduledDspTime = -1;
+            handleSlot = -1;
 
             if (cancellationTokenSource != null)
             {
