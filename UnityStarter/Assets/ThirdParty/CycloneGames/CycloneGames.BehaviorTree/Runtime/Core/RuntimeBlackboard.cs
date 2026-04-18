@@ -36,6 +36,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         // Monotonic sequence counter for change detection (per-blackboard)
         private ulong _sequenceId;
         private readonly Dictionary<int, ulong> _stamps;
+        private readonly List<int> _sortedKeyScratch;
 
         // Observer system: key-specific and global observers
         private Dictionary<int, List<BlackboardObserverCallback>> _keyObservers;
@@ -57,6 +58,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             _objectData = new Dictionary<int, object>(initialCapacity);
             _stamps = new Dictionary<int, ulong>(initialCapacity);
             _allKeys = new HashSet<int>(initialCapacity);
+            _sortedKeyScratch = new List<int>(initialCapacity);
         }
 
         /// <summary>
@@ -94,6 +96,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterWriteLock();
             try
             {
+                RemoveOtherTypedValues(key, 1);
                 _intData[key] = value;
                 _allKeys.Add(key);
                 _stamps[key] = ++_sequenceId;
@@ -118,6 +121,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterWriteLock();
             try
             {
+                RemoveOtherTypedValues(key, 2);
                 _floatData[key] = value;
                 _allKeys.Add(key);
                 _stamps[key] = ++_sequenceId;
@@ -142,6 +146,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterWriteLock();
             try
             {
+                RemoveOtherTypedValues(key, 3);
                 _boolData[key] = value;
                 _allKeys.Add(key);
                 _stamps[key] = ++_sequenceId;
@@ -166,6 +171,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterWriteLock();
             try
             {
+                RemoveOtherTypedValues(key, 4);
                 _vectorData[key] = value;
                 _allKeys.Add(key);
                 _stamps[key] = ++_sequenceId;
@@ -190,6 +196,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_lock != null) _lock.EnterWriteLock();
             try
             {
+                RemoveOtherTypedValues(key, 5);
                 _objectData[key] = value;
                 _allKeys.Add(key);
                 _stamps[key] = ++_sequenceId;
@@ -343,6 +350,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 _objectData.Clear();
                 _allKeys.Clear();
                 _stamps.Clear();
+                _sequenceId = 0;
             }
             finally { if (_lock != null) _lock.ExitWriteLock(); }
         }
@@ -359,24 +367,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             {
                 writer.Write(_sequenceId);
 
-                writer.Write(_intData.Count);
-                foreach (var kv in _intData) { writer.Write(kv.Key); writer.Write(kv.Value); }
-
-                writer.Write(_floatData.Count);
-                foreach (var kv in _floatData) { writer.Write(kv.Key); writer.Write(kv.Value); }
-
-                writer.Write(_boolData.Count);
-                foreach (var kv in _boolData) { writer.Write(kv.Key); writer.Write(kv.Value ? (byte)1 : (byte)0); }
-
-                writer.Write(_vectorData.Count);
-                foreach (var kv in _vectorData)
+                WriteOrdered(_intData, writer, static (w, value) => w.Write(value));
+                WriteOrdered(_floatData, writer, static (w, value) => w.Write(value));
+                WriteOrdered(_boolData, writer, static (w, value) => w.Write(value ? (byte)1 : (byte)0));
+                WriteOrdered(_vectorData, writer, static (w, value) =>
                 {
-                    writer.Write(kv.Key);
-                    writer.Write(kv.Value.x); writer.Write(kv.Value.y); writer.Write(kv.Value.z);
-                }
-
-                writer.Write(_stamps.Count);
-                foreach (var kv in _stamps) { writer.Write(kv.Key); writer.Write(kv.Value); }
+                    w.Write(value.x);
+                    w.Write(value.y);
+                    w.Write(value.z);
+                });
+                WriteOrdered(_stamps, writer, static (w, value) => w.Write(value));
             }
             finally { if (_lock != null) _lock.ExitReadLock(); }
         }
@@ -449,28 +449,40 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 const uint FNV_PRIME = 16777619u;
                 uint hash = FNV_OFFSET;
 
-                foreach (var kv in _intData)
+                FillSortedKeys(_intData);
+                for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
-                    hash = (hash ^ (uint)kv.Key) * FNV_PRIME;
-                    hash = (hash ^ (uint)kv.Value) * FNV_PRIME;
+                    int key = _sortedKeyScratch[i];
+                    hash = (hash ^ (uint)key) * FNV_PRIME;
+                    hash = (hash ^ (uint)_intData[key]) * FNV_PRIME;
                 }
-                foreach (var kv in _floatData)
+
+                FillSortedKeys(_floatData);
+                for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
-                    hash = (hash ^ (uint)kv.Key) * FNV_PRIME;
-                    var u = new FloatUintUnion { FloatValue = kv.Value };
+                    int key = _sortedKeyScratch[i];
+                    hash = (hash ^ (uint)key) * FNV_PRIME;
+                    var u = new FloatUintUnion { FloatValue = _floatData[key] };
                     hash = (hash ^ u.UintValue) * FNV_PRIME;
                 }
-                foreach (var kv in _boolData)
+
+                FillSortedKeys(_boolData);
+                for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
-                    hash = (hash ^ (uint)kv.Key) * FNV_PRIME;
-                    hash = (hash ^ (kv.Value ? 1u : 0u)) * FNV_PRIME;
+                    int key = _sortedKeyScratch[i];
+                    hash = (hash ^ (uint)key) * FNV_PRIME;
+                    hash = (hash ^ (_boolData[key] ? 1u : 0u)) * FNV_PRIME;
                 }
-                foreach (var kv in _vectorData)
+
+                FillSortedKeys(_vectorData);
+                for (int i = 0; i < _sortedKeyScratch.Count; i++)
                 {
-                    hash = (hash ^ (uint)kv.Key) * FNV_PRIME;
-                    var ux = new FloatUintUnion { FloatValue = kv.Value.x };
-                    var uy = new FloatUintUnion { FloatValue = kv.Value.y };
-                    var uz = new FloatUintUnion { FloatValue = kv.Value.z };
+                    int key = _sortedKeyScratch[i];
+                    Vector3 value = _vectorData[key];
+                    hash = (hash ^ (uint)key) * FNV_PRIME;
+                    var ux = new FloatUintUnion { FloatValue = value.x };
+                    var uy = new FloatUintUnion { FloatValue = value.y };
+                    var uz = new FloatUintUnion { FloatValue = value.z };
                     hash = (hash ^ ux.UintValue) * FNV_PRIME;
                     hash = (hash ^ uy.UintValue) * FNV_PRIME;
                     hash = (hash ^ uz.UintValue) * FNV_PRIME;
@@ -587,12 +599,47 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             if (_disposed) return;
             _disposed = true;
 
+            Clear();
             _keyObservers?.Clear();
             _globalObservers?.Clear();
             _lock?.Dispose();
             _lock = null;
         }
         #endregion
+
+        private void RemoveOtherTypedValues(int key, byte keepType)
+        {
+            if (keepType != 1) _intData.Remove(key);
+            if (keepType != 2) _floatData.Remove(key);
+            if (keepType != 3) _boolData.Remove(key);
+            if (keepType != 4) _vectorData.Remove(key);
+            if (keepType != 5) _objectData.Remove(key);
+        }
+
+        private void FillSortedKeys<T>(Dictionary<int, T> source)
+        {
+            _sortedKeyScratch.Clear();
+            foreach (var key in source.Keys)
+            {
+                _sortedKeyScratch.Add(key);
+            }
+
+            _sortedKeyScratch.Sort();
+        }
+
+        private void WriteOrdered<T>(Dictionary<int, T> source, System.IO.BinaryWriter writer,
+            Action<System.IO.BinaryWriter, T> writeValue)
+        {
+            FillSortedKeys(source);
+            writer.Write(_sortedKeyScratch.Count);
+
+            for (int i = 0; i < _sortedKeyScratch.Count; i++)
+            {
+                int key = _sortedKeyScratch[i];
+                writer.Write(key);
+                writeValue(writer, source[key]);
+            }
+        }
 
 #if UNITY_EDITOR
         public Dictionary<int, int> DebugIntData => _intData;

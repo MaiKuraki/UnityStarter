@@ -9,6 +9,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         int TickInterval { get; }
     }
 
+    public interface IBTAgentGroupProvider
+    {
+        int GroupId { get; }
+        int GroupPriority { get; }
+        int GroupTickInterval { get; }
+    }
+
     [CreateAssetMenu(fileName = "BTLODConfig", menuName = "CycloneGames/AI/BT LOD Config")]
     public class BTLODConfig : ScriptableObject
     {

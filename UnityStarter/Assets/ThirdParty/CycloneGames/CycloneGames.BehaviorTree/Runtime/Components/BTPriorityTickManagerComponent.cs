@@ -37,7 +37,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private BTPriorityTickManager _manager;
         private BTDistanceLODProvider _lodProvider;
-        private float _lastLODUpdateTime;
+        private double _lastLODUpdateTime;
         private bool _initialized;
 
 #if UNITY_EDITOR
@@ -135,7 +135,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (!_initialized) return;
 
-            float currentTime = Time.time;
+            PromoteWakeUpTrees();
+
+            double currentTime = RuntimeBTTime.GetUnityTime(false);
             if (currentTime - _lastLODUpdateTime >= _lodUpdateInterval)
             {
                 if (_autoFindPlayer && _referencePoint == null)
@@ -219,6 +221,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 int interval = _lodProvider.GetTickInterval(tree);
                 _manager.UpdatePriority(tree, priority);
                 tree.TickInterval = interval;
+            }
+        }
+
+        private void PromoteWakeUpTrees()
+        {
+            if (_lodProvider == null || _manager == null || _config == null) return;
+
+            var trees = _lodProvider.GetTreeBuffer();
+            for (int i = 0; i < trees.Count; i++)
+            {
+                var tree = trees[i];
+                if (tree == null || !tree.HasWakeUpRequest) continue;
+
+                _manager.UpdatePriority(tree, _config.BoostedPriority);
+                tree.TickInterval = _config.BoostedTickInterval;
             }
         }
 

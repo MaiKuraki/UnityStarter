@@ -115,7 +115,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
                     if (tree != null && tree.ShouldTick())
                     {
-                        tree.Tick();
+                        var state = tree.Tick();
+                        if (state == RuntimeState.Success || state == RuntimeState.Failure)
+                        {
+                            tree.Stop();
+                        }
                     }
 
                     _bucketIndices[priority] = (idx + 1) % count;

@@ -11,20 +11,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         [SerializeField] private Vector2 _waitTimeRange = new Vector2(1f, 2f);
         [SerializeField] private float _waitTime = 1f;
         [SerializeField] private bool _useUnscaledTime = false;
-        private float _timer = 0f;
+        private double _startTime;
+        private float _actualWaitTime;
 
         protected override void OnStart(IBlackBoard blackBoard)
         {
-            _timer = 0f;
+            _startTime = Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime);
+            _actualWaitTime = _waitTime;
             if (_useRandomBetweenTwoConstants)
             {
-                _waitTime = Random.Range(_waitTimeRange.x, _waitTimeRange.y);
+                _actualWaitTime = Random.Range(_waitTimeRange.x, _waitTimeRange.y);
             }
         }
         protected override BTState OnRun(IBlackBoard blackBoard)
         {
-            _timer += Time.deltaTime;
-            if (_timer >= _waitTime)
+            double elapsed = Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime) - _startTime;
+            if (elapsed >= _actualWaitTime)
             {
                 return BTState.FAILURE;
             }

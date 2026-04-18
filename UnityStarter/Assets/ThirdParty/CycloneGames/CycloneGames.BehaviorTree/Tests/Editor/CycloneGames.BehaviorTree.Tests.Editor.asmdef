@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.BehaviorTree.Tests.Editor",
+    "rootNamespace": "CycloneGames.BehaviorTree.Tests.Editor",
+    "references": [
+        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.BehaviorTree.Runtime.DOD",
+        "Unity.PerformanceTesting"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

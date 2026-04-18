@@ -15,7 +15,9 @@ A production-grade, zero-GC behavior tree framework for Unity — featuring dual
 - [Core Concepts](#core-concepts)
   - [BTRunnerComponent](#btrunnercomponent)
   - [BlackBoard](#blackboard)
+    - [Runtime Time Services (double API)](#runtime-time-services-double-api)
   - [Node Lifecycle](#node-lifecycle)
+- [Benchmark & Performance Workflow](#benchmark--performance-workflow)
 - [Node Reference](#node-reference)
   - [Composite Nodes](#composite-nodes)
   - [Decorator Nodes](#decorator-nodes)
@@ -42,6 +44,10 @@ A production-grade, zero-GC behavior tree framework for Unity — featuring dual
 | **Scaling**      | Self Tick → BTTickManager (100s) → BTPriorityTickManager with LOD (1,000s) → Burst DOD Jobs (10,000+)                       |
 | **Networking**   | Server-authoritative snapshots, client-predicted hash comparison, delta blackboard sync                                     |
 | **BlackBoard**   | 5 typed dictionaries (int/float/bool/Vector3/object), int-key hashing, parent chain, observer system, stamps, thread safety |
+| **Time API**     | `double`-precision runtime time (`IRuntimeBTTimeProvider`, `RuntimeBTTime.GetTime`) with Unity fallback                     |
+| **Event-Driven** | `EmitWakeUpSignal()` + external `WakeUp()` entry with boosted immediate-tick budget                                          |
+| **Group LOD**    | `IBTAgentGroupProvider` supports per-group priority / tick-interval overrides on top of distance LOD                         |
+| **Benchmark**    | Preset+complexity matrix, scheduling profile comparison, soak sampling, CSV/JSON export                                      |
 | **Editor**       | GraphView with animated flowing-dot edges, state coloring, progress bars, info labels, real-time runtime visualization      |
 | **DI/IoC**       | `IRuntimeBTServiceResolver` interface — compatible with VContainer, Zenject, or custom containers                           |
 | **ECS Bridge**   | `IBTEntityBridge`, `BTEntityRef`, `BTTreePool` for managed + DOD dual-mode                                                  |
@@ -215,6 +221,12 @@ runner.SetTickMode(TickMode.PriorityManaged);
 
 // Priority boost for 2 seconds (PriorityManaged mode)
 runner.BoostPriority(2f);
+
+// Event-driven wake-up (urgent re-tick)
+runner.WakeUp(boostedTicks: 2);
+
+// Optional: inject services (time/random/custom)
+runner.SetServiceResolver(new RuntimeBTContext.ServiceProviderResolver(serviceProvider));
 ```
 
 **Tick Modes:**
@@ -291,6 +303,32 @@ blackboard.EnableThreadSafety(); // allocates ReaderWriterLockSlim once
 // Now safe to read/write from background threads
 ```
 
+### Runtime Time Services (double API)
+
+Runtime time-sensitive nodes (Wait/Delay/Timeout/Service/CoolDown/WaitSuccess, etc.) use
+`RuntimeBTTime.GetTime(...)` and store internal timestamps as `double`.
+
+```csharp
+public interface IRuntimeBTTimeProvider
+{
+    double TimeAsDouble { get; }
+    double UnscaledTimeAsDouble { get; }
+}
+
+// RuntimeBTTime.GetTime(...) resolves in this order:
+// 1) IRuntimeBTTimeProvider from blackboard/context service resolver
+// 2) UnityEngine.Time.timeAsDouble / unscaledTimeAsDouble
+// 3) DateTime fallback on very old runtime targets
+```
+
+Practical use cases:
+
+- deterministic simulation clocks
+- server-authoritative virtual time
+- replay or rollback systems that must avoid float drift
+
+Note: DOD/Burst tick jobs still use `float deltaTime` by design for job throughput and data size.
+
 ### Node Lifecycle
 
 Every node follows this state machine:
@@ -325,6 +363,40 @@ stateDiagram-v2
 // - SucceedWhenFalse → Skip this node, return Success
 // - AbortWhenFalse → Abort running child immediately
 ```
+
+---
+
+## Benchmark & Performance Workflow
+
+The module includes a full benchmark pipeline for editor and PlayMode scenarios.
+
+### Key capabilities
+
+- Runner modes: `Single`, `RecommendedMatrix`, `FullMatrix`, `PriorityComparison`
+- Presets: from `AiBattle500` up to `AiExtreme10000`, plus network and soak presets
+- Scheduling profiles: `FullRate`, `LodCrowd`, `PriorityLod`, `NetworkMixed`, `FarCrowd`, `UltraLod`, `PriorityManaged`
+- Automatic CSV/JSON export via `BehaviorTreeBenchmarkExportUtility`
+- Memory and GC metrics (`ManagedMemoryDeltaBytes`, `PeakManagedMemoryBytes`, `Gen0/1/2Collections`)
+- Tick efficiency metrics (`EffectiveTickRatio`, `AverageActiveAgentsPerFrame`, `TicksPerSecond`)
+
+### Main APIs
+
+```csharp
+// Single-pass benchmark
+BehaviorTreeBenchmarkResult result = BehaviorTreeBenchmarkSession.RunImmediate(config);
+
+// Scene runner (supports matrix and priority comparison modes)
+BehaviorTreeBenchmarkRunner runner = gameObject.AddComponent<BehaviorTreeBenchmarkRunner>();
+runner.RunnerMode = BehaviorTreeBenchmarkRunnerMode.FullMatrix;
+runner.SetConfig(config);
+runner.BeginBenchmark();
+```
+
+### Entry points
+
+- `Tools > CycloneGames > Behavior Tree > Behavior Tree Benchmark`
+- Runtime components under `Runtime/PerformanceTest`
+- Validation coverage in the `Tests` folder (Editor + PlayMode)
 
 ---
 
@@ -1065,15 +1137,25 @@ protected override RuntimeState OnRun(RuntimeBlackboard bb)
 }
 ```
 
+External systems can wake trees directly:
+
+```csharp
+// e.g. called by perception, damage, netcode, or gameplay event bus
+runner.WakeUp(boostedTicks: 2);
+```
+
+In `PriorityManaged` mode, wake-up requests are promoted using boosted priority/tick interval before normal LOD updates.
+
 ### Open World — Large Map Optimization
 
 For open-world games with thousands of spread-out NPCs:
 
 1. **Distance LOD** — far-away NPCs tick less frequently (every 4–8 frames)
 2. **Priority markers** — quest-relevant NPCs always tick at full speed
-3. **Chunk-based activation** — only activate `BTRunnerComponent` for loaded chunks
-4. **SubTree sharing** — common behavior trees shared as assets, compiled per-instance
-5. **BTTreePool** — template pool for ECS-like mass instantiation:
+3. **Group provider overrides** — coordinated squads share explicit priority and interval
+4. **Chunk-based activation** — only activate `BTRunnerComponent` for loaded chunks
+5. **SubTree sharing** — common behavior trees shared as assets, compiled per-instance
+6. **BTTreePool** — template pool for ECS-like mass instantiation:
 
 ```csharp
 // Create pool and register template (once)
@@ -1090,6 +1172,17 @@ pool.TickAll();
 
 // Release back to pool O(1)
 pool.Release(instanceId);
+```
+
+Group provider example:
+
+```csharp
+public class SquadGroupProvider : MonoBehaviour, IBTAgentGroupProvider
+{
+    public int GroupId => 7;
+    public int GroupPriority => 1;
+    public int GroupTickInterval => 2;
+}
 ```
 
 ---
@@ -1176,6 +1269,54 @@ public enum TickMode { Self, Managed, PriorityManaged, Manual }
 
 // Conditional abort types
 public enum ConditionalAbortType { NONE, SELF, LOWER_PRIORITY, BOTH }
+
+// Benchmark runner modes
+public enum BehaviorTreeBenchmarkRunnerMode
+{
+    Single, RecommendedMatrix, FullMatrix, PriorityComparison
+}
+```
+
+### Runtime Time Services
+
+```csharp
+public interface IRuntimeBTTimeProvider
+{
+    double TimeAsDouble { get; }
+    double UnscaledTimeAsDouble { get; }
+}
+
+public static class RuntimeBTTime
+{
+    public static double GetTime(RuntimeBlackboard blackboard, bool useUnscaledTime);
+    public static double GetUnityTime(bool useUnscaledTime);
+    public static double GetUnityDeltaTime(bool useUnscaledTime);
+}
+```
+
+### RuntimeBehaviorTree (event-driven)
+
+```csharp
+public class RuntimeBehaviorTree : IRuntimeBTContext
+{
+    bool HasWakeUpRequest { get; }
+    int WakeUpTickBudget { get; }
+
+    void WakeUp(int boostedTicks = 1);
+    bool ConsumeWakeUp();
+    bool ShouldTick();
+}
+```
+
+### Group-based LOD Override
+
+```csharp
+public interface IBTAgentGroupProvider
+{
+    int GroupId { get; }
+    int GroupPriority { get; }
+    int GroupTickInterval { get; }
+}
 ```
 
 ### RuntimeBlackboard
@@ -1297,6 +1438,7 @@ public class BTRunnerComponent : MonoBehaviour
     void SetTickMode(TickMode mode);
     void SetTickInterval(int interval);
     void BoostPriority(float duration);
+    void WakeUp(int boostedTicks = 1);
 
     // Static
     static IReadOnlyList<BTRunnerComponent> ActiveRunners { get; }

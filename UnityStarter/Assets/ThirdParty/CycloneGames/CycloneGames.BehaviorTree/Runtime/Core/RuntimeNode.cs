@@ -108,7 +108,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (State != previousState && OwnerTree?.StatusLogger != null)
             {
-                OwnerTree.StatusLogger.Log(GUID, previousState, State, UnityEngine.Time.time);
+                OwnerTree.StatusLogger.Log(GUID, previousState, State, RuntimeBTTime.GetUnityTime(false));
             }
 #endif
 
@@ -182,7 +182,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         /// </summary>
         protected void EmitWakeUpSignal()
         {
-            OwnerTree?.RequestWakeUp();
+            OwnerTree?.RequestWakeUp(2);
         }
 
         protected virtual void OnStart(RuntimeBlackboard blackboard) { }
