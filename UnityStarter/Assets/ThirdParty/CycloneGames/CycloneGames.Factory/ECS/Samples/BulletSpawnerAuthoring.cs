@@ -8,6 +8,12 @@ using UnityEngine;
 
 namespace CycloneGames.Factory.ECS.Samples
 {
+    public enum BulletSpawnStrategy : byte
+    {
+        PoolReuse = 0,
+        DirectInstantiateDestroy = 1,
+    }
+
     public struct ScreenInfo : IComponentData
     {
         public float2 ScreenMin;
@@ -30,6 +36,24 @@ namespace CycloneGames.Factory.ECS.Samples
         public float NextSpawnTime;
         public float SpawnRate;
         public int InitialPoolSize;
+        public int HardCapacity;
+        public byte ReturnNullOnOverflow;
+        public byte SpawnStrategy;
+    }
+
+    public struct BulletPoolMetrics : IComponentData
+    {
+        public byte SpawnStrategy;
+        public int CountActive;
+        public int CountInactive;
+        public int CountAll;
+        public int PeakCountActive;
+        public int PeakCountAll;
+        public int TotalCreated;
+        public int TotalSpawned;
+        public int TotalDespawned;
+        public int RejectedSpawns;
+        public int InvalidDespawns;
     }
 
     public class BulletSpawnerAuthoring : MonoBehaviour
@@ -37,6 +61,9 @@ namespace CycloneGames.Factory.ECS.Samples
         public GameObject BulletPrefab;
         public float SpawnsPerSecond = 200f;
         public int InitialPoolSize = 100;
+        public int HardCapacity = 10000;
+        public bool ReturnNullOnOverflow = true;
+        public BulletSpawnStrategy SpawnStrategy = BulletSpawnStrategy.PoolReuse;
 
         class Baker : Baker<BulletSpawnerAuthoring>
         {
@@ -52,8 +79,12 @@ namespace CycloneGames.Factory.ECS.Samples
                 {
                     NextSpawnTime = 0.0f,
                     SpawnRate = 1.0f / authoring.SpawnsPerSecond,
-                    InitialPoolSize = authoring.InitialPoolSize
+                    InitialPoolSize = authoring.InitialPoolSize,
+                    HardCapacity = math.max(authoring.InitialPoolSize, authoring.HardCapacity),
+                    ReturnNullOnOverflow = authoring.ReturnNullOnOverflow ? (byte)1 : (byte)0,
+                    SpawnStrategy = (byte)authoring.SpawnStrategy
                 });
+                AddComponent(entity, default(BulletPoolMetrics));
             }
         }
     }
@@ -69,6 +100,15 @@ namespace CycloneGames.Factory.ECS.Samples
     {
         private EntityPool<BulletComponent> bulletPool;
         private EntityQuery despawnQuery;
+        private Entity prefabEntity;
+        private int pendingPrewarmCount;
+        private bool firstSpawnDiagLogged;
+        private int directActiveCount;
+        private int directPeakCountActive;
+        private int directCreated;
+        private int directSpawned;
+        private int directDespawned;
+        private int directRejected;
 
         protected override void OnCreate()
         {
@@ -90,10 +130,32 @@ namespace CycloneGames.Factory.ECS.Samples
 
             // Get the default bullet data from the master prefab
             var defaultBulletData = EntityManager.GetComponentData<BulletComponent>(masterPrefabEntity);
+            prefabEntity = masterPrefabEntity;
             Debug.Log($"Default bullet data - Velocity: {defaultBulletData.Velocity}, Lifetime: {defaultBulletData.Lifetime}");
 
-            var factory = new PrefabEntityFactory<BulletComponent>(EntityManager, masterPrefabEntity);
-            bulletPool = new EntityPool<BulletComponent>(EntityManager, factory, defaultBulletData, spawner.InitialPoolSize);
+            if ((BulletSpawnStrategy)spawner.SpawnStrategy == BulletSpawnStrategy.PoolReuse)
+            {
+                var factory = new PrefabEntityFactory<BulletComponent>(EntityManager, masterPrefabEntity);
+                // Create pool WITHOUT auto-prewarm (softCapacity = 0).
+                // Prewarm is deferred to the first OnUpdate frame to avoid structural changes
+                // that would invalidate SystemAPI type handles used later in the same Update() call.
+                var capacitySettings = new EntityPoolCapacitySettings(
+                    0,
+                    spawner.HardCapacity,
+                    spawner.ReturnNullOnOverflow != 0 ? EntityPoolOverflowPolicy.ReturnNull : EntityPoolOverflowPolicy.Throw);
+                bulletPool = new EntityPool<BulletComponent>(EntityManager, factory, defaultBulletData, capacitySettings);
+                pendingPrewarmCount = spawner.InitialPoolSize;
+            }
+            else
+            {
+                bulletPool = null;
+                directActiveCount = 0;
+                directPeakCountActive = 0;
+                directCreated = 0;
+                directSpawned = 0;
+                directDespawned = 0;
+                directRejected = 0;
+            }
 
             // Now set the singleton with the default data obtained earlier
             if (!SystemAPI.HasSingleton<DefaultBulletData>())
@@ -101,8 +163,16 @@ namespace CycloneGames.Factory.ECS.Samples
                 EntityManager.CreateEntity(typeof(DefaultBulletData));
             }
             SystemAPI.SetSingleton(new DefaultBulletData { Value = defaultBulletData });
+            UpdateMetrics();
 
-            Debug.Log($"Pool active entities count: {bulletPool.GetActiveEntities().Count},\nBulletPool initialized with {spawner.InitialPoolSize} entities.");
+            if ((BulletSpawnStrategy)spawner.SpawnStrategy == BulletSpawnStrategy.PoolReuse)
+            {
+                Debug.Log($"BulletPool created (prewarm deferred to first OnUpdate). Pending={pendingPrewarmCount}");
+            }
+            else
+            {
+                Debug.Log($"Direct ECS spawn/destroy mode initialized. HardCapacity={spawner.HardCapacity}");
+            }
 
             // Check if there are any other Bullet entities that shouldn't exist
             var allBulletQuery = GetEntityQuery(typeof(BulletComponent));
@@ -119,25 +189,61 @@ namespace CycloneGames.Factory.ECS.Samples
 
         protected override void OnUpdate()
         {
+            // Deferred prewarm: structural changes (EntityManager.CreateEntity) must happen
+            // at the start of OnUpdate so that SystemAPI handles are re-acquired on the next frame.
+            if (pendingPrewarmCount > 0)
+            {
+                bulletPool?.Prewarm(pendingPrewarmCount);
+                Debug.Log($"BulletPool prewarmed with {pendingPrewarmCount} entities. " +
+                          $"CountActive={bulletPool?.CountActive}, CountInactive={bulletPool?.CountInactive}");
+                pendingPrewarmCount = 0;
+                firstSpawnDiagLogged = false;
+                return; // Skip this frame — type handles are now stale after structural changes.
+            }
+
             var ecb = SystemAPI.GetSingleton<EndSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(World.Unmanaged);
 
             if (!despawnQuery.IsEmpty)
             {
+                var spawnStrategy = (BulletSpawnStrategy)SystemAPI.GetSingleton<BulletSpawner>().SpawnStrategy;
                 using (var entitiesToDespawn = despawnQuery.ToEntityArray(Unity.Collections.Allocator.TempJob))
                 {
                     foreach (var entity in entitiesToDespawn)
                     {
-                        bulletPool.Despawn(entity, ecb);
-                        ecb.RemoveComponent<DespawnTag>(entity);
+                        if (spawnStrategy == BulletSpawnStrategy.PoolReuse)
+                        {
+                            bulletPool.Despawn(entity, ecb);
+                            ecb.RemoveComponent<DespawnTag>(entity);
+                        }
+                        else
+                        {
+                            ecb.DestroyEntity(entity);
+                            directActiveCount = math.max(0, directActiveCount - 1);
+                            directDespawned++;
+                        }
                     }
                 }
             }
 
             var spawner = SystemAPI.GetSingletonRW<BulletSpawner>();
-            if (spawner.ValueRO.SpawnRate <= 0) return;
+            if (spawner.ValueRO.SpawnRate <= 0)
+            {
+                UpdateMetrics();
+                return;
+            }
 
             var screenInfo = SystemAPI.GetSingleton<ScreenInfo>();
-            if (screenInfo.ScreenMax.x == 0) return;
+            if (screenInfo.ScreenMax.x == 0)
+            {
+                if (!firstSpawnDiagLogged)
+                {
+                    Debug.LogWarning($"[Factory][ECS] ScreenInfo.ScreenMax is zero — Camera.main may be null. " +
+                                     $"ScreenMin={screenInfo.ScreenMin}, ScreenMax={screenInfo.ScreenMax}");
+                    firstSpawnDiagLogged = true;
+                }
+                UpdateMetrics();
+                return;
+            }
 
             var defaultBulletData = SystemAPI.GetSingleton<DefaultBulletData>();
             float currentTime = (float)SystemAPI.Time.ElapsedTime;
@@ -151,19 +257,112 @@ namespace CycloneGames.Factory.ECS.Samples
 
             if (bulletsToSpawn == 0) return;
 
+            if (!firstSpawnDiagLogged)
+            {
+                Debug.Log($"[Factory][ECS] First spawn frame: bulletsToSpawn={bulletsToSpawn}, " +
+                          $"PoolInactive={bulletPool?.CountInactive}, PoolActive={bulletPool?.CountActive}, " +
+                          $"ScreenMax={screenInfo.ScreenMax}, SpawnRate={spawner.ValueRO.SpawnRate}");
+                firstSpawnDiagLogged = true;
+            }
+
             var random = SystemAPI.GetSingletonRW<ScreenInfo>();
 
+            int spawnedCount = 0;
+            int rejectedCount = 0;
             for (int i = 0; i < bulletsToSpawn; i++)
             {
-                var newBullet = bulletPool.Spawn(ecb, defaultBulletData.Value);
+                Entity newBullet;
+                bool spawned;
+                if ((BulletSpawnStrategy)spawner.ValueRO.SpawnStrategy == BulletSpawnStrategy.PoolReuse)
+                {
+                    spawned = bulletPool.TrySpawn(ecb, defaultBulletData.Value, out newBullet);
+                }
+                else
+                {
+                    if (directActiveCount >= spawner.ValueRO.HardCapacity)
+                    {
+                        directRejected++;
+                        continue;
+                    }
 
+                    newBullet = ecb.Instantiate(prefabEntity);
+                    ecb.SetComponent(newBullet, defaultBulletData.Value);
+                    spawned = true;
+                    directActiveCount++;
+                    directCreated++;
+                    directSpawned++;
+                    if (directActiveCount > directPeakCountActive)
+                    {
+                        directPeakCountActive = directActiveCount;
+                    }
+                }
+
+                if (!spawned)
+                {
+                    rejectedCount++;
+                    continue;
+                }
+
+                spawnedCount++;
                 float randomX = random.ValueRW.Random.NextFloat(random.ValueRO.ScreenMin.x, random.ValueRO.ScreenMax.x);
                 float randomY = random.ValueRW.Random.NextFloat(random.ValueRO.ScreenMin.y, random.ValueRO.ScreenMax.y);
 
                 var newTransform = LocalTransform.FromPosition(randomX, randomY, 0);
                 ecb.SetComponent(newBullet, newTransform);
-                ecb.SetEnabled(newBullet, true);
             }
+
+            if (!firstSpawnDiagLogged || (spawnedCount + rejectedCount > 0 && rejectedCount > 0))
+            {
+                Debug.Log($"[Factory][ECS] Spawn result: requested={bulletsToSpawn}, spawned={spawnedCount}, rejected={rejectedCount}, " +
+                          $"PoolActive={bulletPool?.CountActive}, PoolInactive={bulletPool?.CountInactive}");
+                firstSpawnDiagLogged = true;
+            }
+
+            UpdateMetrics();
+        }
+
+        private void UpdateMetrics()
+        {
+            if (!SystemAPI.HasSingleton<BulletPoolMetrics>())
+            {
+                return;
+            }
+
+            var spawner = SystemAPI.GetSingleton<BulletSpawner>();
+            if ((BulletSpawnStrategy)spawner.SpawnStrategy == BulletSpawnStrategy.PoolReuse)
+            {
+                var diagnostics = bulletPool.Diagnostics;
+                SystemAPI.SetSingleton(new BulletPoolMetrics
+                {
+                    SpawnStrategy = spawner.SpawnStrategy,
+                    CountActive = bulletPool.CountActive,
+                    CountInactive = bulletPool.CountInactive,
+                    CountAll = bulletPool.CountAll,
+                    PeakCountActive = diagnostics.PeakCountActive,
+                    PeakCountAll = diagnostics.PeakCountAll,
+                    TotalCreated = diagnostics.TotalCreated,
+                    TotalSpawned = diagnostics.TotalSpawned,
+                    TotalDespawned = diagnostics.TotalDespawned,
+                    RejectedSpawns = diagnostics.RejectedSpawns,
+                    InvalidDespawns = diagnostics.InvalidDespawns
+                });
+                return;
+            }
+
+            SystemAPI.SetSingleton(new BulletPoolMetrics
+            {
+                SpawnStrategy = spawner.SpawnStrategy,
+                CountActive = directActiveCount,
+                CountInactive = 0,
+                CountAll = directActiveCount,
+                PeakCountActive = directPeakCountActive,
+                PeakCountAll = directPeakCountActive,
+                TotalCreated = directCreated,
+                TotalSpawned = directSpawned,
+                TotalDespawned = directDespawned,
+                RejectedSpawns = directRejected,
+                InvalidDespawns = 0
+            });
         }
     }
 
@@ -203,7 +402,7 @@ namespace CycloneGames.Factory.ECS.Samples
         {
             float deltaTime = SystemAPI.Time.DeltaTime;
             int bulletCount = 0;
-            foreach (var (transform, bullet) in SystemAPI.Query<RefRW<LocalTransform>, RefRO<BulletComponent>>().WithAll<PooledEntity>())
+            foreach (var (transform, bullet) in SystemAPI.Query<RefRW<LocalTransform>, RefRO<BulletComponent>>())
             {
                 transform.ValueRW.Position += bullet.ValueRO.Velocity * deltaTime;
                 bulletCount++;
@@ -229,19 +428,12 @@ namespace CycloneGames.Factory.ECS.Samples
         public void OnUpdate(ref SystemState state)
         {
             var ecb = SystemAPI.GetSingleton<EndSimulationEntityCommandBufferSystem.Singleton>().CreateCommandBuffer(state.WorldUnmanaged);
-            foreach (var (transform, bullet, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRW<BulletComponent>>().WithAll<PooledEntity>().WithEntityAccess())
+            foreach (var (transform, bullet, entity) in SystemAPI.Query<RefRO<LocalTransform>, RefRW<BulletComponent>>().WithEntityAccess())
             {
                 bullet.ValueRW.Lifetime -= SystemAPI.Time.DeltaTime;
                 if (bullet.ValueRO.Lifetime <= 0)
                 {
-                        ecb.AddComponent<DespawnTag>(entity);
                     ecb.AddComponent<DespawnTag>(entity);
-                    ecb.SetEnabled(entity, false);
-                    var hiddenTransform = transform.ValueRO;
-                    hiddenTransform.Position = new float3(0, 0, 0);
-                    hiddenTransform.Scale = 0;
-                    hiddenTransform.Rotation = quaternion.identity;
-                    ecb.SetComponent(entity, hiddenTransform);
                 }
             }
         }

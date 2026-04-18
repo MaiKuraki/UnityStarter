@@ -10,6 +10,9 @@ namespace CycloneGames.Factory.OOPBullet
         [SerializeField] private Bullet bulletPrefab;
         [SerializeField] private float spawnsPerSecond = 200f;
         [SerializeField] private int initialPoolSize = 100;
+        [SerializeField] private int hardPoolCapacity = 2000;
+        [SerializeField] private PoolOverflowPolicy overflowPolicy = PoolOverflowPolicy.ReturnNull;
+        [SerializeField] private PoolTrimPolicy trimPolicy = PoolTrimPolicy.Manual;
         [SerializeField] private bool autoSpawn = true;
 
         [Header("Bullet Settings")]
@@ -90,7 +93,38 @@ namespace CycloneGames.Factory.OOPBullet
                 return;
             }
 
-            _bulletPool = new MonoFastPool<Bullet>(bulletPrefab, initialPoolSize, transform);
+            if (spawnsPerSecond <= 0f)
+            {
+                Debug.LogWarning("Spawns Per Second must be > 0. Falling back to 1.");
+                spawnsPerSecond = 1f;
+            }
+
+            if (initialPoolSize < 0)
+            {
+                Debug.LogWarning("Initial Pool Size cannot be negative. Falling back to 0.");
+                initialPoolSize = 0;
+            }
+
+            if (hardPoolCapacity != -1 && hardPoolCapacity < 1)
+            {
+                Debug.LogWarning("Hard Pool Capacity must be -1 (unlimited) or >= 1. Falling back to -1.");
+                hardPoolCapacity = -1;
+            }
+
+            if (hardPoolCapacity > 0 && initialPoolSize > hardPoolCapacity)
+            {
+                Debug.LogWarning("Initial Pool Size exceeds Hard Pool Capacity. Clamping Initial Pool Size.");
+                initialPoolSize = hardPoolCapacity;
+            }
+
+            _bulletPool = new MonoFastPool<Bullet>(
+                bulletPrefab,
+                new PoolCapacitySettings(
+                    softCapacity: initialPoolSize,
+                    hardCapacity: hardPoolCapacity,
+                    overflowPolicy: overflowPolicy,
+                    trimPolicy: trimPolicy),
+                transform);
 
             _activeBullets = new List<Bullet>(initialPoolSize);
 
@@ -120,7 +154,10 @@ namespace CycloneGames.Factory.OOPBullet
 
             var bulletData = new BulletData(defaultVelocity, defaultLifetime);
 
-            var bullet = _bulletPool.Spawn();
+            if (!_bulletPool.TrySpawn(out var bullet))
+            {
+                return;
+            }
             bullet.OnSpawned(bulletData, _bulletPool);
             Vector3 spawnPosition = GetRandomSpawnPosition();
             bullet.SetPositionAndVelocity(spawnPosition, bulletData.Velocity);
@@ -153,7 +190,7 @@ namespace CycloneGames.Factory.OOPBullet
         public string GetPoolStats()
         {
             if (_bulletPool == null) return "Pool not initialized";
-            return $"Pool Stats - Active: {_bulletPool.NumActive}, Inactive: {_bulletPool.NumInactive}, Spawned: {_totalSpawned}";
+            return $"Pool Stats - Active: {_bulletPool.CountActive}, Inactive: {_bulletPool.CountInactive}, Spawned: {_totalSpawned}";
         }
 
         private void OnDestroy()
@@ -171,7 +208,7 @@ namespace CycloneGames.Factory.OOPBullet
         }
 
         public int TotalSpawned => _totalSpawned;
-        public int ActiveBullets => _bulletPool?.NumActive ?? 0;
-        public int InactiveBullets => _bulletPool?.NumInactive ?? 0;
+        public int ActiveBullets => _bulletPool?.CountActive ?? 0;
+        public int InactiveBullets => _bulletPool?.CountInactive ?? 0;
     }
 }

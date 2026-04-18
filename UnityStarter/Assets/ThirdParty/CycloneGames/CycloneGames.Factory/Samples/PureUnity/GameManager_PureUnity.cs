@@ -17,8 +17,14 @@ namespace CycloneGames.Factory.Samples.PureUnity
 
         void Start()
         {
-            _bulletPool = new MonoFastPool<Bullet>(BulletPrefab, 0, transform);
-            _bulletPool.MaxCapacity = maxPoolCapacity;
+            _bulletPool = new MonoFastPool<Bullet>(
+                BulletPrefab,
+                new PoolCapacitySettings(
+                    softCapacity: initialPoolSize,
+                    hardCapacity: maxPoolCapacity,
+                    overflowPolicy: PoolOverflowPolicy.ReturnNull,
+                    trimPolicy: PoolTrimPolicy.Manual),
+                transform);
 
             // Spread warmup across frames to avoid spike on low-end devices
             StartCoroutine(_bulletPool.WarmupCoroutine(initialPoolSize, batchSize: 8));
@@ -28,7 +34,10 @@ namespace CycloneGames.Factory.Samples.PureUnity
         {
             if (Input.GetMouseButtonDown(0))
             {
-                var bullet = _bulletPool.Spawn();
+                if (!_bulletPool.TrySpawn(out var bullet))
+                {
+                    return;
+                }
 
                 // MonoFastPool does not auto-invoke IPoolable callbacks.
                 // The caller is responsible for initialization — this is by design for lightweight scenarios.
