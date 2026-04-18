@@ -58,7 +58,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
 
             snapshot.TreeStateHash = ComputeTreeStateHash(snapshot);
-            snapshot.Timestamp = UnityEngine.Time.time;
+            snapshot.Timestamp = RuntimeBTTime.GetUnityTime(false);
             snapshot.IsValid = true;
 
             return snapshot;
@@ -136,7 +136,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             using (var reader = new BinaryReader(ms))
             {
                 snapshot.IsValid = reader.ReadBoolean();
-                snapshot.Timestamp = reader.ReadSingle();
+                snapshot.Timestamp = reader.ReadDouble();
                 snapshot.TreeStateHash = reader.ReadUInt32();
                 snapshot.BlackboardHash = reader.ReadUInt32();
 
@@ -227,7 +227,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
     public struct BTStateSnapshot
     {
         public bool IsValid;
-        public float Timestamp;
+        public double Timestamp;
 
         /// <summary>Per-node RuntimeState (DFS order matching tree traversal).</summary>
         public byte[] NodeStates;

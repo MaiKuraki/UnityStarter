@@ -15,7 +15,9 @@
 - [核心概念](#核心概念)
   - [BTRunnerComponent](#btrunnercomponent)
   - [黑板 (BlackBoard)](#黑板-blackboard)
+    - [运行时时间服务（double API）](#运行时时间服务double-api)
   - [节点生命周期](#节点生命周期)
+- [Benchmark 与性能工作流](#benchmark-与性能工作流)
 - [节点参考手册](#节点参考手册)
   - [组合节点 (Composite)](#组合节点-composite)
   - [装饰节点 (Decorator)](#装饰节点-decorator)
@@ -42,6 +44,10 @@
 | **扩容**     | Self Tick → BTTickManager（百级）→ BTPriorityTickManager + LOD（千级）→ Burst DOD Jobs（万级+）            |
 | **网络**     | 服务端权威快照、客户端预测哈希比对、增量黑板同步                                                           |
 | **黑板**     | 5 类型字典（int/float/bool/Vector3/object）、int 键哈希、父链继承、观察者推送、时间戳、线程安全            |
+| **时间 API** | `double` 精度运行时计时（`IRuntimeBTTimeProvider`、`RuntimeBTTime.GetTime`），并带 Unity 回退              |
+| **事件驱动** | `EmitWakeUpSignal()` + 外部 `WakeUp()` 入口，支持短时增强立即 Tick 预算                                     |
+| **分组 LOD** | `IBTAgentGroupProvider` 支持在距离 LOD 之上按组覆盖优先级 / Tick 间隔                                       |
+| **Benchmark**| 预设 × 复杂度矩阵、调度策略对比、soak 采样、CSV/JSON 导出                                                     |
 | **编辑器**   | GraphView 流动粒子动画边、状态着色、进度条、信息标签、运行时实时可视化                                     |
 | **DI/IoC**   | `IRuntimeBTServiceResolver` 接口 — 兼容 VContainer、Zenject 或自定义容器                                   |
 | **ECS 桥接** | `IBTEntityBridge`、`BTEntityRef`、`BTTreePool` 实现托管 + DOD 双模式                                       |
@@ -215,6 +221,12 @@ runner.SetTickMode(TickMode.PriorityManaged);
 
 // 优先级提升 2 秒（PriorityManaged 模式下有效）
 runner.BoostPriority(2f);
+
+// 事件驱动唤醒（紧急重新 Tick）
+runner.WakeUp(boostedTicks: 2);
+
+// 可选：注入服务（时间/随机/自定义）
+runner.SetServiceResolver(new RuntimeBTContext.ServiceProviderResolver(serviceProvider));
 ```
 
 **Tick 模式说明：**
@@ -291,6 +303,32 @@ blackboard.EnableThreadSafety(); // 一次性分配 ReaderWriterLockSlim
 // 现在可以安全地从后台线程读写
 ```
 
+### 运行时时间服务（double API）
+
+运行时里所有时间敏感节点（Wait/Delay/Timeout/Service/CoolDown/WaitSuccess 等）
+统一通过 `RuntimeBTTime.GetTime(...)` 取时，并以 `double` 保存内部时间戳。
+
+```csharp
+public interface IRuntimeBTTimeProvider
+{
+    double TimeAsDouble { get; }
+    double UnscaledTimeAsDouble { get; }
+}
+
+// RuntimeBTTime.GetTime(...) 的解析顺序：
+// 1) 从 blackboard/context 的 service resolver 取 IRuntimeBTTimeProvider
+// 2) 使用 UnityEngine.Time.timeAsDouble / unscaledTimeAsDouble
+// 3) 在极老运行时目标上回退到 DateTime
+```
+
+典型用途：
+
+- 确定性模拟时钟
+- 服务端权威虚拟时间
+- 需要避免 float 漂移的回放 / 回滚系统
+
+说明：DOD/Burst 的 Job Tick 仍然采用 `float deltaTime`，以保证吞吐和数据体积。
+
 ### 节点生命周期
 
 每个节点遵循以下状态机：
@@ -316,6 +354,40 @@ stateDiagram-v2
 | `OnRun()`      | Running 期间每帧调用 | 核心逻辑 → 返回 `Success`、`Failure` 或 `Running` |
 | `OnStop()`     | 节点结束或被中止     | 清理                                              |
 | `ResetState()` | 父节点重启子节点时   | 重置内部计数器                                    |
+
+---
+
+## Benchmark 与性能工作流
+
+模块内置了覆盖 Editor 与 PlayMode 的完整 benchmark 管线。
+
+### 关键能力
+
+- Runner 模式：`Single`、`RecommendedMatrix`、`FullMatrix`、`PriorityComparison`
+- 预设规模：从 `AiBattle500` 到 `AiExtreme10000`，并包含网络与 soak 场景
+- 调度策略：`FullRate`、`LodCrowd`、`PriorityLod`、`NetworkMixed`、`FarCrowd`、`UltraLod`、`PriorityManaged`
+- 通过 `BehaviorTreeBenchmarkExportUtility` 自动导出 CSV/JSON
+- 内存与 GC 指标（`ManagedMemoryDeltaBytes`、`PeakManagedMemoryBytes`、`Gen0/1/2Collections`）
+- Tick 效率指标（`EffectiveTickRatio`、`AverageActiveAgentsPerFrame`、`TicksPerSecond`）
+
+### 主要 API
+
+```csharp
+// 单次 benchmark
+BehaviorTreeBenchmarkResult result = BehaviorTreeBenchmarkSession.RunImmediate(config);
+
+// 场景内 Runner（支持矩阵与优先级对比模式）
+BehaviorTreeBenchmarkRunner runner = gameObject.AddComponent<BehaviorTreeBenchmarkRunner>();
+runner.RunnerMode = BehaviorTreeBenchmarkRunnerMode.FullMatrix;
+runner.SetConfig(config);
+runner.BeginBenchmark();
+```
+
+### 入口
+
+- `Tools > CycloneGames > Behavior Tree > Behavior Tree Benchmark`
+- `Runtime/PerformanceTest` 下的运行时组件
+- `Tests` 目录下的 Editor + PlayMode 校验
 
 ---
 
@@ -1056,15 +1128,25 @@ protected override RuntimeState OnRun(RuntimeBlackboard bb)
 }
 ```
 
+外部系统也可以直接唤醒树：
+
+```csharp
+// 例如感知、受击、网络消息或事件总线回调
+runner.WakeUp(boostedTicks: 2);
+```
+
+在 `PriorityManaged` 模式下，唤醒请求会先按增强优先级/间隔提升，再进入常规 LOD 流程。
+
 ### 开放世界 → 大地图优化
 
 面向拥有数千 NPC 的开放世界游戏：
 
 1. **距离 LOD** → 远处 NPC 降低 Tick 频率（每 4–8 帧）
 2. **优先级标记** → 任务相关 NPC 始终全速 Tick
-3. **区块激活** → 仅为已加载区块激活 `BTRunnerComponent`
-4. **SubTree 共享** → 公共行为树以资产形式共享，按实例编译
-5. **BTTreePool** → 模板池化，实现类 ECS 的批量实例化：
+3. **分组覆盖** → 小队/阵营可共享固定优先级与 Tick 间隔
+4. **区块激活** → 仅为已加载区块激活 `BTRunnerComponent`
+5. **SubTree 共享** → 公共行为树以资产形式共享，按实例编译
+6. **BTTreePool** → 模板池化，实现类 ECS 的批量实例化：
 
 ```csharp
 // 创建池并注册模板（仅一次）
@@ -1081,6 +1163,17 @@ pool.TickAll();
 
 // 释放回池 O(1)
 pool.Release(instanceId);
+```
+
+分组提供器示例：
+
+```csharp
+public class SquadGroupProvider : MonoBehaviour, IBTAgentGroupProvider
+{
+    public int GroupId => 7;
+    public int GroupPriority => 1;
+    public int GroupTickInterval => 2;
+}
 ```
 
 ---
@@ -1167,6 +1260,54 @@ public enum TickMode { Self, Managed, PriorityManaged, Manual }
 
 // 条件中止类型
 public enum ConditionalAbortType { NONE, SELF, LOWER_PRIORITY, BOTH }
+
+// Benchmark Runner 模式
+public enum BehaviorTreeBenchmarkRunnerMode
+{
+    Single, RecommendedMatrix, FullMatrix, PriorityComparison
+}
+```
+
+### 运行时时间服务
+
+```csharp
+public interface IRuntimeBTTimeProvider
+{
+    double TimeAsDouble { get; }
+    double UnscaledTimeAsDouble { get; }
+}
+
+public static class RuntimeBTTime
+{
+    public static double GetTime(RuntimeBlackboard blackboard, bool useUnscaledTime);
+    public static double GetUnityTime(bool useUnscaledTime);
+    public static double GetUnityDeltaTime(bool useUnscaledTime);
+}
+```
+
+### RuntimeBehaviorTree（事件驱动）
+
+```csharp
+public class RuntimeBehaviorTree : IRuntimeBTContext
+{
+    bool HasWakeUpRequest { get; }
+    int WakeUpTickBudget { get; }
+
+    void WakeUp(int boostedTicks = 1);
+    bool ConsumeWakeUp();
+    bool ShouldTick();
+}
+```
+
+### 基于分组的 LOD 覆盖
+
+```csharp
+public interface IBTAgentGroupProvider
+{
+    int GroupId { get; }
+    int GroupPriority { get; }
+    int GroupTickInterval { get; }
+}
 ```
 
 ### RuntimeBlackboard
@@ -1288,6 +1429,7 @@ public class BTRunnerComponent : MonoBehaviour
     void SetTickMode(TickMode mode);
     void SetTickInterval(int interval);
     void BoostPriority(float duration);
+    void WakeUp(int boostedTicks = 1);
 
     // 静态
     static IReadOnlyList<BTRunnerComponent> ActiveRunners { get; }

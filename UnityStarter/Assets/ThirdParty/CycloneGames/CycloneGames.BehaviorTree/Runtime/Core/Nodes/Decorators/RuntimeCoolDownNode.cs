@@ -7,12 +7,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         public float CoolDown { get; set; }
         public bool ResetOnSuccess { get; set; }
 
-        private float _lastTime;
+        private double _lastTime;
         private bool _isCoolDownStarted;
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-            if (Time.time - _lastTime > CoolDown)
+            if (RuntimeBTTime.GetTime(blackboard, false) - _lastTime > CoolDown)
             {
                 if (Child == null) return RuntimeState.Failure;
                 _isCoolDownStarted = true;
@@ -33,7 +33,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 
             if (!ResetOnSuccess || (Child != null && Child.State == RuntimeState.Success))
             {
-                _lastTime = Time.time;
+                _lastTime = RuntimeBTTime.GetTime(blackboard, false);
             }
         }
     }

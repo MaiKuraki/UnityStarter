@@ -123,6 +123,15 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             for (int i = 0; i < _actionSlotCount; i++)
                 _actionSlots[aOff + i] = ActionRequestStatus.Idle;
 
+            // Reset blackboard slots to avoid stale data when reusing a pooled agent slot.
+            int bbOff = id * _bbSlotCount;
+            for (int i = 0; i < _bbSlotCount; i++)
+            {
+                _bbInts[bbOff + i] = 0;
+                _bbFloats[bbOff + i] = 0f;
+                _bbBools[bbOff + i] = 0;
+            }
+
             return id;
         }
 

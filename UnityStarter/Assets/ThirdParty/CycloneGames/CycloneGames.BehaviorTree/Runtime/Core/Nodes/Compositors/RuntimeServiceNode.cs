@@ -44,8 +44,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         /// </summary>
         public System.Action<RuntimeBlackboard> OnServiceTick { get; set; }
 
-        private float _lastServiceTime;
-        private float _currentInterval;
+        private double _lastServiceTime;
+        private double _currentInterval;
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
@@ -60,7 +60,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             if (Child == null) return RuntimeState.Failure;
 
             // Check service interval
-            float now = GetTime();
+            double now = GetTime();
             if (now - _lastServiceTime >= _currentInterval)
             {
                 _lastServiceTime = now;
@@ -83,12 +83,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             OnServiceUpdate(blackboard);
         }
 
-        private float GetTime()
+        private double GetTime()
         {
-            return UseUnscaledTime ? UnityEngine.Time.unscaledTime : UnityEngine.Time.time;
+            return RuntimeBTTime.GetUnityTime(UseUnscaledTime);
         }
 
-        private float ComputeInterval()
+        private double ComputeInterval()
         {
             if (RandomDeviation <= 0f) return Interval;
             float deviation = UnityEngine.Random.Range(-RandomDeviation, RandomDeviation);

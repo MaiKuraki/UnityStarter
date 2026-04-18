@@ -10,16 +10,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
     {
         [SerializeField] private float _timeoutSeconds = 5f;
         [SerializeField] private bool _useUnscaledTime = false;
-        private float _startTime;
+        private double _startTime;
 
         protected override void OnStart(IBlackBoard blackBoard)
         {
-            _startTime = _useUnscaledTime ? Time.unscaledTime : Time.time;
+            _startTime = Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime);
         }
 
         protected override BTState OnRun(IBlackBoard blackBoard)
         {
-            float currentTime = _useUnscaledTime ? Time.unscaledTime : Time.time;
+            double currentTime = Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime);
             if (currentTime - _startTime >= _timeoutSeconds) return BTState.FAILURE;
             return Child.Run(blackBoard);
         }

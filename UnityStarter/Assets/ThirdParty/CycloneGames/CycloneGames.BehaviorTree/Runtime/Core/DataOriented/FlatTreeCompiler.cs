@@ -32,9 +32,8 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             if (tree?.Root == null)
                 return default;
 
-            // Phase 1: collect all nodes via BFS and assign indices
+            // Phase 1: collect all nodes and assign indices
             var nodeList = new List<RuntimeNode>(64);
-            var childLinks = new List<int>(128);
             var nodeIndexMap = new Dictionary<RuntimeNode, int>(64);
 
             CollectNodes(tree.Root, nodeList, nodeIndexMap);
@@ -110,7 +109,10 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
 
             if (node is RuntimeCompositeNode composite)
             {
-                def.Type = MapCompositeType(composite);
+                def.Type = MapCompositeType(composite, out bool isSupportedComposite);
+                if (!isSupportedComposite)
+                    throw new System.NotSupportedException($"DOD compiler does not support composite node '{composite.GetType().Name}'.");
+
                 def.Flags = (byte)composite.AbortType;
 
                 if (composite.Children != null && composite.Children.Length > 0)
@@ -136,7 +138,9 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
 
             if (node is RuntimeDecoratorNode decorator)
             {
-                def.Type = MapDecoratorType(decorator);
+                def.Type = MapDecoratorType(decorator, out bool isSupportedDecorator);
+                if (!isSupportedDecorator)
+                    throw new System.NotSupportedException($"DOD compiler does not support decorator node '{decorator.GetType().Name}'.");
 
                 if (decorator.Child != null && indexMap.TryGetValue(decorator.Child, out int di))
                 {
@@ -160,36 +164,39 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
                 return def;
             }
 
-            // Leaf nodes default to ActionSlot
-            def.Type = FlatNodeType.ActionSlot;
-            def.ParamInt = 0; // Default action ID 0; override via custom mapping
-            return def;
+            throw new System.NotSupportedException(
+                $"DOD compiler does not support managed leaf node '{node.GetType().Name}'. " +
+                "Use a dedicated flat/DOD-compatible node set instead of silently mapping this node.");
         }
 
-        private static FlatNodeType MapCompositeType(RuntimeCompositeNode composite)
+        private static FlatNodeType MapCompositeType(RuntimeCompositeNode composite, out bool isSupported)
         {
             // Order matters: check more specific types before base types
-            if (composite is RuntimeReactiveSequence)  return FlatNodeType.ReactiveSequence;
-            if (composite is RuntimeReactiveFallback)   return FlatNodeType.ReactiveSelector;
-            if (composite is RuntimeSequenceWithMemory) return FlatNodeType.Sequence;
-            if (composite is RuntimeSequencer)          return FlatNodeType.Sequence;
-            if (composite is RuntimeSelector)           return FlatNodeType.Selector;
-            if (composite is RuntimeParallelAllNode)    return FlatNodeType.Parallel;
-            if (composite is RuntimeParallelNode)       return FlatNodeType.Parallel;
+            if (composite is RuntimeReactiveSequence)  { isSupported = true; return FlatNodeType.ReactiveSequence; }
+            if (composite is RuntimeReactiveFallback)  { isSupported = true; return FlatNodeType.ReactiveSelector; }
+            if (composite is RuntimeSequenceWithMemory){ isSupported = true; return FlatNodeType.Sequence; }
+            if (composite is RuntimeSequencer)         { isSupported = true; return FlatNodeType.Sequence; }
+            if (composite is RuntimeSelector)          { isSupported = true; return FlatNodeType.Selector; }
+            if (composite is RuntimeParallelAllNode)   { isSupported = true; return FlatNodeType.Parallel; }
+            if (composite is RuntimeParallelNode)      { isSupported = true; return FlatNodeType.Parallel; }
+
+            isSupported = false;
             return FlatNodeType.Sequence;
         }
 
-        private static FlatNodeType MapDecoratorType(RuntimeDecoratorNode decorator)
+        private static FlatNodeType MapDecoratorType(RuntimeDecoratorNode decorator, out bool isSupported)
         {
-            if (decorator is RuntimeInverterNode)      return FlatNodeType.Inverter;
-            if (decorator is RuntimeRepeatNode)        return FlatNodeType.Repeater;
-            if (decorator is RuntimeSucceederNode)     return FlatNodeType.Succeeder;
-            if (decorator is RuntimeForceFailureNode)  return FlatNodeType.ForceFailure;
-            if (decorator is RuntimeRetryNode)         return FlatNodeType.Retry;
-            if (decorator is RuntimeTimeoutNode)       return FlatNodeType.Timeout;
-            if (decorator is RuntimeDelayNode)         return FlatNodeType.Delay;
-            if (decorator is RuntimeRunOnceNode)       return FlatNodeType.RunOnce;
-            if (decorator is RuntimeCoolDownNode)      return FlatNodeType.CoolDown;
+            if (decorator is RuntimeInverterNode)      { isSupported = true; return FlatNodeType.Inverter; }
+            if (decorator is RuntimeRepeatNode)        { isSupported = true; return FlatNodeType.Repeater; }
+            if (decorator is RuntimeSucceederNode)     { isSupported = true; return FlatNodeType.Succeeder; }
+            if (decorator is RuntimeForceFailureNode)  { isSupported = true; return FlatNodeType.ForceFailure; }
+            if (decorator is RuntimeRetryNode)         { isSupported = true; return FlatNodeType.Retry; }
+            if (decorator is RuntimeTimeoutNode)       { isSupported = true; return FlatNodeType.Timeout; }
+            if (decorator is RuntimeDelayNode)         { isSupported = true; return FlatNodeType.Delay; }
+            if (decorator is RuntimeRunOnceNode)       { isSupported = true; return FlatNodeType.RunOnce; }
+            if (decorator is RuntimeCoolDownNode)      { isSupported = true; return FlatNodeType.CoolDown; }
+
+            isSupported = false;
             return FlatNodeType.Succeeder;
         }
     }

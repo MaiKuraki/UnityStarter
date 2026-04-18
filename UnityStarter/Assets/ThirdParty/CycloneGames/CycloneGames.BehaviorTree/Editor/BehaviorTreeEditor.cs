@@ -3,6 +3,7 @@ using System.Text;
 using CycloneGames.BehaviorTree.Runtime.Components;
 using UnityEditor;
 using UnityEditor.Callbacks;
+using UnityEditor.UIElements;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -13,7 +14,9 @@ namespace CycloneGames.BehaviorTree.Editor
         private const string DEBUG_FLAG = "[BehaviorTreeEditor]";
         private BehaviorTreeView _behaviorTreeView;
         private BTInspectorView _inspectorView;
-        [MenuItem("Tools/CycloneGames/Behavior Tree Editor")]
+        private ToolbarSearchField _searchField;
+        private Label _statsLabel;
+        [MenuItem("Tools/CycloneGames/Behavior Tree/Behavior Tree Editor")]
         public static void OpenWindow()
         {
             BehaviorTreeEditor wnd = GetWindow<BehaviorTreeEditor>();
@@ -33,6 +36,10 @@ namespace CycloneGames.BehaviorTree.Editor
         public void CreateGUI()
         {
             VisualElement root = rootVisualElement;
+            root.Clear();
+
+            CreateToolbar(root);
+
             var visualTree = Resources.Load<VisualTreeAsset>("BT_Editor_Layout");
             visualTree.CloneTree(root);
 
@@ -49,10 +56,67 @@ namespace CycloneGames.BehaviorTree.Editor
 
             _behaviorTreeView.OnNodeSelectionChanged += OnNodeSelectionChange;
             OnSelectionChange();
+            UpdateStats();
+        }
+
+        private void CreateToolbar(VisualElement root)
+        {
+            var toolbar = new Toolbar();
+            toolbar.style.flexShrink = 0;
+
+            var saveButton = new ToolbarButton(Save) { text = "Save" };
+            toolbar.Add(saveButton);
+
+            var validateButton = new ToolbarButton(ValidateCurrentTree) { text = "Validate" };
+            toolbar.Add(validateButton);
+
+            var sortButton = new ToolbarButton(() => _behaviorTreeView?.SortNodes()) { text = "Sort" };
+            toolbar.Add(sortButton);
+
+            var rootButton = new ToolbarButton(() => _behaviorTreeView?.ReturnToRoot()) { text = "Focus Root" };
+            toolbar.Add(rootButton);
+
+            var refreshButton = new ToolbarButton(() =>
+            {
+                if (_behaviorTreeView?.Tree != null)
+                {
+                    _behaviorTreeView.PopulateView(_behaviorTreeView.Tree);
+                    UpdateStats();
+                }
+            }) { text = "Refresh" };
+            toolbar.Add(refreshButton);
+
+            toolbar.Add(new ToolbarSpacer());
+
+            _searchField = new ToolbarSearchField();
+            _searchField.style.minWidth = 220;
+            _searchField.RegisterValueChangedCallback(evt =>
+            {
+                _behaviorTreeView?.SetSearchFilter(evt.newValue);
+                UpdateStats();
+            });
+            toolbar.Add(_searchField);
+
+            _statsLabel = new Label("No tree")
+            {
+                name = "bt-editor-stats"
+            };
+            _statsLabel.style.marginLeft = 8;
+            _statsLabel.style.unityTextAlign = TextAnchor.MiddleLeft;
+            _statsLabel.style.color = new StyleColor(new Color(0.72f, 0.72f, 0.72f));
+            toolbar.Add(_statsLabel);
+
+            root.Add(toolbar);
         }
 
         private void Save()
         {
+            if (_behaviorTreeView == null || !_behaviorTreeView.HasTree || _behaviorTreeView.Tree == null)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Save skipped: no behavior tree is currently loaded.");
+                return;
+            }
+
             StringBuilder log = new StringBuilder();
             log.Append(DEBUG_FLAG);
             log.AppendLine("Save Behavior Tree : " + _behaviorTreeView.Tree.name);
@@ -137,6 +201,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 {
                     Debug.Log($"Open Tree : " + _lastTree.name);
                     _behaviorTreeView.PopulateView(_lastTree);
+                    UpdateStats();
                 }
                 else
                 {
@@ -151,6 +216,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 {
                     Debug.Log($"Open Tree : " + _lastTree.name);
                     _behaviorTreeView.PopulateView(_lastTree);
+                    UpdateStats();
                 }
             }
         }
@@ -207,6 +273,7 @@ namespace CycloneGames.BehaviorTree.Editor
         private void OnNodeSelectionChange(BTNodeView nodeView)
         {
             _inspectorView.UpdateSelection(nodeView);
+            UpdateStats(nodeView);
         }
 
         /// <summary>
@@ -219,6 +286,42 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 _behaviorTreeView.UpdateNodeStates();
             }
+        }
+
+        private void ValidateCurrentTree()
+        {
+            if (_behaviorTreeView == null || !_behaviorTreeView.HasTree)
+            {
+                EditorUtility.DisplayDialog("Behavior Tree Validation", "No tree selected.", "OK");
+                return;
+            }
+
+            string report = _behaviorTreeView.GetValidationReport();
+            bool passed = report.StartsWith("Validation passed", StringComparison.Ordinal);
+            EditorUtility.DisplayDialog(
+                passed ? "Behavior Tree Validation Passed" : "Behavior Tree Validation Report",
+                report,
+                "OK");
+        }
+
+        private void UpdateStats(BTNodeView selectedNode = null)
+        {
+            if (_statsLabel == null)
+            {
+                return;
+            }
+
+            if (_behaviorTreeView == null || !_behaviorTreeView.HasTree)
+            {
+                _statsLabel.text = "No tree";
+                return;
+            }
+
+            string selectedText = selectedNode?.Node != null
+                ? $" | Selected: {selectedNode.Node.GetType().Name}"
+                : string.Empty;
+
+            _statsLabel.text = $"Nodes: {_behaviorTreeView.GetNodeCount()}{selectedText}";
         }
 
         private void OnInspectorUpdate()

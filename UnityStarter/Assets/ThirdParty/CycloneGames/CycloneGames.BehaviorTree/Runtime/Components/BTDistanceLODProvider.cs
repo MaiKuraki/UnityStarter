@@ -26,10 +26,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             public Transform Transform;
             public int CurrentPriority;
             public int CurrentTickInterval;
-            public float BoostEndTime;
+            public double BoostEndTime;
             public bool HasTypeOverride;
             public int TypePriority;
             public int TypeTickInterval;
+            public bool HasGroupOverride;
+            public int GroupId;
+            public int GroupPriority;
+            public int GroupTickInterval;
         }
 
         public BTLODConfig Config
@@ -93,6 +97,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                     data.TypePriority = priority;
                     data.TypeTickInterval = interval;
                 }
+
+                var groupProvider = go.GetComponent<IBTAgentGroupProvider>();
+                if (groupProvider != null)
+                {
+                    data.HasGroupOverride = true;
+                    data.GroupId = groupProvider.GroupId;
+                    data.GroupPriority = groupProvider.GroupPriority;
+                    data.GroupTickInterval = groupProvider.GroupTickInterval;
+                }
             }
 
             int idx = _count;
@@ -124,11 +137,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (!_indexMap.TryGetValue(tree, out int idx)) return 0;
             ref var data = ref _values[idx];
 
-            if (Time.time < data.BoostEndTime && _config != null)
+            if (RuntimeBTTime.GetUnityTime(false) < data.BoostEndTime && _config != null)
                 return _config.BoostedPriority;
 
             if (data.HasTypeOverride && data.TypePriority >= 0)
                 return data.TypePriority;
+
+            if (data.HasGroupOverride && data.GroupPriority >= 0)
+                return data.GroupPriority;
 
             return data.CurrentPriority;
         }
@@ -138,19 +154,32 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (!_indexMap.TryGetValue(tree, out int idx)) return 1;
             ref var data = ref _values[idx];
 
-            if (Time.time < data.BoostEndTime && _config != null)
+            if (RuntimeBTTime.GetUnityTime(false) < data.BoostEndTime && _config != null)
                 return _config.BoostedTickInterval;
 
             if (data.HasTypeOverride && data.TypeTickInterval >= 0)
                 return data.TypeTickInterval;
 
+            if (data.HasGroupOverride && data.GroupTickInterval > 0)
+                return data.GroupTickInterval;
+
             return data.CurrentTickInterval;
+        }
+
+        public bool TryGetGroupId(RuntimeBehaviorTree tree, out int groupId)
+        {
+            groupId = -1;
+            if (!_indexMap.TryGetValue(tree, out int idx)) return false;
+            ref var data = ref _values[idx];
+            if (!data.HasGroupOverride) return false;
+            groupId = data.GroupId;
+            return true;
         }
 
         public void BoostPriority(RuntimeBehaviorTree tree, float duration)
         {
             if (!_indexMap.TryGetValue(tree, out int idx)) return;
-            _values[idx].BoostEndTime = Time.time + duration;
+            _values[idx].BoostEndTime = RuntimeBTTime.GetUnityTime(false) + duration;
         }
 
         public void UpdateLOD(RuntimeBehaviorTree tree)

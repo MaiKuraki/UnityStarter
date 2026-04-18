@@ -8,6 +8,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public RuntimeNode Root { get; private set; }
         public RuntimeBlackboard Blackboard { get; private set; }
         public RuntimeState State { get; private set; } = RuntimeState.NotEntered;
+        public bool IsStopped { get; private set; }
 
         public RuntimeBTContext Context { get; private set; }
 
@@ -19,7 +20,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         // Event-driven execution support
         private volatile bool _wakeUpRequested;
+        private int _wakeUpTickBudget;
         public bool HasWakeUpRequest => _wakeUpRequested;
+        public int WakeUpTickBudget => _wakeUpTickBudget;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         public BTStatusLogger StatusLogger { get; set; }
@@ -82,9 +85,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         /// Called by nodes via EmitWakeUpSignal() to request the next tick.
         /// Thread-safe (volatile flag).
         /// </summary>
-        internal void RequestWakeUp()
+        internal void RequestWakeUp(int boostedTicks = 1)
         {
             _wakeUpRequested = true;
+            if (boostedTicks > _wakeUpTickBudget)
+            {
+                _wakeUpTickBudget = boostedTicks;
+            }
+        }
+
+        /// <summary>
+        /// Public wake-up entry for external systems such as perception, damage, or network events.
+        /// boostedTicks keeps the tree at immediate cadence for a short burst.
+        /// </summary>
+        public void WakeUp(int boostedTicks = 1)
+        {
+            RequestWakeUp(boostedTicks);
         }
 
         /// <summary>
@@ -99,10 +115,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public bool ShouldTick()
         {
-            if (_wakeUpRequested)
+            if (IsStopped)
+            {
+                return false;
+            }
+
+            if (_wakeUpRequested || _wakeUpTickBudget > 0)
             {
                 _wakeUpRequested = false;
                 _tickCounter = 0;
+                if (_wakeUpTickBudget > 0)
+                {
+                    _wakeUpTickBudget--;
+                }
                 return true;
             }
 
@@ -160,6 +185,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public RuntimeState Tick()
         {
+            if (IsStopped)
+            {
+                return State;
+            }
+
             if (Root == null) return RuntimeState.Failure;
 
             State = Root.Run(Blackboard);
@@ -168,12 +198,33 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public void Stop()
         {
+            if (IsStopped) return;
+
             if (Root != null && Root.IsStarted)
             {
                 Root.Abort(Blackboard);
             }
-            Blackboard?.Dispose();
+
+            _wakeUpRequested = false;
+            _wakeUpTickBudget = 0;
+            _tickCounter = 0;
             State = RuntimeState.NotEntered;
+            IsStopped = true;
+        }
+
+        public void Play()
+        {
+            _wakeUpRequested = false;
+            _wakeUpTickBudget = 0;
+            _tickCounter = 0;
+            State = RuntimeState.NotEntered;
+            IsStopped = false;
+        }
+
+        public void Dispose()
+        {
+            Stop();
+            Blackboard?.Dispose();
         }
     }
 }

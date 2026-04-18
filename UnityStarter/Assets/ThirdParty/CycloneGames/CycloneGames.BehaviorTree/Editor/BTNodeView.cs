@@ -144,6 +144,7 @@ namespace CycloneGames.BehaviorTree.Editor
         private VisualElement _progressBarContainer;
         private VisualElement _progressBarFill;
         private Label _progressLabel;
+        private bool _matchesSearch = true;
 
         /// <summary>
         /// Caches the last known final state (SUCCESS/FAILURE) to preserve node state
@@ -168,6 +169,29 @@ namespace CycloneGames.BehaviorTree.Editor
         public void ClearStateCache()
         {
             _lastKnownState = BTState.NOT_ENTERED;
+        }
+
+        public string SearchText
+        {
+            get
+            {
+                string titleText = title ?? string.Empty;
+                string typeText = _node != null ? _node.GetType().Name : string.Empty;
+                string tooltipText = tooltip ?? string.Empty;
+                return $"{titleText} {typeText} {tooltipText}";
+            }
+        }
+
+        public bool MatchesSearch(string searchText)
+        {
+            if (string.IsNullOrWhiteSpace(searchText)) return true;
+            return SearchText.IndexOf(searchText, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        public void SetSearchState(bool matchesSearch, bool hasActiveFilter)
+        {
+            _matchesSearch = matchesSearch || !hasActiveFilter;
+            style.opacity = _matchesSearch ? 1f : 0.2f;
         }
 
 
