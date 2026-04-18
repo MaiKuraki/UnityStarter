@@ -6,7 +6,10 @@
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
-    "com.cysharp.unitask": "2.5.0"
+    "com.cysharp.unitask": "2.5.0",
+    "com.unity.burst": "1.8.29",
+    "com.unity.collections": "2.6.5",
+    "com.unity.mathematics": "1.3.3"
   },
   "keywords": [
     "CycloneGames",
@@ -22,6 +25,11 @@
       "displayName": "Behavior Tree Sample",
       "description": "Behavior Tree Sample",
       "path": "Samples"
+    },
+    {
+      "displayName": "Behavior Tree Tests",
+      "description": "Behavior Tree Tests",
+      "path": "Tests"
     }
   ]
 }

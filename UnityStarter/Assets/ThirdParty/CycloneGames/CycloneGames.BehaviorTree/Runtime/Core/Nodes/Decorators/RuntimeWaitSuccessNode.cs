@@ -10,13 +10,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         public float RangeMax { get; set; }
         public bool UseUnscaledTime { get; set; }
 
-        private float _timer;
-        private float _actualWaitTime;
-        public float ActualWaitTime => _actualWaitTime;
+        private double _startTime;
+        private double _actualWaitTime;
+        public float ActualWaitTime => (float)_actualWaitTime;
+        public double ActualWaitTimeAsDouble => _actualWaitTime;
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
-            _timer = 0f;
+            _startTime = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime);
             _actualWaitTime = UseRandomRange ? Random.Range(RangeMin, RangeMax) : WaitTime;
         }
 
@@ -24,8 +25,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         {
             if (Child == null) return RuntimeState.Success;
 
-            _timer += UseUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
-            if (_timer >= _actualWaitTime)
+            double elapsed = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime) - _startTime;
+            if (elapsed >= _actualWaitTime)
             {
                 return RuntimeState.Failure;
             }

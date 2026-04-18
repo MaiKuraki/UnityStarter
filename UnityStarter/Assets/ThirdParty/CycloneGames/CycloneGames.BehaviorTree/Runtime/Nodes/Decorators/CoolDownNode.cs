@@ -8,11 +8,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
     {
         [SerializeField] private float _coolDown = 1f;
         [SerializeField] private bool _resetOnSuccess = false;
-        private float _lastTime = 0f;
+        private double _lastTime = 0d;
         private bool _isCoolDownStarted = false;
         public override BTState Evaluate(IBlackBoard blackBoard)
         {
-            if (Time.time - _lastTime > _coolDown)
+            if (Core.RuntimeBTTime.GetUnityTime(false) - _lastTime > _coolDown)
             {
                 return Child.Evaluate(blackBoard);
             }
@@ -21,7 +21,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
 
         protected override BTState OnRun(IBlackBoard blackBoard)
         {
-            if (Time.time - _lastTime > _coolDown)
+            if (Core.RuntimeBTTime.GetUnityTime(false) - _lastTime > _coolDown)
             {
                 _isCoolDownStarted = true;
                 return Child.Run(blackBoard);
@@ -38,12 +38,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             base.OnStop(blackBoard);
             if (!_resetOnSuccess)
             {
-                _lastTime = Time.time;
+                _lastTime = Core.RuntimeBTTime.GetUnityTime(false);
                 return;
             }
             if (Child.State == BTState.SUCCESS)
             {
-                _lastTime = Time.time;
+                _lastTime = Core.RuntimeBTTime.GetUnityTime(false);
             }
         }
 

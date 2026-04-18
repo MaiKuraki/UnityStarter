@@ -11,12 +11,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         public float DelaySeconds { get; set; } = 1f;
         public bool UseUnscaledTime { get; set; }
 
-        private float _startTime;
+        private double _startTime;
         private bool _delayComplete;
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
-            _startTime = UseUnscaledTime ? Time.unscaledTime : Time.time;
+            _startTime = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime);
             _delayComplete = false;
         }
 
@@ -24,7 +24,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         {
             if (!_delayComplete)
             {
-                float elapsed = (UseUnscaledTime ? Time.unscaledTime : Time.time) - _startTime;
+                double elapsed = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime) - _startTime;
                 if (elapsed < DelaySeconds)
                     return RuntimeState.Running;
                 _delayComplete = true;

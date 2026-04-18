@@ -10,12 +10,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
     {
         [SerializeField] private float _delaySeconds = 1f;
         [SerializeField] private bool _useUnscaledTime = false;
-        private float _startTime;
+        private double _startTime;
         private bool _delayCompleted;
 
         protected override void OnStart(IBlackBoard blackBoard)
         {
-            _startTime = _useUnscaledTime ? Time.unscaledTime : Time.time;
+            _startTime = Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime);
             _delayCompleted = false;
         }
 
@@ -23,7 +23,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         {
             if (!_delayCompleted)
             {
-                float currentTime = _useUnscaledTime ? Time.unscaledTime : Time.time;
+                double currentTime = Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime);
                 if (currentTime - _startTime < _delaySeconds) return BTState.RUNNING;
                 _delayCompleted = true;
             }

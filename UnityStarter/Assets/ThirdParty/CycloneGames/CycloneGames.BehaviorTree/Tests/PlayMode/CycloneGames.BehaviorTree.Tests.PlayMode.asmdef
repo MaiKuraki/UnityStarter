@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.BehaviorTree.Tests.PlayMode",
+    "rootNamespace": "CycloneGames.BehaviorTree.Tests.PlayMode",
+    "references": [
+        "CycloneGames.BehaviorTree.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

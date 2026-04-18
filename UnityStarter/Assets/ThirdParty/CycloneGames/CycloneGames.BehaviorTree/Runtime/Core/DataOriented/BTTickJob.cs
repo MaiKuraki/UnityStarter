@@ -55,7 +55,9 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
                 TickCountdowns[agentIndex] = countdown - 1;
                 return;
             }
-            TickCountdowns[agentIndex] = TickIntervals[agentIndex];
+            TickCountdowns[agentIndex] = TickIntervals[agentIndex] > 1
+                ? TickIntervals[agentIndex] - 1
+                : 0;
 
             int nodeOff = agentIndex * NodeCount;
             int bbOff = agentIndex * BBSlotCount;
@@ -444,6 +446,9 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
         private byte TickAction(int nodeIdx, int gi, int actOff)
         {
             int actionId = TreeNodes[nodeIdx].ParamInt;
+            if ((uint)actionId >= (uint)ActionSlotCount)
+                return (byte)RuntimeState.Failure;
+
             int slotIdx = actOff + actionId;
 
             var status = AllActionSlots[slotIdx];
@@ -477,6 +482,9 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
         private byte TickBBCondition(int nodeIdx, int bbOff)
         {
             var def = TreeNodes[nodeIdx];
+            if ((uint)def.BBKey >= (uint)BBSlotCount)
+                return (byte)RuntimeState.Failure;
+
             int bbIdx = bbOff + def.BBKey;
             int value = AllBBInts[bbIdx];
 

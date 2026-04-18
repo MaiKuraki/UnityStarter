@@ -9,7 +9,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
     /// </summary>
     public class BTStatusLogger
     {
-        public delegate void StatusChangeHandler(string nodeGuid, RuntimeState previousState, RuntimeState newState, float timestamp);
+        public delegate void StatusChangeHandler(string nodeGuid, RuntimeState previousState, RuntimeState newState, double timestamp);
 
         private StatusChangeHandler _handler;
         private bool _enabled;
@@ -26,7 +26,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             _enabled = true;
         }
 
-        public void Log(string nodeGuid, RuntimeState previousState, RuntimeState newState, float timestamp)
+        public void Log(string nodeGuid, RuntimeState previousState, RuntimeState newState, double timestamp)
         {
             if (!_enabled || _handler == null) return;
             _handler(nodeGuid, previousState, newState, timestamp);
