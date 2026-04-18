@@ -184,36 +184,15 @@ namespace CycloneGames.Factory.Runtime
 
         public void DespawnAll()
         {
-            Exception firstException = null;
             while (_activeItems.Count > 0)
             {
-                int countBefore = _activeItems.Count;
-                TValue item = _activeItems[countBefore - 1];
-                try
+                TValue item = _activeItems[_activeItems.Count - 1];
+                if (!Despawn(item))
                 {
-                    Despawn(item);
+                    throw new InvalidOperationException(
+                        $"Failed to despawn active item of type {typeof(TValue).Name}. " +
+                        "Pool state was preserved to avoid losing ownership tracking.");
                 }
-                catch (Exception ex) when (firstException == null)
-                {
-                    firstException = ex;
-                }
-                catch
-                {
-                }
-
-                // Guarantee progress: if Despawn failed to remove the item, force-remove it.
-                if (_activeItems.Count >= countBefore)
-                {
-                    int last = _activeItems.Count - 1;
-                    TValue staleItem = _activeItems[last];
-                    _activeItems.RemoveAt(last);
-                    try { _activeItemIndices.Remove(staleItem); } catch { }
-                }
-            }
-
-            if (firstException != null)
-            {
-                throw firstException;
             }
         }
 
@@ -230,38 +209,17 @@ namespace CycloneGames.Factory.Runtime
             }
 
             int processed = 0;
-            Exception firstException = null;
             while (processed < maxItems && _activeItems.Count > 0)
             {
-                int countBefore = _activeItems.Count;
-                TValue item = _activeItems[countBefore - 1];
-                try
+                TValue item = _activeItems[_activeItems.Count - 1];
+                if (!Despawn(item))
                 {
-                    Despawn(item);
-                }
-                catch (Exception ex) when (firstException == null)
-                {
-                    firstException = ex;
-                }
-                catch
-                {
-                    // Keep progressing in frame-sliced mode.
-                }
-
-                if (_activeItems.Count >= countBefore)
-                {
-                    int last = _activeItems.Count - 1;
-                    TValue staleItem = _activeItems[last];
-                    _activeItems.RemoveAt(last);
-                    try { _activeItemIndices.Remove(staleItem); } catch { }
+                    throw new InvalidOperationException(
+                        $"Failed to despawn active item of type {typeof(TValue).Name}. " +
+                        "Pool state was preserved to avoid losing ownership tracking.");
                 }
 
                 processed++;
-            }
-
-            if (firstException != null)
-            {
-                throw firstException;
             }
 
             return processed;
@@ -297,6 +255,7 @@ namespace CycloneGames.Factory.Runtime
         /// <summary>
         /// Coroutine-friendly DespawnAll that yields every <paramref name="batchSize"/> items
         /// to spread the cost across multiple frames.
+        /// Allocates an iterator state machine and should not be used on strict zero-GC hot paths.
         /// </summary>
         public IEnumerator DespawnAllCoroutine(int batchSize = 8)
         {
@@ -308,23 +267,12 @@ namespace CycloneGames.Factory.Runtime
             int remainingUntilYield = batchSize;
             while (_activeItems.Count > 0)
             {
-                int countBefore = _activeItems.Count;
-                TValue item = _activeItems[countBefore - 1];
-                try
+                TValue item = _activeItems[_activeItems.Count - 1];
+                if (!Despawn(item))
                 {
-                    Despawn(item);
-                }
-                catch
-                {
-                    // Swallow – coroutines cannot propagate exceptions usefully.
-                }
-
-                if (_activeItems.Count >= countBefore)
-                {
-                    int last = _activeItems.Count - 1;
-                    TValue staleItem = _activeItems[last];
-                    _activeItems.RemoveAt(last);
-                    try { _activeItemIndices.Remove(staleItem); } catch { }
+                    throw new InvalidOperationException(
+                        $"Failed to despawn active item of type {typeof(TValue).Name}. " +
+                        "Pool state was preserved to avoid losing ownership tracking.");
                 }
 
                 remainingUntilYield--;
@@ -366,6 +314,7 @@ namespace CycloneGames.Factory.Runtime
 
         /// <summary>
         /// Coroutine-friendly Prewarm that yields every <paramref name="batchSize"/> items.
+        /// Allocates an iterator state machine and should not be used on strict zero-GC hot paths.
         /// </summary>
         public IEnumerator WarmupCoroutine(int count, int batchSize = 8)
         {
