@@ -12,15 +12,15 @@ namespace CycloneGames.Factory.Samples.PureCSharp
     }
 
     // The Particle class itself
-    public class Particle : IPoolable<ParticleData, IMemoryPool>, ITickable, IDisposable
+    public class Particle : IPoolable<ParticleData, Particle>, ITickable, IDisposable
     {
-        private IMemoryPool _pool;
+        private IDespawnableMemoryPool<Particle> _pool;
         private ParticleData _data;
         private int _ticksRemaining;
         private System.Numerics.Vector2 _currentPosition;
 
         // OnSpawned configures the particle with its new state
-        public void OnSpawned(ParticleData data, IMemoryPool pool)
+        public void OnSpawned(ParticleData data, IDespawnableMemoryPool<Particle> pool)
         {
             _data = data;
             _pool = pool;

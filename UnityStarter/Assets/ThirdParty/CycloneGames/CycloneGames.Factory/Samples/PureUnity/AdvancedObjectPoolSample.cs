@@ -4,11 +4,8 @@ using CycloneGames.Factory.Runtime;
 namespace CycloneGames.Factory.Samples.PureUnity
 {
     /// <summary>
-    /// Demonstrates the usage of the heavy-duty 'ObjectPool'.
-    /// Use this pool when you need:
-    /// - Thread safety (access from multiple threads).
-    /// - Automatic tracking of active items (UpdateActiveItems).
-    /// - Complex factory composition (IFactory decorators), maybe integrate DI framework
+    /// Demonstrates the usage of the configurable main-thread ObjectPool.
+    /// Use this pool when you need deterministic ownership tracking and clear capacity policy.
     /// </summary>
     public class AdvancedObjectPoolSample : MonoBehaviour
     {
@@ -25,17 +22,13 @@ namespace CycloneGames.Factory.Samples.PureUnity
             var spawner = new DefaultUnityObjectSpawner();
             _factory = new MonoPrefabFactory<Bullet>(spawner, BulletPrefab, transform);
 
-            _advancedPool = new ObjectPool<BulletData, Bullet>(
-                _factory,
-                initialCapacity: 20,
-                expansionFactor: 0.5f,
-                shrinkBufferFactor: 0.2f,
-                shrinkCooldownTicks: 600
-            );
+            _advancedPool = new ObjectPool<BulletData, Bullet>(_factory, new PoolCapacitySettings(
+                softCapacity: 20,
+                hardCapacity: 100,
+                overflowPolicy: PoolOverflowPolicy.Throw,
+                trimPolicy: PoolTrimPolicy.TrimOnDespawn));
 
-            _advancedPool.MaxCapacity = 100;
-
-            Debug.Log($"Advanced Pool Ready. Total: {_advancedPool.NumTotal}");
+            Debug.Log($"Advanced Pool Ready. Total: {_advancedPool.CountAll}");
         }
 
         void Update()
@@ -47,13 +40,11 @@ namespace CycloneGames.Factory.Samples.PureUnity
 
             if (Input.GetKeyDown(KeyCode.Space))
             {
-                _advancedPool.UpdateActiveItems(bullet =>
+                _advancedPool.ForEachActive(bullet =>
                 {
                     Debug.Log($"Processing active bullet at {bullet.transform.position}");
                 });
             }
-
-            _advancedPool.Maintenance();
         }
 
         private void SpawnFromAdvancedPool()
@@ -68,7 +59,7 @@ namespace CycloneGames.Factory.Samples.PureUnity
             try
             {
                 var bullet = _advancedPool.Spawn(data);
-                Debug.Log($"[Advanced] Spawned Bullet. Active Count: {_advancedPool.NumActive}");
+                Debug.Log($"[Advanced] Spawned Bullet. Active Count: {_advancedPool.CountActive}");
             }
             catch (System.Exception e)
             {
@@ -87,7 +78,10 @@ namespace CycloneGames.Factory.Samples.PureUnity
             GUILayout.Label("Space: Iterate Active Items (Check Console)");
             if (_advancedPool != null)
             {
-                GUILayout.Label($"Pool Stats: {_advancedPool.NumActive} Active / {_advancedPool.NumInactive} Inactive");
+                var profile = _advancedPool.Profile;
+                GUILayout.Label($"Pool Stats: {profile.CountActive} Active / {profile.CountInactive} Inactive / {profile.CountAll} Total");
+                GUILayout.Label($"Capacity: soft {profile.CapacitySettings.SoftCapacity}, hard {profile.CapacitySettings.HardCapacity}");
+                GUILayout.Label($"Diagnostics: peak active {profile.Diagnostics.PeakCountActive}, peak total {profile.Diagnostics.PeakCountAll}, rejected {profile.Diagnostics.RejectedSpawns}");
             }
         }
     }

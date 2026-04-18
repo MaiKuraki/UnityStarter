@@ -1,309 +1,64 @@
-using System;
-using System.Collections.Generic;
-
 namespace CycloneGames.Factory.Runtime
 {
     /// <summary>
-    /// A lightweight, high-performance object pool designed for high-frequency objects like particles and projectiles.
-    /// Features: 
-    /// - No locks (Main-thread only).
-    /// - No Dictionary tracking.
-    /// - Smart auto-shrink logic based on usage peaks.
-    /// - Minimal GC overhead.
+    /// Abstract pool for main-thread objects that do not require spawn parameters.
+    /// Provides parameterless Spawn/TrySpawn. Subclasses implement creation and lifecycle hooks.
+    /// All tracking, capacity, diagnostics, and lifecycle infrastructure is in <see cref="PoolBase{TValue}"/>.
     /// </summary>
-    public abstract class FastObjectPool<T> : IMemoryPool<T>, IDisposable where T : class
+    public abstract class FastObjectPool<T> : PoolBase<T>, IMemoryPool<T> where T : class
     {
-        protected readonly Stack<T> _pool;
-        private bool _disposed;
-
-        public int NumTotal => NumActive + NumInactive;
-        public int NumActive { get; protected set; }
-        public int NumInactive => _pool.Count;
-        public Type ItemType => typeof(T);
-
-        /// <summary>
-        /// Maximum number of inactive items allowed in the pool. -1 means unlimited.
-        /// </summary>
-        public int MaxCapacity { get; set; } = -1;
-
-        /// <summary>
-        /// Minimum number of items to keep in the pool, preventing over-shrinking during low activity.
-        /// </summary>
-        public int MinCapacity { get; set; } = 16;
-
-        private const int kCheckInterval = 128;
-        private const float kBufferRatio = 1.25f;
-        private const int kMaxDestroyPerCheck = 8;
-
-        private int _peakActiveSinceLastCheck = 0;
-        private int _despawnCounter = 0;
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        private long _totalGets = 0;
-        private long _totalReturns = 0;
-        private long _totalDiscards = 0;
-        private int _peakActive = 0;
-#endif
-
-        protected FastObjectPool(int initialCapacity = 16)
+        protected FastObjectPool(int initialCapacity = 0, int maxCapacity = -1)
+            : this(new PoolCapacitySettings(initialCapacity, maxCapacity))
         {
-            _pool = new Stack<T>(initialCapacity);
-            _peakActiveSinceLastCheck = 0;
-            // If initial capacity is provided, treat it as a suggestion for MinCapacity too, unless specified otherwise.
-            if (initialCapacity > 16) MinCapacity = initialCapacity;
+        }
+
+        protected FastObjectPool(PoolCapacitySettings capacitySettings)
+            : this(capacitySettings, deferInitialPrewarm: false)
+        {
+        }
+
+        protected FastObjectPool(PoolCapacitySettings capacitySettings, bool deferInitialPrewarm)
+            : base(capacitySettings)
+        {
+            if (!deferInitialPrewarm && capacitySettings.SoftCapacity > 0)
+            {
+                Prewarm(capacitySettings.SoftCapacity);
+            }
         }
 
         public T Spawn()
         {
-            if (_disposed) throw new ObjectDisposedException(GetType().Name);
-
-            T item;
-            while (_pool.Count > 0)
-            {
-                item = _pool.Pop();
-                if (IsValid(item))
-                {
-                    NumActive++;
-                    TrackPeak();
-                    OnSpawn(item);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                    _totalGets++;
-                    int peak = _peakActive;
-                    if (NumActive > peak)
-                    {
-                        _peakActive = NumActive;
-                    }
-#endif
-                    return item;
-                }
-            }
-
-            item = CreateNew();
-            NumActive++;
-            TrackPeak();
-            OnSpawn(item);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            _totalGets++;
-            int peakCheck = _peakActive;
-            if (NumActive > peakCheck)
-            {
-                _peakActive = NumActive;
-            }
-#endif
+            TrySpawnInternal(throwOnFailure: true, out var item);
             return item;
         }
 
-        private void TrackPeak()
+        public bool TrySpawn(out T item)
         {
-            if (NumActive > _peakActiveSinceLastCheck)
-            {
-                _peakActiveSinceLastCheck = NumActive;
-            }
+            return TrySpawnInternal(throwOnFailure: false, out item);
         }
 
-        public void Despawn(T item)
-        {
-            if (!IsValid(item))
-            {
-                if (NumActive > 0) NumActive--;
-                return;
-            }
-
-            NumActive--;
-
-            if (_disposed)
-            {
-                OnDespawn(item);
-                DestroyItem(item);
-                return;
-            }
-
-            if (MaxCapacity > 0 && _pool.Count >= MaxCapacity)
-            {
-                OnDespawn(item);
-                DestroyItem(item);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                _totalDiscards++;
-#endif
-                return;
-            }
-
-            OnDespawn(item);
-            _pool.Push(item);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            _totalReturns++;
-#endif
-
-            _despawnCounter++;
-            if (_despawnCounter >= kCheckInterval)
-            {
-                PerformSmartShrink();
-                _despawnCounter = 0;
-            }
-        }
-
-        public void Despawn(object obj)
-        {
-            if (obj is T t) Despawn(t);
-        }
-
-        public void Clear()
-        {
-            foreach (var item in _pool)
-            {
-                if (IsValid(item)) DestroyItem(item);
-            }
-            _pool.Clear();
-            NumActive = 0;
-            _peakActiveSinceLastCheck = 0;
-        }
-
-        // Abstract methods for subclass
-        protected abstract T CreateNew();
+        /// <summary>
+        /// Called when an item is being activated (spawned) from the pool.
+        /// </summary>
         protected abstract void OnSpawn(T item);
-        protected abstract void OnDespawn(T item);
 
-        /// <summary>
-        /// Checks if the item is valid and safe to use.
-        /// Subclasses can override this to handle Unity's "fake null" for destroyed objects.
-        /// </summary>
-        protected virtual bool IsValid(T item)
+        private bool TrySpawnInternal(bool throwOnFailure, out T item)
         {
-            return item != null;
-        }
-
-        // Optional hook for destroying an item (e.g. Object.Destroy or Dispose)
-        protected virtual void DestroyItem(T item)
-        {
-            if (item is IDisposable disposable)
+            if (!TryAcquireAndTrack(throwOnFailure, out item))
             {
-                disposable.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// Evaluates current usage and gently trims the pool if it's holding too many unused items.
-        /// </summary>
-        private void PerformSmartShrink()
-        {
-            // Calculate target capacity based on the peak usage we saw recently.
-            // e.g., if peak was 100, we keep 125.
-            int targetTotal = (int)(_peakActiveSinceLastCheck * kBufferRatio);
-
-            // Ensure we respect the minimum capacity floor.
-            targetTotal = Math.Max(targetTotal, MinCapacity);
-
-            int currentTotal = NumActive + NumInactive;
-            if (currentTotal > targetTotal)
-            {
-                int excess = currentTotal - targetTotal;
-                int safeToRemove = Math.Min(excess, _pool.Count);
-
-                int toRemove = Math.Min(safeToRemove, kMaxDestroyPerCheck);
-
-                if (toRemove > 0)
-                {
-                    ShrinkBy(toRemove);
-                }
+                return false;
             }
 
-            // Decay the peak tracker slowly instead of resetting to current active.
-            // This acts as a "memory" of recent high load.
-            // A decay factor ensures we don't shrink too aggressively after a busy period ends.
-            // Math.Max ensures we never drop below current active count.
-            _peakActiveSinceLastCheck = Math.Max(NumActive, (int)(_peakActiveSinceLastCheck * 0.5f));
-        }
-
-        public void Resize(int size)
-        {
-            if (NumInactive < size) ExpandBy(size - NumInactive);
-            else if (NumInactive > size) ShrinkBy(NumInactive - size);
-        }
-
-        public void ExpandBy(int num)
-        {
-            if (_disposed) throw new ObjectDisposedException(GetType().Name);
-            if (MaxCapacity > 0)
+            try
             {
-                num = Math.Min(num, Math.Max(0, MaxCapacity - _pool.Count));
+                OnSpawn(item);
+                return true;
             }
-            for (int i = 0; i < num; i++)
+            catch
             {
-                T item = CreateNew();
-                OnDespawn(item);
-                _pool.Push(item);
+                RollbackSpawn(item);
+                throw;
             }
         }
-
-        public void ShrinkBy(int num)
-        {
-            for (int i = 0; i < num && _pool.Count > 0; i++)
-            {
-                T item = _pool.Pop();
-                if (IsValid(item)) DestroyItem(item);
-            }
-        }
-
-        /// <summary>
-        /// Spreads pool warmup across multiple frames to avoid lag spikes on low-end devices.
-        /// Use with StartCoroutine in Unity or iterate manually in pure C#.
-        /// </summary>
-        public System.Collections.IEnumerator WarmupCoroutine(int count, int batchSize = 8)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                if (_disposed) yield break;
-                if (MaxCapacity > 0 && _pool.Count >= MaxCapacity) yield break;
-                T item = CreateNew();
-                OnDespawn(item);
-                _pool.Push(item);
-                if ((i + 1) % batchSize == 0) yield return null;
-            }
-        }
-
-        public void Dispose()
-        {
-            if (_disposed) return;
-            _disposed = true;
-            Dispose(true);
-        }
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (disposing) Clear();
-        }
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        public PoolStatistics GetStatistics()
-        {
-            return new PoolStatistics
-            {
-                NumActive = NumActive,
-                NumInactive = NumInactive,
-                TotalGets = _totalGets,
-                TotalReturns = _totalReturns,
-                TotalDiscards = _totalDiscards,
-                PeakActive = _peakActive
-            };
-        }
-
-        public void ResetStatistics()
-        {
-            _totalGets = 0;
-            _totalReturns = 0;
-            _totalDiscards = 0;
-            _peakActive = 0;
-        }
-
-        public struct PoolStatistics
-        {
-            public int NumActive;
-            public int NumInactive;
-            public long TotalGets;
-            public long TotalReturns;
-            public long TotalDiscards;
-            public int PeakActive;
-        }
-#endif
     }
 }

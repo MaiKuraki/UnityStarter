@@ -3,6 +3,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Numerics;
 using CycloneGames.Factory.Runtime;
+#if PRESENT_COLLECTIONS
+using CycloneGames.Factory.DOD.Runtime;
+using Unity.Collections;
+#endif
 
 namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
 {
@@ -24,6 +28,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
             BenchmarkObjectPoolStress();
             BenchmarkObjectPoolScaling();
             BenchmarkConcurrentPoolAccess();
+            BenchmarkPoolDiagnostics();
             
             _runner.PrintSummary();
             
@@ -84,8 +89,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                     LifetimeTicks = 1 // Will despawn immediately in next tick
                 };
                 
-                var particle = pool.Spawn(data);
-                pool.Maintenance(); // Process despawn
+                pool.Spawn(data);
             });
             
             pool.Dispose();
@@ -119,15 +123,14 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                 }
                 
                 // Tick all particles
-                pool.UpdateActiveItems(p => p.Tick());
-                pool.Maintenance();
+                pool.ForEachActive(p => p.Tick());
                 
                 // Remove despawned particles from our tracking
                 activeParticles.RemoveAll(p => p.IsDestroyed);
             });
             
-            Console.WriteLine($"  Final active particles: {pool.NumActive}");
-            Console.WriteLine($"  Final inactive particles: {pool.NumInactive}");
+            Console.WriteLine($"  Final active particles: {pool.CountActive}");
+            Console.WriteLine($"  Final inactive particles: {pool.CountInactive}");
             pool.Dispose();
         }
 
@@ -138,7 +141,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
         {
             const int phases = 10;
             var factory = new DefaultFactory<BenchmarkParticle>();
-            var pool = new ObjectPool<ParticleData, BenchmarkParticle>(factory, 10);
+            var pool = new ObjectPool<ParticleData, BenchmarkParticle>(factory, 10, 512);
             
             _runner.RunBenchmark("Object Pool Auto-Scaling", phases, () =>
             {
@@ -156,64 +159,54 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                         pool.Spawn(data);
                     }
                     
-                    // Process several ticks to allow natural despawning
                     for (int tick = 0; tick < 10; tick++)
                     {
-                        pool.Maintenance();
+                        pool.ForEachActive(p => p.Tick());
                     }
                 }
-                
-                // Phase 2: Let pool shrink
-                for (int i = 0; i < 50; i++)
+
+                // Manual trim replaces the old implicit maintenance/shrink path.
+                if (pool.CountInactive > 10)
                 {
-                    pool.Maintenance();
+                    pool.TrimInactive(10);
                 }
             });
             
-            Console.WriteLine($"  Final pool size: {pool.NumTotal} (Active: {pool.NumActive}, Inactive: {pool.NumInactive})");
+            Console.WriteLine($"  Final pool size: {pool.CountAll} (Active: {pool.CountActive}, Inactive: {pool.CountInactive})");
             pool.Dispose();
         }
 
         /// <summary>
-        /// Test concurrent access performance (if threading is used)
+        /// Main-thread pools intentionally do not support concurrent access.
+        /// This benchmark is retained as a note so the report still explains the design choice.
         /// </summary>
         private void BenchmarkConcurrentPoolAccess()
         {
-            const int iterations = 1000;
-            const int threadsCount = 4;
-            
+            Console.WriteLine("  Concurrent Pool Access benchmark skipped: ObjectPool is now explicitly main-thread only by design.");
+        }
+
+        private void BenchmarkPoolDiagnostics()
+        {
             var factory = new DefaultFactory<BenchmarkParticle>();
-            var pool = new ObjectPool<ParticleData, BenchmarkParticle>(factory, 100);
-            
-            _runner.RunBenchmark("Concurrent Pool Access", iterations, () =>
+            var pool = new ObjectPool<ParticleData, BenchmarkParticle>(
+                factory,
+                new PoolCapacitySettings(softCapacity: 64, hardCapacity: 1024, overflowPolicy: PoolOverflowPolicy.ReturnNull));
+
+            for (int i = 0; i < 512; i++)
             {
-                var tasks = new List<System.Threading.Tasks.Task>();
-                
-                for (int t = 0; t < threadsCount; t++)
+                pool.TrySpawn(new ParticleData
                 {
-                    int threadId = t;
-                    var task = System.Threading.Tasks.Task.Run(() =>
-                    {
-                        for (int i = 0; i < 10; i++)
-                        {
-                            var data = new ParticleData
-                            {
-                                StartPosition = new Vector2(threadId, i),
-                                Velocity = Vector2.UnitX,
-                                LifetimeTicks = 5
-                            };
-                            
-                            var particle = pool.Spawn(data);
-                            System.Threading.Thread.Sleep(1); // Simulate work
-                        }
-                    });
-                    tasks.Add(task);
-                }
-                
-                System.Threading.Tasks.Task.WaitAll(tasks.ToArray());
-                pool.Maintenance();
-            });
-            
+                    StartPosition = Vector2.Zero,
+                    Velocity = Vector2.UnitX,
+                    LifetimeTicks = 4
+                }, out _);
+            }
+
+            pool.ForEachActive(p => p.Tick());
+            pool.DespawnAll();
+
+            var diagnostics = pool.Diagnostics;
+            Console.WriteLine($"  Diagnostics: PeakCountActive={diagnostics.PeakCountActive}, PeakCountAll={diagnostics.PeakCountAll}, RejectedSpawns={diagnostics.RejectedSpawns}");
             pool.Dispose();
         }
     }
@@ -221,13 +214,13 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
     /// <summary>
     /// Test particle class for benchmarking
     /// </summary>
-    public class BenchmarkParticle : IPoolable<ParticleData, IMemoryPool>, ITickable
+    public class BenchmarkParticle : IPoolable<ParticleData, BenchmarkParticle>, ITickable
     {
         private Vector2 _position;
         private Vector2 _velocity;
         private int _lifetimeTicks;
         private int _currentTick;
-        private IMemoryPool _pool;
+        private IDespawnableMemoryPool<BenchmarkParticle> _pool;
 
         public bool IsDestroyed { get; private set; }
 
@@ -240,7 +233,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
             IsDestroyed = false;
         }
 
-        public void OnSpawned(ParticleData data, IMemoryPool pool)
+        public void OnSpawned(ParticleData data, IDespawnableMemoryPool<BenchmarkParticle> pool)
         {
             _pool = pool;
             Initialize(data.StartPosition, data.Velocity, data.LifetimeTicks);
@@ -298,4 +291,91 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
     {
         public T Create() => new T();
     }
+
+#if PRESENT_COLLECTIONS
+    /// <summary>
+    /// Dedicated high-density benchmark for handle-based dense pools.
+    /// Focuses on contiguous iteration and stable-handle churn under large active sets.
+    /// </summary>
+    public sealed class DensePoolBenchmark
+    {
+        private readonly BenchmarkRunner _runner = new BenchmarkRunner();
+
+        public void RunAllBenchmarks()
+        {
+            Console.WriteLine("=== CycloneGames.Factory Dense Pool Benchmarks ===\n");
+
+            BenchmarkDenseSpawnAndDespawn();
+            BenchmarkDenseIteration();
+            BenchmarkDenseChurn();
+
+            _runner.PrintSummary();
+            _runner.GenerateReport("Factory_DensePool_Analysis");
+        }
+
+        private void BenchmarkDenseSpawnAndDespawn()
+        {
+            const int capacity = 20000;
+            using var pool = new NativeDensePool<DenseParticle>(capacity, Allocator.Temp);
+
+            _runner.RunBenchmark("Dense Pool Spawn/Despawn", capacity, () =>
+            {
+                pool.TrySpawn(new DenseParticle { X = 1, Y = 2, Lifetime = 60 }, out var handle, out _);
+                pool.Despawn(handle);
+            });
+        }
+
+        private void BenchmarkDenseIteration()
+        {
+            const int count = 10000;
+            using var pool = new NativeDensePool<DenseParticle>(count, Allocator.Temp);
+            for (int i = 0; i < count; i++)
+            {
+                pool.TrySpawn(new DenseParticle { X = i, Y = i * 2, Lifetime = 120 }, out _, out _);
+            }
+
+            _runner.RunBenchmark("Dense Pool Iteration", 1000, () =>
+            {
+                var activeItems = pool.ActiveItems;
+                for (int i = 0; i < activeItems.Length; i++)
+                {
+                    var particle = activeItems[i];
+                    particle.X += particle.Y;
+                    particle.Lifetime--;
+                    activeItems[i] = particle;
+                }
+            });
+        }
+
+        private void BenchmarkDenseChurn()
+        {
+            const int capacity = 15000;
+            using var pool = new NativeDensePool<DenseParticle>(capacity, Allocator.Temp);
+
+            _runner.RunBenchmark("Dense Pool High Churn", 200, () =>
+            {
+                for (int i = 0; i < capacity; i++)
+                {
+                    pool.TrySpawn(new DenseParticle { X = i, Y = i + 1, Lifetime = 8 }, out _, out _);
+                }
+
+                int removals = Math.Min(5000, pool.CountActive);
+                for (int i = 0; i < removals; i++)
+                {
+                    var handle = pool.GetHandleAtDenseIndex(pool.CountActive - 1);
+                    pool.Despawn(handle);
+                }
+
+                pool.Clear();
+            });
+        }
+
+        private struct DenseParticle
+        {
+            public int X;
+            public int Y;
+            public int Lifetime;
+        }
+    }
+#endif
 }

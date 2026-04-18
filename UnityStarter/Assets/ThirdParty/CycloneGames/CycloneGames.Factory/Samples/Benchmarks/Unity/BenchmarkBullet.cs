@@ -7,7 +7,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
     /// Benchmark bullet implementation for testing Unity GameObject pooling performance.
     /// Implements the required interfaces for object pooling while providing realistic behavior.
     /// </summary>
-    public class BenchmarkBullet : MonoBehaviour, IPoolable<BulletSpawnData, IMemoryPool>, ITickable
+    public class BenchmarkBullet : MonoBehaviour, IPoolable<BulletSpawnData, BenchmarkBullet>, ITickable
     {
         [Header("Bullet Configuration")]
         [SerializeField] private float baseSpeed = 10f;
@@ -21,7 +21,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
 
         private Vector2 _velocity;
         private float _remainingLifetime;
-        private IMemoryPool _owningPool;
+        private IDespawnableMemoryPool<BenchmarkBullet> _owningPool;
         private bool _isActive;
         private float _currentSpeed;
 
@@ -31,7 +31,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
 
         #region IPoolable Implementation
 
-        public void OnSpawned(BulletSpawnData data, IMemoryPool pool)
+        public void OnSpawned(BulletSpawnData data, IDespawnableMemoryPool<BenchmarkBullet> pool)
         {
             _owningPool = pool;
             _isActive = true;

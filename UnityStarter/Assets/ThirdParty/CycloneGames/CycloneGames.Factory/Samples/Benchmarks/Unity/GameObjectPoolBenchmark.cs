@@ -50,8 +50,10 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
 		[SerializeField] private bool includePrewarmed = true;
 		[Tooltip("Prewarm size for prewarmed scenarios")]
 		[SerializeField] private int prewarmSize = 1000;
-		[Tooltip("Burst size per operation for cold/prewarmed scenarios (spawn N, then despawn N)")]
-		[SerializeField] private int scenarioBurstSize = 256;
+        [Tooltip("Burst size per operation for cold/prewarmed scenarios (spawn N, then despawn N)")]
+        [SerializeField] private int scenarioBurstSize = 256;
+        [Tooltip("Optional shared high-load profile for comparing OOP, DOD and ECS benchmarks with the same target load.")]
+        [SerializeField] private FactoryHighLoadProfile highLoadProfile;
 
         private UnityBenchmarkRunner _runner;
         private ObjectPool<BulletSpawnData, BenchmarkBullet> _bulletPool;
@@ -116,7 +118,11 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
         {
             var spawner = new DefaultUnityObjectSpawner();
             _bulletFactory = new MonoPrefabFactory<BenchmarkBullet>(spawner, bulletPrefab, spawnParent);
-            _bulletPool = new ObjectPool<BulletSpawnData, BenchmarkBullet>(_bulletFactory, 100);
+            PoolCapacitySettings capacitySettings = highLoadProfile != null
+                ? new PoolCapacitySettings(highLoadProfile.softCapacity, highLoadProfile.hardCapacity, PoolOverflowPolicy.ReturnNull)
+                : new PoolCapacitySettings(100, 4096, PoolOverflowPolicy.ReturnNull);
+
+            _bulletPool = new ObjectPool<BulletSpawnData, BenchmarkBullet>(_bulletFactory, capacitySettings);
         }
 
         [ContextMenu("Run All Benchmarks (UniTask)")]
@@ -161,8 +167,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 }
 
                 // Reclaim pooled objects (do not clear pool), and clean up non-pooled
-                _bulletPool.DespawnAllActive();
-                _bulletPool.Maintenance();
+                _bulletPool.DespawnAll();
                 if (_directInstantiatedObjects != null && _directInstantiatedObjects.Count > 0)
                 {
                     for (int i = 0; i < _directInstantiatedObjects.Count; i++)
@@ -278,7 +283,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
             System.Action cleanup = () =>
             {
                 if (enableDetailedProfiling) Profiler.BeginSample("Op.Pool.Tick");
-                _bulletPool.Maintenance(); // Process despawns
+                _bulletPool.TrimInactive(_bulletPool.CountInactive);
                 if (enableDetailedProfiling) Profiler.EndSample();
             };
 
@@ -364,7 +369,6 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
             }
             long poolingMemory = Profiler.GetTotalAllocatedMemoryLong();
             foreach (var bullet in pooledBullets) { _bulletPool.Despawn(bullet); }
-            _bulletPool.Maintenance();
             pooledBullets.Clear();
 
             // --- Report ---
@@ -397,18 +401,22 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
             if (enableDetailedProfiling) Profiler.BeginSample("Benchmark.StressTest");
             Debug.Log($"--- Running Stress Test: {maxConcurrentObjects} objects over {stressTestDuration}s ---");
 
+            int targetActive = highLoadProfile != null ? highLoadProfile.sustainedActiveCount : maxConcurrentObjects;
+            int burstPerFrame = highLoadProfile != null ? highLoadProfile.spawnBurstPerFrame : spawnBatchSize;
+            float duration = highLoadProfile != null ? highLoadProfile.benchmarkDurationSeconds : stressTestDuration;
+
             float startTime = Time.realtimeSinceStartup;
             var frameTimes = new List<float>();
 
-            while (Time.realtimeSinceStartup - startTime < stressTestDuration)
+            while (Time.realtimeSinceStartup - startTime < duration)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 float frameStart = Time.realtimeSinceStartup;
 
                 if (enableDetailedProfiling) Profiler.BeginSample("Op.Stress.SpawnBatch");
-                for (int i = 0; i < spawnBatchSize; i++)
+                for (int i = 0; i < burstPerFrame; i++)
                 {
-                    if (_bulletPool.NumActive >= maxConcurrentObjects) break;
+                    if (_bulletPool.CountActive >= targetActive) break;
                     var data = new BulletSpawnData
                     {
                         Position = Random.insideUnitCircle * 10f,
@@ -416,13 +424,12 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                         Speed = Random.Range(1f, 10f),
                         Lifetime = Random.Range(1f, 5f)
                     };
-                    _bulletPool.Spawn(data);
+                    _bulletPool.TrySpawn(data, out _);
                 }
                 if (enableDetailedProfiling) Profiler.EndSample();
 
                 if (enableDetailedProfiling) Profiler.BeginSample("Op.Stress.PoolTick");
-                _bulletPool.UpdateActiveItems(b => b.Tick());
-                _bulletPool.Maintenance();
+                _bulletPool.ForEachActive(b => b.Tick());
                 if (enableDetailedProfiling) Profiler.EndSample();
 
                 frameTimes.Add((Time.realtimeSinceStartup - frameStart) * 1000f);
@@ -433,7 +440,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
             {
                 Name = "FrameTime - Stress Test",
                 Iterations = frameTimes.Count,
-                TotalTimeSeconds = stressTestDuration,
+                TotalTimeSeconds = duration,
                 AverageTimeMs = frameTimes.Average(),
                 MinFrameTimeMs = frameTimes.Min(),
                 MaxFrameTimeMs = frameTimes.Max(),
@@ -441,7 +448,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
             };
             _runner.AddResult(result);
 
-            Debug.Log($"[Stress Test] Avg FrameTime: {result.AverageTimeMs:F2}ms, Max: {result.MaxFrameTimeMs:F2}ms. Final active objects: {_bulletPool.NumActive}");
+            Debug.Log($"[Stress Test] Avg FrameTime: {result.AverageTimeMs:F2}ms, Max: {result.MaxFrameTimeMs:F2}ms. Final active objects: {_bulletPool.CountActive}");
             if (enableDetailedProfiling) Profiler.EndSample();
         }
 
@@ -495,15 +502,14 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
             if (enableDetailedProfiling) Profiler.BeginSample("Benchmark.PoolScenario");
 
             // Prepare pool size
-            _bulletPool.DespawnAllActive();
-            _bulletPool.Maintenance();
+            _bulletPool.DespawnAll();
             if (prewarm > 0)
             {
-                _bulletPool.Resize(prewarm);
+                _bulletPool.Prewarm(prewarm);
             }
             else
             {
-                _bulletPool.Resize(0);
+                _bulletPool.TrimInactive(0);
             }
 
             var data = new BulletSpawnData { Position = Vector2.zero, Direction = Vector2.up, Speed = 10f, Lifetime = 0.01f };
@@ -520,14 +526,16 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 {
                     _bulletPool.Despawn(temp[i]);
                 }
-                _bulletPool.Maintenance();
             };
 
             System.Action trialCleanup = () =>
             {
-                _bulletPool.DespawnAllActive();
-                _bulletPool.Maintenance();
-                _bulletPool.Resize(prewarm > 0 ? prewarm : 0);
+                _bulletPool.DespawnAll();
+                _bulletPool.TrimInactive(prewarm > 0 ? prewarm : 0);
+                if (prewarm > 0)
+                {
+                    _bulletPool.Prewarm(prewarm);
+                }
             };
 
             await _runner.RunUltraHighPrecisionBenchmarkAsync(
