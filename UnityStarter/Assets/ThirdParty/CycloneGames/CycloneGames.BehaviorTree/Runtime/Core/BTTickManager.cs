@@ -86,7 +86,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 var tree = _trees[_currentIndex];
                 if (tree != null && tree.ShouldTick())
                 {
-                    tree.Tick();
+                    var state = tree.Tick();
+                    if (state == RuntimeState.Success || state == RuntimeState.Failure)
+                    {
+                        tree.Stop();
+                    }
                 }
 
                 _currentIndex++;

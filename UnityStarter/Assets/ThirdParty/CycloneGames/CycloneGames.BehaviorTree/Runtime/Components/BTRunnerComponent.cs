@@ -125,17 +125,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             // Compile to Pure C# Runtime Tree
             _runtimeTree = behaviorTree.Compile(_context);
 
-            if (_runtimeTree != null && _runtimeTree.Blackboard != null)
+            ApplyInitialBlackboardObjects();
+        }
+
+        private void ApplyInitialBlackboardObjects()
+        {
+            if (_runtimeTree == null || _runtimeTree.Blackboard == null) return;
+
+            // Transfer initial objects
+            if (_initialObjects != null)
             {
-                // Transfer initial objects
-                if (_initialObjects != null)
+                for (int i = 0; i < _initialObjects.Length; i++)
                 {
-                    for (int i = 0; i < _initialObjects.Length; i++)
-                    {
-                        var data = _initialObjects[i];
-                        if (data == null || string.IsNullOrEmpty(data.Key)) continue;
-                        _runtimeTree.Blackboard.SetObject(Animator.StringToHash(data.Key), data.Value);
-                    }
+                    var data = _initialObjects[i];
+                    if (data == null || string.IsNullOrEmpty(data.Key)) continue;
+                    _runtimeTree.Blackboard.SetObject(Animator.StringToHash(data.Key), data.Value);
                 }
             }
         }
@@ -164,7 +168,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             var state = _runtimeTree.Tick();
             if (state == RuntimeState.Failure || state == RuntimeState.Success)
             {
-                _isStopped = true;
+                Stop();
             }
             return state;
         }
@@ -175,11 +179,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             UnregisterFromManager();
             if (_runtimeTree != null)
             {
-                _runtimeTree.Stop();
+                _runtimeTree.Dispose();
             }
             behaviorTree = _nextTree;
             InitializeRuntimeTree();
             RegisterWithManager();
+            _isPaused = false;
+            _isStopped = false;
             _nextTree = null;
         }
 
@@ -199,7 +205,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             UnregisterFromManager();
             if (_runtimeTree != null)
             {
-                _runtimeTree.Stop();
+                _runtimeTree.Dispose();
             }
         }
 
@@ -288,6 +294,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
         }
 
+        public void WakeUp(int boostedTicks = 1)
+        {
+            if (_runtimeTree == null) return;
+            _runtimeTree.WakeUp(boostedTicks);
+        }
+
         public void Stop()
         {
             if (_runtimeTree != null)
@@ -301,9 +313,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void Play()
         {
-            if (_runtimeTree == null)
+            if (_runtimeTree == null || _isStopped)
             {
+                UnregisterFromManager();
+                if (_runtimeTree != null)
+                {
+                    _runtimeTree.Dispose();
+                }
                 InitializeRuntimeTree();
+                RegisterWithManager();
             }
 
             if (_runtimeTree == null) return;
@@ -312,6 +330,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             {
                 _runtimeTree.Stop();
             }
+            _runtimeTree.Play();
+            ApplyInitialBlackboardObjects();
             _isPaused = false;
             _isStopped = false;
         }
@@ -323,9 +343,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void Resume()
         {
-            if (_runtimeTree == null)
+            if (_runtimeTree == null || _isStopped)
             {
-                InitializeRuntimeTree();
+                Play();
+                return;
             }
             _isPaused = false;
         }

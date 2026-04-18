@@ -14,14 +14,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
 
         public float Duration { get => _duration; set => _duration = value; }
 
-        private float _time;
+        private double _startTime;
+        private float _actualDuration;
 
         protected override void OnStart(IBlackBoard blackBoard)
         {
-            _time = 0;
+            _startTime = Runtime.Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime);
+            _actualDuration = _duration;
             if (_useRandomBetweenTwoConstants)
             {
-                _duration = Random.Range(_range.x, _range.y);
+                _actualDuration = Random.Range(_range.x, _range.y);
             }
         }
         public override BTNode Clone()
@@ -44,8 +46,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
         }
         protected override BTState OnRun(IBlackBoard blackBoard)
         {
-            _time += Time.deltaTime;
-            return _time < _duration ? BTState.RUNNING : BTState.SUCCESS;
+            double elapsed = Runtime.Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime) - _startTime;
+            return elapsed < _actualDuration ? BTState.RUNNING : BTState.SUCCESS;
         }
     }
 }

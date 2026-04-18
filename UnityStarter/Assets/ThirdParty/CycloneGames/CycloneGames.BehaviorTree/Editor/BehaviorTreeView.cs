@@ -90,6 +90,7 @@ namespace CycloneGames.BehaviorTree.Editor
         private Vector2 _copiedTreePosition;
 
         private BTState _lastTreeState = BTState.NOT_ENTERED;
+        private string _searchFilter = string.Empty;
 
         // Cached lists to avoid per-frame ToList() allocations
         private readonly List<UnityEditor.Experimental.GraphView.Node> _cachedNodeList = new List<UnityEditor.Experimental.GraphView.Node>(64);
@@ -305,6 +306,7 @@ namespace CycloneGames.BehaviorTree.Editor
             if (this._tree == tree)
             {
                 UpdateNodeStates();
+                ApplySearchFilter();
                 return;
             }
 
@@ -315,6 +317,76 @@ namespace CycloneGames.BehaviorTree.Editor
             _lastTreeState = BTState.NOT_ENTERED;
             DrawGraph();
             RestoreStateCache();
+            ApplySearchFilter();
+        }
+
+        public void SetSearchFilter(string searchFilter)
+        {
+            _searchFilter = searchFilter ?? string.Empty;
+            ApplySearchFilter();
+        }
+
+        public int GetNodeCount()
+        {
+            return _tree?.Nodes?.Count ?? 0;
+        }
+
+        public bool HasTree => _tree != null;
+
+        public string GetValidationReport()
+        {
+            if (_tree == null)
+            {
+                return "No tree selected.";
+            }
+
+            var issues = new List<string>();
+
+            if (_tree.Root == null)
+            {
+                issues.Add("- Missing root node.");
+            }
+
+            var guidSet = new HashSet<string>();
+            int orphanCount = 0;
+
+            for (int i = 0; i < _tree.Nodes.Count; i++)
+            {
+                var node = _tree.Nodes[i];
+                if (node == null)
+                {
+                    issues.Add($"- Nodes[{i}] is null.");
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(node.GUID))
+                {
+                    issues.Add($"- {node.name}: missing GUID.");
+                }
+                else if (!guidSet.Add(node.GUID))
+                {
+                    issues.Add($"- {node.name}: duplicate GUID '{node.GUID}'.");
+                }
+
+                if (node.Tree != _tree)
+                {
+                    issues.Add($"- {node.name}: owner tree reference is invalid.");
+                }
+
+                if (node != _tree.Root && !IsReachableFromRoot(node))
+                {
+                    orphanCount++;
+                }
+            }
+
+            if (orphanCount > 0)
+            {
+                issues.Add($"- Found {orphanCount} orphan node(s) not connected to the root.");
+            }
+
+            return issues.Count == 0
+                ? $"Validation passed. Nodes: {GetNodeCount()}."
+                : string.Join("\n", issues);
         }
 
         /// <summary>
@@ -1080,6 +1152,11 @@ namespace CycloneGames.BehaviorTree.Editor
         /// </summary>
         public void ReturnToRoot()
         {
+            if (_tree == null || _tree.Root == null || string.IsNullOrEmpty(_tree.Root.GUID))
+            {
+                return;
+            }
+
             var root = GetNodeByGuid(_tree.Root.GUID) as BTNodeView;
             if (root != null)
             {
@@ -1092,13 +1169,69 @@ namespace CycloneGames.BehaviorTree.Editor
             return GetNodeByGuid(node.GUID) as BTNodeView;
         }
 
+        private void ApplySearchFilter()
+        {
+            bool hasFilter = !string.IsNullOrWhiteSpace(_searchFilter);
+
+            RefreshCachedNodeList();
+            for (int i = 0; i < _cachedNodeList.Count; i++)
+            {
+                if (_cachedNodeList[i] is BTNodeView nodeView)
+                {
+                    bool isMatch = nodeView.MatchesSearch(_searchFilter);
+                    nodeView.SetSearchState(isMatch, hasFilter);
+                }
+            }
+
+            foreach (var element in graphElements)
+            {
+                if (element is Edge edge &&
+                    edge.output?.node is BTNodeView parentView &&
+                    edge.input?.node is BTNodeView childView)
+                {
+                    bool parentMatch = parentView.MatchesSearch(_searchFilter);
+                    bool childMatch = childView.MatchesSearch(_searchFilter);
+                    edge.style.opacity = !hasFilter || parentMatch || childMatch ? 1f : 0.15f;
+                }
+            }
+        }
+
+        private bool IsReachableFromRoot(BTNode target)
+        {
+            if (_tree?.Root == null || target == null) return false;
+            if (_tree.Root == target) return true;
+
+            var stack = new Stack<BTNode>();
+            var visited = new HashSet<string>();
+            stack.Push(_tree.Root);
+
+            while (stack.Count > 0)
+            {
+                var node = stack.Pop();
+                if (node == null) continue;
+                if (!string.IsNullOrEmpty(node.GUID) && !visited.Add(node.GUID)) continue;
+
+                var children = _tree.GetChildren(node);
+                for (int i = 0; i < children.Count; i++)
+                {
+                    var child = children[i];
+                    if (child == null) continue;
+                    if (child == target) return true;
+                    stack.Push(child);
+                }
+            }
+
+            return false;
+        }
+
         #region Sort Nodes
         /// <summary>
         /// Sort all nodes in the tree
         /// </summary>
         public void SortNodes()
         {
-            if (_tree.Root == null) return;
+            if (_tree == null || _tree.Root == null || _tree.Nodes == null) return;
+
             SortNodes(Vector3.zero, _tree.Root);
             int nodeCount = _tree.Nodes.Count;
             for (int i = 0; i < nodeCount; i++)

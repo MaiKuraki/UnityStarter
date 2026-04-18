@@ -11,18 +11,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         public float TimeoutSeconds { get; set; } = 5f;
         public bool UseUnscaledTime { get; set; }
 
-        private float _startTime;
+        private double _startTime;
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
-            _startTime = UseUnscaledTime ? Time.unscaledTime : Time.time;
+            _startTime = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime);
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
             if (Child == null) return RuntimeState.Failure;
 
-            float elapsed = (UseUnscaledTime ? Time.unscaledTime : Time.time) - _startTime;
+            double elapsed = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime) - _startTime;
             if (elapsed >= TimeoutSeconds)
             {
                 if (Child.IsStarted) Child.Abort(blackboard);

@@ -50,4 +50,38 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
     }
+
+    public static class RuntimeBTTime
+    {
+        public static double GetTime(RuntimeBlackboard blackboard, bool useUnscaledTime)
+        {
+            var timeProvider = blackboard?.GetService<IRuntimeBTTimeProvider>();
+            if (timeProvider != null)
+            {
+                return useUnscaledTime ? timeProvider.UnscaledTimeAsDouble : timeProvider.TimeAsDouble;
+            }
+
+            return GetUnityTime(useUnscaledTime);
+        }
+
+        public static double GetUnityTime(bool useUnscaledTime)
+        {
+#if UNITY_2020_2_OR_NEWER
+            return useUnscaledTime ? Time.unscaledTimeAsDouble : Time.timeAsDouble;
+#elif UNITY_5_3_OR_NEWER
+            return useUnscaledTime ? Time.unscaledTime : Time.time;
+#else
+            return DateTime.UtcNow.Ticks / (double)TimeSpan.TicksPerSecond;
+#endif
+        }
+
+        public static double GetUnityDeltaTime(bool useUnscaledTime)
+        {
+#if UNITY_5_3_OR_NEWER
+            return useUnscaledTime ? Time.unscaledDeltaTime : Time.deltaTime;
+#else
+            return 0d;
+#endif
+        }
+    }
 }

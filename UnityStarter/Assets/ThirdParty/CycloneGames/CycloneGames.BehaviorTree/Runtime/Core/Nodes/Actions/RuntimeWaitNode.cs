@@ -1,4 +1,5 @@
 using UnityEngine;
+using CycloneGames.BehaviorTree.Runtime.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
 {
@@ -10,28 +11,26 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
         public float RangeMin { get; set; }
         public float RangeMax { get; set; }
 
-        private float _startTime;
-        private float _actualDuration;
-        public float StartTime => _startTime;
-        public float ActualDuration => _actualDuration;
+        private double _startTime;
+        private double _actualDuration;
+        public float StartTime => (float)_startTime;
+        public double StartTimeAsDouble => _startTime;
+        public float ActualDuration => (float)_actualDuration;
+        public double ActualDurationAsDouble => _actualDuration;
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
-            _actualDuration = UseRandomRange ? Random.Range(RangeMin, RangeMax) : Duration;
-#if UNITY_5_3_OR_NEWER
-            _startTime = UseUnscaledTime ? Time.unscaledTime : Time.time;
-#else
-            _startTime = (float)(System.DateTime.Now.Ticks / 10000000.0);
-#endif
+            var randomProvider = blackboard.GetService<IRuntimeBTRandomProvider>();
+            _actualDuration = UseRandomRange
+                ? (randomProvider != null ? randomProvider.Range(RangeMin, RangeMax) : Random.Range(RangeMin, RangeMax))
+                : Duration;
+
+            _startTime = GetCurrentTime(blackboard);
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-#if UNITY_5_3_OR_NEWER
-            float currentTime = UseUnscaledTime ? Time.unscaledTime : Time.time;
-#else
-            float currentTime = (float)(System.DateTime.Now.Ticks / 10000000.0);
-#endif
+            double currentTime = GetCurrentTime(blackboard);
 
             if (currentTime - _startTime >= _actualDuration)
             {
@@ -39,6 +38,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
             }
 
             return RuntimeState.Running;
+        }
+
+        private double GetCurrentTime(RuntimeBlackboard blackboard)
+        {
+            return RuntimeBTTime.GetTime(blackboard, UseUnscaledTime);
         }
     }
 }
