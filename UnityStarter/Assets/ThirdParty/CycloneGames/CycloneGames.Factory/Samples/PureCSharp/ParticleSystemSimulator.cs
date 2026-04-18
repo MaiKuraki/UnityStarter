@@ -16,7 +16,7 @@ namespace CycloneGames.Factory.Samples.PureCSharp
             // 2. Create the pool using the factory
             _particlePool = new ObjectPool<ParticleData, Particle>(particleFactory, 10);
             
-            Console.WriteLine($"Particle System Initialized. Pool contains {_particlePool.NumInactive} inactive particles.\n");
+            Console.WriteLine($"Particle System Initialized. Pool contains {_particlePool.CountInactive} inactive particles.\n");
         }
 
         // This simulates one frame of the game
@@ -38,17 +38,16 @@ namespace CycloneGames.Factory.Samples.PureCSharp
             }
 
             // Update all currently active particles
-            _particlePool.UpdateActiveItems(p => p.Tick());
-            _particlePool.Maintenance();
+            _particlePool.ForEachActive(p => p.Tick());
 
-            Console.WriteLine($"Pool Status - Active: {_particlePool.NumActive}, Inactive: {_particlePool.NumInactive}");
+            Console.WriteLine($"Pool Status - Active: {_particlePool.CountActive}, Inactive: {_particlePool.CountInactive}");
         }
 
         public void Shutdown()
         {
             Console.WriteLine("\n----- SHUTTING DOWN -----");
             _particlePool.Dispose();
-            Console.WriteLine($"Pool disposed. Active: {_particlePool.NumActive}, Inactive: {_particlePool.NumInactive}");
+            Console.WriteLine($"Pool disposed. Active: {_particlePool.CountActive}, Inactive: {_particlePool.CountInactive}");
         }
     }
 }

@@ -1009,7 +1009,7 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                 EnsureGeneratedRoot();
                 _generatedControllerPool ??= new MonoFastPool<SpriteSequenceController>(sweepTemplate, 0, _generatedRoot, true);
 
-                int currentCapacity = _generatedControllerPool.NumInactive + _activeGeneratedFromPool.Count;
+                int currentCapacity = _generatedControllerPool.CountInactive + _activeGeneratedFromPool.Count;
                 int toWarm = requiredGenerated - currentCapacity;
                 if (toWarm > 0)
                 {
@@ -1109,11 +1109,11 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                 EnsureGeneratedRoot();
                 _generatedControllerPool ??= new MonoFastPool<SpriteSequenceController>(template, 0, _generatedRoot, true);
 
-                int currentCapacity = _generatedControllerPool.NumInactive + _activeGeneratedFromPool.Count;
+                int currentCapacity = _generatedControllerPool.CountInactive + _activeGeneratedFromPool.Count;
                 int toExpand = requiredCount - currentCapacity;
                 if (toExpand > 0)
                 {
-                    _generatedControllerPool.ExpandBy(toExpand);
+                    _generatedControllerPool.Prewarm(toExpand);
                 }
 
                 return;

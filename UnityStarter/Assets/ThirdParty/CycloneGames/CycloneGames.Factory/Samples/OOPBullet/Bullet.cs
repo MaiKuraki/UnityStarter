@@ -4,14 +4,14 @@ using UnityEngine;
 
 namespace CycloneGames.Factory.OOPBullet
 {
-    public class Bullet : MonoBehaviour, IPoolable<BulletData, IMemoryPool>, ITickable
+    public class Bullet : MonoBehaviour, IPoolable<BulletData, Bullet>, ITickable
     {
         [Header("Bullet Settings")]
         [SerializeField] private float lifetime = 5f;
         [SerializeField] private float speed = 10f;
 
         private BulletData _bulletData;
-        private IMemoryPool _pool;
+        private IDespawnableMemoryPool<Bullet> _pool;
         private float _despawnTime;
         private bool _isActive;
         private Rigidbody _rigidbody;
@@ -47,7 +47,7 @@ namespace CycloneGames.Factory.OOPBullet
             _rigidbody.isKinematic = false;
         }
 
-        public void OnSpawned(BulletData bulletData, IMemoryPool pool)
+        public void OnSpawned(BulletData bulletData, IDespawnableMemoryPool<Bullet> pool)
         {
             _bulletData = bulletData;
             _pool = pool;
