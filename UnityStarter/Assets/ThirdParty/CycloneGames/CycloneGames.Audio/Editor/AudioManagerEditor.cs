@@ -18,6 +18,7 @@ namespace CycloneGames.Audio.Editor
         private bool showLoadedBanks = true;
         private bool showEventNameMap = false;
         private bool showMemoryUsage = false;
+        private bool showExternalCache = true;
         private bool showActiveEvents = true;
 
         // Serialized properties for settings
@@ -29,6 +30,7 @@ namespace CycloneGames.Audio.Editor
         private readonly List<KeyValuePair<AudioClip, long>> sortedClipList = new List<KeyValuePair<AudioClip, long>>();
         private readonly List<AudioBank> loadedBanksList = new List<AudioBank>();
         private readonly List<AudioBank> banksToUnload = new List<AudioBank>();
+        private readonly List<ExternalAudioClipCacheEntryInfo> externalCacheEntries = new List<ExternalAudioClipCacheEntryInfo>();
 
         // Search field state
         private string searchEventName = "";
@@ -37,6 +39,7 @@ namespace CycloneGames.Audio.Editor
         private Vector2 activeEventsScrollPos;
         private Vector2 memoryScrollPos;
         private Vector2 eventMapScrollPos;
+        private Vector2 externalCacheScrollPos;
 
         // Colors for visual styling
         private static readonly Color settingsColor = new Color(0.5f, 0.5f, 0.6f);
@@ -46,6 +49,7 @@ namespace CycloneGames.Audio.Editor
         private static readonly Color eventsColor = new Color(0.8f, 0.6f, 0.3f);
         private static readonly Color memoryColor = new Color(0.6f, 0.5f, 0.7f);
         private static readonly Color activeColor = new Color(0.5f, 0.7f, 0.6f);
+        private static readonly Color cacheColor = new Color(0.4f, 0.65f, 0.75f);
         private static readonly Color successColor = new Color(0.3f, 0.8f, 0.4f);
         private static readonly Color warningColor = new Color(0.9f, 0.7f, 0.3f);
 
@@ -185,6 +189,15 @@ namespace CycloneGames.Audio.Editor
                 DrawMemoryUsageSection();
             }
 
+            EditorGUILayout.Space(3);
+
+            ExternalAudioClipCacheStats externalStats = AudioClipResolver.GetExternalCacheStats();
+            showExternalCache = DrawFoldoutHeader($"External Audio Cache ({externalStats.EntryCount})", showExternalCache, cacheColor);
+            if (showExternalCache)
+            {
+                DrawExternalCacheSection(externalStats);
+            }
+
             // Auto-repaint during play mode
             Repaint();
         }
@@ -233,6 +246,9 @@ namespace CycloneGames.Audio.Editor
             // Memory
             DrawStatBox("Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage), memoryColor);
 
+            // External cache
+            DrawStatBox("Ext Cache", AudioClipResolver.GetExternalCacheStats().EntryCount.ToString(), cacheColor);
+
             EditorGUILayout.EndHorizontal();
         }
 
@@ -256,6 +272,19 @@ namespace CycloneGames.Audio.Editor
             DrawStatRow("Loaded Banks", AudioManager.GetLoadedBankCount().ToString());
             DrawStatRow("Active Events", AudioManager.ActiveEvents.Count.ToString());
             DrawStatRow("Total Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage));
+
+            ExternalAudioClipCacheStats cacheStats = AudioClipResolver.GetExternalCacheStats();
+            EditorGUILayout.Space(4);
+            EditorGUILayout.LabelField("External Audio Cache", _sectionLabelStyle);
+            DrawStatRow("Cached Entries", cacheStats.EntryCount.ToString());
+            DrawStatRow("Loading", cacheStats.LoadingCount.ToString());
+            DrawStatRow("Loaded", cacheStats.LoadedCount.ToString());
+            DrawStatRow("Failed", cacheStats.FailedCount.ToString());
+            DrawStatRow("Total Refs", cacheStats.TotalRefCount.ToString());
+            DrawStatRow("Load Requests", cacheStats.TotalLoadRequests.ToString());
+            DrawStatRow("Cache Hits", cacheStats.CacheHitCount.ToString());
+            DrawStatRow("Cache Misses", cacheStats.CacheMissCount.ToString());
+            DrawStatRow("Failures (Total)", cacheStats.TotalFailureCount.ToString());
 
             EditorGUILayout.EndVertical();
         }
@@ -629,6 +658,101 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.HelpBox("Tracks raw AudioClip sample data. Does not include Unity audio engine overhead.", MessageType.None);
 
             EditorGUILayout.EndVertical();
+        }
+
+        private void DrawExternalCacheSection(ExternalAudioClipCacheStats stats)
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            EditorGUILayout.BeginHorizontal();
+            DrawMiniStatBox("Entries", stats.EntryCount.ToString());
+            DrawMiniStatBox("Loading", stats.LoadingCount.ToString());
+            DrawMiniStatBox("Loaded", stats.LoadedCount.ToString());
+            DrawMiniStatBox("Failed", stats.FailedCount.ToString());
+            DrawMiniStatBox("Refs", stats.TotalRefCount.ToString());
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.BeginHorizontal();
+            DrawMiniStatBox("Requests", stats.TotalLoadRequests.ToString());
+            DrawMiniStatBox("Hits", stats.CacheHitCount.ToString());
+            DrawMiniStatBox("Misses", stats.CacheMissCount.ToString());
+            DrawMiniStatBox("Failures", stats.TotalFailureCount.ToString());
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space(4);
+
+            AudioClipResolver.GetExternalCacheEntries(externalCacheEntries);
+            externalCacheEntries.Sort((a, b) => string.Compare(a.Location, b.Location, System.StringComparison.Ordinal));
+
+            if (externalCacheEntries.Count == 0)
+            {
+                EditorGUILayout.LabelField("No external audio clips cached", EditorStyles.centeredGreyMiniLabel);
+            }
+            else
+            {
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("Location", EditorStyles.miniLabel, GUILayout.Width(260));
+                EditorGUILayout.LabelField("State", EditorStyles.miniLabel, GUILayout.Width(55));
+                EditorGUILayout.LabelField("Refs", EditorStyles.miniLabel, GUILayout.Width(35));
+                EditorGUILayout.LabelField("Clip", EditorStyles.miniLabel, GUILayout.Width(90));
+                EditorGUILayout.EndHorizontal();
+
+                Rect separatorRect = EditorGUILayout.GetControlRect(false, 1);
+                EditorGUI.DrawRect(separatorRect, Color.gray * 0.5f);
+
+                externalCacheScrollPos = EditorGUILayout.BeginScrollView(externalCacheScrollPos, GUILayout.Height(140));
+
+                for (int i = 0; i < externalCacheEntries.Count; i++)
+                {
+                    DrawExternalCacheRow(externalCacheEntries[i], i);
+                }
+
+                EditorGUILayout.EndScrollView();
+            }
+
+            EditorGUILayout.HelpBox("Shows shared external clip cache entries used by AudioClipReference and legacy file-path loading.", MessageType.None);
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawExternalCacheRow(ExternalAudioClipCacheEntryInfo entry, int index)
+        {
+            Rect rowRect = EditorGUILayout.BeginHorizontal();
+            if (index % 2 == 0)
+            {
+                EditorGUI.DrawRect(rowRect, new Color(0.5f, 0.5f, 0.5f, 0.1f));
+            }
+
+            string state;
+            Color stateColor;
+            if (!entry.IsDone)
+            {
+                state = "Loading";
+                stateColor = warningColor;
+            }
+            else if (entry.IsSuccess)
+            {
+                state = "Ready";
+                stateColor = successColor;
+            }
+            else
+            {
+                state = "Failed";
+                stateColor = new Color(0.9f, 0.4f, 0.4f);
+            }
+
+            EditorGUILayout.LabelField(entry.Location, EditorStyles.wordWrappedMiniLabel, GUILayout.Width(260));
+            GUI.color = stateColor;
+            EditorGUILayout.LabelField(state, EditorStyles.miniLabel, GUILayout.Width(55));
+            GUI.color = Color.white;
+            EditorGUILayout.LabelField(entry.RefCount.ToString(), EditorStyles.miniLabel, GUILayout.Width(35));
+            EditorGUILayout.LabelField(string.IsNullOrEmpty(entry.ClipName) ? "-" : entry.ClipName, EditorStyles.miniLabel, GUILayout.Width(90));
+            EditorGUILayout.EndHorizontal();
+
+            if (entry.IsDone && !entry.IsSuccess && !string.IsNullOrEmpty(entry.Error))
+            {
+                EditorGUILayout.LabelField(entry.Error, EditorStyles.miniLabel);
+            }
         }
 
         private void DrawStatRow(string label, string value)

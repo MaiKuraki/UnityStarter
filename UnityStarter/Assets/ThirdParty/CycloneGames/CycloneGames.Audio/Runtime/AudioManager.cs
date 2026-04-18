@@ -71,14 +71,85 @@ namespace CycloneGames.Audio.Runtime
             cachedMainCameraFrame = -1;
             mainThreadId = Thread.CurrentThread.ManagedThreadId;
             OnBankUnloaded = null;
+            activeEventHandleTable.Clear();
+            freeActiveEventHandleSlots.Clear();
+            ClearCommandQueue();
+            AudioClipResolver.ClearExternalCache();
+            AudioClipResolver.ClearReferenceLoaders();
         }
 
         public static List<ActiveEvent> ActiveEvents { get; private set; }
 
         private static readonly Stack<ActiveEvent> activeEventPool = new Stack<ActiveEvent>(64);
         private static readonly Queue<AudioSource> availableSources = new Queue<AudioSource>();
+        private static readonly Stack<int> freeActiveEventHandleSlots = new Stack<int>(64);
+        private static readonly List<ActiveEvent> activeEventHandleTable = new List<ActiveEvent>(64);
         public static IReadOnlyCollection<AudioSource> AvailableSources => availableSources;
-        private static readonly ConcurrentQueue<Action> commandQueue = new ConcurrentQueue<Action>();
+        private enum AudioCommandType
+        {
+            None = 0,
+            PlayEventOnObject = 1,
+            PlayEventAtPosition = 2,
+            PlayEventByNameOnObject = 3,
+            PlayEventByNameAtPosition = 4,
+            PlayScheduledByName = 5,
+            PlayScheduledEvent = 6,
+            PlayEventOnAudioSource = 7,
+            StopAllByEvent = 8,
+            StopAllByName = 9,
+            StopAllByGroup = 10,
+            LoadBank = 11,
+            UnloadBank = 12,
+            ClearEventNameMap = 13
+        }
+
+        private readonly struct AudioCommand
+        {
+            public readonly AudioCommandType Type;
+            public readonly AudioEvent AudioEvent;
+            public readonly string EventName;
+            public readonly GameObject EmitterObject;
+            public readonly AudioSource EmitterSource;
+            public readonly Vector3 Position;
+            public readonly double DspTime;
+            public readonly int Group;
+            public readonly AudioBank Bank;
+            public readonly bool OverwriteExisting;
+
+            public AudioCommand(
+                AudioCommandType type,
+                AudioEvent audioEvent = null,
+                string eventName = null,
+                GameObject emitterObject = null,
+                AudioSource emitterSource = null,
+                Vector3 position = default,
+                double dspTime = 0d,
+                int group = 0,
+                AudioBank bank = null,
+                bool overwriteExisting = false)
+            {
+                Type = type;
+                AudioEvent = audioEvent;
+                EventName = eventName;
+                EmitterObject = emitterObject;
+                EmitterSource = emitterSource;
+                Position = position;
+                DspTime = dspTime;
+                Group = group;
+                Bank = bank;
+                OverwriteExisting = overwriteExisting;
+            }
+        }
+
+        private const int CommandQueueCapacity = 1024;
+        private static readonly object commandQueueLock = new object();
+        private static readonly AudioCommand[] commandQueue = new AudioCommand[CommandQueueCapacity];
+        private static int commandQueueHead;
+        private static int commandQueueTail;
+        private static int commandQueueCount;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private static int droppedCommandCount;
+#endif
         private static readonly ActiveEvent[] previousEventsBuffer = new ActiveEvent[MaxPreviousEvents];
         private static int previousEventsWriteIndex;
         private static int previousEventsCount;
@@ -133,6 +204,7 @@ namespace CycloneGames.Audio.Runtime
         // Reusable collections to avoid allocations during bank loading
         private static readonly Dictionary<string, List<AudioEvent>> reusableDuplicateCheck = new Dictionary<string, List<AudioEvent>>();
         private static readonly HashSet<string> reusableBankRegisteredNames = new HashSet<string>();
+        private static readonly HashSet<AudioParameter> reusableGlobalParameters = new HashSet<AudioParameter>();
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         public static long TotalMemoryUsage { get; private set; }
@@ -315,7 +387,10 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                commandQueue.Enqueue(() => PlayEvent(eventToPlay, emitterObject));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.PlayEventOnObject,
+                    audioEvent: eventToPlay,
+                    emitterObject: emitterObject));
                 return null;
             }
 
@@ -337,7 +412,10 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                commandQueue.Enqueue(() => PlayEvent(eventToPlay, position));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.PlayEventAtPosition,
+                    audioEvent: eventToPlay,
+                    position: position));
                 return null;
             }
 
@@ -359,8 +437,10 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                string capturedName = eventName;
-                commandQueue.Enqueue(() => PlayEvent(capturedName, emitterObject));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.PlayEventByNameOnObject,
+                    eventName: eventName,
+                    emitterObject: emitterObject));
                 return null;
             }
 
@@ -382,8 +462,10 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                string capturedName = eventName;
-                commandQueue.Enqueue(() => PlayEvent(capturedName, position));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.PlayEventByNameAtPosition,
+                    eventName: eventName,
+                    position: position));
                 return null;
             }
 
@@ -408,10 +490,13 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                string capturedName = eventName;
                 double capturedDspTime = AudioSettings.dspTime;
                 double adjustedDspTime = dspTime > capturedDspTime ? dspTime : capturedDspTime + 0.01;
-                commandQueue.Enqueue(() => PlayEventScheduled(capturedName, emitterObject, adjustedDspTime));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.PlayScheduledByName,
+                    eventName: eventName,
+                    emitterObject: emitterObject,
+                    dspTime: adjustedDspTime));
                 return null;
             }
 
@@ -435,7 +520,11 @@ namespace CycloneGames.Audio.Runtime
             {
                 double capturedDspTime = AudioSettings.dspTime;
                 double adjustedDspTime = dspTime > capturedDspTime ? dspTime : capturedDspTime + 0.01;
-                commandQueue.Enqueue(() => PlayEventScheduled(eventToPlay, emitterObject, adjustedDspTime));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.PlayScheduledEvent,
+                    audioEvent: eventToPlay,
+                    emitterObject: emitterObject,
+                    dspTime: adjustedDspTime));
                 return null;
             }
 
@@ -461,6 +550,7 @@ namespace CycloneGames.Audio.Runtime
         {
             ActiveEvent activeEvent = activeEventPool.Count > 0 ? activeEventPool.Pop() : new ActiveEvent();
             activeEvent.Initialize(eventToPlay, emitter);
+            RegisterActiveEventHandle(activeEvent);
             return activeEvent;
         }
 
@@ -469,7 +559,10 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                commandQueue.Enqueue(() => PlayEvent(eventToPlay, emitter));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.PlayEventOnAudioSource,
+                    audioEvent: eventToPlay,
+                    emitterSource: emitter));
                 return null;
             }
 
@@ -491,7 +584,9 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                commandQueue.Enqueue(() => StopAll(eventsToStop));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.StopAllByEvent,
+                    audioEvent: eventsToStop));
                 return;
             }
 
@@ -509,8 +604,9 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                string capturedName = eventName;
-                commandQueue.Enqueue(() => StopAll(capturedName));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.StopAllByName,
+                    eventName: eventName));
                 return;
             }
 
@@ -532,7 +628,9 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                commandQueue.Enqueue(() => StopAll(groupNum));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.StopAllByGroup,
+                    group: groupNum));
                 return;
             }
 
@@ -568,6 +666,7 @@ namespace CycloneGames.Audio.Runtime
                 var es = stoppedEvent.GetSource(i);
                 if (es.IsValid)
                 {
+                    ResetAudioSource(es.source);
                     es.source.clip = null;
                     availableSources.Enqueue(es.source);
                 }
@@ -579,6 +678,7 @@ namespace CycloneGames.Audio.Runtime
                 ActiveEvents[idx] = ActiveEvents[last];
             ActiveEvents.RemoveAt(last);
 
+            UnregisterActiveEventHandle(stoppedEvent);
             stoppedEvent.Reset();
             activeEventPool.Push(stoppedEvent);
         }
@@ -588,6 +688,57 @@ namespace CycloneGames.Audio.Runtime
             previousEventsBuffer[previousEventsWriteIndex] = newEvent;
             previousEventsWriteIndex = (previousEventsWriteIndex + 1) % MaxPreviousEvents;
             if (previousEventsCount < MaxPreviousEvents) previousEventsCount++;
+        }
+
+        internal static bool TryGetActiveEventByHandle(int slot, int generation, out ActiveEvent activeEvent)
+        {
+            if ((uint)slot < (uint)activeEventHandleTable.Count)
+            {
+                activeEvent = activeEventHandleTable[slot];
+                if (activeEvent != null &&
+                    activeEvent.generation == generation &&
+                    activeEvent.status != EventStatus.Stopped &&
+                    activeEvent.handleSlot == slot)
+                {
+                    return true;
+                }
+            }
+
+            activeEvent = null;
+            return false;
+        }
+
+        private static void RegisterActiveEventHandle(ActiveEvent activeEvent)
+        {
+            if (activeEvent == null) return;
+
+            int slot = freeActiveEventHandleSlots.Count > 0
+                ? freeActiveEventHandleSlots.Pop()
+                : activeEventHandleTable.Count;
+
+            if (slot == activeEventHandleTable.Count)
+            {
+                activeEventHandleTable.Add(activeEvent);
+            }
+            else
+            {
+                activeEventHandleTable[slot] = activeEvent;
+            }
+
+            activeEvent.handleSlot = slot;
+        }
+
+        private static void UnregisterActiveEventHandle(ActiveEvent activeEvent)
+        {
+            if (activeEvent == null) return;
+
+            int slot = activeEvent.handleSlot;
+            if ((uint)slot >= (uint)activeEventHandleTable.Count) return;
+            if (!ReferenceEquals(activeEventHandleTable[slot], activeEvent)) return;
+
+            activeEventHandleTable[slot] = null;
+            freeActiveEventHandleSlots.Push(slot);
+            activeEvent.handleSlot = -1;
         }
 
         public static void UpdateLanguages()
@@ -770,11 +921,15 @@ namespace CycloneGames.Audio.Runtime
 #endif
             activeEventPool.Clear();
             availableSources.Clear();
+            activeEventHandleTable.Clear();
+            freeActiveEventHandleSlots.Clear();
             globalVolume = 1f;
             globalPaused = false;
             systemPaused = false;
             activeFocusMode = AudioFocusMode.All;
-            while (commandQueue.TryDequeue(out _)) { }
+            ClearCommandQueue();
+            AudioClipResolver.ClearExternalCache();
+            AudioClipResolver.ClearReferenceLoaders();
             AllowCreateInstance = false;
         }
 
@@ -790,11 +945,13 @@ namespace CycloneGames.Audio.Runtime
             // Process command queue with frame limit
             int commandProcessed = 0;
             const int maxCommandsPerFrame = 10;
-            while (commandProcessed < maxCommandsPerFrame && commandQueue.TryDequeue(out Action command))
+            while (commandProcessed < maxCommandsPerFrame && TryDequeueCommand(out AudioCommand command))
             {
-                command.Invoke();
+                ExecuteCommand(command);
                 commandProcessed++;
             }
+
+            UpdateGlobalParameters(Time.deltaTime);
 
             // Update active events
             int eventCount = ActiveEvents.Count;
@@ -813,6 +970,114 @@ namespace CycloneGames.Audio.Runtime
 
             // Smart pool shrinking
             TryShrinkPool();
+        }
+
+        private static void ExecuteCommand(in AudioCommand command)
+        {
+            switch (command.Type)
+            {
+                case AudioCommandType.PlayEventOnObject:
+                    PlayEvent(command.AudioEvent, command.EmitterObject);
+                    break;
+                case AudioCommandType.PlayEventAtPosition:
+                    PlayEvent(command.AudioEvent, command.Position);
+                    break;
+                case AudioCommandType.PlayEventByNameOnObject:
+                    PlayEvent(command.EventName, command.EmitterObject);
+                    break;
+                case AudioCommandType.PlayEventByNameAtPosition:
+                    PlayEvent(command.EventName, command.Position);
+                    break;
+                case AudioCommandType.PlayScheduledByName:
+                    PlayEventScheduled(command.EventName, command.EmitterObject, command.DspTime);
+                    break;
+                case AudioCommandType.PlayScheduledEvent:
+                    PlayEventScheduled(command.AudioEvent, command.EmitterObject, command.DspTime);
+                    break;
+                case AudioCommandType.PlayEventOnAudioSource:
+                    ExecuteDeprecatedAudioSourcePlay(command.AudioEvent, command.EmitterSource);
+                    break;
+                case AudioCommandType.StopAllByEvent:
+                    StopAll(command.AudioEvent);
+                    break;
+                case AudioCommandType.StopAllByName:
+                    StopAll(command.EventName);
+                    break;
+                case AudioCommandType.StopAllByGroup:
+                    StopAll(command.Group);
+                    break;
+                case AudioCommandType.LoadBank:
+                    LoadBank(command.Bank, command.OverwriteExisting);
+                    break;
+                case AudioCommandType.UnloadBank:
+                    UnloadBank(command.Bank);
+                    break;
+                case AudioCommandType.ClearEventNameMap:
+                    ClearEventNameMap();
+                    break;
+            }
+        }
+
+        private static bool TryEnqueueCommand(in AudioCommand command)
+        {
+            lock (commandQueueLock)
+            {
+                if (commandQueueCount >= CommandQueueCapacity)
+                {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                    droppedCommandCount++;
+                    if (droppedCommandCount <= 5)
+                    {
+                        Debug.LogWarning($"AudioManager: Command queue overflow. Dropped command '{command.Type}'.");
+                    }
+#endif
+                    return false;
+                }
+
+                commandQueue[commandQueueTail] = command;
+                commandQueueTail = (commandQueueTail + 1) % CommandQueueCapacity;
+                commandQueueCount++;
+                return true;
+            }
+        }
+
+        private static bool TryDequeueCommand(out AudioCommand command)
+        {
+            lock (commandQueueLock)
+            {
+                if (commandQueueCount == 0)
+                {
+                    command = default;
+                    return false;
+                }
+
+                command = commandQueue[commandQueueHead];
+                commandQueue[commandQueueHead] = default;
+                commandQueueHead = (commandQueueHead + 1) % CommandQueueCapacity;
+                commandQueueCount--;
+                return true;
+            }
+        }
+
+        private static void ClearCommandQueue()
+        {
+            lock (commandQueueLock)
+            {
+                Array.Clear(commandQueue, 0, commandQueue.Length);
+                commandQueueHead = 0;
+                commandQueueTail = 0;
+                commandQueueCount = 0;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                droppedCommandCount = 0;
+#endif
+            }
+        }
+
+        private static void ExecuteDeprecatedAudioSourcePlay(AudioEvent eventToPlay, AudioSource emitterSource)
+        {
+#pragma warning disable CS0618
+            PlayEvent(eventToPlay, emitterSource);
+#pragma warning restore CS0618
         }
 
         #endregion
@@ -834,6 +1099,7 @@ namespace CycloneGames.Audio.Runtime
             // Initialize smart pool configuration (auto-discovery only)
             activePoolConfig = AudioPoolConfig.FindConfig();
             InitializeSmartPool();
+            RefreshLoadedBankRuntimeState();
 
             ValidateAudioListener();
             Application.quitting += HandleQuitting;
@@ -953,7 +1219,7 @@ namespace CycloneGames.Audio.Runtime
                 sourceGO.transform.localScale = new Vector3(0.1f, 0.1f, 0.1f);
                 sourceGO.transform.SetParent(transform);
                 var tempSource = sourceGO.AddComponent<AudioSource>();
-                tempSource.playOnAwake = false;
+                ResetAudioSource(tempSource);
 
 #if UNITY_WEBGL || UNITY_ANDROID || UNITY_IOS
                 tempSource.bypassEffects = false;
@@ -1156,15 +1422,6 @@ namespace CycloneGames.Audio.Runtime
                 attempts++;
             }
 
-            // Fallback: find any non-playing source
-            int poolCount = sourcePool.Count;
-            for (int i = 0; i < poolCount; i++)
-            {
-                var source = sourcePool[i];
-                if (source != null && source.gameObject != null && !source.isPlaying)
-                    return source;
-            }
-
             // Smart pool: try to expand
             if (Instance != null && Instance.TryExpandPool())
             {
@@ -1286,8 +1543,10 @@ namespace CycloneGames.Audio.Runtime
 
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                AudioBank capturedBank = bank;
-                commandQueue.Enqueue(() => LoadBank(capturedBank, overwriteExisting));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.LoadBank,
+                    bank: bank,
+                    overwriteExisting: overwriteExisting));
                 return;
             }
 
@@ -1356,6 +1615,7 @@ namespace CycloneGames.Audio.Runtime
 
             // Track bank with instance ID for O(1) unload
             loadedBanks[bank.GetInstanceID()] = bank;
+            InitializeBankRuntimeState(bank);
 
             if (registeredCount > 0)
                 Debug.Log($"AudioManager: Loaded {registeredCount} events from '{bank.name}'.");
@@ -1381,8 +1641,9 @@ namespace CycloneGames.Audio.Runtime
 
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                AudioBank capturedBank = bank;
-                commandQueue.Enqueue(() => UnloadBank(capturedBank));
+                TryEnqueueCommand(new AudioCommand(
+                    AudioCommandType.UnloadBank,
+                    bank: bank));
                 return;
             }
 
@@ -1427,6 +1688,7 @@ namespace CycloneGames.Audio.Runtime
             }
 
             loadedBanks.TryRemove(bank.GetInstanceID(), out _);
+            ResetBankRuntimeState(bank);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (removedCount > 0)
@@ -1449,7 +1711,7 @@ namespace CycloneGames.Audio.Runtime
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
             {
-                commandQueue.Enqueue(ClearEventNameMap);
+                TryEnqueueCommand(new AudioCommand(AudioCommandType.ClearEventNameMap));
                 return;
             }
 
@@ -1495,6 +1757,97 @@ namespace CycloneGames.Audio.Runtime
         }
 
         public static int GetLoadedBankCount() => loadedBanks.Count;
+
+        private static void InitializeBankRuntimeState(AudioBank bank)
+        {
+            if (bank == null) return;
+
+            var parameters = bank.Parameters;
+            if (parameters != null)
+            {
+                for (int i = 0; i < parameters.Count; i++)
+                {
+                    parameters[i]?.ResetParameter();
+                }
+            }
+
+            var switches = bank.Switches;
+            if (switches != null)
+            {
+                for (int i = 0; i < switches.Count; i++)
+                {
+                    switches[i]?.ResetSwitch();
+                }
+            }
+        }
+
+        private static void ResetBankRuntimeState(AudioBank bank)
+        {
+            InitializeBankRuntimeState(bank);
+        }
+
+        private static void RefreshLoadedBankRuntimeState()
+        {
+            foreach (var bank in loadedBanks.Values)
+            {
+                InitializeBankRuntimeState(bank);
+            }
+        }
+
+        private static void UpdateGlobalParameters(float deltaTime)
+        {
+            reusableGlobalParameters.Clear();
+
+            foreach (var bank in loadedBanks.Values)
+            {
+                var parameters = bank?.Parameters;
+                if (parameters == null) continue;
+
+                for (int i = 0; i < parameters.Count; i++)
+                {
+                    var parameter = parameters[i];
+                    if (parameter != null)
+                    {
+                        reusableGlobalParameters.Add(parameter);
+                    }
+                }
+            }
+
+            foreach (var parameter in reusableGlobalParameters)
+            {
+                parameter.UpdateInterpolation(deltaTime);
+            }
+        }
+
+        private static void ResetAudioSource(AudioSource source)
+        {
+            if (source == null) return;
+
+            source.Stop();
+            source.clip = null;
+            source.outputAudioMixerGroup = null;
+            source.playOnAwake = false;
+            source.loop = false;
+            source.mute = false;
+            source.volume = 1f;
+            source.pitch = 1f;
+            source.panStereo = 0f;
+            source.spatialBlend = 0f;
+            source.spatialize = false;
+            source.dopplerLevel = 1f;
+            source.reverbZoneMix = 1f;
+            source.bypassEffects = false;
+            source.bypassListenerEffects = false;
+            source.bypassReverbZones = false;
+            source.priority = 128;
+            source.rolloffMode = AudioRolloffMode.Logarithmic;
+            source.minDistance = 1f;
+            source.maxDistance = 500f;
+            source.spread = 0f;
+            source.SetScheduledEndTime(double.MaxValue);
+            source.transform.localPosition = Vector3.zero;
+            source.transform.localRotation = Quaternion.identity;
+        }
 
         #endregion
 

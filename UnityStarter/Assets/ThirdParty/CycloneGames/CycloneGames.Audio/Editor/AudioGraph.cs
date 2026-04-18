@@ -488,6 +488,7 @@ namespace CycloneGames.Audio.Editor
             AudioParameter tempParameter;
             int paramCount = this.audioBank.EditorParameters.Count;
             int currentColumn = 0;
+            bool deletedParameter = false;
 
             // Calculate column width based on window width and number of columns
             // Account for scrollbar (20px) and padding (20px total)
@@ -520,7 +521,8 @@ namespace CycloneGames.Audio.Editor
                 {
                     this.audioBank.DeleteParameter(tempParameter);
                     EditorGUILayout.EndVertical();
-                    if (currentColumn > 0)
+                    deletedParameter = true;
+                    if (currentColumn >= 0)
                     {
                         EditorGUILayout.EndHorizontal();
                     }
@@ -538,7 +540,7 @@ namespace CycloneGames.Audio.Editor
             }
 
             // Close remaining row if not complete
-            if (currentColumn > 0)
+            if (!deletedParameter && currentColumn > 0)
             {
                 // Fill remaining columns with empty space to maintain grid alignment
                 while (currentColumn < this.parameterGridColumns)
@@ -634,6 +636,7 @@ namespace CycloneGames.Audio.Editor
             AudioSwitch tempSwitch;
             int switchCount = this.audioBank.EditorSwitches.Count;
             int currentColumn = 0;
+            bool deletedSwitch = false;
 
             // Calculate column width based on window width and number of columns
             float availableWidth = this.position.width - 40;
@@ -665,7 +668,8 @@ namespace CycloneGames.Audio.Editor
                 {
                     this.audioBank.DeleteSwitch(tempSwitch);
                     EditorGUILayout.EndVertical();
-                    if (currentColumn > 0)
+                    deletedSwitch = true;
+                    if (currentColumn >= 0)
                     {
                         EditorGUILayout.EndHorizontal();
                     }
@@ -683,7 +687,7 @@ namespace CycloneGames.Audio.Editor
             }
 
             // Close remaining row if not complete
-            if (currentColumn > 0)
+            if (!deletedSwitch && currentColumn > 0)
             {
                 // Fill remaining columns with empty space to maintain grid alignment
                 while (currentColumn < this.switchGridColumns)

@@ -7,6 +7,7 @@ namespace CycloneGames.Audio.Runtime
 {
     public class AudioSwitch : ScriptableObject
     {
+        [SerializeField]
         private int defaultValue = 0;
         public int CurrentValue { get; private set; }
 
