@@ -184,6 +184,7 @@ MonoBehaviour:
   includePrewarmed: 1
   prewarmSize: 1000
   scenarioBurstSize: 256
+  highLoadProfile: {fileID: 11400000, guid: 970ec5b972ac9c045adb2cb07843f810, type: 2}
 --- !u!1 &499389889
 GameObject:
   m_ObjectHideFlags: 0

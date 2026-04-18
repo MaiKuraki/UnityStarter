@@ -22,15 +22,13 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
 
             try
             {
-                var benchmark = new FactoryBenchmark();
-                
                 if (args.Length > 0)
                 {
-                    RunSpecificBenchmark(benchmark, args[0]);
+                    RunSpecificBenchmark(args[0]);
                 }
                 else
                 {
-                    benchmark.RunAllBenchmarks();
+                    new FactoryBenchmark().RunAllBenchmarks();
                 }
             }
             catch (Exception ex)
@@ -43,46 +41,58 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
             Console.ReadKey();
         }
 
-        private static void RunSpecificBenchmark(FactoryBenchmark benchmark, string benchmarkName)
+        private static void RunSpecificBenchmark(string benchmarkName)
         {
             switch (benchmarkName.ToLowerInvariant())
             {
                 case "all":
-                    benchmark.RunAllBenchmarks();
+                    new FactoryBenchmark().RunAllBenchmarks();
                     break;
                 case "allocation":
-                    RunAllocationBenchmarks(benchmark);
+                    RunAllocationBenchmarks();
                     break;
                 case "pooling":
-                    RunPoolingBenchmarks(benchmark);
+                    RunPoolingBenchmarks();
                     break;
                 case "scaling":
-                    RunScalingBenchmarks(benchmark);
+                    RunScalingBenchmarks();
+                    break;
+                case "dense":
+                    RunDenseBenchmarks();
                     break;
                 default:
                     Console.WriteLine($"Unknown benchmark: {benchmarkName}");
-                    Console.WriteLine("Available benchmarks: all, allocation, pooling, scaling");
+                    Console.WriteLine("Available benchmarks: all, allocation, pooling, scaling, dense");
                     break;
             }
         }
 
-        private static void RunAllocationBenchmarks(FactoryBenchmark benchmark)
+        private static void RunAllocationBenchmarks()
         {
             Console.WriteLine("=== Allocation Benchmarks ===\n");
-            // These would call specific methods if FactoryBenchmark was refactored to expose them
-            benchmark.RunAllBenchmarks(); // For now, run all
+            new FactoryBenchmark().RunAllBenchmarks();
         }
 
-        private static void RunPoolingBenchmarks(FactoryBenchmark benchmark)
+        private static void RunPoolingBenchmarks()
         {
             Console.WriteLine("=== Pooling Benchmarks ===\n");
-            benchmark.RunAllBenchmarks(); // For now, run all
+            new FactoryBenchmark().RunAllBenchmarks();
         }
 
-        private static void RunScalingBenchmarks(FactoryBenchmark benchmark)
+        private static void RunScalingBenchmarks()
         {
             Console.WriteLine("=== Scaling Benchmarks ===\n");
-            benchmark.RunAllBenchmarks(); // For now, run all
+            new FactoryBenchmark().RunAllBenchmarks();
+        }
+
+        private static void RunDenseBenchmarks()
+        {
+            Console.WriteLine("=== Dense Pool Benchmarks ===\n");
+#if PRESENT_COLLECTIONS
+            new DensePoolBenchmark().RunAllBenchmarks();
+#else
+            Console.WriteLine("Dense benchmarks are unavailable because Unity.Collections is not present.");
+#endif
         }
 
         private static void PrintHelp()
@@ -94,6 +104,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
             Console.WriteLine("  allocation - Test direct vs factory allocation performance");
             Console.WriteLine("  pooling    - Test object pool spawn/despawn performance");
             Console.WriteLine("  scaling    - Test auto-scaling behavior of object pools");
+            Console.WriteLine("  dense      - Test high-density handle/dense pool behavior");
             Console.WriteLine();
             Console.WriteLine("Examples:");
             Console.WriteLine("  Program                 # Run all benchmarks");

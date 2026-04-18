@@ -3,15 +3,15 @@ using CycloneGames.Factory.Runtime;
 
 namespace CycloneGames.RPGFoundation.Runtime.Interaction
 {
-    public class PooledEffect : MonoBehaviour, IPoolable<PooledEffectSpawnData, IMemoryPool>
+    public class PooledEffect : MonoBehaviour, IPoolable<PooledEffectSpawnData, PooledEffect>
     {
         [SerializeField] private float defaultDuration = 2f;
 
-        private IMemoryPool _pool;
+        private IDespawnableMemoryPool<PooledEffect> _pool;
         private float _timer;
         private bool _isPooled;
 
-        public void OnSpawned(PooledEffectSpawnData data, IMemoryPool pool)
+        public void OnSpawned(PooledEffectSpawnData data, IDespawnableMemoryPool<PooledEffect> pool)
         {
             _pool = pool;
             _isPooled = true;

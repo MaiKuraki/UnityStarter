@@ -12,18 +12,37 @@ namespace CycloneGames.Factory.Runtime
         private readonly Transform _root;
         private readonly bool _autoSetActive;
 
-        public MonoFastPool(T prefab, int initialCapacity = 16, Transform root = null, bool autoSetActive = true)
-            : base(initialCapacity)
+        public MonoFastPool(T prefab, int initialCapacity = 0, Transform root = null, bool autoSetActive = true, int maxCapacity = -1)
+            : base(new PoolCapacitySettings(initialCapacity, maxCapacity), deferInitialPrewarm: true)
         {
             _prefab = prefab;
             _root = root;
             _autoSetActive = autoSetActive;
 
-            if (initialCapacity > 0) ExpandBy(initialCapacity);
+            if (initialCapacity > 0)
+            {
+                Prewarm(initialCapacity);
+            }
+        }
+
+        public MonoFastPool(T prefab, PoolCapacitySettings capacitySettings, Transform root = null, bool autoSetActive = true)
+            : base(capacitySettings, deferInitialPrewarm: true)
+        {
+            _prefab = prefab;
+            _root = root;
+            _autoSetActive = autoSetActive;
+
+            if (capacitySettings.SoftCapacity > 0)
+            {
+                Prewarm(capacitySettings.SoftCapacity);
+            }
         }
 
         protected override T CreateNew()
         {
+            if (_prefab == null)
+                throw new System.InvalidOperationException("Prefab has been destroyed. The pool cannot create new items.");
+
             T instance = _root != null
                 ? Object.Instantiate(_prefab, _root)
                 : Object.Instantiate(_prefab);
@@ -45,10 +64,6 @@ namespace CycloneGames.Factory.Runtime
                 item.transform.SetParent(_root, false);
             }
         }
-
-        /// <summary>
-        /// Handles Unity's "Fake Null" for destroyed objects (e.g. from scene unload).
-        /// </summary>
         protected override bool IsValid(T item)
         {
             return item != null;
@@ -60,19 +75,8 @@ namespace CycloneGames.Factory.Runtime
             {
                 Object.Destroy(item.gameObject);
             }
+            base.DestroyItem(item);
         }
 
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                // Destroy all pooled GameObjects before clearing the pool
-                foreach (var item in _pool)
-                {
-                    if (item != null) Object.Destroy(item.gameObject);
-                }
-            }
-            base.Dispose(disposing);
-        }
     }
 }

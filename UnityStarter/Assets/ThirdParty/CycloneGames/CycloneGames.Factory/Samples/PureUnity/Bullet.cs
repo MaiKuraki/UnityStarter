@@ -10,13 +10,13 @@ namespace CycloneGames.Factory.Samples.PureUnity
         public float Speed;
     }
 
-    public class Bullet : MonoBehaviour, IPoolable<BulletData, IMemoryPool>
+    public class Bullet : MonoBehaviour, IPoolable<BulletData, Bullet>
     {
-        private IMemoryPool _pool;
+        private IDespawnableMemoryPool<Bullet> _pool;
         private BulletData _data;
         private bool _isActive;
 
-        public void OnSpawned(BulletData data, IMemoryPool pool)
+        public void OnSpawned(BulletData data, IDespawnableMemoryPool<Bullet> pool)
         {
             _data = data;
             _pool = pool;

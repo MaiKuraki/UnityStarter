@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Concurrent;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using CycloneGames.Factory.Runtime;
@@ -8,7 +8,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 {
     public static class EffectPoolSystem
     {
-        private static readonly ConcurrentDictionary<int, ObjectPool<PooledEffectSpawnData, PooledEffect>> s_pools = new();
+        private static readonly Dictionary<int, ObjectPool<PooledEffectSpawnData, PooledEffect>> s_pools = new();
         private static readonly DefaultUnityObjectSpawner s_spawner = new();
 
         private static Transform s_root;
@@ -53,16 +53,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             int key = prefab.GetInstanceID();
 
             // GetOrAdd is atomic — no external lock needed
-            var pool = s_pools.GetOrAdd(key, _ =>
+            if (!s_pools.TryGetValue(key, out var pool))
             {
                 var factory = new MonoPrefabFactory<PooledEffect>(s_spawner, template, s_root);
-                return new ObjectPool<PooledEffectSpawnData, PooledEffect>(
-                    factory: factory,
-                    initialCapacity: 8,
-                    expansionFactor: 0.5f,
-                    shrinkBufferFactor: 0.2f
-                );
-            });
+                pool = new ObjectPool<PooledEffectSpawnData, PooledEffect>(factory: factory, initialCapacity: 8);
+                s_pools.Add(key, pool);
+            }
 
             var spawnData = new PooledEffectSpawnData(position, rotation, duration);
             pool.Spawn(spawnData);

@@ -2,101 +2,165 @@ using System;
 
 namespace CycloneGames.Factory.Runtime
 {
-    /// <summary>
-    /// Defines the basic, non-generic contract for a memory pool.
-    /// </summary>
+    public enum PoolOverflowPolicy
+    {
+        Throw = 0,
+        ReturnNull = 1,
+    }
+
+    public enum PoolTrimPolicy
+    {
+        Manual = 0,
+        TrimOnDespawn = 1,
+    }
+
+    public readonly struct PoolCapacitySettings : IEquatable<PoolCapacitySettings>
+    {
+        public int SoftCapacity { get; }
+        public int HardCapacity { get; }
+        public PoolOverflowPolicy OverflowPolicy { get; }
+        public PoolTrimPolicy TrimPolicy { get; }
+
+        public PoolCapacitySettings(
+            int softCapacity = 0,
+            int hardCapacity = -1,
+            PoolOverflowPolicy overflowPolicy = PoolOverflowPolicy.Throw,
+            PoolTrimPolicy trimPolicy = PoolTrimPolicy.Manual)
+        {
+            if (softCapacity < 0) throw new ArgumentOutOfRangeException(nameof(softCapacity));
+            if (hardCapacity == 0 || hardCapacity < -1) throw new ArgumentOutOfRangeException(nameof(hardCapacity));
+            if (hardCapacity > 0 && softCapacity > hardCapacity) throw new ArgumentException("Soft capacity cannot exceed hard capacity.");
+
+            SoftCapacity = softCapacity;
+            HardCapacity = hardCapacity;
+            OverflowPolicy = overflowPolicy;
+            TrimPolicy = trimPolicy;
+        }
+
+        public bool Equals(PoolCapacitySettings other)
+        {
+            return SoftCapacity == other.SoftCapacity
+                && HardCapacity == other.HardCapacity
+                && OverflowPolicy == other.OverflowPolicy
+                && TrimPolicy == other.TrimPolicy;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is PoolCapacitySettings other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                uint h = (uint)SoftCapacity;
+                h = ((h >> 16) ^ h) * 0x45d9f3b;
+                h ^= (uint)HardCapacity * 0x9e3779b9;
+                h = ((h >> 16) ^ h) * 0x45d9f3b;
+                h ^= (uint)OverflowPolicy * 0x27d4eb2d;
+                h ^= (uint)TrimPolicy * 0x9e3779b9;
+                h = (h >> 16) ^ h;
+                return (int)h;
+            }
+        }
+    }
+
+    public readonly struct PoolDiagnostics
+    {
+        public int PeakCountActive { get; }
+        public int PeakCountAll { get; }
+        public int TotalCreated { get; }
+        public int TotalSpawned { get; }
+        public int TotalDespawned { get; }
+        public int FailedSpawnRollbacks { get; }
+        public int RejectedSpawns { get; }
+        public int InvalidDespawns { get; }
+        public int DestroyedOnTrim { get; }
+
+        public PoolDiagnostics(
+            int peakCountActive,
+            int peakCountAll,
+            int totalCreated,
+            int totalSpawned,
+            int totalDespawned,
+            int failedSpawnRollbacks,
+            int rejectedSpawns,
+            int invalidDespawns,
+            int destroyedOnTrim)
+        {
+            PeakCountActive = peakCountActive;
+            PeakCountAll = peakCountAll;
+            TotalCreated = totalCreated;
+            TotalSpawned = totalSpawned;
+            TotalDespawned = totalDespawned;
+            FailedSpawnRollbacks = failedSpawnRollbacks;
+            RejectedSpawns = rejectedSpawns;
+            InvalidDespawns = invalidDespawns;
+            DestroyedOnTrim = destroyedOnTrim;
+        }
+    }
+
+    public readonly struct PoolProfile
+    {
+        public int CountAll { get; }
+        public int CountActive { get; }
+        public int CountInactive { get; }
+        public PoolCapacitySettings CapacitySettings { get; }
+        public PoolDiagnostics Diagnostics { get; }
+
+        public PoolProfile(
+            int countAll,
+            int countActive,
+            int countInactive,
+            PoolCapacitySettings capacitySettings,
+            PoolDiagnostics diagnostics)
+        {
+            CountAll = countAll;
+            CountActive = countActive;
+            CountInactive = countInactive;
+            CapacitySettings = capacitySettings;
+            Diagnostics = diagnostics;
+        }
+    }
+
     public interface IMemoryPool
     {
-        /// <summary>
-        /// Gets the total number of items managed by the pool (both active and inactive).
-        /// </summary>
-        int NumTotal { get; }
-
-        /// <summary>
-        /// Gets the number of items currently spawned and in use.
-        /// </summary>
-        int NumActive { get; }
-
-        /// <summary>
-        /// Gets the number of items currently available in the pool, ready to be spawned.
-        /// </summary>
-        int NumInactive { get; }
-
-        /// <summary>
-        /// Gets the <see cref="Type"/> of items managed by this pool.
-        /// </summary>
+        int CountAll { get; }
+        int CountActive { get; }
+        int CountInactive { get; }
         Type ItemType { get; }
+        PoolCapacitySettings CapacitySettings { get; }
+        PoolDiagnostics Diagnostics { get; }
+        PoolProfile Profile { get; }
 
-        /// <summary>
-        /// Adjusts the number of inactive items in the pool to match the desired size.
-        /// If the current count is less than the desired size, new items are created.
-        /// If the current count is greater, excess items are destroyed.
-        /// </summary>
-        /// <param name="desiredPoolSize">The target number of inactive items.</param>
-        void Resize(int desiredPoolSize);
-
-        /// <summary>
-        /// Destroys all items in the pool, both active and inactive. The pool becomes empty.
-        /// </summary>
         void Clear();
-
-        /// <summary>
-        /// Increases the number of inactive items in the pool by a specific amount.
-        /// </summary>
-        /// <param name="numToAdd">The number of new items to create and add to the pool.</param>
-        void ExpandBy(int numToAdd);
-
-        /// <summary>
-        /// Decreases the number of inactive items in the pool by a specific amount.
-        /// </summary>
-        /// <param name="numToRemove">The number of inactive items to destroy.</param>
-        void ShrinkBy(int numToRemove);
-
-        /// <summary>
-        /// Returns an item to the pool. The item must be of the correct type for the pool.
-        /// </summary>
-        /// <param name="obj">The object to return to the pool.</param>
-        void Despawn(object obj);
+        void DespawnAll();
+        int DespawnStep(int maxItems);
+        void Prewarm(int count);
+        int WarmupStep(int maxItems);
+        void TrimInactive(int targetInactiveCount);
     }
 
-    /// <summary>
-    /// Extends the base memory pool with a strongly-typed Despawn method.
-    /// </summary>
-    /// <typeparam name="TValue">The type of item to despawn.</typeparam>
     public interface IDespawnableMemoryPool<in TValue> : IMemoryPool
     {
-        /// <summary>
-        /// Returns a strongly-typed item to the pool.
-        /// </summary>
-        /// <param name="item">The item to return.</param>
-        void Despawn(TValue item);
+        bool Contains(TValue item);
+        bool Despawn(TValue item);
     }
 
-    /// <summary>
-    /// Defines a memory pool that can spawn items without parameters.
-    /// </summary>
-    /// <typeparam name="TValue">The type of item to spawn.</typeparam>
     public interface IMemoryPool<TValue> : IDespawnableMemoryPool<TValue>
     {
-        /// <summary>
-        /// Retrieves an item from the pool, creating a new one if necessary.
-        /// </summary>
-        /// <returns>A spawned item.</returns>
         TValue Spawn();
+        bool TrySpawn(out TValue item);
+        void ForEachActive(Action<TValue> action);
+        void ForEachActive<TState>(TState state, Action<TValue, TState> action);
     }
 
-    /// <summary>
-    /// Defines a memory pool that can spawn items using a parameter.
-    /// </summary>
-    /// <typeparam name="TParam1">The parameter type for spawning.</typeparam>
-    /// <typeparam name="TValue">The type of item to spawn.</typeparam>
     public interface IMemoryPool<in TParam1, TValue> : IDespawnableMemoryPool<TValue>
     {
-        /// <summary>
-        /// Retrieves an item from the pool, creating a new one if necessary, and initializes it with the given parameter.
-        /// </summary>
-        /// <param name="param">The parameter to use for initialization.</param>
-        /// <returns>A spawned and initialized item.</returns>
         TValue Spawn(TParam1 param);
+        bool TrySpawn(TParam1 param, out TValue item);
+        void ForEachActive(Action<TValue> action);
+        void ForEachActive<TState>(TState state, Action<TValue, TState> action);
     }
 }

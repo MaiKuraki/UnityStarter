@@ -1,177 +1,121 @@
 # CycloneGames.Factory Benchmarks
 
-This directory contains comprehensive benchmark suites for testing the performance characteristics of the CycloneGames.Factory package. The benchmarks are designed to help you understand the performance benefits of using object pooling and factory patterns in both pure C# and Unity environments.
+This folder contains benchmark and profiling entry points for the current `CycloneGames.Factory` architecture.
 
-## Overview
+The benchmark suite is not only for micro-benchmarking method calls. Its main purpose is to answer architecture questions:
 
-The benchmark suite includes:
+- Should this system stay in OOP pooling?
+- Should it move to dense DOD storage?
+- Is ECS reuse better than direct instantiate/destroy under this workload?
+- Is the current capacity policy too strict or too loose?
 
-### Pure C# Benchmarks (`PureCSharp/`)
-- **Environment**: Standalone C# application
-- **Purpose**: Test core factory and pooling algorithms without Unity overhead
-- **Metrics**: CPU performance, memory allocation, GC pressure
-- **Use Case**: Server applications, batch processing, pure computation
+## Benchmark Families
 
-### Unity Benchmarks (`Unity/`)
-- **Environment**: Unity Editor/Runtime
-- **Purpose**: Test GameObject pooling, MonoBehaviour lifecycle, Unity-specific features
-- **Metrics**: Frame time, Unity memory management, Profiler integration
-- **Use Case**: Game development, real-time applications, Unity projects
+### Pure C#
 
-## Quick Start
+Entry point:
 
-### Running Pure C# Benchmarks
+- `Samples/Benchmarks/PureCSharp/Program.cs`
 
-1. **Standalone Execution**: The `PureCSharp/Program.cs` can be run independently
-   ```bash
-   # Compile and run (if extracting to standalone project)
-   dotnet run
-   ```
+Covers:
 
-2. **Within Unity**: The benchmarks can also be called from Unity scripts
-   ```csharp
-   var benchmark = new FactoryBenchmark();
-   benchmark.RunAllBenchmarks();
-   ```
+- direct allocation
+- factory creation
+- `ObjectPool<TParam, TValue>`
+- dense DOD handle-pool churn
 
-### Running Unity Benchmarks
+### Unity / Runtime OOP
 
-1. **Add Component**: Add `GameObjectPoolBenchmark` to a GameObject in your scene
-2. **Configure**: Set the bullet prefab and spawn parent in the inspector
-3. **Run**: Either enable "Run On Start" or call methods manually
-4. **Monitor**: View results in Console and Unity Profiler
+Main sample:
 
-## Benchmark Categories
+- `Samples/Benchmarks/Unity/GameObjectPoolBenchmark.cs`
 
-### 1. Allocation Performance
-- **Direct Allocation**: `new Object()` baseline performance
-- **Factory Allocation**: `IFactory<T>.Create()` overhead measurement
-- **Comparison**: Direct vs Factory allocation patterns
+Covers:
 
-### 2. Object Pool Performance
-- **Spawn/Despawn**: Pool operation timing
-- **Memory Efficiency**: Allocation reduction measurement
-- **Scaling Behavior**: Performance under varying load
+- `GameObject.Instantiate/Destroy`
+- `ObjectPool<TParam, TValue>`
+- prewarmed vs cold start behavior
+- sustained active-count scenarios
 
-### 3. Concurrency Testing
-- **Thread Safety**: Multi-threaded pool access
-- **Lock Contention**: Performance under concurrent load
-- **Scalability**: Performance with multiple CPU cores
+### Unity / DOD
 
-### 4. Unity-Specific Features
-- **GameObject Instantiation**: `Instantiate()` vs pooling
-- **MonoBehaviour Lifecycle**: Component initialization overhead
-- **Memory Profiling**: Unity-specific memory patterns
-- **Frame Time Analysis**: Real-time performance impact
+Main sample:
 
-## Configuration Options
+- `Samples/Benchmarks/Unity/HighDensityDODBenchmark.cs`
 
-### Pure C# Benchmarks
+Covers:
 
-```csharp
-// Customize iteration counts
-const int iterations = 100000;  // Measurement iterations
-const int warmupIterations = 1000;  // Warm-up iterations
+- `NativePool<T>`
+- `NativeDensePool<T>`
+- `NativeDenseColumnPool2<T0, T1>`
+- batched column-pool spawn/despawn
 
-// Adjust pool settings
-var pool = new ObjectPool<Data, Object>(factory, initialCapacity: 100);
-```
+The DOD benchmark now logs unified profile vocabulary such as `CountActive`, `CountInactive`, and `PeakCountActive`.
 
-### Unity Benchmarks
+### Unity / ECS
 
-```csharp
-[SerializeField] private int measurementIterations = 1000;
-[SerializeField] private int maxConcurrentObjects = 5000;
-[SerializeField] private float stressTestDuration = 10f;
-```
+Main samples:
 
-## Interpreting Results
+- `ECS/Samples/BulletSpawnerAuthoring.cs`
+- `ECS/Samples/ECSHighLoadBenchmark.cs`
 
-### Performance Metrics
+Covers:
 
-1. **Operations per Second**: Higher is better
-2. **Average Time per Operation**: Lower is better (measured in microseconds)
-3. **Memory per Operation**: Lower is better (measured in bytes)
-4. **GC Collections**: Fewer is better
+- `PoolReuse`
+- `DirectInstantiateDestroy`
+- shared metrics vocabulary for current counts, peaks, and rejected spawns
 
-### Typical Performance Expectations
+## Recommended Workflow
 
-| Operation | Expected Performance | Notes |
-|-----------|---------------------|-------|
-| Direct Allocation | 1-10 million ops/sec | Baseline performance |
-| Factory Creation | 0.8-8 million ops/sec | Small overhead from abstraction |
-| Pool Spawn/Despawn | 2-20 million ops/sec | Significantly faster than allocation |
-| GameObject Pool | 50k-200k ops/sec | Unity overhead, but much faster than Instantiate |
+1. Fix one target active count and one hard capacity.
+2. Run the OOP, DOD, or ECS scenario with the same spawn pressure.
+3. Compare frame time together with diagnostics, not separately.
+4. Tune capacity policy only after reading peak and reject metrics.
+5. If OOP pooling shows stable pressure at very high counts, test a DOD or ECS version next.
 
-### Memory Usage Patterns
+## Reading The Numbers
 
-- **Direct Allocation**: High GC pressure, frequent collections
-- **Object Pooling**: Low GC pressure, stable memory usage
-- **Initial Pool Creation**: One-time allocation cost, then stable
+Use the metrics as a system:
 
-## Performance Tips
+- high `TotalCreated` with relatively stable `PeakCountActive` usually means reuse is underperforming
+- non-zero `RejectedSpawns` usually means `HardCapacity` is lower than the true burst requirement
+- a large gap between `PeakCountActive` and current `CountActive` usually means bursty traffic
+- high `CountInactive` means memory is being retained for fast reuse, not freed
 
-### For Best Results
-1. **Warm-up**: Always include warm-up iterations to account for JIT compilation
-2. **GC Control**: Force garbage collection between measurements
-3. **Consistent Environment**: Run benchmarks on dedicated hardware when possible
-4. **Multiple Runs**: Average results across multiple benchmark runs
+## Suggested Comparisons
 
-### Optimizing Your Code
-1. **Pool Sizing**: Start with reasonable initial capacity to avoid early expansions
-2. **Lifetime Management**: Use appropriate object lifetimes to balance memory and performance
-3. **Batch Operations**: Process multiple objects per frame when possible
+### OOP
 
-## Advanced Usage
+Compare:
 
-### Custom Benchmarks
+- cold pool vs prewarmed pool
+- trim-on-despawn vs manual trim
+- `Throw` vs `ReturnNull` overflow behavior
 
-Extend the benchmark framework for your specific use cases:
+### DOD
 
-```csharp
-// Pure C# custom benchmark
-public class MyCustomBenchmark
-{
-    private readonly BenchmarkRunner _runner = new BenchmarkRunner();
-    
-    public void RunMyBenchmark()
-    {
-        _runner.RunBenchmark("My Test", 10000, () => {
-            // Your test code here
-        });
-    }
-}
+Compare:
 
-// Unity custom benchmark
-public class MyUnityBenchmark : MonoBehaviour
-{
-    private UnityBenchmarkRunner _runner = new UnityBenchmarkRunner();
-    
-    IEnumerator RunMyBenchmark()
-    {
-        yield return StartCoroutine(_runner.RunBenchmark(
-            "My Unity Test", 1000, () => {
-                // Your test code here
-            }));
-    }
-}
-```
+- `NativePool<T>` vs `NativeDensePool<T>`
+- one-struct dense layout vs columnar layout
+- single spawn/despawn vs batch spawn/despawn
 
-### Profiler Integration
+### ECS
 
-The Unity benchmarks integrate with Unity's Profiler:
+Compare:
 
-1. **Open Profiler**: Window → Analysis → Profiler
-2. **Run Benchmarks**: Execute benchmark scripts
-3. **Analyze**: Look for `Benchmark_*` samples in the Profiler timeline
-4. **Memory Analysis**: Monitor Memory and GC Alloc tracks
+- `PoolReuse`
+- `DirectInstantiateDestroy`
 
-### Data Export
+Keep these aligned between runs:
 
-Export benchmark results for analysis:
+- spawn rate
+- target active count
+- hard capacity
+- reporting interval
 
-```csharp
-// Get CSV data for external analysis
-string csvData = _runner.ExportToCSV();
-System.IO.File.WriteAllText("benchmark_results.csv", csvData);
-```
+## Notes
+
+- Benchmark results should be validated on target hardware, not only in editor.
+- WebGL, mobile, and desktop should be profiled separately.
+- For dense DOD and ECS scenarios, prioritize frame-time stability over average-only throughput.
