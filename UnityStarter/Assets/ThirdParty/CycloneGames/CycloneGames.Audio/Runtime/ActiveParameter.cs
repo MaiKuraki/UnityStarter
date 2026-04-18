@@ -8,18 +8,11 @@ namespace CycloneGames.Audio.Runtime
     /// </summary>
     public class ActiveParameter
     {
-        /// <summary>
-        /// The value of the parameter
-        /// </summary>
-        private float currentValue = 0;
-        /// <summary>
-        /// The result of the parameter's curve on the currentValue
-        /// </summary>
-        private float currentResult = 0;
-        /// <summary>
-        /// Has the ActiveParameter been set to a value independent from the main AudioParameter
-        /// </summary>
-        private bool isDirty = false;
+        private float localCurrentValue;
+        private float localTargetValue;
+        private float localCurrentResult;
+        private bool useLocalOverride;
+        private readonly float interpolationSpeed;
 
         /// <summary>
         /// Constructor: Create a new ActiveParameter from the EventParameter
@@ -28,6 +21,8 @@ namespace CycloneGames.Audio.Runtime
         public ActiveParameter(AudioEventParameter root)
         {
             this.rootParameter = root;
+            this.interpolationSpeed = root?.parameter != null ? root.parameter.InterpolationSpeed : 0f;
+            Reset();
         }
 
         /// <summary>
@@ -41,20 +36,19 @@ namespace CycloneGames.Audio.Runtime
         {
             get
             {
-                if (this.isDirty)
-                {
-                    return this.currentValue;
-                }
-                else
-                {
-                    return this.rootParameter.parameter.CurrentValue;
-                }
+                return useLocalOverride ? localCurrentValue : GetGlobalValue();
             }
             set
             {
-                this.currentValue = value;
-                this.currentResult = this.rootParameter.ProcessParameter(this.currentValue);
-                this.isDirty = true;
+                float clamped = ClampToParameter(value);
+                useLocalOverride = true;
+                localTargetValue = clamped;
+
+                if (interpolationSpeed <= 0f)
+                {
+                    localCurrentValue = clamped;
+                    localCurrentResult = Evaluate(localCurrentValue);
+                }
             }
         }
 
@@ -63,26 +57,49 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public float CurrentResult
         {
-            get {
-                if (this.isDirty)
-                {
-                    return this.currentResult;
-                }
-                else
-                {
-                    return this.rootParameter.CurrentResult;
-                }
-            }
+            get => useLocalOverride ? localCurrentResult : Evaluate(GetGlobalValue());
         }
 
-        /// <summary>
-        /// Clear the modified value and use the global parameter's value
-        /// </summary>
+        public void Update(float deltaTime)
+        {
+            if (!useLocalOverride) return;
+
+            if (interpolationSpeed > 0f && !UnityEngine.Mathf.Approximately(localCurrentValue, localTargetValue))
+            {
+                localCurrentValue = UnityEngine.Mathf.MoveTowards(localCurrentValue, localTargetValue, interpolationSpeed * deltaTime);
+            }
+            else
+            {
+                localCurrentValue = localTargetValue;
+            }
+
+            localCurrentResult = Evaluate(localCurrentValue);
+        }
+
         public void Reset()
         {
-            this.currentValue = this.rootParameter.parameter.CurrentValue;
-            this.currentResult = this.rootParameter.CurrentResult;
-            this.isDirty = false;
+            float globalValue = GetGlobalValue();
+            localCurrentValue = globalValue;
+            localTargetValue = globalValue;
+            localCurrentResult = Evaluate(globalValue);
+            useLocalOverride = false;
+        }
+
+        private float GetGlobalValue()
+        {
+            if (rootParameter?.parameter == null) return 0f;
+            return rootParameter.parameter.EvaluateCurrentValue();
+        }
+
+        private float ClampToParameter(float value)
+        {
+            if (rootParameter?.parameter == null) return value;
+            return UnityEngine.Mathf.Clamp(value, rootParameter.parameter.MinValue, rootParameter.parameter.MaxValue);
+        }
+
+        private float Evaluate(float value)
+        {
+            return rootParameter != null ? rootParameter.Evaluate(value) : value;
         }
     }
 }

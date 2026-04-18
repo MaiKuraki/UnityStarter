@@ -36,24 +36,44 @@ namespace CycloneGames.Audio.Runtime
         /// <summary>
         /// The current (possibly interpolated) value of the parameter.
         /// </summary>
-        public float CurrentValue { get; private set; }
+        public float CurrentValue
+        {
+            get
+            {
+                EnsureRuntimeInitialized();
+                return runtimeCurrentValue;
+            }
+            private set => runtimeCurrentValue = value;
+        }
 
         /// <summary>
         /// The target value that CurrentValue is interpolating toward.
         /// When interpolationSpeed is 0, CurrentValue == TargetValue always.
         /// </summary>
-        public float TargetValue { get; private set; }
+        public float TargetValue
+        {
+            get
+            {
+                EnsureRuntimeInitialized();
+                return runtimeTargetValue;
+            }
+            private set => runtimeTargetValue = value;
+        }
+
+        private float runtimeCurrentValue;
+        private float runtimeTargetValue;
+        private bool runtimeInitialized;
 
         public void InitializeParameter()
         {
-            this.CurrentValue = Mathf.Clamp(this.defaultValue, this.minValue, this.maxValue);
-            this.TargetValue = this.CurrentValue;
+            runtimeCurrentValue = Mathf.Clamp(this.defaultValue, this.minValue, this.maxValue);
+            runtimeTargetValue = runtimeCurrentValue;
+            runtimeInitialized = true;
         }
 
         public void ResetParameter()
         {
-            this.CurrentValue = Mathf.Clamp(this.defaultValue, this.minValue, this.maxValue);
-            this.TargetValue = this.CurrentValue;
+            InitializeParameter();
         }
 
         /// <summary>
@@ -62,6 +82,7 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public void SetValue(float newValue)
         {
+            EnsureRuntimeInitialized();
             if (this.useGaze) return;
 
             newValue = Mathf.Clamp(newValue, this.minValue, this.maxValue);
@@ -80,9 +101,32 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public void UpdateInterpolation(float deltaTime)
         {
+            EnsureRuntimeInitialized();
             if (this.interpolationSpeed <= 0f || this.CurrentValue == this.TargetValue) return;
 
             this.CurrentValue = Mathf.MoveTowards(this.CurrentValue, this.TargetValue, this.interpolationSpeed * deltaTime);
+        }
+
+        public float EvaluateCurrentValue()
+        {
+            EnsureRuntimeInitialized();
+            return runtimeCurrentValue;
+        }
+
+        private void OnEnable()
+        {
+            if (!runtimeInitialized)
+            {
+                InitializeParameter();
+            }
+        }
+
+        private void EnsureRuntimeInitialized()
+        {
+            if (!runtimeInitialized)
+            {
+                InitializeParameter();
+            }
         }
 
 #if UNITY_EDITOR

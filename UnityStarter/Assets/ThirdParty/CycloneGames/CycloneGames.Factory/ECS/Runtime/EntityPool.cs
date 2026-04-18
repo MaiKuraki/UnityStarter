@@ -23,6 +23,8 @@ namespace CycloneGames.Factory.ECS.Runtime
         bool TrySpawn(TData data, out Entity entity);
         Entity Spawn(EntityCommandBuffer ecb, TData data);
         bool TrySpawn(EntityCommandBuffer ecb, TData data, out Entity entity);
+        Entity SpawnReuseOnly(EntityCommandBuffer ecb, TData data);
+        bool TrySpawnReuseOnly(EntityCommandBuffer ecb, TData data, out Entity entity);
         void Despawn(Entity entity, EntityCommandBuffer ecb);
         void DespawnAll(EntityCommandBuffer ecb);
         void Prewarm(int count);
@@ -217,13 +219,24 @@ namespace CycloneGames.Factory.ECS.Runtime
         /// </summary>
         public Entity Spawn(EntityCommandBuffer ecb, TData data)
         {
-            TrySpawnInternal(ecb, data, throwOnFailure: true, out var entity);
+            TrySpawnInternal(ecb, data, throwOnFailure: true, reuseOnly: false, out var entity);
             return entity;
         }
 
         public bool TrySpawn(EntityCommandBuffer ecb, TData data, out Entity entity)
         {
-            return TrySpawnInternal(ecb, data, throwOnFailure: false, out entity);
+            return TrySpawnInternal(ecb, data, throwOnFailure: false, reuseOnly: false, out entity);
+        }
+
+        public Entity SpawnReuseOnly(EntityCommandBuffer ecb, TData data)
+        {
+            TrySpawnInternal(ecb, data, throwOnFailure: true, reuseOnly: true, out var entity);
+            return entity;
+        }
+
+        public bool TrySpawnReuseOnly(EntityCommandBuffer ecb, TData data, out Entity entity)
+        {
+            return TrySpawnInternal(ecb, data, throwOnFailure: false, reuseOnly: true, out entity);
         }
 
         public void Despawn(Entity entity, EntityCommandBuffer ecb)
@@ -481,7 +494,7 @@ namespace CycloneGames.Factory.ECS.Runtime
         /// If the pool has no inactive entities, the spawn is rejected.
         /// Callers should Prewarm the pool or use the non-ECB <see cref="Spawn(TData)"/> overload to grow the pool.
         /// </summary>
-        private bool TrySpawnInternal(EntityCommandBuffer ecb, TData data, bool throwOnFailure, out Entity entity)
+        private bool TrySpawnInternal(EntityCommandBuffer ecb, TData data, bool throwOnFailure, bool reuseOnly, out Entity entity)
         {
             while (inactiveEntities.Count > 0)
             {
@@ -498,11 +511,35 @@ namespace CycloneGames.Factory.ECS.Runtime
             }
 
             // No inactive entities — cannot create via ECB without structural changes.
+            if (!reuseOnly)
+            {
+                if (hardCapacity > 0 && CountAll >= hardCapacity)
+                {
+                    rejectedSpawns++;
+                    if (overflowPolicy == EntityPoolOverflowPolicy.ReturnNull && !throwOnFailure)
+                    {
+                        entity = Entity.Null;
+                        return false;
+                    }
+
+                    throw new System.InvalidOperationException($"EntityPool for {typeof(TData).Name} reached max capacity {hardCapacity}.");
+                }
+
+                entity = factory.Create(data);
+                totalCreated++;
+                EnsurePooledTag(entity);
+                entityManager.SetEnabled(entity, true);
+                TrackActiveEntity(entity);
+                totalSpawned++;
+                UpdatePeaks();
+                return true;
+            }
+
             rejectedSpawns++;
             if (throwOnFailure)
                 throw new System.InvalidOperationException(
                     $"EntityPool<{typeof(TData).Name}> has no inactive entities to reuse via ECB. " +
-                    "Prewarm or use the non-ECB Spawn overload to grow the pool.");
+                    "Prewarm first or use the non-reuse-only ECB spawn overload.");
 
             entity = Entity.Null;
             return false;
