@@ -24,6 +24,9 @@ namespace CycloneGames.Audio.Editor
         // Serialized properties for settings
         private SerializedProperty _focusModeProp;
         private SerializedProperty _customPoolSizeProp;
+        private SerializedProperty _poolConfigOverrideProp;
+        private SerializedProperty _voicePolicyProfileOverrideProp;
+        private SerializedProperty _platformProfileOverrideProp;
         private SerializedProperty _mainMixerProp;
 
         // Cached lists to avoid per-frame allocations
@@ -66,6 +69,9 @@ namespace CycloneGames.Audio.Editor
         {
             _focusModeProp = serializedObject.FindProperty("focusMode");
             _customPoolSizeProp = serializedObject.FindProperty("customPoolSize");
+            _poolConfigOverrideProp = serializedObject.FindProperty("poolConfigOverride");
+            _voicePolicyProfileOverrideProp = serializedObject.FindProperty("voicePolicyProfileOverride");
+            _platformProfileOverrideProp = serializedObject.FindProperty("platformProfileOverride");
             _mainMixerProp = serializedObject.FindProperty("mainMixer");
         }
 
@@ -218,6 +224,11 @@ namespace CycloneGames.Audio.Editor
 
             EditorGUILayout.PropertyField(_focusModeProp);
             EditorGUILayout.PropertyField(_customPoolSizeProp, new GUIContent("Custom Pool Size"));
+            EditorGUILayout.Space(3);
+            EditorGUILayout.PropertyField(_poolConfigOverrideProp, new GUIContent("Pool Config Override"));
+            EditorGUILayout.PropertyField(_voicePolicyProfileOverrideProp, new GUIContent("Voice Policy Override"));
+            EditorGUILayout.PropertyField(_platformProfileOverrideProp, new GUIContent("Platform Profile Override"));
+            EditorGUILayout.Space(3);
             EditorGUILayout.PropertyField(_mainMixerProp);
 
             EditorGUILayout.EndVertical();
@@ -267,6 +278,9 @@ namespace CycloneGames.Audio.Editor
             DrawStatRow("Loaded Banks", AudioManager.GetLoadedBankCount().ToString());
             DrawStatRow("Active Events", AudioManager.ActiveEvents.Count.ToString());
             DrawStatRow("Total Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage));
+            DrawStatRow("Platform Profile", $"{AudioManager.PoolStats.PlatformProfile} [{AudioManager.PoolStats.PlatformTarget}]");
+            DrawStatRow("Repeat Throttled", AudioManager.PoolStats.TotalRepeatTriggerRejections.ToString());
+            DrawStatRow("Audibility Culled", AudioManager.PoolStats.TotalAudibilityCulls.ToString());
 
             ExternalAudioClipCacheStats cacheStats = AudioClipResolver.GetExternalCacheStats();
             EditorGUILayout.Space(4);
@@ -312,6 +326,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.EndHorizontal();
 
             DrawStatRow("Device Tier", AudioManager.PoolStats.DeviceTier);
+            DrawStatRow("Platform Profile", $"{AudioManager.PoolStats.PlatformProfile} [{AudioManager.PoolStats.PlatformTarget}]");
 
             EditorGUILayout.Space(5);
 
