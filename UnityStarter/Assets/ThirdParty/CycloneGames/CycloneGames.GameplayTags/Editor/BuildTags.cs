@@ -1,4 +1,5 @@
 using System.IO;
+using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 using CycloneGames.GameplayTags.Runtime;
@@ -11,15 +12,15 @@ namespace CycloneGames.GameplayTags.Editor
 
       public void OnPreprocessBuild(BuildReport report)
       {
-         string streamingAssetsPath = Path.Combine(Directory.GetCurrentDirectory(), "Assets", "StreamingAssets");
-         if (!Directory.Exists(streamingAssetsPath))
+         string resourcesPath = Path.Combine(Directory.GetCurrentDirectory(), "Assets", "Resources");
+         if (!Directory.Exists(resourcesPath))
          {
-            Directory.CreateDirectory(streamingAssetsPath);
+            Directory.CreateDirectory(resourcesPath);
          }
 
          GameplayTagManager.ReloadTags();
 
-         string filePath = Path.Combine(streamingAssetsPath, "GameplayTags");
+         string filePath = Path.Combine(resourcesPath, "GameplayTags.bytes");
 
          using (FileStream file = File.Create(filePath))
          {
@@ -34,6 +35,8 @@ namespace CycloneGames.GameplayTags.Editor
                }
             }
          }
+
+         AssetDatabase.ImportAsset("Assets/Resources/GameplayTags.bytes", ImportAssetOptions.ForceSynchronousImport);
       }
    }
 }

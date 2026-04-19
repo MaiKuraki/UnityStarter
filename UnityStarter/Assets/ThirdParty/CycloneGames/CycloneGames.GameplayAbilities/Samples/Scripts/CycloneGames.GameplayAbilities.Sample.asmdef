@@ -7,7 +7,7 @@
         "CycloneGames.Logger",
         "CycloneGames.Utility.Runtime",
         "CycloneGames.Factory.Runtime",
-        "CycloneGames.GameplayTags.Runtime",
+        "CycloneGames.GameplayTags.Core",
         "CycloneGames.GameplayAbilities.Core",
         "CycloneGames.GameplayAbilities.Runtime"
     ],
