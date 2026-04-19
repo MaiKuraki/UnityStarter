@@ -339,9 +339,119 @@ The AudioGraph has been redrawn to enhance the rendering of node connection curv
 
 The system exposes a clean `IAudioService` interface, enabling seamless integration with any DI container. For non-DI projects, all functionality remains accessible via static methods on `AudioManager`. The `SetInstance()` method allows external code to register a pre-existing `AudioManager` as the singleton.
 
+### AudioClipReference and External Loaders
+
+`AudioClipReference` supports multiple source styles:
+
+- `FilePath`
+- `StreamingAssetsPath`
+- `PersistentDataPath`
+- `Url`
+- `AssetAddress`
+
+The important distinction is:
+
+- Path / URL modes can be loaded directly by the audio system
+- `AssetAddress` is treated as a logical key, not as a local file path
+- For `AssetAddress`, you should register a runtime loader
+
+#### Register a Loader for One Reference
+
+```csharp
+AudioClipResolver.RegisterManagedReferenceLoader(audioClipReference, async (clipRef, ct) =>
+{
+    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
+    if (handle == null || handle.Asset == null)
+        return default;
+
+    return new ManagedAudioClipLoadResult(
+        handle.Asset,
+        () => handle.Release());
+});
+```
+
+#### Register a Loader for an Entire Location Kind
+
+This is the recommended setup for `AssetAddress`, YooAsset, Addressables, or a custom runtime package system.
+
+```csharp
+AudioClipResolver.RegisterManagedLocationKindLoader(AudioLocationKind.AssetAddress, async (clipRef, ct) =>
+{
+    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
+    if (handle == null || handle.Asset == null)
+        return default;
+
+    return new ManagedAudioClipLoadResult(
+        handle.Asset,
+        () => handle.Release());
+});
+```
+
+#### Lifecycle Guarantee
+
+When an external loader returns an `IAudioClipHandle`, the audio system will call `Release()` automatically when the clip is no longer used:
+
+- event stop
+- event recycle
+- bank unload
+- async cancellation cleanup
+
+This means:
+
+- the audio system decides **when** a clip is no longer referenced
+- your asset system decides **how** the underlying resource handle is actually released
+
+This split is what keeps external resource lifetimes safe without forcing `CycloneGames.Audio` to own every loading backend directly.
+
+#### External Clip Lifecycle Validation Checklist
+
+Recommended verification scenarios for projects that integrate `AudioClipReference` with Addressables, YooAsset, or a custom asset system:
+
+- Start playback, then unload the owning bank and confirm the external release callback runs exactly once
+- Start async loading, stop the event before completion, and confirm no dangling handle remains after cleanup
+- Play the same `AudioClipReference` from multiple instances and confirm the underlying resource is released only after the last instance finishes
+- Force the external loader to fail and confirm cache stats record the failure without leaking a partially initialized handle
+- Clear or reload the audio system in Play Mode and confirm registered loaders and cached external clips are released safely
+
+### Category Defaults and Voice Policy Overrides
+
+`AudioEvent` now supports a lightweight two-layer voice policy model:
+
+- `Category` selects a high-level runtime intent
+- `Use Category Defaults` applies a built-in voice policy template for that category
+- Per-event overrides are only needed for special cases
+
+This keeps the common workflow simple. In most projects, designers only need to set the category:
+
+- `CriticalUI`
+- `GameplaySFX`
+- `Voice`
+- `Ambient`
+- `Music`
+
+When `Use Category Defaults` is enabled, the event resolves its voice policy automatically. The current built-in defaults are:
+
+| Category | Steal Resistance | Budget Weight | Allow Voice Steal | Allow Distance Steal | Protect Scheduled |
+| --- | ---: | ---: | :---: | :---: | :---: |
+| `CriticalUI` | `2.2` | `1.5` | `false` | `false` | `true` |
+| `GameplaySFX` | `1.0` | `1.0` | `true` | `true` | `true` |
+| `Voice` | `1.5` | `1.35` | `true` | `false` | `true` |
+| `Ambient` | `0.7` | `0.7` | `true` | `true` | `false` |
+| `Music` | `2.6` | `1.8` | `false` | `false` | `true` |
+
+Recommended usage:
+
+- Set BGM and long-lived music layers to `Music`
+- Set dialog, narration, and subtitle-driven speech to `Voice`
+- Set far-field loops and background environmental beds to `Ambient`
+- Keep most one-shot gameplay sounds on `GameplaySFX`
+- Reserve `CriticalUI` for menu confirms, warnings, timing cues, or other must-hear feedback
+
+Disable `Use Category Defaults` only when a specific event needs custom behavior beyond its category template.
+
 ### Thread-Safe Command Dispatch
 
-All public API methods are thread-safe. Calls from worker threads are dispatched to the main thread via a lock-free `ConcurrentQueue<Action>`, ensuring zero-contention playback commands from async loading pipelines.
+All public API methods are thread-safe. Calls from worker threads are dispatched to the main thread through a structured command queue backed by a fixed-capacity ring buffer, reducing hot-path GC pressure and keeping command handoff predictable under load.
 
 ### Safe Asset Lifecycle Management
 

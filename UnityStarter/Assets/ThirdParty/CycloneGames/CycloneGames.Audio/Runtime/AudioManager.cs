@@ -41,6 +41,52 @@ namespace CycloneGames.Audio.Runtime
         All = PauseOnAppPause | ResumeOnAppResume | PauseOnFocusLost | ResumeOnFocusGain
     }
 
+    public readonly struct AudioCategoryVoiceStats
+    {
+        public readonly AudioEventCategory Category;
+        public readonly int Budget;
+        public readonly int ActiveSources;
+        public readonly float WeightedLoad;
+
+        public AudioCategoryVoiceStats(AudioEventCategory category, int budget, int activeSources, float weightedLoad)
+        {
+            Category = category;
+            Budget = budget;
+            ActiveSources = activeSources;
+            WeightedLoad = weightedLoad;
+        }
+    }
+
+    internal readonly struct RepeatTriggerKey : IEquatable<RepeatTriggerKey>
+    {
+        public readonly int EventId;
+        public readonly int ScopeId;
+
+        public RepeatTriggerKey(int eventId, int scopeId)
+        {
+            EventId = eventId;
+            ScopeId = scopeId;
+        }
+
+        public bool Equals(RepeatTriggerKey other)
+        {
+            return EventId == other.EventId && ScopeId == other.ScopeId;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is RepeatTriggerKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return (EventId * 397) ^ ScopeId;
+            }
+        }
+    }
+
     /// <summary>
     /// High-performance audio event playback manager with thread-safe operations
     /// </summary>
@@ -76,6 +122,18 @@ namespace CycloneGames.Audio.Runtime
             ClearCommandQueue();
             AudioClipResolver.ClearExternalCache();
             AudioClipResolver.ClearReferenceLoaders();
+            AudioClipResolver.ClearCustomProviders();
+            AudioPoolConfig.ClearCache();
+            AudioVoicePolicyProfile.ClearCache();
+            AudioPlatformProfile.ClearCache();
+            recentTriggerTimes.Clear();
+            reusableExpiredTriggerKeys.Clear();
+            lastRepeatTriggerCleanupTime = 0f;
+            totalRepeatTriggerRejections = 0;
+            totalAudibilityCulls = 0;
+            activePoolConfig = null;
+            activePlatformProfile = null;
+            activePlatformSettings = AudioPlatformProfile.GetFallbackSettings();
         }
 
         public static List<ActiveEvent> ActiveEvents { get; private set; }
@@ -164,6 +222,14 @@ namespace CycloneGames.Audio.Runtime
         [Header("Pool Configuration")]
         [Tooltip("Set to 0 to use auto-detected pool size based on device. Set > 0 to override with fixed size.")]
         [SerializeField] private int customPoolSize = 0;
+        [Tooltip("Optional explicit AudioPoolConfig. If assigned, it takes precedence over SetConfig and FindConfig.")]
+        [SerializeField] private AudioPoolConfig poolConfigOverride;
+
+        [Header("Policy Profiles")]
+        [Tooltip("Optional explicit AudioVoicePolicyProfile. If assigned, it takes precedence over SetConfig and FindConfig.")]
+        [SerializeField] private AudioVoicePolicyProfile voicePolicyProfileOverride;
+        [Tooltip("Optional explicit AudioPlatformProfile. If assigned, it takes precedence over SetConfig and FindConfig.")]
+        [SerializeField] private AudioPlatformProfile platformProfileOverride;
 
         [Header("Mixing")]
         [SerializeField] private AudioMixer mainMixer;
@@ -175,6 +241,8 @@ namespace CycloneGames.Audio.Runtime
 
         // Smart pool management
         private static AudioPoolConfig activePoolConfig;
+        private static AudioPlatformProfile activePlatformProfile;
+        private static AudioPlatformProfile.PlatformRuntimeSettings activePlatformSettings;
         private static int initialPoolSize;
         private static int currentPoolSize;
         private static int maxPoolSize;
@@ -186,6 +254,13 @@ namespace CycloneGames.Audio.Runtime
         private static int peakPoolUsage;
         private static int totalExpansions;
         private static int totalSteals;
+        private static int totalRepeatTriggerRejections;
+        private static int totalAudibilityCulls;
+        private static readonly Dictionary<AudioEventCategory, int> reusableCategorySourceCounts = new Dictionary<AudioEventCategory, int>(5);
+        private static readonly Dictionary<AudioEventCategory, float> reusableCategoryBudgetLoads = new Dictionary<AudioEventCategory, float>(5);
+        private static readonly Dictionary<RepeatTriggerKey, float> recentTriggerTimes = new Dictionary<RepeatTriggerKey, float>(256);
+        private static readonly List<RepeatTriggerKey> reusableExpiredTriggerKeys = new List<RepeatTriggerKey>(64);
+        private static float lastRepeatTriggerCleanupTime;
 
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -244,8 +319,26 @@ namespace CycloneGames.Audio.Runtime
             public static int PeakUsage => peakPoolUsage;
             public static int TotalExpansions => totalExpansions;
             public static int TotalSteals => totalSteals;
+            public static int TotalRepeatTriggerRejections => totalRepeatTriggerRejections;
+            public static int TotalAudibilityCulls => totalAudibilityCulls;
             public static string DeviceTier => activePoolConfig?.GetDeviceTierName() ?? AudioPoolConfig.GetDefaultDeviceTierName();
             public static bool HasConfig => activePoolConfig != null;
+            public static string PlatformProfile => activePlatformProfile != null ? activePlatformProfile.name : "Fallback";
+            public static string PlatformTarget => activePlatformProfile != null ? activePlatformProfile.GetCurrentPlatformLabel() : "Desktop Fallback";
+        }
+
+        public static void GetCategoryVoiceStats(List<AudioCategoryVoiceStats> results)
+        {
+            if (results == null) return;
+
+            FillActiveSourceCountsByCategory(reusableCategorySourceCounts, reusableCategoryBudgetLoads);
+            results.Clear();
+
+            AddCategoryVoiceStats(results, AudioEventCategory.CriticalUI);
+            AddCategoryVoiceStats(results, AudioEventCategory.GameplaySFX);
+            AddCategoryVoiceStats(results, AudioEventCategory.Voice);
+            AddCategoryVoiceStats(results, AudioEventCategory.Ambient);
+            AddCategoryVoiceStats(results, AudioEventCategory.Music);
         }
 
         private static List<ActiveEvent> cachedPreviousEventsList;
@@ -394,11 +487,13 @@ namespace CycloneGames.Audio.Runtime
                 return null;
             }
 
-            if (!ValidateManager() || !ValidateEvent(eventToPlay)) return null;
-
             Transform emitterTransform = emitterObject != null ? emitterObject.transform : null;
+            if (!ValidateManager() || !ValidateEvent(eventToPlay, emitterTransform, null, false, out RepeatTriggerKey triggerKey)) return null;
+
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitterTransform);
             tempEvent.Play();
+            if (tempEvent.status != EventStatus.Error)
+                CommitRepeatTrigger(triggerKey);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (tempEvent.status != EventStatus.Error)
@@ -419,11 +514,13 @@ namespace CycloneGames.Audio.Runtime
                 return null;
             }
 
-            if (!ValidateManager() || !ValidateEvent(eventToPlay)) return null;
+            if (!ValidateManager() || !ValidateEvent(eventToPlay, null, position, false, out RepeatTriggerKey triggerKey)) return null;
 
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, null);
             tempEvent.Play();
             tempEvent.SetAllSourcePositions(position);
+            if (tempEvent.status != EventStatus.Error)
+                CommitRepeatTrigger(triggerKey);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (tempEvent.status != EventStatus.Error)
@@ -528,15 +625,17 @@ namespace CycloneGames.Audio.Runtime
                 return null;
             }
 
-            if (!ValidateManager() || !ValidateEvent(eventToPlay)) return null;
+            Transform emitterTransform = emitterObject != null ? emitterObject.transform : null;
+            if (!ValidateManager() || !ValidateEvent(eventToPlay, emitterTransform, null, true, out RepeatTriggerKey triggerKey)) return null;
 
             double currentDspTime = AudioSettings.dspTime;
             if (dspTime < currentDspTime) dspTime = currentDspTime + 0.01;
 
-            Transform emitterTransform = emitterObject != null ? emitterObject.transform : null;
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitterTransform);
             tempEvent.scheduledDspTime = dspTime;
             tempEvent.Play();
+            if (tempEvent.status != EventStatus.Error)
+                CommitRepeatTrigger(triggerKey);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (tempEvent.status != EventStatus.Error)
@@ -567,10 +666,13 @@ namespace CycloneGames.Audio.Runtime
             }
 
             Debug.LogWarning("AudioManager: Deprecated - play on AudioSource no longer supported");
-            if (!ValidateManager() || !ValidateEvent(eventToPlay)) return null;
+            Transform emitterTransform = emitter != null ? emitter.transform : null;
+            if (!ValidateManager() || !ValidateEvent(eventToPlay, emitterTransform, null, false, out RepeatTriggerKey triggerKey)) return null;
 
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitter.transform);
             tempEvent.Play();
+            if (tempEvent.status != EventStatus.Error)
+                CommitRepeatTrigger(triggerKey);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (tempEvent.status != EventStatus.Error)
@@ -800,6 +902,8 @@ namespace CycloneGames.Audio.Runtime
         {
             Interlocked.Exchange(ref totalEventsPlayed, 0);
             Interlocked.Exchange(ref peakActiveEvents, 0);
+            totalRepeatTriggerRejections = 0;
+            totalAudibilityCulls = 0;
         }
 #endif
 
@@ -927,9 +1031,17 @@ namespace CycloneGames.Audio.Runtime
             globalPaused = false;
             systemPaused = false;
             activeFocusMode = AudioFocusMode.All;
+            activePlatformProfile = null;
+            activePlatformSettings = AudioPlatformProfile.GetFallbackSettings();
+            recentTriggerTimes.Clear();
+            reusableExpiredTriggerKeys.Clear();
+            lastRepeatTriggerCleanupTime = 0f;
+            totalRepeatTriggerRejections = 0;
+            totalAudibilityCulls = 0;
             ClearCommandQueue();
             AudioClipResolver.ClearExternalCache();
             AudioClipResolver.ClearReferenceLoaders();
+            AudioClipResolver.ClearCustomProviders();
             AllowCreateInstance = false;
         }
 
@@ -951,9 +1063,10 @@ namespace CycloneGames.Audio.Runtime
                 commandProcessed++;
             }
 
-            UpdateGlobalParameters(Time.deltaTime);
+              UpdateGlobalParameters(Time.deltaTime);
+            CleanupRepeatTriggerCache(Time.unscaledTime);
 
-            // Update active events
+              // Update active events
             int eventCount = ActiveEvents.Count;
             for (int i = eventCount - 1; i >= 0; i--)
             {
@@ -1096,8 +1209,7 @@ namespace CycloneGames.Audio.Runtime
             staticMainMixer = mainMixer;
             ActiveEvents = new List<ActiveEvent>(64);
 
-            // Initialize smart pool configuration (auto-discovery only)
-            activePoolConfig = AudioPoolConfig.FindConfig();
+            ApplyResolvedConfigs();
             InitializeSmartPool();
             RefreshLoadedBankRuntimeState();
 
@@ -1106,7 +1218,57 @@ namespace CycloneGames.Audio.Runtime
             isInitialized = true;
 
             string configSource = activePoolConfig != null ? "Auto-discovered" : "Defaults";
-            Debug.Log($"AudioManager: Initialized with {currentPoolSize} sources (max: {maxPoolSize}, tier: {PoolStats.DeviceTier}, config: {configSource})");
+            string platformProfileSource = activePlatformProfile != null
+                ? $"{activePlatformProfile.name} ({activePlatformProfile.GetCurrentPlatformLabel()})"
+                : "Fallback Desktop Settings";
+            Debug.Log($"AudioManager: Initialized with {currentPoolSize} sources (max: {maxPoolSize}, tier: {PoolStats.DeviceTier}, config: {configSource}, platform profile: {platformProfileSource})");
+        }
+
+        private void ApplyResolvedConfigs()
+        {
+            activePoolConfig = ResolvePoolConfig();
+            AudioVoicePolicyProfile resolvedVoicePolicyProfile = ResolveVoicePolicyProfile();
+            activePlatformProfile = ResolvePlatformProfile();
+
+            if (activePoolConfig != null)
+                AudioPoolConfig.SetConfig(activePoolConfig);
+
+            if (resolvedVoicePolicyProfile != null)
+                AudioVoicePolicyProfile.SetConfig(resolvedVoicePolicyProfile);
+
+            if (activePlatformProfile != null)
+                AudioPlatformProfile.SetConfig(activePlatformProfile);
+
+            activePlatformSettings = activePlatformProfile != null
+                ? activePlatformProfile.GetSettingsForCurrentPlatform()
+                : AudioPlatformProfile.GetFallbackSettings();
+            activeFocusMode = activePlatformSettings.overrideFocusMode
+                ? activePlatformSettings.focusMode
+                : focusMode;
+        }
+
+        private AudioPoolConfig ResolvePoolConfig()
+        {
+            if (poolConfigOverride != null)
+                return poolConfigOverride;
+
+            return AudioPoolConfig.FindConfig();
+        }
+
+        private AudioVoicePolicyProfile ResolveVoicePolicyProfile()
+        {
+            if (voicePolicyProfileOverride != null)
+                return voicePolicyProfileOverride;
+
+            return AudioVoicePolicyProfile.FindConfig();
+        }
+
+        private AudioPlatformProfile ResolvePlatformProfile()
+        {
+            if (platformProfileOverride != null)
+                return platformProfileOverride;
+
+            return AudioPlatformProfile.FindConfig();
         }
 
         private void InitializeSmartPool()
@@ -1135,6 +1297,8 @@ namespace CycloneGames.Audio.Runtime
             peakPoolUsage = 0;
             totalExpansions = 0;
             totalSteals = 0;
+            totalRepeatTriggerRejections = 0;
+            totalAudibilityCulls = 0;
             lastHighUsageTime = Time.time;
 
             // Pre-allocate capacity
@@ -1152,8 +1316,15 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static void ReloadPoolConfig()
         {
-            // Re-fetch config (will get the one set via SetConfig)
-            activePoolConfig = AudioPoolConfig.FindConfig();
+            if (Instance == null)
+            {
+                activePoolConfig = AudioPoolConfig.FindConfig();
+                return;
+            }
+
+            activePoolConfig = Instance.ResolvePoolConfig();
+            if (activePoolConfig != null)
+                AudioPoolConfig.SetConfig(activePoolConfig);
 
             // Update pool limits based on new config
             if (activePoolConfig != null)
@@ -1171,9 +1342,50 @@ namespace CycloneGames.Audio.Runtime
                     if (sourcePool.Capacity < maxPoolSize)
                         sourcePool.Capacity = maxPoolSize;
 
+                    Instance.TrimExcessIdleSources(forceTrimToMax: true);
+
                     Debug.Log($"AudioManager: Pool config reloaded (initial: {initialPoolSize}, max: {maxPoolSize}, tier: {PoolStats.DeviceTier})");
                 }
             }
+        }
+
+        public static void ReloadVoicePolicyProfile()
+        {
+            if (Instance == null)
+                return;
+
+            AudioVoicePolicyProfile resolvedProfile = Instance.ResolveVoicePolicyProfile();
+            AudioVoicePolicyProfile.SetConfig(resolvedProfile);
+        }
+
+        public static void ReloadPlatformProfile()
+        {
+            if (Instance == null)
+            {
+                activePlatformProfile = AudioPlatformProfile.FindConfig();
+                activePlatformSettings = activePlatformProfile != null
+                    ? activePlatformProfile.GetSettingsForCurrentPlatform()
+                    : AudioPlatformProfile.GetFallbackSettings();
+                return;
+            }
+
+            activePlatformProfile = Instance.ResolvePlatformProfile();
+            if (activePlatformProfile != null)
+                AudioPlatformProfile.SetConfig(activePlatformProfile);
+
+            activePlatformSettings = activePlatformProfile != null
+                ? activePlatformProfile.GetSettingsForCurrentPlatform()
+                : AudioPlatformProfile.GetFallbackSettings();
+            activeFocusMode = activePlatformSettings.overrideFocusMode
+                ? activePlatformSettings.focusMode
+                : Instance.focusMode;
+        }
+
+        public static void ReloadRuntimeProfiles()
+        {
+            ReloadPoolConfig();
+            ReloadVoicePolicyProfile();
+            ReloadPlatformProfile();
         }
 
         private void ValidateAudioListener()
@@ -1239,6 +1451,34 @@ namespace CycloneGames.Audio.Runtime
             currentPoolSize += count;
         }
 
+        private void TrimExcessIdleSources(bool forceTrimToMax)
+        {
+            if (availableSources.Count == 0 || currentPoolSize <= 0) return;
+
+            int targetPoolSize = forceTrimToMax
+                ? Mathf.Clamp(maxPoolSize, 0, currentPoolSize)
+                : initialPoolSize;
+
+            if (currentPoolSize <= targetPoolSize) return;
+
+            int trimCount = Mathf.Min(currentPoolSize - targetPoolSize, availableSources.Count);
+            if (trimCount <= 0) return;
+
+            for (int i = 0; i < trimCount; i++)
+            {
+                AudioSource sourceToRemove = availableSources.Dequeue();
+                if (sourceToRemove == null)
+                    continue;
+
+                sourcePool.Remove(sourceToRemove);
+                Destroy(sourceToRemove.gameObject);
+                currentPoolSize--;
+            }
+
+            if (peakPoolUsage > currentPoolSize)
+                peakPoolUsage = currentPoolSize;
+        }
+
         /// <summary>
         /// Attempt to expand the pool when more sources are needed.
         /// Returns true if expansion was successful.
@@ -1262,18 +1502,192 @@ namespace CycloneGames.Audio.Runtime
             return true;
         }
 
+        private static int GetVoiceBudgetForCategory(AudioEventCategory category)
+        {
+            int poolCap = Mathf.Max(maxPoolSize, 1);
+            float multiplier = activePlatformSettings.GetVoiceBudgetMultiplier(category);
+            switch (category)
+            {
+                case AudioEventCategory.CriticalUI:
+                    return Mathf.Max(2, Mathf.CeilToInt(poolCap * 0.10f * multiplier));
+                case AudioEventCategory.Voice:
+                    return Mathf.Max(2, Mathf.CeilToInt(poolCap * 0.20f * multiplier));
+                case AudioEventCategory.Ambient:
+                    return Mathf.Max(2, Mathf.CeilToInt(poolCap * 0.18f * multiplier));
+                case AudioEventCategory.Music:
+                    return Mathf.Max(1, Mathf.CeilToInt(poolCap * 0.08f * multiplier));
+                default:
+                    return Mathf.Max(4, Mathf.CeilToInt(poolCap * 0.44f * multiplier));
+            }
+        }
+
+        private static void AddCategoryVoiceStats(List<AudioCategoryVoiceStats> results, AudioEventCategory category)
+        {
+            int activeSources = reusableCategorySourceCounts.TryGetValue(category, out int sourceCount) ? sourceCount : 0;
+            float weightedLoad = reusableCategoryBudgetLoads.TryGetValue(category, out float load) ? load : 0f;
+            results.Add(new AudioCategoryVoiceStats(category, GetVoiceBudgetForCategory(category), activeSources, weightedLoad));
+        }
+
+        private static void FillActiveSourceCountsByCategory(
+            Dictionary<AudioEventCategory, int> counts,
+            Dictionary<AudioEventCategory, float> weightedLoads)
+        {
+            if (counts == null || weightedLoads == null) return;
+
+            counts.Clear();
+            weightedLoads.Clear();
+            counts[AudioEventCategory.CriticalUI] = 0;
+            counts[AudioEventCategory.GameplaySFX] = 0;
+            counts[AudioEventCategory.Voice] = 0;
+            counts[AudioEventCategory.Ambient] = 0;
+            counts[AudioEventCategory.Music] = 0;
+            weightedLoads[AudioEventCategory.CriticalUI] = 0f;
+            weightedLoads[AudioEventCategory.GameplaySFX] = 0f;
+            weightedLoads[AudioEventCategory.Voice] = 0f;
+            weightedLoads[AudioEventCategory.Ambient] = 0f;
+            weightedLoads[AudioEventCategory.Music] = 0f;
+
+            if (ActiveEvents == null) return;
+
+            for (int i = 0; i < ActiveEvents.Count; i++)
+            {
+                ActiveEvent evt = ActiveEvents[i];
+                if (evt == null || evt.status == EventStatus.Stopped || evt.rootEvent == null)
+                    continue;
+
+                AudioEventCategory category = evt.rootEvent.Category;
+                counts[category] += evt.SourceCount;
+                weightedLoads[category] += evt.SourceCount * evt.rootEvent.VoiceBudgetWeight;
+            }
+        }
+
+        private static float GetCategoryProtectionWeight(AudioEventCategory category)
+        {
+            switch (category)
+            {
+                case AudioEventCategory.CriticalUI: return 120f;
+                case AudioEventCategory.Music: return 105f;
+                case AudioEventCategory.Voice: return 85f;
+                case AudioEventCategory.GameplaySFX: return 65f;
+                case AudioEventCategory.Ambient: return 45f;
+                default: return 60f;
+            }
+        }
+
+        private static Vector3 GetReferenceListenerPosition()
+        {
+            if (cachedAudioListener != null && cachedAudioListener.gameObject != null)
+                return cachedAudioListener.transform.position;
+
+            Camera mainCamera = GetMainCamera();
+            if (mainCamera != null)
+                return mainCamera.transform.position;
+
+            return Vector3.zero;
+        }
+
+        private static float GetVoiceProtectionScore(
+            ActiveEvent evt,
+            Dictionary<AudioEventCategory, int> categoryCounts,
+            Dictionary<AudioEventCategory, float> weightedLoads)
+        {
+            if (evt == null || evt.rootEvent == null)
+                return float.MaxValue;
+
+            AudioEvent rootEvent = evt.rootEvent;
+            if (!rootEvent.AllowVoiceSteal)
+                return float.MaxValue;
+
+            float score = GetCategoryProtectionWeight(rootEvent.Category);
+            score += rootEvent.Priority * 1.5f;
+            score *= rootEvent.StealResistance;
+
+            if (rootEvent.Output != null && rootEvent.Output.loop)
+                score += 20f;
+
+            if (evt.IsPaused)
+                score += 15f;
+
+            if (rootEvent.ProtectScheduledPlayback && evt.scheduledDspTime > 0)
+                score += 40f;
+
+            float age = Mathf.Max(0f, Time.time - evt.timeStarted);
+            score -= Mathf.Min(age, 20f) * 1.5f;
+
+            EventSource primarySource = evt.GetSource(0);
+            if (rootEvent.AllowDistanceBasedSteal && primarySource.IsValid)
+            {
+                AudioSource source = primarySource.source;
+                float maxDistance = Mathf.Max(source.maxDistance, 0.0001f);
+                float distance = Vector3.Distance(source.transform.position, GetReferenceListenerPosition());
+                float normalizedDistance = Mathf.Clamp01(distance / maxDistance);
+                score += (1f - normalizedDistance) * 35f;
+                score += Mathf.Clamp01(source.volume) * 15f;
+            }
+
+            if (categoryCounts != null && categoryCounts.TryGetValue(rootEvent.Category, out int activeSourceCount))
+            {
+                int budget = GetVoiceBudgetForCategory(rootEvent.Category);
+                if (activeSourceCount > budget)
+                    score -= 25f;
+            }
+
+            if (weightedLoads != null && weightedLoads.TryGetValue(rootEvent.Category, out float weightedLoad))
+            {
+                float weightedBudget = GetVoiceBudgetForCategory(rootEvent.Category) * 1.15f;
+                if (weightedLoad > weightedBudget)
+                    score -= Mathf.Min((weightedLoad - weightedBudget) * 6f, 35f);
+            }
+
+            return score;
+        }
+
+        private static float GetRequesterProtectionScore(
+            AudioEvent requestingEvent,
+            Dictionary<AudioEventCategory, int> categoryCounts,
+            Dictionary<AudioEventCategory, float> weightedLoads)
+        {
+            if (requestingEvent == null)
+                return float.MinValue;
+
+            float score = GetCategoryProtectionWeight(requestingEvent.Category);
+            score += requestingEvent.Priority * 1.6f;
+            score *= requestingEvent.StealResistance;
+
+            if (categoryCounts != null && categoryCounts.TryGetValue(requestingEvent.Category, out int activeSourceCount))
+            {
+                int budget = GetVoiceBudgetForCategory(requestingEvent.Category);
+                if (activeSourceCount < budget)
+                    score += 20f;
+                else
+                    score -= Mathf.Min(activeSourceCount - budget, 4) * 8f;
+            }
+
+            if (weightedLoads != null && weightedLoads.TryGetValue(requestingEvent.Category, out float weightedLoad))
+            {
+                float weightedBudget = GetVoiceBudgetForCategory(requestingEvent.Category) * 1.15f;
+                if (weightedLoad < weightedBudget)
+                    score += 10f;
+                else
+                    score -= Mathf.Min((weightedLoad - weightedBudget) * 6f, 30f);
+            }
+
+            return score;
+        }
+
         /// <summary>
-        /// Attempt to steal a source from the lowest-priority, oldest playing event.
-        /// Priority is checked first; among equal priority, the oldest event is stolen.
+        /// Attempt to steal a source using category-aware voice budgeting and protection scoring.
         /// Returns the stolen source or null if no suitable source found.
         /// </summary>
-        private static AudioSource TryStealSource()
+        private static AudioSource TryStealSource(AudioEvent requestingEvent)
         {
             if (ActiveEvents == null || ActiveEvents.Count == 0) return null;
 
+            FillActiveSourceCountsByCategory(reusableCategorySourceCounts, reusableCategoryBudgetLoads);
+
             ActiveEvent victim = null;
-            int lowestPriority = int.MaxValue;
-            float oldestTime = float.MaxValue;
+            float lowestProtectionScore = float.MaxValue;
+            float requesterScore = GetRequesterProtectionScore(requestingEvent, reusableCategorySourceCounts, reusableCategoryBudgetLoads);
 
             for (int i = 0; i < ActiveEvents.Count; i++)
             {
@@ -1281,19 +1695,25 @@ namespace CycloneGames.Audio.Runtime
                 if (evt == null || evt.status == EventStatus.Stopped) continue;
                 if (evt.rootEvent == null) continue;
 
-                // Skip looping events
-                if (evt.rootEvent.Output != null && evt.rootEvent.Output.loop) continue;
-
-                int evtPriority = evt.rootEvent.Priority;
-
-                // Prefer stealing lower priority events; among equal priority, steal oldest
-                if (evtPriority < lowestPriority ||
-                    (evtPriority == lowestPriority && evt.timeStarted < oldestTime))
+                float protectionScore = GetVoiceProtectionScore(evt, reusableCategorySourceCounts, reusableCategoryBudgetLoads);
+                if (protectionScore < lowestProtectionScore)
                 {
-                    lowestPriority = evtPriority;
-                    oldestTime = evt.timeStarted;
+                    lowestProtectionScore = protectionScore;
                     victim = evt;
                 }
+            }
+
+            if (victim == null)
+                return null;
+
+            if (requestingEvent != null)
+            {
+                bool victimOverBudget = reusableCategorySourceCounts.TryGetValue(victim.rootEvent.Category, out int victimCategoryCount) &&
+                    victimCategoryCount > GetVoiceBudgetForCategory(victim.rootEvent.Category);
+
+                float requiredMargin = victimOverBudget ? -5f : 10f;
+                if (requesterScore < lowestProtectionScore + requiredMargin)
+                    return null;
             }
 
             if (victim != null && victim.SourceCount > 0)
@@ -1305,7 +1725,7 @@ namespace CycloneGames.Audio.Runtime
                     totalSteals++;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                    Debug.LogWarning($"AudioManager: Voice stolen from '{victim.name}' (priority:{lowestPriority}, total steals: {totalSteals})");
+                    Debug.LogWarning($"AudioManager: Voice stolen from '{victim.name}' (category:{victim.rootEvent.Category}, protection:{lowestProtectionScore:F1}, total steals: {totalSteals})");
 #endif
                     return source.source;
                 }
@@ -1342,24 +1762,18 @@ namespace CycloneGames.Audio.Runtime
             if (idleTime < shrinkIdleThreshold) return;
             if (currentTime - lastShrinkTime < shrinkInterval) return;
 
-            // Shrink by one
-            if (availableSources.Count > 0 && currentPoolSize > initialPoolSize)
+            int beforeSize = currentPoolSize;
+            TrimExcessIdleSources(forceTrimToMax: false);
+            if (currentPoolSize < beforeSize)
             {
-                var sourceToRemove = availableSources.Dequeue();
-                if (sourceToRemove != null)
-                {
-                    sourcePool.Remove(sourceToRemove);
-                    Destroy(sourceToRemove.gameObject);
-                    currentPoolSize--;
-                    lastShrinkTime = currentTime;
+                lastShrinkTime = currentTime;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                    if (currentPoolSize % 8 == 0) // Log every 8 shrinks
-                    {
-                        Debug.Log($"AudioManager: Pool shrunk to {currentPoolSize}/{maxPoolSize} sources");
-                    }
-#endif
+                if (currentPoolSize % 8 == 0 || currentPoolSize == initialPoolSize)
+                {
+                    Debug.Log($"AudioManager: Pool shrunk to {currentPoolSize}/{maxPoolSize} sources");
                 }
+#endif
             }
         }
 
@@ -1409,7 +1823,7 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        public static AudioSource GetUnusedSource()
+        public static AudioSource GetUnusedSource(AudioEvent requestingEvent = null)
         {
             int maxAttempts = availableSources.Count;
             int attempts = 0;
@@ -1432,14 +1846,15 @@ namespace CycloneGames.Audio.Runtime
             }
 
             // Smart pool: try voice stealing as last resort
-            var stolenSource = TryStealSource();
+            var stolenSource = TryStealSource(requestingEvent);
             if (stolenSource != null)
             {
                 return stolenSource;
             }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            Debug.LogWarning($"AudioManager: Source pool exhausted ({currentPoolSize}/{maxPoolSize}). All sources in use and none can be stolen.");
+            string requesterName = requestingEvent != null ? requestingEvent.name : "Unknown";
+            Debug.LogWarning($"AudioManager: Source pool exhausted ({currentPoolSize}/{maxPoolSize}) for '{requesterName}'. All sources are in use and none met the current stealing policy.");
 #endif
             return null;
         }
@@ -1517,13 +1932,180 @@ namespace CycloneGames.Audio.Runtime
             return Instance != null;
         }
 
-        private static bool ValidateEvent(AudioEvent eventToPlay)
+        private static bool ValidateEvent(
+            AudioEvent eventToPlay,
+            Transform emitterTransform,
+            Vector3? explicitPosition,
+            bool isScheduledPlayback,
+            out RepeatTriggerKey triggerKey)
         {
+            triggerKey = default;
             if (eventToPlay == null) return false;
             if (!eventToPlay.ValidateAudioFiles()) return false;
             if (eventToPlay.InstanceLimit > 0 && CountActiveInstances(eventToPlay) >= eventToPlay.InstanceLimit) return false;
+            if (!PassesAudibilityCulling(eventToPlay, emitterTransform, explicitPosition, isScheduledPlayback)) return false;
+            if (!PassesRepeatTriggerThrottle(eventToPlay, emitterTransform, explicitPosition, isScheduledPlayback, out triggerKey)) return false;
             if (eventToPlay.Group != 0) StopGroupInstances(eventToPlay.Group);
             return true;
+        }
+
+        private static bool PassesRepeatTriggerThrottle(
+            AudioEvent eventToPlay,
+            Transform emitterTransform,
+            Vector3? explicitPosition,
+            bool isScheduledPlayback,
+            out RepeatTriggerKey triggerKey)
+        {
+            triggerKey = default;
+            float repeatWindow = activePlatformSettings.GetRepeatTriggerWindow(eventToPlay.Category);
+            if (repeatWindow <= 0f) return true;
+            if (isScheduledPlayback && !activePlatformSettings.throttleScheduledPlayback) return true;
+
+            int scopeId = ResolveTriggerScopeId(emitterTransform, explicitPosition);
+            triggerKey = new RepeatTriggerKey(eventToPlay.GetInstanceID(), scopeId);
+
+            float currentTime = Time.unscaledTime;
+            if (recentTriggerTimes.TryGetValue(triggerKey, out float lastTime) &&
+                currentTime - lastTime < repeatWindow)
+            {
+                totalRepeatTriggerRejections++;
+                return false;
+            }
+
+            return true;
+        }
+
+        private static void CommitRepeatTrigger(RepeatTriggerKey triggerKey)
+        {
+            if (triggerKey.EventId == 0) return;
+            recentTriggerTimes[triggerKey] = Time.unscaledTime;
+        }
+
+        private static int ResolveTriggerScopeId(Transform emitterTransform, Vector3? explicitPosition)
+        {
+            if (!activePlatformSettings.throttlePerEmitter)
+                return 0;
+
+            if (emitterTransform != null)
+                return emitterTransform.GetInstanceID();
+
+            if (explicitPosition.HasValue)
+                return QuantizePositionHash(explicitPosition.Value);
+
+            return 0;
+        }
+
+        private static int QuantizePositionHash(Vector3 position)
+        {
+            int x = Mathf.RoundToInt(position.x * 2f);
+            int y = Mathf.RoundToInt(position.y * 2f);
+            int z = Mathf.RoundToInt(position.z * 2f);
+            unchecked
+            {
+                int hash = x;
+                hash = (hash * 397) ^ y;
+                hash = (hash * 397) ^ z;
+                return hash;
+            }
+        }
+
+        private static void CleanupRepeatTriggerCache(float currentTime)
+        {
+            if (recentTriggerTimes.Count == 0) return;
+            if (currentTime - lastRepeatTriggerCleanupTime < 2f && recentTriggerTimes.Count < 256) return;
+
+            lastRepeatTriggerCleanupTime = currentTime;
+            float maxWindow = Mathf.Max(activePlatformSettings.GetMaxRepeatTriggerWindow(), 0.05f);
+            float expiryThreshold = currentTime - Mathf.Max(maxWindow * 4f, 1f);
+
+            reusableExpiredTriggerKeys.Clear();
+            foreach (var entry in recentTriggerTimes)
+            {
+                if (entry.Value <= expiryThreshold)
+                    reusableExpiredTriggerKeys.Add(entry.Key);
+            }
+
+            for (int i = 0; i < reusableExpiredTriggerKeys.Count; i++)
+                recentTriggerTimes.Remove(reusableExpiredTriggerKeys[i]);
+        }
+
+        private static bool PassesAudibilityCulling(
+            AudioEvent eventToPlay,
+            Transform emitterTransform,
+            Vector3? explicitPosition,
+            bool isScheduledPlayback)
+        {
+            if (!activePlatformSettings.enableAudibilityCulling) return true;
+            if (isScheduledPlayback && !activePlatformSettings.cullScheduledPlayback) return true;
+
+            AudioOutput output = eventToPlay.Output;
+            if (output == null) return true;
+            if (output.loop && !activePlatformSettings.cullLoopingEvents) return true;
+
+            if (output.spatialBlend <= 0.01f)
+            {
+                if (!activePlatformSettings.cull2DEvents) return true;
+                if (output.MaxVolume < activePlatformSettings.minEstimatedAudibility)
+                {
+                    totalAudibilityCulls++;
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (!TryGetPlaybackWorldPosition(emitterTransform, explicitPosition, out Vector3 playbackPosition))
+                return true;
+
+            Vector3 listenerPosition = GetReferenceListenerPosition();
+            float distance = Vector3.Distance(listenerPosition, playbackPosition);
+            float maxDistance = Mathf.Max(output.MaxDistance, 0.01f);
+            float paddedDistance = maxDistance + activePlatformSettings.distanceCullPadding;
+            if (distance > paddedDistance)
+            {
+                totalAudibilityCulls++;
+                return false;
+            }
+
+            float normalizedDistance = Mathf.Clamp01(distance / maxDistance);
+            float attenuation = EstimateAudibilityFromOutput(output, normalizedDistance);
+            float estimatedVolume = output.MaxVolume * attenuation;
+            if (estimatedVolume < activePlatformSettings.minEstimatedAudibility)
+            {
+                totalAudibilityCulls++;
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryGetPlaybackWorldPosition(Transform emitterTransform, Vector3? explicitPosition, out Vector3 position)
+        {
+            if (emitterTransform != null)
+            {
+                position = emitterTransform.position;
+                return true;
+            }
+
+            if (explicitPosition.HasValue)
+            {
+                position = explicitPosition.Value;
+                return true;
+            }
+
+            position = default;
+            return false;
+        }
+
+        private static float EstimateAudibilityFromOutput(AudioOutput output, float normalizedDistance)
+        {
+            if (output == null) return 1f;
+
+            AnimationCurve curve = output.attenuationCurve;
+            if (curve != null && curve.length > 0)
+                return Mathf.Clamp01(curve.Evaluate(normalizedDistance));
+
+            return 1f - normalizedDistance;
         }
 
         #endregion

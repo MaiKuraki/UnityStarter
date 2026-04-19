@@ -25,6 +25,14 @@ namespace CycloneGames.Audio.Runtime
         void Release();
     }
 
+    public interface IAudioClipProvider
+    {
+        string Name { get; }
+        int Priority { get; }
+        bool CanLoad(AudioClipReference reference);
+        UniTask<IAudioClipHandle> LoadAsync(AudioClipReference reference, CancellationToken cancellationToken);
+    }
+
     public delegate UniTask<IAudioClipHandle> AudioClipReferenceLoader(AudioClipReference reference, CancellationToken cancellationToken);
     public delegate UniTask<ManagedAudioClipLoadResult> ManagedAudioClipReferenceLoader(AudioClipReference reference, CancellationToken cancellationToken);
 
@@ -99,8 +107,25 @@ namespace CycloneGames.Audio.Runtime
 
     public static class AudioClipResolver
     {
+        private const int ReferenceLoaderProviderPriority = 300;
+        private const int LocationKindLoaderProviderPriority = 200;
+        private const int BuiltInExternalProviderPriority = 100;
+
         private static readonly Dictionary<int, AudioClipReferenceLoader> runtimeReferenceLoaders = new Dictionary<int, AudioClipReferenceLoader>();
+        private static readonly Dictionary<AudioLocationKind, AudioClipReferenceLoader> runtimeLocationKindLoaders = new Dictionary<AudioLocationKind, AudioClipReferenceLoader>();
         private static readonly object runtimeReferenceLoaderLock = new object();
+        private static readonly List<IAudioClipProvider> providers = new List<IAudioClipProvider>();
+        private static readonly object providerLock = new object();
+        private static readonly IAudioClipProvider referenceLoaderProvider = new ReferenceLoaderAudioClipProvider();
+        private static readonly IAudioClipProvider locationKindLoaderProvider = new LocationKindAudioClipProvider();
+        private static readonly IAudioClipProvider builtInExternalProvider = new BuiltInExternalAudioClipProvider();
+
+        static AudioClipResolver()
+        {
+            RegisterProviderInternal(referenceLoaderProvider);
+            RegisterProviderInternal(locationKindLoaderProvider);
+            RegisterProviderInternal(builtInExternalProvider);
+        }
 
         public static IAudioClipHandle CreateEmbedded(AudioClip clip)
         {
@@ -117,21 +142,19 @@ namespace CycloneGames.Audio.Runtime
             if (reference == null || string.IsNullOrWhiteSpace(reference.Location))
                 return null;
 
-            AudioClipReferenceLoader runtimeLoader = GetRegisteredLoader(reference);
-            if (runtimeLoader != null)
+            IAudioClipProvider[] providerSnapshot = GetProviderSnapshot();
+            for (int i = 0; i < providerSnapshot.Length; i++)
             {
-                IAudioClipHandle managedHandle = await runtimeLoader(reference, cancellationToken);
-                if (managedHandle != null)
-                    return managedHandle;
+                IAudioClipProvider provider = providerSnapshot[i];
+                if (provider == null || !provider.CanLoad(reference))
+                    continue;
+
+                IAudioClipHandle handle = await provider.LoadAsync(reference, cancellationToken);
+                if (handle != null)
+                    return handle;
             }
 
-            if (reference.LocationKind == AudioLocationKind.AssetAddress)
-            {
-                return null;
-            }
-
-            string resolvedLocation = reference.ResolveLocation();
-            return await ExternalAudioClipHandle.LoadAsync(resolvedLocation, cancellationToken);
+            return null;
         }
 
         public static async UniTask<IAudioClipHandle> LoadLegacyPathAsync(string legacyPath, CancellationToken cancellationToken)
@@ -171,6 +194,30 @@ namespace CycloneGames.Audio.Runtime
             });
         }
 
+        public static void RegisterLocationKindLoader(AudioLocationKind locationKind, AudioClipReferenceLoader loader)
+        {
+            if (loader == null) return;
+
+            lock (runtimeReferenceLoaderLock)
+            {
+                runtimeLocationKindLoaders[locationKind] = loader;
+            }
+        }
+
+        public static void RegisterManagedLocationKindLoader(AudioLocationKind locationKind, ManagedAudioClipReferenceLoader loader)
+        {
+            if (loader == null) return;
+
+            RegisterLocationKindLoader(locationKind, async (clipReference, cancellationToken) =>
+            {
+                ManagedAudioClipLoadResult result = await loader(clipReference, cancellationToken);
+                if (!result.IsValid)
+                    return null;
+
+                return CreateManaged(result.Clip, result.ReleaseAction);
+            });
+        }
+
         public static void UnregisterReferenceLoader(AudioClipReference reference)
         {
             if (reference == null) return;
@@ -181,11 +228,62 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
+        public static void UnregisterLocationKindLoader(AudioLocationKind locationKind)
+        {
+            lock (runtimeReferenceLoaderLock)
+            {
+                runtimeLocationKindLoaders.Remove(locationKind);
+            }
+        }
+
         public static void ClearReferenceLoaders()
         {
             lock (runtimeReferenceLoaderLock)
             {
                 runtimeReferenceLoaders.Clear();
+                runtimeLocationKindLoaders.Clear();
+            }
+        }
+
+        public static void RegisterProvider(IAudioClipProvider provider)
+        {
+            if (provider == null) return;
+
+            lock (providerLock)
+            {
+                RegisterProviderInternal(provider);
+            }
+        }
+
+        public static void UnregisterProvider(IAudioClipProvider provider)
+        {
+            if (provider == null) return;
+
+            lock (providerLock)
+            {
+                providers.Remove(provider);
+            }
+        }
+
+        public static void ClearCustomProviders()
+        {
+            lock (providerLock)
+            {
+                providers.Clear();
+                RegisterProviderInternal(referenceLoaderProvider);
+                RegisterProviderInternal(locationKindLoaderProvider);
+                RegisterProviderInternal(builtInExternalProvider);
+            }
+        }
+
+        public static void GetProviders(List<IAudioClipProvider> results)
+        {
+            if (results == null) return;
+
+            lock (providerLock)
+            {
+                results.Clear();
+                results.AddRange(providers);
             }
         }
 
@@ -208,6 +306,96 @@ namespace CycloneGames.Audio.Runtime
             {
                 runtimeReferenceLoaders.TryGetValue(reference.GetInstanceID(), out AudioClipReferenceLoader loader);
                 return loader;
+            }
+        }
+
+        private static AudioClipReferenceLoader GetRegisteredLocationKindLoader(AudioLocationKind locationKind)
+        {
+            lock (runtimeReferenceLoaderLock)
+            {
+                runtimeLocationKindLoaders.TryGetValue(locationKind, out AudioClipReferenceLoader loader);
+                return loader;
+            }
+        }
+
+        private static void RegisterProviderInternal(IAudioClipProvider provider)
+        {
+            if (provider == null || providers.Contains(provider))
+                return;
+
+            int insertIndex = providers.Count;
+            for (int i = 0; i < providers.Count; i++)
+            {
+                IAudioClipProvider existing = providers[i];
+                if (existing == null || provider.Priority > existing.Priority)
+                {
+                    insertIndex = i;
+                    break;
+                }
+            }
+
+            providers.Insert(insertIndex, provider);
+        }
+
+        private static IAudioClipProvider[] GetProviderSnapshot()
+        {
+            lock (providerLock)
+            {
+                return providers.ToArray();
+            }
+        }
+
+        private sealed class ReferenceLoaderAudioClipProvider : IAudioClipProvider
+        {
+            public string Name => "Registered Reference Loader";
+            public int Priority => ReferenceLoaderProviderPriority;
+
+            public bool CanLoad(AudioClipReference reference)
+            {
+                return GetRegisteredLoader(reference) != null;
+            }
+
+            public UniTask<IAudioClipHandle> LoadAsync(AudioClipReference reference, CancellationToken cancellationToken)
+            {
+                AudioClipReferenceLoader loader = GetRegisteredLoader(reference);
+                return loader != null ? loader(reference, cancellationToken) : UniTask.FromResult<IAudioClipHandle>(null);
+            }
+        }
+
+        private sealed class LocationKindAudioClipProvider : IAudioClipProvider
+        {
+            public string Name => "Registered LocationKind Loader";
+            public int Priority => LocationKindLoaderProviderPriority;
+
+            public bool CanLoad(AudioClipReference reference)
+            {
+                return reference != null && GetRegisteredLocationKindLoader(reference.LocationKind) != null;
+            }
+
+            public UniTask<IAudioClipHandle> LoadAsync(AudioClipReference reference, CancellationToken cancellationToken)
+            {
+                AudioClipReferenceLoader loader = reference != null ? GetRegisteredLocationKindLoader(reference.LocationKind) : null;
+                return loader != null ? loader(reference, cancellationToken) : UniTask.FromResult<IAudioClipHandle>(null);
+            }
+        }
+
+        private sealed class BuiltInExternalAudioClipProvider : IAudioClipProvider
+        {
+            public string Name => "Built-in External Audio Provider";
+            public int Priority => BuiltInExternalProviderPriority;
+
+            public bool CanLoad(AudioClipReference reference)
+            {
+                return reference != null && reference.LocationKind != AudioLocationKind.AssetAddress;
+            }
+
+            public async UniTask<IAudioClipHandle> LoadAsync(AudioClipReference reference, CancellationToken cancellationToken)
+            {
+                if (reference == null || reference.LocationKind == AudioLocationKind.AssetAddress)
+                    return null;
+
+                string resolvedLocation = reference.ResolveLocation();
+                return await ExternalAudioClipHandle.LoadAsync(resolvedLocation, cancellationToken);
             }
         }
     }
@@ -853,7 +1041,35 @@ namespace CycloneGames.Audio.Runtime
                 if (this.externalReference != null)
                 {
                     EditorGUILayout.LabelField("Location Kind", this.externalReference.LocationKind.ToString());
-                    EditorGUILayout.LabelField("Resolved Path", this.externalReference.ResolveLocation(), EditorStyles.wordWrappedLabel);
+
+                    switch (this.externalReference.LocationKind)
+                    {
+                        case AudioLocationKind.AssetAddress:
+                            EditorGUILayout.LabelField("Address / Location", this.externalReference.GetDisplayLocation(), EditorStyles.wordWrappedLabel);
+                            if (this.externalReference.HasEditorAssetLink)
+                            {
+                                EditorGUILayout.LabelField("Editor Asset Link", this.externalReference.GUID, EditorStyles.wordWrappedLabel);
+                            }
+                            else
+                            {
+                                EditorGUILayout.HelpBox("No editor asset link stored. Runtime loading depends on the registered AssetAddress loader.", MessageType.Info);
+                            }
+                            break;
+                        case AudioLocationKind.Url:
+                            EditorGUILayout.LabelField("URL", this.externalReference.GetDisplayLocation(), EditorStyles.wordWrappedLabel);
+                            break;
+                        case AudioLocationKind.StreamingAssetsPath:
+                            EditorGUILayout.LabelField("StreamingAssets Path", this.externalReference.GetDisplayLocation(), EditorStyles.wordWrappedLabel);
+                            EditorGUILayout.LabelField("Resolved Path", this.externalReference.ResolveLocation(), EditorStyles.wordWrappedLabel);
+                            break;
+                        case AudioLocationKind.PersistentDataPath:
+                            EditorGUILayout.LabelField("PersistentData Path", this.externalReference.GetDisplayLocation(), EditorStyles.wordWrappedLabel);
+                            EditorGUILayout.LabelField("Resolved Path", this.externalReference.ResolveLocation(), EditorStyles.wordWrappedLabel);
+                            break;
+                        default:
+                            EditorGUILayout.LabelField("File Path", this.externalReference.GetDisplayLocation(), EditorStyles.wordWrappedLabel);
+                            break;
+                    }
                 }
                 else if (!string.IsNullOrEmpty(this.legacyFilePath))
                 {

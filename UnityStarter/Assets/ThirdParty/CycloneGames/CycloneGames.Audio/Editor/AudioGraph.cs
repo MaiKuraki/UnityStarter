@@ -826,6 +826,39 @@ namespace CycloneGames.Audio.Editor
             float newFadeOut = EditorGUILayout.FloatField("Fade Out", audioEvent.FadeOut);
             int newGroup = EditorGUILayout.IntField("Group", audioEvent.Group);
             int newPriority = EditorGUILayout.IntSlider("Priority", audioEvent.PriorityValue, 0, 100);
+            AudioEventCategory newCategory = (AudioEventCategory)EditorGUILayout.EnumPopup("Category", audioEvent.CategoryValue);
+            bool newUseCategoryDefaults = EditorGUILayout.Toggle("Use Category Defaults", audioEvent.UseCategoryDefaultsValue);
+
+            AudioEventVoicePolicy previewPolicy = newUseCategoryDefaults
+                ? AudioEvent.GetDefaultVoicePolicy(newCategory)
+                : audioEvent.GetResolvedVoicePolicy();
+
+            if (newUseCategoryDefaults)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Resolved Policy\n" +
+                    $"Steal Resistance: {previewPolicy.StealResistance:0.##}\n" +
+                    $"Budget Weight: {previewPolicy.VoiceBudgetWeight:0.##}\n" +
+                    $"Allow Voice Steal: {previewPolicy.AllowVoiceSteal}\n" +
+                    $"Allow Distance Steal: {previewPolicy.AllowDistanceBasedSteal}\n" +
+                    $"Protect Scheduled: {previewPolicy.ProtectScheduledPlayback}",
+                    MessageType.None);
+            }
+
+            float newStealResistance = audioEvent.StealResistanceValue;
+            float newVoiceBudgetWeight = audioEvent.VoiceBudgetWeightValue;
+            bool newAllowVoiceSteal = audioEvent.AllowVoiceStealValue;
+            bool newAllowDistanceBasedSteal = audioEvent.AllowDistanceBasedStealValue;
+            bool newProtectScheduledPlayback = audioEvent.ProtectScheduledPlaybackValue;
+
+            if (!newUseCategoryDefaults)
+            {
+                newStealResistance = EditorGUILayout.Slider("Steal Resistance", audioEvent.StealResistanceValue, 0.25f, 3f);
+                newVoiceBudgetWeight = EditorGUILayout.Slider("Budget Weight", audioEvent.VoiceBudgetWeightValue, 0.25f, 3f);
+                newAllowVoiceSteal = EditorGUILayout.Toggle("Allow Voice Steal", audioEvent.AllowVoiceStealValue);
+                newAllowDistanceBasedSteal = EditorGUILayout.Toggle("Allow Distance Steal", audioEvent.AllowDistanceBasedStealValue);
+                newProtectScheduledPlayback = EditorGUILayout.Toggle("Protect Scheduled", audioEvent.ProtectScheduledPlaybackValue);
+            }
 
             if (EditorGUI.EndChangeCheck())
             {
@@ -835,6 +868,16 @@ namespace CycloneGames.Audio.Editor
                 audioEvent.FadeOut = newFadeOut;
                 audioEvent.Group = newGroup;
                 audioEvent.PriorityValue = newPriority;
+                audioEvent.CategoryValue = newCategory;
+                audioEvent.UseCategoryDefaultsValue = newUseCategoryDefaults;
+                if (!newUseCategoryDefaults)
+                {
+                    audioEvent.StealResistanceValue = newStealResistance;
+                    audioEvent.VoiceBudgetWeightValue = newVoiceBudgetWeight;
+                    audioEvent.AllowVoiceStealValue = newAllowVoiceSteal;
+                    audioEvent.AllowDistanceBasedStealValue = newAllowDistanceBasedSteal;
+                    audioEvent.ProtectScheduledPlaybackValue = newProtectScheduledPlayback;
+                }
                 EditorUtility.SetDirty(audioEvent);
                 EditorUtility.SetDirty(this.audioBank);
                 AssetDatabase.SaveAssets();

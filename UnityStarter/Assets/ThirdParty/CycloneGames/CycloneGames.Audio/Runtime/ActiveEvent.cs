@@ -351,7 +351,7 @@ namespace CycloneGames.Audio.Runtime
                 return false;
             }
 
-            AudioSource source = AudioManager.GetUnusedSource();
+            AudioSource source = AudioManager.GetUnusedSource(rootEvent);
             if (source == null)
             {
                 Debug.LogWarning($"AudioManager: Can't find unused audio source for event {name}!");
