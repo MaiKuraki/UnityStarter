@@ -3,7 +3,7 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.GameplayAbilities.Runtime",
-        "CycloneGames.GameplayTags.Runtime",
+        "CycloneGames.GameplayTags.Core",
         "CycloneGames.Utility.Runtime"
     ],
     "includePlatforms": [
