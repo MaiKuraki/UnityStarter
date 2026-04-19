@@ -31,6 +31,8 @@ namespace CycloneGames.Audio.Editor
         private readonly List<AudioBank> loadedBanksList = new List<AudioBank>();
         private readonly List<AudioBank> banksToUnload = new List<AudioBank>();
         private readonly List<ExternalAudioClipCacheEntryInfo> externalCacheEntries = new List<ExternalAudioClipCacheEntryInfo>();
+        private readonly List<IAudioClipProvider> audioClipProviders = new List<IAudioClipProvider>();
+        private readonly List<AudioCategoryVoiceStats> categoryVoiceStats = new List<AudioCategoryVoiceStats>();
 
         // Search field state
         private string searchEventName = "";
@@ -56,7 +58,6 @@ namespace CycloneGames.Audio.Editor
         // Cached GUIStyles to avoid per-frame allocations
         private GUIStyle _titleStyle;
         private GUIStyle _subtitleStyle;
-        private GUIStyle _foldoutLabelStyle;
         private GUIStyle _statValueStyle;
         private GUIStyle _sectionLabelStyle;
         private bool _stylesInitialized;
@@ -82,12 +83,6 @@ namespace CycloneGames.Audio.Editor
             _subtitleStyle = new GUIStyle(EditorStyles.centeredGreyMiniLabel)
             {
                 fontSize = 10
-            };
-
-            _foldoutLabelStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                normal = { textColor = Color.white },
-                alignment = TextAnchor.MiddleLeft
             };
 
             _statValueStyle = new GUIStyle(EditorStyles.boldLabel)
@@ -126,7 +121,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.Space(3);
 
             // Settings Section (serialized fields)
-            showSettings = DrawFoldoutHeader("Settings", showSettings, settingsColor);
+            showSettings = InspectorUiUtility.DrawFoldoutHeader("Settings", showSettings, settingsColor);
             if (showSettings)
             {
                 DrawSettingsSection();
@@ -135,7 +130,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.Space(3);
 
             // Statistics Section
-            showStatistics = DrawFoldoutHeader("Overview", showStatistics, statsColor);
+            showStatistics = InspectorUiUtility.DrawFoldoutHeader("Overview", showStatistics, statsColor);
             if (showStatistics)
             {
                 DrawStatisticsSection();
@@ -144,7 +139,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.Space(3);
 
             // Pool Status Section
-            showPoolStatus = DrawFoldoutHeader("AudioSource Pool", showPoolStatus, poolColor);
+            showPoolStatus = InspectorUiUtility.DrawFoldoutHeader("AudioSource Pool", showPoolStatus, poolColor);
             if (showPoolStatus)
             {
                 DrawPoolStatusSection();
@@ -154,7 +149,7 @@ namespace CycloneGames.Audio.Editor
 
             // Loaded Banks Section
             int bankCount = AudioManager.GetLoadedBankCount();
-            showLoadedBanks = DrawFoldoutHeader($"Loaded Banks ({bankCount})", showLoadedBanks, banksColor);
+            showLoadedBanks = InspectorUiUtility.DrawFoldoutHeader($"Loaded Banks ({bankCount})", showLoadedBanks, banksColor);
             if (showLoadedBanks)
             {
                 DrawLoadedBanksSection();
@@ -164,7 +159,7 @@ namespace CycloneGames.Audio.Editor
 
             // Active Events Section
             int activeCount = AudioManager.ActiveEvents.Count;
-            showActiveEvents = DrawFoldoutHeader($"Active Events ({activeCount})", showActiveEvents, activeColor);
+            showActiveEvents = InspectorUiUtility.DrawFoldoutHeader($"Active Events ({activeCount})", showActiveEvents, activeColor);
             if (showActiveEvents)
             {
                 DrawActiveEventsSection();
@@ -174,7 +169,7 @@ namespace CycloneGames.Audio.Editor
 
             // Event Name Map Section
             int registeredCount = AudioManager.GetRegisteredEventCount();
-            showEventNameMap = DrawFoldoutHeader($"Event Registry ({registeredCount})", showEventNameMap, eventsColor);
+            showEventNameMap = InspectorUiUtility.DrawFoldoutHeader($"Event Registry ({registeredCount})", showEventNameMap, eventsColor);
             if (showEventNameMap)
             {
                 DrawEventNameMapSection();
@@ -183,7 +178,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.Space(3);
 
             // Memory Usage Section
-            showMemoryUsage = DrawFoldoutHeader("Memory Usage", showMemoryUsage, memoryColor);
+            showMemoryUsage = InspectorUiUtility.DrawFoldoutHeader("Memory Usage", showMemoryUsage, memoryColor);
             if (showMemoryUsage)
             {
                 DrawMemoryUsageSection();
@@ -192,7 +187,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.Space(3);
 
             ExternalAudioClipCacheStats externalStats = AudioClipResolver.GetExternalCacheStats();
-            showExternalCache = DrawFoldoutHeader($"External Audio Cache ({externalStats.EntryCount})", showExternalCache, cacheColor);
+            showExternalCache = InspectorUiUtility.DrawFoldoutHeader($"External Audio Cache ({externalStats.EntryCount})", showExternalCache, cacheColor);
             if (showExternalCache)
             {
                 DrawExternalCacheSection(externalStats);
@@ -285,6 +280,18 @@ namespace CycloneGames.Audio.Editor
             DrawStatRow("Cache Hits", cacheStats.CacheHitCount.ToString());
             DrawStatRow("Cache Misses", cacheStats.CacheMissCount.ToString());
             DrawStatRow("Failures (Total)", cacheStats.TotalFailureCount.ToString());
+
+            AudioManager.GetCategoryVoiceStats(categoryVoiceStats);
+            if (categoryVoiceStats.Count > 0)
+            {
+                EditorGUILayout.Space(4);
+                EditorGUILayout.LabelField("Category Voice Budgets", _sectionLabelStyle);
+                for (int i = 0; i < categoryVoiceStats.Count; i++)
+                {
+                    AudioCategoryVoiceStats stat = categoryVoiceStats[i];
+                    DrawStatRow(stat.Category.ToString(), $"{stat.ActiveSources}/{stat.Budget} (Weight {stat.WeightedLoad:0.##})");
+                }
+            }
 
             EditorGUILayout.EndVertical();
         }
@@ -476,7 +483,9 @@ namespace CycloneGames.Audio.Editor
                 // Header
                 EditorGUILayout.BeginHorizontal();
                 EditorGUILayout.LabelField("Event", EditorStyles.miniLabel, GUILayout.Width(140));
+                EditorGUILayout.LabelField("Category", EditorStyles.miniLabel, GUILayout.Width(80));
                 EditorGUILayout.LabelField("Emitter", EditorStyles.miniLabel, GUILayout.Width(100));
+                EditorGUILayout.LabelField("Sources", EditorStyles.miniLabel, GUILayout.Width(50));
                 EditorGUILayout.LabelField("Status", EditorStyles.miniLabel, GUILayout.Width(80));
                 EditorGUILayout.EndHorizontal();
 
@@ -516,9 +525,15 @@ namespace CycloneGames.Audio.Editor
             // Event name
             EditorGUILayout.LabelField(activeEvent.rootEvent.name, GUILayout.Width(140));
 
+            // Category
+            EditorGUILayout.LabelField(activeEvent.rootEvent.Category.ToString(), EditorStyles.miniLabel, GUILayout.Width(80));
+
             // Emitter name
             string emitterName = activeEvent.emitterTransform != null ? activeEvent.emitterTransform.name : "-";
             EditorGUILayout.LabelField(emitterName, EditorStyles.miniLabel, GUILayout.Width(100));
+
+            // Source count
+            EditorGUILayout.LabelField(activeEvent.SourceCount.ToString(), EditorStyles.miniLabel, GUILayout.Width(50));
 
             // Status with color
             string status = activeEvent.status.ToString();
@@ -681,6 +696,20 @@ namespace CycloneGames.Audio.Editor
 
             EditorGUILayout.Space(4);
 
+            AudioClipResolver.GetProviders(audioClipProviders);
+            if (audioClipProviders.Count > 0)
+            {
+                EditorGUILayout.LabelField("Providers", _sectionLabelStyle);
+                for (int i = 0; i < audioClipProviders.Count; i++)
+                {
+                    IAudioClipProvider provider = audioClipProviders[i];
+                    if (provider == null) continue;
+                    EditorGUILayout.LabelField($"[{provider.Priority}] {provider.Name}", EditorStyles.miniLabel);
+                }
+
+                EditorGUILayout.Space(4);
+            }
+
             AudioClipResolver.GetExternalCacheEntries(externalCacheEntries);
             externalCacheEntries.Sort((a, b) => string.Compare(a.Location, b.Location, System.StringComparison.Ordinal));
 
@@ -764,39 +793,6 @@ namespace CycloneGames.Audio.Editor
         }
 
         #region Utility Methods
-
-        private bool DrawFoldoutHeader(string title, bool foldout, Color color)
-        {
-            EditorGUILayout.Space(2);
-
-            Rect rect = EditorGUILayout.GetControlRect(false, 22);
-
-            // Background
-            Color bgColor = foldout ? color : new Color(color.r * 0.7f, color.g * 0.7f, color.b * 0.7f);
-            EditorGUI.DrawRect(rect, bgColor);
-
-            // Border
-            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1), Color.black * 0.2f);
-            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1, rect.width, 1), Color.black * 0.2f);
-
-            // Label - use cached style
-            Rect labelRect = new Rect(rect.x + 20, rect.y, rect.width - 20, rect.height);
-            EditorGUI.LabelField(labelRect, title, _foldoutLabelStyle);
-
-            // Arrow
-            string arrow = foldout ? "v" : ">";
-            Rect arrowRect = new Rect(rect.x + 5, rect.y, 15, rect.height);
-            EditorGUI.LabelField(arrowRect, arrow, _foldoutLabelStyle);
-
-            // Click handling
-            if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
-            {
-                foldout = !foldout;
-                Event.current.Use();
-            }
-
-            return foldout;
-        }
 
         private static string ToMemorySizeString(long bytes)
         {

@@ -41,6 +41,22 @@ namespace CycloneGames.Audio.Runtime
         All = PauseOnAppPause | ResumeOnAppResume | PauseOnFocusLost | ResumeOnFocusGain
     }
 
+    public readonly struct AudioCategoryVoiceStats
+    {
+        public readonly AudioEventCategory Category;
+        public readonly int Budget;
+        public readonly int ActiveSources;
+        public readonly float WeightedLoad;
+
+        public AudioCategoryVoiceStats(AudioEventCategory category, int budget, int activeSources, float weightedLoad)
+        {
+            Category = category;
+            Budget = budget;
+            ActiveSources = activeSources;
+            WeightedLoad = weightedLoad;
+        }
+    }
+
     /// <summary>
     /// High-performance audio event playback manager with thread-safe operations
     /// </summary>
@@ -76,6 +92,7 @@ namespace CycloneGames.Audio.Runtime
             ClearCommandQueue();
             AudioClipResolver.ClearExternalCache();
             AudioClipResolver.ClearReferenceLoaders();
+            AudioClipResolver.ClearCustomProviders();
         }
 
         public static List<ActiveEvent> ActiveEvents { get; private set; }
@@ -186,6 +203,8 @@ namespace CycloneGames.Audio.Runtime
         private static int peakPoolUsage;
         private static int totalExpansions;
         private static int totalSteals;
+        private static readonly Dictionary<AudioEventCategory, int> reusableCategorySourceCounts = new Dictionary<AudioEventCategory, int>(5);
+        private static readonly Dictionary<AudioEventCategory, float> reusableCategoryBudgetLoads = new Dictionary<AudioEventCategory, float>(5);
 
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -246,6 +265,20 @@ namespace CycloneGames.Audio.Runtime
             public static int TotalSteals => totalSteals;
             public static string DeviceTier => activePoolConfig?.GetDeviceTierName() ?? AudioPoolConfig.GetDefaultDeviceTierName();
             public static bool HasConfig => activePoolConfig != null;
+        }
+
+        public static void GetCategoryVoiceStats(List<AudioCategoryVoiceStats> results)
+        {
+            if (results == null) return;
+
+            FillActiveSourceCountsByCategory(reusableCategorySourceCounts, reusableCategoryBudgetLoads);
+            results.Clear();
+
+            AddCategoryVoiceStats(results, AudioEventCategory.CriticalUI);
+            AddCategoryVoiceStats(results, AudioEventCategory.GameplaySFX);
+            AddCategoryVoiceStats(results, AudioEventCategory.Voice);
+            AddCategoryVoiceStats(results, AudioEventCategory.Ambient);
+            AddCategoryVoiceStats(results, AudioEventCategory.Music);
         }
 
         private static List<ActiveEvent> cachedPreviousEventsList;
@@ -930,6 +963,7 @@ namespace CycloneGames.Audio.Runtime
             ClearCommandQueue();
             AudioClipResolver.ClearExternalCache();
             AudioClipResolver.ClearReferenceLoaders();
+            AudioClipResolver.ClearCustomProviders();
             AllowCreateInstance = false;
         }
 
@@ -1262,18 +1296,194 @@ namespace CycloneGames.Audio.Runtime
             return true;
         }
 
+        private static int GetVoiceBudgetForCategory(AudioEventCategory category)
+        {
+            int poolCap = Mathf.Max(maxPoolSize, 1);
+            switch (category)
+            {
+                case AudioEventCategory.CriticalUI:
+                    return Mathf.Max(2, Mathf.CeilToInt(poolCap * 0.10f));
+                case AudioEventCategory.Voice:
+                    return Mathf.Max(2, Mathf.CeilToInt(poolCap * 0.20f));
+                case AudioEventCategory.Ambient:
+                    return Mathf.Max(2, Mathf.CeilToInt(poolCap * 0.18f));
+                case AudioEventCategory.Music:
+                    return Mathf.Max(1, Mathf.CeilToInt(poolCap * 0.08f));
+                default:
+                    return Mathf.Max(4, poolCap - GetVoiceBudgetForCategory(AudioEventCategory.CriticalUI)
+                        - GetVoiceBudgetForCategory(AudioEventCategory.Voice)
+                        - GetVoiceBudgetForCategory(AudioEventCategory.Ambient)
+                        - GetVoiceBudgetForCategory(AudioEventCategory.Music));
+            }
+        }
+
+        private static void AddCategoryVoiceStats(List<AudioCategoryVoiceStats> results, AudioEventCategory category)
+        {
+            int activeSources = reusableCategorySourceCounts.TryGetValue(category, out int sourceCount) ? sourceCount : 0;
+            float weightedLoad = reusableCategoryBudgetLoads.TryGetValue(category, out float load) ? load : 0f;
+            results.Add(new AudioCategoryVoiceStats(category, GetVoiceBudgetForCategory(category), activeSources, weightedLoad));
+        }
+
+        private static void FillActiveSourceCountsByCategory(
+            Dictionary<AudioEventCategory, int> counts,
+            Dictionary<AudioEventCategory, float> weightedLoads)
+        {
+            if (counts == null || weightedLoads == null) return;
+
+            counts.Clear();
+            weightedLoads.Clear();
+            counts[AudioEventCategory.CriticalUI] = 0;
+            counts[AudioEventCategory.GameplaySFX] = 0;
+            counts[AudioEventCategory.Voice] = 0;
+            counts[AudioEventCategory.Ambient] = 0;
+            counts[AudioEventCategory.Music] = 0;
+            weightedLoads[AudioEventCategory.CriticalUI] = 0f;
+            weightedLoads[AudioEventCategory.GameplaySFX] = 0f;
+            weightedLoads[AudioEventCategory.Voice] = 0f;
+            weightedLoads[AudioEventCategory.Ambient] = 0f;
+            weightedLoads[AudioEventCategory.Music] = 0f;
+
+            if (ActiveEvents == null) return;
+
+            for (int i = 0; i < ActiveEvents.Count; i++)
+            {
+                ActiveEvent evt = ActiveEvents[i];
+                if (evt == null || evt.status == EventStatus.Stopped || evt.rootEvent == null)
+                    continue;
+
+                AudioEventCategory category = evt.rootEvent.Category;
+                counts[category] += evt.SourceCount;
+                weightedLoads[category] += evt.SourceCount * evt.rootEvent.VoiceBudgetWeight;
+            }
+        }
+
+        private static float GetCategoryProtectionWeight(AudioEventCategory category)
+        {
+            switch (category)
+            {
+                case AudioEventCategory.CriticalUI: return 120f;
+                case AudioEventCategory.Music: return 105f;
+                case AudioEventCategory.Voice: return 85f;
+                case AudioEventCategory.GameplaySFX: return 65f;
+                case AudioEventCategory.Ambient: return 45f;
+                default: return 60f;
+            }
+        }
+
+        private static Vector3 GetReferenceListenerPosition()
+        {
+            if (cachedAudioListener != null && cachedAudioListener.gameObject != null)
+                return cachedAudioListener.transform.position;
+
+            Camera mainCamera = GetMainCamera();
+            if (mainCamera != null)
+                return mainCamera.transform.position;
+
+            return Vector3.zero;
+        }
+
+        private static float GetVoiceProtectionScore(
+            ActiveEvent evt,
+            Dictionary<AudioEventCategory, int> categoryCounts,
+            Dictionary<AudioEventCategory, float> weightedLoads)
+        {
+            if (evt == null || evt.rootEvent == null)
+                return float.MaxValue;
+
+            AudioEvent rootEvent = evt.rootEvent;
+            if (!rootEvent.AllowVoiceSteal)
+                return float.MaxValue;
+
+            float score = GetCategoryProtectionWeight(rootEvent.Category);
+            score += rootEvent.Priority * 1.5f;
+            score *= rootEvent.StealResistance;
+
+            if (rootEvent.Output != null && rootEvent.Output.loop)
+                score += 20f;
+
+            if (evt.IsPaused)
+                score += 15f;
+
+            if (rootEvent.ProtectScheduledPlayback && evt.scheduledDspTime > 0)
+                score += 40f;
+
+            float age = Mathf.Max(0f, Time.time - evt.timeStarted);
+            score -= Mathf.Min(age, 20f) * 1.5f;
+
+            EventSource primarySource = evt.GetSource(0);
+            if (rootEvent.AllowDistanceBasedSteal && primarySource.IsValid)
+            {
+                AudioSource source = primarySource.source;
+                float maxDistance = Mathf.Max(source.maxDistance, 0.0001f);
+                float distance = Vector3.Distance(source.transform.position, GetReferenceListenerPosition());
+                float normalizedDistance = Mathf.Clamp01(distance / maxDistance);
+                score += (1f - normalizedDistance) * 35f;
+                score += Mathf.Clamp01(source.volume) * 15f;
+            }
+
+            if (categoryCounts != null && categoryCounts.TryGetValue(rootEvent.Category, out int activeSourceCount))
+            {
+                int budget = GetVoiceBudgetForCategory(rootEvent.Category);
+                if (activeSourceCount > budget)
+                    score -= 25f;
+            }
+
+            if (weightedLoads != null && weightedLoads.TryGetValue(rootEvent.Category, out float weightedLoad))
+            {
+                float weightedBudget = GetVoiceBudgetForCategory(rootEvent.Category) * 1.15f;
+                if (weightedLoad > weightedBudget)
+                    score -= Mathf.Min((weightedLoad - weightedBudget) * 6f, 35f);
+            }
+
+            return score;
+        }
+
+        private static float GetRequesterProtectionScore(
+            AudioEvent requestingEvent,
+            Dictionary<AudioEventCategory, int> categoryCounts,
+            Dictionary<AudioEventCategory, float> weightedLoads)
+        {
+            if (requestingEvent == null)
+                return float.MinValue;
+
+            float score = GetCategoryProtectionWeight(requestingEvent.Category);
+            score += requestingEvent.Priority * 1.6f;
+            score *= requestingEvent.StealResistance;
+
+            if (categoryCounts != null && categoryCounts.TryGetValue(requestingEvent.Category, out int activeSourceCount))
+            {
+                int budget = GetVoiceBudgetForCategory(requestingEvent.Category);
+                if (activeSourceCount < budget)
+                    score += 20f;
+                else
+                    score -= Mathf.Min(activeSourceCount - budget, 4) * 8f;
+            }
+
+            if (weightedLoads != null && weightedLoads.TryGetValue(requestingEvent.Category, out float weightedLoad))
+            {
+                float weightedBudget = GetVoiceBudgetForCategory(requestingEvent.Category) * 1.15f;
+                if (weightedLoad < weightedBudget)
+                    score += 10f;
+                else
+                    score -= Mathf.Min((weightedLoad - weightedBudget) * 6f, 30f);
+            }
+
+            return score;
+        }
+
         /// <summary>
-        /// Attempt to steal a source from the lowest-priority, oldest playing event.
-        /// Priority is checked first; among equal priority, the oldest event is stolen.
+        /// Attempt to steal a source using category-aware voice budgeting and protection scoring.
         /// Returns the stolen source or null if no suitable source found.
         /// </summary>
-        private static AudioSource TryStealSource()
+        private static AudioSource TryStealSource(AudioEvent requestingEvent)
         {
             if (ActiveEvents == null || ActiveEvents.Count == 0) return null;
 
+            FillActiveSourceCountsByCategory(reusableCategorySourceCounts, reusableCategoryBudgetLoads);
+
             ActiveEvent victim = null;
-            int lowestPriority = int.MaxValue;
-            float oldestTime = float.MaxValue;
+            float lowestProtectionScore = float.MaxValue;
+            float requesterScore = GetRequesterProtectionScore(requestingEvent, reusableCategorySourceCounts, reusableCategoryBudgetLoads);
 
             for (int i = 0; i < ActiveEvents.Count; i++)
             {
@@ -1281,19 +1491,25 @@ namespace CycloneGames.Audio.Runtime
                 if (evt == null || evt.status == EventStatus.Stopped) continue;
                 if (evt.rootEvent == null) continue;
 
-                // Skip looping events
-                if (evt.rootEvent.Output != null && evt.rootEvent.Output.loop) continue;
-
-                int evtPriority = evt.rootEvent.Priority;
-
-                // Prefer stealing lower priority events; among equal priority, steal oldest
-                if (evtPriority < lowestPriority ||
-                    (evtPriority == lowestPriority && evt.timeStarted < oldestTime))
+                float protectionScore = GetVoiceProtectionScore(evt, reusableCategorySourceCounts, reusableCategoryBudgetLoads);
+                if (protectionScore < lowestProtectionScore)
                 {
-                    lowestPriority = evtPriority;
-                    oldestTime = evt.timeStarted;
+                    lowestProtectionScore = protectionScore;
                     victim = evt;
                 }
+            }
+
+            if (victim == null)
+                return null;
+
+            if (requestingEvent != null)
+            {
+                bool victimOverBudget = reusableCategorySourceCounts.TryGetValue(victim.rootEvent.Category, out int victimCategoryCount) &&
+                    victimCategoryCount > GetVoiceBudgetForCategory(victim.rootEvent.Category);
+
+                float requiredMargin = victimOverBudget ? -5f : 10f;
+                if (requesterScore < lowestProtectionScore + requiredMargin)
+                    return null;
             }
 
             if (victim != null && victim.SourceCount > 0)
@@ -1305,7 +1521,7 @@ namespace CycloneGames.Audio.Runtime
                     totalSteals++;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                    Debug.LogWarning($"AudioManager: Voice stolen from '{victim.name}' (priority:{lowestPriority}, total steals: {totalSteals})");
+                    Debug.LogWarning($"AudioManager: Voice stolen from '{victim.name}' (category:{victim.rootEvent.Category}, protection:{lowestProtectionScore:F1}, total steals: {totalSteals})");
 #endif
                     return source.source;
                 }
@@ -1409,7 +1625,7 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        public static AudioSource GetUnusedSource()
+        public static AudioSource GetUnusedSource(AudioEvent requestingEvent = null)
         {
             int maxAttempts = availableSources.Count;
             int attempts = 0;
@@ -1432,14 +1648,15 @@ namespace CycloneGames.Audio.Runtime
             }
 
             // Smart pool: try voice stealing as last resort
-            var stolenSource = TryStealSource();
+            var stolenSource = TryStealSource(requestingEvent);
             if (stolenSource != null)
             {
                 return stolenSource;
             }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            Debug.LogWarning($"AudioManager: Source pool exhausted ({currentPoolSize}/{maxPoolSize}). All sources in use and none can be stolen.");
+            string requesterName = requestingEvent != null ? requestingEvent.name : "Unknown";
+            Debug.LogWarning($"AudioManager: Source pool exhausted ({currentPoolSize}/{maxPoolSize}) for '{requesterName}'. All sources are in use and none met the current stealing policy.");
 #endif
             return null;
         }

@@ -338,9 +338,119 @@ public class AddressablesAudioBridge
 
 系统暴露了简洁的 `IAudioService` 接口，可无缝集成任何 DI 容器。对于非 DI 项目，所有功能仍可通过 `AudioManager` 的静态方法访问。`SetInstance()` 方法允许外部代码将已有的 `AudioManager` 注册为单例。
 
+### AudioClipReference 与外部加载器
+
+`AudioClipReference` 支持多种来源类型：
+
+- `FilePath`
+- `StreamingAssetsPath`
+- `PersistentDataPath`
+- `Url`
+- `AssetAddress`
+
+这里最重要的设计原则是：
+
+- 路径和 URL 类型可以由音频系统直接加载
+- `AssetAddress` 被视为逻辑地址，不等同于本地文件路径
+- 对于 `AssetAddress`，建议注册运行时加载器
+
+#### 为单个引用注册加载器
+
+```csharp
+AudioClipResolver.RegisterManagedReferenceLoader(audioClipReference, async (clipRef, ct) =>
+{
+    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
+    if (handle == null || handle.Asset == null)
+        return default;
+
+    return new ManagedAudioClipLoadResult(
+        handle.Asset,
+        () => handle.Release());
+});
+```
+
+#### 为整个来源类型注册加载器
+
+这更适合 `AssetAddress`、YooAsset、Addressables 或你自己的运行时资源系统：
+
+```csharp
+AudioClipResolver.RegisterManagedLocationKindLoader(AudioLocationKind.AssetAddress, async (clipRef, ct) =>
+{
+    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
+    if (handle == null || handle.Asset == null)
+        return default;
+
+    return new ManagedAudioClipLoadResult(
+        handle.Asset,
+        () => handle.Release());
+});
+```
+
+#### 生命周期保证
+
+当外部加载器返回 `IAudioClipHandle` 后，音频系统会在不再使用该资源时自动调用 `Release()`，包括：
+
+- 事件停止
+- 事件回收
+- Bank 卸载
+- 异步加载取消后的清理
+
+这意味着：
+
+- 音频系统负责决定“什么时候已经不再引用这个 clip”
+- 外部资源系统负责决定“如何真正释放底层资源句柄”
+
+这样既能保证资源生命周期安全，也不会强迫 `CycloneGames.Audio` 直接耦合所有加载后端。
+
+#### 外部 Clip 生命周期验证清单
+
+对于将 `AudioClipReference` 接入 Addressables、YooAsset 或自定义资源系统的项目，建议至少验证以下场景：
+
+- 开始播放后卸载所属 Bank，确认外部释放回调只执行一次
+- 异步加载尚未完成前停止事件，确认清理结束后没有悬空句柄残留
+- 多个实例同时播放同一个 `AudioClipReference`，确认只有最后一个实例结束后底层资源才会被真正释放
+- 强制外部加载器失败，确认缓存统计记录失败，同时不会泄漏半初始化状态的句柄
+- 在 Play Mode 下清理或重载音频系统，确认已注册的 loader 和外部缓存 clip 都会被安全释放
+
+### Category 默认模板与语音策略覆盖
+
+`AudioEvent` 现在支持一个轻量的两层语音策略模型：
+
+- `Category` 用来表达高层运行时意图
+- `Use Category Defaults` 会自动套用该分类的内建语音策略模板
+- 只有极少数特殊事件，才需要做单事件覆盖
+
+这样常规工作流会简单很多。对大多数项目来说，设计师通常只需要给事件选一个分类：
+
+- `CriticalUI`
+- `GameplaySFX`
+- `Voice`
+- `Ambient`
+- `Music`
+
+当 `Use Category Defaults` 开启时，事件会自动解析出对应的语音策略。当前内建默认模板如下：
+
+| 分类 | Steal Resistance | Budget Weight | Allow Voice Steal | Allow Distance Steal | Protect Scheduled |
+| --- | ---: | ---: | :---: | :---: | :---: |
+| `CriticalUI` | `2.2` | `1.5` | `false` | `false` | `true` |
+| `GameplaySFX` | `1.0` | `1.0` | `true` | `true` | `true` |
+| `Voice` | `1.5` | `1.35` | `true` | `false` | `true` |
+| `Ambient` | `0.7` | `0.7` | `true` | `true` | `false` |
+| `Music` | `2.6` | `1.8` | `false` | `false` | `true` |
+
+推荐用法：
+
+- 将 BGM 和长期存在的音乐层设置为 `Music`
+- 将对白、旁白、字幕驱动的语音设置为 `Voice`
+- 将远景循环声和环境底噪设置为 `Ambient`
+- 大多数一次性玩法音效保留在 `GameplaySFX`
+- `CriticalUI` 留给菜单确认、警告、节奏提示或其他“必须被听见”的反馈
+
+只有当某个事件需要超出分类模板的特殊行为时，才建议关闭 `Use Category Defaults` 并改成自定义策略。
+
 ### 线程安全的命令派发
 
-所有公共 API 方法均为线程安全。来自工作线程的调用通过无锁 `ConcurrentQueue<Action>` 派发至主线程，确保异步加载管线中的播放命令零竞争。
+所有公共 API 方法均为线程安全。来自工作线程的调用会先写入结构化命令队列，再由主线程通过固定容量的环形缓冲区统一消费，从而降低热路径 GC 压力，并在高负载下保持更可预测的命令移交行为。
 
 ### 安全的资源生命周期管理
 
