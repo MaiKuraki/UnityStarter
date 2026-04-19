@@ -4,9 +4,9 @@
     "references": [
         "CycloneGames.Networking.Runtime",
         "CycloneGames.Networking.GAS",
+        "CycloneGames.GameplayTags.Core",
         "CycloneGames.GameplayAbilities.Core",
-        "CycloneGames.GameplayAbilities.Runtime",
-        "CycloneGames.GameplayTags.Runtime"
+        "CycloneGames.GameplayAbilities.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

@@ -1,12 +1,8 @@
 {
-    "name": "CycloneGames.GameplayTags.SourceGenerator",
-    "rootNamespace": "CycloneGames.GameplayTags.SourceGenerator",
-    "references": [
-        "CycloneGames.GameplayTags.Core"
-    ],
-    "includePlatforms": [
-        "Editor"
-    ],
+    "name": "CycloneGames.GameplayTags.Core",
+    "rootNamespace": "",
+    "references": [],
+    "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,
