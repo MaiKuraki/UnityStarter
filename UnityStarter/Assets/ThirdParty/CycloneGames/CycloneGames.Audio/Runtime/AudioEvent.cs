@@ -9,6 +9,38 @@ using UnityEditor;
 
 namespace CycloneGames.Audio.Runtime
 {
+    public enum AudioEventCategory
+    {
+        CriticalUI = 0,
+        GameplaySFX = 1,
+        Voice = 2,
+        Ambient = 3,
+        Music = 4
+    }
+
+    public readonly struct AudioEventVoicePolicy
+    {
+        public readonly float StealResistance;
+        public readonly float VoiceBudgetWeight;
+        public readonly bool AllowVoiceSteal;
+        public readonly bool AllowDistanceBasedSteal;
+        public readonly bool ProtectScheduledPlayback;
+
+        public AudioEventVoicePolicy(
+            float stealResistance,
+            float voiceBudgetWeight,
+            bool allowVoiceSteal,
+            bool allowDistanceBasedSteal,
+            bool protectScheduledPlayback)
+        {
+            StealResistance = stealResistance;
+            VoiceBudgetWeight = voiceBudgetWeight;
+            AllowVoiceSteal = allowVoiceSteal;
+            AllowDistanceBasedSteal = allowDistanceBasedSteal;
+            ProtectScheduledPlayback = protectScheduledPlayback;
+        }
+    }
+
     /// <summary>
     /// The logic, settings, and audio clips that define the playback of a sound
     /// </summary>
@@ -66,6 +98,50 @@ namespace CycloneGames.Audio.Runtime
         private int priority = 50;
 
         /// <summary>
+        /// High-level event category used by voice budgeting and steal policy.
+        /// </summary>
+        [SerializeField]
+        private AudioEventCategory category = AudioEventCategory.GameplaySFX;
+
+        /// <summary>
+        /// When enabled, the event automatically uses the default voice policy for its category.
+        /// </summary>
+        [SerializeField]
+        private bool useCategoryDefaults = true;
+
+        /// <summary>
+        /// Multiplier applied to runtime steal protection. Higher values make this event harder to steal.
+        /// </summary>
+        [SerializeField]
+        [Range(0.25f, 3f)]
+        private float stealResistance = 1f;
+
+        /// <summary>
+        /// Relative weight when this event competes for limited voices within its category.
+        /// </summary>
+        [SerializeField]
+        [Range(0.25f, 3f)]
+        private float voiceBudgetWeight = 1f;
+
+        /// <summary>
+        /// If false, this event should not be selected as a steal victim under normal runtime pressure.
+        /// </summary>
+        [SerializeField]
+        private bool allowVoiceSteal = true;
+
+        /// <summary>
+        /// If true, distance and current loudness can reduce protection score under heavy load.
+        /// </summary>
+        [SerializeField]
+        private bool allowDistanceBasedSteal = true;
+
+        /// <summary>
+        /// If true, scheduled sample-accurate playback gets extra protection from voice stealing.
+        /// </summary>
+        [SerializeField]
+        private bool protectScheduledPlayback = true;
+
+        /// <summary>
         /// The maximum number of simultaneous instances of an event that can be played
         /// </summary>
         public int InstanceLimit
@@ -87,6 +163,62 @@ namespace CycloneGames.Audio.Runtime
         /// Priority for voice stealing (0-100). Higher priority events are less likely to be stolen.
         /// </summary>
         public int Priority => this.priority;
+
+        /// <summary>
+        /// High-level category used by runtime voice budgeting.
+        /// </summary>
+        public AudioEventCategory Category => this.category;
+
+        /// <summary>
+        /// Runtime steal protection multiplier. Higher values make this event harder to evict.
+        /// </summary>
+        public float StealResistance => GetResolvedVoicePolicy().StealResistance;
+
+        /// <summary>
+        /// Relative weight used when competing for category budget.
+        /// </summary>
+        public float VoiceBudgetWeight => GetResolvedVoicePolicy().VoiceBudgetWeight;
+
+        /// <summary>
+        /// Whether runtime stealing may evict this event under load.
+        /// </summary>
+        public bool AllowVoiceSteal => GetResolvedVoicePolicy().AllowVoiceSteal;
+
+        /// <summary>
+        /// Whether distance/loudness heuristics may reduce protection under load.
+        /// </summary>
+        public bool AllowDistanceBasedSteal => GetResolvedVoicePolicy().AllowDistanceBasedSteal;
+
+        /// <summary>
+        /// Whether scheduled playback receives extra runtime protection.
+        /// </summary>
+        public bool ProtectScheduledPlayback => GetResolvedVoicePolicy().ProtectScheduledPlayback;
+
+        /// <summary>
+        /// Whether this event resolves its voice policy from the selected category.
+        /// </summary>
+        public bool UseCategoryDefaults => this.useCategoryDefaults;
+
+        public static AudioEventVoicePolicy GetDefaultVoicePolicy(AudioEventCategory category)
+        {
+            AudioVoicePolicyProfile profile = AudioVoicePolicyProfile.FindConfig();
+            return profile != null
+                ? profile.GetPolicy(category)
+                : AudioVoicePolicyProfile.GetFallbackPolicy(category);
+        }
+
+        public AudioEventVoicePolicy GetResolvedVoicePolicy()
+        {
+            if (this.useCategoryDefaults)
+                return GetDefaultVoicePolicy(this.category);
+
+            return new AudioEventVoicePolicy(
+                this.stealResistance,
+                this.voiceBudgetWeight,
+                this.allowVoiceSteal,
+                this.allowDistanceBasedSteal,
+                this.protectScheduledPlayback);
+        }
 
         public bool ValidateAudioFiles()
         {
@@ -324,6 +456,83 @@ namespace CycloneGames.Audio.Runtime
             get { return this.priority; }
 #if UNITY_EDITOR
             set { this.priority = Mathf.Clamp(value, 0, 100); }
+#endif
+        }
+
+        /// <summary>
+        /// Event category used by runtime voice budgeting and stealing policy.
+        /// </summary>
+        public AudioEventCategory CategoryValue
+        {
+            get { return this.category; }
+#if UNITY_EDITOR
+            set { this.category = value; }
+#endif
+        }
+
+        /// <summary>
+        /// Whether this event resolves its voice policy from the selected category.
+        /// </summary>
+        public bool UseCategoryDefaultsValue
+        {
+            get { return this.useCategoryDefaults; }
+#if UNITY_EDITOR
+            set { this.useCategoryDefaults = value; }
+#endif
+        }
+
+        /// <summary>
+        /// Runtime steal protection multiplier. Higher values make this event harder to evict.
+        /// </summary>
+        public float StealResistanceValue
+        {
+            get { return this.stealResistance; }
+#if UNITY_EDITOR
+            set { this.stealResistance = Mathf.Clamp(value, 0.25f, 3f); }
+#endif
+        }
+
+        /// <summary>
+        /// Relative weight used when competing for category budget.
+        /// </summary>
+        public float VoiceBudgetWeightValue
+        {
+            get { return this.voiceBudgetWeight; }
+#if UNITY_EDITOR
+            set { this.voiceBudgetWeight = Mathf.Clamp(value, 0.25f, 3f); }
+#endif
+        }
+
+        /// <summary>
+        /// Whether runtime stealing may evict this event under load.
+        /// </summary>
+        public bool AllowVoiceStealValue
+        {
+            get { return this.allowVoiceSteal; }
+#if UNITY_EDITOR
+            set { this.allowVoiceSteal = value; }
+#endif
+        }
+
+        /// <summary>
+        /// Whether distance/loudness heuristics may reduce protection under load.
+        /// </summary>
+        public bool AllowDistanceBasedStealValue
+        {
+            get { return this.allowDistanceBasedSteal; }
+#if UNITY_EDITOR
+            set { this.allowDistanceBasedSteal = value; }
+#endif
+        }
+
+        /// <summary>
+        /// Whether scheduled playback receives extra runtime protection.
+        /// </summary>
+        public bool ProtectScheduledPlaybackValue
+        {
+            get { return this.protectScheduledPlayback; }
+#if UNITY_EDITOR
+            set { this.protectScheduledPlayback = value; }
 #endif
         }
 

@@ -54,7 +54,6 @@ namespace CycloneGames.Audio.Editor
 
         // Cached GUIStyles to avoid per-frame allocations
         private GUIStyle _titleStyle;
-        private GUIStyle _foldoutLabelStyle;
         private bool _stylesInitialized;
 
         private void OnEnable()
@@ -91,11 +90,6 @@ namespace CycloneGames.Audio.Editor
                 alignment = TextAnchor.MiddleCenter
             };
 
-            _foldoutLabelStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                normal = { textColor = Color.white },
-                alignment = TextAnchor.MiddleLeft
-            };
         }
 
         public override void OnInspectorGUI()
@@ -208,7 +202,7 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawDevicePreview(AudioPoolConfig config)
         {
-            showDevicePreview = DrawFoldoutHeader("Current Device Preview", showDevicePreview, headerColor);
+            showDevicePreview = InspectorUiUtility.DrawFoldoutHeader("Current Device Preview", showDevicePreview, headerColor);
 
             if (showDevicePreview)
             {
@@ -259,7 +253,7 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawWebGLSection()
         {
-            showWebGL = DrawFoldoutHeader("WebGL Platform", showWebGL, webglColor);
+            showWebGL = InspectorUiUtility.DrawFoldoutHeader("WebGL Platform", showWebGL, webglColor);
 
             if (showWebGL)
             {
@@ -278,7 +272,7 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawMobileSection()
         {
-            showMobile = DrawFoldoutHeader("Mobile Platforms (Android/iOS)", showMobile, mobileColor);
+            showMobile = InspectorUiUtility.DrawFoldoutHeader("Mobile Platforms (Android/iOS)", showMobile, mobileColor);
 
             if (showMobile)
             {
@@ -299,7 +293,7 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawDesktopSection()
         {
-            showDesktop = DrawFoldoutHeader("Desktop Platforms", showDesktop, desktopColor);
+            showDesktop = InspectorUiUtility.DrawFoldoutHeader("Desktop Platforms", showDesktop, desktopColor);
 
             if (showDesktop)
             {
@@ -320,7 +314,7 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawConsoleSection()
         {
-            showConsole = DrawFoldoutHeader("Console Platforms", showConsole, new Color(0.8f, 0.5f, 0.6f));
+            showConsole = InspectorUiUtility.DrawFoldoutHeader("Console Platforms", showConsole, new Color(0.8f, 0.5f, 0.6f));
 
             if (showConsole)
             {
@@ -337,7 +331,7 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawInitialSizesSection()
         {
-            showInitialSizes = DrawFoldoutHeader("Initial Pool Sizes", showInitialSizes, configColor);
+            showInitialSizes = InspectorUiUtility.DrawFoldoutHeader("Initial Pool Sizes", showInitialSizes, configColor);
 
             if (showInitialSizes)
             {
@@ -360,7 +354,7 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawExpansionSection()
         {
-            showExpansion = DrawFoldoutHeader("Pool Expansion", showExpansion, configColor);
+            showExpansion = InspectorUiUtility.DrawFoldoutHeader("Pool Expansion", showExpansion, configColor);
 
             if (showExpansion)
             {
@@ -380,7 +374,7 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawShrinkingSection()
         {
-            showShrinking = DrawFoldoutHeader("Pool Shrinking", showShrinking, configColor);
+            showShrinking = InspectorUiUtility.DrawFoldoutHeader("Pool Shrinking", showShrinking, configColor);
 
             if (showShrinking)
             {
@@ -404,7 +398,7 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawRuntimeStats()
         {
-            showRuntimeStats = DrawFoldoutHeader("Runtime Statistics", showRuntimeStats, new Color(0.9f, 0.4f, 0.4f));
+            showRuntimeStats = InspectorUiUtility.DrawFoldoutHeader("Runtime Statistics", showRuntimeStats, new Color(0.9f, 0.4f, 0.4f));
 
             if (showRuntimeStats)
             {
@@ -454,39 +448,6 @@ namespace CycloneGames.Audio.Editor
         }
 
         #region Utility Methods
-
-        private bool DrawFoldoutHeader(string title, bool foldout, Color color)
-        {
-            EditorGUILayout.Space(3);
-
-            Rect rect = EditorGUILayout.GetControlRect(false, 22);
-
-            // Background
-            Color bgColor = foldout ? color : new Color(color.r * 0.6f, color.g * 0.6f, color.b * 0.6f);
-            EditorGUI.DrawRect(rect, bgColor);
-
-            // Border
-            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1), Color.black * 0.3f);
-            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1, rect.width, 1), Color.black * 0.3f);
-
-            // Label - use cached style
-            Rect labelRect = new Rect(rect.x + 20, rect.y, rect.width - 20, rect.height);
-            EditorGUI.LabelField(labelRect, title, _foldoutLabelStyle);
-
-            // Arrow
-            string arrow = foldout ? "v" : ">";
-            Rect arrowRect = new Rect(rect.x + 5, rect.y, 15, rect.height);
-            EditorGUI.LabelField(arrowRect, arrow, _foldoutLabelStyle);
-
-            // Click handling
-            if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
-            {
-                foldout = !foldout;
-                Event.current.Use();
-            }
-
-            return foldout;
-        }
 
         private void DrawSliderWithValue(SerializedProperty prop, string label, int min, int max)
         {
