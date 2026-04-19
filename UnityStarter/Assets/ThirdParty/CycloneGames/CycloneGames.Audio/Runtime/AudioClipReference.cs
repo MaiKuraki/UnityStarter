@@ -29,6 +29,7 @@ namespace CycloneGames.Audio.Runtime
         public string GUID => m_GUID;
         public bool RuntimeMutable => runtimeMutable;
         public int Version => version;
+        public bool HasEditorAssetLink => !string.IsNullOrEmpty(m_GUID);
 
         public void SetLocation(string newLocation)
         {
@@ -67,6 +68,11 @@ namespace CycloneGames.Audio.Runtime
                 default:
                     return m_Location;
             }
+        }
+
+        public string GetDisplayLocation()
+        {
+            return m_Location ?? string.Empty;
         }
     }
 }
