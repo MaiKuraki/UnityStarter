@@ -21,7 +21,7 @@ namespace CycloneGames.GameplayTags.Runtime
    {
       private List<GameplayTagDefinition> m_Definition = new();
       private Dictionary<string, GameplayTagDefinition> m_TagsByName = new(StringComparer.Ordinal);
-      private string m_LastRegistrarionErrorMessage;
+      private string m_LastRegistrationErrorMessage;
       private List<GameplayTagRegistrationError> m_RegistrationErrors = new();
       
       public GameplayTagRegistrationContext() { }
