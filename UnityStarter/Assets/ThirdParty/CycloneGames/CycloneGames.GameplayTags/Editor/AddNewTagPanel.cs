@@ -27,7 +27,7 @@ namespace CycloneGames.GameplayTags.Editor
       private GUIStyle m_PanelStyle;
       private GUIStyle m_PanelTitleStyle;
 
-      public AddNewTagPanel()
+      public AddNewTagPanel(string prefillTagName = null)
       {
          m_PanelStyle = new GUIStyle(EditorStyles.toolbar)
          {
@@ -58,7 +58,7 @@ namespace CycloneGames.GameplayTags.Editor
          if (m_SelectedSourceFileIndex == k_NewFileOptionIndex)
             m_NewSourceFileName = "DefaultGameplayTags.json";
 
-         m_NewTagName = string.Empty;
+         m_NewTagName = prefillTagName ?? string.Empty;
          m_NewTagComment = string.Empty;
       }
 

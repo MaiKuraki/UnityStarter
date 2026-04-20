@@ -1,5 +1,5 @@
-﻿using System.Diagnostics;
-using System.Linq;
+﻿using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace CycloneGames.GameplayTags.Runtime
 {
@@ -47,9 +47,18 @@ namespace CycloneGames.GameplayTags.Runtime
       [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
       public Tag[] Tags
       {
-         get => Container.GetTags()
-               .Select(tag => new Tag(Container, tag))
-               .ToArray();
+         get
+         {
+            int count = Container.TagCount;
+            var result = new Tag[count];
+            int i = 0;
+            foreach (GameplayTag tag in Container.GetTags())
+            {
+               if (i >= count) break;
+               result[i++] = new Tag(Container, tag);
+            }
+            return result;
+         }
       }
 
       public GameplayTagContainerDebugView(IGameplayTagContainer container)

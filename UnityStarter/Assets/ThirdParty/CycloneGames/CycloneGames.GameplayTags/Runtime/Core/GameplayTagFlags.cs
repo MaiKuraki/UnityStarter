@@ -1,5 +1,8 @@
-﻿namespace CycloneGames.GameplayTags.Runtime
+﻿using System;
+
+namespace CycloneGames.GameplayTags.Runtime
 {
+   [Flags]
    public enum GameplayTagFlags
    {
       None = 0,

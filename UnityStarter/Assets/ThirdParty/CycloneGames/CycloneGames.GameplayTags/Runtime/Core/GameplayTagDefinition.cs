@@ -102,7 +102,7 @@ namespace CycloneGames.GameplayTags.Runtime
          m_NameHash = name.GetHashCode();
 
          Label = GameplayTagUtility.GetLabel(name);
-         HierarchyLevel = GameplayTagUtility.GetHeirarchyLevelFromName(name);
+         HierarchyLevel = GameplayTagUtility.GetHierarchyLevelFromName(name);
       }
 
       public static GameplayTagDefinition CreateInvalidDefinition(string name)
