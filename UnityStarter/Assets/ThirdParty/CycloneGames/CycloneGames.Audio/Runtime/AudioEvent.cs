@@ -423,7 +423,7 @@ namespace CycloneGames.Audio.Runtime
         /// <summary>
         /// Public accessor for the list of all nodes in the event
         /// </summary>
-        public List<AudioNode> EditorNodes
+        public List<AudioNode> Nodes
         {
             get { return this.nodes; }
         }

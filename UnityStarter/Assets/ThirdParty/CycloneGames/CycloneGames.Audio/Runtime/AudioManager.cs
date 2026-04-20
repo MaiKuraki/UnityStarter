@@ -119,6 +119,14 @@ namespace CycloneGames.Audio.Runtime
             OnBankUnloaded = null;
             activeEventHandleTable.Clear();
             freeActiveEventHandleSlots.Clear();
+            activeInstanceCounts.Clear();
+            playingEventNameCounts.Clear();
+            activeEventIndices.Clear();
+            pendingRemovals.Clear();
+            categoryCountsCacheFrame = -1;
+            cachedStealVictimFrame = -1;
+            cachedStealVictim = null;
+            cachedStealVictimScore = float.MaxValue;
             ClearCommandQueue();
             AudioClipResolver.ClearExternalCache();
             AudioClipResolver.ClearReferenceLoaders();
@@ -143,6 +151,31 @@ namespace CycloneGames.Audio.Runtime
         private static readonly Stack<int> freeActiveEventHandleSlots = new Stack<int>(64);
         private static readonly List<ActiveEvent> activeEventHandleTable = new List<ActiveEvent>(64);
         public static IReadOnlyCollection<AudioSource> AvailableSources => availableSources;
+
+        // O(1) instance counting: keyed by AudioEvent.GetInstanceID()
+        private static readonly Dictionary<int, int> activeInstanceCounts = new Dictionary<int, int>(128);
+
+        // O(1) event-name playing check
+        private static readonly Dictionary<string, int> playingEventNameCounts = new Dictionary<string, int>(128);
+
+        // O(1) ActiveEvent -> index mapping for swap-remove
+        private static readonly Dictionary<ActiveEvent, int> activeEventIndices = new Dictionary<ActiveEvent, int>(128);
+
+        // Pending removals (replaces async void DelayRemoveActiveEvent)
+        private struct PendingRemoval
+        {
+            public ActiveEvent Event;
+            public float RemoveTime;
+        }
+        private static readonly List<PendingRemoval> pendingRemovals = new List<PendingRemoval>(32);
+
+        // Per-frame cached category counts (avoids recomputing on multiple steals/frame)
+        private static int categoryCountsCacheFrame = -1;
+
+        // Voice stealing victim cache — avoids O(N) scan for every steal in the same frame
+        private static int cachedStealVictimFrame = -1;
+        private static ActiveEvent cachedStealVictim;
+        private static float cachedStealVictimScore = float.MaxValue;
         private enum AudioCommandType
         {
             None = 0,
@@ -152,7 +185,6 @@ namespace CycloneGames.Audio.Runtime
             PlayEventByNameAtPosition = 4,
             PlayScheduledByName = 5,
             PlayScheduledEvent = 6,
-            PlayEventOnAudioSource = 7,
             StopAllByEvent = 8,
             StopAllByName = 9,
             StopAllByGroup = 10,
@@ -167,7 +199,6 @@ namespace CycloneGames.Audio.Runtime
             public readonly AudioEvent AudioEvent;
             public readonly string EventName;
             public readonly GameObject EmitterObject;
-            public readonly AudioSource EmitterSource;
             public readonly Vector3 Position;
             public readonly double DspTime;
             public readonly int Group;
@@ -179,7 +210,6 @@ namespace CycloneGames.Audio.Runtime
                 AudioEvent audioEvent = null,
                 string eventName = null,
                 GameObject emitterObject = null,
-                AudioSource emitterSource = null,
                 Vector3 position = default,
                 double dspTime = 0d,
                 int group = 0,
@@ -190,7 +220,6 @@ namespace CycloneGames.Audio.Runtime
                 AudioEvent = audioEvent;
                 EventName = eventName;
                 EmitterObject = emitterObject;
-                EmitterSource = emitterSource;
                 Position = position;
                 DspTime = dspTime;
                 Group = group;
@@ -199,7 +228,7 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        private const int CommandQueueCapacity = 1024;
+        private const int CommandQueueCapacity = 4096;
         private static readonly object commandQueueLock = new object();
         private static readonly AudioCommand[] commandQueue = new AudioCommand[CommandQueueCapacity];
         private static int commandQueueHead;
@@ -277,9 +306,9 @@ namespace CycloneGames.Audio.Runtime
         private static readonly ConcurrentDictionary<int, AudioBank> loadedBanks = new ConcurrentDictionary<int, AudioBank>();
 
         // Reusable collections to avoid allocations during bank loading
-        private static readonly Dictionary<string, List<AudioEvent>> reusableDuplicateCheck = new Dictionary<string, List<AudioEvent>>();
+        private static readonly Dictionary<string, int> reusableDuplicateCountCheck = new Dictionary<string, int>();
         private static readonly HashSet<string> reusableBankRegisteredNames = new HashSet<string>();
-        private static readonly HashSet<AudioParameter> reusableGlobalParameters = new HashSet<AudioParameter>();
+        private static readonly List<AudioParameter> reusableGlobalParameters = new List<AudioParameter>();
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         public static long TotalMemoryUsage { get; private set; }
@@ -331,7 +360,7 @@ namespace CycloneGames.Audio.Runtime
         {
             if (results == null) return;
 
-            FillActiveSourceCountsByCategory(reusableCategorySourceCounts, reusableCategoryBudgetLoads);
+            EnsureCategoryCountsCached();
             results.Clear();
 
             AddCategoryVoiceStats(results, AudioEventCategory.CriticalUI);
@@ -395,6 +424,7 @@ namespace CycloneGames.Audio.Runtime
         float IAudioService.GetGlobalVolume() => GetGlobalVolume();
         void IAudioService.LoadBank(AudioBank bank, bool overwriteExisting) => LoadBank(bank, overwriteExisting);
         void IAudioService.UnloadBank(AudioBank bank) => UnloadBank(bank);
+        UniTask<int> IAudioService.PreloadBankClipsAsync(AudioBank bank, CancellationToken cancellationToken) => PreloadBankClipsAsync(bank, cancellationToken);
 
         public void SetMixerVolume(string parameterName, float volume)
         {
@@ -449,17 +479,8 @@ namespace CycloneGames.Audio.Runtime
 
         public static bool IsEventPlaying(string eventName)
         {
-            if (string.IsNullOrEmpty(eventName) || ActiveEvents == null) return false;
-            AudioEvent evt = GetEventByName(eventName);
-            if (evt == null) return false;
-            int count = ActiveEvents.Count;
-            for (int i = 0; i < count; i++)
-            {
-                var ae = ActiveEvents[i];
-                if (ae != null && ae.rootEvent == evt && ae.status == EventStatus.Played)
-                    return true;
-            }
-            return false;
+            if (string.IsNullOrEmpty(eventName)) return false;
+            return playingEventNameCounts.TryGetValue(eventName, out int count) && count > 0;
         }
 
         /// <summary>
@@ -653,35 +674,6 @@ namespace CycloneGames.Audio.Runtime
             return activeEvent;
         }
 
-        [Obsolete("Playing on AudioSource is deprecated")]
-        public static ActiveEvent PlayEvent(AudioEvent eventToPlay, AudioSource emitter)
-        {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.PlayEventOnAudioSource,
-                    audioEvent: eventToPlay,
-                    emitterSource: emitter));
-                return null;
-            }
-
-            Debug.LogWarning("AudioManager: Deprecated - play on AudioSource no longer supported");
-            Transform emitterTransform = emitter != null ? emitter.transform : null;
-            if (!ValidateManager() || !ValidateEvent(eventToPlay, emitterTransform, null, false, out RepeatTriggerKey triggerKey)) return null;
-
-            ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitter.transform);
-            tempEvent.Play();
-            if (tempEvent.status != EventStatus.Error)
-                CommitRepeatTrigger(triggerKey);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (tempEvent.status != EventStatus.Error)
-                TrackMemory(tempEvent, true);
-#endif
-
-            return tempEvent;
-        }
-
         public static void StopAll(AudioEvent eventsToStop)
         {
             if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
@@ -750,18 +742,34 @@ namespace CycloneGames.Audio.Runtime
         {
             if (!ValidateManager()) return;
 
-            // Idempotent: skip if already removed (prevents double pool entry from delayed removal)
-            int idx = ActiveEvents.IndexOf(stoppedEvent);
-            if (idx < 0) return;
+            // Idempotent: skip if not tracked (prevents double pool entry from delayed removal)
+            if (!activeEventIndices.TryGetValue(stoppedEvent, out int idx)) return;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             // Track memory BEFORE clearing clips, so TrackMemory can read source.clip
             TrackMemory(stoppedEvent, false);
 #endif
 
+            // Decrement O(1) tracking counters
+            if (stoppedEvent.rootEvent != null)
+            {
+                int eventId = stoppedEvent.rootEvent.GetInstanceID();
+                if (activeInstanceCounts.TryGetValue(eventId, out int cnt))
+                {
+                    if (cnt <= 1) activeInstanceCounts.Remove(eventId);
+                    else activeInstanceCounts[eventId] = cnt - 1;
+                }
+            }
+            if (!string.IsNullOrEmpty(stoppedEvent.name))
+            {
+                if (playingEventNameCounts.TryGetValue(stoppedEvent.name, out int nc))
+                {
+                    if (nc <= 1) playingEventNameCounts.Remove(stoppedEvent.name);
+                    else playingEventNameCounts[stoppedEvent.name] = nc - 1;
+                }
+            }
+
             // Clear AudioSource.clip before returning to pool.
-            // This releases the clip reference so external asset management systems
-            // (AssetManagement, Addressables, etc.) can safely unload the underlying asset.
             int sourceCount = stoppedEvent.SourceCount;
             for (int i = 0; i < sourceCount; i++)
             {
@@ -774,15 +782,43 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
 
-            // O(1) swap-remove
+            // O(1) swap-remove from ActiveEvents + index tracking
             int last = ActiveEvents.Count - 1;
             if (idx < last)
-                ActiveEvents[idx] = ActiveEvents[last];
+            {
+                var swapped = ActiveEvents[last];
+                ActiveEvents[idx] = swapped;
+                activeEventIndices[swapped] = idx;
+            }
             ActiveEvents.RemoveAt(last);
+            activeEventIndices.Remove(stoppedEvent);
 
             UnregisterActiveEventHandle(stoppedEvent);
             stoppedEvent.Reset();
             activeEventPool.Push(stoppedEvent);
+        }
+
+        /// <summary>
+        /// Registers a newly-played event into ActiveEvents and all O(1) tracking structures.
+        /// Called from ActiveEvent.Play() instead of directly modifying ActiveEvents.
+        /// </summary>
+        internal static void RegisterActiveEvent(ActiveEvent activeEvent)
+        {
+            int idx = ActiveEvents.Count;
+            ActiveEvents.Add(activeEvent);
+            activeEventIndices[activeEvent] = idx;
+
+            if (activeEvent.rootEvent != null)
+            {
+                int eventId = activeEvent.rootEvent.GetInstanceID();
+                activeInstanceCounts.TryGetValue(eventId, out int cnt);
+                activeInstanceCounts[eventId] = cnt + 1;
+            }
+            if (!string.IsNullOrEmpty(activeEvent.name))
+            {
+                playingEventNameCounts.TryGetValue(activeEvent.name, out int nc);
+                playingEventNameCounts[activeEvent.name] = nc + 1;
+            }
         }
 
         public static void AddPreviousEvent(ActiveEvent newEvent)
@@ -907,20 +943,18 @@ namespace CycloneGames.Audio.Runtime
         }
 #endif
 
-        public static async void DelayRemoveActiveEvent(ActiveEvent eventToRemove, float delay = 1)
+        /// <summary>
+        /// Schedules an active event for deferred removal after the specified delay.
+        /// Processed in Update() — no async allocation, no CTS dependency.
+        /// </summary>
+        public static void DelayRemoveActiveEvent(ActiveEvent eventToRemove, float delay = 1)
         {
             if (!ValidateManager()) return;
-
-            try
+            pendingRemovals.Add(new PendingRemoval
             {
-                await UniTask.Delay(TimeSpan.FromSeconds(delay), ignoreTimeScale: false, cancellationToken: eventToRemove.GetCancellationToken());
-                if (eventToRemove.status != EventStatus.Error)
-                    RemoveActiveEvent(eventToRemove);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected when event stopped abruptly
-            }
+                Event = eventToRemove,
+                RemoveTime = Time.time + delay
+            });
         }
 
         #endregion
@@ -1016,8 +1050,17 @@ namespace CycloneGames.Audio.Runtime
                 ActiveEvents.Clear();
             }
 
+            activeInstanceCounts.Clear();
+            playingEventNameCounts.Clear();
+            activeEventIndices.Clear();
+            pendingRemovals.Clear();
+            categoryCountsCacheFrame = -1;
+            cachedStealVictimFrame = -1;
+            cachedStealVictim = null;
+
             eventNameMap.Clear();
             loadedBanks.Clear();
+            loadedBanksCacheDirty = true;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             activeClipRefCount.Clear();
             clipMemoryCache.Clear();
@@ -1048,32 +1091,84 @@ namespace CycloneGames.Audio.Runtime
         private void Update()
         {
 #if UNITY_ANDROID || UNITY_IOS
-            // Throttle updates on mobile to save battery
+            // Throttle updates on mobile to save battery.
+            // NOTE: Commands and pending removals still processed every frame
+            // to avoid delayed playback / stale removal timing.
             float currentTime = Time.unscaledTime;
-            if (currentTime - lastMobileUpdateTime < MobileUpdateInterval) return;
-            lastMobileUpdateTime = currentTime;
+            bool mobileThrottle = (currentTime - lastMobileUpdateTime < MobileUpdateInterval);
+            if (!mobileThrottle) lastMobileUpdateTime = currentTime;
 #endif
 
-            // Process command queue with frame limit
+            // Process command queue with adaptive throughput based on queue pressure
+            int queueDepth;
+            lock (commandQueueLock) { queueDepth = commandQueueCount; }
+            int maxCommandsPerFrame;
+            if (queueDepth > CommandQueueCapacity / 2) maxCommandsPerFrame = 128;
+            else if (queueDepth > CommandQueueCapacity / 4) maxCommandsPerFrame = 64;
+            else maxCommandsPerFrame = 16;
+
             int commandProcessed = 0;
-            const int maxCommandsPerFrame = 10;
             while (commandProcessed < maxCommandsPerFrame && TryDequeueCommand(out AudioCommand command))
             {
                 ExecuteCommand(command);
                 commandProcessed++;
             }
 
+            // Process pending delayed removals (replaces async void DelayRemoveActiveEvent)
+            float now = Time.time;
+            for (int i = pendingRemovals.Count - 1; i >= 0; i--)
+            {
+                if (now >= pendingRemovals[i].RemoveTime)
+                {
+                    var evt = pendingRemovals[i].Event;
+                    // Swap-remove from pending list
+                    int lastPending = pendingRemovals.Count - 1;
+                    if (i < lastPending) pendingRemovals[i] = pendingRemovals[lastPending];
+                    pendingRemovals.RemoveAt(lastPending);
+
+                    if (evt.status != EventStatus.Error)
+                        RemoveActiveEvent(evt);
+                }
+            }
+
+#if UNITY_ANDROID || UNITY_IOS
+            if (mobileThrottle) return;
+#endif
+
               UpdateGlobalParameters(Time.deltaTime);
             CleanupRepeatTriggerCache(Time.unscaledTime);
 
-              // Update active events
+            // Invalidate per-frame category count cache
+            categoryCountsCacheFrame = -1;
+
+              // Update active events with distance-tiered LOD
             int eventCount = ActiveEvents.Count;
+            var lodSettings = activePlatformSettings.updateLOD;
+            bool lodEnabled = lodSettings.enabled;
+            int recalcInterval = Mathf.Max(lodSettings.recalcFrameInterval, 1);
+            bool recalcLOD = lodEnabled && (Time.frameCount % recalcInterval) == 0;
+            Vector3 listenerPos = default;
+            bool hasListener = false;
+            if (recalcLOD && cachedAudioListener != null && cachedAudioListener.gameObject != null)
+            {
+                listenerPos = cachedAudioListener.transform.position;
+                hasListener = true;
+            }
+
             for (int i = eventCount - 1; i >= 0; i--)
             {
                 if (i >= ActiveEvents.Count) continue;
                 var tempEvent = ActiveEvents[i];
                 if (tempEvent == null || tempEvent.status == EventStatus.Stopped) continue;
                 if (tempEvent.SourceCount == 0) continue;
+
+                // Recalculate LOD interval based on distance to listener
+                if (recalcLOD && tempEvent.is3D && hasListener)
+                {
+                    float sqrDist = (tempEvent.LastEmitterPosition - listenerPos).sqrMagnitude;
+                    tempEvent.updateInterval = lodSettings.GetUpdateInterval(sqrDist);
+                }
+
                 tempEvent.Update();
             }
 
@@ -1083,6 +1178,9 @@ namespace CycloneGames.Audio.Runtime
 
             // Smart pool shrinking
             TryShrinkPool();
+
+            // Periodic external clip cache eviction
+            TryEvictExternalClips();
         }
 
         private static void ExecuteCommand(in AudioCommand command)
@@ -1106,9 +1204,6 @@ namespace CycloneGames.Audio.Runtime
                     break;
                 case AudioCommandType.PlayScheduledEvent:
                     PlayEventScheduled(command.AudioEvent, command.EmitterObject, command.DspTime);
-                    break;
-                case AudioCommandType.PlayEventOnAudioSource:
-                    ExecuteDeprecatedAudioSourcePlay(command.AudioEvent, command.EmitterSource);
                     break;
                 case AudioCommandType.StopAllByEvent:
                     StopAll(command.AudioEvent);
@@ -1184,13 +1279,6 @@ namespace CycloneGames.Audio.Runtime
                 droppedCommandCount = 0;
 #endif
             }
-        }
-
-        private static void ExecuteDeprecatedAudioSourcePlay(AudioEvent eventToPlay, AudioSource emitterSource)
-        {
-#pragma warning disable CS0618
-            PlayEvent(eventToPlay, emitterSource);
-#pragma warning restore CS0618
         }
 
         #endregion
@@ -1528,6 +1616,18 @@ namespace CycloneGames.Audio.Runtime
             results.Add(new AudioCategoryVoiceStats(category, GetVoiceBudgetForCategory(category), activeSources, weightedLoad));
         }
 
+        /// <summary>
+        /// Ensures category counts are computed at most once per frame.
+        /// Multiple voice-steal calls in the same frame reuse cached results.
+        /// </summary>
+        private static void EnsureCategoryCountsCached()
+        {
+            int frame = Time.frameCount;
+            if (categoryCountsCacheFrame == frame) return;
+            categoryCountsCacheFrame = frame;
+            FillActiveSourceCountsByCategory(reusableCategorySourceCounts, reusableCategoryBudgetLoads);
+        }
+
         private static void FillActiveSourceCountsByCategory(
             Dictionary<AudioEventCategory, int> counts,
             Dictionary<AudioEventCategory, float> weightedLoads)
@@ -1574,7 +1674,7 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        private static Vector3 GetReferenceListenerPosition()
+        internal static Vector3 GetReferenceListenerPosition()
         {
             if (cachedAudioListener != null && cachedAudioListener.gameObject != null)
                 return cachedAudioListener.transform.position;
@@ -1585,6 +1685,12 @@ namespace CycloneGames.Audio.Runtime
 
             return Vector3.zero;
         }
+
+        /// <summary>Whether occlusion raycasts are enabled for the active platform profile.</summary>
+        public static bool IsOcclusionEnabled => activePlatformSettings.occlusion.enabled;
+
+        /// <summary>Active occlusion settings for the current platform profile.</summary>
+        internal static AudioPlatformProfile.OcclusionSettings ActiveOcclusionSettings => activePlatformSettings.occlusion;
 
         private static float GetVoiceProtectionScore(
             ActiveEvent evt,
@@ -1619,8 +1725,8 @@ namespace CycloneGames.Audio.Runtime
             {
                 AudioSource source = primarySource.source;
                 float maxDistance = Mathf.Max(source.maxDistance, 0.0001f);
-                float distance = Vector3.Distance(source.transform.position, GetReferenceListenerPosition());
-                float normalizedDistance = Mathf.Clamp01(distance / maxDistance);
+                float sqrDist = (source.transform.position - GetReferenceListenerPosition()).sqrMagnitude;
+                float normalizedDistance = Mathf.Clamp01(Mathf.Sqrt(sqrDist) / maxDistance);
                 score += (1f - normalizedDistance) * 35f;
                 score += Mathf.Clamp01(source.volume) * 15f;
             }
@@ -1683,25 +1789,34 @@ namespace CycloneGames.Audio.Runtime
         {
             if (ActiveEvents == null || ActiveEvents.Count == 0) return null;
 
-            FillActiveSourceCountsByCategory(reusableCategorySourceCounts, reusableCategoryBudgetLoads);
+            EnsureCategoryCountsCached();
 
-            ActiveEvent victim = null;
-            float lowestProtectionScore = float.MaxValue;
-            float requesterScore = GetRequesterProtectionScore(requestingEvent, reusableCategorySourceCounts, reusableCategoryBudgetLoads);
-
-            for (int i = 0; i < ActiveEvents.Count; i++)
+            // Cache victim scan per frame — multiple steal attempts reuse the same result
+            int frame = Time.frameCount;
+            if (cachedStealVictimFrame != frame)
             {
-                var evt = ActiveEvents[i];
-                if (evt == null || evt.status == EventStatus.Stopped) continue;
-                if (evt.rootEvent == null) continue;
+                cachedStealVictimFrame = frame;
+                cachedStealVictim = null;
+                cachedStealVictimScore = float.MaxValue;
 
-                float protectionScore = GetVoiceProtectionScore(evt, reusableCategorySourceCounts, reusableCategoryBudgetLoads);
-                if (protectionScore < lowestProtectionScore)
+                for (int i = 0; i < ActiveEvents.Count; i++)
                 {
-                    lowestProtectionScore = protectionScore;
-                    victim = evt;
+                    var evt = ActiveEvents[i];
+                    if (evt == null || evt.status == EventStatus.Stopped) continue;
+                    if (evt.rootEvent == null) continue;
+
+                    float protectionScore = GetVoiceProtectionScore(evt, reusableCategorySourceCounts, reusableCategoryBudgetLoads);
+                    if (protectionScore < cachedStealVictimScore)
+                    {
+                        cachedStealVictimScore = protectionScore;
+                        cachedStealVictim = evt;
+                    }
                 }
             }
+
+            ActiveEvent victim = cachedStealVictim;
+            float lowestProtectionScore = cachedStealVictimScore;
+            float requesterScore = GetRequesterProtectionScore(requestingEvent, reusableCategorySourceCounts, reusableCategoryBudgetLoads);
 
             if (victim == null)
                 return null;
@@ -1723,6 +1838,8 @@ namespace CycloneGames.Audio.Runtime
                 {
                     victim.StopImmediate();
                     totalSteals++;
+                    // Invalidate victim cache since victim was consumed
+                    cachedStealVictimFrame = -1;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     Debug.LogWarning($"AudioManager: Voice stolen from '{victim.name}' (category:{victim.rootEvent.Category}, protection:{lowestProtectionScore:F1}, total steals: {totalSteals})");
@@ -1797,16 +1914,8 @@ namespace CycloneGames.Audio.Runtime
 
         private static int CountActiveInstances(AudioEvent audioEvent)
         {
-            if (audioEvent == null || ActiveEvents == null) return 0;
-
-            int count = 0;
-            int eventCount = ActiveEvents.Count;
-            for (int i = eventCount - 1; i >= 0; i--)
-            {
-                var ae = ActiveEvents[i];
-                if (ae != null && ae.rootEvent == audioEvent && ae.status != EventStatus.Stopped)
-                    count++;
-            }
+            if (audioEvent == null) return 0;
+            activeInstanceCounts.TryGetValue(audioEvent.GetInstanceID(), out int count);
             return count;
         }
 
@@ -1866,10 +1975,10 @@ namespace CycloneGames.Audio.Runtime
 
             // Use Unity Profiler API for accurate runtime memory measurement.
             // This accounts for the actual load type and compression format:
-            //   - Decompress On Load: full PCM in memory (samples × channels × bytesPerSample)
+            //   - Decompress On Load: full PCM in memory (samples x channels x bytesPerSample)
             //   - Compressed In Memory: compressed data only (much smaller than PCM)
             //   - Streaming: only a small I/O buffer (a few KB)
-            // Fallback to PCM estimate (samples × channels × 2 bytes) if Profiler returns 0.
+            // Fallback to PCM estimate (samples x channels x 2 bytes) if Profiler returns 0.
             long profilerSize = UnityEngine.Profiling.Profiler.GetRuntimeMemorySizeLong(clip);
             if (profilerSize > 0) return profilerSize;
 
@@ -2019,11 +2128,15 @@ namespace CycloneGames.Audio.Runtime
             float expiryThreshold = currentTime - Mathf.Max(maxWindow * 4f, 1f);
 
             reusableExpiredTriggerKeys.Clear();
-            foreach (var entry in recentTriggerTimes)
+            // Use GetEnumerator() manually to avoid struct-boxing allocation on Dictionary<K,V>
+            var enumerator = recentTriggerTimes.GetEnumerator();
+            while (enumerator.MoveNext())
             {
+                var entry = enumerator.Current;
                 if (entry.Value <= expiryThreshold)
                     reusableExpiredTriggerKeys.Add(entry.Key);
             }
+            enumerator.Dispose();
 
             for (int i = 0; i < reusableExpiredTriggerKeys.Count; i++)
                 recentTriggerTimes.Remove(reusableExpiredTriggerKeys[i]);
@@ -2058,15 +2171,20 @@ namespace CycloneGames.Audio.Runtime
                 return true;
 
             Vector3 listenerPosition = GetReferenceListenerPosition();
-            float distance = Vector3.Distance(listenerPosition, playbackPosition);
             float maxDistance = Mathf.Max(output.MaxDistance, 0.01f);
             float paddedDistance = maxDistance + activePlatformSettings.distanceCullPadding;
-            if (distance > paddedDistance)
+
+            // Use squared distance for the common far-cull early-out (avoids sqrt)
+            float sqrDistance = (listenerPosition - playbackPosition).sqrMagnitude;
+            float sqrPaddedDistance = paddedDistance * paddedDistance;
+            if (sqrDistance > sqrPaddedDistance)
             {
                 totalAudibilityCulls++;
                 return false;
             }
 
+            // Only compute actual distance for fine-grained audibility estimation
+            float distance = Mathf.Sqrt(sqrDistance);
             float normalizedDistance = Mathf.Clamp01(distance / maxDistance);
             float attenuation = EstimateAudibilityFromOutput(output, normalizedDistance);
             float estimatedVolume = output.MaxVolume * attenuation;
@@ -2141,8 +2259,8 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            // Detect duplicates within bank
-            reusableDuplicateCheck.Clear();
+            // Detect duplicates within bank (zero-allocation: count-based instead of List-per-key)
+            reusableDuplicateCountCheck.Clear();
             int eventCount = events.Count;
 
             for (int i = 0; i < eventCount; i++)
@@ -2151,16 +2269,17 @@ namespace CycloneGames.Audio.Runtime
                 if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name)) continue;
 
                 string eventName = audioEvent.name;
-                if (!reusableDuplicateCheck.ContainsKey(eventName))
-                    reusableDuplicateCheck[eventName] = new List<AudioEvent>();
-                reusableDuplicateCheck[eventName].Add(audioEvent);
+                reusableDuplicateCountCheck.TryGetValue(eventName, out int existing);
+                reusableDuplicateCountCheck[eventName] = existing + 1;
             }
 
-            foreach (var kvp in reusableDuplicateCheck)
+            var dupEnumerator = reusableDuplicateCountCheck.GetEnumerator();
+            while (dupEnumerator.MoveNext())
             {
-                if (kvp.Value.Count > 1)
-                    Debug.LogError($"AudioManager: Bank '{bank.name}' has {kvp.Value.Count} events named '{kvp.Key}'.");
+                if (dupEnumerator.Current.Value > 1)
+                    Debug.LogError($"AudioManager: Bank '{bank.name}' has {dupEnumerator.Current.Value} events named '{dupEnumerator.Current.Key}'.");
             }
+            dupEnumerator.Dispose();
 
             // Register events
             reusableBankRegisteredNames.Clear();
@@ -2197,6 +2316,7 @@ namespace CycloneGames.Audio.Runtime
 
             // Track bank with instance ID for O(1) unload
             loadedBanks[bank.GetInstanceID()] = bank;
+            loadedBanksCacheDirty = true;
             InitializeBankRuntimeState(bank);
 
             if (registeredCount > 0)
@@ -2270,6 +2390,7 @@ namespace CycloneGames.Audio.Runtime
             }
 
             loadedBanks.TryRemove(bank.GetInstanceID(), out _);
+            loadedBanksCacheDirty = true;
             ResetBankRuntimeState(bank);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -2324,18 +2445,35 @@ namespace CycloneGames.Audio.Runtime
                 nameGroups[eventName].Add(audioEvent);
             }
 
-            foreach (var kvp in nameGroups)
+            var nameGroupsEnum = nameGroups.GetEnumerator();
+            while (nameGroupsEnum.MoveNext())
             {
-                if (kvp.Value.Count > 1)
-                    duplicates[kvp.Key] = kvp.Value;
+                if (nameGroupsEnum.Current.Value.Count > 1)
+                    duplicates[nameGroupsEnum.Current.Key] = nameGroupsEnum.Current.Value;
             }
+            nameGroupsEnum.Dispose();
 
             return duplicates;
         }
 
+        // Cached bank list for GetLoadedBanks() - avoids per-call allocation
+        private static readonly List<AudioBank> cachedLoadedBanksList = new List<AudioBank>(16);
+        private static bool loadedBanksCacheDirty = true;
+        private static System.Collections.ObjectModel.ReadOnlyCollection<AudioBank> cachedLoadedBanksReadOnly;
+
         public static IReadOnlyCollection<AudioBank> GetLoadedBanks()
         {
-            return new List<AudioBank>(loadedBanks.Values).AsReadOnly();
+            if (loadedBanksCacheDirty)
+            {
+                cachedLoadedBanksList.Clear();
+                var enumerator = loadedBanks.GetEnumerator();
+                while (enumerator.MoveNext())
+                    cachedLoadedBanksList.Add(enumerator.Current.Value);
+                enumerator.Dispose();
+                cachedLoadedBanksReadOnly = cachedLoadedBanksList.AsReadOnly();
+                loadedBanksCacheDirty = false;
+            }
+            return cachedLoadedBanksReadOnly;
         }
 
         public static int GetLoadedBankCount() => loadedBanks.Count;
@@ -2370,19 +2508,22 @@ namespace CycloneGames.Audio.Runtime
 
         private static void RefreshLoadedBankRuntimeState()
         {
-            foreach (var bank in loadedBanks.Values)
+            var enumerator = loadedBanks.GetEnumerator();
+            while (enumerator.MoveNext())
             {
-                InitializeBankRuntimeState(bank);
+                InitializeBankRuntimeState(enumerator.Current.Value);
             }
+            enumerator.Dispose();
         }
 
         private static void UpdateGlobalParameters(float deltaTime)
         {
             reusableGlobalParameters.Clear();
 
-            foreach (var bank in loadedBanks.Values)
+            var bankEnumerator = loadedBanks.GetEnumerator();
+            while (bankEnumerator.MoveNext())
             {
-                var parameters = bank?.Parameters;
+                var parameters = bankEnumerator.Current.Value?.Parameters;
                 if (parameters == null) continue;
 
                 for (int i = 0; i < parameters.Count; i++)
@@ -2394,10 +2535,11 @@ namespace CycloneGames.Audio.Runtime
                     }
                 }
             }
+            bankEnumerator.Dispose();
 
-            foreach (var parameter in reusableGlobalParameters)
+            for (int i = 0; i < reusableGlobalParameters.Count; i++)
             {
-                parameter.UpdateInterpolation(deltaTime);
+                reusableGlobalParameters[i].UpdateInterpolation(deltaTime);
             }
         }
 
@@ -2429,6 +2571,121 @@ namespace CycloneGames.Audio.Runtime
             source.SetScheduledEndTime(double.MaxValue);
             source.transform.localPosition = Vector3.zero;
             source.transform.localRotation = Quaternion.identity;
+        }
+
+        #endregion
+
+        #region Clip Preload & Memory Budget
+
+        /// <summary>
+        /// Memory budget in bytes for externally-loaded clips. 0 = no budget limit.
+        /// Set per-platform via AudioPoolConfig or manually.
+        /// </summary>
+        public static long ExternalClipMemoryBudgetBytes { get; set; } = 0;
+
+        /// <summary>
+        /// Idle TTL (seconds) for unused external clips before eviction. Default 30s.
+        /// </summary>
+        public static float ExternalClipIdleTTL { get; set; } = 30f;
+
+        private static float lastEvictionCheckTime;
+
+        /// <summary>
+        /// Preloads all AudioClipReference-based external clips from a bank's events
+        /// into the external clip cache. This warms the cache so that first PlayEvent
+        /// calls don't incur load latency.
+        /// </summary>
+        /// <param name="bank">The bank whose events' external clips should be preloaded.</param>
+        /// <param name="cancellationToken">Token to cancel the preload operation.</param>
+        /// <returns>Number of clips successfully preloaded.</returns>
+        public static async UniTask<int> PreloadBankClipsAsync(AudioBank bank, CancellationToken cancellationToken = default)
+        {
+            if (bank == null || bank.AudioEvents == null) return 0;
+
+            var tasks = new List<UniTask<IAudioClipHandle>>();
+            var locations = new HashSet<string>(StringComparer.Ordinal);
+
+            int eventCount = bank.AudioEvents.Count;
+            for (int i = 0; i < eventCount; i++)
+            {
+                var audioEvent = bank.AudioEvents[i];
+                if (audioEvent == null) continue;
+
+                CollectExternalClipLocations(audioEvent, locations);
+            }
+
+            foreach (string location in locations)
+            {
+                tasks.Add(ExternalAudioClipHandle.LoadAsync(location, cancellationToken));
+            }
+
+            if (tasks.Count == 0) return 0;
+
+            var handles = await UniTask.WhenAll(tasks);
+            int successCount = 0;
+
+            for (int i = 0; i < handles.Length; i++)
+            {
+                if (handles[i] != null && handles[i].IsSuccess)
+                    successCount++;
+
+                // Release our preload reference -- clip stays in cache via refCount >= 0
+                handles[i]?.Release();
+            }
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            Debug.Log($"AudioManager: Preloaded {successCount}/{locations.Count} external clips from '{bank.name}'.");
+#endif
+            return successCount;
+        }
+
+        private static void CollectExternalClipLocations(AudioEvent audioEvent, HashSet<string> locations)
+        {
+            if (audioEvent == null) return;
+
+            var nodes = audioEvent.Nodes;
+            if (nodes == null) return;
+
+            for (int i = 0; i < nodes.Count; i++)
+            {
+                var node = nodes[i];
+                if (node is AudioFile audioFile)
+                {
+                    var clipRef = audioFile.ExternalReference;
+                    if (clipRef != null)
+                    {
+                        string loc = clipRef.ResolveLocation();
+                        if (!string.IsNullOrEmpty(loc))
+                            locations.Add(loc);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Called periodically to evict expired external clips that exceed the memory budget.
+        /// Integrated into the Update loop.
+        /// </summary>
+        internal static void TryEvictExternalClips()
+        {
+            float now = Time.realtimeSinceStartup;
+            if (now - lastEvictionCheckTime < 5f) return; // Check every 5 seconds max
+            lastEvictionCheckTime = now;
+
+            int evicted = ExternalAudioClipHandle.EvictExpiredEntries(ExternalClipIdleTTL, ExternalClipMemoryBudgetBytes);
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (evicted > 0)
+                Debug.Log($"AudioManager: Evicted {evicted} expired external clips from cache.");
+#endif
+        }
+
+        /// <summary>
+        /// Returns the total estimated memory currently used by cached external clips.
+        /// </summary>
+        public static long GetExternalClipCacheMemoryBytes()
+        {
+            return ExternalAudioClipHandle.GetTotalCachedMemoryBytes();
         }
 
         #endregion
