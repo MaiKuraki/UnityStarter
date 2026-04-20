@@ -89,38 +89,91 @@ namespace CycloneGames.Audio.Runtime
 
 #if UNITY_EDITOR
 
+        private const float NodeWidth   = 250f;
+        private const float TitleBarH   = 18f;  // Unity GUI.Window internal title bar
+        private const float RowH        = 19f;
+        private const float RowGap      =  2f;
+        private const float BottomPad   =  8f;
+
         public override void InitializeNode(Vector2 position)
         {
             this.name = "Random Selector";
-            this.nodeRect.height = 80;
-            this.nodeRect.width = 200;
+            this.nodeRect.width    = NodeWidth;
+            this.nodeRect.height   = CalcHeight(0);
             this.nodeRect.position = position;
             AddInput();
             AddOutput();
         }
 
+        private float CalcHeight(int connCount)
+        {
+            // title bar + avoid-repeat row + padding
+            float h = TitleBarH + RowH + RowGap + BottomPad;
+            if (connCount > 0)
+                h += RowH + RowGap + connCount * (RowH + RowGap); // "Weights:" header + per-node rows
+            return h;
+        }
+
+        // Override DrawNode to update height BEFORE GUI.Window measures the rect
+        public override void DrawNode(int id)
+        {
+            int connCount = (input != null && input.ConnectedNodes != null) ? input.ConnectedNodes.Length : 0;
+            this.nodeRect.height = CalcHeight(connCount);
+            this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
+            DrawInput();
+            DrawOutput();
+        }
+
         protected override void DrawProperties()
         {
+            EditorGUI.BeginChangeCheck();
             avoidRepeat = EditorGUILayout.Toggle("Avoid Repeat", avoidRepeat);
+            if (EditorGUI.EndChangeCheck())
+                EditorUtility.SetDirty(this);
 
             int connCount = (input != null && input.ConnectedNodes != null) ? input.ConnectedNodes.Length : 0;
-            if (connCount > 0)
-            {
-                // Sync weights array size
-                if (weights == null || weights.Length != connCount)
-                {
-                    float[] newWeights = new float[connCount];
-                    for (int i = 0; i < connCount; i++)
-                        newWeights[i] = (weights != null && i < weights.Length) ? weights[i] : 1f;
-                    weights = newWeights;
-                }
+            if (connCount == 0) return;
 
-                EditorGUILayout.LabelField("Weights:");
+            // Sync weights array — preserve existing values, default new slots to 1
+            if (weights == null || weights.Length != connCount)
+            {
+                float[] newWeights = new float[connCount];
                 for (int i = 0; i < connCount; i++)
-                {
-                    weights[i] = Mathf.Max(0f, EditorGUILayout.FloatField($"  Node {i}", weights[i]));
-                }
+                    newWeights[i] = (weights != null && i < weights.Length && weights[i] > 0f) ? weights[i] : 1f;
+                weights = newWeights;
+                EditorUtility.SetDirty(this);
             }
+
+            // Compute total weight for probability display
+            float totalW = 0f;
+            for (int i = 0; i < connCount; i++)
+                totalW += Mathf.Max(0f, weights[i]);
+
+            // Header row: "Weights:" on left, "%" hint on right
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Weights:", EditorStyles.boldLabel, GUILayout.Width(100f));
+            EditorGUILayout.LabelField("%", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(34f));
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUI.BeginChangeCheck();
+            for (int i = 0; i < connCount; i++)
+            {
+                // Use the source node name, truncated if long
+                string srcName = (input.ConnectedNodes[i] != null && input.ConnectedNodes[i].ParentNode != null)
+                    ? input.ConnectedNodes[i].ParentNode.name
+                    : $"Node {i}";
+                if (srcName.Length > 13) srcName = srcName.Substring(0, 12) + "…";
+
+                float prob = (totalW > 0.0001f) ? weights[i] / totalW * 100f : 0f;
+
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField(srcName, GUILayout.Width(100f));
+                weights[i] = Mathf.Max(0f, EditorGUILayout.FloatField(weights[i], GUILayout.Width(50f)));
+                EditorGUILayout.LabelField($"{prob:0.#}%", EditorStyles.miniLabel, GUILayout.Width(38f));
+                EditorGUILayout.EndHorizontal();
+            }
+            if (EditorGUI.EndChangeCheck())
+                EditorUtility.SetDirty(this);
         }
 
 #endif

@@ -36,7 +36,16 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
 
-            Debug.LogErrorFormat("AudioManager: Event \"{0}\" not localized for language: {1}", activeEvent.name, AudioManager.CurrentLanguage);
+            // Fallback: play first connected node if no language match found
+            if (this.input.ConnectedNodes.Length > 0)
+            {
+                Debug.LogWarningFormat("AudioManager: Event \"{0}\" not localized for language {1}, falling back to first node", activeEvent.name, AudioManager.CurrentLanguage);
+                ProcessConnectedNode(0, activeEvent);
+            }
+            else
+            {
+                Debug.LogErrorFormat("AudioManager: Event \"{0}\" has no connected voice files", activeEvent.name);
+            }
         }
 
 #if UNITY_EDITOR
