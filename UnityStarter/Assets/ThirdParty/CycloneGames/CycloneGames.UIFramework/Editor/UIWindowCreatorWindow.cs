@@ -82,7 +82,7 @@ namespace CycloneGames.UIFramework.Editor
             };
         }
 
-        [MenuItem("Tools/CycloneGames/UIWindow Creator")]
+        [MenuItem("Tools/CycloneGames/UI Framework/UIWindow Creator")]
         public static void ShowWindow()
         {
             var window = GetWindow<UIWindowCreatorWindow>("UIWindow Creator");

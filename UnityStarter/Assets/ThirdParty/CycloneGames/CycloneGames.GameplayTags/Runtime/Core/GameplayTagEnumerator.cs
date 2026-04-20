@@ -30,6 +30,7 @@ namespace CycloneGames.GameplayTags.Runtime
 
       public bool MoveNext()
       {
+         if (m_Indexes == null) return false;
          m_CurrentIndex++;
          return m_CurrentIndex < m_Indexes.Count;
       }

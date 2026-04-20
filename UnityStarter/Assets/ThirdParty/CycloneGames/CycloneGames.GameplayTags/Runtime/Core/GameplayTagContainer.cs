@@ -126,6 +126,7 @@ namespace CycloneGames.GameplayTags.Runtime
       private GameplayTagContainerIndices m_Indices = new();
       private int[] m_ExplicitBitset = Array.Empty<int>();
       private int[] m_ImplicitBitset = Array.Empty<int>();
+      private bool m_SerializedDirty;
 
       public GameplayTagContainer()
       { }
@@ -398,7 +399,7 @@ namespace CycloneGames.GameplayTags.Runtime
 
          m_Indices.Explicit.Sort();
          RebuildExplicitBitsetIfNeeded();
-         FillImplictTags();
+         FillImplicitTags();
          SyncSerializedExplicitTagsWithRuntime();
       }
 
@@ -414,13 +415,13 @@ namespace CycloneGames.GameplayTags.Runtime
          int index = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
          if (index < 0)
          {
-            GameplayTagUtility.WarnNotExplictlyAddedTagRemoval(tag);
+            GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(tag);
             return;
          }
 
          m_Indices.Explicit.RemoveAt(index);
          RebuildExplicitBitsetIfNeeded();
-         FillImplictTags();
+         FillImplicitTags();
          SyncSerializedExplicitTagsWithRuntime();
       }
 
@@ -433,16 +434,14 @@ namespace CycloneGames.GameplayTags.Runtime
          bool changed = false;
          foreach (GameplayTag tag in other.GetExplicitTags())
          {
-            if (BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex) < 0)
+            int removeIndex = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
+            if (removeIndex < 0)
             {
-               GameplayTagUtility.WarnNotExplictlyAddedTagRemoval(tag);
+               GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(tag);
                continue;
             }
 
-            int removeIndex = BinarySearchUtility.Search(m_Indices.Explicit, tag.RuntimeIndex);
-            if (removeIndex >= 0)
-               m_Indices.Explicit.RemoveAt(removeIndex);
-
+            m_Indices.Explicit.RemoveAt(removeIndex);
             changed = true;
          }
 
@@ -450,7 +449,7 @@ namespace CycloneGames.GameplayTags.Runtime
             return;
 
          RebuildExplicitBitsetIfNeeded();
-         FillImplictTags();
+         FillImplicitTags();
          SyncSerializedExplicitTagsWithRuntime();
       }
 
@@ -494,7 +493,7 @@ namespace CycloneGames.GameplayTags.Runtime
             m_Indices.Explicit.Sort();
 
          RebuildExplicitBitsetIfNeeded();
-         FillImplictTags();
+         FillImplicitTags();
       }
 
       private void AddImplicitTagsFor(GameplayTag tag)
@@ -513,7 +512,7 @@ namespace CycloneGames.GameplayTags.Runtime
          RebuildImplicitBitsetIfNeeded();
       }
 
-      private void FillImplictTags()
+      private void FillImplicitTags()
       {
          m_Indices.Implicit.Clear();
 
@@ -623,6 +622,20 @@ namespace CycloneGames.GameplayTags.Runtime
 
       private void SyncSerializedExplicitTagsWithRuntime()
       {
+         m_SerializedDirty = true;
+      }
+
+      /// <summary>
+      /// Called by serialization (OnBeforeSerialize) or when explicit serialized state is needed.
+      /// Only rebuilds the serialized list if dirty, avoiding per-operation GC allocation.
+      /// </summary>
+      internal void FlushSerializedState()
+      {
+         if (!m_SerializedDirty)
+            return;
+
+         m_SerializedDirty = false;
+
          if (!m_Indices.IsCreated)
             return;
 

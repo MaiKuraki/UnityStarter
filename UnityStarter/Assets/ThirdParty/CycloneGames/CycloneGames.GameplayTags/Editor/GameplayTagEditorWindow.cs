@@ -9,8 +9,9 @@ namespace CycloneGames.GameplayTags.Editor
     {
         private ManagerTreeView treeView;
         private TreeViewState treeViewState;
+        private int cachedTagCount;
 
-        [MenuItem("Tools/CycloneGames/Gameplay Tag Manager")]
+        [MenuItem("Tools/CycloneGames/GameplayTags/Gameplay Tag Manager")]
         public static void ShowWindow()
         {
             GetWindow<GameplayTagEditorWindow>("Gameplay Tag Manager");
@@ -20,6 +21,20 @@ namespace CycloneGames.GameplayTags.Editor
         {
             treeViewState = new TreeViewState();
             treeView = new ManagerTreeView(treeViewState);
+            cachedTagCount = GameplayTagManager.GetAllTags().Length;
+            GameplayTagManager.OnGameplayTagTreeChanged += OnTreeChanged;
+        }
+
+        private void OnDisable()
+        {
+            GameplayTagManager.OnGameplayTagTreeChanged -= OnTreeChanged;
+        }
+
+        private void OnTreeChanged()
+        {
+            cachedTagCount = GameplayTagManager.GetAllTags().Length;
+            treeView?.Reload();
+            Repaint();
         }
 
         private void OnGUI()
@@ -28,8 +43,7 @@ namespace CycloneGames.GameplayTags.Editor
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
             EditorGUILayout.LabelField("Gameplay Tag Manager", EditorStyles.boldLabel, GUILayout.ExpandWidth(true));
 
-            int tagCount = GameplayTagManager.GetAllTags().Length;
-            GUILayout.Label($"{tagCount} tags", EditorStyles.centeredGreyMiniLabel, GUILayout.ExpandWidth(false));
+            GUILayout.Label($"{cachedTagCount} tags", EditorStyles.centeredGreyMiniLabel, GUILayout.ExpandWidth(false));
 
             EditorGUILayout.EndHorizontal();
 
