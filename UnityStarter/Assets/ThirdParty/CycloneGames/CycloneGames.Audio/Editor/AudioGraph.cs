@@ -316,7 +316,7 @@ namespace CycloneGames.Audio.Editor
                 var duplicates = AudioManager.ValidateBankForDuplicateNames(this.audioBank);
                 if (duplicates.Count > 0)
                 {
-                    EditorGUILayout.HelpBox($"⚠ {duplicates.Count} duplicate event name(s) detected. Only the first event of each name will be accessible via PlayEvent(string).",
+                    EditorGUILayout.HelpBox($"⚠{duplicates.Count} duplicate event name(s) detected. Only the first event of each name will be accessible via PlayEvent(string).",
                         MessageType.Warning);
                 }
             }
@@ -380,7 +380,7 @@ namespace CycloneGames.Audio.Editor
                     EditorGUILayout.BeginHorizontal();
                     if (isDuplicate)
                     {
-                        EditorGUILayout.LabelField("⚠", GUILayout.Width(20));
+                        EditorGUILayout.LabelField("\u26a0", GUILayout.Width(20));
                     }
                     else
                     {
@@ -816,7 +816,7 @@ namespace CycloneGames.Audio.Editor
 
                 if (duplicateCount > 0)
                 {
-                    EditorGUILayout.HelpBox($"⚠ Warning: {duplicateCount} other event(s) in this bank have the same name. " +
+                    EditorGUILayout.HelpBox($"⚠Warning: {duplicateCount} other event(s) in this bank have the same name. " +
                         $"Only the first one will be accessible via PlayEvent(string).", MessageType.Warning);
                 }
             }
@@ -897,7 +897,7 @@ namespace CycloneGames.Audio.Editor
                 return;
             }
 
-            if (audioEvent.EditorNodes == null)
+            if (audioEvent.Nodes == null)
             {
                 return;
             }
@@ -910,9 +910,9 @@ namespace CycloneGames.Audio.Editor
             // Apply panning by offsetting a second group
             GUI.BeginGroup(new Rect(this.panX, this.panY, CANVAS_SIZE, CANVAS_SIZE));
             BeginWindows();
-            for (int i = 0; i < audioEvent.EditorNodes.Count; i++)
+            for (int i = 0; i < audioEvent.Nodes.Count; i++)
             {
-                AudioNode currentNode = audioEvent.EditorNodes[i];
+                AudioNode currentNode = audioEvent.Nodes[i];
                 currentNode.DrawNode(i);
             }
             EndWindows();
@@ -1211,7 +1211,7 @@ namespace CycloneGames.Audio.Editor
                             bool connectionWasBroken = false; // Renamed to avoid confusion and indicate intent
                             if (selectedEvent != null)
                             {
-                                foreach (var node in selectedEvent.EditorNodes)
+                                foreach (var node in selectedEvent.Nodes)
                                 {
                                     if (node.Input != null)
                                     {
@@ -1466,9 +1466,9 @@ namespace CycloneGames.Audio.Editor
             const float clickThreshold = 10.0f; // The distance in pixels to check for a click near a line.
 
             // Iterate through all nodes to find their input connections
-            for (int i = 0; i < selectedEvent.EditorNodes.Count; i++)
+            for (int i = 0; i < selectedEvent.Nodes.Count; i++)
             {
-                AudioNode node = selectedEvent.EditorNodes[i];
+                AudioNode node = selectedEvent.Nodes[i];
                 if (node.Input != null && node.Input.ConnectedNodes.Length > 0)
                 {
                     AudioNodeInput input = node.Input;
@@ -1775,9 +1775,9 @@ namespace CycloneGames.Audio.Editor
         public void ClearOutput(object positionObject)
         {
             AudioNodeOutput tempOutput = GetOutputAtPosition((Vector2)positionObject);
-            for (int i = 0; i < this.selectedEvent.EditorNodes.Count; i++)
+            for (int i = 0; i < this.selectedEvent.Nodes.Count; i++)
             {
-                AudioNode tempNode = this.selectedEvent.EditorNodes[i];
+                AudioNode tempNode = this.selectedEvent.Nodes[i];
                 if (tempNode.Input != null)
                 {
                     tempNode.Input.RemoveConnection(tempOutput);
@@ -1799,9 +1799,9 @@ namespace CycloneGames.Audio.Editor
 
             Vector2 position = ConvertToGlobalPosition(viewPosition);
 
-            for (int i = 0; i < this.selectedEvent.EditorNodes.Count; i++)
+            for (int i = 0; i < this.selectedEvent.Nodes.Count; i++)
             {
-                AudioNode tempNode = this.selectedEvent.EditorNodes[i];
+                AudioNode tempNode = this.selectedEvent.Nodes[i];
                 if (tempNode.NodeRect.Contains(position))
                 {
                     return tempNode;
@@ -1825,9 +1825,9 @@ namespace CycloneGames.Audio.Editor
 
             Vector2 position = ConvertToGlobalPosition(viewPosition);
 
-            for (int i = 0; i < this.selectedEvent.EditorNodes.Count; i++)
+            for (int i = 0; i < this.selectedEvent.Nodes.Count; i++)
             {
-                AudioNode tempNode = this.selectedEvent.EditorNodes[i];
+                AudioNode tempNode = this.selectedEvent.Nodes[i];
                 if (tempNode.Input != null && tempNode.Input.Window.Contains(position))
                 {
                     return tempNode.Input;
@@ -1851,9 +1851,9 @@ namespace CycloneGames.Audio.Editor
                 return null;
             }
 
-            for (int i = 0; i < this.selectedEvent.EditorNodes.Count; i++)
+            for (int i = 0; i < this.selectedEvent.Nodes.Count; i++)
             {
-                AudioNode tempNode = this.selectedEvent.EditorNodes[i];
+                AudioNode tempNode = this.selectedEvent.Nodes[i];
 
                 if (tempNode.Output != null && tempNode.Output.Window.Contains(position))
                 {
@@ -1911,9 +1911,9 @@ namespace CycloneGames.Audio.Editor
                         EditorUtility.SetDirty(audioEvent);
 
                         // Mark all nodes in the event
-                        if (audioEvent.EditorNodes != null)
+                        if (audioEvent.Nodes != null)
                         {
-                            foreach (var node in audioEvent.EditorNodes)
+                            foreach (var node in audioEvent.Nodes)
                             {
                                 if (node != null)
                                 {

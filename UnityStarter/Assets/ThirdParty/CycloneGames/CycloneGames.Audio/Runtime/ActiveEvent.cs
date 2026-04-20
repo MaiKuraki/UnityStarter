@@ -88,47 +88,70 @@ namespace CycloneGames.Audio.Runtime
         private const int MaxSourcesPerEvent = 8;
         private const int MaxParametersPerEvent = 8;
 
-        public string name = "";
-        public AudioEvent rootEvent { get; private set; }
-
-        // Zero-allocation source array with fixed capacity
-        private EventSource[] sourcesArray = new EventSource[MaxSourcesPerEvent];
-        private int sourceCount;
-
-        public int SourceCount => sourceCount;
-        public EventSource GetSource(int index) => index >= 0 && index < sourceCount ? sourcesArray[index] : default;
-
-        // Legacy property for backward compatibility - returns a ReadOnlySpan view
-        internal ReadOnlySpan<EventSource> SourcesSpan => new ReadOnlySpan<EventSource>(sourcesArray, 0, sourceCount);
-
+        // ---- Hot path fields (accessed every frame in Update) ----
+        // Grouped at top for better cache line utilization
         public EventStatus status = EventStatus.Initialized;
-
-        private ActiveParameter[] activeParameters;
-        private int activeParameterCount;
-
-        public float timeStarted;
-        private Transform gazeReference;
-        internal Transform emitterTransform;
-        private Vector3 lastEmitterPos;
-        internal string text = "";
-        internal float initialDelay;
+        private int sourceCount;
+        private float elapsedTime;
+        private bool isPaused;
+        private bool hasPlayed;
+        private bool hasTimeAdvanced;
         private float eventVolume;
         private float targetVolume = 1f;
         private float eventPitch = 1f;
         private float targetFadeTime;
         private float currentFadeTime;
-        private float elapsedTime;
         private float fadeOriginVolume;
         private bool fadeStopQueued;
-        private bool hasPlayed;
+
+        // Distance-tiered update LOD: skip non-critical work for distant/simple events
+        internal int updateSkipCounter;
+        internal int updateInterval = 1;   // 1 = every frame, 2 = every 2nd frame, etc.
+        internal bool is3D;
+        internal bool hasActiveParameters;
+
+        // 3D spatial state: occlusion, distance LP, spread curve, cone
+        private float occlusionFactor;       // 0 = unoccluded, 1 = fully occluded
+        private float distanceLPCutoff = 22000f;
+        private float coneVolumeScale = 1f;
+        private float currentSpread;
+        private float cachedSqrDistance;     // listener distance cached on LOD tick
+        private AudioLowPassFilter[] cachedLPFilters = new AudioLowPassFilter[MaxSourcesPerEvent];
+        private bool lpFiltersCached;
+
+        // ---- Warm path fields (accessed during play/stop) ----
+        public string name = "";
+        public AudioEvent rootEvent { get; private set; }
+        private EventSource[] sourcesArray = new EventSource[MaxSourcesPerEvent];
+        private ActiveParameter[] activeParameters;
+        private int activeParameterCount;
+        public float timeStarted;
+        internal Transform emitterTransform;
+        private Vector3 lastEmitterPos;
+        internal Vector3 LastEmitterPosition => lastEmitterPos;
+        internal float initialDelay;
         internal bool isAsync;
-        private bool useGaze;
-        private bool callbackActivated;
-        private bool hasTimeAdvanced;
         internal bool hasSnapshotTransition;
-        private bool isPaused;
-        private CancellationTokenSource cancellationTokenSource;
         internal double scheduledDspTime = -1;
+        private CancellationTokenSource cancellationTokenSource;
+        private bool callbackActivated;
+
+        // ---- Cold path fields (rarely accessed) ----
+        private Transform gazeReference;
+        internal string text = "";
+        private bool useGaze;
+        /// <summary>
+        /// Minimum time in seconds after PlayAllSources before we consider the event
+        /// complete. Prevents false completion when AudioSource.isPlaying hasn't
+        /// yet returned true on the frame immediately after Play().
+        /// </summary>
+        private const float MinPlayGracePeriod = 0.05f;
+        private float playStartRealtime;
+
+        public int SourceCount => sourceCount;
+        public EventSource GetSource(int index) => index >= 0 && index < sourceCount ? sourcesArray[index] : default;
+
+        internal ReadOnlySpan<EventSource> SourcesSpan => new ReadOnlySpan<EventSource>(sourcesArray, 0, sourceCount);
 
         public float EstimatedRemainingTime { get; private set; }
         public bool Muted { get; private set; }
@@ -142,6 +165,8 @@ namespace CycloneGames.Audio.Runtime
         {
             sourcesArray = new EventSource[MaxSourcesPerEvent];
             activeParameters = new ActiveParameter[MaxParametersPerEvent];
+            for (int i = 0; i < MaxParametersPerEvent; i++)
+                activeParameters[i] = new ActiveParameter();
         }
 
         public void Initialize(AudioEvent eventToPlay, Transform emitter)
@@ -152,8 +177,13 @@ namespace CycloneGames.Audio.Runtime
             emitterTransform = emitter;
             if (emitter != null) lastEmitterPos = emitter.position;
 
-            cancellationTokenSource?.Dispose();
-            cancellationTokenSource = new CancellationTokenSource();
+            if (cancellationTokenSource != null)
+            {
+                cancellationTokenSource.Cancel();
+                cancellationTokenSource.Dispose();
+                cancellationTokenSource = null;
+            }
+            // CTS is created lazily in GetCancellationToken() only when needed (async loads).
 
             InitializeParameters();
         }
@@ -172,7 +202,7 @@ namespace CycloneGames.Audio.Runtime
 
             SetStartingSourceProperties();
             status = EventStatus.Played;
-            AudioManager.ActiveEvents.Add(this);
+            AudioManager.RegisterActiveEvent(this);
             AudioManager.AddPreviousEvent(this);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -199,16 +229,7 @@ namespace CycloneGames.Audio.Runtime
                 PlayAllSources();
             }
 
-            if (emitterTransform != null)
-            {
-                Vector3 newPos = emitterTransform.position;
-                Vector3 delta = newPos - lastEmitterPos;
-                if (delta.sqrMagnitude > 0.000001f)
-                {
-                    SetAllSourcePositions(newPos);
-                    lastEmitterPos = newPos;
-                }
-            }
+            // ---- Critical path: always runs every frame ----
 
             if (hasPlayed && currentFadeTime < targetFadeTime)
             {
@@ -226,16 +247,46 @@ namespace CycloneGames.Audio.Runtime
             if (!rootEvent.Output.loop)
             {
                 UpdateRemainingTime();
-                if (hasPlayed && !IsAnySourcePlaying())
+                bool pastGracePeriod = (Time.realtimeSinceStartup - playStartRealtime) >= MinPlayGracePeriod;
+                if (hasPlayed && pastGracePeriod && !IsAnySourcePlaying())
                 {
                     StopImmediate();
+                    return;
                 }
             }
 
+            // ---- LOD path: position, parameters, gaze can run at reduced frequency ----
+            // updateInterval=1 means every frame; >1 means skip non-critical work
+            if (updateInterval > 1)
+            {
+                updateSkipCounter++;
+                if (updateSkipCounter < updateInterval)
+                    return;
+                updateSkipCounter = 0;
+            }
+
+            if (is3D && emitterTransform != null)
+            {
+                Vector3 newPos = emitterTransform.position;
+                Vector3 delta = newPos - lastEmitterPos;
+                if (delta.sqrMagnitude > 0.000001f)
+                {
+                    SetAllSourcePositions(newPos);
+                    lastEmitterPos = newPos;
+                }
+            }
+
+            if (is3D) UpdateSpatial3D(dt);
+
             if (useGaze) UpdateGaze();
 
-            UpdateParameters();
-            ApplyParameters();
+            if (hasActiveParameters)
+            {
+                // Scale deltaTime by interval to keep interpolation speed correct
+                float scaledDt = dt * updateInterval;
+                UpdateParameters(scaledDt);
+                ApplyParameters();
+            }
         }
 
         public void Pause()
@@ -331,7 +382,9 @@ namespace CycloneGames.Audio.Runtime
 
         public CancellationToken GetCancellationToken()
         {
-            return cancellationTokenSource?.Token ?? CancellationToken.None;
+            if (cancellationTokenSource == null)
+                cancellationTokenSource = new CancellationTokenSource();
+            return cancellationTokenSource.Token;
         }
 
         public bool AddEventSource(AudioClip clip, AudioParameter parameter = null, AnimationCurve responseCurve = null, float startTime = 0, IAudioClipHandle clipHandle = null)
@@ -421,6 +474,10 @@ namespace CycloneGames.Audio.Runtime
 
             SetAllSourcePitches(eventPitch);
 
+            // Cache fast-path flags to avoid per-frame checks
+            is3D = rootEvent.Output != null && rootEvent.Output.spatialBlend > 0.01f;
+            hasActiveParameters = activeParameterCount > 0;
+
             useGaze = HasGazeProperty();
             if (useGaze)
             {
@@ -461,6 +518,7 @@ namespace CycloneGames.Audio.Runtime
 
         private void PlayAllSources()
         {
+            playStartRealtime = Time.realtimeSinceStartup;
             bool useScheduled = scheduledDspTime > 0;
             for (int i = 0; i < sourceCount; i++)
             {
@@ -518,6 +576,132 @@ namespace CycloneGames.Audio.Runtime
 
         #region Private Functions
 
+        /// <summary>
+        /// Runs on the LOD tick. Evaluates distance low-pass, spread curve, cone attenuation,
+        /// and occlusion raycast — then applies results to each AudioSource.
+        /// Zero allocation; GetComponent avoided via per-event LPF cache.
+        /// </summary>
+        private void UpdateSpatial3D(float dt)
+        {
+            if (sourceCount == 0 || rootEvent == null) return;
+            AudioOutput output = rootEvent.Output;
+            if (output == null || output.spatialBlend <= 0f) return;
+
+            // Compute listener distance
+            Vector3 listenerPos = AudioManager.GetReferenceListenerPosition();
+            Vector3 emitterPos = lastEmitterPos;
+            float sqrDist = (emitterPos - listenerPos).sqrMagnitude;
+            cachedSqrDistance = sqrDist;
+
+            float dist = Mathf.Sqrt(sqrDist);
+            float range = output.MaxDistance - output.MinDistance;
+            float normDist = (range > 0.001f)
+                ? Mathf.Clamp01((dist - output.MinDistance) / range)
+                : (dist >= output.MaxDistance ? 1f : 0f);
+
+            // ---- Distance Low-Pass (air absorption) ----
+            float targetDistLP = 22000f;
+            if (output.useDistanceLowPass && output.distanceLowPassCurve != null)
+                targetDistLP = output.distanceLowPassCurve.Evaluate(normDist);
+            distanceLPCutoff = targetDistLP;
+
+            // ---- Spread Curve ----
+            if (output.useSpreadCurve && output.spreadCurve != null)
+            {
+                float spreadDeg = output.spreadCurve.Evaluate(normDist) * 360f;
+                if (Mathf.Abs(spreadDeg - currentSpread) > 0.5f)
+                {
+                    currentSpread = spreadDeg;
+                    for (int i = 0; i < sourceCount; i++)
+                    {
+                        ref var es = ref sourcesArray[i];
+                        if (es.IsValid) es.source.spread = spreadDeg;
+                    }
+                }
+            }
+
+            // ---- Cone Attenuation ----
+            float newConeScale = 1f;
+            if (output.useConeAttenuation && emitterTransform != null)
+            {
+                Vector3 toListener = listenerPos - emitterPos;
+                float toListenerSqr = toListener.sqrMagnitude;
+                if (toListenerSqr > 0.0001f)
+                {
+                    // Normalize without Normalize() to avoid allocation check overhead
+                    float invLen = 1f / Mathf.Sqrt(toListenerSqr);
+                    toListener.x *= invLen; toListener.y *= invLen; toListener.z *= invLen;
+                    float dot = Vector3.Dot(emitterTransform.forward, toListener);
+                    float angleDeg = Mathf.Acos(Mathf.Clamp(dot, -1f, 1f)) * Mathf.Rad2Deg;
+                    float halfInner = output.coneInnerAngle * 0.5f;
+                    float halfOuter = output.coneOuterAngle * 0.5f;
+                    if (angleDeg <= halfInner)
+                        newConeScale = 1f;
+                    else if (angleDeg >= halfOuter)
+                        newConeScale = output.coneOuterVolume;
+                    else
+                        newConeScale = halfOuter > halfInner
+                            ? Mathf.Lerp(1f, output.coneOuterVolume, (angleDeg - halfInner) / (halfOuter - halfInner))
+                            : output.coneOuterVolume;
+                }
+            }
+            coneVolumeScale = newConeScale;
+
+            // ---- Occlusion Raycast ----
+            float occlusionCutoff = 22000f;
+            float occlusionVolumeScale = 1f;
+            var occlSettings = AudioManager.ActiveOcclusionSettings;
+            if (occlSettings.enabled && sqrDist <= occlSettings.maxOcclusionDistance * occlSettings.maxOcclusionDistance)
+            {
+                bool isOccluded = Physics.Linecast(emitterPos, listenerPos, occlSettings.occlusionLayers);
+                float targetFactor = isOccluded ? 1f : 0f;
+                // Scale lerp speed by LOD interval so it doesn't animate slower at higher LOD
+                occlusionFactor = Mathf.MoveTowards(occlusionFactor, targetFactor,
+                    dt * updateInterval * occlSettings.interpolationSpeed);
+                occlusionCutoff = Mathf.Lerp(22000f, occlSettings.occludedCutoffHz, occlusionFactor);
+                occlusionVolumeScale = Mathf.Lerp(1f, occlSettings.occludedVolumeScale, occlusionFactor);
+            }
+            else if (!occlSettings.enabled && occlusionFactor > 0f)
+            {
+                // Smoothly clear when occlusion is toggled off at runtime
+                occlusionFactor = Mathf.MoveTowards(occlusionFactor, 0f, dt * 5f);
+                occlusionCutoff = Mathf.Lerp(22000f, occlSettings.occludedCutoffHz, occlusionFactor);
+                occlusionVolumeScale = Mathf.Lerp(1f, occlSettings.occludedVolumeScale, occlusionFactor);
+            }
+
+            // ---- Apply to AudioSources ----
+            float finalLPCutoff = Mathf.Min(distanceLPCutoff, occlusionCutoff);
+            bool needsLPF = output.useDistanceLowPass || occlusionFactor > 0.001f;
+            float combinedVolumeScale = coneVolumeScale * occlusionVolumeScale;
+            bool hasVolumeModifier = output.useConeAttenuation || occlSettings.enabled;
+
+            // Cache LPF components once per active event lifetime (avoids repeated GetComponent)
+            if (!lpFiltersCached && needsLPF)
+            {
+                for (int i = 0; i < sourceCount; i++)
+                {
+                    ref var es = ref sourcesArray[i];
+                    if (es.IsValid) cachedLPFilters[i] = es.source.GetComponent<AudioLowPassFilter>();
+                }
+                lpFiltersCached = true;
+            }
+
+            for (int i = 0; i < sourceCount; i++)
+            {
+                ref var es = ref sourcesArray[i];
+                if (!es.IsValid) continue;
+
+                if (needsLPF)
+                {
+                    AudioLowPassFilter lpf = cachedLPFilters[i];
+                    if (lpf != null) lpf.cutoffFrequency = finalLPCutoff;
+                }
+
+                if (hasVolumeModifier)
+                    es.source.volume = eventVolume * combinedVolumeScale;
+            }
+        }
+
         private void InitializeParameters()
         {
             var eventParams = rootEvent.Parameters;
@@ -531,14 +715,14 @@ namespace CycloneGames.Audio.Runtime
                 var p = eventParams[i];
                 if (p != null)
                 {
-                    activeParameters[activeParameterCount++] = new ActiveParameter(p);
+                    activeParameters[activeParameterCount].ReInitialize(p);
+                    activeParameterCount++;
                 }
             }
         }
 
-        private void UpdateParameters()
+        private void UpdateParameters(float dt)
         {
-            float dt = Time.deltaTime;
             for (int i = 0; i < activeParameterCount; i++)
             {
                 var ap = activeParameters[i];
@@ -651,11 +835,7 @@ namespace CycloneGames.Audio.Runtime
             }
             sourceCount = 0;
 
-            // Clear parameters without reallocating
-            for (int i = 0; i < activeParameterCount; i++)
-            {
-                activeParameters[i] = null;
-            }
+            // Clear parameters without reallocating — instances are reused via ReInitialize
             activeParameterCount = 0;
 
             status = EventStatus.Initialized;
@@ -675,12 +855,24 @@ namespace CycloneGames.Audio.Runtime
             hasPlayed = false;
             isAsync = false;
             isPaused = false;
+            updateSkipCounter = 0;
+            updateInterval = 1;
+            is3D = false;
+            hasActiveParameters = false;
+            occlusionFactor = 0f;
+            distanceLPCutoff = 22000f;
+            coneVolumeScale = 1f;
+            currentSpread = 0f;
+            cachedSqrDistance = 0f;
+            lpFiltersCached = false;
+            System.Array.Clear(cachedLPFilters, 0, MaxSourcesPerEvent);
             useGaze = false;
             callbackActivated = false;
             hasTimeAdvanced = false;
             hasSnapshotTransition = false;
             scheduledDspTime = -1;
             handleSlot = -1;
+            playStartRealtime = 0;
 
             if (cancellationTokenSource != null)
             {
@@ -853,22 +1045,6 @@ namespace CycloneGames.Audio.Runtime
         {
             Soloed = false;
             SetMute(Muted);
-        }
-
-        // Legacy compatibility: provide sources as list for code that expects List<EventSource>
-        private System.Collections.Generic.List<EventSource> sourcesList;
-        public System.Collections.Generic.List<EventSource> sources
-        {
-            get
-            {
-                if (sourcesList == null) sourcesList = new System.Collections.Generic.List<EventSource>(MaxSourcesPerEvent);
-                sourcesList.Clear();
-                for (int i = 0; i < sourceCount; i++)
-                {
-                    sourcesList.Add(sourcesArray[i]);
-                }
-                return sourcesList;
-            }
         }
 
 #if UNITY_EDITOR

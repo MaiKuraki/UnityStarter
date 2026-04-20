@@ -24,6 +24,83 @@ namespace CycloneGames.Audio.Runtime
             public float repeatTriggerWindowSeconds;
         }
 
+        /// <summary>
+        /// Distance-tiered Level-of-Detail settings for active event updates.
+        /// Events beyond near/mid thresholds run position, parameter, and gaze updates at reduced frequency.
+        /// Critical work (fade, completion detection) always runs every frame regardless of LOD tier.
+        /// </summary>
+        [Serializable]
+        public struct UpdateLODSettings
+        {
+            [Tooltip("Enable distance-based update frequency reduction for 3D events.")]
+            public bool enabled;
+
+            [Tooltip("How often (in frames) to recalculate each event's LOD tier. Lower = more responsive but higher cost.")]
+            [Range(5, 120)]
+            public int recalcFrameInterval;
+
+            [Tooltip("Events closer than this distance (meters) to the listener update every frame.")]
+            [Range(1f, 200f)]
+            public float nearDistance;
+
+            [Tooltip("Events between near and mid distance update at a reduced rate.")]
+            [Range(5f, 500f)]
+            public float midDistance;
+
+            [Tooltip("Update interval (in frames) for events in the near zone.")]
+            [Range(1, 4)]
+            public int nearUpdateInterval;
+
+            [Tooltip("Update interval (in frames) for events in the mid zone.")]
+            [Range(1, 8)]
+            public int midUpdateInterval;
+
+            [Tooltip("Update interval (in frames) for events beyond the mid zone.")]
+            [Range(1, 16)]
+            public int farUpdateInterval;
+
+            public int GetUpdateInterval(float sqrDistanceToListener)
+            {
+                if (!enabled) return 1;
+                float nearSqr = nearDistance * nearDistance;
+                float midSqr = midDistance * midDistance;
+                if (sqrDistanceToListener < nearSqr) return nearUpdateInterval;
+                if (sqrDistanceToListener < midSqr) return midUpdateInterval;
+                return farUpdateInterval;
+            }
+        }
+
+        /// <summary>
+        /// Raycast-based audio occlusion settings.
+        /// When enabled, sounds blocked by geometry are attenuated with a low-pass filter and volume reduction.
+        /// Occlusion checks run on the LOD tick (not every frame) to avoid excessive raycasting.
+        /// </summary>
+        [Serializable]
+        public struct OcclusionSettings
+        {
+            [Tooltip("Enable raycast-based occlusion for 3D events.")]
+            public bool enabled;
+
+            [Tooltip("Physics layers to test for occlusion. Typically walls, terrain, large static objects.")]
+            public LayerMask occlusionLayers;
+
+            [Tooltip("Low-pass cutoff frequency when fully occluded (Hz). Lower = more muffled.")]
+            [Range(200f, 5000f)]
+            public float occludedCutoffHz;
+
+            [Tooltip("Volume multiplier when fully occluded. 0 = silent, 1 = no change.")]
+            [Range(0f, 1f)]
+            public float occludedVolumeScale;
+
+            [Tooltip("Interpolation speed for occlusion transitions. Higher = snappier.")]
+            [Range(1f, 30f)]
+            public float interpolationSpeed;
+
+            [Tooltip("Max distance for occlusion raycasts. Events beyond this skip occlusion checks.")]
+            [Range(5f, 200f)]
+            public float maxOcclusionDistance;
+        }
+
         [Serializable]
         public struct PlatformRuntimeSettings
         {
@@ -50,6 +127,10 @@ namespace CycloneGames.Audio.Runtime
             public CategoryRuntimeSettings voice;
             public CategoryRuntimeSettings ambient;
             public CategoryRuntimeSettings music;
+
+            public UpdateLODSettings updateLOD;
+
+            public OcclusionSettings occlusion;
 
             public float GetVoiceBudgetMultiplier(AudioEventCategory category)
             {
@@ -165,7 +246,9 @@ namespace CycloneGames.Audio.Runtime
                 gameplaySFX = CreateCategorySettings(1f, 0.01f),
                 voice = CreateCategorySettings(1f, 0.02f),
                 ambient = CreateCategorySettings(0.85f, 0.04f),
-                music = CreateCategorySettings(0.75f, 0f)
+                music = CreateCategorySettings(0.75f, 0f),
+                updateLOD = CreateUpdateLODSettings(true, 30, 20f, 50f, 1, 2, 4),
+                occlusion = CreateOcclusionSettings(true, 800f, 0.35f, 8f, 80f)
             };
         }
 
@@ -188,7 +271,9 @@ namespace CycloneGames.Audio.Runtime
                 gameplaySFX = CreateCategorySettings(0.95f, 0.016f),
                 voice = CreateCategorySettings(1f, 0.03f),
                 ambient = CreateCategorySettings(0.7f, 0.06f),
-                music = CreateCategorySettings(0.75f, 0f)
+                music = CreateCategorySettings(0.75f, 0f),
+                updateLOD = CreateUpdateLODSettings(true, 20, 15f, 35f, 1, 3, 6),
+                occlusion = CreateOcclusionSettings(true, 1200f, 0.3f, 10f, 40f)
             };
         }
 
@@ -211,7 +296,9 @@ namespace CycloneGames.Audio.Runtime
                 gameplaySFX = CreateCategorySettings(0.85f, 0.02f),
                 voice = CreateCategorySettings(0.9f, 0.03f),
                 ambient = CreateCategorySettings(0.65f, 0.075f),
-                music = CreateCategorySettings(0.7f, 0f)
+                music = CreateCategorySettings(0.7f, 0f),
+                updateLOD = CreateUpdateLODSettings(true, 15, 12f, 30f, 1, 4, 8),
+                occlusion = CreateOcclusionSettings(false, 1500f, 0.4f, 8f, 30f)
             };
         }
 
@@ -234,7 +321,41 @@ namespace CycloneGames.Audio.Runtime
                 gameplaySFX = CreateCategorySettings(1.05f, 0.01f),
                 voice = CreateCategorySettings(1.05f, 0.02f),
                 ambient = CreateCategorySettings(0.8f, 0.05f),
-                music = CreateCategorySettings(0.8f, 0f)
+                music = CreateCategorySettings(0.8f, 0f),
+                updateLOD = CreateUpdateLODSettings(true, 30, 25f, 60f, 1, 2, 3),
+                occlusion = CreateOcclusionSettings(true, 700f, 0.35f, 8f, 100f)
+            };
+        }
+
+        private static OcclusionSettings CreateOcclusionSettings(
+            bool enabled, float cutoffHz, float volumeScale,
+            float interpSpeed, float maxDist)
+        {
+            return new OcclusionSettings
+            {
+                enabled = enabled,
+                occlusionLayers = ~0, // Default: all layers
+                occludedCutoffHz = cutoffHz,
+                occludedVolumeScale = volumeScale,
+                interpolationSpeed = interpSpeed,
+                maxOcclusionDistance = maxDist
+            };
+        }
+
+        private static UpdateLODSettings CreateUpdateLODSettings(
+            bool enabled, int recalcFrameInterval,
+            float nearDistance, float midDistance,
+            int nearInterval, int midInterval, int farInterval)
+        {
+            return new UpdateLODSettings
+            {
+                enabled = enabled,
+                recalcFrameInterval = recalcFrameInterval,
+                nearDistance = nearDistance,
+                midDistance = midDistance,
+                nearUpdateInterval = nearInterval,
+                midUpdateInterval = midInterval,
+                farUpdateInterval = farInterval
             };
         }
 

@@ -12,13 +12,17 @@ namespace CycloneGames.Audio.Runtime
         private float localTargetValue;
         private float localCurrentResult;
         private bool useLocalOverride;
-        private readonly float interpolationSpeed;
+        private float interpolationSpeed;
 
         /// <summary>
-        /// Constructor: Create a new ActiveParameter from the EventParameter
+        /// Constructor: Create a new ActiveParameter (used for initial pool allocation)
         /// </summary>
-        /// <param name="root">The EventParameter to apply to this event</param>
-        public ActiveParameter(AudioEventParameter root)
+        public ActiveParameter() { }
+
+        /// <summary>
+        /// Re-initialize this instance with a new EventParameter, avoiding heap allocation.
+        /// </summary>
+        public void ReInitialize(AudioEventParameter root)
         {
             this.rootParameter = root;
             this.interpolationSpeed = root?.parameter != null ? root.parameter.InterpolationSpeed : 0f;

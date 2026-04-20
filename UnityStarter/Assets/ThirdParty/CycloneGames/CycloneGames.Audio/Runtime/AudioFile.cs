@@ -119,6 +119,8 @@ namespace CycloneGames.Audio.Runtime
         private static readonly IAudioClipProvider referenceLoaderProvider = new ReferenceLoaderAudioClipProvider();
         private static readonly IAudioClipProvider locationKindLoaderProvider = new LocationKindAudioClipProvider();
         private static readonly IAudioClipProvider builtInExternalProvider = new BuiltInExternalAudioClipProvider();
+        private static IAudioClipProvider[] cachedProviderSnapshot;
+        private static bool providerSnapshotDirty = true;
 
         static AudioClipResolver()
         {
@@ -155,14 +157,6 @@ namespace CycloneGames.Audio.Runtime
             }
 
             return null;
-        }
-
-        public static async UniTask<IAudioClipHandle> LoadLegacyPathAsync(string legacyPath, CancellationToken cancellationToken)
-        {
-            if (string.IsNullOrWhiteSpace(legacyPath))
-                return null;
-
-            return await ExternalAudioClipHandle.LoadAsync(legacyPath, cancellationToken);
         }
 
         public static void ClearExternalCache()
@@ -252,6 +246,7 @@ namespace CycloneGames.Audio.Runtime
             lock (providerLock)
             {
                 RegisterProviderInternal(provider);
+                providerSnapshotDirty = true;
             }
         }
 
@@ -262,6 +257,7 @@ namespace CycloneGames.Audio.Runtime
             lock (providerLock)
             {
                 providers.Remove(provider);
+                providerSnapshotDirty = true;
             }
         }
 
@@ -273,6 +269,7 @@ namespace CycloneGames.Audio.Runtime
                 RegisterProviderInternal(referenceLoaderProvider);
                 RegisterProviderInternal(locationKindLoaderProvider);
                 RegisterProviderInternal(builtInExternalProvider);
+                providerSnapshotDirty = true;
             }
         }
 
@@ -335,13 +332,19 @@ namespace CycloneGames.Audio.Runtime
             }
 
             providers.Insert(insertIndex, provider);
+            providerSnapshotDirty = true;
         }
 
         private static IAudioClipProvider[] GetProviderSnapshot()
         {
             lock (providerLock)
             {
-                return providers.ToArray();
+                if (providerSnapshotDirty || cachedProviderSnapshot == null)
+                {
+                    cachedProviderSnapshot = providers.ToArray();
+                    providerSnapshotDirty = false;
+                }
+                return cachedProviderSnapshot;
             }
         }
 
@@ -415,17 +418,17 @@ namespace CycloneGames.Audio.Runtime
         public bool IsSuccess => clip != null;
         public AudioClip Clip => clip;
         public string Error => clip == null ? "Embedded AudioClip is null." : string.Empty;
-        public int RefCount => refCount;
+        public int RefCount => Interlocked.CompareExchange(ref refCount, 0, 0);
 
         public void Retain()
         {
             if (clip == null) return;
-            refCount++;
+            Interlocked.Increment(ref refCount);
         }
 
         public void Release()
         {
-            if (refCount > 0) refCount--;
+            Interlocked.Decrement(ref refCount);
         }
 
         public void Dispose() => Release();
@@ -436,32 +439,35 @@ namespace CycloneGames.Audio.Runtime
         private AudioClip clip;
         private Action releaseAction;
         private int refCount;
+        private int disposed;
 
         public ManagedAudioClipHandle(AudioClip clip, Action releaseAction)
         {
             this.clip = clip;
             this.releaseAction = releaseAction;
             refCount = 1;
+            disposed = 0;
         }
 
         public bool IsDone => true;
         public bool IsSuccess => clip != null;
         public AudioClip Clip => clip;
         public string Error => clip == null ? "Managed AudioClip is null." : string.Empty;
-        public int RefCount => refCount;
+        public int RefCount => Interlocked.CompareExchange(ref refCount, 0, 0);
 
         public void Retain()
         {
             if (clip == null) return;
-            refCount++;
+            Interlocked.Increment(ref refCount);
         }
 
         public void Release()
         {
-            if (refCount <= 0) return;
+            int newCount = Interlocked.Decrement(ref refCount);
+            if (newCount > 0) return;
 
-            refCount--;
-            if (refCount > 0) return;
+            // Ensure only one thread invokes the release action
+            if (Interlocked.CompareExchange(ref disposed, 1, 0) != 0) return;
 
             try
             {
@@ -490,9 +496,15 @@ namespace CycloneGames.Audio.Runtime
             public UniTask LoadTask;
             public bool LoadStarted;
 
+            // Memory budget & eviction tracking
+            public int AccessCount;
+            public float LastAccessTime;
+            public long EstimatedMemoryBytes;
+
             public CacheEntry(string location)
             {
                 Location = location;
+                LastAccessTime = Time.realtimeSinceStartup;
             }
         }
 
@@ -559,9 +571,18 @@ namespace CycloneGames.Audio.Runtime
                 released = true;
                 entry.RefCount = Mathf.Max(0, entry.RefCount - 1);
 
-                if (entry.RefCount == 0 && entry.IsDone)
+                if (entry.RefCount == 0)
                 {
-                    DestroyAndRemoveEntry(entry);
+                    // Don't destroy immediately — let the eviction system handle TTL-based cleanup.
+                    // For failed loads that nobody holds, remove right away to avoid leaking error entries.
+                    if (entry.IsDone && !entry.IsSuccess)
+                    {
+                        DestroyAndRemoveEntry(entry);
+                    }
+                    else
+                    {
+                        entry.LastAccessTime = Time.realtimeSinceStartup;
+                    }
                 }
 
                 entry = null;
@@ -588,6 +609,8 @@ namespace CycloneGames.Audio.Runtime
 
                 cacheHitCount++;
                 entry.RefCount++;
+                entry.AccessCount++;
+                entry.LastAccessTime = Time.realtimeSinceStartup;
                 if (!entry.LoadStarted)
                 {
                     entry.LoadStarted = true;
@@ -616,7 +639,7 @@ namespace CycloneGames.Audio.Runtime
                             entry.IsDone = true;
                             entry.IsSuccess = false;
                             totalFailureCount++;
-                            if (entry.RefCount == 0) cache.Remove(entry.Location);
+                            if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
                         }
                         return;
                     }
@@ -638,10 +661,14 @@ namespace CycloneGames.Audio.Runtime
                         entry.Clip.name = System.IO.Path.GetFileNameWithoutExtension(entry.Location);
                         entry.IsSuccess = true;
                         entry.IsDone = true;
+                        // Estimate PCM memory: samples * channels * sizeof(float)
+                        entry.EstimatedMemoryBytes = (long)entry.Clip.samples * entry.Clip.channels * 4;
 
                         if (entry.RefCount == 0)
                         {
-                            DestroyAndRemoveEntry(entry);
+                            // Clip loaded but nobody is waiting — keep in cache for future use.
+                            // The eviction system will clean it up after TTL expires.
+                            entry.LastAccessTime = Time.realtimeSinceStartup;
                         }
                     }
                 }
@@ -656,7 +683,7 @@ namespace CycloneGames.Audio.Runtime
                     entry.IsDone = true;
                     entry.IsSuccess = false;
                     totalFailureCount++;
-                    if (entry.RefCount == 0) cache.Remove(entry.Location);
+                    if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
                 }
             }
         }
@@ -696,6 +723,101 @@ namespace CycloneGames.Audio.Runtime
                 totalFailureCount = 0;
             }
         }
+
+        /// <summary>
+        /// Returns the total estimated memory (in bytes) of all cached external clips.
+        /// </summary>
+        public static long GetTotalCachedMemoryBytes()
+        {
+            lock (cacheLock)
+            {
+                long total = 0;
+                var enumerator = cache.GetEnumerator();
+                while (enumerator.MoveNext())
+                {
+                    if (enumerator.Current.Value.IsSuccess)
+                        total += enumerator.Current.Value.EstimatedMemoryBytes;
+                }
+                enumerator.Dispose();
+                return total;
+            }
+        }
+
+        /// <summary>
+        /// Evicts unused (refCount == 0) external clips that exceed the specified TTL.
+        /// Uses frequency-weighted scoring: clips accessed more frequently are retained longer.
+        /// Returns the number of entries evicted.
+        /// </summary>
+        /// <param name="maxIdleSeconds">Base TTL in seconds. Clips idle longer than this are candidates.</param>
+        /// <param name="memoryBudgetBytes">If total cached memory exceeds this, evict more aggressively (0 = no budget).</param>
+        public static int EvictExpiredEntries(float maxIdleSeconds = 30f, long memoryBudgetBytes = 0)
+        {
+            lock (cacheLock)
+            {
+                if (cache.Count == 0) return 0;
+
+                float now = Time.realtimeSinceStartup;
+                bool overBudget = memoryBudgetBytes > 0 && GetTotalCachedMemoryBytesUnsafe() > memoryBudgetBytes;
+
+                // Collect eviction candidates: refCount == 0, loaded successfully, past TTL
+                evictionCandidates.Clear();
+                var enumerator = cache.GetEnumerator();
+                while (enumerator.MoveNext())
+                {
+                    CacheEntry entry = enumerator.Current.Value;
+                    if (entry.RefCount > 0 || !entry.IsDone || !entry.IsSuccess) continue;
+
+                    float idleTime = now - entry.LastAccessTime;
+                    // Frequency-weighted TTL: more accessed clips get proportionally longer TTL
+                    float effectiveTTL = maxIdleSeconds * Mathf.Max(1f, entry.AccessCount * 0.5f);
+
+                    if (overBudget)
+                        effectiveTTL *= 0.25f; // Aggressively shorten TTL when over budget
+
+                    if (idleTime >= effectiveTTL)
+                    {
+                        // Score for prioritized eviction: lower = evict first
+                        float score = entry.AccessCount / Mathf.Max(idleTime, 0.01f);
+                        evictionCandidates.Add((entry, score));
+                    }
+                }
+                enumerator.Dispose();
+
+                if (evictionCandidates.Count == 0) return 0;
+
+                // Sort: lowest score (least valuable) first
+                evictionCandidates.Sort((a, b) => a.score.CompareTo(b.score));
+
+                int evictedCount = 0;
+                for (int i = 0; i < evictionCandidates.Count; i++)
+                {
+                    DestroyAndRemoveEntry(evictionCandidates[i].entry);
+                    evictedCount++;
+
+                    // If we're under budget again, stop evicting
+                    if (memoryBudgetBytes > 0 && GetTotalCachedMemoryBytesUnsafe() <= memoryBudgetBytes)
+                        break;
+                }
+
+                evictionCandidates.Clear();
+                return evictedCount;
+            }
+        }
+
+        private static long GetTotalCachedMemoryBytesUnsafe()
+        {
+            long total = 0;
+            var enumerator = cache.GetEnumerator();
+            while (enumerator.MoveNext())
+            {
+                if (enumerator.Current.Value.IsSuccess)
+                    total += enumerator.Current.Value.EstimatedMemoryBytes;
+            }
+            enumerator.Dispose();
+            return total;
+        }
+
+        private static readonly List<(CacheEntry entry, float score)> evictionCandidates = new List<(CacheEntry, float)>(32);
 
         public static ExternalAudioClipCacheStats GetCacheStats()
         {
@@ -756,12 +878,39 @@ namespace CycloneGames.Audio.Runtime
 
         private static AudioType GetAudioType(string path)
         {
-            string lower = path.ToLowerInvariant();
-            if (lower.EndsWith(".mp3")) return AudioType.MPEG;
-            if (lower.EndsWith(".wav")) return AudioType.WAV;
-            if (lower.EndsWith(".ogg")) return AudioType.OGGVORBIS;
-            if (lower.EndsWith(".aiff") || lower.EndsWith(".aif")) return AudioType.AIFF;
+            if (string.IsNullOrEmpty(path)) return AudioType.UNKNOWN;
+
+            // Find extension start from the end without allocating a substring
+            int dotIndex = path.LastIndexOf('.');
+            if (dotIndex < 0 || dotIndex >= path.Length - 1) return AudioType.UNKNOWN;
+
+            int extLen = path.Length - dotIndex - 1;
+
+            if (MatchExtension(path, dotIndex, "mp3")) return AudioType.MPEG;
+            if (MatchExtension(path, dotIndex, "wav")) return AudioType.WAV;
+            if (MatchExtension(path, dotIndex, "ogg")) return AudioType.OGGVORBIS;
+            if (MatchExtension(path, dotIndex, "aiff") || MatchExtension(path, dotIndex, "aif")) return AudioType.AIFF;
+#if !UNITY_WEBGL
+            if (MatchExtension(path, dotIndex, "m4a") || MatchExtension(path, dotIndex, "mp4") || MatchExtension(path, dotIndex, "aac")) return AudioType.ACC;
+#endif
+            if (MatchExtension(path, dotIndex, "webm")) return AudioType.OGGVORBIS; // WebM audio uses Vorbis codec
+            if (MatchExtension(path, dotIndex, "flac")) return AudioType.UNKNOWN; // Unity does not natively support FLAC via UnityWebRequest
+
             return AudioType.UNKNOWN;
+        }
+
+        private static bool MatchExtension(string path, int dotIndex, string ext)
+        {
+            int extLen = path.Length - dotIndex - 1;
+            if (extLen != ext.Length) return false;
+
+            for (int i = 0; i < ext.Length; i++)
+            {
+                char c = path[dotIndex + 1 + i];
+                if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+                if (c != ext[i]) return false;
+            }
+            return true;
         }
     }
 
@@ -787,9 +936,6 @@ namespace CycloneGames.Audio.Runtime
 
         [SerializeField]
         private AudioClipReference externalReference = null;
-
-        [SerializeField, FormerlySerializedAs("filePath"), HideInInspector]
-        private string legacyFilePath = "";
 
         public AudioClip File
         {
@@ -884,7 +1030,7 @@ namespace CycloneGames.Audio.Runtime
                 CalculateStartTime(this.embeddedClip);
                 activeEvent.AddEventSource(this.embeddedClip, null, null, startTime, AudioClipResolver.CreateEmbedded(this.embeddedClip));
             }
-            else if (effectiveMode == AudioFileSourceMode.ExternalReference && (this.externalReference != null || !string.IsNullOrEmpty(this.legacyFilePath)))
+            else if (effectiveMode == AudioFileSourceMode.ExternalReference && this.externalReference != null)
             {
                 activeEvent.isAsync = true;
                 LoadClipAsync(activeEvent).Forget();
@@ -899,9 +1045,7 @@ namespace CycloneGames.Audio.Runtime
         {
             try
             {
-                IAudioClipHandle handle = this.externalReference != null
-                    ? await AudioClipResolver.LoadExternalAsync(this.externalReference, activeEvent.GetCancellationToken())
-                    : await AudioClipResolver.LoadLegacyPathAsync(this.legacyFilePath, activeEvent.GetCancellationToken());
+                IAudioClipHandle handle = await AudioClipResolver.LoadExternalAsync(this.externalReference, activeEvent.GetCancellationToken());
 
                 if (handle == null)
                 {
@@ -969,10 +1113,7 @@ namespace CycloneGames.Audio.Runtime
 
         private string GetDisplayLocation()
         {
-            if (externalReference != null)
-                return externalReference.ResolveLocation();
-
-            return legacyFilePath;
+            return externalReference != null ? externalReference.ResolveLocation() : string.Empty;
         }
 
         private AudioFileSourceMode GetEffectiveSourceMode()
@@ -983,7 +1124,7 @@ namespace CycloneGames.Audio.Runtime
             if (embeddedClip != null)
                 return AudioFileSourceMode.EmbeddedClip;
 
-            if (externalReference != null || !string.IsNullOrEmpty(legacyFilePath))
+            if (externalReference != null)
                 return AudioFileSourceMode.ExternalReference;
 
             return sourceMode;
@@ -1070,11 +1211,6 @@ namespace CycloneGames.Audio.Runtime
                             EditorGUILayout.LabelField("File Path", this.externalReference.GetDisplayLocation(), EditorStyles.wordWrappedLabel);
                             break;
                     }
-                }
-                else if (!string.IsNullOrEmpty(this.legacyFilePath))
-                {
-                    EditorGUILayout.HelpBox("Legacy filePath data is still present on this node. Assign a new AudioClipReference asset to complete migration.", MessageType.Warning);
-                    EditorGUILayout.LabelField("Legacy Path", this.legacyFilePath, EditorStyles.wordWrappedLabel);
                 }
             }
             this.volumeOffset = EditorGUILayout.Slider("Volume Offset", this.volumeOffset, -1, 1);

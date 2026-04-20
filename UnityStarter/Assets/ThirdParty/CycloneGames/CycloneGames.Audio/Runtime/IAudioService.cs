@@ -1,4 +1,6 @@
 using System;
+using System.Threading;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 namespace CycloneGames.Audio.Runtime
@@ -188,5 +190,14 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         /// <param name="bank">The bank asset to unload.</param>
         void UnloadBank(AudioBank bank);
+
+        /// <summary>
+        /// Preloads all externally-referenced AudioClips from a bank's events into the clip cache.
+        /// Useful for warming the cache before gameplay scenes to avoid first-play load latency.
+        /// </summary>
+        /// <param name="bank">The bank whose external clips should be preloaded.</param>
+        /// <param name="cancellationToken">Token to cancel the preload operation.</param>
+        /// <returns>Number of clips successfully preloaded.</returns>
+        UniTask<int> PreloadBankClipsAsync(AudioBank bank, CancellationToken cancellationToken = default);
     }
 }

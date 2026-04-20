@@ -56,6 +56,12 @@ namespace CycloneGames.Audio.Runtime
         [SerializeField]
         public bool HRTF = false;
         /// <summary>
+        /// The distance within which the sound stays at maximum volume (inner radius).
+        /// Prevents volume spikes at very close range.
+        /// </summary>
+        [SerializeField]
+        public float MinDistance = 1;
+        /// <summary>
         /// The distance beyond which the sound can no longer be heard
         /// </summary>
         [SerializeField]
@@ -81,14 +87,62 @@ namespace CycloneGames.Audio.Runtime
         [SerializeField, Range(0, 360)]
         public float Spread = 0;
 
+        // ---- Advanced 3D Spatial Features ----
+
+        /// <summary>
+        /// Optional curve mapping normalized distance (0=MinDistance, 1=MaxDistance) to spread angle (0-360).
+        /// When enabled, overrides the fixed Spread value. Allows sources to widen as the listener gets close.
+        /// </summary>
+        [SerializeField]
+        public bool useSpreadCurve = false;
+        [SerializeField]
+        public AnimationCurve spreadCurve = AnimationCurve.Linear(0f, 0.5f, 1f, 0f);
+
+        /// <summary>
+        /// Enable distance-based low-pass filtering to simulate air absorption.
+        /// High frequencies attenuate faster over distance than low frequencies.
+        /// </summary>
+        [SerializeField]
+        public bool useDistanceLowPass = false;
+        /// <summary>
+        /// Curve mapping normalized distance (0=MinDistance, 1=MaxDistance) to LP cutoff frequency.
+        /// Default: 22000 Hz at distance 0, 800 Hz at distance 1.
+        /// </summary>
+        [SerializeField]
+        public AnimationCurve distanceLowPassCurve = new AnimationCurve(
+            new Keyframe(0f, 22000f), new Keyframe(1f, 800f));
+
+        /// <summary>
+        /// Enable directional cone attenuation. Sound is louder in the emitter's forward direction.
+        /// </summary>
+        [SerializeField]
+        public bool useConeAttenuation = false;
+        /// <summary>
+        /// Inner cone angle (degrees). Sound at full volume within this angle.
+        /// </summary>
+        [SerializeField, Range(0f, 360f)]
+        public float coneInnerAngle = 60f;
+        /// <summary>
+        /// Outer cone angle (degrees). Sound attenuates between inner and outer angles.
+        /// </summary>
+        [SerializeField, Range(0f, 360f)]
+        public float coneOuterAngle = 120f;
+        /// <summary>
+        /// Volume multiplier applied when the listener is completely outside the outer cone.
+        /// </summary>
+        [SerializeField, Range(0f, 1f)]
+        public float coneOuterVolume = 0.25f;
+
         /// <summary>
         /// The width in pixels for the node's window in the graph
         /// </summary>
-        private const float NodeWidth = 300;
-        /// <summary>
-        /// The height in pixels for the node's window in the graph
-        /// </summary>
-        private const float NodeHeight = 250;
+        private const float NodeWidth  = 310f;
+        private const float TitleBarH  = 18f;
+        private const float RowH       = 19f;
+        private const float RowGap     =  2f;
+        private const float SectionGap =  6f;
+        private const float BottomPad  = 10f;
+        private const float HelpBoxH   = 38f;  // HelpBox (~2 rows)
 
         /// <summary>
         /// Apply all of the properties to the ActiveEvent and start processing the rest of the event's nodes
@@ -125,13 +179,32 @@ namespace CycloneGames.Audio.Runtime
                 if (this.spatialBlend > 0)
                 {
                     eventSource.spatialize = this.HRTF;
+                    eventSource.minDistance = this.MinDistance;
                     eventSource.maxDistance = this.MaxDistance;
-                    eventSource.rolloffMode = AudioRolloffMode.Custom;
-                    eventSource.SetCustomCurve(AudioSourceCurveType.CustomRolloff, this.attenuationCurve);
+                    if (this.attenuationCurve != null && this.attenuationCurve.length > 0)
+                    {
+                        eventSource.rolloffMode = AudioRolloffMode.Custom;
+                        eventSource.SetCustomCurve(AudioSourceCurveType.CustomRolloff, this.attenuationCurve);
+                    }
+                    else
+                    {
+                        eventSource.rolloffMode = AudioRolloffMode.Logarithmic;
+                        string eventName = activeEvent.rootEvent != null ? activeEvent.rootEvent.name : activeEvent.name;
+                        Debug.LogWarning($"[AudioOutput] Node '{this.name}' in event '{eventName}' has Spatial Blend > 0 but an empty Attenuation curve. Falling back to Logarithmic rolloff. Fix it in the Audio Graph.");
+                    }
                     eventSource.dopplerLevel = this.dopplerLevel;
                     eventSource.reverbZoneMix = this.ReverbZoneMix;
                     if (this.ReverbZoneMix == 0) eventSource.bypassReverbZones = true;
                     eventSource.spread = this.Spread;
+
+                    // Attach AudioLowPassFilter for distance-based air absorption or occlusion
+                    if (this.useDistanceLowPass || AudioManager.IsOcclusionEnabled)
+                    {
+                        var lpf = eventSource.GetComponent<AudioLowPassFilter>();
+                        if (lpf == null) lpf = eventSource.gameObject.AddComponent<AudioLowPassFilter>();
+                        lpf.cutoffFrequency = 22000f;
+                        lpf.lowpassResonanceQ = 1f;
+                    }
                 }
             }
         }
@@ -147,9 +220,47 @@ namespace CycloneGames.Audio.Runtime
         {
             this.name = "Output";
             this.nodeRect.position = position;
-            this.nodeRect.width = NodeWidth;
-            this.nodeRect.height = NodeHeight;
+            this.nodeRect.width    = NodeWidth;
+            this.nodeRect.height   = CalcHeight();
             AddInput();
+        }
+
+        private float CalcHeight()
+        {
+            float R(int n) => n * (RowH + RowGap);
+
+            // Always-visible: MixerGroup + Volume + Pitch + Loop + SpatialBlend
+            float h = TitleBarH + R(5);
+
+            // 3D section (shown but disabled when spatialBlend == 0)
+            // HRTF + MinDist + MaxDist + Attenuation + Doppler + ReverbZoneMix + Spread
+            h += R(7);
+
+            // Warning HelpBox when spatialBlend > 0 and attenuation curve is missing
+            if (this.spatialBlend > 0f && (this.attenuationCurve == null || this.attenuationCurve.length == 0))
+                h += HelpBoxH + RowGap;
+
+            // Advanced 3D block — only rendered when spatialBlend > 0
+            if (this.spatialBlend > 0f)
+            {
+                h += SectionGap + R(1); // "Advanced 3D" header
+                h += R(1);              // useSpreadCurve toggle
+                if (this.useSpreadCurve) h += R(1);
+                h += R(1);              // useDistanceLowPass toggle
+                if (this.useDistanceLowPass) h += R(1);
+                h += R(1);              // useConeAttenuation toggle
+                if (this.useConeAttenuation) h += R(3);
+            }
+
+            return h + BottomPad;
+        }
+
+        public override void DrawNode(int id)
+        {
+            this.nodeRect.height = CalcHeight();
+            this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
+            DrawInput();
+            // Output node has no output connector
         }
 
         /// <summary>
@@ -157,20 +268,66 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         protected override void DrawProperties()
         {
+            EditorGUI.BeginChangeCheck();
+
+            // ---- Always-visible section ----
             this.mixerGroup = EditorGUILayout.ObjectField("Mixer Group", this.mixerGroup, typeof(AudioMixerGroup), false) as AudioMixerGroup;
             EditorGUILayout.MinMaxSlider("Volume", ref this.MinVolume, ref this.MaxVolume, Volume_Min, Volume_Max);
-            EditorGUILayout.MinMaxSlider("Pitch", ref this.MinPitch, ref this.MaxPitch, Pitch_Min, Pitch_Max);
-            this.loop = EditorGUILayout.Toggle("Loop", this.loop);
-            this.spatialBlend = EditorGUILayout.Slider("Spatial Blend", this.spatialBlend, 0, 1);
+            EditorGUILayout.MinMaxSlider("Pitch",  ref this.MinPitch,  ref this.MaxPitch,  Pitch_Min,  Pitch_Max);
+            this.loop         = EditorGUILayout.Toggle("Loop",          this.loop);
+            this.spatialBlend = EditorGUILayout.Slider("Spatial Blend", this.spatialBlend, 0f, 1f);
 
-            EditorGUI.BeginDisabledGroup(this.spatialBlend == 0);
-            this.HRTF = EditorGUILayout.Toggle("HRTF", this.HRTF);
-            this.MaxDistance = EditorGUILayout.FloatField("Max Distance", this.MaxDistance);
-            this.attenuationCurve = EditorGUILayout.CurveField("Attenuation", this.attenuationCurve);
-            this.dopplerLevel = EditorGUILayout.FloatField("Doppler Level", this.dopplerLevel);
-            this.ReverbZoneMix = EditorGUILayout.Slider("Reverb Zone Mix", this.ReverbZoneMix, 0, 1.1f);
-            this.Spread = EditorGUILayout.Slider("Spread", this.Spread, 0, 360f);
-            EditorGUI.EndDisabledGroup();
+            // ---- 3D section (disabled when 2D) ----
+            using (new EditorGUI.DisabledScope(this.spatialBlend == 0f))
+            {
+                this.HRTF         = EditorGUILayout.Toggle("HRTF",          this.HRTF);
+                this.MinDistance  = Mathf.Max(0.01f, EditorGUILayout.FloatField("Min Distance", this.MinDistance));
+                this.MaxDistance  = Mathf.Max(this.MinDistance, EditorGUILayout.FloatField("Max Distance", this.MaxDistance));
+                this.attenuationCurve = EditorGUILayout.CurveField("Attenuation", this.attenuationCurve);
+                this.dopplerLevel = EditorGUILayout.FloatField("Doppler Level", this.dopplerLevel);
+                this.ReverbZoneMix = EditorGUILayout.Slider("Reverb Zone Mix", this.ReverbZoneMix, 0f, 1.1f);
+                this.Spread       = EditorGUILayout.Slider("Spread",          this.Spread,          0f, 360f);
+            }
+
+            // ---- Configuration warning ----
+            if (this.spatialBlend > 0f && (this.attenuationCurve == null || this.attenuationCurve.length == 0))
+                EditorGUILayout.HelpBox("Attenuation curve is empty — will fall back to Logarithmic rolloff at runtime.", MessageType.Warning);
+
+            // ---- Advanced 3D sub-section (only when spatial) ----
+            if (this.spatialBlend > 0f)
+            {
+                EditorGUILayout.Space(4f);
+                EditorGUILayout.LabelField("Advanced 3D", EditorStyles.boldLabel);
+
+                this.useSpreadCurve = EditorGUILayout.Toggle("Spread Curve", this.useSpreadCurve);
+                if (this.useSpreadCurve)
+                {
+                    EditorGUI.indentLevel++;
+                    this.spreadCurve = EditorGUILayout.CurveField("Dist → Spread°", this.spreadCurve);
+                    EditorGUI.indentLevel--;
+                }
+
+                this.useDistanceLowPass = EditorGUILayout.Toggle("Distance LP", this.useDistanceLowPass);
+                if (this.useDistanceLowPass)
+                {
+                    EditorGUI.indentLevel++;
+                    this.distanceLowPassCurve = EditorGUILayout.CurveField("Dist → LP Hz", this.distanceLowPassCurve);
+                    EditorGUI.indentLevel--;
+                }
+
+                this.useConeAttenuation = EditorGUILayout.Toggle("Cone Atten.", this.useConeAttenuation);
+                if (this.useConeAttenuation)
+                {
+                    EditorGUI.indentLevel++;
+                    this.coneInnerAngle  = EditorGUILayout.Slider("Inner°", this.coneInnerAngle,  0f, 360f);
+                    this.coneOuterAngle  = EditorGUILayout.Slider("Outer°", Mathf.Max(this.coneOuterAngle, this.coneInnerAngle), this.coneInnerAngle, 360f);
+                    this.coneOuterVolume = EditorGUILayout.Slider("Out Vol", this.coneOuterVolume, 0f, 1f);
+                    EditorGUI.indentLevel--;
+                }
+            }
+
+            if (EditorGUI.EndChangeCheck())
+                EditorUtility.SetDirty(this);
         }
 
 #endif
