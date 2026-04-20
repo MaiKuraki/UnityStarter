@@ -1,21 +1,38 @@
 using System;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 
 namespace CycloneGames.GameplayTags.Runtime
 {
    [Serializable]
    [DebuggerDisplay("{m_Name,nq}")]
-   public struct GameplayTag : IEquatable<GameplayTag>
+   public struct GameplayTag : IEquatable<GameplayTag>, IComparable<GameplayTag>
    {
       public static readonly GameplayTag None = new() { m_RuntimeIndex = 0, m_Name = null };
 
-      public readonly bool IsNone => GetResolvedRuntimeIndex() == 0 && string.IsNullOrEmpty(m_Name);
+      public readonly bool IsNone
+      {
+         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+         get => GetResolvedRuntimeIndex() == 0 && string.IsNullOrEmpty(m_Name);
+      }
 
-      public readonly bool IsValid => GetResolvedRuntimeIndex() >= 0;
+      public readonly bool IsValid
+      {
+         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+         get => GetResolvedRuntimeIndex() >= 0;
+      }
 
-      public readonly bool IsLeaf => !IsNone && GameplayTagManager.IsLeafTag(GetResolvedRuntimeIndex());
+      public readonly bool IsLeaf
+      {
+         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+         get => !IsNone && GameplayTagManager.IsLeafTag(GetResolvedRuntimeIndex());
+      }
 
-      public readonly int RuntimeIndex => GetResolvedRuntimeIndex();
+      public readonly int RuntimeIndex
+      {
+         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+         get => GetResolvedRuntimeIndex();
+      }
 
       public readonly GameplayTagDefinition Definition
       {
@@ -48,13 +65,11 @@ namespace CycloneGames.GameplayTags.Runtime
 
       public readonly GameplayTag ParentTag
       {
+         [MethodImpl(MethodImplOptions.AggressiveInlining)]
          get
          {
             int parentRuntimeIndex = GameplayTagManager.GetParentRuntimeIndex(GetResolvedRuntimeIndex());
-            if (parentRuntimeIndex <= 0)
-               return None;
-
-            return GameplayTagManager.GetTagFromRuntimeIndex(parentRuntimeIndex);
+            return parentRuntimeIndex <= 0 ? None : GameplayTagManager.GetTagFromRuntimeIndex(parentRuntimeIndex);
          }
       }
 
@@ -82,18 +97,31 @@ namespace CycloneGames.GameplayTags.Runtime
          m_Name = definition.IsNone() ? null : definition.TagName;
       }
 
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public readonly bool IsParentOf(in GameplayTag tag)
       {
          ValidateIsNotNone();
          return GameplayTagManager.IsParentOf(GetResolvedRuntimeIndex(), tag.GetResolvedRuntimeIndex());
       }
 
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public readonly bool IsChildOf(in GameplayTag parentTag)
       {
          ValidateIsNotNone();
          return GameplayTagManager.IsChildOf(GetResolvedRuntimeIndex(), parentTag.GetResolvedRuntimeIndex());
       }
 
+      /// <summary>
+      /// Returns the number of matching hierarchy levels between this tag and another.
+      /// E.g., "A.B.C" vs "A.B.D" returns 2 (matching "A" and "A.B").
+      /// </summary>
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      public readonly int MatchesTagDepth(in GameplayTag other)
+      {
+         return GameplayTagManager.MatchesTagDepth(this, other);
+      }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public readonly bool Equals(GameplayTag other)
       {
          int runtimeIndex = GetResolvedRuntimeIndex();
@@ -115,6 +143,12 @@ namespace CycloneGames.GameplayTags.Runtime
          return runtimeIndex >= 0 ? runtimeIndex : HashCode.Combine(runtimeIndex, m_Name);
       }
 
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      public readonly int CompareTo(GameplayTag other)
+      {
+         return GetResolvedRuntimeIndex().CompareTo(other.GetResolvedRuntimeIndex());
+      }
+
       public override readonly string ToString()
       {
          if (IsNone)
@@ -123,21 +157,27 @@ namespace CycloneGames.GameplayTags.Runtime
          return IsValid ? GameplayTagManager.GetTagName(GetResolvedRuntimeIndex()) : m_Name;
       }
 
+      /// <summary>
+      /// Resolves the runtime index from m_Name if m_RuntimeIndex is unset.
+      /// Uses Unsafe.AsRef to cache the resolved index back into the struct field,
+      /// which works when this struct lives in an array/field (not a stack copy).
+      /// </summary>
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
       private readonly int GetResolvedRuntimeIndex()
       {
-         if (m_RuntimeIndex != 0)
-         {
-            return m_RuntimeIndex;
-         }
+         int idx = m_RuntimeIndex;
+         if (idx != 0) return idx;
 
          if (string.IsNullOrEmpty(m_Name))
-         {
             return 0;
-         }
 
-         if (GameplayTagManager.TryRequestTag(m_Name, out GameplayTag resolvedTag))
+         TagDataSnapshot snap = GameplayTagManager.Snapshot;
+         if (snap != null && snap.TryGetRuntimeIndex(m_Name, out int resolved))
          {
-            return resolvedTag.m_RuntimeIndex;
+            // Write back to cache — works when this struct is in an array/field,
+            // harmless no-op on stack copies. No 'unsafe' keyword required.
+            Unsafe.AsRef(in m_RuntimeIndex) = resolved;
+            return resolved;
          }
 
          return -1;

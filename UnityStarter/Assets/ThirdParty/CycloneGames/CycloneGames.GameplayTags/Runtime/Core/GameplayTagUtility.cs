@@ -4,7 +4,7 @@ namespace CycloneGames.GameplayTags.Runtime
 {
    public static class GameplayTagUtility
    {
-      internal static void WarnNotExplictlyAddedTagRemoval(GameplayTag gameplayTag)
+      internal static void WarnNotExplicitlyAddedTagRemoval(GameplayTag gameplayTag)
       {
          GameplayTagLogger.LogWarning($"Attempted to remove tag {gameplayTag} from tag count container, but it is not explicitly added to the container.");
       }
@@ -13,7 +13,7 @@ namespace CycloneGames.GameplayTags.Runtime
       {
          foreach (GameplayTag tag in tags)
          {
-            WarnNotExplictlyAddedTagRemoval(tag);
+            WarnNotExplicitlyAddedTagRemoval(tag);
          }
       }
 
@@ -22,11 +22,11 @@ namespace CycloneGames.GameplayTags.Runtime
       /// example, if the tag is "A.B.C", the result will be ["A", "A.B",
       /// "A.B.C"]
       /// </summary>
-      public static string[] GetHeirarchyNames(string tagName)
+      public static string[] GetHierarchyNames(string tagName)
       {
          ValidateName(tagName);
 
-         int level = GetHeirarchyLevelFromName(tagName);
+         int level = GetHierarchyLevelFromName(tagName);
          string[] names = new string[level];
          names[--level] = tagName;
 
@@ -65,7 +65,7 @@ namespace CycloneGames.GameplayTags.Runtime
          return name.Substring(0, lastDot);
       }
 
-      public static int GetHeirarchyLevelFromName(string name)
+      public static int GetHierarchyLevelFromName(string name)
       {
          ValidateName(name);
 

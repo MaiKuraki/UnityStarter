@@ -251,10 +251,10 @@ namespace CycloneGames.GameplayTags.Runtime
       private void AddTagInternal(GameplayTag tag, List<PendingTagChange> pendingChanges, Dictionary<int, int> changeIndexMap, ref bool explicitChanged, ref bool implicitChanged, bool batchMode)
       {
          EnsureCountCapacity(tag.RuntimeIndex);
-         int previousExplictTagCount = m_ExplicitTagCountByIndex[tag.RuntimeIndex];
-         m_ExplicitTagCountByIndex[tag.RuntimeIndex] = previousExplictTagCount + 1;
+         int previousExplicitTagCount = m_ExplicitTagCountByIndex[tag.RuntimeIndex];
+         m_ExplicitTagCountByIndex[tag.RuntimeIndex] = previousExplicitTagCount + 1;
 
-         if (previousExplictTagCount == 0)
+         if (previousExplicitTagCount == 0)
          {
             if (batchMode)
             {
@@ -345,14 +345,14 @@ namespace CycloneGames.GameplayTags.Runtime
       private void RemoveTagInternal(GameplayTag tag, List<PendingTagChange> pendingChanges, Dictionary<int, int> changeIndexMap, ref bool explicitChanged, ref bool implicitChanged, bool batchMode)
       {
          int runtimeIndex = tag.RuntimeIndex;
-         int explictTagCount = runtimeIndex >= 0 && runtimeIndex < m_ExplicitTagCountByIndex.Length ? m_ExplicitTagCountByIndex[runtimeIndex] : 0;
-         if (explictTagCount == 0)
+         int explicitTagCount = runtimeIndex >= 0 && runtimeIndex < m_ExplicitTagCountByIndex.Length ? m_ExplicitTagCountByIndex[runtimeIndex] : 0;
+         if (explicitTagCount == 0)
          {
-            GameplayTagUtility.WarnNotExplictlyAddedTagRemoval(tag);
+            GameplayTagUtility.WarnNotExplicitlyAddedTagRemoval(tag);
             return;
          }
 
-         if (explictTagCount == 1)
+         if (explicitTagCount == 1)
          {
             if (batchMode)
             {
@@ -367,7 +367,7 @@ namespace CycloneGames.GameplayTags.Runtime
          }
          else
          {
-            m_ExplicitTagCountByIndex[runtimeIndex] = explictTagCount - 1;
+            m_ExplicitTagCountByIndex[runtimeIndex] = explicitTagCount - 1;
          }
 
          ReadOnlySpan<int> hierarchyTagIndices = GameplayTagManager.GetHierarchyRuntimeIndicesSpan(tag.RuntimeIndex);

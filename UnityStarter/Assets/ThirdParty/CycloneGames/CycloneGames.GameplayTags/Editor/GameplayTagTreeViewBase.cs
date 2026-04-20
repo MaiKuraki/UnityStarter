@@ -163,11 +163,11 @@ namespace CycloneGames.GameplayTags.Editor
          GUILayout.EndArea();
       }
 
-      private void CreateAddNewTagPanel()
+      private void CreateAddNewTagPanel(string prefillTagName = null)
       {
          m_DeleteTagPanel = null;
 
-         m_AddNewTagPanel = new();
+         m_AddNewTagPanel = new(prefillTagName);
 
          m_AddNewTagPanel.OnClose += () =>
          {
@@ -306,6 +306,12 @@ namespace CycloneGames.GameplayTags.Editor
          menu.AddItem(new GUIContent("Copy Tag Name"), false, () =>
          {
             EditorGUIUtility.systemCopyBuffer = tagName;
+         });
+
+         menu.AddSeparator("");
+         menu.AddItem(new GUIContent("Create Child Tag"), false, () =>
+         {
+            CreateAddNewTagPanel(tagName + ".");
          });
 
          if (item.CanBeDeleted)

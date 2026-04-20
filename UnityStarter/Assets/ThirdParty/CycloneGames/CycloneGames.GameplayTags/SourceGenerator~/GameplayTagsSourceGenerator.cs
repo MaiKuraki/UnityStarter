@@ -146,7 +146,7 @@ namespace CycloneGames.GameplayTags.SourceGenerator
                 string sanitizedPart = SanitizeIdentifier(part);
                 if (!currentNode.Children.ContainsKey(sanitizedPart))
                 {
-                    currentNode.Children[sanitizedPart] = new TagNode(sanitizedPart, currentNode);
+                    currentNode.Children[sanitizedPart] = new TagNode(sanitizedPart, part, currentNode);
                 }
                 currentNode = currentNode.Children[sanitizedPart];
             }
@@ -204,11 +204,8 @@ namespace CycloneGames.GameplayTags.SourceGenerator
 
             while (current != null && current.Parent != null) // Stop at root's children
             {
-                // We need the original, unsanitized name for the RequestTag call
-                // This requires a more complex TagNode to store both original and sanitized names.
-                // For now, we'll assume sanitized name is close enough for hierarchy, but this is a known limitation.
-                // A proper implementation would store the original segment. Let's stick to the sanitized one for now.
-                path.Push(current.Name);
+                // Use the original unsanitized segment name for the RequestTag call
+                path.Push(current.OriginalName);
                 current = current.Parent;
             }
 
@@ -218,12 +215,14 @@ namespace CycloneGames.GameplayTags.SourceGenerator
         private class TagNode
         {
             public string Name { get; }
+            public string OriginalName { get; }
             public TagNode? Parent { get; set; }
             public Dictionary<string, TagNode> Children { get; }
 
-            public TagNode(string name, TagNode? parent = null)
+            public TagNode(string name, string originalName = null, TagNode? parent = null)
             {
                 Name = name;
+                OriginalName = originalName ?? name;
                 Parent = parent;
                 Children = new Dictionary<string, TagNode>();
             }

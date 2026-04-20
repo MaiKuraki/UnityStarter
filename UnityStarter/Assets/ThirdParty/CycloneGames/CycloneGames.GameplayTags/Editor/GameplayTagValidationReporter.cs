@@ -5,8 +5,6 @@ using System.Collections.Generic;
 using CycloneGames.GameplayTags.Runtime;
 using UnityEditor.SceneManagement;
 
-//  NOTE: This tool doesn't works well.
-
 namespace CycloneGames.GameplayTags.Editor
 {
     public class GameplayTagValidationReporter : EditorWindow
@@ -31,8 +29,7 @@ namespace CycloneGames.GameplayTags.Editor
         private List<InvalidTagEntry> m_InvalidTags = new List<InvalidTagEntry>();
         private Vector2 m_ScrollPosition;
 
-        //  NOTE: This tool doesn't works well. keep comment until we find a good way validate the tags required in GameObject(Prefab)/Scene/ScriptableObject.
-        // [MenuItem("Tools/CycloneGames/GameplayTags/Tag Validation Window")]
+        [MenuItem("Tools/CycloneGames/GameplayTags/Tag Validation Window")]
         public static void ShowWindow()
         {
             GetWindow<GameplayTagValidationReporter>("GameplayTag Validation");
@@ -104,15 +101,27 @@ namespace CycloneGames.GameplayTags.Editor
 
             // --- Part 1: Scan Project Assets (Prefabs and ScriptableObjects) ---
             string[] assetGuids = AssetDatabase.FindAssets("t:ScriptableObject t:GameObject");
-            for (int i = 0; i < assetGuids.Length; i++)
+
+            // Suppress "The referenced script (Unknown) on this Behaviour is missing!" warnings
+            // that Unity emits when loading prefabs with missing script references.
+            var previousFilterLogType = Debug.unityLogger.filterLogType;
+            Debug.unityLogger.filterLogType = LogType.Error;
+            try
             {
-                string assetPath = AssetDatabase.GUIDToAssetPath(assetGuids[i]);
-                EditorUtility.DisplayProgressBar("Scanning Project Assets", $"Scanning: {assetPath}", (float)i / assetGuids.Length);
+                for (int i = 0; i < assetGuids.Length; i++)
+                {
+                    string assetPath = AssetDatabase.GUIDToAssetPath(assetGuids[i]);
+                    EditorUtility.DisplayProgressBar("Scanning Project Assets", $"Scanning: {assetPath}", (float)i / assetGuids.Length);
 
-                Object assetObject = AssetDatabase.LoadAssetAtPath<Object>(assetPath);
-                if (assetObject == null) continue;
+                    Object assetObject = AssetDatabase.LoadAssetAtPath<Object>(assetPath);
+                    if (assetObject == null) continue;
 
-                CheckObjectForInvalidTags(assetObject, assetPath);
+                    CheckObjectForInvalidTags(assetObject, assetPath);
+                }
+            }
+            finally
+            {
+                Debug.unityLogger.filterLogType = previousFilterLogType;
             }
 
             // --- Part 2: Scan All Open Scenes ---
@@ -241,17 +250,45 @@ namespace CycloneGames.GameplayTags.Editor
             }
 
             int fixedCount = 0;
-            // Iterate backwards because FixSingleInvalidTag will remove items from the list
             for (int i = m_InvalidTags.Count - 1; i >= 0; i--)
             {
-                FixSingleInvalidTag(m_InvalidTags[i], i);
-                fixedCount++;
+                var entry = m_InvalidTags[i];
+                SerializedObject serializedObject = new SerializedObject(entry.ContextObject);
+                SerializedProperty containerProperty = serializedObject.FindProperty(entry.PropertyPath);
+                if (containerProperty == null) continue;
+
+                SerializedProperty tagsArrayProperty = containerProperty.FindPropertyRelative("m_SerializedExplicitTags");
+                if (tagsArrayProperty == null || !tagsArrayProperty.isArray) continue;
+
+                bool tagRemoved = false;
+                for (int j = tagsArrayProperty.arraySize - 1; j >= 0; j--)
+                {
+                    if (tagsArrayProperty.GetArrayElementAtIndex(j).stringValue == entry.TagName)
+                    {
+                        tagsArrayProperty.DeleteArrayElementAtIndex(j);
+                        tagRemoved = true;
+                    }
+                }
+
+                if (tagRemoved)
+                {
+                    serializedObject.ApplyModifiedProperties();
+                    if (!EditorUtility.IsPersistent(entry.ContextObject) && entry.ContextObject is Component comp)
+                    {
+                        EditorSceneManager.MarkSceneDirty(comp.gameObject.scene);
+                    }
+
+                    m_InvalidTags.RemoveAt(i);
+                    fixedCount++;
+                }
             }
 
             if (fixedCount > 0)
             {
-                EditorUtility.DisplayDialog("Fix All Complete", $"Successfully processed {fixedCount} invalid tag references. Please review and save any modified scenes or assets.", "OK");
+                Debug.Log($"Successfully removed {fixedCount} invalid GameplayTag references. Please save modified scenes/assets.");
             }
+
+            Repaint();
         }
     }
 }
