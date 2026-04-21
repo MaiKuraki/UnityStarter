@@ -33,6 +33,13 @@
 
 通过 UPM 安装或将包放置在 `Packages`/`Assets` 目录下。详情请参阅此文件夹中的 `package.json`。
 
+## 文档导航
+
+- [运行时系统与 API（本文档）](./README.SCH.md)
+- 生产环境音频导入与优化指南（Unity 内置音频流程）：
+  - [English](../../../../../Docs/AudioBestPractices/AudioBestPractices.md)
+  - [简体中文](../../../../../Docs/AudioBestPractices/AudioBestPractices.SCH.md)
+
 ## 编辑器预览
 
 - <img src="./Documents~/Preview_01.png" alt="Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
@@ -178,6 +185,23 @@ public class BankExample : MonoBehaviour
     }
 }
 ```
+
+### 5) Selector 工作流（Sequence / Switch / Random）
+
+选择器节点已经针对大型生产图做过优化，核心目标是让分支语义清晰、后期维护可控。
+
+| 节点 | 最适用场景 | 编辑建议 |
+| --- | --- | --- |
+| `SequenceSelector` | 有顺序要求的播放（连击步骤、分段 VO、固定轮转） | 打开 `Auto Sort by Node Y`，按从上到下摆放输入节点，视觉顺序即播放顺序。 |
+| `SwitchSelector` | 状态驱动路由（`Surface`、`WeaponMode`、`Language` 等） | 在 `AudioSwitch` 中使用命名状态，并为每个分支做显式状态绑定，不要依赖连线先后。 |
+| `RandomSelector` | 变化池（脚步、打击、重复音效去同质化） | 用 `weights` 控制概率，搭配 `Avoid Repeat` 降低连续重复感。 |
+
+推荐工作流：
+
+1. 连线前先给来源节点命名（例如 `Footstep_Concrete`、`Footstep_Wood`）。
+2. 默认保持 `Auto Sort by Node Y` 打开，让图布局和真实分支顺序一致。
+3. 把 `unassigned` / `duplicate` 警告当作发版前阻塞项处理。
+4. Random 权重先从等权开始，再根据实机听感或埋点数据迭代。
 
 ## API 参考
 
