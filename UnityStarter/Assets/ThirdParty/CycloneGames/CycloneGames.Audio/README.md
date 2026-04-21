@@ -13,6 +13,7 @@ This version introduces critical optimizations for production environments, incl
 ## Features
 
 - **AudioGraph Redrawing**: A more intuitive and visually appealing AudioGraph editing interface, featuring Unreal Engine-like shortcuts (e.g., Alt + mouse click on connections).
+- **Selector Workflow Upgrades**: Sequence/Switch/Random selectors now include clearer branch mapping, auto-sort by node Y, and improved per-branch UI readability for large graphs.
 - **Centralized Audio Control**: Manage sound effects and music from a unified API.
 - **DI & Non-DI Compatible**: Full `IAudioService` interface for DI containers (VContainer, Zenject, etc.), plus static `AudioManager` methods for direct access.
 - **Smart Audio Pool**: Intelligent AudioSource pool with device-adaptive sizing, auto-expansion, voice stealing, and intelligent shrinking.
@@ -37,6 +38,17 @@ Install via UPM or place the package under `Packages`/`Assets`. See `package.jso
 - <img src="./Documents~/Preview_01.png" alt="Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
 - <img src="./Documents~/Preview_02.png" alt="Preview 2" style="width: 100%; height: auto; max-width: 800px;" />
 - <img src="./Documents~/Preview_03.png" alt="Preview 3" style="width: 100%; height: auto; max-width: 800px;" />
+
+### Runtime Monitoring & Policy Inspectors
+
+- AudioManager runtime dashboard (pool usage, category budgets, bank overview)
+    - <img src="./Documents~/Preview_04.png" alt="AudioManager Runtime Dashboard" style="width: 100%; height: auto; max-width: 460px;" />
+- AudioPlatformProfile inspector (focus, throttling, culling, LOD, occlusion)
+    - <img src="./Documents~/Preview_05.png" alt="Audio Platform Profile Inspector" style="width: 100%; height: auto; max-width: 460px;" />
+- AudioPoolConfig inspector (device tiers, expansion/shrinking, runtime stats)
+    - <img src="./Documents~/Preview_06.png" alt="Audio Pool Config Inspector" style="width: 100%; height: auto; max-width: 460px;" />
+- AudioVoicePolicyProfile inspector (category-level steal/budget defaults)
+    - <img src="./Documents~/Preview_07.png" alt="Audio Voice Policy Profile Inspector" style="width: 100%; height: auto; max-width: 460px;" />
 
 ## Quick Start
 
@@ -512,8 +524,6 @@ By default, the system uses optimal values for your device. To customize:
 1. Create a config asset: **Create → CycloneGames → Audio → Audio Pool Config**
 2. Place it anywhere in your `Assets` folder
 3. Adjust values in the Inspector
-
-<img src="./Documents~/Preview_04.png" alt="Preview 4" style="width: 100%; height: auto; max-width: 400px;" />
 
 > [!NOTE]
 >
