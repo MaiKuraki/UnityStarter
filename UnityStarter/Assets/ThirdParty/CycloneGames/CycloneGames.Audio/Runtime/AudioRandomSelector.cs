@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
+using System.Collections.Generic;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -89,11 +90,65 @@ namespace CycloneGames.Audio.Runtime
 
 #if UNITY_EDITOR
 
-        private const float NodeWidth   = 250f;
+        private const float NodeWidth   = 280f;
         private const float TitleBarH   = 18f;  // Unity GUI.Window internal title bar
         private const float RowH        = 19f;
         private const float RowGap      =  2f;
         private const float BottomPad   =  8f;
+        private const float NameFieldMinW = 112f;
+        private const float WeightFieldW = 48f;
+        private const float ProbFieldW   = 44f;
+
+        [SerializeField]
+        private bool autoSortByNodeY = true;
+
+        private bool NeedsSortByNodeY()
+        {
+            if (this.input == null || this.input.ConnectedNodes == null || this.input.ConnectedNodes.Length < 2)
+                return false;
+
+            float prevY = float.NegativeInfinity;
+            for (int i = 0; i < this.input.ConnectedNodes.Length; i++)
+            {
+                AudioNodeOutput output = this.input.ConnectedNodes[i];
+                float y = output != null && output.ParentNode != null
+                    ? output.ParentNode.NodeRect.y
+                    : prevY;
+                if (y < prevY)
+                    return true;
+                prevY = y;
+            }
+            return false;
+        }
+
+        private void AutoSortConnectionsIfNeeded()
+        {
+            if (!autoSortByNodeY || this.input == null || !NeedsSortByNodeY()) return;
+
+            // Preserve weight mapping when the connection order changes.
+            Dictionary<AudioNodeOutput, float> weightByOutput = new Dictionary<AudioNodeOutput, float>();
+            AudioNodeOutput[] before = this.input.ConnectedNodes;
+            for (int i = 0; i < before.Length; i++)
+            {
+                float weight = (weights != null && i < weights.Length) ? weights[i] : 1f;
+                weightByOutput[before[i]] = weight;
+            }
+
+            this.input.SortConnections();
+
+            AudioNodeOutput[] after = this.input.ConnectedNodes;
+            float[] reordered = new float[after.Length];
+            for (int i = 0; i < after.Length; i++)
+            {
+                reordered[i] = (after[i] != null && weightByOutput.TryGetValue(after[i], out float w))
+                    ? Mathf.Max(0f, w)
+                    : 1f;
+            }
+
+            weights = reordered;
+            EditorUtility.SetDirty(this.input);
+            EditorUtility.SetDirty(this);
+        }
 
         public override void InitializeNode(Vector2 position)
         {
@@ -107,16 +162,17 @@ namespace CycloneGames.Audio.Runtime
 
         private float CalcHeight(int connCount)
         {
-            // title bar + avoid-repeat row + padding
-            float h = TitleBarH + RowH + RowGap + BottomPad;
+            // title bar + auto-sort row + avoid-repeat row + padding
+            float h = TitleBarH + RowH + RowGap + RowH + RowGap + BottomPad;
             if (connCount > 0)
-                h += RowH + RowGap + connCount * (RowH + RowGap); // "Weights:" header + per-node rows
+                h += (RowH + RowGap) + (RowH + RowGap) + connCount * (RowH + RowGap); // "Weights:" + table header + per-node rows
             return h;
         }
 
         // Override DrawNode to update height BEFORE GUI.Window measures the rect
         public override void DrawNode(int id)
         {
+            AutoSortConnectionsIfNeeded();
             int connCount = (input != null && input.ConnectedNodes != null) ? input.ConnectedNodes.Length : 0;
             this.nodeRect.height = CalcHeight(connCount);
             this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
@@ -126,6 +182,11 @@ namespace CycloneGames.Audio.Runtime
 
         protected override void DrawProperties()
         {
+            EditorGUI.BeginChangeCheck();
+            autoSortByNodeY = EditorGUILayout.ToggleLeft("Auto Sort by Node Y", autoSortByNodeY);
+            if (EditorGUI.EndChangeCheck())
+                EditorUtility.SetDirty(this);
+
             EditorGUI.BeginChangeCheck();
             avoidRepeat = EditorGUILayout.Toggle("Avoid Repeat", avoidRepeat);
             if (EditorGUI.EndChangeCheck())
@@ -149,27 +210,27 @@ namespace CycloneGames.Audio.Runtime
             for (int i = 0; i < connCount; i++)
                 totalW += Mathf.Max(0f, weights[i]);
 
-            // Header row: "Weights:" on left, "%" hint on right
+            // Header rows
+            EditorGUILayout.LabelField("Weights:", EditorStyles.boldLabel);
             EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Weights:", EditorStyles.boldLabel, GUILayout.Width(100f));
-            EditorGUILayout.LabelField("%", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(34f));
+            EditorGUILayout.LabelField("Node", EditorStyles.centeredGreyMiniLabel, GUILayout.MinWidth(NameFieldMinW), GUILayout.ExpandWidth(true));
+            EditorGUILayout.LabelField("W", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(WeightFieldW));
+            EditorGUILayout.LabelField("Chance", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(ProbFieldW));
             EditorGUILayout.EndHorizontal();
 
             EditorGUI.BeginChangeCheck();
             for (int i = 0; i < connCount; i++)
             {
-                // Use the source node name, truncated if long
+                // Use source node name directly so branch identity stays clear
                 string srcName = (input.ConnectedNodes[i] != null && input.ConnectedNodes[i].ParentNode != null)
                     ? input.ConnectedNodes[i].ParentNode.name
                     : $"Node {i}";
-                if (srcName.Length > 13) srcName = srcName.Substring(0, 12) + "…";
-
                 float prob = (totalW > 0.0001f) ? weights[i] / totalW * 100f : 0f;
 
                 EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField(srcName, GUILayout.Width(100f));
-                weights[i] = Mathf.Max(0f, EditorGUILayout.FloatField(weights[i], GUILayout.Width(50f)));
-                EditorGUILayout.LabelField($"{prob:0.#}%", EditorStyles.miniLabel, GUILayout.Width(38f));
+                EditorGUILayout.LabelField(srcName, EditorStyles.miniLabel, GUILayout.MinWidth(NameFieldMinW), GUILayout.ExpandWidth(true));
+                weights[i] = Mathf.Max(0f, EditorGUILayout.FloatField(weights[i], GUILayout.Width(WeightFieldW)));
+                EditorGUILayout.LabelField($"{prob:0.#}%", EditorStyles.miniLabel, GUILayout.Width(ProbFieldW));
                 EditorGUILayout.EndHorizontal();
             }
             if (EditorGUI.EndChangeCheck())

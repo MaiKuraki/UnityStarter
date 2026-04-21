@@ -2,6 +2,9 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 namespace CycloneGames.Audio.Runtime
 {
@@ -50,6 +53,24 @@ namespace CycloneGames.Audio.Runtime
 
 #if UNITY_EDITOR
 
+    private const float NodeWidth = 270f;
+
+    private const string UsageText = "Chooses the connected Voice File whose Language matches CurrentLanguage. If none match, it uses the first branch.";
+    private const string LoadingText = "Embedded clips keep all language audio referenced by the bank. Use External Reference for per-language on-demand loading.";
+
+    private static float CalcHeight()
+    {
+        GUIStyle titleStyle = EditorStyles.boldLabel;
+        GUIStyle bodyStyle = EditorStyles.wordWrappedMiniLabel;
+
+        float contentWidth = NodeWidth - 24f;
+        float usageHeight = bodyStyle.CalcHeight(new GUIContent(UsageText), contentWidth);
+        float loadingHeight = bodyStyle.CalcHeight(new GUIContent(LoadingText), contentWidth);
+        float titleHeight = titleStyle.lineHeight;
+
+        return 18f + 8f + titleHeight + usageHeight + 10f + titleHeight + loadingHeight + 16f;
+    }
+
         /// <summary>
         /// EDITOR: Set the initial values for the node's properties
         /// </summary>
@@ -57,11 +78,47 @@ namespace CycloneGames.Audio.Runtime
         public override void InitializeNode(Vector2 position)
         {
             this.name = "Language Selector";
-            this.nodeRect.height = 50;
-            this.nodeRect.width = 150;
+            this.nodeRect.height = CalcHeight();
+            this.nodeRect.width = NodeWidth;
             this.nodeRect.position = position;
             AddInput();
             AddOutput();
+        }
+
+        public override void DrawNode(int id)
+        {
+            this.nodeRect.height = CalcHeight();
+            this.nodeRect.width = NodeWidth;
+            this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
+            DrawInput();
+            DrawOutput();
+        }
+
+        protected override void DrawProperties()
+        {
+            GUIStyle title = new GUIStyle(EditorStyles.boldLabel)
+            {
+                wordWrap = false
+            };
+
+            GUIStyle wrap = new GUIStyle(EditorStyles.wordWrappedMiniLabel)
+            {
+                richText = true
+            };
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Usage", title);
+            EditorGUILayout.LabelField(
+                UsageText,
+                wrap);
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Loading", title);
+            EditorGUILayout.LabelField(
+                LoadingText,
+                wrap);
+            EditorGUILayout.EndVertical();
         }
 
 #endif
