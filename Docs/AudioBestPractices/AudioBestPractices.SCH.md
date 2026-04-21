@@ -6,19 +6,23 @@
 
 <p align="left"><br> <a href="AudioBestPractices.md">English</a> | 简体中文</p>
 
+## 关联 CycloneGames.Audio 主文档
+
+- [插件主文档（English）](../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.md)
+- [插件主文档（简体中文）](../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)
+
 ## 目录
 
 1. [音频管线概览](#音频管线概览)
 2. [源文件格式：WAV vs OGG](#源文件格式wav-vs-ogg)
 3. [PCM 基础与音频计算](#pcm-基础与音频计算)
 4. [Unity AudioClip 导入设置](#unity-audioclip-导入设置)
-5. [Unity AudioClip 导入设置](#unity-audioclip-导入设置)
-6. [按音频类别的推荐设置](#按音频类别的推荐设置)
-7. [按游戏类型的推荐设置](#按游戏类型的推荐设置)
-8. [音频延迟深入分析](#音频延迟深入分析)
-9. [蓝牙音频延迟](#蓝牙音频延迟)
-10. [文件夹结构规范](#文件夹结构规范)
-11. [音频标准化工具工作流](#音频标准化工具工作流)
+5. [按音频类别的推荐设置](#按音频类别的推荐设置)
+6. [按游戏类型的推荐设置](#按游戏类型的推荐设置)
+7. [音频延迟深入分析](#音频延迟深入分析)
+8. [蓝牙音频延迟](#蓝牙音频延迟)
+9. [文件夹结构规范](#文件夹结构规范)
+10. [音频标准化工具工作流](#音频标准化工具工作流)
 
 ---
 

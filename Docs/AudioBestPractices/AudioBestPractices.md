@@ -6,6 +6,11 @@ A comprehensive guide to audio asset preparation, Unity import settings, and opt
 
 <p align="left"><br> English | <a href="AudioBestPractices.SCH.md">简体中文</a></p>
 
+## Related CycloneGames.Audio Docs
+
+- [Main plugin docs (English)](../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.md)
+- [Main plugin docs (简体中文)](../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)
+
 ## Table of Contents
 
 - [Audio Best Practices for Unity Game Development](#audio-best-practices-for-unity-game-development)

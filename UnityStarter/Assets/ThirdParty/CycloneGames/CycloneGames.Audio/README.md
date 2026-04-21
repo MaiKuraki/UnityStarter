@@ -33,6 +33,13 @@ This version introduces critical optimizations for production environments, incl
 
 Install via UPM or place the package under `Packages`/`Assets`. See `package.json` in this folder for details.
 
+## Documentation Map
+
+- [Runtime system and API (this document)](./README.md)
+- Production audio import and optimization guide (Unity built-in audio workflow):
+  - [English](../../../../../Docs/AudioBestPractices/AudioBestPractices.md)
+  - [简体中文](../../../../../Docs/AudioBestPractices/AudioBestPractices.SCH.md)
+
 ## Editor Preview
 
 - <img src="./Documents~/Preview_01.png" alt="Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
@@ -178,6 +185,23 @@ public class BankExample : MonoBehaviour
     }
 }
 ```
+
+### 5) Selector Workflow (Sequence / Switch / Random)
+
+The selector nodes are optimized for large production graphs where branch readability and maintenance matter.
+
+| Node | Best Use Case | Authoring Guidance |
+| --- | --- | --- |
+| `SequenceSelector` | Ordered playback patterns (combo steps, staged VO, deterministic rotations) | Enable `Auto Sort by Node Y` and arrange source nodes top-to-bottom to define playback order visually. |
+| `SwitchSelector` | State-driven routing (`Surface`, `WeaponMode`, `Language`, etc.) | Prefer named states in `AudioSwitch`; assign each branch explicitly to a state. Avoid relying on connection order semantics. |
+| `RandomSelector` | Variation pools (footsteps, impacts, repetitive SFX) | Use per-branch `weights` for probability control; combine with `Avoid Repeat` for less perceived repetition. |
+
+Recommended workflow:
+
+1. Name source nodes explicitly (for example `Footstep_Concrete`, `Footstep_Wood`) before connecting.
+2. Keep `Auto Sort by Node Y` enabled so graph layout reflects actual branch order.
+3. Use warnings (`unassigned` or `duplicate`) as blockers before shipping a bank.
+4. For random pools, start with equal weights and tune using playtest telemetry rather than intuition.
 
 ## API Reference
 
