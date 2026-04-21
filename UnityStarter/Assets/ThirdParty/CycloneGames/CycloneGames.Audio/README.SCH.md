@@ -13,6 +13,7 @@
 ## 特性
 
 - **AudioGraph 重绘**: 更合理好看的 AudioGraph 编辑界面，类虚幻引擎的快捷键 (Alt+鼠标点击操作连接线)。
+- **Selector 工作流增强**: Sequence/Switch/Random 三类选择器增加了更清晰的分支映射、按节点 Y 值自动排序，以及更易读的多分支编辑 UI。
 - **集中式音频控制**: 通过统一的 API 管理音效和音乐。
 - **DI 与非 DI 兼容**: 提供完整的 `IAudioService` 接口用于 DI 容器（VContainer、Zenject 等），同时保留 `AudioManager` 静态方法用于直接访问。
 - **智能音频池**: 智能 AudioSource 对象池，支持设备自适应、自动扩容、声音窃取和智能收缩。
@@ -37,6 +38,17 @@
 - <img src="./Documents~/Preview_01.png" alt="Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
 - <img src="./Documents~/Preview_02.png" alt="Preview 2" style="width: 100%; height: auto; max-width: 800px;" />
 - <img src="./Documents~/Preview_03.png" alt="Preview 3" style="width: 100%; height: auto; max-width: 800px;" />
+
+### 运行时监控与策略配置检视
+
+- AudioManager 运行时总览（池使用率、分类预算、Bank 概览）
+    - <img src="./Documents~/Preview_04.png" alt="AudioManager Runtime Dashboard" style="width: 100%; height: auto; max-width: 460px;" />
+- AudioPlatformProfile 检视器（焦点、节流、可听度剔除、LOD、遮挡）
+    - <img src="./Documents~/Preview_05.png" alt="Audio Platform Profile Inspector" style="width: 100%; height: auto; max-width: 460px;" />
+- AudioPoolConfig 检视器（设备分层、扩容/收缩、运行时统计）
+    - <img src="./Documents~/Preview_06.png" alt="Audio Pool Config Inspector" style="width: 100%; height: auto; max-width: 460px;" />
+- AudioVoicePolicyProfile 检视器（分类级抢占/预算策略）
+    - <img src="./Documents~/Preview_07.png" alt="Audio Voice Policy Profile Inspector" style="width: 100%; height: auto; max-width: 460px;" />
 
 ## 快速上手
 
@@ -511,8 +523,6 @@ AudioClipResolver.RegisterManagedLocationKindLoader(AudioLocationKind.AssetAddre
 1. 创建配置资产：**Create → CycloneGames → Audio → Audio Pool Config**
 2. 放置在 `Assets` 目录下的任意位置
 3. 在 Inspector 中调整参数
-
-<img src="./Documents~/Preview_04.png" alt="Preview 4" style="width: 100%; height: auto; max-width: 400px;" />
 
 > [!NOTE]
 >
