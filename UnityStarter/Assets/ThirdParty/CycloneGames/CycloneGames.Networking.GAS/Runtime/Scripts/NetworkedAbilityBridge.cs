@@ -30,6 +30,7 @@ namespace CycloneGames.Networking.GAS
         public const ushort MsgEffectApplied              = 210;
         public const ushort MsgEffectRemoved              = 211;
         public const ushort MsgEffectStackChanged         = 212;
+        public const ushort MsgEffectUpdated              = 213;
         public const ushort MsgAttributeUpdate            = 220;
         public const ushort MsgTagUpdate                  = 225;
         public const ushort MsgAbilityMulticast           = 230;
@@ -55,6 +56,7 @@ namespace CycloneGames.Networking.GAS
         public event Action<int, AbilityActivateRequest> OnAbilityActivateRequested;
         public event Action<uint, EffectReplicationData> OnEffectApplied;
         public event Action<uint, int> OnEffectRemoved; // (networkId, effectInstanceId)
+        public event Action<uint, EffectUpdateData> OnEffectUpdated;
         public event Action<uint, AttributeUpdateData> OnAttributeUpdated;
         public event Action<uint, FullStateSnapshotData> OnFullStateReceived;
 
@@ -76,6 +78,7 @@ namespace CycloneGames.Networking.GAS
             _networkManager.RegisterHandler<EffectReplicationData>(MsgEffectApplied, OnRecvEffectApplied);
             _networkManager.RegisterHandler<EffectRemoveData>(MsgEffectRemoved, OnRecvEffectRemoved);
             _networkManager.RegisterHandler<EffectStackChangeData>(MsgEffectStackChanged, OnRecvEffectStackChanged);
+            _networkManager.RegisterHandler<EffectUpdateData>(MsgEffectUpdated, OnRecvEffectUpdated);
             _networkManager.RegisterHandler<AttributeUpdateData>(MsgAttributeUpdate, OnRecvAttributeUpdate);
             _networkManager.RegisterHandler<TagUpdateData>(MsgTagUpdate, OnRecvTagUpdate);
             _networkManager.RegisterHandler<AbilityMulticastData>(MsgAbilityMulticast, OnRecvAbilityMulticast);
@@ -96,6 +99,7 @@ namespace CycloneGames.Networking.GAS
             _networkManager.UnregisterHandler(MsgEffectApplied);
             _networkManager.UnregisterHandler(MsgEffectRemoved);
             _networkManager.UnregisterHandler(MsgEffectStackChanged);
+            _networkManager.UnregisterHandler(MsgEffectUpdated);
             _networkManager.UnregisterHandler(MsgAttributeUpdate);
             _networkManager.UnregisterHandler(MsgTagUpdate);
             _networkManager.UnregisterHandler(MsgAbilityMulticast);
@@ -223,6 +227,16 @@ namespace CycloneGames.Networking.GAS
             });
         }
 
+        /// <summary>
+        /// Server broadcasts an in-place update for an existing effect instance.
+        /// Use this when fields other than stack count changed.
+        /// </summary>
+        public void ServerReplicateEffectUpdated(IReadOnlyList<INetConnection> observers,
+            uint targetNetworkId, EffectUpdateData data)
+        {
+            _networkManager.Broadcast(observers, MsgEffectUpdated, data);
+        }
+
         // =====================================================
         // SERVER → CLIENTS: Attribute Sync
         // =====================================================
@@ -342,6 +356,13 @@ namespace CycloneGames.Networking.GAS
                 asc.OnReplicatedStackChanged(msg.EffectInstanceId, msg.NewStackCount);
         }
 
+        private void OnRecvEffectUpdated(INetConnection sender, EffectUpdateData msg)
+        {
+            if (_ascByNetworkId.TryGetValue(msg.TargetNetworkId, out var asc))
+                asc.OnReplicatedEffectUpdated(msg);
+            OnEffectUpdated?.Invoke(msg.TargetNetworkId, msg);
+        }
+
         private void OnRecvAttributeUpdate(INetConnection sender, AttributeUpdateData msg)
         {
             if (_ascByNetworkId.TryGetValue(msg.TargetNetworkId, out var asc))
@@ -409,6 +430,7 @@ namespace CycloneGames.Networking.GAS
         void OnReplicatedEffectApplied(EffectReplicationData data);
         void OnReplicatedEffectRemoved(int effectInstanceId);
         void OnReplicatedStackChanged(int effectInstanceId, int newStackCount);
+        void OnReplicatedEffectUpdated(EffectUpdateData data);
 
         // Attribute/Tag sync
         void OnReplicatedAttributeUpdate(AttributeUpdateData data);
@@ -464,6 +486,7 @@ namespace CycloneGames.Networking.GAS
         public int StackCount;
         public float Duration;
         public float TimeRemaining;
+        public float PeriodTimeRemaining;
         public int PredictionKey;           // For rollback association
 
         // SetByCaller magnitudes (compact: tag hash → value)
@@ -488,6 +511,22 @@ namespace CycloneGames.Networking.GAS
         public uint TargetNetworkId;
         public int EffectInstanceId;
         public int NewStackCount;
+    }
+
+    public struct EffectUpdateData
+    {
+        public uint TargetNetworkId;
+        public uint SourceNetworkId;
+        public int EffectInstanceId;
+        public int EffectDefinitionId;
+        public int Level;
+        public int StackCount;
+        public float Duration;
+        public float TimeRemaining;
+        public float PeriodTimeRemaining;
+        public int PredictionKey;
+        public int SetByCallerCount;
+        public SetByCallerEntry[] SetByCallerEntries;
     }
 
     /// <summary>

@@ -13,7 +13,7 @@ namespace CycloneGames.GameplayTags.Unity
    ///   EntityManager.AddComponentData(entity, new GameplayTagMaskComponent { Mask = mask });
    ///
    ///   // In a system:
-   ///   foreach (var (tags, entity) in SystemAPI.Query&lt;RefRW&lt;GameplayTagMaskComponent&gt;&gt;())
+   ///   foreach (var (tags, entity) in SystemAPI.Query<RefRW<GameplayTagMaskComponent>>())
    ///   {
    ///       if (tags.ValueRO.HasTag(stunTagIndex))
    ///           // apply stun logic

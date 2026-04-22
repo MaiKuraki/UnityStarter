@@ -20,10 +20,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public Action OnFinished;
         public Action OnCancelled;
 
-        private float interval;
+        private double interval;
         private int totalRepetitions;
         private int currentRepetition;
-        private float timer;
+        private double timer;
 
         /// <summary>
         /// Creates a Repeat task.
@@ -34,10 +34,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public static AbilityTask_Repeat Repeat(GameplayAbility ability, float interval, int totalRepetitions)
         {
             var task = ability.NewAbilityTask<AbilityTask_Repeat>();
-            task.interval = System.Math.Max(0.001f, interval);
+            task.interval = System.Math.Max(0.001d, interval);
             task.totalRepetitions = totalRepetitions;
             task.currentRepetition = 0;
-            task.timer = 0f;
+            task.timer = 0d;
             return task;
         }
 

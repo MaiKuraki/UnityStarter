@@ -131,7 +131,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
         /// <summary>
         /// Builds a cache key that includes type information to prevent cross-type collisions.
-        /// E.g. LoadAssetAsync&lt;Texture2D&gt;("atlas") and LoadAssetAsync&lt;Sprite&gt;("atlas")
+        /// E.g. LoadAssetAsync<Texture2D>("atlas") and LoadAssetAsync<Sprite>("atlas")
         /// must map to different cache entries.
         /// Results are cached so that repeated loads of the same (location, type) pair
         /// produce zero string allocations after the first call.

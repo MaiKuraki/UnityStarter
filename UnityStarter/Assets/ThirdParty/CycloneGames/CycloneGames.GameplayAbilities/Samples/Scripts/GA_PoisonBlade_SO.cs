@@ -20,7 +20,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             // This ability is now cast by an Enemy, so we commit it first.
             CommitAbility(actorInfo, spec);
             
-            var caster = actorInfo.AvatarActor as GameObject;
+            var caster = actorInfo.AvatarGameObject;
             
             var target = FindTarget(caster);
 

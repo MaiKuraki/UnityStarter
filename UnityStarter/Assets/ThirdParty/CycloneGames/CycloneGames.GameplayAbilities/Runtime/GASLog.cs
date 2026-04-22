@@ -102,6 +102,26 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CLogger.LogInfo(messageBuilder, GAS_CATEGORY, filePath, lineNumber, memberName);
         }
+
+        /// <summary>
+        /// Zero-GC warning logging using StringBuilder builder pattern.
+        /// Always active (including Release) — avoids string interpolation allocation at call sites.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void Warning(System.Action<StringBuilder> messageBuilder, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
+        {
+            CLogger.LogWarning(messageBuilder, GAS_CATEGORY, filePath, lineNumber, memberName);
+        }
+
+        /// <summary>
+        /// Zero-GC error logging using StringBuilder builder pattern.
+        /// Always active (including Release) — avoids string interpolation allocation at call sites.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void Error(System.Action<StringBuilder> messageBuilder, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
+        {
+            CLogger.LogError(messageBuilder, GAS_CATEGORY, filePath, lineNumber, memberName);
+        }
         
         #endregion
     }
