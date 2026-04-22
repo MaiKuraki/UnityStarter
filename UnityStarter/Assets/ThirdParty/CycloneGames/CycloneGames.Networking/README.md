@@ -1,6 +1,6 @@
 # CycloneGames.Networking
 
-<div align="left">English | <a href="./README.SCH.md">简体中文</a></div>
+English | [简体中文](./README.SCH.md)
 
 A **production-grade networking abstraction layer** for Unity supporting state synchronization, lockstep, rollback netcode, client prediction, and more. Designed for **low-allocation runtime performance**, **adapter-aware thread safety**, and **cross-platform compatibility**.
 
@@ -99,7 +99,7 @@ flowchart TB
     subgraph Bridge["🔗 GAS Bridge (CycloneGames.Networking.GAS separate package)"]
         AbilityBridge["NetworkedAbilityBridge"]
         AttrSync["AttributeSyncManager"]
-        EffectRepl["EffectReplicationManager"]
+        GasAdapter["GameplayAbilitiesNetworkedASCAdapter\nExtensions"]
     end
 
     subgraph Mid["📡 Middle Layer"]
@@ -908,7 +908,8 @@ simulator.Enabled = true;
 
 > **Package structure**: This module is split into two layers.
 >
-> - `CycloneGames.Networking.GAS` — Protocol layer only: message IDs, `IAbilityNetAdapter` interface, `NetworkedAbilityBridge`, `AttributeSyncManager`, `EffectReplicationManager`. Has no dependency on any specific GAS implementation.
+> - `CycloneGames.Networking.GAS` — Protocol layer only: message IDs, `IAbilityNetAdapter` interface, `NetworkedAbilityBridge`, `AttributeSyncManager`. Has no dependency on any specific GAS implementation.
+> - `CycloneGames.Networking.GAS.Integrations.GameplayAbilities` — Mainline GAS integration for `CycloneGames.GameplayAbilities`: ASC adapter, refined effect delta replication, full-state snapshot wiring, and security helpers.
 > - `CycloneGames.Networking.GAS.Integrations.GameplayAbilities` — Concrete wiring to `CycloneGames.GameplayAbilities`. Include this when using `CycloneGames.GameplayAbilities`; omit it for custom GAS implementations.
 
 Deep integration with `CycloneGames.GameplayAbilities` for networked abilities, effects, and attributes.
@@ -946,10 +947,11 @@ flowchart TB
 ```
 
 ```csharp
-using CycloneGames.Networking.GAS; // 📦 Required: GAS separate package
+using CycloneGames.Networking.GAS; // 📦 Required: GAS protocol package
+using CycloneGames.Networking.GAS.Integrations.GameplayAbilities; // 📦 Mainline GameplayAbilities integration
 
 var bridge = new NetworkedAbilityBridge(networkManager);
-bridge.RegisterASC(networkId, ownerConnectionId, myASC);
+var adapter = bridge.RegisterGameplayAbilitiesASC(myAsc, networkId, ownerConnectionId, idRegistry);
 
 // Optional: customize authorization for full-state requests (default: owner-only)
 bridge.FullStateRequestAuthorizer = (sender, targetId) => sender.ConnectionId == ownerConnectionId;
@@ -987,21 +989,11 @@ attrSync.RegisterPublicAttribute(healthAttrId);
 attrSync.MarkDirty(networkId, healthAttrId, baseValue: 100f, currentValue: 75f);
 attrSync.FlushDirty(getOwnerConnectionId: GetOwnerConnectionId, getObservers: GetObservers, getConnectionById: GetConnectionById);
 
-// Effect replication
-var effectRepl = new EffectReplicationManager(bridge);
-int instanceId = effectRepl.OnEffectApplied(
-    targetNetworkId,
-    sourceNetworkId,
-    effectDefinitionId,
-    level,
-    stackCount,
-    duration,
-    predictionKey: key,
-    setByCallerEntries: null,
-    getObservers: GetObservers
-);
-effectRepl.OnStackChanged(instanceId, newStackCount, GetObservers);
-effectRepl.OnEffectRemoved(instanceId, GetObservers);
+// Mainline GAS delta replication
+bridge.ReplicatePendingState(adapter, GetObservers);
+
+// Reconnect or late join
+bridge.SendGameplayAbilitiesFullState(adapter, clientConnection);
 ```
 
 Production hardening recommendations (commonly used):
@@ -1369,17 +1361,16 @@ public class TeamVisionController : MonoBehaviour
 
 ### GAS Integration (📦 Separate Package: `CycloneGames.Networking.GAS`)
 
-| Class                      | Purpose                                      |
-| -------------------------- | -------------------------------------------- |
-| `NetworkedAbilityBridge`   | Ability activation/confirm/reject networking |
-| `AttributeSyncManager`     | Attribute dirty tracking & sync              |
-| `EffectReplicationManager` | Effect instance replication                  |
+- `NetworkedAbilityBridge`: transport-agnostic GAS protocol bridge.
+- `AttributeSyncManager`: generic attribute dirty tracking and sync.
+- `GameplayAbilitiesNetworkedASCAdapter`: GameplayAbilities full-state and refined effect delta integration.
+- `GasBridgeGameplayAbilitiesExtensions`: one-line ASC registration, delta replication, and full-state send.
 
 ---
 
 ## Directory Structure
 
-```
+```text
 Runtime/Scripts/
 ├── Core/                 # Core interfaces and types
 ├── Buffers/              # Buffer system and pool
@@ -1413,8 +1404,14 @@ DOD/Runtime/                      # Data-Oriented Design variants (Burst/Jobs)
     ├── IAbilityNetAdapter.cs
     ├── NoopAbilityNetAdapter.cs
     ├── NetworkedAbilityBridge.cs
-    ├── AttributeSyncManager.cs
-    └── EffectReplicationManager.cs
+    └── AttributeSyncManager.cs
+
+📦 CycloneGames.Networking.GAS.Integrations.GameplayAbilities/
+└── Runtime/Scripts/
+    ├── GameplayAbilitiesNetworkedASCAdapter.cs
+    ├── GasBridgeGameplayAbilitiesExtensions.cs
+    ├── DefaultGasNetIdRegistry.cs
+    └── GasBridgeSecurityExtensions.cs
 ```
 
 ---

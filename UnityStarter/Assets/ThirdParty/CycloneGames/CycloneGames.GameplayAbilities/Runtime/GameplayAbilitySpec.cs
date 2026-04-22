@@ -8,6 +8,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
     public class GameplayAbilitySpec : IGASPoolable
     {
         /// <summary>
+        /// Globally-unique handle assigned at pool-get time.
+        /// Stable across the spec's entire lifetime; reset on ReturnToPool.
+        /// Used by IGASNetworkBridge to address ability activations by ID rather than list index.
+        /// </summary>
+        public int Handle { get; private set; }
+
+        private static int s_NextHandle; // Interlocked increment for thread safety
+        /// <summary>
         /// The stateless definition of the ability (template).
         /// </summary>
         public GameplayAbility Ability { get; private set; }
@@ -60,6 +68,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             GrantingEffect = null;
             Level = 0;
             IsActive = false;
+            Handle = 0;
         }
 
         #endregion
@@ -74,6 +83,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             spec.IsActive = false;
             spec.AbilityInstance = null;
             spec.Owner = null;
+            spec.Handle = System.Threading.Interlocked.Increment(ref s_NextHandle);
             return spec;
         }
 
@@ -125,10 +135,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (AbilityInstance != null)
             {
-                if (IsActive) AbilityInstance.CancelAbility();
-                if (Ability.InstancingPolicy != EGameplayAbilityInstancingPolicy.NonInstanced)
+                if (IsActive)
                 {
-                    PoolManager.ReturnAbility(AbilityInstance);
+                    AbilityInstance.CancelAbility();
+                }
+
+                var instanceToReturn = AbilityInstance;
+                if (instanceToReturn != null && Ability.InstancingPolicy != EGameplayAbilityInstancingPolicy.NonInstanced)
+                {
+                    PoolManager.ReturnAbility(instanceToReturn);
                 }
                 AbilityInstance = null;
             }

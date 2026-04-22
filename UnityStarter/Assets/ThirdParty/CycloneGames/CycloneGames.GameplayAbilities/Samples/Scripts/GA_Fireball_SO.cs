@@ -31,7 +31,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             // --- Targeting ---
             // TODO: should spawn a projectile or use a targeting system.
             // simulate finding a target in front of the caster.
-            var caster = actorInfo.AvatarActor as GameObject;
+            var caster = actorInfo.AvatarGameObject;
             var target = FindTarget(caster);
 
             if (target != null && target.TryGetComponent<AbilitySystemComponentHolder>(out var holder))

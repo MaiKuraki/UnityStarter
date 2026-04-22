@@ -11,19 +11,24 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Gets the remaining cooldown time for a specific ability.
-        /// Returns 0 if the ability is not on cooldown.
+        /// O(1) tag lookup + O(k) scan over effects that explicitly grant matching cooldown tags.
         /// </summary>
         public float GetCooldownTimeRemaining(GameplayAbility ability)
         {
-            if (ability?.CooldownEffectDefinition?.GrantedTags == null || ability.CooldownEffectDefinition.GrantedTags.IsEmpty)
+            if (ability?.CooldownGrantedTagsSnapshot == null || ability.CooldownGrantedTagsSnapshot.IsEmpty)
                 return 0f;
 
             float maxRemaining = 0f;
-            foreach (var effect in activeEffects)
+            var indices = ability.CooldownGrantedTagsSnapshot.GetExplicitIndices();
+            for (int i = 0; i < indices.Length; i++)
             {
-                if (effect.Spec.Def.GrantedTags.HasAny(ability.CooldownEffectDefinition.GrantedTags))
+                if (!grantedTagIndexToEffects.TryGetValue(indices[i], out var effects))
+                    continue;
+
+                for (int j = 0; j < effects.Count; j++)
                 {
-                    if (effect.TimeRemaining > maxRemaining)
+                    var effect = effects[j];
+                    if (!effect.IsExpired && effect.TimeRemaining > maxRemaining)
                         maxRemaining = effect.TimeRemaining;
                 }
             }
@@ -32,6 +37,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Gets detailed cooldown information for an ability.
+        /// O(1) tag lookup + O(k) scan over effects that explicitly grant matching cooldown tags.
         /// </summary>
         /// <param name="ability">The ability to check cooldown for.</param>
         /// <param name="timeRemaining">Output: Remaining cooldown time in seconds.</param>
@@ -42,14 +48,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
             timeRemaining = 0f;
             totalDuration = 0f;
 
-            if (ability?.CooldownEffectDefinition?.GrantedTags == null || ability.CooldownEffectDefinition.GrantedTags.IsEmpty)
+            if (ability?.CooldownGrantedTagsSnapshot == null || ability.CooldownGrantedTagsSnapshot.IsEmpty)
                 return false;
 
-            foreach (var effect in activeEffects)
+            var indices = ability.CooldownGrantedTagsSnapshot.GetExplicitIndices();
+            for (int i = 0; i < indices.Length; i++)
             {
-                if (effect.Spec.Def.GrantedTags.HasAny(ability.CooldownEffectDefinition.GrantedTags))
+                if (!grantedTagIndexToEffects.TryGetValue(indices[i], out var effects))
+                    continue;
+
+                for (int j = 0; j < effects.Count; j++)
                 {
-                    if (effect.TimeRemaining > timeRemaining)
+                    var effect = effects[j];
+                    if (!effect.IsExpired && effect.TimeRemaining > timeRemaining)
                     {
                         timeRemaining = effect.TimeRemaining;
                         totalDuration = effect.Spec.Def.Duration;
@@ -61,17 +72,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Gets the remaining time of the cooldown effect that grants the specified tag.
+        /// O(1) tag lookup + O(k) scan over effects that explicitly grant the tag.
         /// </summary>
         public float GetCooldownTimeRemainingByTag(GameplayTag cooldownTag)
         {
             if (cooldownTag.IsNone) return 0f;
+            if (!grantedTagIndexToEffects.TryGetValue(cooldownTag.RuntimeIndex, out var effects))
+                return 0f;
 
-            foreach (var effect in activeEffects)
+            float maxRemaining = 0f;
+            for (int i = 0; i < effects.Count; i++)
             {
-                if (effect.Spec.Def.GrantedTags.HasTag(cooldownTag))
-                    return effect.TimeRemaining;
+                var effect = effects[i];
+                if (!effect.IsExpired && effect.TimeRemaining > maxRemaining)
+                    maxRemaining = effect.TimeRemaining;
             }
-            return 0f;
+
+            return maxRemaining;
         }
 
         /// <summary>
@@ -87,9 +104,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public bool IsAbilityOnCooldown(GameplayAbility ability)
         {
-            if (ability?.CooldownEffectDefinition?.GrantedTags == null || ability.CooldownEffectDefinition.GrantedTags.IsEmpty)
+            if (ability?.CooldownGrantedTagsSnapshot == null || ability.CooldownGrantedTagsSnapshot.IsEmpty)
                 return false;
-            return CombinedTags.HasAny(ability.CooldownEffectDefinition.GrantedTags);
+            return HasAnyMatchingGameplayTagsExact(ability.CooldownGrantedTagsSnapshot);
         }
 
         #endregion

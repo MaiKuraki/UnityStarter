@@ -35,7 +35,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         private void HandleLanded()
         {
-            var caster = ActorInfo.AvatarActor as GameObject;
+            var caster = ActorInfo.AvatarGameObject;
             if (caster == null)
             {
                 EndAbility();

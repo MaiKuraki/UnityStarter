@@ -7,5 +7,6 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
     {
         bool TryRemoveReplicatedEffect(int effectInstanceId);
         bool TryApplyReplicatedStackChange(int effectInstanceId, int newStackCount);
+        bool TryApplyReplicatedEffectUpdate(EffectUpdateData data);
     }
 }

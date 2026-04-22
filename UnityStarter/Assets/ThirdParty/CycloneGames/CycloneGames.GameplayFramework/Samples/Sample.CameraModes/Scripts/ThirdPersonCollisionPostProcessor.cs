@@ -5,7 +5,7 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// <summary>
     /// Camera post-processor that prevents the camera from clipping through geometry (spring-arm probe).
     ///
-    /// <para><b>How it works</b><br/>
+    /// <para><b>How it works</b>
     /// Each frame a sphere-cast is fired from a pivot point (the view target's position offset upward)
     /// toward the desired camera position. If the probe hits geometry the camera is pulled in to the
     /// safe distance instantly, preventing clip-through. When the path clears the camera recovers
@@ -26,12 +26,12 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// cameraManager.UnregisterPostProcessor(collision);
     /// </code></para>
     ///
-    /// <para><b>Notes</b><br/>
+    /// <para><b>Notes</b>
     /// • <see cref="PivotHeightOffset"/> should roughly match the <c>PivotHeight</c> set on your
     ///   <see cref="ThirdPersonFollowCameraMode"/> so the probe origin aligns with the camera orbit
-    ///   center.<br/>
+    ///   center.
     /// • Set <see cref="ProbeRadius"/> to at least the camera's near-clip plane distance to avoid
-    ///   residual clip artefacts.<br/>
+    ///   residual clip artefacts.
     /// • Register <i>after</i> any shake or offset processors so collision resolves the final pose.</para>
     /// </summary>
     public sealed class ThirdPersonCollisionPostProcessor : ICameraPostProcessor

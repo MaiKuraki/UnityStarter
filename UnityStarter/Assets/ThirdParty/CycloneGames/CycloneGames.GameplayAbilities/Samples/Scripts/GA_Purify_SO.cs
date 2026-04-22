@@ -45,7 +45,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
             var charactersToProcess = new HashSet<Character>();
 
-            var casterCharacter = (ActorInfo.AvatarActor as GameObject)?.GetComponent<Character>();
+            var casterCharacter = ActorInfo.AvatarGameObject?.GetComponent<Character>();
             if (casterCharacter != null)
             {
                 charactersToProcess.Add(casterCharacter);

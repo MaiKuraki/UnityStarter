@@ -236,6 +236,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void TrackActive(int delta)
         {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            //  WebGL is single-threaded — skip Interlocked overhead (memory barriers are no-ops anyway).
+            _activeCount += delta;
+            if (delta > 0)
+            {
+                if (_activeCount > _peakActiveSinceLastCheck) _peakActiveSinceLastCheck = _activeCount;
+                if (_activeCount > _peakActive) _peakActive = _activeCount;
+            }
+#else
             int newCount = Interlocked.Add(ref _activeCount, delta);
 
             if (delta > 0)
@@ -253,6 +262,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     if (newCount <= currentPeak) break;
                 } while (Interlocked.CompareExchange(ref _peakActive, newCount, currentPeak) != currentPeak);
             }
+#endif
         }
 
         #endregion
