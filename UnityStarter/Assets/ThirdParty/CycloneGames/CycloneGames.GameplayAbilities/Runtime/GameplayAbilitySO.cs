@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayAbilities.Core;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -8,7 +9,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// A ScriptableObject that serves as a data asset for defining a GameplayAbility's properties in the Unity Editor.
     /// This allows designers to configure abilities without modifying code.
     /// </summary>
-    public abstract class GameplayAbilitySO : ScriptableObject
+    public abstract class GameplayAbilitySO : ScriptableObject, IGASAbilityDefinition
     {
         [Tooltip("The display name of the ability, primarily used for debugging and logging.")]
         public string AbilityName;

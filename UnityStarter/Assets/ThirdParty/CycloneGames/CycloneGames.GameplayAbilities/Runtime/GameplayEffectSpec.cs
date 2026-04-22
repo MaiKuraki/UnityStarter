@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Runtime;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -59,9 +60,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public GameplayTagContainer DynamicAssetTags { get; } = new GameplayTagContainer();
 
-        // SetByCaller magnitude storage
-        private readonly Dictionary<GameplayTag, float> setByCallerMagnitudes = new Dictionary<GameplayTag, float>();
-        private readonly Dictionary<string, float> setByCallerMagnitudesByName = new Dictionary<string, float>(System.StringComparer.Ordinal);
+        // SetByCaller magnitude storage — null-lazy to avoid Dictionary allocation on specs that never use SetByCaller.
+        // The vast majority of effect specs (damage, buffs, cooldowns) don’t use this API.
+        private Dictionary<GameplayTag, float> setByCallerMagnitudes;
+        private Dictionary<string, float> setByCallerMagnitudesByName;
+
+        private Dictionary<GameplayTag, float> GetOrCreateTagMagnitudes()
+            => setByCallerMagnitudes ??= new Dictionary<GameplayTag, float>();
+
+        private Dictionary<string, float> GetOrCreateNameMagnitudes()
+            => setByCallerMagnitudesByName ??= new Dictionary<string, float>(System.StringComparer.Ordinal);
 
         public GameplayEffectSpec() { }
 
@@ -87,10 +95,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Level = 0;
             Duration = 0;
 
-            // Fast clear of references
+            // Fast clear of references — clear BOTH arrays so stale magnitudes never survive pool reuse.
             System.Array.Clear(TargetAttributes, 0, TargetAttributes.Length);
-            setByCallerMagnitudes.Clear();
-            setByCallerMagnitudesByName.Clear();
+            System.Array.Clear(ModifierMagnitudes, 0, ModifierMagnitudes.Length);
+            setByCallerMagnitudes?.Clear();
+            setByCallerMagnitudesByName?.Clear();
             DynamicGrantedTags.Clear();
             DynamicAssetTags.Clear();
         }
@@ -104,20 +113,31 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public static GameplayEffectSpec Create(GameplayEffect def, AbilitySystemComponent source, int level = 1)
         {
+            return Create(def, source, source?.MakeEffectContext(), level);
+        }
+
+        /// <summary>
+        /// Factory method that allows callers to provide a custom effect context.
+        /// </summary>
+        public static GameplayEffectSpec Create(GameplayEffect def, AbilitySystemComponent source, IGameplayEffectContext context, int level = 1)
+        {
             var spec = GASPool<GameplayEffectSpec>.Shared.Get();
-            spec.Initialize(def, source, level);
+            spec.Initialize(def, source, context, level);
             return spec;
         }
 
-        private void Initialize(GameplayEffect def, AbilitySystemComponent source, int level)
+        private void Initialize(GameplayEffect def, AbilitySystemComponent source, IGameplayEffectContext context, int level)
         {
             Def = def;
             Source = source;
             Level = level;
             Duration = def.Duration;
 
-            Context = GASPool<GameplayEffectContext>.Shared.Get();
-            Context.AddInstigator(source, null);
+            Context = context ?? GASPool<GameplayEffectContext>.Shared.Get();
+            if (source != null)
+            {
+                Context.AddInstigator(source, null);
+            }
 
             int modCount = def.Modifiers.Count;
             EnsureCapacity(modCount);
@@ -159,19 +179,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void SetSetByCallerMagnitude(GameplayTag dataTag, float magnitude)
         {
             if (dataTag.IsNone) return;
-            setByCallerMagnitudes[dataTag] = magnitude;
+            GetOrCreateTagMagnitudes()[dataTag] = magnitude;
         }
 
         public float GetSetByCallerMagnitude(GameplayTag dataTag, bool warnIfNotFound = true, float defaultValue = 0f)
         {
-            if (setByCallerMagnitudes.TryGetValue(dataTag, out float magnitude))
+            if (setByCallerMagnitudes != null && setByCallerMagnitudes.TryGetValue(dataTag, out float magnitude))
             {
                 return magnitude;
             }
 
             if (warnIfNotFound)
             {
-                GASLog.Warning($"GetSetByCallerMagnitude: Tag '{dataTag.Name}' not found in spec for effect '{Def?.Name}'.");
+                GASLog.Warning(sb => sb.Append("GetSetByCallerMagnitude: Tag '").Append(dataTag.Name)
+                    .Append("' not found in spec for effect '").Append(Def?.Name).Append("'."));
             }
             return defaultValue;
         }
@@ -180,34 +201,110 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (string.IsNullOrEmpty(dataName))
             {
-                GASLog.Warning("SetSetByCallerMagnitude: dataName cannot be null or empty.");
+                GASLog.Warning(sb => sb.Append("SetSetByCallerMagnitude: dataName cannot be null or empty."));
                 return;
             }
-            setByCallerMagnitudesByName[dataName] = magnitude;
+            GetOrCreateNameMagnitudes()[dataName] = magnitude;
         }
 
         public float GetSetByCallerMagnitude(string dataName, bool warnIfNotFound = true, float defaultValue = 0f)
         {
-            if (setByCallerMagnitudesByName.TryGetValue(dataName, out float magnitude))
+            if (setByCallerMagnitudesByName != null && setByCallerMagnitudesByName.TryGetValue(dataName, out float magnitude))
             {
                 return magnitude;
             }
 
             if (warnIfNotFound)
             {
-                GASLog.Warning($"GetSetByCallerMagnitude: Name '{dataName}' not found in spec for effect '{Def?.Name}'.");
+                GASLog.Warning(sb => sb.Append("GetSetByCallerMagnitude: Name '").Append(dataName)
+                    .Append("' not found in spec for effect '").Append(Def?.Name).Append("'."));
             }
             return defaultValue;
         }
 
         public bool HasSetByCallerMagnitude(string dataName)
         {
-            return !string.IsNullOrEmpty(dataName) && setByCallerMagnitudesByName.ContainsKey(dataName);
+            return !string.IsNullOrEmpty(dataName) && setByCallerMagnitudesByName != null && setByCallerMagnitudesByName.ContainsKey(dataName);
         }
 
         public bool HasSetByCallerMagnitude(GameplayTag dataTag)
         {
-            return !dataTag.IsNone && setByCallerMagnitudes.ContainsKey(dataTag);
+            return !dataTag.IsNone && setByCallerMagnitudes != null && setByCallerMagnitudes.ContainsKey(dataTag);
+        }
+
+        public int SetByCallerTagMagnitudeCount => setByCallerMagnitudes?.Count ?? 0;
+
+        public int CopySetByCallerTagMagnitudes(GameplayTag[] destinationTags, float[] destinationValues)
+        {
+            if (destinationTags == null || destinationValues == null || setByCallerMagnitudes == null || setByCallerMagnitudes.Count == 0)
+            {
+                return 0;
+            }
+
+            int capacity = System.Math.Min(destinationTags.Length, destinationValues.Length);
+            if (capacity <= 0)
+            {
+                return 0;
+            }
+
+            int index = 0;
+            foreach (var pair in setByCallerMagnitudes)
+            {
+                if (index >= capacity)
+                {
+                    break;
+                }
+
+                destinationTags[index] = pair.Key;
+                destinationValues[index] = pair.Value;
+                index++;
+            }
+
+            return index;
+        }
+
+        public SetByCallerTagStateSnapshot[] CaptureSetByCallerTagMagnitudes()
+        {
+            if (setByCallerMagnitudes == null || setByCallerMagnitudes.Count == 0)
+            {
+                return System.Array.Empty<SetByCallerTagStateSnapshot>();
+            }
+
+            var entries = new SetByCallerTagStateSnapshot[setByCallerMagnitudes.Count];
+            int index = 0;
+            foreach (var pair in setByCallerMagnitudes)
+            {
+                entries[index++] = new SetByCallerTagStateSnapshot(pair.Key, pair.Value);
+            }
+
+            return entries;
+        }
+
+        public void ApplyReplicatedState(
+            int level,
+            float duration,
+            GameplayTag[] setByCallerTags,
+            float[] setByCallerValues,
+            int setByCallerCount)
+        {
+            Level = level;
+            Duration = duration;
+
+            setByCallerMagnitudes?.Clear();
+            if (setByCallerTags != null && setByCallerValues != null)
+            {
+                int count = System.Math.Min(setByCallerCount, System.Math.Min(setByCallerTags.Length, setByCallerValues.Length));
+                for (int i = 0; i < count; i++)
+                {
+                    var tag = setByCallerTags[i];
+                    if (!tag.IsNone)
+                    {
+                        GetOrCreateTagMagnitudes()[tag] = setByCallerValues[i];
+                    }
+                }
+            }
+
+            RecalculateModifierMagnitudes();
         }
 
         #endregion
@@ -260,6 +357,32 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     {
                         TargetAttributes[i] = target.GetAttribute(Def.Modifiers[i].AttributeName);
                     }
+                }
+            }
+        }
+
+        private void RecalculateModifierMagnitudes()
+        {
+            if (Def == null)
+            {
+                return;
+            }
+
+            int modCount = Def.Modifiers.Count;
+            EnsureCapacity(modCount);
+
+            for (int i = 0; i < modCount; i++)
+            {
+                var mod = Def.Modifiers[i];
+                float magnitude = mod.CustomCalculation != null
+                    ? mod.CustomCalculation.CalculateMagnitude(this)
+                    : mod.Magnitude.GetValueAtLevel(Level);
+
+                ModifierMagnitudes[i] = magnitude;
+
+                if (Target != null)
+                {
+                    TargetAttributes[i] = Target.GetAttribute(mod.AttributeName);
                 }
             }
         }

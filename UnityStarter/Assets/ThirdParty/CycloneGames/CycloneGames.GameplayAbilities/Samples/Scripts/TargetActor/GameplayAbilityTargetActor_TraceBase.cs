@@ -24,7 +24,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             this.OnTargetDataReady = onTargetDataReady;
             this.OnCanceled = onCancelled;
 
-            if (ability.ActorInfo.AvatarActor is GameObject casterGO)
+            if (ability.ActorInfo.AvatarGameObject is GameObject casterGO)
             {
                 this.CasterGameObject = casterGO;
             }

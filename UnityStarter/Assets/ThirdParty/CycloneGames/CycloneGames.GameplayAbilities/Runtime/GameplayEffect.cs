@@ -118,6 +118,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public bool DenyOverflowApplication { get; }
 
+        internal ReadOnlyGameplayTagContainer GameplayCuesSnapshot { get; }
+        internal ReadOnlyGameplayTagContainer AssetTagsSnapshot { get; }
+        internal ReadOnlyGameplayTagContainer GrantedTagsSnapshot { get; }
+        internal ReadOnlyGameplayTagContainer RemoveGameplayEffectsWithTagsSnapshot { get; }
+        internal ReadOnlyGameplayTagContainer ApplicationRequiredTagsSnapshot { get; }
+        internal ReadOnlyGameplayTagContainer ApplicationForbiddenTagsSnapshot { get; }
+        internal ReadOnlyGameplayTagContainer OngoingRequiredTagsSnapshot { get; }
+        internal ReadOnlyGameplayTagContainer OngoingForbiddenTagsSnapshot { get; }
+
         public GameplayEffect(
             string name,
             EDurationPolicy durationPolicy,
@@ -160,6 +169,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ExecutePeriodicEffectOnApplication = executePeriodicEffectOnApplication;
             OverflowEffects = overflowEffects ?? (IReadOnlyList<GameplayEffect>)System.Array.Empty<GameplayEffect>();
             DenyOverflowApplication = denyOverflowApplication;
+            GameplayCuesSnapshot = GameplayCues.CreateSnapshot();
+            AssetTagsSnapshot = AssetTags.CreateSnapshot();
+            GrantedTagsSnapshot = GrantedTags.CreateSnapshot();
+            RemoveGameplayEffectsWithTagsSnapshot = RemoveGameplayEffectsWithTags.CreateSnapshot();
+            ApplicationRequiredTagsSnapshot = ApplicationTagRequirements.RequiredTags?.CreateSnapshot();
+            ApplicationForbiddenTagsSnapshot = ApplicationTagRequirements.ForbiddenTags?.CreateSnapshot();
+            OngoingRequiredTagsSnapshot = OngoingTagRequirements.RequiredTags?.CreateSnapshot();
+            OngoingForbiddenTagsSnapshot = OngoingTagRequirements.ForbiddenTags?.CreateSnapshot();
 
             if (DurationPolicy == EDurationPolicy.HasDuration && duration <= 0 && duration != GameplayEffectConstants.INFINITE_DURATION)
             {

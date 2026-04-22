@@ -8,7 +8,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 {
     public class AssetManagementResourceLocator : IResourceLocator
     {
-        private class AssetManagementHandleWrapper<T> : IResourceHandle<T> where T : Object
+        private class AssetManagementHandleWrapper<T> : IResourceHandle<T> where T : UnityEngine.Object
         {
             private IAssetHandle<T> underlyingHandle;
             public T Asset => underlyingHandle.Asset;
@@ -57,17 +57,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.assetPackage = assetPackage;
         }
 
-        public async UniTask<IResourceHandle<T>> LoadAssetAsync<T>(object key, string bucket = null, string cacheTag = null, string cacheOwner = null, CancellationToken cancellationToken = default) where T : Object
+        public async UniTask<IResourceHandle<T>> LoadAssetAsync<T>(string key, string bucket = null, string cacheTag = null, string cacheOwner = null, CancellationToken cancellationToken = default) where T : UnityEngine.Object
         {
-            if (key == null) return null;
-
-            if (key is not string stringKey || string.IsNullOrEmpty(stringKey))
+            if (string.IsNullOrEmpty(key))
             {
                 GASLog.Error($"Invalid asset key: {key}, key must be a non-empty string.");
                 return null;
             }
 
-            var loadHandle = assetPackage.LoadAssetAsync<T>(stringKey, bucket: bucket, tag: cacheTag, owner: cacheOwner, cancellationToken: cancellationToken);
+            var loadHandle = assetPackage.LoadAssetAsync<T>(key, bucket: bucket, tag: cacheTag, owner: cacheOwner, cancellationToken: cancellationToken);
 
             await loadHandle.Task;
 

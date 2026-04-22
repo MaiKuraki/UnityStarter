@@ -147,7 +147,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             public int ActiveCount;
             public int PeakActiveSinceLastCheck;
             public int ReturnCounter;
-            public float LastAccessTime;
+            public double LastAccessTime;
             public long TotalGets;
             public long TotalReturns;
             public long TotalCreated;
@@ -174,7 +174,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly Dictionary<int, string> instanceToAssetKey = new Dictionary<int, string>(10000);
         private readonly Transform poolRoot;
 
-        private float lastTickTime;
+        private double lastTickTime;
 
         #endregion
 
@@ -185,7 +185,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.resourceLocator = locator;
             poolRoot = new GameObject("GameObjectPool_Root").transform;
             UnityEngine.Object.DontDestroyOnLoad(poolRoot.gameObject);
-            lastTickTime = Time.time;
+            lastTickTime = GetCurrentTime();
         }
 
         #endregion
@@ -225,14 +225,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         #region Core Pool Operations
 
-        public async UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null, string bucket = null, string cacheTag = null, string cacheOwner = null)
+        public async UniTask<GameObject> GetAsync(string assetRef, Vector3 position, Quaternion rotation, Transform parent = null, string bucket = null, string cacheTag = null, string cacheOwner = null)
         {
             TickDecay();
 
-            if (assetRef is not string assetKey || string.IsNullOrEmpty(assetKey)) return null;
+            if (string.IsNullOrEmpty(assetRef)) return null;
+
+            string assetKey = assetRef;
 
             var poolData = GetOrCreatePoolData(assetKey);
-            poolData.LastAccessTime = Time.time;
+            poolData.LastAccessTime = GetCurrentTime();
 
             GameObject instance;
 
@@ -288,7 +290,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
 
-            poolData.LastAccessTime = Time.time;
+            poolData.LastAccessTime = GetCurrentTime();
             poolData.ActiveCount = Math.Max(0, poolData.ActiveCount - 1);
             poolData.TotalReturns++;
 
@@ -318,12 +320,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         #region Pre-warming
 
-        public async UniTask PrewarmPoolAsync(object assetRef, int count, string bucket = null, string cacheTag = null, string cacheOwner = null)
+        public async UniTask PrewarmPoolAsync(string assetRef, int count, string bucket = null, string cacheTag = null, string cacheOwner = null)
         {
-            if (assetRef is not string assetKey || string.IsNullOrEmpty(assetKey)) return;
+            if (string.IsNullOrEmpty(assetRef)) return;
+
+            string assetKey = assetRef;
 
             var poolData = GetOrCreatePoolData(assetKey);
-            poolData.LastAccessTime = Time.time;
+            poolData.LastAccessTime = GetCurrentTime();
 
             if (poolData.Handle == null)
             {
@@ -387,8 +391,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         private void TickDecay()
         {
-            float now = Time.time;
-            if (now - lastTickTime < 5f) return;
+            double now = GetCurrentTime();
+            if (now - lastTickTime < 5d) return;
             lastTickTime = now;
 
             foreach (var kvp in poolRegistry)
@@ -620,11 +624,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     Config = config,
                     Pool = new Stack<GameObject>(config.InitialCapacity > 0 ? config.InitialCapacity : 8),
-                    LastAccessTime = Time.time
+                    LastAccessTime = GetCurrentTime()
                 };
                 poolRegistry[assetKey] = poolData;
             }
             return poolData;
+        }
+
+        private static double GetCurrentTime()
+        {
+#if UNITY_2020_1_OR_NEWER
+            return Time.timeAsDouble;
+#else
+            return Time.time;
+#endif
         }
 
         #endregion

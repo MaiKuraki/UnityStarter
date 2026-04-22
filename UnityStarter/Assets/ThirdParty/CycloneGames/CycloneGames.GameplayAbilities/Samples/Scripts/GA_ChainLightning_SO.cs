@@ -22,7 +22,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         {
             CommitAbility(actorInfo, spec);
             
-            var caster = actorInfo.AvatarActor as GameObject;
+            var caster = actorInfo.AvatarGameObject;
 
             // Use a HashSet to track who has been hit to prevent infinite chains.
             var hitTargets = new HashSet<GameObject>();

@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Runtime;
@@ -10,7 +11,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// Represents a loaded asset handle that must be disposed when no longer needed.
     /// This allows the underlying asset management system to properly track and evict unused assets.
     /// </summary>
-    public interface IResourceHandle<T> : System.IDisposable where T : Object
+    public interface IResourceHandle<T> : System.IDisposable where T : UnityEngine.Object
     {
         T Asset { get; }
     }
@@ -21,7 +22,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public interface IResourceLocator
     {
-        UniTask<IResourceHandle<T>> LoadAssetAsync<T>(object key, string bucket = null, string cacheTag = null, string cacheOwner = null, CancellationToken cancellationToken = default) where T : Object;
+        UniTask<IResourceHandle<T>> LoadAssetAsync<T>(string key, string bucket = null, string cacheTag = null, string cacheOwner = null, CancellationToken cancellationToken = default) where T : UnityEngine.Object;
     }
 
     /// <summary>
@@ -29,7 +30,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public interface IGameObjectPoolManager
     {
-        UniTask<GameObject> GetAsync(object assetRef, Vector3 position, Quaternion rotation, Transform parent = null, string bucket = null, string cacheTag = null, string cacheOwner = null);
+        UniTask<GameObject> GetAsync(string assetRef, Vector3 position, Quaternion rotation, Transform parent = null, string bucket = null, string cacheTag = null, string cacheOwner = null);
         void Release(GameObject instance);
         void Shutdown();
     }
@@ -42,15 +43,37 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public readonly struct GameplayCueParameters
     {
-        public readonly GameplayEffectSpec EffectSpec;
-        public AbilitySystemComponent Source => EffectSpec.Source;
-        public AbilitySystemComponent Target => EffectSpec.Target;
-        public GameObject SourceObject => Source?.AvatarActor as GameObject;
-        public GameObject TargetObject => Target?.AvatarActor as GameObject;
+        public readonly GameplayEffect EffectDefinition;
+        public readonly IGameplayEffectContext EffectContext;
+        public readonly AbilitySystemComponent Source;
+        public readonly AbilitySystemComponent Target;
+        public readonly GameObject SourceObject;
+        public readonly GameObject TargetObject;
+        public readonly int EffectLevel;
+        public readonly float EffectDuration;
 
         public GameplayCueParameters(GameplayEffectSpec spec)
         {
-            EffectSpec = spec;
+            EffectDefinition = spec?.Def;
+            EffectContext = spec?.Context;
+            Source = spec?.Source;
+            Target = spec?.Target;
+            SourceObject = Source?.AvatarGameObject;
+            TargetObject = Target?.AvatarGameObject;
+            EffectLevel = spec?.Level ?? 0;
+            EffectDuration = spec?.Duration ?? 0f;
+        }
+
+        public GameplayCueParameters(GameplayCueEventParams parameters)
+        {
+            EffectDefinition = parameters.EffectDefinition as GameplayEffect;
+            EffectContext = parameters.EffectContext as IGameplayEffectContext;
+            Source = parameters.Source as AbilitySystemComponent;
+            Target = parameters.Target as AbilitySystemComponent;
+            SourceObject = parameters.SourceObject as GameObject ?? Source?.AvatarGameObject;
+            TargetObject = parameters.TargetObject as GameObject ?? Target?.AvatarGameObject;
+            EffectLevel = parameters.EffectLevel;
+            EffectDuration = parameters.EffectDuration;
         }
     }
 
