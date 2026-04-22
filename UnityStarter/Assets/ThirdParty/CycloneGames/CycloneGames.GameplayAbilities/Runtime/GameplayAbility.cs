@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using CycloneGames.GameplayTags.Runtime;
 using CycloneGames.GameplayAbilities.Core;
+using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -61,16 +62,35 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// This actor is responsible for the lifetime of the ASC.
         /// </summary>
         public readonly object OwnerActor;
+        public readonly UnityEngine.Object OwnerUnityObject;
         /// <summary>
         /// The physical representation of the owner in the game world, typically a Character or Pawn.
         /// This is the actor that performs animations, has a transform, etc.
         /// </summary>
         public readonly object AvatarActor;
+        public readonly GameObject AvatarGameObject;
 
         public GameplayAbilityActorInfo(object owner, object avatar)
         {
             OwnerActor = owner;
+            OwnerUnityObject = owner as UnityEngine.Object;
             AvatarActor = avatar;
+            AvatarGameObject = ResolveAvatarGameObject(avatar);
+        }
+
+        private static GameObject ResolveAvatarGameObject(object avatar)
+        {
+            if (avatar is GameObject gameObject)
+            {
+                return gameObject;
+            }
+
+            if (avatar is Component component)
+            {
+                return component.gameObject;
+            }
+
+            return null;
         }
     }
 
@@ -91,7 +111,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// The base class for all gameplay abilities. It defines the logic and properties of a single skill or action an actor can perform.
     /// This class is designed to be subclassed to implement specific abilities.
     /// </summary>
-    public abstract class GameplayAbility
+    public abstract class GameplayAbility : IGASAbilityDefinition
     {
         #region Configuration Properties
 
@@ -192,6 +212,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public IReadOnlyList<AbilityTriggerData> AbilityTriggers { get; protected set; }
 
+        internal ReadOnlyGameplayTagContainer AbilityTagsSnapshot { get; private set; }
+        internal ReadOnlyGameplayTagContainer ActivationBlockedTagsSnapshot { get; private set; }
+        internal ReadOnlyGameplayTagContainer ActivationRequiredTagsSnapshot { get; private set; }
+        internal ReadOnlyGameplayTagContainer SourceRequiredTagsSnapshot { get; private set; }
+        internal ReadOnlyGameplayTagContainer SourceBlockedTagsSnapshot { get; private set; }
+        internal ReadOnlyGameplayTagContainer TargetRequiredTagsSnapshot { get; private set; }
+        internal ReadOnlyGameplayTagContainer TargetBlockedTagsSnapshot { get; private set; }
+        internal ReadOnlyGameplayTagContainer CooldownGrantedTagsSnapshot { get; private set; }
+
         #endregion
 
         #region Runtime Properties
@@ -246,6 +275,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             TargetRequiredTags = targetRequiredTags ?? new GameplayTagContainer();
             TargetBlockedTags = targetBlockedTags ?? new GameplayTagContainer();
             AbilityTriggers = abilityTriggers ?? (IReadOnlyList<AbilityTriggerData>)System.Array.Empty<AbilityTriggerData>();
+
+            AbilityTagsSnapshot = AbilityTags.CreateSnapshot();
+            ActivationBlockedTagsSnapshot = ActivationBlockedTags.CreateSnapshot();
+            ActivationRequiredTagsSnapshot = ActivationRequiredTags.CreateSnapshot();
+            SourceRequiredTagsSnapshot = SourceRequiredTags.CreateSnapshot();
+            SourceBlockedTagsSnapshot = SourceBlockedTags.CreateSnapshot();
+            TargetRequiredTagsSnapshot = TargetRequiredTags.CreateSnapshot();
+            TargetBlockedTagsSnapshot = TargetBlockedTags.CreateSnapshot();
+            CooldownGrantedTagsSnapshot = CooldownEffectDefinition?.GrantedTags?.CreateSnapshot();
         }
 
         /// <summary>
@@ -388,12 +426,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public virtual bool CanActivate(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec)
         {
             if (isEnding) return false;
-            if (spec.Owner.CombinedTags.HasAny(ActivationBlockedTags)) return false;
-            if (!spec.Owner.CombinedTags.HasAll(ActivationRequiredTags)) return false;
+            if (spec.Owner.HasAnyMatchingGameplayTags(ActivationBlockedTagsSnapshot)) return false;
+            if (!spec.Owner.HasAllMatchingGameplayTags(ActivationRequiredTagsSnapshot)) return false;
 
             // UE5: Source tag requirements — check tags on the source (owner)
-            if (!SourceRequiredTags.IsEmpty && !spec.Owner.CombinedTags.HasAll(SourceRequiredTags)) return false;
-            if (!SourceBlockedTags.IsEmpty && spec.Owner.CombinedTags.HasAny(SourceBlockedTags)) return false;
+            if (!spec.Owner.HasAllMatchingGameplayTags(SourceRequiredTagsSnapshot)) return false;
+            if (spec.Owner.HasAnyMatchingGameplayTags(SourceBlockedTagsSnapshot)) return false;
 
             // UE5: Check if any active ability is blocking us via BlockAbilitiesWithTag
             if (AbilityTags != null && !AbilityTags.IsEmpty && spec.Owner.AreAbilitiesBlockedByTag(AbilityTags))
@@ -417,8 +455,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public virtual bool CanApplyToTarget(AbilitySystemComponent target)
         {
             if (target == null) return false;
-            if (!TargetRequiredTags.IsEmpty && !target.CombinedTags.HasAll(TargetRequiredTags)) return false;
-            if (!TargetBlockedTags.IsEmpty && target.CombinedTags.HasAny(TargetBlockedTags)) return false;
+            if (!target.HasAllMatchingGameplayTags(TargetRequiredTagsSnapshot)) return false;
+            if (target.HasAnyMatchingGameplayTags(TargetBlockedTagsSnapshot)) return false;
             return true;
         }
 
@@ -427,9 +465,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         protected bool CheckCooldown(AbilitySystemComponent asc)
         {
-            if (CooldownEffectDefinition?.GrantedTags != null)
+            if (CooldownGrantedTagsSnapshot != null)
             {
-                if (asc.CombinedTags.HasAny(CooldownEffectDefinition.GrantedTags))
+                if (asc.HasAnyMatchingGameplayTagsExact(CooldownGrantedTagsSnapshot))
                 {
                     GASLog.Debug($"Ability '{Name}' failed: on cooldown.");
                     return false;

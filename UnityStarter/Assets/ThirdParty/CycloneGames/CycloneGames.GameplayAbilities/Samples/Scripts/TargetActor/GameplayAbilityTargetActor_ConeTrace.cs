@@ -42,7 +42,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         protected override void PerformTrace()
         {
-            var caster = owningAbility?.ActorInfo.AvatarActor as GameObject;
+            var caster = owningAbility?.ActorInfo.AvatarGameObject;
             if (caster == null)
             {
                 BroadcastCancelled();

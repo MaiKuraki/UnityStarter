@@ -34,7 +34,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         protected override void PerformTrace()
         {
-            if (owningAbility?.ActorInfo.AvatarActor is GameObject caster)
+            if (owningAbility?.ActorInfo.AvatarGameObject is GameObject caster)
             {
                 // Perform a raycast from the caster's position, forward.
                 if (Physics.Raycast(caster.transform.position, caster.transform.forward, out RaycastHit hit, traceRange))

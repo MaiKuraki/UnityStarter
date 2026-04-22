@@ -5,7 +5,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     public class AbilityTask_WaitDelay : AbilityTask, IAbilityTaskTick
     {
         public Action OnFinishDelay;
-        private float timeRemaining;
+        private double timeRemaining;
 
         public static AbilityTask_WaitDelay WaitDelay(GameplayAbility ability, float duration)
         {
@@ -16,7 +16,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         protected override void OnActivate()
         {
-            if (timeRemaining <= 0)
+            if (timeRemaining <= 0d)
             {
                 if (!IsCancelled)
                 {
@@ -31,7 +31,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (!IsActive) return;
 
             timeRemaining -= deltaTime;
-            if (timeRemaining <= 0)
+            if (timeRemaining <= 0d)
             {
                 if (!IsCancelled)
                 {

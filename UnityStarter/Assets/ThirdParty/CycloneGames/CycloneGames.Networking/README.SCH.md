@@ -1,6 +1,6 @@
 # CycloneGames.Networking
 
-<div align="left"><a href="./README.md">English</a> | 简体中文</div>
+[English](./README.md) | 简体中文
 
 一个为 Unity 设计的**生产级网络抽象层**，支持状态同步、帧同步（Lockstep）、回滚（Rollback）、客户端预测等多种网络同步模式。具备**低分配运行时性能**、**适配器感知的线程安全**与**跨平台兼容**特性。
 
@@ -104,7 +104,7 @@ flowchart TB
     subgraph Bridge["🔗 GAS 桥接 (独立包 CycloneGames.Networking.GAS)"]
         AbilityBridge["NetworkedAbilityBridge"]
         AttrSync["AttributeSyncManager"]
-        EffectRepl["EffectReplicationManager"]
+        GasAdapter["GameplayAbilitiesNetworkedASCAdapter\nExtensions"]
     end
 
     subgraph Mid["📡 中间层"]
@@ -1035,7 +1035,8 @@ simulator.Enabled = true;
 
 > **包结构说明**：本模块分为两层。
 >
-> - `CycloneGames.Networking.GAS` — 纯协议层：消息 ID、`IAbilityNetAdapter` 接口、`NetworkedAbilityBridge`、`AttributeSyncManager`、`EffectReplicationManager`。不依赖任何具体 GAS 实现。
+> - `CycloneGames.Networking.GAS` — 纯协议层：消息 ID、`IAbilityNetAdapter` 接口、`NetworkedAbilityBridge`、`AttributeSyncManager`。不依赖任何具体 GAS 实现。
+> - `CycloneGames.Networking.GAS.Integrations.GameplayAbilities` — `CycloneGames.GameplayAbilities` 的主线集成层：ASC 适配器、细粒度 effect delta 复制、full-state 快照接线与安全辅助。
 > - `CycloneGames.Networking.GAS.Integrations.GameplayAbilities` — 与 `CycloneGames.GameplayAbilities` 的具体胶水层。使用 `CycloneGames.GameplayAbilities` 时引入此包；自定义 GAS 实现时可忽略。
 
 与 `CycloneGames.GameplayAbilities` 模块的深度集成，支持技能激活、效果复制、属性同步。
@@ -1073,13 +1074,14 @@ flowchart TB
 ```
 
 ```csharp
-using CycloneGames.Networking.GAS; // 📦 需引用 GAS 独立包
+using CycloneGames.Networking.GAS; // 📦 需引用 GAS 协议包
+using CycloneGames.Networking.GAS.Integrations.GameplayAbilities; // 📦 GameplayAbilities 主线集成包
 
 // 创建桥接
 var bridge = new NetworkedAbilityBridge(networkManager);
 
-// 注册 ASC（AbilitySystemComponent）
-bridge.RegisterASC(networkId, ownerConnectionId, myASC);
+// 注册 ASC（AbilitySystemComponent）并创建主线适配器
+var adapter = bridge.RegisterGameplayAbilitiesASC(myAsc, networkId, ownerConnectionId, idRegistry);
 
 // 可选：自定义完整状态请求鉴权（默认仅所有者可请求）
 bridge.FullStateRequestAuthorizer = (sender, targetId) => sender.ConnectionId == ownerConnectionId;
@@ -1118,21 +1120,11 @@ attrSync.RegisterPublicAttribute(maxHealthAttrId);
 attrSync.MarkDirty(networkId, healthAttrId, baseValue: 100f, currentValue: 75f);
 attrSync.FlushDirty(getOwnerConnectionId: GetOwnerConnectionId, getObservers: GetObservers, getConnectionById: GetConnectionById); // 发送脏属性
 
-// 效果复制管理器
-var effectRepl = new EffectReplicationManager(bridge);
-int instanceId = effectRepl.OnEffectApplied(
-    targetNetworkId,
-    sourceNetworkId,
-    effectDefinitionId,
-    level,
-    stackCount,
-    duration,
-    predictionKey: nextPredictionKey,
-    setByCallerEntries: null,
-    getObservers: GetObservers
-);
-effectRepl.OnStackChanged(instanceId, newStacks, GetObservers);
-effectRepl.OnEffectRemoved(instanceId, GetObservers);
+// 主线 GAS 增量复制
+bridge.ReplicatePendingState(adapter, GetObservers);
+
+// 断线重连或晚加入
+bridge.SendGameplayAbilitiesFullState(adapter, clientConnection);
 ```
 
 生产环境常用加固建议：
@@ -1603,17 +1595,16 @@ public class TeamVisionController : MonoBehaviour
 
 ### GAS 集成（📦 独立包：`CycloneGames.Networking.GAS`）
 
-| 类                         | 说明                         |
-| -------------------------- | ---------------------------- |
-| `NetworkedAbilityBridge`   | 技能激活/确认/拒绝的网络传输 |
-| `AttributeSyncManager`     | 属性脏追踪与同步             |
-| `EffectReplicationManager` | 效果实例复制                 |
+- `NetworkedAbilityBridge`：与具体传输层无关的 GAS 协议桥。
+- `AttributeSyncManager`：通用属性脏追踪与同步。
+- `GameplayAbilitiesNetworkedASCAdapter`：GameplayAbilities 的全量快照与细粒度 effect delta 集成。
+- `GasBridgeGameplayAbilitiesExtensions`：一行完成 ASC 注册、delta 复制与 full-state 下发。
 
 ---
 
 ## 目录结构
 
-```
+```text
 Runtime/Scripts/
 ├── Core/                 # 核心接口与类型
 ├── Buffers/              # 缓冲区与对象池
@@ -1647,8 +1638,14 @@ DOD/Runtime/                      # 面向数据设计变体（Burst/Jobs 加速
     ├── IAbilityNetAdapter.cs
     ├── NoopAbilityNetAdapter.cs
     ├── NetworkedAbilityBridge.cs
-    ├── AttributeSyncManager.cs
-    └── EffectReplicationManager.cs
+    └── AttributeSyncManager.cs
+
+📦 CycloneGames.Networking.GAS.Integrations.GameplayAbilities/
+└── Runtime/Scripts/
+    ├── GameplayAbilitiesNetworkedASCAdapter.cs
+    ├── GasBridgeGameplayAbilitiesExtensions.cs
+    ├── DefaultGasNetIdRegistry.cs
+    └── GasBridgeSecurityExtensions.cs
 ```
 
 ---
