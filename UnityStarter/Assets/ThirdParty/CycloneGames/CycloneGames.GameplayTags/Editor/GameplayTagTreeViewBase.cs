@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
@@ -70,16 +71,31 @@ namespace CycloneGames.GameplayTags.Editor
    {
       public bool IsEmpty => m_IsEmpty;
 
+      private const float ToolbarHeight = 22f;
+      private const float CompactSearchWidth = 150f;
+      private const float FullSearchWidth = 250f;
+      private const float ToolbarSpacing = 4f;
+      private const float ToolbarTopPadding = 2f;
+      private const float ToolbarContentHeight = 20f;
+
       private static Styles s_Styles;
+      private static readonly StringBuilder s_SourceTooltipBuilder = new(256);
       private SearchField m_SearchField;
       private bool m_IsEmpty;
       private AddNewTagPanel m_AddNewTagPanel;
       private DeleteTagPanel m_DeleteTagPanel;
+      private string m_CachedDeleteTooltip;
+      private string m_CachedReadOnlyTooltip;
+      private GUIContent m_TempDeleteContent;
+      private bool m_IsSearching;
 
       public GameplayTagTreeViewBase(TreeViewState treeViewState)
          : base(treeViewState)
       {
          m_SearchField = new SearchField();
+         m_TempDeleteContent = new GUIContent();
+         m_CachedDeleteTooltip = "Delete Tag";
+         m_CachedReadOnlyTooltip = "Tag cannot be deleted (Read-Only)";
          showAlternatingRowBackgrounds = true;
          rowHeight = 24;
 
@@ -88,17 +104,20 @@ namespace CycloneGames.GameplayTags.Editor
 
       public override float GetTotalHeight()
       {
-         return base.GetTotalHeight() + EditorStyles.toolbar.fixedHeight * 2;
+         float height = base.GetTotalHeight() + ToolbarHeight;
+         if (m_AddNewTagPanel != null)
+            height += m_AddNewTagPanel.GetHeight();
+         if (m_DeleteTagPanel != null)
+            height += m_DeleteTagPanel.GetHeight();
+         return height;
       }
 
       public override void OnGUI(Rect rect)
       {
-         rect.height = Mathf.Min(rect.height, GetTotalHeight());
-
          s_Styles ??= new Styles();
 
          Rect toolbarRect = rect;
-         toolbarRect.height = EditorStyles.toolbar.fixedHeight * 2;
+         toolbarRect.height = ToolbarHeight;
          ToolbarGUI(toolbarRect);
 
          rect.yMin += toolbarRect.height;
@@ -108,15 +127,14 @@ namespace CycloneGames.GameplayTags.Editor
             Rect panelRect = rect;
             panelRect.height = m_AddNewTagPanel.GetHeight();
             rect.yMin += panelRect.height;
-
             m_AddNewTagPanel.OnGUI(panelRect);
          }
+
          if (m_DeleteTagPanel != null)
          {
             Rect panelRect = rect;
             panelRect.height = m_DeleteTagPanel.GetHeight();
             rect.yMin += panelRect.height;
-
             m_DeleteTagPanel.OnGUI(panelRect);
          }
 
@@ -125,48 +143,72 @@ namespace CycloneGames.GameplayTags.Editor
 
       private void ToolbarGUI(Rect rect)
       {
-         Rect topRect = rect;
-         rect.height = EditorStyles.toolbar.fixedHeight;
-         Rect bottomRect = rect;
-         bottomRect.y += rect.height;
-         rect.height = EditorStyles.toolbar.fixedHeight;
+         GUI.BeginGroup(rect);
 
-         GUILayout.BeginArea(topRect);
-         GUILayout.BeginHorizontal(EditorStyles.toolbar);
+         Rect contentRect = new Rect(0, 0, rect.width, rect.height);
+         GUI.DrawTexture(contentRect, EditorGUIUtility.whiteTexture, ScaleMode.StretchToFill);
+         EditorGUI.DrawRect(contentRect, EditorGUIUtility.isProSkin 
+            ? new Color(0.2f, 0.2f, 0.2f, 1f) 
+            : new Color(0.88f, 0.88f, 0.88f, 1f));
 
-         if (ToolbarButton("Expand All"))
+         Rect layoutArea = new Rect(ToolbarSpacing, 0, rect.width - ToolbarSpacing * 2, rect.height);
+
+         GUI.BeginGroup(layoutArea);
+         DrawCompactToolbar(layoutArea);
+         GUI.EndGroup();
+
+         GUI.EndGroup();
+      }
+
+      private void DrawCompactToolbar(Rect rect)
+      {
+         float contentY = ToolbarTopPadding;
+         float contentHeight = Mathf.Min(ToolbarContentHeight, Mathf.Max(1f, rect.height - contentY));
+
+         float x = 0;
+         float buttonSize = 20f;
+
+         Rect expandRect = new Rect(x, contentY, buttonSize, contentHeight);
+         if (GUI.Button(expandRect, s_Styles.ExpandIcon, EditorStyles.miniLabel))
             ExpandAll();
 
-         if (ToolbarButton("Collapse All"))
+         x += buttonSize + ToolbarSpacing;
+
+         Rect collapseRect = new Rect(x, contentY, buttonSize, contentHeight);
+         if (GUI.Button(collapseRect, s_Styles.CollapseIcon, EditorStyles.miniLabel))
             CollapseAll();
 
-         OnToolbarGUI();
+         x += buttonSize + ToolbarSpacing;
 
-         GUILayout.FlexibleSpace();
+         Rect addRect = new Rect(rect.xMax - buttonSize, contentY, buttonSize, contentHeight);
+         float rightLimit = addRect.xMin - ToolbarSpacing;
+         OnToolbarGUI(ref x, rect, rightLimit);
 
-         if (m_AddNewTagPanel == null && ToolbarButton(s_Styles.AddNewTagIcon, "Add New Tag"))
-            CreateAddNewTagPanel();
+         if (m_AddNewTagPanel == null)
+         {
+            m_TempDeleteContent.image = s_Styles.AddNewTagIcon;
+            m_TempDeleteContent.tooltip = "Add New Tag (Ctrl+Shift+A)";
+            if (GUI.Button(addRect, m_TempDeleteContent, EditorStyles.miniLabel))
+               CreateAddNewTagPanel();
+         }
 
-         GUILayout.EndHorizontal();
-         GUILayout.EndArea();
+         float searchWidth = CompactSearchWidth;
+         if (rect.width > 600f)
+            searchWidth = FullSearchWidth;
 
-         GUILayout.BeginArea(bottomRect);
-         GUILayout.BeginHorizontal(EditorStyles.toolbar);
+         Rect searchRect = new Rect(rect.xMax - searchWidth - buttonSize - ToolbarSpacing, contentY, searchWidth, contentHeight);
 
-         GUILayout.Space(4);
-
-         searchString = m_SearchField.OnToolbarGUI(searchString);
-
-         GUILayout.Space(4);
-
-         GUILayout.EndHorizontal();
-         GUILayout.EndArea();
+         string newSearchString = m_SearchField.OnToolbarGUI(searchRect, searchString);
+         if (newSearchString != searchString)
+         {
+            searchString = newSearchString;
+            m_IsSearching = !string.IsNullOrEmpty(searchString);
+         }
       }
 
       private void CreateAddNewTagPanel(string prefillTagName = null)
       {
          m_DeleteTagPanel = null;
-
          m_AddNewTagPanel = new(prefillTagName);
 
          m_AddNewTagPanel.OnClose += () =>
@@ -204,7 +246,7 @@ namespace CycloneGames.GameplayTags.Editor
       protected virtual void OnTagAdded(GameplayTag tag)
       { }
 
-      protected virtual void OnToolbarGUI()
+      protected virtual void OnToolbarGUI(ref float x, Rect toolbarRect, float rightLimit)
       { }
 
       protected void DoTagRowGUI(Rect rect, GameplayTagTreeViewItem item)
@@ -216,10 +258,11 @@ namespace CycloneGames.GameplayTags.Editor
 
          Color prevColor = GUI.color;
          GUI.color = item.CanBeDeleted ? prevColor : new Color(1, 1, 1, 0.3f);
-         string tooltip = item.CanBeDeleted ? "Delete Tag" : "Tag cannot be deleted (Read-Only)";
 
-         GUIContent deleteButtonContent = TreeViewGUIUtility.TempContent(s_Styles.DeleteTagIcon, tooltip);
-         if (GUI.Button(deleteButtonRect, deleteButtonContent, EditorStyles.label) && item.CanBeDeleted)
+         m_TempDeleteContent.image = s_Styles.DeleteTagIcon;
+         m_TempDeleteContent.tooltip = item.CanBeDeleted ? m_CachedDeleteTooltip : m_CachedReadOnlyTooltip;
+
+         if (GUI.Button(deleteButtonRect, m_TempDeleteContent, EditorStyles.label) && item.CanBeDeleted)
             CreateDeleteTagPanel(item.Tag);
 
          GUI.color = prevColor;
@@ -230,7 +273,7 @@ namespace CycloneGames.GameplayTags.Editor
          labelRect.height = EditorGUIUtility.singleLineHeight;
          labelRect.center = new Vector2(labelRect.center.x, rect.center.y);
 
-         GUI.Label(labelRect, TreeViewGUIUtility.TempContent(hasSearch ? item.Tag.Name : item.displayName, item.Tag.Description));
+         GUI.Label(labelRect, TreeViewGUIUtility.TempContent(m_IsSearching ? item.Tag.Name : item.displayName, item.Tag.Description));
 
          if (item.Tag.Definition.SourceCount > 0)
          {
@@ -249,17 +292,28 @@ namespace CycloneGames.GameplayTags.Editor
 
             if (isMouseOver)
             {
-               sourceTooltip = "Sources:\n";
+               s_SourceTooltipBuilder.Clear();
+               s_SourceTooltipBuilder.Append("Sources:\n");
                for (int i = 0; i < item.Tag.Definition.SourceCount; i++)
                {
                   IGameplayTagSource source = item.Tag.Definition.GetSource(i);
                   if (source is not IDeleteTagHandler)
-                     sourceTooltip += $"{source.Name} (Read-Only)\n";
+                  {
+                     s_SourceTooltipBuilder.Append(source.Name);
+                     s_SourceTooltipBuilder.Append(" (Read-Only)");
+                  }
                   else
-                     sourceTooltip += $"{source.Name}\n";
+                  {
+                     s_SourceTooltipBuilder.Append(source.Name);
+                  }
+
+                  s_SourceTooltipBuilder.Append('\n');
                }
 
-               sourceTooltip = sourceTooltip.TrimEnd();
+               if (s_SourceTooltipBuilder.Length > 0 && s_SourceTooltipBuilder[s_SourceTooltipBuilder.Length - 1] == '\n')
+                  s_SourceTooltipBuilder.Length -= 1;
+
+               sourceTooltip = s_SourceTooltipBuilder.ToString();
             }
 
             GUIContent sourceContent = TreeViewGUIUtility.TempContent(sourceText, sourceTooltip);
@@ -267,14 +321,28 @@ namespace CycloneGames.GameplayTags.Editor
          }
       }
 
-      protected bool ToolbarButton(string text)
+      protected bool ToolbarButton(ref float x, Rect toolbarRect, float rightLimit, float width, string text)
       {
-         return GUILayout.Button(text, EditorStyles.toolbarButton, GUILayout.ExpandWidth(false));
+         if (x + width > rightLimit)
+            return false;
+
+         float contentY = ToolbarTopPadding;
+         float contentHeight = Mathf.Min(ToolbarContentHeight, Mathf.Max(1f, toolbarRect.height - contentY));
+         Rect rect = new(x, contentY, width, contentHeight);
+         x += width + ToolbarSpacing;
+         return GUI.Button(rect, text, EditorStyles.toolbarButton);
       }
 
-      protected bool ToolbarButton(Texture texture, string tooltip = null)
+      protected bool ToolbarButton(ref float x, Rect toolbarRect, float rightLimit, float width, Texture texture, string tooltip = null)
       {
-         return GUILayout.Button(TreeViewGUIUtility.TempContent(texture, tooltip), EditorStyles.toolbarButton, GUILayout.ExpandWidth(false));
+         if (x + width > rightLimit)
+            return false;
+
+         float contentY = ToolbarTopPadding;
+         float contentHeight = Mathf.Min(ToolbarContentHeight, Mathf.Max(1f, toolbarRect.height - contentY));
+         Rect rect = new(x, contentY, width, contentHeight);
+         x += width + ToolbarSpacing;
+         return GUI.Button(rect, TreeViewGUIUtility.TempContent(texture, tooltip), EditorStyles.toolbarButton);
       }
 
       protected override bool DoesItemMatchSearch(TreeViewItem item, string search)
@@ -354,6 +422,8 @@ namespace CycloneGames.GameplayTags.Editor
          public readonly GUIStyle TagSourceLabel;
          public readonly Texture AddNewTagIcon;
          public readonly Texture DeleteTagIcon;
+         public readonly Texture ExpandIcon;
+         public readonly Texture CollapseIcon;
 
          public Styles()
          {
@@ -368,6 +438,8 @@ namespace CycloneGames.GameplayTags.Editor
 
             AddNewTagIcon = EditorGUIUtility.IconContent("Toolbar Plus").image;
             DeleteTagIcon = EditorGUIUtility.IconContent("Toolbar Minus").image;
+            ExpandIcon = EditorGUIUtility.IconContent("Toolbar Plus").image;
+            CollapseIcon = EditorGUIUtility.IconContent("Toolbar Minus").image;
          }
       }
    }
