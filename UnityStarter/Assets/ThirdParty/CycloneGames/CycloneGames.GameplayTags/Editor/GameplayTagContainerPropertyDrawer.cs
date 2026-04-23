@@ -1,6 +1,7 @@
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
+using System.Text;
 using CycloneGames.GameplayTags.Runtime;
 
 namespace CycloneGames.GameplayTags.Editor
@@ -19,8 +20,14 @@ namespace CycloneGames.GameplayTags.Editor
       private static GUIContent s_TempContent = new();
 
       private static GUIStyle s_TagBoxStyle;
+      private static readonly StringBuilder s_LabelBuilder = new(128);
+      private static readonly Color s_DimmedColor = new(1f, 1f, 1f, 0.7f);
+      private static readonly Color s_InvalidTagColor = new(1f, 0.4f, 0.4f, 1f);
 
       private GUIContent m_RemoveTagContent;
+      private GUIContent m_EditTagsContent;
+      private int m_LastEditTagsCount = -1;
+      private bool m_LastEditTagsMixed;
 
       public GameplayTagContainerPropertyDrawer()
       {
@@ -30,6 +37,8 @@ namespace CycloneGames.GameplayTags.Editor
             text = null,
             tooltip = "Remove this tag."
          };
+
+         m_EditTagsContent = new GUIContent();
 
          if (s_TagBoxStyle == null)
          {
@@ -86,15 +95,13 @@ namespace CycloneGames.GameplayTags.Editor
          Rect editButtonRect = new(position.x, position.y, k_ButtonsWidth, k_ButtonHeight);
          using (new EditorGUI.DisabledScope(explicitTagsProperty.hasMultipleDifferentValues))
          {
-            string editLabel = explicitTagsProperty.arraySize > 0
-               ? $"Edit Tags ({explicitTagsProperty.arraySize})..."
-               : "Edit Tags...";
-            if (GUI.Button(editButtonRect, editLabel))
+            UpdateEditTagsContent(explicitTagsProperty);
+            if (GUI.Button(editButtonRect, m_EditTagsContent))
             {
                GameplayTagContainerTreeView tagTreeView = new(new TreeViewState(), explicitTagsProperty);
                Rect activatorRect = editButtonRect;
                activatorRect.width = position.width;
-               tagTreeView.ShowPopupWindow(activatorRect, 280f);
+               tagTreeView.ShowPopupWindow(activatorRect, 460f, 420f, 860f);
             }
          }
 
@@ -125,12 +132,12 @@ namespace CycloneGames.GameplayTags.Editor
          Color prevColor = GUI.color;
          if (explicitTagsProperty.hasMultipleDifferentValues)
          {
-            GUI.color = new Color(1, 1, 1, 0.7f);
+            GUI.color = s_DimmedColor;
             EditorGUI.LabelField(tagRect, "Tags have different values.");
          }
          else if (explicitTagsProperty.arraySize == 0)
          {
-            GUI.color = new Color(1, 1, 1, 0.7f);
+            GUI.color = s_DimmedColor;
             EditorGUI.LabelField(tagRect, "No tags added.");
          }
          else
@@ -143,7 +150,7 @@ namespace CycloneGames.GameplayTags.Editor
                GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue);
 
                bool isValid = tag.IsValid;
-               s_TempContent.text = isValid ? element.stringValue : element.stringValue + " (Invalid)";
+               SetTagLabelContent(element.stringValue, isValid);
                s_TempContent.tooltip = tag.Description ?? "No description";
 
                Rect removeButtonRect = new(tagRect.x, tagRect.y, k_RemoveButtonWidth, tagRect.height);
@@ -159,7 +166,11 @@ namespace CycloneGames.GameplayTags.Editor
 
                Color previousColor = GUI.color;
                if (!isValid)
-                  GUI.color = new Color(1f, 0.4f, 0.4f, previousColor.a);
+               {
+                  Color invalidColor = s_InvalidTagColor;
+                  invalidColor.a = previousColor.a;
+                  GUI.color = invalidColor;
+               }
 
                EditorGUI.LabelField(labelRect, s_TempContent);
 
@@ -173,6 +184,50 @@ namespace CycloneGames.GameplayTags.Editor
 
          EditorGUI.indentLevel = oldIndentLevel;
          EditorGUI.EndProperty();
+      }
+
+      private void UpdateEditTagsContent(SerializedProperty explicitTagsProperty)
+      {
+         bool mixed = explicitTagsProperty.hasMultipleDifferentValues;
+         int count = explicitTagsProperty.arraySize;
+
+         if (mixed == m_LastEditTagsMixed && count == m_LastEditTagsCount)
+            return;
+
+         m_LastEditTagsMixed = mixed;
+         m_LastEditTagsCount = count;
+
+         if (mixed)
+         {
+            m_EditTagsContent.text = "Edit Tags...";
+            return;
+         }
+
+         if (count <= 0)
+         {
+            m_EditTagsContent.text = "Edit Tags...";
+            return;
+         }
+
+         s_LabelBuilder.Clear();
+         s_LabelBuilder.Append("Edit Tags (");
+         s_LabelBuilder.Append(count);
+         s_LabelBuilder.Append(")...");
+         m_EditTagsContent.text = s_LabelBuilder.ToString();
+      }
+
+      private static void SetTagLabelContent(string tagName, bool isValid)
+      {
+         if (isValid)
+         {
+            s_TempContent.text = tagName;
+            return;
+         }
+
+         s_LabelBuilder.Clear();
+         s_LabelBuilder.Append(tagName);
+         s_LabelBuilder.Append(" (Invalid)");
+         s_TempContent.text = s_LabelBuilder.ToString();
       }
    }
 }
