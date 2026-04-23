@@ -20,12 +20,13 @@ namespace CycloneGames.GameplayTags.Editor
             UpdateIncludedTags();
         }
 
-        protected override void OnToolbarGUI()
+        protected override void OnToolbarGUI(ref float x, Rect toolbarRect, float rightLimit)
         {
-            if (ToolbarButton("Clear All"))
+            if (ToolbarButton(ref x, toolbarRect, rightLimit, 72f, "Clear All"))
             {
                 m_ExplicitTagsProperty.ClearArray();
                 m_ExplicitTagsProperty.serializedObject.ApplyModifiedProperties();
+                m_ExplicitTagsProperty.serializedObject.Update();
                 UpdateIncludedTags();
             }
         }
