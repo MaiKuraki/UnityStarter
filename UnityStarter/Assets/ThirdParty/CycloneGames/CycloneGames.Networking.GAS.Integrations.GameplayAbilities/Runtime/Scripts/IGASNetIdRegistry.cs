@@ -6,7 +6,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
     /// <summary>
     /// Registry for stable cross-network IDs used by the GAS bridge.
     /// </summary>
-    public interface IGasNetIdRegistry
+    public interface IGASNetIdRegistry
     {
         int GetAbilityDefinitionId(GameplayAbility ability);
         bool TryResolveAbilityDefinition(int abilityDefinitionId, out GameplayAbility ability);

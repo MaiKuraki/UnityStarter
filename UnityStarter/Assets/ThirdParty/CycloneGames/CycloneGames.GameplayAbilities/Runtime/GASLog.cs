@@ -13,7 +13,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     public static class GASLog
     {
         private const string GAS_CATEGORY = "GAS";
-        
+
         /// <summary>
         /// Logs a trace message (most verbose). Compiled out in Release.
         /// </summary>
@@ -23,7 +23,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CLogger.LogTrace(message, GAS_CATEGORY, filePath, lineNumber, memberName);
         }
-        
+
         /// <summary>
         /// Logs a debug message. Compiled out in Release.
         /// </summary>
@@ -33,7 +33,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CLogger.LogDebug(message, GAS_CATEGORY, filePath, lineNumber, memberName);
         }
-        
+
         /// <summary>
         /// Logs an info message. Compiled out in Release.
         /// </summary>
@@ -43,7 +43,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CLogger.LogInfo(message, GAS_CATEGORY, filePath, lineNumber, memberName);
         }
-        
+
         /// <summary>
         /// Logs a warning (always active, includes Release).
         /// </summary>
@@ -52,7 +52,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CLogger.LogWarning(message, GAS_CATEGORY, filePath, lineNumber, memberName);
         }
-        
+
         /// <summary>
         /// Logs an error (always active, includes Release).
         /// </summary>
@@ -61,7 +61,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CLogger.LogError(message, GAS_CATEGORY, filePath, lineNumber, memberName);
         }
-        
+
         /// <summary>
         /// Logs a fatal error (always active, includes Release).
         /// </summary>
@@ -70,9 +70,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CLogger.LogFatal(message, GAS_CATEGORY, filePath, lineNumber, memberName);
         }
-        
+
         #region Zero-GC StringBuilder Overloads
-        
+
         /// <summary>
         /// Zero-GC trace logging using StringBuilder builder pattern.
         /// </summary>
@@ -82,7 +82,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CLogger.LogTrace(messageBuilder, GAS_CATEGORY, filePath, lineNumber, memberName);
         }
-        
+
         /// <summary>
         /// Zero-GC debug logging using StringBuilder builder pattern.
         /// </summary>
@@ -92,7 +92,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             CLogger.LogDebug(messageBuilder, GAS_CATEGORY, filePath, lineNumber, memberName);
         }
-        
+
         /// <summary>
         /// Zero-GC info logging using StringBuilder builder pattern.
         /// </summary>
@@ -105,7 +105,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Zero-GC warning logging using StringBuilder builder pattern.
-        /// Always active (including Release) — avoids string interpolation allocation at call sites.
+        /// Always active (including Release) --avoids string interpolation allocation at call sites.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Warning(System.Action<StringBuilder> messageBuilder, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
@@ -115,14 +115,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Zero-GC error logging using StringBuilder builder pattern.
-        /// Always active (including Release) — avoids string interpolation allocation at call sites.
+        /// Always active (including Release) --avoids string interpolation allocation at call sites.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Error(System.Action<StringBuilder> messageBuilder, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             CLogger.LogError(messageBuilder, GAS_CATEGORY, filePath, lineNumber, memberName);
         }
-        
+
         #endregion
     }
 }

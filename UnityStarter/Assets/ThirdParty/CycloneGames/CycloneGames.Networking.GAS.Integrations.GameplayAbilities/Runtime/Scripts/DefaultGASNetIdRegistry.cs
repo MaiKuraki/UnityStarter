@@ -9,7 +9,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
     /// <summary>
     /// Default runtime registry for deterministic ID mapping.
     /// </summary>
-    public sealed class DefaultGasNetIdRegistry : IGasNetIdRegistry
+    public sealed class DefaultGASNetIdRegistry : IGASNetIdRegistry
     {
         private readonly Dictionary<int, GameplayAbility> _abilityById = new Dictionary<int, GameplayAbility>(128);
         private readonly Dictionary<GameplayAbility, int> _idByAbility = new Dictionary<GameplayAbility, int>(128);
@@ -90,7 +90,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
             if (_abilityById.TryGetValue(abilityDefinitionId, out var existing) && !ReferenceEquals(existing, ability))
             {
-                Debug.LogWarning($"[DefaultGasNetIdRegistry] Ability ID collision: {abilityDefinitionId}.");
+                Debug.LogWarning($"[DefaultGASNetIdRegistry] Ability ID collision: {abilityDefinitionId}.");
                 return;
             }
 
@@ -104,7 +104,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
             if (_effectById.TryGetValue(effectDefinitionId, out var existing) && !ReferenceEquals(existing, effect))
             {
-                Debug.LogWarning($"[DefaultGasNetIdRegistry] Effect ID collision: {effectDefinitionId}.");
+                Debug.LogWarning($"[DefaultGASNetIdRegistry] Effect ID collision: {effectDefinitionId}.");
                 return;
             }
 
@@ -118,7 +118,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
             if (_attributeNameById.TryGetValue(attributeId, out var existing) && !string.Equals(existing, attributeName, StringComparison.Ordinal))
             {
-                Debug.LogWarning($"[DefaultGasNetIdRegistry] Attribute ID collision: {attributeId}. existing='{existing}', incoming='{attributeName}'.");
+                Debug.LogWarning($"[DefaultGASNetIdRegistry] Attribute ID collision: {attributeId}. existing='{existing}', incoming='{attributeName}'.");
                 return;
             }
 
@@ -132,7 +132,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
             if (_tagByHash.TryGetValue(tagHash, out var existing) && existing != tag)
             {
-                Debug.LogWarning($"[DefaultGasNetIdRegistry] Tag hash collision: {tagHash}. existing='{existing}', incoming='{tag}'.");
+                Debug.LogWarning($"[DefaultGASNetIdRegistry] Tag hash collision: {tagHash}. existing='{existing}', incoming='{tag}'.");
                 return;
             }
 

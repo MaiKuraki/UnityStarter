@@ -5,11 +5,11 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
     /// <summary>
     /// Default audit sink that logs events to Unity console.
     /// </summary>
-    public sealed class UnityLogGasSecurityAuditSink : IGasSecurityAuditSink
+    public sealed class UnityLogGASSecurityAuditSink : IGASSecurityAuditSink
     {
-        public static readonly UnityLogGasSecurityAuditSink Instance = new UnityLogGasSecurityAuditSink();
+        public static readonly UnityLogGASSecurityAuditSink Instance = new UnityLogGASSecurityAuditSink();
 
-        private UnityLogGasSecurityAuditSink() { }
+        private UnityLogGASSecurityAuditSink() { }
 
         public void Record(string eventName, int senderConnectionId, uint targetNetworkId, string reason)
         {

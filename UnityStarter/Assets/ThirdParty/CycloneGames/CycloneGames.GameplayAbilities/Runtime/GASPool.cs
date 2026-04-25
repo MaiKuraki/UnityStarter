@@ -237,7 +237,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void TrackActive(int delta)
         {
 #if UNITY_WEBGL && !UNITY_EDITOR
-            //  WebGL is single-threaded — skip Interlocked overhead (memory barriers are no-ops anyway).
+            // WebGL is single-threaded --skip Interlocked overhead (memory barriers are no-ops anyway).
             _activeCount += delta;
             if (delta > 0)
             {

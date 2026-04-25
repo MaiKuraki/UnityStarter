@@ -27,7 +27,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             get
             {
                 if (s_DefaultInstance != null) return s_DefaultInstance;
-                //  Thread-safe lazy init — Interlocked.CompareExchange guarantees exactly one winner;
+                //  Thread-safe lazy init --Interlocked.CompareExchange guarantees exactly one winner;
                 // any concurrent new GameplayCueManager() that lost the race is discarded.
                 var newInstance = new GameplayCueManager();
                 return Interlocked.CompareExchange(ref s_DefaultInstance, newInstance, null) ?? newInstance;
@@ -65,7 +65,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private IGameObjectPoolManager poolManager;
         private bool isInitialized = false;
 
-        //  Cancellation token source tied to this manager’s lifetime.
+        //  Cancellation token source tied to this manager's lifetime.
         // Cancelled on Shutdown() to interrupt any in-flight async cue loads.
         private CancellationTokenSource _shutdownCts = new CancellationTokenSource();
 
@@ -77,7 +77,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // Registry for dynamically added cue handlers at runtime.
         private readonly Dictionary<GameplayTag, List<IGameplayCueHandler>> runtimeCueHandlers = new Dictionary<GameplayTag, List<IGameplayCueHandler>>();
 
-        private class ActiveCueInstance { public GameplayTag CueTag; public GameObject Instance; }
+        private struct ActiveCueInstance { public GameplayTag CueTag; public GameObject Instance; public GASPredictionKey PredictionKey; }
         private readonly Dictionary<AbilitySystemComponent, List<ActiveCueInstance>> activeInstances = new Dictionary<AbilitySystemComponent, List<ActiveCueInstance>>();
 
         public GameplayCueManager() { }
@@ -193,7 +193,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     if (cueSO is IPersistentGameplayCue persistentCue)
                     {
                         GameObject instance = await persistentCue.OnActiveAsync(parameters, poolManager);
-                        if (instance != null) AddInstanceToTracker(parameters.Target, cueTag, instance);
+                        if (instance != null) AddInstanceToTracker(parameters.Target, cueTag, instance, parameters.PredictionKey);
                     }
                     else
                     {
@@ -213,7 +213,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        private void AddInstanceToTracker(AbilitySystemComponent target, GameplayTag tag, GameObject instance)
+        private void AddInstanceToTracker(AbilitySystemComponent target, GameplayTag tag, GameObject instance, GASPredictionKey predictionKey)
         {
             if (target == null || instance == null) return;
             if (!activeInstances.TryGetValue(target, out var instanceList))
@@ -221,7 +221,57 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 instanceList = new List<ActiveCueInstance>();
                 activeInstances[target] = instanceList;
             }
-            instanceList.Add(new ActiveCueInstance { CueTag = tag, Instance = instance });
+            instanceList.Add(new ActiveCueInstance { CueTag = tag, Instance = instance, PredictionKey = predictionKey });
+        }
+
+        public void AcceptPredictedCues(AbilitySystemComponent target, GASPredictionKey predictionKey)
+        {
+            if (target == null || !predictionKey.IsValid || !activeInstances.TryGetValue(target, out var instanceList)) return;
+
+            for (int i = 0; i < instanceList.Count; i++)
+            {
+                var activeCue = instanceList[i];
+                if (activeCue.PredictionKey.Equals(predictionKey))
+                {
+                    activeCue.PredictionKey = default;
+                    instanceList[i] = activeCue;
+                }
+            }
+        }
+
+        public async UniTaskVoid RemovePredictedCues(AbilitySystemComponent target, GASPredictionKey predictionKey)
+        {
+            if (target == null || !predictionKey.IsValid || !activeInstances.TryGetValue(target, out var instanceList)) return;
+
+            using (CycloneGames.GameplayTags.Runtime.Pools.ListPool<ActiveCueInstance>.Get(out var toRemove))
+            {
+                for (int i = 0; i < instanceList.Count; i++)
+                {
+                    var activeCue = instanceList[i];
+                    if (activeCue.PredictionKey.Equals(predictionKey))
+                    {
+                        toRemove.Add(activeCue);
+                    }
+                }
+
+                for (int i = 0; i < toRemove.Count; i++)
+                {
+                    var itemToRemove = toRemove[i];
+                    var parameters = new GameplayCueParameters(new GameplayCueEventParams(
+                        null,
+                        target,
+                        null,
+                        null,
+                        null,
+                        target.AvatarGameObject,
+                        0,
+                        0f,
+                        predictionKey));
+
+                    await ReleaseTrackedCueInstanceAsync(itemToRemove, parameters);
+                    RemoveTrackedCueInstance(instanceList, itemToRemove);
+                }
+            }
         }
 
         private async UniTask RemoveInstancesFromTrackerAsync(AbilitySystemComponent target, GameplayTag tag, IPersistentGameplayCue persistentCue, GameplayCueParameters parameters)
@@ -231,18 +281,52 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Use ListPool to avoid GC allocation
             using (CycloneGames.GameplayTags.Runtime.Pools.ListPool<ActiveCueInstance>.Get(out var toRemove))
             {
-                foreach (var activeCue in instanceList)
+                for (int i = 0; i < instanceList.Count; i++)
                 {
+                    var activeCue = instanceList[i];
                     if (activeCue.CueTag == tag) toRemove.Add(activeCue);
                 }
 
-                foreach (var itemToRemove in toRemove)
+                for (int i = 0; i < toRemove.Count; i++)
                 {
+                    var itemToRemove = toRemove[i];
                     await persistentCue.OnRemovedAsync(itemToRemove.Instance, parameters);
                     poolManager.Release(itemToRemove.Instance);
-                    instanceList.Remove(itemToRemove);
+                    RemoveTrackedCueInstance(instanceList, itemToRemove);
                 }
             }
+        }
+
+        private static void RemoveTrackedCueInstance(List<ActiveCueInstance> instanceList, ActiveCueInstance itemToRemove)
+        {
+            for (int i = instanceList.Count - 1; i >= 0; i--)
+            {
+                if (!instanceList[i].Equals(itemToRemove))
+                {
+                    continue;
+                }
+
+                int lastIndex = instanceList.Count - 1;
+                if (i != lastIndex)
+                {
+                    instanceList[i] = instanceList[lastIndex];
+                }
+                instanceList.RemoveAt(lastIndex);
+                return;
+            }
+        }
+
+        private async UniTask ReleaseTrackedCueInstanceAsync(ActiveCueInstance activeCue, GameplayCueParameters parameters)
+        {
+            if (activeCue.Instance == null) return;
+
+            var cueSO = await GetCueSOAsync(activeCue.CueTag, _shutdownCts.Token);
+            if (!_shutdownCts.IsCancellationRequested && cueSO is IPersistentGameplayCue persistentCue)
+            {
+                await persistentCue.OnRemovedAsync(activeCue.Instance, parameters);
+            }
+
+            poolManager.Release(activeCue.Instance);
         }
 
         private async UniTask<GameplayCueSO> GetCueSOAsync(GameplayTag cueTag, CancellationToken ct = default)
