@@ -11,21 +11,21 @@
   - 支持 ASC 完整状态快照采集（用于重连/晚加入）。
   - 支持细化后的 effect 增量采集，区分 add/update/stack-change/remove。
   - 支持将复制过来的属性、标签、效果数据应用到本地 ASC。
-- IGasNetIdRegistry:
+- IGASNetIdRegistry:
   - 稳定 ID 注册中心（能力/效果/属性/标签 + ASC 与网络实体映射）。
-- DefaultGasNetIdRegistry:
+- DefaultGASNetIdRegistry:
   - 默认运行时实现，基于确定性 FNV-1a 哈希和查找表。
-- IGasReplicatedEffectMutationHandler:
+- IGASReplicatedEffectMutationHandler:
   - 远端效果移除、堆叠变更与原地更新的通用策略接口。
-- GasBridgeGameplayAbilitiesExtensions:
+- GASBridgeGameplayAbilitiesExtensions:
   - 一行完成 GameplayAbilitiesNetworkedASCAdapter 的 bridge 注册。
   - 一行完成基于 observer 解析器的 pending delta 复制。
   - 一行完成断线重连 / 晚加入的 full-state 下发。
-- IGasFullStateAuthorizationPolicy + GasBridgeSecurityExtensions:
+- IGASFullStateAuthorizationPolicy + GASBridgeSecurityExtensions:
   - 完整状态请求鉴权的通用策略模型。
 - IConnectionRateLimiter + InMemoryTokenBucketRateLimiter:
   - 可复用的连接级请求限频能力。
-- IGasSecurityAuditSink + UnityLogGasSecurityAuditSink:
+- IGASSecurityAuditSink + UnityLogGASSecurityAuditSink:
   - 安全审计抽象与默认 Unity 日志实现。
 
 ## 重要说明
@@ -53,7 +53,7 @@ bridge.SendGameplayAbilitiesFullState(adapter, clientConnection);
 
 ```csharp
 var limiter = new InMemoryTokenBucketRateLimiter(capacity: 2f, refillPerSecond: 0.5f);
-var auditSink = UnityLogGasSecurityAuditSink.Instance;
+var auditSink = UnityLogGASSecurityAuditSink.Instance;
 var policy = new OwnerOrObserverWithRateLimitPolicy(limiter, auditSink);
 
 bridge.ConfigureFullStateAuthorization(

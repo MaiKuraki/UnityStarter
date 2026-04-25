@@ -16,20 +16,20 @@ namespace CycloneGames.GameplayAbilities.Editor
     {
         #region Constants & Styles
 
-        private static readonly Color s_EffectColor     = new Color(0.25f, 0.65f, 0.35f, 1f);
-        private static readonly Color s_InhibitedColor  = new Color(0.6f,  0.6f,  0.2f,  1f);
-        private static readonly Color s_ExpiredColor    = new Color(0.7f,  0.3f,  0.3f,  1f);
-        private static readonly Color s_TagColor        = new Color(0.4f,  0.6f,  0.9f,  1f);
-        private static readonly Color s_AttributeColor  = new Color(0.9f,  0.75f, 0.3f,  1f);
-        private static readonly Color s_CooldownColor   = new Color(0.9f,  0.6f,  0.2f,  1f);
-        private static readonly Color s_ReadyColor      = new Color(0.5f,  0.5f,  0.5f,  1f);
-        private static readonly Color s_ImmunityColor   = new Color(0.85f, 0.35f, 0.55f, 1f);
+        private static readonly Color s_EffectColor = new Color(0.25f, 0.65f, 0.35f, 1f);
+        private static readonly Color s_InhibitedColor = new Color(0.6f, 0.6f, 0.2f, 1f);
+        private static readonly Color s_ExpiredColor = new Color(0.7f, 0.3f, 0.3f, 1f);
+        private static readonly Color s_TagColor = new Color(0.4f, 0.6f, 0.9f, 1f);
+        private static readonly Color s_AttributeColor = new Color(0.9f, 0.75f, 0.3f, 1f);
+        private static readonly Color s_CooldownColor = new Color(0.9f, 0.6f, 0.2f, 1f);
+        private static readonly Color s_ReadyColor = new Color(0.5f, 0.5f, 0.5f, 1f);
+        private static readonly Color s_ImmunityColor = new Color(0.85f, 0.35f, 0.55f, 1f);
 
-        private static readonly Color s_BarBg           = new Color(0.15f, 0.15f, 0.15f, 1f);
-        private static readonly Color s_BarFill         = new Color(0.2f,  0.6f,  0.85f, 1f);
-        private static readonly Color s_BarFillCooldown = new Color(0.9f,  0.55f, 0.15f, 1f);
-        private static readonly Color s_BarFillHealth   = new Color(0.25f, 0.75f, 0.35f, 1f);
-        private static readonly Color s_BarFillPool     = new Color(0.45f, 0.65f, 0.85f, 1f);
+        private static readonly Color s_BarBg = new Color(0.15f, 0.15f, 0.15f, 1f);
+        private static readonly Color s_BarFill = new Color(0.2f, 0.6f, 0.85f, 1f);
+        private static readonly Color s_BarFillCooldown = new Color(0.9f, 0.55f, 0.15f, 1f);
+        private static readonly Color s_BarFillHealth = new Color(0.25f, 0.75f, 0.35f, 1f);
+        private static readonly Color s_BarFillPool = new Color(0.45f, 0.65f, 0.85f, 1f);
 
         private static GUIStyle s_SectionHeader;
         private static GUIStyle s_BadgeStyle;
@@ -1051,9 +1051,9 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             switch (policy)
             {
-                case EDurationPolicy.Instant:     return "Instant";
+                case EDurationPolicy.Instant: return "Instant";
                 case EDurationPolicy.HasDuration: return "Duration";
-                case EDurationPolicy.Infinite:    return "Infinite";
+                case EDurationPolicy.Infinite: return "Infinite";
                 default: return "?";
             }
         }
@@ -1062,9 +1062,9 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             switch (policy)
             {
-                case EDurationPolicy.Instant:     return new Color(0.4f, 0.7f, 0.9f);
+                case EDurationPolicy.Instant: return new Color(0.4f, 0.7f, 0.9f);
                 case EDurationPolicy.HasDuration: return new Color(0.3f, 0.6f, 0.4f);
-                case EDurationPolicy.Infinite:    return new Color(0.6f, 0.4f, 0.7f);
+                case EDurationPolicy.Infinite: return new Color(0.6f, 0.4f, 0.7f);
                 default: return Color.gray;
             }
         }
@@ -1073,7 +1073,7 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             switch (op)
             {
-                case EAttributeModifierOperation.Add:      return "+";
+                case EAttributeModifierOperation.Add: return "+";
                 case EAttributeModifierOperation.Multiply: return "\u00D7";
                 case EAttributeModifierOperation.Division: return "\u00F7";
                 case EAttributeModifierOperation.Override: return "=";
@@ -1085,8 +1085,8 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             switch (policy)
             {
-                case EGameplayAbilityInstancingPolicy.NonInstanced:          return "CDO";
-                case EGameplayAbilityInstancingPolicy.InstancedPerActor:     return "Actor";
+                case EGameplayAbilityInstancingPolicy.NonInstanced: return "CDO";
+                case EGameplayAbilityInstancingPolicy.InstancedPerActor: return "Actor";
                 case EGameplayAbilityInstancingPolicy.InstancedPerExecution: return "Exec";
                 default: return "?";
             }

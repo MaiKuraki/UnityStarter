@@ -60,8 +60,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public GameplayTagContainer DynamicAssetTags { get; } = new GameplayTagContainer();
 
-        // SetByCaller magnitude storage — null-lazy to avoid Dictionary allocation on specs that never use SetByCaller.
-        // The vast majority of effect specs (damage, buffs, cooldowns) don’t use this API.
+        // SetByCaller magnitude storage --null-lazy to avoid Dictionary allocation on specs that never use SetByCaller.
+        // The vast majority of effect specs (damage, buffs, cooldowns) do not use this API.
         private Dictionary<GameplayTag, float> setByCallerMagnitudes;
         private Dictionary<string, float> setByCallerMagnitudesByName;
 
@@ -95,7 +95,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Level = 0;
             Duration = 0;
 
-            // Fast clear of references — clear BOTH arrays so stale magnitudes never survive pool reuse.
+            // Fast clear of references --clear BOTH arrays so stale magnitudes never survive pool reuse.
             System.Array.Clear(TargetAttributes, 0, TargetAttributes.Length);
             System.Array.Clear(ModifierMagnitudes, 0, ModifierMagnitudes.Length);
             setByCallerMagnitudes?.Clear();
@@ -124,6 +124,27 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var spec = GASPool<GameplayEffectSpec>.Shared.Get();
             spec.Initialize(def, source, context, level);
             return spec;
+        }
+
+        public static void WarmPool(int count, int modifierCapacity = 8)
+        {
+            if (count <= 0)
+            {
+                return;
+            }
+
+            var specs = new GameplayEffectSpec[count];
+            for (int i = 0; i < count; i++)
+            {
+                var spec = GASPool<GameplayEffectSpec>.Shared.Get();
+                spec.ReserveModifierCapacity(modifierCapacity);
+                specs[i] = spec;
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                GASPool<GameplayEffectSpec>.Shared.Return(specs[i]);
+            }
         }
 
         private void Initialize(GameplayEffect def, AbilitySystemComponent source, IGameplayEffectContext context, int level)
@@ -162,6 +183,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 System.Array.Resize(ref ModifierMagnitudes, newSize);
                 System.Array.Resize(ref TargetAttributes, newSize);
             }
+        }
+
+        public void ReserveModifierCapacity(int count)
+        {
+            EnsureCapacity(count);
         }
 
         /// <summary>
@@ -263,21 +289,25 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return index;
         }
 
-        public SetByCallerTagStateSnapshot[] CaptureSetByCallerTagMagnitudes()
+        public int CopySetByCallerTagStateData(GASSetByCallerTagStateData[] destination)
         {
-            if (setByCallerMagnitudes == null || setByCallerMagnitudes.Count == 0)
+            if (destination == null || setByCallerMagnitudes == null || setByCallerMagnitudes.Count == 0)
             {
-                return System.Array.Empty<SetByCallerTagStateSnapshot>();
+                return 0;
             }
 
-            var entries = new SetByCallerTagStateSnapshot[setByCallerMagnitudes.Count];
             int index = 0;
             foreach (var pair in setByCallerMagnitudes)
             {
-                entries[index++] = new SetByCallerTagStateSnapshot(pair.Key, pair.Value);
+                if (index >= destination.Length)
+                {
+                    break;
+                }
+
+                destination[index++] = new GASSetByCallerTagStateData(pair.Key, pair.Value);
             }
 
-            return entries;
+            return index;
         }
 
         public void ApplyReplicatedState(
