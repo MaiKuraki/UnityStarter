@@ -5,19 +5,19 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
     /// <summary>
     /// Policy for authorizing full-state requests.
     /// </summary>
-    public interface IGasFullStateAuthorizationPolicy
+    public interface IGASFullStateAuthorizationPolicy
     {
-        bool IsAuthorized(in GasFullStateAuthorizationContext context);
+        bool IsAuthorized(in GASFullStateAuthorizationContext context);
     }
 
-    public readonly struct GasFullStateAuthorizationContext
+    public readonly struct GASFullStateAuthorizationContext
     {
         public readonly INetConnection Sender;
         public readonly uint TargetNetworkId;
         public readonly int OwnerConnectionId;
         public readonly bool IsObserver;
 
-        public GasFullStateAuthorizationContext(INetConnection sender, uint targetNetworkId, int ownerConnectionId, bool isObserver)
+        public GASFullStateAuthorizationContext(INetConnection sender, uint targetNetworkId, int ownerConnectionId, bool isObserver)
         {
             Sender = sender;
             TargetNetworkId = targetNetworkId;

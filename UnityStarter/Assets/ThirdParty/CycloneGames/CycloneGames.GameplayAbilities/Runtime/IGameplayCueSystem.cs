@@ -51,6 +51,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public readonly GameObject TargetObject;
         public readonly int EffectLevel;
         public readonly float EffectDuration;
+        public readonly GASPredictionKey PredictionKey;
 
         public GameplayCueParameters(GameplayEffectSpec spec)
         {
@@ -62,6 +63,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             TargetObject = Target?.AvatarGameObject;
             EffectLevel = spec?.Level ?? 0;
             EffectDuration = spec?.Duration ?? 0f;
+            PredictionKey = spec?.Context?.PredictionKey ?? default;
         }
 
         public GameplayCueParameters(GameplayCueEventParams parameters)
@@ -74,6 +76,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             TargetObject = parameters.TargetObject as GameObject ?? Target?.AvatarGameObject;
             EffectLevel = parameters.EffectLevel;
             EffectDuration = parameters.EffectDuration;
+            PredictionKey = parameters.PredictionKey;
         }
     }
 

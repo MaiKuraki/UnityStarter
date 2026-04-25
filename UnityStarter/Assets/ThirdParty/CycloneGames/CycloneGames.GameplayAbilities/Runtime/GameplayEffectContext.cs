@@ -7,7 +7,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         AbilitySystemComponent Instigator { get; }
         GameplayAbility AbilityInstance { get; }
         TargetData TargetData { get; }
-        PredictionKey PredictionKey { get; set; }
+        GASPredictionKey PredictionKey { get; set; }
 
         void AddInstigator(AbilitySystemComponent instigator, GameplayAbility abilityInstance);
         void AddTargetData(TargetData targetData);
@@ -23,7 +23,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public AbilitySystemComponent Instigator { get; private set; }
         public GameplayAbility AbilityInstance { get; private set; }
         public TargetData TargetData { get; private set; }
-        public PredictionKey PredictionKey { get; set; }
+        public GASPredictionKey PredictionKey { get; set; }
 
         public GameplayEffectContext() { }
 

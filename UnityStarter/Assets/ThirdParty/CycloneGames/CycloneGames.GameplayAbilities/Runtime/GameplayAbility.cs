@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using CycloneGames.GameplayTags.Runtime;
 using CycloneGames.GameplayAbilities.Core;
 using UnityEngine;
@@ -104,7 +104,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// This key is used to associate client-side predicted effects with the server's authoritative confirmation,
         /// enabling rollback of mispredictions.
         /// </summary>
-        public PredictionKey PredictionKey { get; set; }
+        public GASPredictionKey PredictionKey { get; set; }
     }
 
     /// <summary>
@@ -241,10 +241,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public GameplayAbilityActorInfo ActorInfo { get; private set; }
 
+        public GameplayAbilityActivationInfo CurrentActivationInfo { get; private set; }
+
         #endregion
 
         private readonly List<AbilityTask> activeTasks = new List<AbilityTask>();
+        private readonly Dictionary<AbilityTask, int> activeTaskIndexByTask = new Dictionary<AbilityTask, int>();
         private readonly List<IAbilityTaskTick> tickableTasks = new List<IAbilityTaskTick>();
+        private readonly Dictionary<IAbilityTaskTick, int> tickableTaskIndexByTask = new Dictionary<IAbilityTaskTick, int>();
         private bool isEnding = false;
 
         protected GameplayAbility() { }
@@ -297,7 +301,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.AbilitySystemComponent = spec.Owner;
             this.isEnding = false;
             this.activeTasks.Clear();
+            this.activeTaskIndexByTask.Clear();
             this.tickableTasks.Clear();
+            this.tickableTaskIndexByTask.Clear();
         }
 
         /// <summary>
@@ -314,8 +320,47 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public virtual void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            GASLog.Warning($"Base ActivateAbility called for '{Name}'. Did you forget to override it in your specific ability class?");
+            GASLog.Warning(sb => sb.Append("Base ActivateAbility called for '").Append(Name).Append("'. Did you forget to override it in your specific ability class?"));
             CommitAbility(actorInfo, spec);
+        }
+
+        internal void SetCurrentActivationInfo(GameplayAbilityActivationInfo activationInfo)
+        {
+            CurrentActivationInfo = activationInfo;
+        }
+
+        internal void AcceptTasksForPredictionKey(GASPredictionKey predictionKey)
+        {
+            if (!predictionKey.IsValid)
+            {
+                return;
+            }
+
+            for (int i = activeTasks.Count - 1; i >= 0; i--)
+            {
+                var task = activeTasks[i];
+                if (task != null && task.IsBoundToPredictionKey(predictionKey))
+                {
+                    task.AcceptPrediction();
+                }
+            }
+        }
+
+        internal void CancelTasksForPredictionKey(GASPredictionKey predictionKey)
+        {
+            if (!predictionKey.IsValid)
+            {
+                return;
+            }
+
+            for (int i = activeTasks.Count - 1; i >= 0; i--)
+            {
+                var task = activeTasks[i];
+                if (task != null && task.IsBoundToPredictionKey(predictionKey))
+                {
+                    task.CancelTask();
+                }
+            }
         }
 
         /// <summary>
@@ -331,10 +376,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 activeTasks[i].CancelTask();
             }
             activeTasks.Clear();
+            activeTaskIndexByTask.Clear();
             tickableTasks.Clear();
+            tickableTaskIndexByTask.Clear();
+            CurrentActivationInfo = default;
 
             AbilitySystemComponent?.OnAbilityEnded(this);
-            GASLog.Debug($"Ability '{Name}' ended.");
+            GASLog.Debug(sb => sb.Append("Ability '").Append(Name).Append("' ended."));
         }
 
         internal void InternalOnEndAbility()
@@ -347,7 +395,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public virtual void CancelAbility()
         {
-            GASLog.Debug($"Ability '{Name}' was cancelled.");
+            GASLog.Debug(sb => sb.Append("Ability '").Append(Name).Append("' was cancelled."));
             EndAbility();
         }
 
@@ -376,9 +424,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             var task = PoolManager.GetTask<T>();
             task.InitTask(this);
+            activeTaskIndexByTask[task] = activeTasks.Count;
             activeTasks.Add(task);
+            if (task.PredictionKey.IsValid)
+            {
+                AbilitySystemComponent?.NotifyPredictedAbilityTaskCreated(task.PredictionKey);
+            }
+
             if (task is IAbilityTaskTick tickable)
             {
+                tickableTaskIndexByTask[tickable] = tickableTasks.Count;
                 tickableTasks.Add(tickable);
             }
             return task;
@@ -386,28 +441,43 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         internal void OnTaskEnded(AbilityTask task)
         {
-            int index = activeTasks.IndexOf(task);
-            if (index >= 0)
+            if (isEnding)
+            {
+                return;
+            }
+
+            if (activeTaskIndexByTask.TryGetValue(task, out int index) &&
+                index >= 0 &&
+                index < activeTasks.Count &&
+                ReferenceEquals(activeTasks[index], task))
             {
                 int lastIndex = activeTasks.Count - 1;
                 if (index != lastIndex)
                 {
-                    activeTasks[index] = activeTasks[lastIndex];
+                    var movedTask = activeTasks[lastIndex];
+                    activeTasks[index] = movedTask;
+                    activeTaskIndexByTask[movedTask] = index;
                 }
                 activeTasks.RemoveAt(lastIndex);
+                activeTaskIndexByTask.Remove(task);
             }
 
             if (task is IAbilityTaskTick tickable)
             {
-                int tickIndex = tickableTasks.IndexOf(tickable);
-                if (tickIndex >= 0)
+                if (tickableTaskIndexByTask.TryGetValue(tickable, out int tickIndex) &&
+                    tickIndex >= 0 &&
+                    tickIndex < tickableTasks.Count &&
+                    ReferenceEquals(tickableTasks[tickIndex], tickable))
                 {
                     int lastTickIndex = tickableTasks.Count - 1;
                     if (tickIndex != lastTickIndex)
                     {
-                        tickableTasks[tickIndex] = tickableTasks[lastTickIndex];
+                        var movedTickable = tickableTasks[lastTickIndex];
+                        tickableTasks[tickIndex] = movedTickable;
+                        tickableTaskIndexByTask[movedTickable] = tickIndex;
                     }
                     tickableTasks.RemoveAt(lastTickIndex);
+                    tickableTaskIndexByTask.Remove(tickable);
                 }
             }
         }
@@ -429,14 +499,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (spec.Owner.HasAnyMatchingGameplayTags(ActivationBlockedTagsSnapshot)) return false;
             if (!spec.Owner.HasAllMatchingGameplayTags(ActivationRequiredTagsSnapshot)) return false;
 
-            // UE5: Source tag requirements — check tags on the source (owner)
+            // UE5: Source tag requirements --check tags on the source (owner)
             if (!spec.Owner.HasAllMatchingGameplayTags(SourceRequiredTagsSnapshot)) return false;
             if (spec.Owner.HasAnyMatchingGameplayTags(SourceBlockedTagsSnapshot)) return false;
 
             // UE5: Check if any active ability is blocking us via BlockAbilitiesWithTag
             if (AbilityTags != null && !AbilityTags.IsEmpty && spec.Owner.AreAbilitiesBlockedByTag(AbilityTags))
             {
-                GASLog.Debug($"Ability '{Name}' blocked by another active ability's BlockAbilitiesWithTag.");
+                GASLog.Debug(sb => sb.Append("Ability '").Append(Name).Append("' blocked by another active ability's BlockAbilitiesWithTag."));
                 return false;
             }
 
@@ -469,7 +539,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 if (asc.HasAnyMatchingGameplayTagsExact(CooldownGrantedTagsSnapshot))
                 {
-                    GASLog.Debug($"Ability '{Name}' failed: on cooldown.");
+                    GASLog.Debug(sb => sb.Append("Ability '").Append(Name).Append("' failed: on cooldown."));
                     return false;
                 }
             }
@@ -483,14 +553,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (CostEffectDefinition != null)
             {
-                foreach (var mod in CostEffectDefinition.Modifiers)
+                var modifiers = CostEffectDefinition.Modifiers;
+                for (int i = 0; i < modifiers.Count; i++)
                 {
+                    var mod = modifiers[i];
                     var attr = asc.GetAttribute(mod.AttributeName);
                     // Cost magnitudes are typically negative, so we check against its negation.
                     float costMagnitude = mod.Magnitude.GetValueAtLevel(this.Spec.Level);
                     if (attr == null || attr.CurrentValue < -costMagnitude)
                     {
-                        GASLog.Debug($"Ability '{Name}' failed: insufficient {attr?.Name ?? "resource"}.");
+                        GASLog.Debug(sb => sb.Append("Ability '").Append(Name).Append("' failed: insufficient ").Append(attr?.Name ?? "resource").Append('.'));
                         return false;
                     }
                 }
@@ -613,6 +685,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             this.Spec = null;
             this.AbilitySystemComponent = null;
+            this.CurrentActivationInfo = default;
             this.isEnding = false;
             this.activeTasks.Clear();
             this.tickableTasks.Clear();
