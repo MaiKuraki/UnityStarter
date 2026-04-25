@@ -4,14 +4,14 @@ using CycloneGames.Networking;
 
 namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 {
-    public static class GasBridgeSecurityExtensions
+    public static class GASBridgeSecurityExtensions
     {
         /// <summary>
         /// Apply a generic authorization policy to the bridge's FullStateRequestAuthorizer.
         /// </summary>
         public static void ConfigureFullStateAuthorization(
             this NetworkedAbilityBridge bridge,
-            IGasFullStateAuthorizationPolicy policy,
+            IGASFullStateAuthorizationPolicy policy,
             Func<uint, int> getOwnerConnectionId,
             Func<uint, IReadOnlyList<INetConnection>> getObservers)
         {
@@ -41,7 +41,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
                     }
                 }
 
-                var context = new GasFullStateAuthorizationContext(
+                var context = new GASFullStateAuthorizationContext(
                     sender,
                     targetNetworkId,
                     ownerConnectionId,

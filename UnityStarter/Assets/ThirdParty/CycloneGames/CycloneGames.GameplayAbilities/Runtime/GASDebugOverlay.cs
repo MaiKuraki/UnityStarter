@@ -424,7 +424,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             int maxPanels = config != null ? config.MaxPanels : 8;
             bool trackWorld = config != null && config.TrackWorldPosition;
 
-            // Config button uses baseScale only — stays fixed regardless of runtimeScale
+            // Config button uses baseScale only --stays fixed regardless of runtimeScale
             float configW = 44 * baseScale;
             float configH = 18 * baseScale;
             Rect configRect = new Rect(Screen.width - configW - margin, margin, configW, configH);

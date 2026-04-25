@@ -247,7 +247,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
-            // Periodic effect handling — skip entirely when inhibited (OngoingTagRequirements not met).
+            // Periodic effect handling --skip entirely when inhibited (OngoingTagRequirements not met).
             // IsInhibited is kept current by AbilitySystemComponent.RecalculateDirtyAttributes(),
             // which runs at the START of each tick (before effects are ticked) when tags change.
             if (!IsExpired && !IsInhibited && periodTimer >= 0d)

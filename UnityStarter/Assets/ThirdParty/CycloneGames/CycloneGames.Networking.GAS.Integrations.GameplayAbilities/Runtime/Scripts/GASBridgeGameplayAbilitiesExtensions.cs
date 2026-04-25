@@ -9,14 +9,14 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
     /// Convenience helpers that make the GameplayAbilities integration usable as a mainline replication path
     /// without forcing projects to manually wire bridge registration and per-tick delta replication.
     /// </summary>
-    public static class GasBridgeGameplayAbilitiesExtensions
+    public static class GASBridgeGameplayAbilitiesExtensions
     {
         public static GameplayAbilitiesNetworkedASCAdapter RegisterGameplayAbilitiesASC(
             this NetworkedAbilityBridge bridge,
             AbilitySystemComponent asc,
             uint networkId,
             int ownerConnectionId,
-            IGasNetIdRegistry idRegistry = null)
+            IGASNetIdRegistry idRegistry = null)
         {
             if (bridge == null) throw new ArgumentNullException(nameof(bridge));
 
@@ -63,13 +63,13 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             if (adapter == null) throw new ArgumentNullException(nameof(adapter));
             if (clients == null) throw new ArgumentNullException(nameof(clients));
 
-            var snapshot = adapter.CaptureFullState();
+            var data = adapter.CaptureFullState();
             for (int i = 0; i < clients.Count; i++)
             {
                 var client = clients[i];
                 if (client != null)
                 {
-                    bridge.ServerSendFullState(client, snapshot);
+                    bridge.ServerSendFullState(client, data);
                 }
             }
         }

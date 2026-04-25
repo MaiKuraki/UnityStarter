@@ -26,16 +26,25 @@ namespace CycloneGames.Networking.GAS
             new Dictionary<uint, DirtyAttributeSet>(64);
 
         // Replication filter: which attributes are replicated to non-owners
-        // attributeId → true means replicate to observers (not just owner)
+        // attributeId ->true means replicate to observers (not just owner)
         private readonly HashSet<int> _publicAttributes = new HashSet<int>();
+        private AttributeEntry[] _fullSyncEntries = Array.Empty<AttributeEntry>();
 
         public AttributeSyncManager(NetworkedAbilityBridge bridge)
         {
             _bridge = bridge;
         }
 
+        public void ReserveRuntimeCapacity(int entityCapacity = 64, int attributeCapacity = 32)
+        {
+            if (attributeCapacity > _fullSyncEntries.Length)
+            {
+                _fullSyncEntries = new AttributeEntry[attributeCapacity];
+            }
+        }
+
         /// <summary>
-        /// Mark an attribute as "public" — replicated to all observers.
+        /// Mark an attribute as "public" --replicated to all observers.
         /// By default, attributes are only sent to the owning client.
         /// Public examples: Health, Mana (visible on health bars).
         /// Private examples: Gold, XP, internal cooldown values.
@@ -112,7 +121,7 @@ namespace CycloneGames.Networking.GAS
             IReadOnlyList<(int attributeId, float baseValue, float currentValue)> allAttributes,
             bool isOwner)
         {
-            var entries = new AttributeEntry[allAttributes.Count];
+            EnsureArrayCapacity(ref _fullSyncEntries, allAttributes.Count);
             int count = 0;
 
             for (int i = 0; i < allAttributes.Count; i++)
@@ -123,7 +132,7 @@ namespace CycloneGames.Networking.GAS
                 if (!isOwner && !_publicAttributes.Contains(attrId))
                     continue;
 
-                entries[count++] = new AttributeEntry
+                _fullSyncEntries[count++] = new AttributeEntry
                 {
                     AttributeId = attrId,
                     BaseValue = baseVal,
@@ -136,16 +145,28 @@ namespace CycloneGames.Networking.GAS
                 TargetNetworkId = networkId,
                 IsFullSync = true,
                 AttributeCount = count,
-                Attributes = entries
+                Attributes = _fullSyncEntries
             };
 
             _bridge.ServerSyncAttributes(client, networkId, data);
+        }
+
+        private static void EnsureArrayCapacity(ref AttributeEntry[] entries, int capacity)
+        {
+            if (entries == null || entries.Length < capacity)
+            {
+                int current = entries != null ? entries.Length : 0;
+                int next = Math.Max(capacity, current == 0 ? 4 : current * 2);
+                entries = new AttributeEntry[next];
+            }
         }
 
         private sealed class DirtyAttributeSet
         {
             private readonly uint _networkId;
             private readonly Dictionary<int, AttributeEntry> _dirty = new Dictionary<int, AttributeEntry>(16);
+            private AttributeEntry[] _allDirtyEntries = Array.Empty<AttributeEntry>();
+            private AttributeEntry[] _publicDirtyEntries = Array.Empty<AttributeEntry>();
             public int DirtyCount => _dirty.Count;
 
             public DirtyAttributeSet(uint networkId) => _networkId = networkId;
@@ -163,7 +184,8 @@ namespace CycloneGames.Networking.GAS
             public AttributeUpdateData BuildUpdateData(uint networkId, bool includeAll,
                 HashSet<int> publicFilter = null)
             {
-                var entries = new AttributeEntry[_dirty.Count];
+                ref var entries = ref (includeAll ? ref _allDirtyEntries : ref _publicDirtyEntries);
+                EnsureArrayCapacity(ref entries, _dirty.Count);
                 int count = 0;
 
                 foreach (var pair in _dirty)

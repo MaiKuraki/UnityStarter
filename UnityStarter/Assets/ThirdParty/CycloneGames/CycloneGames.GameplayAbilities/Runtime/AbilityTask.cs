@@ -1,3 +1,5 @@
+using CycloneGames.GameplayAbilities.Core;
+
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
@@ -30,6 +32,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public bool IsCancelled { get; private set; }
 
+        public GASPredictionKey PredictionKey { get; private set; }
+
+        public bool HasPredictionKey => PredictionKey.IsValid;
+
         /// <summary>
         /// Initializes the task with its owning ability and resets its state.
         /// Called when a task is retrieved from the pool.
@@ -39,6 +45,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.Ability = ability;
             IsActive = false;
             IsCancelled = false;
+            PredictionKey = ability?.CurrentActivationInfo.PredictionKey ?? default;
+        }
+
+        public bool IsBoundToPredictionKey(GASPredictionKey predictionKey)
+        {
+            return predictionKey.IsValid && PredictionKey.Equals(predictionKey);
+        }
+
+        public void AcceptPrediction()
+        {
+            PredictionKey = default;
         }
 
         /// <summary>
@@ -65,6 +82,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             // Clear reference to prevent memory leaks when pooled
             Ability = null;
+            PredictionKey = default;
         }
 
         /// <summary>

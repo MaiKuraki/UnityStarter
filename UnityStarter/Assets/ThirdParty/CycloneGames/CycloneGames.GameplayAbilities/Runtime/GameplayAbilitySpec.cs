@@ -75,7 +75,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         #region Factory
 
-        public static GameplayAbilitySpec Create(GameplayAbility ability, int level = 1)
+        public static GameplayAbilitySpec Create(GameplayAbility ability, int level = 1, int replicatedHandle = 0)
         {
             var spec = GASPool<GameplayAbilitySpec>.Shared.Get();
             spec.Ability = ability;
@@ -83,13 +83,41 @@ namespace CycloneGames.GameplayAbilities.Runtime
             spec.IsActive = false;
             spec.AbilityInstance = null;
             spec.Owner = null;
-            spec.Handle = System.Threading.Interlocked.Increment(ref s_NextHandle);
+            spec.Handle = replicatedHandle > 0
+                ? replicatedHandle
+                : System.Threading.Interlocked.Increment(ref s_NextHandle);
+            EnsureNextHandleAtLeast(spec.Handle);
             return spec;
+        }
+
+        private static void EnsureNextHandleAtLeast(int handle)
+        {
+            int current;
+            do
+            {
+                current = System.Threading.Volatile.Read(ref s_NextHandle);
+                if (current >= handle)
+                {
+                    return;
+                }
+            }
+            while (System.Threading.Interlocked.CompareExchange(ref s_NextHandle, handle, current) != current);
         }
 
         internal void Init(AbilitySystemComponent owner)
         {
             this.Owner = owner;
+        }
+
+        internal void AssignReplicatedHandle(int replicatedHandle)
+        {
+            if (replicatedHandle <= 0 || Handle == replicatedHandle)
+            {
+                return;
+            }
+
+            Handle = replicatedHandle;
+            EnsureNextHandleAtLeast(replicatedHandle);
         }
 
         #endregion
@@ -148,8 +176,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 AbilityInstance = null;
             }
             AbilityCDO?.OnRemoveAbility();
+        }
 
-            // Return self to pool
+        internal void ReturnToPool()
+        {
             GASPool<GameplayAbilitySpec>.Shared.Return(this);
         }
     }

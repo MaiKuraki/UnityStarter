@@ -10,11 +10,11 @@ namespace CycloneGames.Networking.GAS
     /// Bridge between CycloneGames.GameplayAbilities and CycloneGames.Networking.
     /// 
     /// Handles:
-    /// 1. Ability activation RPC (client request → server auth → client confirm/reject)
+    /// 1. Ability activation RPC (client request ->server auth ->client confirm/reject)
     /// 2. Effect replication (apply/remove/stack change)
     /// 3. Attribute dirty sync (delta or full)
     /// 4. Tag replication
-    /// 5. Initial state snapshot for late-join / reconnect
+    /// 5. Initial state data for late-join / reconnect
     /// 6. Prediction key lifecycle
     /// 
     /// Designed to work with ANY transport (Mirror, Mirage, custom) via INetworkManager.
@@ -22,20 +22,21 @@ namespace CycloneGames.Networking.GAS
     public sealed class NetworkedAbilityBridge : IDisposable
     {
         // Message IDs in the reserved RPC range (100-999)
-        public const ushort MsgAbilityActivateRequest     = 200;
-        public const ushort MsgAbilityActivateConfirm     = 201;
-        public const ushort MsgAbilityActivateReject      = 202;
-        public const ushort MsgAbilityEnd                 = 203;
-        public const ushort MsgAbilityCancel               = 204;
-        public const ushort MsgEffectApplied              = 210;
-        public const ushort MsgEffectRemoved              = 211;
-        public const ushort MsgEffectStackChanged         = 212;
-        public const ushort MsgEffectUpdated              = 213;
-        public const ushort MsgAttributeUpdate            = 220;
-        public const ushort MsgTagUpdate                  = 225;
-        public const ushort MsgAbilityMulticast           = 230;
-        public const ushort MsgFullStateSnapshot          = 240;
-        public const ushort MsgFullStateRequest           = 241;
+        public const ushort MsgAbilityActivateRequest = 200;
+        public const ushort MsgAbilityActivateConfirm = 201;
+        public const ushort MsgAbilityActivateReject = 202;
+        public const ushort MsgAbilityEnd = 203;
+        public const ushort MsgAbilityCancel = 204;
+        public const ushort MsgEffectApplied = 210;
+        public const ushort MsgEffectRemoved = 211;
+        public const ushort MsgEffectStackChanged = 212;
+        public const ushort MsgEffectUpdated = 213;
+        public const ushort MsgAttributeUpdate = 220;
+        public const ushort MsgTagUpdate = 225;
+        public const ushort MsgAbilityMulticast = 230;
+        public const ushort MsgFullState = 240;
+        public const ushort MsgFullStateRequest = 241;
+        public const ushort MsgStateSyncMetadata = 242;
 
         private readonly INetworkManager _networkManager;
         private readonly Dictionary<int, INetworkedASC> _ascByConnectionId =
@@ -47,7 +48,7 @@ namespace CycloneGames.Networking.GAS
 
         /// <summary>
         /// Optional server-side authorization callback for full-state requests.
-        /// Return true to allow the sender to receive the target ASC snapshot.
+        /// Return true to allow the sender to receive the target ASC data.
         /// Default policy (when null): owner-only access.
         /// </summary>
         public Func<INetConnection, uint, bool> FullStateRequestAuthorizer { get; set; }
@@ -58,7 +59,8 @@ namespace CycloneGames.Networking.GAS
         public event Action<uint, int> OnEffectRemoved; // (networkId, effectInstanceId)
         public event Action<uint, EffectUpdateData> OnEffectUpdated;
         public event Action<uint, AttributeUpdateData> OnAttributeUpdated;
-        public event Action<uint, FullStateSnapshotData> OnFullStateReceived;
+        public event Action<uint, GASFullStateData> OnFullStateReceived;
+        public event Action<uint, GASStateSyncMetadata> OnStateSyncMetadataReceived;
 
         public NetworkedAbilityBridge(INetworkManager networkManager)
         {
@@ -82,8 +84,9 @@ namespace CycloneGames.Networking.GAS
             _networkManager.RegisterHandler<AttributeUpdateData>(MsgAttributeUpdate, OnRecvAttributeUpdate);
             _networkManager.RegisterHandler<TagUpdateData>(MsgTagUpdate, OnRecvTagUpdate);
             _networkManager.RegisterHandler<AbilityMulticastData>(MsgAbilityMulticast, OnRecvAbilityMulticast);
-            _networkManager.RegisterHandler<FullStateSnapshotData>(MsgFullStateSnapshot, OnRecvFullState);
+            _networkManager.RegisterHandler<GASFullStateData>(MsgFullState, OnRecvFullState);
             _networkManager.RegisterHandler<FullStateRequest>(MsgFullStateRequest, OnRecvFullStateRequest);
+            _networkManager.RegisterHandler<GASStateSyncMetadata>(MsgStateSyncMetadata, OnRecvStateSyncMetadata);
         }
 
         /// <summary>
@@ -103,8 +106,9 @@ namespace CycloneGames.Networking.GAS
             _networkManager.UnregisterHandler(MsgAttributeUpdate);
             _networkManager.UnregisterHandler(MsgTagUpdate);
             _networkManager.UnregisterHandler(MsgAbilityMulticast);
-            _networkManager.UnregisterHandler(MsgFullStateSnapshot);
+            _networkManager.UnregisterHandler(MsgFullState);
             _networkManager.UnregisterHandler(MsgFullStateRequest);
+            _networkManager.UnregisterHandler(MsgStateSyncMetadata);
         }
 
         public void Dispose()
@@ -128,7 +132,7 @@ namespace CycloneGames.Networking.GAS
         }
 
         // =====================================================
-        // CLIENT → SERVER: Ability Activation
+        // CLIENT ->SERVER: Ability Activation
         // =====================================================
 
         /// <summary>
@@ -138,10 +142,31 @@ namespace CycloneGames.Networking.GAS
         public void ClientRequestActivateAbility(int abilityIndex, int predictionKey,
             Vector3 targetPos, Vector3 direction, uint targetNetworkId = 0)
         {
+            ClientRequestActivateAbility(
+                abilityIndex,
+                predictionKey,
+                0,
+                0,
+                targetPos,
+                direction,
+                targetNetworkId);
+        }
+
+        public void ClientRequestActivateAbility(
+            int abilityIndex,
+            int predictionKey,
+            int predictionKeyOwner,
+            int predictionInputSequence,
+            Vector3 targetPos,
+            Vector3 direction,
+            uint targetNetworkId = 0)
+        {
             _networkManager.SendToServer(MsgAbilityActivateRequest, new AbilityActivateRequest
             {
                 AbilityIndex = abilityIndex,
                 PredictionKey = predictionKey,
+                PredictionKeyOwner = predictionKeyOwner,
+                PredictionInputSequence = predictionInputSequence,
                 TargetPosition = targetPos,
                 Direction = direction,
                 TargetNetworkId = targetNetworkId
@@ -158,7 +183,7 @@ namespace CycloneGames.Networking.GAS
         }
 
         // =====================================================
-        // SERVER → CLIENT: Ability Confirmation/Rejection
+        // SERVER ->CLIENT: Ability Confirmation/Rejection
         // =====================================================
 
         /// <summary>
@@ -167,10 +192,22 @@ namespace CycloneGames.Networking.GAS
         /// </summary>
         public void ServerConfirmActivation(INetConnection client, int abilityIndex, int predictionKey)
         {
+            ServerConfirmActivation(client, abilityIndex, predictionKey, 0, 0);
+        }
+
+        public void ServerConfirmActivation(
+            INetConnection client,
+            int abilityIndex,
+            int predictionKey,
+            int predictionKeyOwner,
+            int predictionInputSequence)
+        {
             _networkManager.SendToClient(client, MsgAbilityActivateConfirm, new AbilityActivateConfirm
             {
                 AbilityIndex = abilityIndex,
-                PredictionKey = predictionKey
+                PredictionKey = predictionKey,
+                PredictionKeyOwner = predictionKeyOwner,
+                PredictionInputSequence = predictionInputSequence
             });
         }
 
@@ -180,15 +217,27 @@ namespace CycloneGames.Networking.GAS
         /// </summary>
         public void ServerRejectActivation(INetConnection client, int abilityIndex, int predictionKey)
         {
+            ServerRejectActivation(client, abilityIndex, predictionKey, 0, 0);
+        }
+
+        public void ServerRejectActivation(
+            INetConnection client,
+            int abilityIndex,
+            int predictionKey,
+            int predictionKeyOwner,
+            int predictionInputSequence)
+        {
             _networkManager.SendToClient(client, MsgAbilityActivateReject, new AbilityActivateReject
             {
                 AbilityIndex = abilityIndex,
-                PredictionKey = predictionKey
+                PredictionKey = predictionKey,
+                PredictionKeyOwner = predictionKeyOwner,
+                PredictionInputSequence = predictionInputSequence
             });
         }
 
         // =====================================================
-        // SERVER → CLIENTS: Effect Replication
+        // SERVER ->CLIENTS: Effect Replication
         // =====================================================
 
         /// <summary>
@@ -238,7 +287,7 @@ namespace CycloneGames.Networking.GAS
         }
 
         // =====================================================
-        // SERVER → CLIENTS: Attribute Sync
+        // SERVER ->CLIENTS: Attribute Sync
         // =====================================================
 
         /// <summary>
@@ -257,7 +306,7 @@ namespace CycloneGames.Networking.GAS
         }
 
         // =====================================================
-        // SERVER → CLIENTS: Tag Sync
+        // SERVER ->CLIENTS: Tag Sync
         // =====================================================
 
         public void ServerSyncTags(IReadOnlyList<INetConnection> observers,
@@ -267,7 +316,7 @@ namespace CycloneGames.Networking.GAS
         }
 
         // =====================================================
-        // SERVER → ALL OBSERVERS: Ability Multicast (VFX/SFX)
+        // SERVER ->ALL OBSERVERS: Ability Multicast (VFX/SFX)
         // =====================================================
 
         /// <summary>
@@ -281,7 +330,7 @@ namespace CycloneGames.Networking.GAS
         }
 
         // =====================================================
-        // FULL STATE SNAPSHOT (Join / Reconnect)
+        // FULL STATE SYNC (Join / Reconnect)
         // =====================================================
 
         /// <summary>
@@ -298,9 +347,18 @@ namespace CycloneGames.Networking.GAS
         /// <summary>
         /// Server sends full ASC state to a client.
         /// </summary>
-        public void ServerSendFullState(INetConnection client, FullStateSnapshotData snapshot)
+        public void ServerSendFullState(INetConnection client, GASFullStateData data)
         {
-            _networkManager.SendToClient(client, MsgFullStateSnapshot, snapshot);
+            _networkManager.SendToClient(client, MsgFullState, data);
+        }
+
+        /// <summary>
+        /// Server sends the authoritative state version/checksum after all per-frame deltas.
+        /// Clients use this as a cheap drift detector and request full state when validation fails.
+        /// </summary>
+        public void ServerBroadcastStateSyncMetadata(IReadOnlyList<INetConnection> observers, GASStateSyncMetadata metadata)
+        {
+            _networkManager.Broadcast(observers, MsgStateSyncMetadata, metadata);
         }
 
         // =====================================================
@@ -315,13 +373,21 @@ namespace CycloneGames.Networking.GAS
         private void OnRecvActivateConfirm(INetConnection sender, AbilityActivateConfirm msg)
         {
             if (_ascByConnectionId.TryGetValue(sender.ConnectionId, out var asc))
-                asc.OnServerConfirmActivation(msg.AbilityIndex, msg.PredictionKey);
+                asc.OnServerConfirmActivation(
+                    msg.AbilityIndex,
+                    msg.PredictionKey,
+                    msg.PredictionKeyOwner,
+                    msg.PredictionInputSequence);
         }
 
         private void OnRecvActivateReject(INetConnection sender, AbilityActivateReject msg)
         {
             if (_ascByConnectionId.TryGetValue(sender.ConnectionId, out var asc))
-                asc.OnServerRejectActivation(msg.AbilityIndex, msg.PredictionKey);
+                asc.OnServerRejectActivation(
+                    msg.AbilityIndex,
+                    msg.PredictionKey,
+                    msg.PredictionKeyOwner,
+                    msg.PredictionInputSequence);
         }
 
         private void OnRecvAbilityEnd(INetConnection sender, AbilityEndMessage msg)
@@ -382,11 +448,27 @@ namespace CycloneGames.Networking.GAS
                 asc.OnAbilityMulticast(msg);
         }
 
-        private void OnRecvFullState(INetConnection sender, FullStateSnapshotData msg)
+        private void OnRecvFullState(INetConnection sender, GASFullStateData msg)
         {
             if (_ascByNetworkId.TryGetValue(msg.TargetNetworkId, out var asc))
-                asc.OnFullStateSnapshot(msg);
+                asc.OnFullState(msg);
             OnFullStateReceived?.Invoke(msg.TargetNetworkId, msg);
+        }
+
+        private void OnRecvStateSyncMetadata(INetConnection sender, GASStateSyncMetadata msg)
+        {
+            bool isConsistent = true;
+            if (_ascByNetworkId.TryGetValue(msg.TargetNetworkId, out var asc))
+            {
+                isConsistent = asc.OnStateSyncMetadata(msg);
+            }
+
+            OnStateSyncMetadataReceived?.Invoke(msg.TargetNetworkId, msg);
+
+            if (!isConsistent)
+            {
+                ClientRequestFullState(msg.TargetNetworkId);
+            }
         }
 
         private void OnRecvFullStateRequest(INetConnection sender, FullStateRequest msg)
@@ -401,8 +483,8 @@ namespace CycloneGames.Networking.GAS
             if (!isAuthorized)
                 return;
 
-            var snapshot = asc.CaptureFullState();
-            ServerSendFullState(sender, snapshot);
+            var data = asc.CaptureFullState();
+            ServerSendFullState(sender, data);
         }
     }
 
@@ -421,7 +503,9 @@ namespace CycloneGames.Networking.GAS
 
         // Ability lifecycle
         void OnServerConfirmActivation(int abilityIndex, int predictionKey);
+        void OnServerConfirmActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence);
         void OnServerRejectActivation(int abilityIndex, int predictionKey);
+        void OnServerRejectActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence);
         void OnAbilityEnded(int abilityIndex);
         void OnAbilityCancelled(int abilityIndex);
         void OnAbilityMulticast(AbilityMulticastData data);
@@ -437,8 +521,9 @@ namespace CycloneGames.Networking.GAS
         void OnReplicatedTagUpdate(TagUpdateData data);
 
         // Full state
-        FullStateSnapshotData CaptureFullState();
-        void OnFullStateSnapshot(FullStateSnapshotData snapshot);
+        GASFullStateData CaptureFullState();
+        void OnFullState(GASFullStateData data);
+        bool OnStateSyncMetadata(GASStateSyncMetadata metadata);
     }
 
     // =====================================================
@@ -449,6 +534,8 @@ namespace CycloneGames.Networking.GAS
     {
         public int AbilityIndex;
         public int PredictionKey;
+        public int PredictionKeyOwner;
+        public int PredictionInputSequence;
         public Vector3 TargetPosition;
         public Vector3 Direction;
         public uint TargetNetworkId;
@@ -458,12 +545,16 @@ namespace CycloneGames.Networking.GAS
     {
         public int AbilityIndex;
         public int PredictionKey;
+        public int PredictionKeyOwner;
+        public int PredictionInputSequence;
     }
 
     public struct AbilityActivateReject
     {
         public int AbilityIndex;
         public int PredictionKey;
+        public int PredictionKeyOwner;
+        public int PredictionInputSequence;
     }
 
     public struct AbilityEndMessage
@@ -488,8 +579,10 @@ namespace CycloneGames.Networking.GAS
         public float TimeRemaining;
         public float PeriodTimeRemaining;
         public int PredictionKey;           // For rollback association
+        public int PredictionKeyOwner;
+        public int PredictionInputSequence;
 
-        // SetByCaller magnitudes (compact: tag hash → value)
+        // SetByCaller magnitudes (compact: tag hash ->value)
         public int SetByCallerCount;
         public SetByCallerEntry[] SetByCallerEntries;
     }
@@ -525,6 +618,8 @@ namespace CycloneGames.Networking.GAS
         public float TimeRemaining;
         public float PeriodTimeRemaining;
         public int PredictionKey;
+        public int PredictionKeyOwner;
+        public int PredictionInputSequence;
         public int SetByCallerCount;
         public SetByCallerEntry[] SetByCallerEntries;
     }
@@ -574,9 +669,11 @@ namespace CycloneGames.Networking.GAS
     /// <summary>
     /// Complete ASC state for initial sync or reconnect.
     /// </summary>
-    public struct FullStateSnapshotData
+    public struct GASFullStateData
     {
         public uint TargetNetworkId;
+        public ulong StateVersion;
+        public uint StateChecksum;
 
         // Granted abilities
         public int AbilityCount;
@@ -605,5 +702,15 @@ namespace CycloneGames.Networking.GAS
     public struct FullStateRequest
     {
         public uint TargetNetworkId;
+    }
+
+    public struct GASStateSyncMetadata
+    {
+        public uint TargetNetworkId;
+        public uint Sequence;
+        public ulong BaseVersion;
+        public ulong CurrentVersion;
+        public uint StateChecksum;
+        public uint ChangeMask;
     }
 }

@@ -33,6 +33,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (IsActive && !IsCancelled)
             {
+                data?.StampPrediction(Ability, PredictionKey);
                 OnValidData?.Invoke(data);
             }
             EndTask(); // Task ends, but actor destruction is handled in OnDestroy

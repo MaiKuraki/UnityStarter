@@ -3,20 +3,20 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
     /// <summary>
     /// Generic production policy: allow owner/observer requests with optional per-connection rate limiting.
     /// </summary>
-    public sealed class OwnerOrObserverWithRateLimitPolicy : IGasFullStateAuthorizationPolicy
+    public sealed class OwnerOrObserverWithRateLimitPolicy : IGASFullStateAuthorizationPolicy
     {
         private readonly IConnectionRateLimiter _rateLimiter;
-        private readonly IGasSecurityAuditSink _auditSink;
+        private readonly IGASSecurityAuditSink _auditSink;
 
         public OwnerOrObserverWithRateLimitPolicy(
             IConnectionRateLimiter rateLimiter = null,
-            IGasSecurityAuditSink auditSink = null)
+            IGASSecurityAuditSink auditSink = null)
         {
             _rateLimiter = rateLimiter;
             _auditSink = auditSink;
         }
 
-        public bool IsAuthorized(in GasFullStateAuthorizationContext context)
+        public bool IsAuthorized(in GASFullStateAuthorizationContext context)
         {
             int senderId = context.Sender?.ConnectionId ?? -1;
 
