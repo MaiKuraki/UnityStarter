@@ -3,7 +3,8 @@
     "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Integrations.GameplayTags",
     "references": [
         "CycloneGames.GameplayFramework.Runtime",
-        "CycloneGames.GameplayTags.Core"
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.GameplayTags.Unity"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -11,10 +12,7 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [
-        "GAMEPLAY_FRAMEWORK_PRESENT",
-        "GAMEPLAY_TAGS_PRESENT"
-    ],
+    "defineConstraints": [],
     "versionDefines": [
         {
             "name": "com.cyclone-games.gameplay-framework",
