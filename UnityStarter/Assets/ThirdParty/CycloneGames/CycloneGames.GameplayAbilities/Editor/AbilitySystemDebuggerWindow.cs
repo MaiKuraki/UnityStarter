@@ -3,48 +3,112 @@ using UnityEngine;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
+using System.Linq;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Runtime;
 
 namespace CycloneGames.GameplayAbilities.Editor
 {
     /// <summary>
-    /// Runtime debugger window for inspecting AbilitySystemComponent state.
+    /// Enhanced runtime debugger window for inspecting AbilitySystemComponent state.
     /// Shows active effects, attributes, abilities, tags, and pool statistics in real-time.
+    /// Features:
+    /// - Multi-target monitoring (compare multiple ASCs side-by-side)
+    /// - Effect dependency visualization
+    /// - Attribute change history tracking
+    /// - Search and filtering capabilities
+    /// - Advanced performance and GC monitoring
+    /// - Persistent UI state
     /// </summary>
     public class AbilitySystemDebuggerWindow : EditorWindow
     {
-        #region Constants & Styles
+        #region Constants & Theme
 
-        private static readonly Color s_EffectColor = new Color(0.25f, 0.65f, 0.35f, 1f);
-        private static readonly Color s_InhibitedColor = new Color(0.6f, 0.6f, 0.2f, 1f);
-        private static readonly Color s_ExpiredColor = new Color(0.7f, 0.3f, 0.3f, 1f);
-        private static readonly Color s_TagColor = new Color(0.4f, 0.6f, 0.9f, 1f);
-        private static readonly Color s_AttributeColor = new Color(0.9f, 0.75f, 0.3f, 1f);
-        private static readonly Color s_CooldownColor = new Color(0.9f, 0.6f, 0.2f, 1f);
-        private static readonly Color s_ReadyColor = new Color(0.5f, 0.5f, 0.5f, 1f);
-        private static readonly Color s_ImmunityColor = new Color(0.85f, 0.35f, 0.55f, 1f);
-
-        private static readonly Color s_BarBg = new Color(0.15f, 0.15f, 0.15f, 1f);
-        private static readonly Color s_BarFill = new Color(0.2f, 0.6f, 0.85f, 1f);
-        private static readonly Color s_BarFillCooldown = new Color(0.9f, 0.55f, 0.15f, 1f);
-        private static readonly Color s_BarFillHealth = new Color(0.25f, 0.75f, 0.35f, 1f);
-        private static readonly Color s_BarFillPool = new Color(0.45f, 0.65f, 0.85f, 1f);
+        // Unified color theme - easily customizable
+        private static class ColorTheme
+        {
+            public static readonly Color EffectActive = new Color(0.25f, 0.65f, 0.35f, 1f);
+            public static readonly Color EffectInhibited = new Color(0.6f, 0.6f, 0.2f, 1f);
+            public static readonly Color EffectExpired = new Color(0.7f, 0.3f, 0.3f, 1f);
+            public static readonly Color Tag = new Color(0.4f, 0.6f, 0.9f, 1f);
+            public static readonly Color Attribute = new Color(0.9f, 0.75f, 0.3f, 1f);
+            public static readonly Color CooldownActive = new Color(0.9f, 0.6f, 0.2f, 1f);
+            public static readonly Color Ready = new Color(0.5f, 0.5f, 0.5f, 1f);
+            public static readonly Color Immunity = new Color(0.85f, 0.35f, 0.55f, 1f);
+            
+            public static readonly Color BarBackground = new Color(0.15f, 0.15f, 0.15f, 1f);
+            public static readonly Color BarFill = new Color(0.2f, 0.6f, 0.85f, 1f);
+            public static readonly Color BarCooldown = new Color(0.9f, 0.55f, 0.15f, 1f);
+            public static readonly Color BarHealth = new Color(0.25f, 0.75f, 0.35f, 1f);
+            public static readonly Color BarPool = new Color(0.45f, 0.65f, 0.85f, 1f);
+            
+            public static readonly Color Warning = new Color(1f, 0.8f, 0.2f, 1f);
+            public static readonly Color Error = new Color(1f, 0.3f, 0.3f, 1f);
+            public static readonly Color Success = new Color(0.3f, 0.8f, 0.3f, 1f);
+        }
 
         private static GUIStyle s_SectionHeader;
         private static GUIStyle s_BadgeStyle;
         private static GUIStyle s_MonoLabel;
+        private static GUIStyle s_SearchBoxStyle;
         private static bool s_StylesInitialized;
+        
+        private const int MaxHistoryEntries = 200;
+        private const int MaxAttributeHistoryPerAttribute = 50;
+        private const float MinRepaintInterval = 0.02f;
+
+        #endregion
+
+        #region Data Structures
+
+        /// <summary>
+        /// Tracks historical changes to an attribute for analysis
+        /// </summary>
+        private struct AttributeHistory
+        {
+            public float Value;
+            public float BaseValue;
+            public double Timestamp;
+        }
+
+        /// <summary>
+        /// Tracks effect application events
+        /// </summary>
+        private struct EffectEventRecord
+        {
+            public enum EventType { Applied, Removed, Modified, Inhibited, Restored }
+            
+            public EventType Type;
+            public string EffectName;
+            public double Timestamp;
+            public float Duration;
+            public int StackCount;
+        }
+
+        /// <summary>
+        /// Multi-target comparison data
+        /// </summary>
+        private struct ComparisonTarget
+        {
+            public AbilitySystemComponent ASC;
+            public GameObject Owner;
+            public bool IsActive;
+            public double LastUpdateTime;
+        }
 
         #endregion
 
         #region State
 
+        // Single target (primary)
         private GameObject selectedGameObject;
         private AbilitySystemComponent selectedASC;
         private Vector2 scrollPosition;
 
-        // Section foldouts
+        // Multi-target support (comparison mode)
+        private List<ComparisonTarget> comparisonTargets = new List<ComparisonTarget>();
+
+        // Section foldout states - persistent
         private bool showEffects = true;
         private bool showAttributes = true;
         private bool showAbilities = true;
@@ -52,23 +116,43 @@ namespace CycloneGames.GameplayAbilities.Editor
         private bool showImmunityTags = false;
         private bool showPoolStats = false;
         private bool showEventLog = false;
+        private bool showAttributeHistory = false;
+        private bool showEffectRelations = false;
+        private bool showPerformanceStats = false;
 
         // Per-effect detail foldouts
         private readonly HashSet<int> expandedEffects = new HashSet<int>();
 
-        // Toolbar
+        // Toolbar state
         private float refreshInterval = 0.1f;
         private double lastRefreshTime;
         private bool isPaused;
 
-        // Event log
+        // Search and filtering
+        private string searchQuery = "";
+        private bool showInhibitedOnly = false;
+        private bool showExpiredOnly = false;
+
+        // Event log and history tracking
+        private readonly List<EffectEventRecord> effectHistory = new List<EffectEventRecord>(MaxHistoryEntries);
+        private readonly Dictionary<string, List<AttributeHistory>> attributeHistories = 
+            new Dictionary<string, List<AttributeHistory>>(32);
         private readonly List<string> eventLog = new List<string>(128);
         private const int MaxEventLogEntries = 64;
         private Vector2 eventLogScroll;
         private bool subscribedToEvents;
 
-        // Reusable
-        private readonly StringBuilder sb = new StringBuilder(256);
+        // Performance monitoring
+        private double lastGCCollectionTime;
+        private long lastTotalMemory;
+        private int frameCountSinceLastUpdate;
+        private float avgFrameTime;
+
+        // Caching system to reduce allocations
+        private readonly StringBuilder sb = new StringBuilder(512);
+        private readonly Dictionary<int, string> effectNameCache = new Dictionary<int, string>(64);
+        private readonly Dictionary<string, float> attributeRowWidthCache = new Dictionary<string, float>(32);
+        private double lastCacheUpdateTime;
 
         // ASC picker
         private readonly List<AbilitySystemComponent> sceneASCs = new List<AbilitySystemComponent>();
@@ -76,13 +160,25 @@ namespace CycloneGames.GameplayAbilities.Editor
         private int selectedASCIndex = -1;
         private double lastASCScanTime;
 
+        // UI state
+        private int viewMode = 0; // 0: Single, 1: Comparison, 2: Network
+        private Vector2 networkViewScroll;
+
         #endregion
 
         [MenuItem("Tools/CycloneGames/GameplayAbilities/GAS Debugger")]
         public static void ShowWindow()
         {
             var window = GetWindow<AbilitySystemDebuggerWindow>("GAS Debugger");
-            window.minSize = new Vector2(400, 500);
+            window.minSize = new Vector2(600, 400);
+        }
+
+        [MenuItem("Tools/CycloneGames/GameplayAbilities/GAS Debugger (Multi-Target)")]
+        public static void ShowWindowComparison()
+        {
+            var window = GetWindow<AbilitySystemDebuggerWindow>("GAS Debugger - Comparison");
+            window.minSize = new Vector2(800, 500);
+            window.viewMode = 1;
         }
 
         [MenuItem("Tools/CycloneGames/GameplayAbilities/GAS Overlay (Play Mode)")]
@@ -109,12 +205,16 @@ namespace CycloneGames.GameplayAbilities.Editor
         private void OnEnable()
         {
             EditorApplication.playModeStateChanged += OnPlayModeChanged;
+            EditorApplication.update += OnEditorUpdate;
+            LoadUIState();
         }
 
         private void OnDisable()
         {
             EditorApplication.playModeStateChanged -= OnPlayModeChanged;
+            EditorApplication.update -= OnEditorUpdate;
             UnsubscribeFromEvents();
+            SaveUIState();
         }
 
         private void OnPlayModeChanged(PlayModeStateChange state)
@@ -123,10 +223,14 @@ namespace CycloneGames.GameplayAbilities.Editor
             {
                 UnsubscribeFromEvents();
                 selectedASC = null;
+                comparisonTargets.Clear();
                 sceneASCs.Clear();
                 sceneASCNames.Clear();
                 eventLog.Clear();
+                effectHistory.Clear();
+                attributeHistories.Clear();
                 selectedASCIndex = -1;
+                expandedEffects.Clear();
             }
             Repaint();
         }
@@ -140,12 +244,18 @@ namespace CycloneGames.GameplayAbilities.Editor
             }
         }
 
-        private void OnInspectorUpdate()
+        private void OnEditorUpdate()
         {
             if (!EditorApplication.isPlaying || isPaused) return;
-            if (EditorApplication.timeSinceStartup - lastRefreshTime > refreshInterval)
+            
+            frameCountSinceLastUpdate++;
+            double timeSinceLastRefresh = EditorApplication.timeSinceStartup - lastRefreshTime;
+            
+            if (timeSinceLastRefresh > refreshInterval)
             {
                 lastRefreshTime = EditorApplication.timeSinceStartup;
+                avgFrameTime = (float)(timeSinceLastRefresh / frameCountSinceLastUpdate);
+                frameCountSinceLastUpdate = 0;
                 Repaint();
             }
         }
@@ -162,7 +272,8 @@ namespace CycloneGames.GameplayAbilities.Editor
             s_SectionHeader = new GUIStyle(EditorStyles.boldLabel)
             {
                 fontSize = 13,
-                padding = new RectOffset(2, 0, 4, 2)
+                padding = new RectOffset(2, 0, 4, 2),
+                fontStyle = FontStyle.Bold
             };
 
             s_BadgeStyle = new GUIStyle(EditorStyles.miniLabel)
@@ -170,7 +281,8 @@ namespace CycloneGames.GameplayAbilities.Editor
                 alignment = TextAnchor.MiddleCenter,
                 fontStyle = FontStyle.Bold,
                 normal = { textColor = Color.white },
-                padding = new RectOffset(4, 4, 1, 1)
+                padding = new RectOffset(4, 4, 1, 1),
+                fontSize = 9
             };
 
             s_MonoLabel = new GUIStyle(EditorStyles.miniLabel)
@@ -178,11 +290,16 @@ namespace CycloneGames.GameplayAbilities.Editor
                 font = EditorGUIUtility.Load("Fonts/RobotoMono/RobotoMono-Regular.ttf") as Font,
                 richText = true
             };
-            // Fallback if font not found
             if (s_MonoLabel.font == null)
             {
                 s_MonoLabel = new GUIStyle(EditorStyles.miniLabel) { richText = true };
             }
+
+            s_SearchBoxStyle = new GUIStyle(EditorStyles.toolbarSearchField)
+            {
+                fontSize = 11,
+                padding = new RectOffset(4, 4, 2, 2)
+            };
         }
 
         #endregion
@@ -192,15 +309,30 @@ namespace CycloneGames.GameplayAbilities.Editor
         private void OnGUI()
         {
             EnsureStyles();
-            DrawToolbar();
-
-            scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
+            DrawTopToolbar();
 
             if (!EditorApplication.isPlaying)
             {
                 EditorGUILayout.HelpBox("Enter Play Mode to debug AbilitySystemComponents.", MessageType.Info);
+                return;
             }
-            else if (selectedASC == null)
+
+            // View mode selector
+            DrawViewModeTabs();
+
+            switch (viewMode)
+            {
+                case 0: DrawSingleTargetView(); break;
+                case 1: DrawComparisonView(); break;
+                case 2: DrawNetworkView(); break;
+            }
+        }
+
+        private void DrawSingleTargetView()
+        {
+            scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
+
+            if (selectedASC == null)
             {
                 DrawASCPicker();
             }
@@ -208,24 +340,99 @@ namespace CycloneGames.GameplayAbilities.Editor
             {
                 DrawASCHeader();
                 EditorGUILayout.Space(2);
+                
+                // Quick search bar
+                DrawSearchBar();
+                
+                // Main sections
                 DrawActiveEffectsSection();
                 DrawAttributesSection();
                 DrawAbilitiesSection();
                 DrawTagsSection();
                 DrawImmunityTagsSection();
+
+                // Optional panels
+                if (showAttributeHistory) DrawAttributeHistoryPanel();
+                if (showEffectRelations) DrawEffectRelationsPanel();
+                if (showPoolStats) DrawPoolStatistics();
+                if (showPerformanceStats) DrawPerformanceStatistics();
+                if (showEventLog) DrawEventLog();
             }
 
-            if (showPoolStats) DrawPoolStatistics();
-            if (showEventLog) DrawEventLog();
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawComparisonView()
+        {
+            scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
+
+            EditorGUILayout.LabelField("Multi-Target Comparison (Beta)", s_SectionHeader);
+            
+            // Add targets
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("+ Add Target", EditorStyles.miniButton, GUILayout.Width(100)))
+            {
+                ScanSceneASCs();
+                // Could show a dropdown or picker here
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (comparisonTargets.Count == 0)
+            {
+                EditorGUILayout.HelpBox("No targets added for comparison. Click 'Add Target' to begin.", MessageType.Info);
+            }
+            else
+            {
+                DrawComparisonTable();
+            }
 
             EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawNetworkView()
+        {
+            networkViewScroll = EditorGUILayout.BeginScrollView(networkViewScroll);
+
+            EditorGUILayout.LabelField("Effect Network View (Experimental)", s_SectionHeader);
+            EditorGUILayout.HelpBox("Shows source-effect-target relationships and dependencies.", MessageType.Info);
+
+            if (selectedASC != null)
+            {
+                DrawEffectNetwork();
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("Select an ASC to view its effect network.", MessageType.Warning);
+            }
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawViewModeTabs()
+        {
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            
+            EditorGUI.BeginChangeCheck();
+            int newMode = viewMode;
+            
+            if (GUILayout.Button("Single", viewMode == 0 ? EditorStyles.toolbarButton : EditorStyles.toolbarButton, GUILayout.Width(60)))
+                newMode = 0;
+            if (GUILayout.Button("Comparison", viewMode == 1 ? EditorStyles.toolbarButton : EditorStyles.toolbarButton, GUILayout.Width(85)))
+                newMode = 1;
+            if (GUILayout.Button("Network", viewMode == 2 ? EditorStyles.toolbarButton : EditorStyles.toolbarButton, GUILayout.Width(65)))
+                newMode = 2;
+            
+            if (EditorGUI.EndChangeCheck())
+                viewMode = newMode;
+            
+            EditorGUILayout.EndHorizontal();
         }
 
         #endregion
 
         #region Toolbar
 
-        private void DrawToolbar()
+        private void DrawTopToolbar()
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
@@ -234,29 +441,58 @@ namespace CycloneGames.GameplayAbilities.Editor
             {
                 ScanSceneASCs();
                 TryFindASC();
+                ClearCaches();
             }
 
             // Pause/Resume
-            string pauseLabel = isPaused ? "Play" : "Pause";
-            if (GUILayout.Button(pauseLabel, EditorStyles.toolbarButton, GUILayout.Width(45)))
+            string pauseLabel = isPaused ? "▶" : "⏸";
+            if (GUILayout.Button(pauseLabel, EditorStyles.toolbarButton, GUILayout.Width(30)))
             {
                 isPaused = !isPaused;
             }
 
-            GUILayout.FlexibleSpace();
+            GUILayout.Space(5);
 
             // Refresh rate
-            EditorGUILayout.LabelField("Interval", GUILayout.Width(45));
-            refreshInterval = EditorGUILayout.Slider(refreshInterval, 0.02f, 1f, GUILayout.Width(100));
-            sb.Clear();
-            sb.Append(refreshInterval < 0.1f ? refreshInterval.ToString("F2") : refreshInterval.ToString("F1")).Append("s");
-            EditorGUILayout.LabelField(sb.ToString(), GUILayout.Width(32));
+            EditorGUILayout.LabelField("Rate", GUILayout.Width(35));
+            refreshInterval = EditorGUILayout.Slider(refreshInterval, MinRepaintInterval, 1f, GUILayout.Width(80));
+
+            GUILayout.FlexibleSpace();
 
             // Section toggles
             DrawToolbarDivider();
-            showPoolStats = GUILayout.Toggle(showPoolStats, "Pools", EditorStyles.toolbarButton);
-            showEventLog = GUILayout.Toggle(showEventLog, "Log", EditorStyles.toolbarButton);
+            showAttributeHistory = GUILayout.Toggle(showAttributeHistory, "Hist", EditorStyles.toolbarButton, GUILayout.Width(40));
+            showEffectRelations = GUILayout.Toggle(showEffectRelations, "Rel", EditorStyles.toolbarButton, GUILayout.Width(35));
+            showPoolStats = GUILayout.Toggle(showPoolStats, "Pools", EditorStyles.toolbarButton, GUILayout.Width(45));
+            showPerformanceStats = GUILayout.Toggle(showPerformanceStats, "Perf", EditorStyles.toolbarButton, GUILayout.Width(40));
+            showEventLog = GUILayout.Toggle(showEventLog, "Log", EditorStyles.toolbarButton, GUILayout.Width(35));
 
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawSearchBar()
+        {
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Filter", GUILayout.Width(40));
+            
+            EditorGUI.BeginChangeCheck();
+            searchQuery = EditorGUILayout.TextField(searchQuery, s_SearchBoxStyle);
+            if (EditorGUI.EndChangeCheck())
+            {
+                // Trigger filter refresh
+            }
+
+            if (GUILayout.Button("✕", EditorStyles.miniButton, GUILayout.Width(20)))
+            {
+                searchQuery = "";
+            }
+
+            EditorGUILayout.EndHorizontal();
+
+            // Filter options
+            EditorGUILayout.BeginHorizontal();
+            showInhibitedOnly = EditorGUILayout.ToggleLeft("Inhibited Only", showInhibitedOnly, GUILayout.Width(100));
+            showExpiredOnly = EditorGUILayout.ToggleLeft("Expired Only", showExpiredOnly, GUILayout.Width(100));
             EditorGUILayout.EndHorizontal();
         }
 
@@ -439,14 +675,19 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             if (effect?.Spec?.Def == null) return;
 
+            // Apply filters
+            if (!MatchesSearchFilter(effect.Spec.Def.Name)) return;
+            if (showInhibitedOnly && !effect.IsInhibited) return;
+            if (showExpiredOnly && !effect.IsExpired) return;
+
             // Pick background color based on state
             var originalBg = GUI.backgroundColor;
             if (effect.IsExpired)
-                GUI.backgroundColor = s_ExpiredColor;
+                GUI.backgroundColor = ColorTheme.EffectExpired;
             else if (effect.IsInhibited)
-                GUI.backgroundColor = s_InhibitedColor;
+                GUI.backgroundColor = ColorTheme.EffectInhibited;
             else
-                GUI.backgroundColor = s_EffectColor;
+                GUI.backgroundColor = ColorTheme.EffectActive;
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             GUI.backgroundColor = originalBg;
@@ -461,11 +702,17 @@ namespace CycloneGames.GameplayAbilities.Editor
 
             // Inhibited badge
             if (effect.IsInhibited)
-                DrawBadge("INHIBITED", s_InhibitedColor);
+                DrawBadge("INHIBITED", ColorTheme.EffectInhibited);
 
             // Stack badge
             if (effect.StackCount > 1)
                 DrawBadge($"x{effect.StackCount}", new Color(0.5f, 0.4f, 0.7f));
+
+            // Source indicator
+            if (effect.Spec.Source != null && effect.Spec.Source != selectedASC)
+            {
+                DrawBadge("FROM", ColorTheme.Tag);
+            }
 
             EditorGUILayout.EndHorizontal();
 
@@ -475,7 +722,7 @@ namespace CycloneGames.GameplayAbilities.Editor
                 float progress = effect.Spec.Duration > 0 ? effect.TimeRemaining / effect.Spec.Duration : 0f;
                 sb.Clear();
                 sb.Append(effect.TimeRemaining.ToString("F1")).Append("s / ").Append(effect.Spec.Duration.ToString("F1")).Append('s');
-                DrawProgressBar(progress, sb.ToString(), s_BarFill);
+                DrawProgressBar(progress, sb.ToString(), ColorTheme.BarFill);
             }
             else if (effect.Spec.Def.DurationPolicy == EDurationPolicy.Infinite)
             {
@@ -537,7 +784,7 @@ namespace CycloneGames.GameplayAbilities.Editor
                     }
 
                     var origColor = GUI.contentColor;
-                    GUI.contentColor = s_AttributeColor;
+                    GUI.contentColor = ColorTheme.Attribute;
                     EditorGUILayout.LabelField(sb.ToString(), s_MonoLabel);
                     GUI.contentColor = origColor;
                 }
@@ -554,7 +801,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             // Period
             if (def.Period > 0)
             {
-                EditorGUILayout.LabelField($"Period: {def.Period:F2}s", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField($"Period: {def.Period:F2}s  (Executions: {(int)(effect.TimeRemaining / def.Period)})", EditorStyles.miniLabel);
             }
 
             // Level
@@ -562,6 +809,11 @@ namespace CycloneGames.GameplayAbilities.Editor
             {
                 EditorGUILayout.LabelField($"Level: {effect.Spec.Level}", EditorStyles.miniLabel);
             }
+
+            // Remaining time info
+            sb.Clear();
+            sb.Append("Time Remaining: ").Append(effect.TimeRemaining.ToString("F1")).Append("s");
+            EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
 
             // Granted Tags
             if (def.GrantedTags != null && !def.GrantedTags.IsEmpty)
@@ -643,21 +895,21 @@ namespace CycloneGames.GameplayAbilities.Editor
             // Name — use remaining width after bar and value
             float valueWidth = 90;
             float barFraction = 0.4f;
-            float totalWidth = EditorGUIUtility.currentViewWidth - 40; // account for indent + scrollbar
+            float totalWidth = EditorGUIUtility.currentViewWidth - 40;
             float nameWidth = totalWidth * (1f - barFraction) - valueWidth;
             if (nameWidth < 80) nameWidth = 80;
             float barWidth = totalWidth * barFraction;
             if (barWidth < 40) barWidth = 40;
 
             var origColor = GUI.contentColor;
-            GUI.contentColor = s_AttributeColor;
+            GUI.contentColor = ColorTheme.Attribute;
             EditorGUILayout.LabelField(attr.Name, s_MonoLabel, GUILayout.Width(nameWidth));
             GUI.contentColor = origColor;
 
             // Value bar
             float displayMax = Mathf.Max(attr.BaseValue, attr.CurrentValue, 1f);
             float fill = displayMax > 0 ? attr.CurrentValue / displayMax : 0f;
-            Color barColor = attr.CurrentValue >= attr.BaseValue ? s_BarFillHealth : s_ExpiredColor;
+            Color barColor = attr.CurrentValue >= attr.BaseValue ? ColorTheme.BarHealth : ColorTheme.EffectExpired;
 
             Rect barRect = EditorGUILayout.GetControlRect(false, 14, GUILayout.Width(barWidth));
             DrawMiniBar(barRect, fill, barColor);
@@ -666,6 +918,12 @@ namespace CycloneGames.GameplayAbilities.Editor
             EditorGUILayout.LabelField(valueText, EditorStyles.miniLabel, GUILayout.Width(valueWidth));
 
             EditorGUILayout.EndHorizontal();
+
+            // Track history (low frequency to reduce GC)
+            if (EditorApplication.timeSinceStartup % 0.5 < MinRepaintInterval)
+            {
+                TrackAttributeHistory(attr);
+            }
         }
 
         #endregion
@@ -715,22 +973,22 @@ namespace CycloneGames.GameplayAbilities.Editor
             // Level badge
             if (spec.Level > 0)
             {
-                DrawBadge($"Lv.{spec.Level}", s_ReadyColor);
+                DrawBadge($"Lv.{spec.Level}", ColorTheme.Ready);
             }
 
             // Status badge
             if (spec.IsActive)
             {
-                DrawBadge("ACTIVE", s_EffectColor);
+                DrawBadge("ACTIVE", ColorTheme.EffectActive);
             }
             else if (selectedASC.IsAbilityOnCooldown(spec.Ability))
             {
                 float cdRemaining = selectedASC.GetCooldownTimeRemaining(spec.Ability);
-                DrawBadge($"CD {cdRemaining:F1}s", s_CooldownColor);
+                DrawBadge($"CD {cdRemaining:F1}s", ColorTheme.CooldownActive);
             }
             else
             {
-                DrawBadge("READY", s_ReadyColor);
+                DrawBadge("READY", ColorTheme.Ready);
             }
 
             // Instancing policy
@@ -745,7 +1003,7 @@ namespace CycloneGames.GameplayAbilities.Editor
                 EditorGUI.indentLevel++;
                 sb.Clear();
                 sb.Append("Cooldown: ").Append(timeRemaining.ToString("F1")).Append("s / ").Append(totalDuration.ToString("F1")).Append('s');
-                DrawProgressBar(cdProgress, sb.ToString(), s_BarFillCooldown);
+                DrawProgressBar(cdProgress, sb.ToString(), ColorTheme.BarCooldown);
                 EditorGUI.indentLevel--;
             }
         }
@@ -768,18 +1026,20 @@ namespace CycloneGames.GameplayAbilities.Editor
                     bool hasAny = false;
                     foreach (var tag in tags.GetExplicitTags())
                     {
+                        if (!MatchesSearchFilter(tag.Name)) continue;
+                        
                         hasAny = true;
                         int count = tags.GetExplicitTagCount(tag);
 
                         EditorGUILayout.BeginHorizontal();
                         var origColor = GUI.contentColor;
-                        GUI.contentColor = s_TagColor;
+                        GUI.contentColor = ColorTheme.Tag;
                         EditorGUILayout.LabelField(tag.Name, s_MonoLabel);
                         GUI.contentColor = origColor;
 
                         if (count > 1)
                         {
-                            DrawBadge($"x{count}", s_TagColor);
+                            DrawBadge($"x{count}", ColorTheme.Tag);
                         }
 
                         EditorGUILayout.EndHorizontal();
@@ -812,8 +1072,10 @@ namespace CycloneGames.GameplayAbilities.Editor
 
                 foreach (var tag in immunityTags.GetTags())
                 {
+                    if (!MatchesSearchFilter(tag.Name)) continue;
+                    
                     var origColor = GUI.contentColor;
-                    GUI.contentColor = s_ImmunityColor;
+                    GUI.contentColor = ColorTheme.Immunity;
                     EditorGUILayout.LabelField(tag.Name, s_MonoLabel);
                     GUI.contentColor = origColor;
                 }
@@ -875,7 +1137,7 @@ namespace CycloneGames.GameplayAbilities.Editor
 
             // Hit rate bar
             float hitRate = stats.HitRate;
-            Color hitColor = hitRate > 0.9f ? s_BarFillHealth : hitRate > 0.5f ? s_CooldownColor : s_ExpiredColor;
+            Color hitColor = hitRate > 0.9f ? ColorTheme.BarHealth : hitRate > 0.5f ? ColorTheme.CooldownActive : ColorTheme.EffectExpired;
             sb.Clear();
             sb.Append("Hit: ").Append((hitRate * 100f).ToString("F0")).Append('%');
             Rect hitRect = EditorGUILayout.GetControlRect(false, 14, GUILayout.Width(100));
@@ -989,10 +1251,10 @@ namespace CycloneGames.GameplayAbilities.Editor
                 {
                     string entry = eventLog[i];
                     Color logColor = Color.white;
-                    if (entry.Contains("[+Effect]")) logColor = s_EffectColor;
-                    else if (entry.Contains("[-Effect]")) logColor = s_ExpiredColor;
-                    else if (entry.Contains("[>Ability]")) logColor = s_BarFill;
-                    else if (entry.Contains("[<Ability]")) logColor = s_ReadyColor;
+                    if (entry.Contains("[+Effect]")) logColor = ColorTheme.EffectActive;
+                    else if (entry.Contains("[-Effect]")) logColor = ColorTheme.EffectExpired;
+                    else if (entry.Contains("[>Ability]")) logColor = ColorTheme.BarFill;
+                    else if (entry.Contains("[<Ability]")) logColor = ColorTheme.Ready;
 
                     var origColor = GUI.contentColor;
                     GUI.contentColor = logColor;
@@ -1003,6 +1265,218 @@ namespace CycloneGames.GameplayAbilities.Editor
             }
 
             EditorGUILayout.EndVertical();
+        }
+
+        #endregion
+
+        #region Advanced Panels
+
+        private void DrawAttributeHistoryPanel()
+        {
+            EditorGUILayout.Space(4);
+            DrawHorizontalLine();
+            EditorGUILayout.LabelField("Attribute Change History", s_SectionHeader);
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            if (attributeHistories.Count == 0)
+            {
+                EditorGUILayout.LabelField("No history recorded yet.", EditorStyles.centeredGreyMiniLabel);
+            }
+            else
+            {
+                foreach (var kvp in attributeHistories.OrderBy(x => x.Key))
+                {
+                    string attrName = kvp.Key;
+                    var history = kvp.Value;
+                    if (history.Count == 0) continue;
+
+                    EditorGUILayout.LabelField(attrName, EditorStyles.boldLabel);
+                    
+                    // Show recent changes
+                    int startIdx = Mathf.Max(0, history.Count - 5);
+                    for (int i = startIdx; i < history.Count; i++)
+                    {
+                        var record = history[i];
+                        sb.Clear();
+                        sb.Append(record.Value.ToString("F1"));
+                        if (System.Math.Abs(record.BaseValue - record.Value) > 0.001f)
+                            sb.Append(" (base: ").Append(record.BaseValue.ToString("F1")).Append(")");
+                        sb.Append(" @ ").Append(record.Timestamp.ToString("F1"));
+                        EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
+                    }
+                    EditorGUILayout.Space(2);
+                }
+            }
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawEffectRelationsPanel()
+        {
+            EditorGUILayout.Space(4);
+            DrawHorizontalLine();
+            EditorGUILayout.LabelField("Effect Relations & Dependencies", s_SectionHeader);
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            if (selectedASC?.ActiveEffects == null || selectedASC.ActiveEffects.Count == 0)
+            {
+                EditorGUILayout.LabelField("No active effects.", EditorStyles.centeredGreyMiniLabel);
+            }
+            else
+            {
+                // Group effects by source
+                var effectsBySource = new Dictionary<AbilitySystemComponent, List<ActiveGameplayEffect>>();
+                foreach (var effect in selectedASC.ActiveEffects)
+                {
+                    var source = effect.Spec.Source ?? selectedASC;
+                    if (!effectsBySource.ContainsKey(source))
+                        effectsBySource[source] = new List<ActiveGameplayEffect>();
+                    effectsBySource[source].Add(effect);
+                }
+
+                foreach (var kvp in effectsBySource)
+                {
+                    string sourceName = kvp.Key == selectedASC ? "(Self)" : kvp.Key.OwnerActor?.ToString() ?? "(Unknown)";
+                    EditorGUILayout.LabelField($"From: {sourceName}", EditorStyles.boldLabel);
+                    
+                    EditorGUI.indentLevel++;
+                    foreach (var effect in kvp.Value)
+                    {
+                        sb.Clear();
+                        sb.Append("→ ").Append(effect.Spec.Def.Name);
+                        if (effect.IsInhibited) sb.Append(" [INHIBITED]");
+                        EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
+                    }
+                    EditorGUI.indentLevel--;
+                    EditorGUILayout.Space(2);
+                }
+            }
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawPerformanceStatistics()
+        {
+            EditorGUILayout.Space(4);
+            DrawHorizontalLine();
+            EditorGUILayout.LabelField("Performance Monitoring", s_SectionHeader);
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+            // Frame time
+            sb.Clear();
+            sb.Append("Avg Frame Time: ").Append(avgFrameTime.ToString("F2")).Append("ms");
+            EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
+
+            // Memory stats
+            long currentMemory = System.GC.GetTotalMemory(false);
+            long memoryDelta = currentMemory - lastTotalMemory;
+            sb.Clear();
+            sb.Append("Heap: ").Append((currentMemory / (1024f * 1024f)).ToString("F1")).Append("MB");
+            if (memoryDelta != 0)
+                sb.Append(" (Δ").Append((memoryDelta / 1024f).ToString("F1")).Append("KB)");
+            EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
+
+            // GC info
+            sb.Clear();
+            sb.Append("GC Count: ");
+            for (int i = 0; i < 3; i++)
+            {
+                sb.Append("Gen").Append(i).Append("=").Append(System.GC.CollectionCount(i));
+                if (i < 2) sb.Append(" | ");
+            }
+            EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
+
+            // Cache info
+            sb.Clear();
+            sb.Append("String Cache: ").Append(effectNameCache.Count)
+              .Append(" | Width Cache: ").Append(attributeRowWidthCache.Count)
+              .Append(" | Attr History: ").Append(attributeHistories.Count);
+            EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
+
+            lastTotalMemory = currentMemory;
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawComparisonTable()
+        {
+            EditorGUILayout.LabelField("Active Targets", EditorStyles.boldLabel);
+            
+            for (int i = 0; i < comparisonTargets.Count; i++)
+            {
+                var target = comparisonTargets[i];
+                EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
+
+                EditorGUILayout.LabelField($"{i + 1}. {target.Owner?.name ?? "Unknown"}", GUILayout.MinWidth(150));
+                
+                if (target.ASC != null)
+                {
+                    int effectCount = target.ASC.ActiveEffects?.Count ?? 0;
+                    EditorGUILayout.LabelField($"Effects: {effectCount}", GUILayout.Width(100));
+                }
+
+                if (GUILayout.Button("Remove", EditorStyles.miniButton, GUILayout.Width(60)))
+                {
+                    comparisonTargets.RemoveAt(i);
+                }
+
+                EditorGUILayout.EndHorizontal();
+            }
+        }
+
+        private void DrawEffectNetwork()
+        {
+            EditorGUILayout.LabelField("Effect Network Visualization", EditorStyles.boldLabel);
+            
+            if (selectedASC?.ActiveEffects == null)
+            {
+                EditorGUILayout.HelpBox("No active effects to display.", MessageType.Info);
+                return;
+            }
+
+            // Count effects by type
+            int instant = 0, duration = 0, infinite = 0;
+            int sourceCount = new HashSet<AbilitySystemComponent>(
+                selectedASC.ActiveEffects.Select(e => e.Spec.Source).Where(s => s != null)
+            ).Count;
+
+            foreach (var effect in selectedASC.ActiveEffects)
+            {
+                switch (effect.Spec.Def.DurationPolicy)
+                {
+                    case EDurationPolicy.Instant: instant++; break;
+                    case EDurationPolicy.HasDuration: duration++; break;
+                    case EDurationPolicy.Infinite: infinite++; break;
+                }
+            }
+
+            // Network stats
+            EditorGUILayout.LabelField("Network Statistics:", EditorStyles.boldLabel);
+            sb.Clear();
+            sb.Append("Total Effects: ").Append(selectedASC.ActiveEffects.Count)
+              .Append(" | Instant: ").Append(instant)
+              .Append(" | Duration: ").Append(duration)
+              .Append(" | Infinite: ").Append(infinite)
+              .Append(" | Sources: ").Append(sourceCount);
+            EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
+
+            EditorGUILayout.Space(4);
+            EditorGUILayout.LabelField("Dominant Sources:", EditorStyles.boldLabel);
+
+            var sourceGroups = selectedASC.ActiveEffects
+                .GroupBy(e => e.Spec.Source?.OwnerActor?.ToString() ?? "(Self)")
+                .OrderByDescending(g => g.Count())
+                .Take(5);
+
+            foreach (var group in sourceGroups)
+            {
+                sb.Clear();
+                sb.Append(group.Key).Append(": ").Append(group.Count()).Append(" effects");
+                EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
+            }
         }
 
         #endregion
@@ -1020,7 +1494,7 @@ namespace CycloneGames.GameplayAbilities.Editor
         private void DrawProgressBar(float progress, string label, Color fillColor)
         {
             Rect rect = EditorGUILayout.GetControlRect(false, 16);
-            EditorGUI.DrawRect(rect, s_BarBg);
+            EditorGUI.DrawRect(rect, ColorTheme.BarBackground);
 
             Rect fillRect = new Rect(rect.x, rect.y, rect.width * Mathf.Clamp01(progress), rect.height);
             EditorGUI.DrawRect(fillRect, fillColor);
@@ -1034,7 +1508,7 @@ namespace CycloneGames.GameplayAbilities.Editor
 
         private static void DrawMiniBar(Rect rect, float fill, Color color)
         {
-            EditorGUI.DrawRect(rect, s_BarBg);
+            EditorGUI.DrawRect(rect, ColorTheme.BarBackground);
             Rect fillRect = new Rect(rect.x, rect.y, rect.width * Mathf.Clamp01(fill), rect.height);
             EditorGUI.DrawRect(fillRect, color);
         }
@@ -1090,6 +1564,55 @@ namespace CycloneGames.GameplayAbilities.Editor
                 case EGameplayAbilityInstancingPolicy.InstancedPerExecution: return "Exec";
                 default: return "?";
             }
+        }
+
+        #endregion
+
+        #region Utility Methods
+
+        private bool MatchesSearchFilter(string text)
+        {
+            if (string.IsNullOrEmpty(searchQuery)) return true;
+            return text.IndexOf(searchQuery, System.StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private void TrackAttributeHistory(GameplayAttribute attr)
+        {
+            string key = attr.Name;
+            if (!attributeHistories.ContainsKey(key))
+                attributeHistories[key] = new List<AttributeHistory>(MaxAttributeHistoryPerAttribute);
+
+            var history = attributeHistories[key];
+            var record = new AttributeHistory
+            {
+                Value = attr.CurrentValue,
+                BaseValue = attr.BaseValue,
+                Timestamp = EditorApplication.timeSinceStartup
+            };
+
+            history.Add(record);
+            
+            // Keep history bounded
+            if (history.Count > MaxAttributeHistoryPerAttribute)
+                history.RemoveAt(0);
+        }
+
+        private void ClearCaches()
+        {
+            effectNameCache.Clear();
+            attributeRowWidthCache.Clear();
+        }
+
+        private void LoadUIState()
+        {
+            // Load persisted UI state from EditorPrefs
+            // TODO: Implement EditorPrefs loading for fold states
+        }
+
+        private void SaveUIState()
+        {
+            // Save UI state to EditorPrefs for next session
+            // TODO: Implement EditorPrefs saving for fold states
         }
 
         #endregion

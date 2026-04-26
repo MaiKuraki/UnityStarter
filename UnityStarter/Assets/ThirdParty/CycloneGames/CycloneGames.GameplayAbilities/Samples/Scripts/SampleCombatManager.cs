@@ -18,6 +18,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         public GameplayEffectSO DebugXpEffect;
 
         [Header("UI")]
+        public Button DetailBtn;
         public Text PlayerStatusText;
         public Text EnemyStatusText;
         public Text LogText;
@@ -25,6 +26,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         private void Awake()
         {
+            DetailBtn.onClick.AddListener(ToggleGASInfoDetail);
             logTextGORef = LogText?.gameObject;
             if (LogText != null)
             {
@@ -58,6 +60,11 @@ namespace CycloneGames.GameplayAbilities.Sample
             // GameplayTagManager.RegisterDynamicTags(tagNames);
         }
 
+        void ToggleGASInfoDetail()
+        {
+            GASDebugOverlay.Toggle();
+        }
+
         void Update()
         {
             HandleInput();
@@ -66,6 +73,8 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         void HandleInput()
         {
+            if (Input.GetKeyDown(KeyCode.F)) ToggleGASInfoDetail();
+
             if (Input.GetKeyDown(KeyCode.Alpha1)) TryActivateAbilityByTag(Player, GameplayTagManager.RequestTag(GASSampleTags.Ability_Fireball)); // Fireball
             if (Input.GetKeyDown(KeyCode.Alpha2)) TryActivateAbilityByTag(Player, GameplayTagManager.RequestTag(GASSampleTags.Ability_Purify)); // Purify
 

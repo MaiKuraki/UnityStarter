@@ -18,12 +18,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
         #endregion
 
         private readonly Dictionary<string, GameplayAttribute> discoveredAttributes = new Dictionary<string, GameplayAttribute>();
+        private bool attributesDiscovered;
 
         public AbilitySystemComponent OwningAbilitySystemComponent { get; internal set; }
 
         protected AttributeSet()
         {
+        }
+
+        private void EnsureAttributesDiscovered()
+        {
+            if (attributesDiscovered)
+            {
+                return;
+            }
+
             DiscoverAndInitAttributes();
+            attributesDiscovered = true;
         }
 
         private void DiscoverAndInitAttributes()
@@ -87,7 +98,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        public IReadOnlyCollection<GameplayAttribute> GetAttributes() => discoveredAttributes.Values;
+        public IReadOnlyCollection<GameplayAttribute> GetAttributes()
+        {
+            EnsureAttributesDiscovered();
+            return discoveredAttributes.Values;
+        }
 
         public float GetBaseValue(GameplayAttribute attribute) => attribute.BaseValue;
         public float GetCurrentValue(GameplayAttribute attribute) => attribute.CurrentValue;
@@ -111,6 +126,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public GameplayAttribute GetAttribute(string name)
         {
+            EnsureAttributesDiscovered();
             discoveredAttributes.TryGetValue(name, out var attribute);
             return attribute;
         }
