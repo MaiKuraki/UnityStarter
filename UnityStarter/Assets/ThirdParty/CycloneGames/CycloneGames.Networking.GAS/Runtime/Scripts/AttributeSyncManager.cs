@@ -29,6 +29,7 @@ namespace CycloneGames.Networking.GAS
         // attributeId ->true means replicate to observers (not just owner)
         private readonly HashSet<int> _publicAttributes = new HashSet<int>();
         private AttributeEntry[] _fullSyncEntries = Array.Empty<AttributeEntry>();
+        private int _defaultAttributeCapacity = 16;
 
         public AttributeSyncManager(NetworkedAbilityBridge bridge)
         {
@@ -37,6 +38,8 @@ namespace CycloneGames.Networking.GAS
 
         public void ReserveRuntimeCapacity(int entityCapacity = 64, int attributeCapacity = 32)
         {
+            _defaultAttributeCapacity = Math.Max(1, attributeCapacity);
+
             if (attributeCapacity > _fullSyncEntries.Length)
             {
                 _fullSyncEntries = new AttributeEntry[attributeCapacity];
@@ -64,7 +67,7 @@ namespace CycloneGames.Networking.GAS
         {
             if (!_dirtyMap.TryGetValue(networkId, out var set))
             {
-                set = new DirtyAttributeSet(networkId);
+                set = new DirtyAttributeSet(_defaultAttributeCapacity);
                 _dirtyMap[networkId] = set;
             }
 
@@ -163,17 +166,35 @@ namespace CycloneGames.Networking.GAS
 
         private sealed class DirtyAttributeSet
         {
-            private readonly uint _networkId;
-            private readonly Dictionary<int, AttributeEntry> _dirty = new Dictionary<int, AttributeEntry>(16);
+            private AttributeEntry[] _dirtyEntries;
+            private int _dirtyCount;
             private AttributeEntry[] _allDirtyEntries = Array.Empty<AttributeEntry>();
             private AttributeEntry[] _publicDirtyEntries = Array.Empty<AttributeEntry>();
-            public int DirtyCount => _dirty.Count;
+            public int DirtyCount => _dirtyCount;
 
-            public DirtyAttributeSet(uint networkId) => _networkId = networkId;
+            public DirtyAttributeSet(int initialCapacity)
+            {
+                _dirtyEntries = new AttributeEntry[Math.Max(1, initialCapacity)];
+            }
 
             public void SetDirty(int attributeId, float baseValue, float currentValue)
             {
-                _dirty[attributeId] = new AttributeEntry
+                for (int i = 0; i < _dirtyCount; i++)
+                {
+                    if (_dirtyEntries[i].AttributeId != attributeId)
+                        continue;
+
+                    _dirtyEntries[i] = new AttributeEntry
+                    {
+                        AttributeId = attributeId,
+                        BaseValue = baseValue,
+                        CurrentValue = currentValue
+                    };
+                    return;
+                }
+
+                EnsureArrayCapacity(ref _dirtyEntries, _dirtyCount + 1);
+                _dirtyEntries[_dirtyCount++] = new AttributeEntry
                 {
                     AttributeId = attributeId,
                     BaseValue = baseValue,
@@ -185,15 +206,16 @@ namespace CycloneGames.Networking.GAS
                 HashSet<int> publicFilter = null)
             {
                 ref var entries = ref (includeAll ? ref _allDirtyEntries : ref _publicDirtyEntries);
-                EnsureArrayCapacity(ref entries, _dirty.Count);
+                EnsureArrayCapacity(ref entries, _dirtyCount);
                 int count = 0;
 
-                foreach (var pair in _dirty)
+                for (int i = 0; i < _dirtyCount; i++)
                 {
-                    if (!includeAll && publicFilter != null && !publicFilter.Contains(pair.Key))
+                    var entry = _dirtyEntries[i];
+                    if (!includeAll && publicFilter != null && !publicFilter.Contains(entry.AttributeId))
                         continue;
 
-                    entries[count++] = pair.Value;
+                    entries[count++] = entry;
                 }
 
                 return new AttributeUpdateData
@@ -205,7 +227,10 @@ namespace CycloneGames.Networking.GAS
                 };
             }
 
-            public void ClearDirty() => _dirty.Clear();
+            public void ClearDirty()
+            {
+                _dirtyCount = 0;
+            }
         }
     }
 }
