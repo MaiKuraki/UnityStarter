@@ -24,7 +24,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (GUILayout.Button("Preview Tag Colors"))
             {
                 var config = (GASOverlayConfig)target;
-                Debug.Log($"[GAS Overlay Config] {config.TagColorRules.Count} tag color rule(s), " +
+                Debug.Log($"[GAS Overlay Config] {config.SemanticTagClassifications.Count} semantic tag classification(s), " +
                           $"{config.DebuffTagSubstrings.Count} debuff substring(s), " +
                           $"Panel alpha={config.PanelAlpha:F2}, MaxPanels={config.MaxPanels}, " +
                           $"TrackWorld={config.TrackWorldPosition}");

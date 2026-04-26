@@ -14,14 +14,120 @@ namespace CycloneGames.GameplayAbilities.Runtime
         Minimal
     }
 
+    public enum GASRuntimeThreadPolicy : byte
+    {
+        Disabled,
+        LogWarning,
+        Throw
+    }
+
     // Delegate for gameplay event delivery (UE5: SendGameplayEventToActor)
     public delegate void GameplayEventDelegate(GameplayEventData eventData);
 
     // Delegate for effect lifecycle events
     public delegate void ActiveEffectDelegate(ActiveGameplayEffect effect);
 
+    public struct GASRuntimeListPoolStatistics
+    {
+        public int GrantedAbilitySpecListPoolSize;
+        public int AbilityAppliedEffectListPoolSize;
+        public int PeakGrantedAbilitySpecListPoolSize;
+        public int PeakAbilityAppliedEffectListPoolSize;
+        public long GrantedAbilitySpecListGets;
+        public long GrantedAbilitySpecListMisses;
+        public long GrantedAbilitySpecListDiscards;
+        public long AbilityAppliedEffectListGets;
+        public long AbilityAppliedEffectListMisses;
+        public long AbilityAppliedEffectListDiscards;
+        public int MaxPooledGrantedAbilitySpecLists;
+        public int MaxPooledAbilityAppliedEffectLists;
+        public int MaxRetainedGrantedAbilitySpecListCapacity;
+        public int MaxRetainedAbilityAppliedEffectListCapacity;
+    }
+
+    [Flags]
+    public enum GASRuntimeDiagnosticFlags : uint
+    {
+        None = 0,
+        RuntimeIndexMismatch = 1u << 0,
+        CoreAbilitySpecHandleMismatch = 1u << 1,
+        CoreActiveEffectHandleMismatch = 1u << 2,
+        OpenPredictionWindows = 1u << 3,
+        PredictionWindowTimeoutRisk = 1u << 4,
+        PendingStateChanges = 1u << 5,
+        PendingRemovedEffects = 1u << 6,
+        PendingRemovedAbilities = 1u << 7,
+        DirtyAttributes = 1u << 8,
+        PendingTagChanges = 1u << 9,
+        RuntimeListPoolMisses = 1u << 10,
+        RuntimeListPoolDiscards = 1u << 11,
+        RuntimeListPoolAtCapacity = 1u << 12,
+        RuntimeListPoolInvalidCapacity = 1u << 13
+    }
+
+    public struct GASRuntimeDiagnostics
+    {
+        public GASRuntimeDiagnosticFlags Flags;
+        public int AbilitySpecCount;
+        public int ActiveEffectCount;
+        public int AttributeSetCount;
+        public int DirtyAttributeCount;
+        public int OpenPredictionWindowCount;
+        public int MaxOpenPredictionWindowAgeFrames;
+        public ulong StateVersion;
+        public ulong LastReplicatedStateVersion;
+        public AbilitySystemStateChangeMask PendingStateChangeMask;
+        public uint ReplicatedStateChecksum;
+        public int CoreAbilitySpecCount;
+        public int CoreActiveEffectCount;
+        public int CoreAttributeCount;
+        public int CoreModifierCount;
+        public int CoreSpecHandleCount;
+        public int CoreActiveEffectHandleCount;
+        public int RuntimeThreadId;
+        public int CurrentThreadId;
+        public long RuntimeThreadViolationCount;
+        public int PendingRemovedEffectCount;
+        public int PendingRemovedAbilityDefinitionCount;
+        public int PendingAddedTagCount;
+        public int PendingRemovedTagCount;
+        public GASRuntimeListPoolStatistics ListPoolStatistics;
+
+        public bool HasCriticalIssues =>
+            (Flags & (GASRuntimeDiagnosticFlags.RuntimeIndexMismatch |
+                      GASRuntimeDiagnosticFlags.CoreAbilitySpecHandleMismatch |
+                      GASRuntimeDiagnosticFlags.CoreActiveEffectHandleMismatch)) != 0;
+    }
+
     public partial class AbilitySystemComponent : IDisposable, IGASNetworkTarget
     {
+        public readonly struct GASPredictionScope : IDisposable
+        {
+            private readonly AbilitySystemComponent asc;
+            private readonly GASPredictionKey previousPredictionKey;
+            private readonly bool active;
+
+            internal GASPredictionScope(AbilitySystemComponent asc, GASPredictionKey predictionKey)
+            {
+                this.asc = asc;
+                previousPredictionKey = asc.currentPredictionKey;
+                active = predictionKey.IsValid;
+
+                if (active)
+                {
+                    asc.currentPredictionKey = predictionKey;
+                }
+            }
+
+            public void Dispose()
+            {
+                if (active && asc != null)
+                {
+                    asc.currentPredictionKey = previousPredictionKey;
+                }
+            }
+        }
+
         public object OwnerActor { get; private set; }
         public object AvatarActor { get; private set; }
         public UnityEngine.Object OwnerUnityObject { get; private set; }
@@ -31,6 +137,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GameplayTagCountContainer CombinedTags { get; } = new GameplayTagCountContainer();
         private readonly GameplayTagCountContainer looseTags = new GameplayTagCountContainer();
         private readonly GameplayTagCountContainer fromEffectsTags = new GameplayTagCountContainer();
+        private const int DefaultGrantedAbilitySpecListCapacity = 2;
+        private const int DefaultAbilityAppliedEffectListCapacity = 4;
+        private const int DefaultReusableListPoolLimit = 32;
+        private const int DefaultMaxRetainedGrantedAbilitySpecListCapacity = 16;
+        private const int DefaultMaxRetainedAbilityAppliedEffectListCapacity = 32;
 
         /// <summary>
         /// Tags that grant immunity to effects. Effects with AssetTags or GrantedTags matching these will be blocked.
@@ -42,6 +153,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly Dictionary<string, GameplayAttribute> attributes = new Dictionary<string, GameplayAttribute>(32);
         private readonly List<ActiveGameplayEffect> activeEffects = new List<ActiveGameplayEffect>(32);
         private readonly Dictionary<ActiveGameplayEffect, int> activeEffectIndexByEffect = new Dictionary<ActiveGameplayEffect, int>(32);
+        private readonly Dictionary<int, ActiveGameplayEffect> activeEffectByNetworkId = new Dictionary<int, ActiveGameplayEffect>(32);
         // Expose as IReadOnlyList without AsReadOnly() wrapper allocation.
         // List<T> implements IReadOnlyList<T> directly since .NET 4.5.
         public IReadOnlyList<ActiveGameplayEffect> ActiveEffects => activeEffects;
@@ -63,6 +175,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly Dictionary<ActiveGameplayEffect, List<GameplayAbilitySpec>> grantedAbilitySpecsByEffect = new Dictionary<ActiveGameplayEffect, List<GameplayAbilitySpec>>(8);
         private readonly Stack<List<GameplayAbilitySpec>> grantedAbilitySpecListPool = new Stack<List<GameplayAbilitySpec>>(4);
         public IReadOnlyList<GameplayAbilitySpec> GetActivatableAbilities() => activatableAbilities;
+        public int MaxPooledGrantedAbilitySpecLists { get; set; } = DefaultReusableListPoolLimit;
+        public int MaxRetainedGrantedAbilitySpecListCapacity { get; set; } = DefaultMaxRetainedGrantedAbilitySpecListCapacity;
+        private int peakGrantedAbilitySpecListPoolSize;
+        private long grantedAbilitySpecListGets;
+        private long grantedAbilitySpecListMisses;
+        private long grantedAbilitySpecListDiscards;
 
         private readonly List<GameplayAbilitySpec> tickingAbilities = new List<GameplayAbilitySpec>(16);
         private readonly Dictionary<GameplayAbilitySpec, int> tickingAbilityIndexBySpec = new Dictionary<GameplayAbilitySpec, int>(16);
@@ -71,7 +189,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         //  Tracks effects applied by abilities for RemoveGameplayEffectsAfterAbilityEnds
         private readonly Dictionary<GameplayAbility, List<ActiveGameplayEffect>> abilityAppliedEffects = new Dictionary<GameplayAbility, List<ActiveGameplayEffect>>(8);
-        private readonly HashSet<ActiveGameplayEffect> abilityAppliedEffectRemovalSet = new HashSet<ActiveGameplayEffect>();
+        private readonly List<ActiveGameplayEffect> abilityAppliedEffectRemovalScratch = new List<ActiveGameplayEffect>(8);
+        private readonly Stack<List<ActiveGameplayEffect>> abilityAppliedEffectListPool = new Stack<List<ActiveGameplayEffect>>(4);
+        public int MaxPooledAbilityAppliedEffectLists { get; set; } = DefaultReusableListPoolLimit;
+        public int MaxRetainedAbilityAppliedEffectListCapacity { get; set; } = DefaultMaxRetainedAbilityAppliedEffectListCapacity;
+        private int peakAbilityAppliedEffectListPoolSize;
+        private long abilityAppliedEffectListGets;
+        private long abilityAppliedEffectListMisses;
+        private long abilityAppliedEffectListDiscards;
 
         [ThreadStatic]
         private static List<ModifierInfo> executionOutputScratchPad;
@@ -94,15 +219,63 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private long stalePredictionRejectCount;
         public int PredictionWindowTimeoutFrames { get; set; } = 180;
         public int OpenPredictionWindowCount => predictionWindows.Count;
+        public GASPredictionKey CurrentPredictionKey => currentPredictionKey;
         public event Action<GASPredictionKey, GASPredictionWindowStatus> OnPredictionWindowClosed;
+
+        private int runtimeThreadId;
+        private long runtimeThreadViolationCount;
+        public GASRuntimeThreadPolicy RuntimeThreadPolicy { get; set; } = GASRuntimeThreadPolicy.Disabled;
+        public int RuntimeThreadId => runtimeThreadId;
+        public long RuntimeThreadViolationCount => runtimeThreadViolationCount;
+
+        public void BindRuntimeThreadToCurrent()
+        {
+            runtimeThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        private void AssertRuntimeThread()
+        {
+            if (RuntimeThreadPolicy == GASRuntimeThreadPolicy.Disabled)
+            {
+                return;
+            }
+
+            int currentThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            if (runtimeThreadId == 0)
+            {
+                runtimeThreadId = currentThreadId;
+                return;
+            }
+
+            if (currentThreadId == runtimeThreadId)
+            {
+                return;
+            }
+
+            runtimeThreadViolationCount++;
+            if (RuntimeThreadPolicy == GASRuntimeThreadPolicy.Throw)
+            {
+                throw new InvalidOperationException($"AbilitySystemComponent accessed from thread {currentThreadId}; runtime thread is {runtimeThreadId}.");
+            }
+
+            GASLog.Warning(sb => sb.Append("AbilitySystemComponent accessed from thread ")
+                .Append(currentThreadId)
+                .Append("; runtime thread is ")
+                .Append(runtimeThreadId)
+                .Append('.'));
+        }
 
         public bool ValidateRuntimeIndexes()
         {
             if (activeEffectIndexByEffect.Count != activeEffects.Count ||
+                activeEffectByNetworkId.Count > activeEffects.Count ||
                 abilitySpecByHandle.Count != activatableAbilities.Count ||
                 abilitySpecIndexBySpec.Count != activatableAbilities.Count ||
                 tickingAbilityIndexBySpec.Count != tickingAbilities.Count ||
-                predictionWindowIndexByKey.Count != predictionWindows.Count)
+                predictionWindowIndexByKey.Count != predictionWindows.Count ||
+                grantedAbilitySpecsByEffect.Count > activeEffects.Count ||
+                abilityAppliedEffects.Count > activeEffects.Count)
             {
                 return false;
             }
@@ -116,15 +289,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     return false;
                 }
+
+                if (effect.NetworkId != 0 &&
+                    (!activeEffectByNetworkId.TryGetValue(effect.NetworkId, out var indexedByNetworkId) ||
+                     !ReferenceEquals(indexedByNetworkId, effect)))
+                {
+                    return false;
+                }
             }
 
             for (int i = 0; i < activatableAbilities.Count; i++)
             {
                 var spec = activatableAbilities[i];
                 if (spec == null ||
-                !abilitySpecByHandle.TryGetValue(spec.Handle, out var indexedSpec) ||
-                !ReferenceEquals(indexedSpec, spec) ||
-                !abilitySpecIndexBySpec.TryGetValue(spec, out int index) ||
+                    !abilitySpecByHandle.TryGetValue(spec.Handle, out var indexedSpec) ||
+                    !ReferenceEquals(indexedSpec, spec) ||
+                    !abilitySpecIndexBySpec.TryGetValue(spec, out int index) ||
                     index != i ||
                     (spec.GrantingEffect != null && !ValidateGrantedAbilityEffectIndex(spec)))
                 {
@@ -153,6 +333,46 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
+            foreach (var kvp in grantedAbilitySpecsByEffect)
+            {
+                if (kvp.Key == null ||
+                    kvp.Value == null ||
+                    !activeEffectIndexByEffect.ContainsKey(kvp.Key))
+                {
+                    return false;
+                }
+
+                var specs = kvp.Value;
+                for (int i = 0; i < specs.Count; i++)
+                {
+                    var spec = specs[i];
+                    if (spec == null ||
+                        !ReferenceEquals(spec.GrantingEffect, kvp.Key) ||
+                        !abilitySpecIndexBySpec.ContainsKey(spec))
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            foreach (var kvp in abilityAppliedEffects)
+            {
+                if (kvp.Key == null || kvp.Value == null)
+                {
+                    return false;
+                }
+
+                var effects = kvp.Value;
+                for (int i = 0; i < effects.Count; i++)
+                {
+                    var effect = effects[i];
+                    if (effect == null || !activeEffectIndexByEffect.ContainsKey(effect))
+                    {
+                        return false;
+                    }
+                }
+            }
+
             return true;
         }
 
@@ -177,6 +397,131 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             return false;
+        }
+
+        public GASRuntimeDiagnostics GetRuntimeDiagnostics(bool computeChecksum = true)
+        {
+            var listPoolStats = GetRuntimeListPoolStatistics();
+            var flags = GASRuntimeDiagnosticFlags.None;
+
+            if (!ValidateRuntimeIndexes())
+            {
+                flags |= GASRuntimeDiagnosticFlags.RuntimeIndexMismatch;
+            }
+
+            if (coreSpecHandles.Count != activatableAbilities.Count ||
+                coreState.AbilitySpecCount != activatableAbilities.Count)
+            {
+                flags |= GASRuntimeDiagnosticFlags.CoreAbilitySpecHandleMismatch;
+            }
+
+            if (coreActiveEffectHandles.Count > activeEffects.Count ||
+                coreState.ActiveEffectCount > activeEffects.Count)
+            {
+                flags |= GASRuntimeDiagnosticFlags.CoreActiveEffectHandleMismatch;
+            }
+
+            if (predictionWindows.Count > 0)
+            {
+                flags |= GASRuntimeDiagnosticFlags.OpenPredictionWindows;
+            }
+
+            int maxPredictionAge = 0;
+            int frame = Time.frameCount;
+            for (int i = 0; i < predictionWindows.Count; i++)
+            {
+                int age = frame - predictionWindows[i].OpenFrame;
+                if (age > maxPredictionAge)
+                {
+                    maxPredictionAge = age;
+                }
+
+                if (predictionWindows[i].TimeoutFrame > 0 && frame >= predictionWindows[i].TimeoutFrame)
+                {
+                    flags |= GASRuntimeDiagnosticFlags.PredictionWindowTimeoutRisk;
+                }
+            }
+
+            var pendingMask = PendingStateChangeMask;
+            if (pendingMask != AbilitySystemStateChangeMask.None || stateVersion != lastReplicatedStateVersion)
+            {
+                flags |= GASRuntimeDiagnosticFlags.PendingStateChanges;
+            }
+
+            if (pendingRemovedEffectNetIds.Count > 0)
+            {
+                flags |= GASRuntimeDiagnosticFlags.PendingRemovedEffects;
+            }
+
+            if (pendingRemovedAbilityDefs.Count > 0)
+            {
+                flags |= GASRuntimeDiagnosticFlags.PendingRemovedAbilities;
+            }
+
+            if (dirtyAttributeNames.Count > 0)
+            {
+                flags |= GASRuntimeDiagnosticFlags.DirtyAttributes;
+            }
+
+            if (pendingAddedTags.Count > 0 || pendingRemovedTags.Count > 0)
+            {
+                flags |= GASRuntimeDiagnosticFlags.PendingTagChanges;
+            }
+
+            if (listPoolStats.GrantedAbilitySpecListMisses > 0 ||
+                listPoolStats.AbilityAppliedEffectListMisses > 0)
+            {
+                flags |= GASRuntimeDiagnosticFlags.RuntimeListPoolMisses;
+            }
+
+            if (listPoolStats.GrantedAbilitySpecListDiscards > 0 ||
+                listPoolStats.AbilityAppliedEffectListDiscards > 0)
+            {
+                flags |= GASRuntimeDiagnosticFlags.RuntimeListPoolDiscards;
+            }
+
+            if ((MaxPooledGrantedAbilitySpecLists > 0 &&
+                 listPoolStats.GrantedAbilitySpecListPoolSize >= MaxPooledGrantedAbilitySpecLists) ||
+                (MaxPooledAbilityAppliedEffectLists > 0 &&
+                 listPoolStats.AbilityAppliedEffectListPoolSize >= MaxPooledAbilityAppliedEffectLists))
+            {
+                flags |= GASRuntimeDiagnosticFlags.RuntimeListPoolAtCapacity;
+            }
+
+            if (MaxRetainedGrantedAbilitySpecListCapacity < DefaultGrantedAbilitySpecListCapacity ||
+                MaxRetainedAbilityAppliedEffectListCapacity < DefaultAbilityAppliedEffectListCapacity)
+            {
+                flags |= GASRuntimeDiagnosticFlags.RuntimeListPoolInvalidCapacity;
+            }
+
+            return new GASRuntimeDiagnostics
+            {
+                Flags = flags,
+                AbilitySpecCount = activatableAbilities.Count,
+                ActiveEffectCount = activeEffects.Count,
+                AttributeSetCount = attributeSets.Count,
+                DirtyAttributeCount = dirtyAttributeNames.Count,
+                OpenPredictionWindowCount = predictionWindows.Count,
+                MaxOpenPredictionWindowAgeFrames = maxPredictionAge,
+                StateVersion = stateVersion,
+                LastReplicatedStateVersion = lastReplicatedStateVersion,
+                PendingStateChangeMask = pendingMask,
+                ReplicatedStateChecksum = computeChecksum ? ComputeReplicatedStateChecksum() : 0u,
+                CoreAbilitySpecCount = coreState.AbilitySpecCount,
+                CoreActiveEffectCount = coreState.ActiveEffectCount,
+                CoreAttributeCount = coreState.AttributeCount,
+                CoreModifierCount = coreState.ModifierCount,
+                CoreSpecHandleCount = coreSpecHandles.Count,
+                CoreActiveEffectHandleCount = coreActiveEffectHandles.Count,
+                RuntimeThreadId = runtimeThreadId,
+                CurrentThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId,
+                RuntimeThreadViolationCount = runtimeThreadViolationCount,
+                PendingRemovedEffectCount = pendingRemovedEffectNetIds.Count,
+                PendingRemovedAbilityDefinitionCount = pendingRemovedAbilityDefs.Count,
+                PendingAddedTagCount = pendingAddedTags.Count,
+                PendingRemovedTagCount = pendingRemovedTags.Count,
+                ListPoolStatistics = listPoolStats
+            };
         }
 
         //  Attribute snapshot for rolling back instant-effect attribute changes on prediction failure.
@@ -336,6 +681,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public AbilitySystemComponent(IFactory<IGameplayEffectContext> effectContextFactory)
         {
             this.EffectContextFactory = effectContextFactory;
+            BindRuntimeThreadToCurrent();
             int entityId = System.Threading.Interlocked.Increment(ref s_NextCoreEntityId);
             coreState = new GASAbilitySystemState(new GASEntityId(entityId));
             core = new GASAbilitySystemFacade(coreState);
@@ -344,6 +690,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void InitAbilityActorInfo(object owner, object avatar)
         {
+            AssertRuntimeThread();
             OwnerActor = owner;
             AvatarActor = avatar;
             OwnerUnityObject = owner as UnityEngine.Object;
@@ -373,6 +720,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             EnsureListCapacity(attributeSets, Math.Min(attributeCapacity, 8));
             EnsureListCapacity(activeEffects, activeEffectCapacity);
             EnsureDictionaryCapacity(activeEffectIndexByEffect, activeEffectCapacity);
+            EnsureDictionaryCapacity(activeEffectByNetworkId, activeEffectCapacity);
             EnsureListCapacity(activatableAbilities, abilityCapacity);
             EnsureDictionaryCapacity(abilitySpecByHandle, abilityCapacity);
             EnsureDictionaryCapacity(abilitySpecIndexBySpec, abilityCapacity);
@@ -586,12 +934,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private List<GameplayAbilitySpec> RentGrantedAbilitySpecList()
         {
+            grantedAbilitySpecListGets++;
             if (grantedAbilitySpecListPool.Count > 0)
             {
                 return grantedAbilitySpecListPool.Pop();
             }
 
-            return new List<GameplayAbilitySpec>(2);
+            grantedAbilitySpecListMisses++;
+            return new List<GameplayAbilitySpec>(DefaultGrantedAbilitySpecListCapacity);
         }
 
         private void ReturnGrantedAbilitySpecList(List<GameplayAbilitySpec> specs)
@@ -602,7 +952,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             specs.Clear();
+            if (MaxPooledGrantedAbilitySpecLists <= 0 ||
+                grantedAbilitySpecListPool.Count >= MaxPooledGrantedAbilitySpecLists ||
+                specs.Capacity > MaxRetainedGrantedAbilitySpecListCapacity)
+            {
+                grantedAbilitySpecListDiscards++;
+                return;
+            }
+
             grantedAbilitySpecListPool.Push(specs);
+            if (grantedAbilitySpecListPool.Count > peakGrantedAbilitySpecListPoolSize)
+            {
+                peakGrantedAbilitySpecListPoolSize = grantedAbilitySpecListPool.Count;
+            }
         }
 
         private void ReturnAllGrantedAbilitySpecLists()
@@ -615,8 +977,159 @@ namespace CycloneGames.GameplayAbilities.Runtime
             grantedAbilitySpecsByEffect.Clear();
         }
 
+        private List<ActiveGameplayEffect> RentAbilityAppliedEffectList()
+        {
+            abilityAppliedEffectListGets++;
+            if (abilityAppliedEffectListPool.Count > 0)
+            {
+                return abilityAppliedEffectListPool.Pop();
+            }
+
+            abilityAppliedEffectListMisses++;
+            return new List<ActiveGameplayEffect>(DefaultAbilityAppliedEffectListCapacity);
+        }
+
+        private void ReturnAbilityAppliedEffectList(List<ActiveGameplayEffect> effects)
+        {
+            if (effects == null)
+            {
+                return;
+            }
+
+            effects.Clear();
+            if (MaxPooledAbilityAppliedEffectLists <= 0 ||
+                abilityAppliedEffectListPool.Count >= MaxPooledAbilityAppliedEffectLists ||
+                effects.Capacity > MaxRetainedAbilityAppliedEffectListCapacity)
+            {
+                abilityAppliedEffectListDiscards++;
+                return;
+            }
+
+            abilityAppliedEffectListPool.Push(effects);
+            if (abilityAppliedEffectListPool.Count > peakAbilityAppliedEffectListPoolSize)
+            {
+                peakAbilityAppliedEffectListPoolSize = abilityAppliedEffectListPool.Count;
+            }
+        }
+
+        private void ReturnAllAbilityAppliedEffectLists()
+        {
+            foreach (var kvp in abilityAppliedEffects)
+            {
+                ReturnAbilityAppliedEffectList(kvp.Value);
+            }
+
+            abilityAppliedEffects.Clear();
+        }
+
+        public void PrewarmRuntimePools(int grantedAbilitySpecLists, int abilityAppliedEffectLists)
+        {
+            PrewarmGrantedAbilitySpecListPool(grantedAbilitySpecLists);
+            PrewarmAbilityAppliedEffectListPool(abilityAppliedEffectLists);
+        }
+
+        private void PrewarmGrantedAbilitySpecListPool(int count)
+        {
+            int target = count;
+            if (target < 0)
+            {
+                target = 0;
+            }
+
+            if (target > MaxPooledGrantedAbilitySpecLists)
+            {
+                target = MaxPooledGrantedAbilitySpecLists;
+            }
+
+            if (target < 0)
+            {
+                target = 0;
+            }
+
+            while (grantedAbilitySpecListPool.Count < target)
+            {
+                grantedAbilitySpecListPool.Push(new List<GameplayAbilitySpec>(DefaultGrantedAbilitySpecListCapacity));
+            }
+
+            if (grantedAbilitySpecListPool.Count > peakGrantedAbilitySpecListPoolSize)
+            {
+                peakGrantedAbilitySpecListPoolSize = grantedAbilitySpecListPool.Count;
+            }
+        }
+
+        private void PrewarmAbilityAppliedEffectListPool(int count)
+        {
+            int target = count;
+            if (target < 0)
+            {
+                target = 0;
+            }
+
+            if (target > MaxPooledAbilityAppliedEffectLists)
+            {
+                target = MaxPooledAbilityAppliedEffectLists;
+            }
+
+            if (target < 0)
+            {
+                target = 0;
+            }
+
+            while (abilityAppliedEffectListPool.Count < target)
+            {
+                abilityAppliedEffectListPool.Push(new List<ActiveGameplayEffect>(DefaultAbilityAppliedEffectListCapacity));
+            }
+
+            if (abilityAppliedEffectListPool.Count > peakAbilityAppliedEffectListPoolSize)
+            {
+                peakAbilityAppliedEffectListPoolSize = abilityAppliedEffectListPool.Count;
+            }
+        }
+
+        public GASRuntimeListPoolStatistics GetRuntimeListPoolStatistics()
+        {
+            return new GASRuntimeListPoolStatistics
+            {
+                GrantedAbilitySpecListPoolSize = grantedAbilitySpecListPool.Count,
+                AbilityAppliedEffectListPoolSize = abilityAppliedEffectListPool.Count,
+                PeakGrantedAbilitySpecListPoolSize = peakGrantedAbilitySpecListPoolSize,
+                PeakAbilityAppliedEffectListPoolSize = peakAbilityAppliedEffectListPoolSize,
+                GrantedAbilitySpecListGets = grantedAbilitySpecListGets,
+                GrantedAbilitySpecListMisses = grantedAbilitySpecListMisses,
+                GrantedAbilitySpecListDiscards = grantedAbilitySpecListDiscards,
+                AbilityAppliedEffectListGets = abilityAppliedEffectListGets,
+                AbilityAppliedEffectListMisses = abilityAppliedEffectListMisses,
+                AbilityAppliedEffectListDiscards = abilityAppliedEffectListDiscards,
+                MaxPooledGrantedAbilitySpecLists = MaxPooledGrantedAbilitySpecLists,
+                MaxPooledAbilityAppliedEffectLists = MaxPooledAbilityAppliedEffectLists,
+                MaxRetainedGrantedAbilitySpecListCapacity = MaxRetainedGrantedAbilitySpecListCapacity,
+                MaxRetainedAbilityAppliedEffectListCapacity = MaxRetainedAbilityAppliedEffectListCapacity
+            };
+        }
+
+        public void ResetRuntimeListPoolStatistics()
+        {
+            peakGrantedAbilitySpecListPoolSize = grantedAbilitySpecListPool.Count;
+            peakAbilityAppliedEffectListPoolSize = abilityAppliedEffectListPool.Count;
+            grantedAbilitySpecListGets = 0;
+            grantedAbilitySpecListMisses = 0;
+            grantedAbilitySpecListDiscards = 0;
+            abilityAppliedEffectListGets = 0;
+            abilityAppliedEffectListMisses = 0;
+            abilityAppliedEffectListDiscards = 0;
+        }
+
+        public void ClearIdleRuntimeListPools()
+        {
+            grantedAbilitySpecListPool.Clear();
+            abilityAppliedEffectListPool.Clear();
+            peakGrantedAbilitySpecListPoolSize = 0;
+            peakAbilityAppliedEffectListPoolSize = 0;
+        }
+
         public void AddAttributeSet(AttributeSet set)
         {
+            AssertRuntimeThread();
             if (set != null && !attributeSets.Contains(set))
             {
                 attributeSets.Add(set);
@@ -644,6 +1157,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void RemoveAttributeSet(AttributeSet set)
         {
+            AssertRuntimeThread();
             if (set == null || !attributeSets.Contains(set)) return;
 
             foreach (var attr in set.GetAttributes())
@@ -662,6 +1176,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void MarkAttributeDirty(GameplayAttribute attribute)
         {
+            AssertRuntimeThread();
             if (attribute != null && !attribute.IsDirty)
             {
                 attribute.IsDirty = true;
@@ -683,6 +1198,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public GameplayAbilitySpec GrantAbility(GameplayAbility ability, int level = 1, int replicatedHandle = 0)
         {
+            AssertRuntimeThread();
             if (ability == null) return null;
 
             var spec = GameplayAbilitySpec.Create(ability, level, replicatedHandle);
@@ -717,6 +1233,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void ClearAbility(GameplayAbilitySpec spec)
         {
+            AssertRuntimeThread();
             if (spec == null) return;
 
             var removedDef = spec.AbilityCDO ?? spec.Ability;
@@ -744,6 +1261,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // --- Ability Activation Flow ---
         public bool TryActivateAbility(GameplayAbilitySpec spec)
         {
+            AssertRuntimeThread();
             if (spec == null || spec.IsActive) return false;
 
             var ability = spec.GetPrimaryInstance();
@@ -805,6 +1323,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void ServerReceiveTryActivateAbility(int specHandle, GASPredictionKey predictionKey)
         {
+            AssertRuntimeThread();
             var spec = FindSpecByHandle(specHandle);
             if (spec == null)
             {
@@ -821,6 +1340,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void ClientReceiveActivationSucceeded(int specHandle, GASPredictionKey predictionKey)
         {
+            AssertRuntimeThread();
             var spec = FindSpecByHandle(specHandle);
             ClientActivateAbilitySucceed(spec, predictionKey);
         }
@@ -831,6 +1351,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void ClientReceiveActivationFailed(int specHandle, GASPredictionKey predictionKey)
         {
+            AssertRuntimeThread();
             var spec = FindSpecByHandle(specHandle);
             ClientActivateAbilityFailed(spec, predictionKey);
         }
@@ -842,6 +1363,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void ClientReceiveEffectApplied(in GASEffectReplicationData data)
         {
+            AssertRuntimeThread();
             if (ApplyAuthoritativeEffectReplication(data, allowCreate: true))
             {
                 OnClientEffectApplied?.Invoke(data);
@@ -853,6 +1375,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void ClientReceiveEffectUpdated(in GASEffectReplicationData data)
         {
+            AssertRuntimeThread();
             ApplyAuthoritativeEffectReplication(data, allowCreate: true);
         }
 
@@ -861,19 +1384,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void ClientReceiveEffectRemoved(int effectNetId)
         {
-            for (int i = activeEffects.Count - 1; i >= 0; i--)
+            AssertRuntimeThread();
+            var effect = FindActiveEffectByNetworkId(effectNetId);
+            if (effect == null)
             {
-                var effect = activeEffects[i];
-                if (effect.NetworkId == effectNetId)
-                {
-                    using (new NetworkReplicationScope(this))
-                    {
-                        RemoveActiveEffectAtIndex(i);
-                        RemoveFromStackingIndex(effect);
-                        OnEffectRemoved(effect, true);
-                    }
-                    return;
-                }
+                return;
+            }
+
+            if (!TryFindActiveEffectIndex(effect, out int index))
+            {
+                return;
+            }
+
+            using (new NetworkReplicationScope(this))
+            {
+                RemoveActiveEffectAtIndex(index);
+                RemoveFromStackingIndex(effect);
+                OnEffectRemoved(effect, true);
             }
         }
 
@@ -882,6 +1409,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void ClientReceiveGameplayCue(GameplayTag cueTag, EGameplayCueEvent eventType, in GASCueNetParams cueParams)
         {
+            AssertRuntimeThread();
             var resolver = GASServices.ReplicationResolver;
             AbilitySystemComponent source = null;
             AbilitySystemComponent target = null;
@@ -915,6 +1443,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void ClientReceiveStateDelta(GASAbilitySystemStateDeltaBuffer delta)
         {
+            AssertRuntimeThread();
             ApplyStateDelta(delta);
         }
 
@@ -943,16 +1472,42 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return null;
             }
 
-            for (int i = activeEffects.Count - 1; i >= 0; i--)
+            return activeEffectByNetworkId.TryGetValue(networkId, out var effect) &&
+                effect != null &&
+                !effect.IsExpired
+                    ? effect
+                    : null;
+        }
+
+        private void SetActiveEffectNetworkId(ActiveGameplayEffect effect, int networkId)
+        {
+            if (effect == null)
             {
-                var effect = activeEffects[i];
-                if (!effect.IsExpired && effect.NetworkId == networkId)
-                {
-                    return effect;
-                }
+                return;
             }
 
-            return null;
+            int oldNetworkId = effect.NetworkId;
+            if (oldNetworkId == networkId)
+            {
+                if (networkId != 0)
+                {
+                    activeEffectByNetworkId[networkId] = effect;
+                }
+                return;
+            }
+
+            if (oldNetworkId != 0 &&
+                activeEffectByNetworkId.TryGetValue(oldNetworkId, out var indexed) &&
+                ReferenceEquals(indexed, effect))
+            {
+                activeEffectByNetworkId.Remove(oldNetworkId);
+            }
+
+            effect.NetworkId = networkId;
+            if (networkId != 0)
+            {
+                activeEffectByNetworkId[networkId] = effect;
+            }
         }
 
         /// <summary>
@@ -1383,6 +1938,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var predictionKey = GASPredictionKey.NewKey(coreState.Entity, inputSequence);
             RegisterPredictionWindow(spec, predictionKey, parentPredictionKey);
             return predictionKey;
+        }
+
+        public GASPredictionScope BeginPredictionScope(GASPredictionKey predictionKey)
+        {
+            return new GASPredictionScope(this, predictionKey);
         }
 
         public bool HasOpenPredictionWindow(GASPredictionKey predictionKey)
@@ -1933,6 +2493,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             out TargetData targetData,
             out TargetDataValidationResult result)
         {
+            AssertRuntimeThread();
             if (TryReceiveTargetDataFromClient(
                 specHandle,
                 predictionKey,
@@ -1957,6 +2518,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void ClientReceiveTargetDataAccepted(int specHandle, GASPredictionKey predictionKey)
         {
+            AssertRuntimeThread();
             var spec = FindSpecByHandle(specHandle);
             spec?.GetPrimaryInstance()?.AcceptTasksForPredictionKey(predictionKey);
             GameplayCueManager.Default.AcceptPredictedCues(this, predictionKey);
@@ -1964,6 +2526,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void ClientReceiveTargetDataRejected(int specHandle, GASPredictionKey predictionKey, TargetDataValidationResult reason)
         {
+            AssertRuntimeThread();
             var spec = FindSpecByHandle(specHandle);
             spec?.GetPrimaryInstance()?.CancelTasksForPredictionKey(predictionKey);
             GameplayCueManager.Default.RemovePredictedCues(this, predictionKey).Forget();
@@ -2085,7 +2648,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 created = true;
             }
 
-            existing.NetworkId = data.NetworkId != 0 ? data.NetworkId : existing.NetworkId;
+            if (data.NetworkId != 0)
+            {
+                SetActiveEffectNetworkId(existing, data.NetworkId);
+            }
             TryApplyReplicatedEffectUpdate(
                 existing,
                 data.Level,
@@ -2393,23 +2959,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     // UE5: RemoveGameplayEffectsAfterAbilityEnds --remove effects this ability applied
                     if (abilityAppliedEffects.TryGetValue(ability, out var appliedEffects))
                     {
-                        abilityAppliedEffectRemovalSet.Clear();
+                        abilityAppliedEffectRemovalScratch.Clear();
                         for (int ei = 0; ei < appliedEffects.Count; ei++)
                         {
                             if (!appliedEffects[ei].IsExpired)
                             {
-                                abilityAppliedEffectRemovalSet.Add(appliedEffects[ei]);
+                                abilityAppliedEffectRemovalScratch.Add(appliedEffects[ei]);
                             }
                         }
 
-                        if (abilityAppliedEffectRemovalSet.Count > 0)
+                        if (abilityAppliedEffectRemovalScratch.Count > 0)
                         {
                             using (Pools.ListPool<ActiveGameplayEffect>.Get(out var removed))
                             {
-                                // Single backward pass over activeEffects: O(n) total instead of O(n^2)
+                                // Small contiguous scratch is usually faster than hashing for per-ability applied effects.
                                 for (int i = activeEffects.Count - 1; i >= 0; i--)
                                 {
-                                    if (abilityAppliedEffectRemovalSet.Contains(activeEffects[i]))
+                                    if (ContainsReference(abilityAppliedEffectRemovalScratch, activeEffects[i]))
                                     {
                                         removed.Add(activeEffects[i]);
                                         RemoveActiveEffectAtIndex(i);
@@ -2420,9 +2986,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                             }
                         }
 
-                        abilityAppliedEffectRemovalSet.Clear();
-                        appliedEffects.Clear();
+                        abilityAppliedEffectRemovalScratch.Clear();
                         abilityAppliedEffects.Remove(ability);
+                        ReturnAbilityAppliedEffectList(appliedEffects);
                     }
                 }
 
@@ -2446,6 +3012,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void ApplyGameplayEffectSpecToSelf(GameplayEffectSpec spec)
         {
+            AssertRuntimeThread();
             spec.SetTarget(this);
 
             // If we are in a prediction scope, tag the spec's context
@@ -2507,7 +3074,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 if (!abilityAppliedEffects.TryGetValue(spec.Context.AbilityInstance, out var list))
                 {
-                    list = new List<ActiveGameplayEffect>(4);
+                    list = RentAbilityAppliedEffectList();
                     abilityAppliedEffects[spec.Context.AbilityInstance] = list;
                 }
                 list.Add(newActiveEffect);
@@ -2637,6 +3204,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         // --- Tick and State Management ---
         public void Tick(float deltaTime, bool isServer)
         {
+            AssertRuntimeThread();
             for (int i = tickingAbilities.Count - 1; i >= 0; i--)
             {
                 var spec = tickingAbilities[i];
@@ -2717,6 +3285,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void RemoveActiveEffectAtIndex(int index)
         {
             var removedEffect = activeEffects[index];
+            if (removedEffect.NetworkId != 0 &&
+                activeEffectByNetworkId.TryGetValue(removedEffect.NetworkId, out var indexed) &&
+                ReferenceEquals(indexed, removedEffect))
+            {
+                activeEffectByNetworkId.Remove(removedEffect.NetworkId);
+            }
+
             int lastIndex = activeEffects.Count - 1;
             if (index != lastIndex)
             {
@@ -2726,6 +3301,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             activeEffects.RemoveAt(lastIndex);
             activeEffectIndexByEffect.Remove(removedEffect);
+        }
+
+        private void RebuildActiveEffectNetworkIdIndex()
+        {
+            activeEffectByNetworkId.Clear();
+            for (int i = 0; i < activeEffects.Count; i++)
+            {
+                var effect = activeEffects[i];
+                if (effect != null && !effect.IsExpired && effect.NetworkId != 0)
+                {
+                    activeEffectByNetworkId[effect.NetworkId] = effect;
+                }
+            }
         }
 
         private bool TryFindActiveEffectIndex(ActiveGameplayEffect effect, out int index)
@@ -3089,7 +3677,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (effect.NetworkId == 0)
             {
-                effect.NetworkId = System.Threading.Interlocked.Increment(ref s_NextEffectNetworkId);
+                SetActiveEffectNetworkId(effect, System.Threading.Interlocked.Increment(ref s_NextEffectNetworkId));
+            }
+            else
+            {
+                SetActiveEffectNetworkId(effect, effect.NetworkId);
             }
 
             var repData = CreateEffectReplicationData(effect);
@@ -3218,6 +3810,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <returns>True if the effect was found and its duration was changed.</returns>
         public bool ChangeActiveEffectDuration(ActiveGameplayEffect effect, float newDuration)
         {
+            AssertRuntimeThread();
             if (effect == null || effect.IsExpired) return false;
             if (effect.Spec.Def.DurationPolicy != EDurationPolicy.HasDuration) return false;
 
@@ -3233,6 +3826,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public bool TryRemoveActiveEffect(ActiveGameplayEffect effect)
         {
+            AssertRuntimeThread();
             if (effect == null)
             {
                 return false;
@@ -3251,6 +3845,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public bool TryApplyActiveEffectStackChange(ActiveGameplayEffect effect, int newStackCount)
         {
+            AssertRuntimeThread();
             if (effect == null || effect.IsExpired)
             {
                 return false;
@@ -3279,6 +3874,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             float[] setByCallerValues,
             int setByCallerCount)
         {
+            AssertRuntimeThread();
             if (effect == null || effect.IsExpired)
             {
                 return false;
@@ -3549,6 +4145,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             activeEffects.Clear();
             activeEffectIndexByEffect.Clear();
+            activeEffectByNetworkId.Clear();
             attributeSets.Clear();
             attributes.Clear();
             activatableAbilities.Clear();
@@ -3583,11 +4180,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
             coreSpecHandles.Clear();
             coreActiveEffectHandles.Clear();
             coreState.Reset(default);
-            abilityAppliedEffects.Clear();
-            abilityAppliedEffectRemovalSet.Clear();
+            ReturnAllAbilityAppliedEffectLists();
+            ClearIdleRuntimeListPools();
+            ResetRuntimeListPoolStatistics();
+            abilityAppliedEffectRemovalScratch.Clear();
             triggerEventAbilities.Clear();
             triggerTagAddedAbilities.Clear();
             triggerTagRemovedAbilities.Clear();
+            dirtyAttributeValueSnapshots.Clear();
             pendingRemovedEffectNetIds.Clear();
             pendingRemovedAbilityDefs.Clear();
             stateVersion = 0;
@@ -3734,6 +4334,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (effects.Count == 0)
                 grantedTagIndexToEffects.Remove(runtimeIndex);
         }
+
+        private static bool ContainsReference<T>(List<T> list, T item) where T : class
+        {
+            if (list == null)
+                return false;
+
+            for (int i = 0; i < list.Count; i++)
+            {
+                if (ReferenceEquals(list[i], item))
+                    return true;
+            }
+
+            return false;
+        }
         private void ApplyModifier(GameplayEffectSpec spec, GameplayAttribute attribute, ModifierInfo mod, float magnitude, bool isFromExecution)
         {
             if (attribute == null)
@@ -3789,6 +4403,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private ulong lastReplicatedStateVersion;
         private uint outgoingDeltaSequence;
         private readonly HashSet<string> dirtyAttributeNames = new HashSet<string>(StringComparer.Ordinal);
+        private readonly List<GameplayAttribute> dirtyAttributeValueSnapshots = new List<GameplayAttribute>(32);
         private readonly HashSet<GameplayTag> pendingAddedTags = new HashSet<GameplayTag>();
         private readonly HashSet<GameplayTag> pendingRemovedTags = new HashSet<GameplayTag>();
         // Delta tracking: NetworkIds of effects removed since last snapshot
@@ -3825,6 +4440,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void CapturePendingStateDeltaNonAlloc(GASAbilitySystemStateDeltaBuffer buffer, Func<ActiveGameplayEffect, int> effectInstanceIdResolver = null)
         {
+            AssertRuntimeThread();
             if (buffer == null)
             {
                 return;
@@ -3875,7 +4491,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 buffer.ChangeMask |= AbilitySystemStateChangeMask.Attributes;
                 buffer.AttributeCount = attributeStructureDirty
                     ? FillAttributes(buffer.EnsureAttributeCapacity(CountAttributes()))
-                    : FillDirtyAttributes(buffer.EnsureAttributeCapacity(dirtyAttributeNames.Count));
+                : FillDirtyAttributes(buffer.EnsureAttributeCapacity(dirtyAttributeValueSnapshots.Count));
             }
 
             if (tagsDirty)
@@ -3989,9 +4605,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private int FillDirtyAttributes(GASAttributeStateData[] entries)
         {
             int index = 0;
-            foreach (var attributeName in dirtyAttributeNames)
+            for (int i = 0; i < dirtyAttributeValueSnapshots.Count; i++)
             {
-                if (attributes.TryGetValue(attributeName, out var attribute))
+                var attribute = dirtyAttributeValueSnapshots[i];
+                if (attribute != null &&
+                    attributes.TryGetValue(attribute.Name, out var registeredAttribute) &&
+                    ReferenceEquals(registeredAttribute, attribute))
                 {
                     entries[index++] = new GASAttributeStateData(attribute.Name, attribute.BaseValue, attribute.CurrentValue);
                 }
@@ -4018,6 +4637,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             attributeStructureDirty = false;
             tagsDirty = false;
             dirtyAttributeNames.Clear();
+            dirtyAttributeValueSnapshots.Clear();
             pendingAddedTags.Clear();
             pendingRemovedTags.Clear();
             pendingRemovedEffectNetIds.Clear();
@@ -4026,6 +4646,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void ConsumePendingStateChanges()
         {
+            AssertRuntimeThread();
             ClearPendingStateChanges();
         }
 
@@ -4048,7 +4669,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
 
-            dirtyAttributeNames.Add(attribute.Name);
+            if (dirtyAttributeNames.Add(attribute.Name))
+            {
+                dirtyAttributeValueSnapshots.Add(attribute);
+            }
             stateVersion++;
         }
 
@@ -4179,16 +4803,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void RemoveActiveEffectByNetworkId(int netId)
         {
-            for (int j = activeEffects.Count - 1; j >= 0; j--)
+            var toRemove = FindActiveEffectByNetworkId(netId);
+            if (toRemove == null)
             {
-                var toRemove = activeEffects[j];
-                if (toRemove.NetworkId == netId)
-                {
-                    RemoveActiveEffectAtIndex(j);
-                    RemoveFromStackingIndex(toRemove);
-                    OnEffectRemoved(toRemove, true);
-                    break;
-                }
+                return;
+            }
+
+            if (TryFindActiveEffectIndex(toRemove, out int index))
+            {
+                RemoveActiveEffectAtIndex(index);
+                RemoveFromStackingIndex(toRemove);
+                OnEffectRemoved(toRemove, true);
             }
         }
 

@@ -8,6 +8,8 @@
 
 无论你正在开发 RPG、MOBA、动作游戏，或是任何包含复杂角色技能、Buff 和属性的项目——本框架都提供了可投入生产的、可扩展的基础设施。
 
+<img src="./Documents~/DemoPreview_1.gif" alt="Demo Preview" style="width: 100%; max-width: 800px;" />
+
 ---
 
 ## 核心特性
@@ -1374,7 +1376,7 @@ GASDebugOverlay.SetPriority(bossASC, 50);
 
 | 设置 | 默认值 | 说明 |
 |---|---|---|
-| **TagColorRules** | （空） | 有序的子串→颜色规则列表。首个匹配生效。 |
+| **SemanticTagClassifications** | 4 个分类 (Buff, Debuff, CC, Status) | 标签语义分类。定义关键词并为每个分类分配颜色。标签根据关键词匹配来确定语义含义和显示颜色。 |
 | **DebuffTagSubstrings** | （空） | 标识减益效果的子串（如 `"Debuff"`） |
 | **PrimaryAttributeSubstrings** | Health, HP, Shield, Mana, MP, Stamina, SP, Energy | 折叠面板摘要中优先显示的属性名关键词列表 |
 | **PanelAlpha** | 0.8 | 背景透明度（运行时可调） |
@@ -1448,7 +1450,7 @@ GASDebugOverlay.SetPriority(bossASC, 50);
 
 - 演示：[https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
 - <img src="./Documents~/DemoPreview_2.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
-- <img src="./Documents~/DemoPreview_1.png" alt="演示预览" style="width: 100%; max-width: 800px;" />
+- <img src="./Documents~/DemoPreview_1.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
 
 ---
 

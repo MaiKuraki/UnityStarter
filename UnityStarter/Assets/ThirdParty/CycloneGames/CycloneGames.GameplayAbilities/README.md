@@ -8,6 +8,8 @@ A powerful, data-driven Gameplay Ability System (GAS) for Unity, inspired by Unr
 
 Whether you are building an RPG, MOBA, action game, or any project with complex character abilities, buffs, and stats — this framework provides a production-ready, scalable foundation.
 
+<img src="./Documents~/DemoPreview_1.gif" alt="Demo Preview" style="width: 100%; max-width: 800px;" />
+
 ---
 
 ## Key Features
@@ -1374,7 +1376,7 @@ A `ScriptableObject` that controls the overlay's visual appearance and behavior.
 
 | Setting | Default | Description |
 |---|---|---|
-| **TagColorRules** | (empty) | Ordered list of substring→color rules for tag display. First match wins. |
+| **SemanticTagClassifications** | 4 categories (Buff, Debuff, CC, Status) | Semantic categories for tag coloring. Define keywords and assign colors per category. Tags are matched against keywords to determine semantic meaning and display color. |
 | **DebuffTagSubstrings** | (empty) | Substrings to identify debuff effects (e.g., `"Debuff"`) |
 | **PrimaryAttributeSubstrings** | Health, HP, Shield, Mana, MP, Stamina, SP, Energy | Priority list for selecting which attribute to show in collapsed panel summary |
 | **PanelAlpha** | 0.8 | Background transparency (adjustable at runtime) |
@@ -1448,7 +1450,7 @@ Demonstrates: attribute-driven events, dynamic effect creation in code, multi-mo
 
 - Demo: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
 - <img src="./Documents~/DemoPreview_2.gif" alt="Demo Preview" style="width: 100%; max-width: 800px;" />
-- <img src="./Documents~/DemoPreview_1.png" alt="Demo Preview" style="width: 100%; max-width: 800px;" />
+- <img src="./Documents~/DemoPreview_1.gif" alt="Demo Preview" style="width: 100%; max-width: 800px;" />
 
 ---
 
