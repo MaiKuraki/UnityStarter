@@ -1,4 +1,4 @@
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 using UnityEditor;
 
 namespace CycloneGames.GameplayTags.Editor

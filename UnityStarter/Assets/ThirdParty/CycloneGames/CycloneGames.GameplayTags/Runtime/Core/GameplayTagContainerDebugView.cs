@@ -1,7 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.Diagnostics;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
    internal class GameplayTagContainerDebugView
    {

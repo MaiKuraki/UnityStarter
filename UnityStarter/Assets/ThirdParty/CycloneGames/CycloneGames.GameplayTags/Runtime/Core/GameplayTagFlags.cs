@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
    [Flags]
    public enum GameplayTagFlags

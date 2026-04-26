@@ -4,7 +4,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
     /// <summary>
     /// Central manager for the GameplayTag system. Uses an immutable Snapshot/Copy-on-Write

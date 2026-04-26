@@ -3,8 +3,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
+using CycloneGames.GameplayTags.Core;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Unity.Runtime
 {
     internal static class GameplayTagUnityPlatformBootstrap
     {

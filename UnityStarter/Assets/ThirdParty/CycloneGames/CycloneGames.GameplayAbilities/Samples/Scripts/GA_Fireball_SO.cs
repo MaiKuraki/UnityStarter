@@ -1,5 +1,5 @@
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 using CycloneGames.Logger;
 using UnityEngine;
 

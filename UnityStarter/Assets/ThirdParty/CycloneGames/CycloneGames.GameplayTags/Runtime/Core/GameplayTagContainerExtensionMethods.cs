@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
    public static class GameplayTagContainerExtensionMethods
    {

@@ -2,7 +2,7 @@ using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 using System.Text;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayTags.Editor
 {
