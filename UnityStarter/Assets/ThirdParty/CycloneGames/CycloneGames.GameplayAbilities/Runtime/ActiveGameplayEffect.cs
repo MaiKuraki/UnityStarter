@@ -250,14 +250,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Periodic effect handling --skip entirely when inhibited (OngoingTagRequirements not met).
             // IsInhibited is kept current by AbilitySystemComponent.RecalculateDirtyAttributes(),
             // which runs at the START of each tick (before effects are ticked) when tags change.
-            if (!IsExpired && !IsInhibited && periodTimer >= 0d)
+            if (!IsExpired && !IsInhibited && cachedPeriod > 0d)
             {
                 periodTimer -= deltaTime64;
-                if (periodTimer <= 0d)
+                while (periodTimer <= 0d)
                 {
                     asc.ExecuteInstantEffect(this.Spec);
-                    // Carry over leftover time to prevent drift
+                    // Carry over leftover time to prevent drift; the while loop ensures we
+                    // fire once per elapsed period and leave periodTimer in [0, cachedPeriod).
                     periodTimer += cachedPeriod;
+                    if (cachedPeriod <= 0d) break; // safety: avoid infinite loop if period is zero
                 }
             }
 
