@@ -17,7 +17,7 @@ namespace CycloneGames.Networking.GAS
     /// 5. Initial state data for late-join / reconnect
     /// 6. Prediction key lifecycle
     /// 
-    /// Designed to work with ANY transport (Mirror, Mirage, custom) via INetworkManager.
+    /// Designed to work with any transport through INetworkManager.
     /// </summary>
     public sealed class NetworkedAbilityBridge : IDisposable
     {

@@ -12,7 +12,9 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
         None,
         OutOfOrderSequence,
         BaseVersionMismatch,
-        ChecksumMismatch
+        ChecksumMismatch,
+        TargetNetworkIdMismatch,
+        InvalidVersionRange
     }
 
     public readonly struct ReplicatedAbilitySystemStateDelta
@@ -114,6 +116,12 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
         private readonly Dictionary<int, EffectReplicationData> _currentEffectsByIdScratch =
             new Dictionary<int, EffectReplicationData>(64);
 
+        private readonly Dictionary<int, GameplayAbilitySpec> _abilitySpecByDefinitionIdScratch =
+            new Dictionary<int, GameplayAbilitySpec>(32);
+
+        private readonly HashSet<int> _fullStateAbilityDefinitionIdsScratch =
+            new HashSet<int>();
+
         private readonly List<EffectReplicationData> _addedEffectsScratch =
             new List<EffectReplicationData>(16);
 
@@ -153,8 +161,11 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
         private int _nextLocalEffectInstanceId = 1;
         private uint _outgoingStateSyncSequence;
         private uint _lastStateSyncSequence;
+        private uint _lastRejectedStateSyncSequence;
         private ulong _lastServerStateVersion;
         private uint _lastServerStateChecksum;
+        private int _runtimeThreadId;
+        private long _runtimeThreadViolationCount;
 
         public uint NetworkId { get; }
         public int OwnerConnectionId { get; }
@@ -169,6 +180,13 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
         public Action<GASFullStateData> OnFullStateReceived { get; set; }
         public Action<GASStateSyncMetadata, GASStateDriftReason> OnStateDriftDetected { get; set; }
         public bool EnableStrictChecksumValidation { get; set; }
+        public GASRuntimeThreadPolicy RuntimeThreadPolicy { get; set; } = GASRuntimeThreadPolicy.Disabled;
+        public uint LastAcceptedStateSyncSequence => _lastStateSyncSequence;
+        public uint LastRejectedStateSyncSequence => _lastRejectedStateSyncSequence;
+        public ulong LastServerStateVersion => _lastServerStateVersion;
+        public uint LastServerStateChecksum => _lastServerStateChecksum;
+        public int RuntimeThreadId => _runtimeThreadId;
+        public long RuntimeThreadViolationCount => _runtimeThreadViolationCount;
 
         /// <summary>
         /// Optional project-provided callbacks for effect removal/stack changes.
@@ -190,8 +208,39 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
             NetworkId = networkId;
             OwnerConnectionId = ownerConnectionId;
+            BindRuntimeThreadToCurrent();
 
             _idRegistry.RegisterAsc(networkId, asc);
+        }
+
+        public void BindRuntimeThreadToCurrent()
+        {
+            _runtimeThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        private void AssertRuntimeThread()
+        {
+            if (RuntimeThreadPolicy == GASRuntimeThreadPolicy.Disabled)
+                return;
+
+            int currentThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            if (_runtimeThreadId == 0)
+            {
+                _runtimeThreadId = currentThreadId;
+                return;
+            }
+
+            if (currentThreadId == _runtimeThreadId)
+                return;
+
+            _runtimeThreadViolationCount++;
+            if (RuntimeThreadPolicy == GASRuntimeThreadPolicy.Throw)
+            {
+                throw new InvalidOperationException($"GameplayAbilitiesNetworkedASCAdapter accessed from thread {currentThreadId}; runtime thread is {_runtimeThreadId}.");
+            }
+
+            Debug.LogWarning($"[GAS Integration] Adapter accessed from thread {currentThreadId}; runtime thread is {_runtimeThreadId}.");
         }
 
         public void ReserveRuntimeCapacity(
@@ -236,11 +285,13 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnServerConfirmActivation(int abilityIndex, int predictionKey)
         {
+            AssertRuntimeThread();
             OnConfirmActivation?.Invoke(abilityIndex, predictionKey);
         }
 
         public void OnServerConfirmActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence)
         {
+            AssertRuntimeThread();
             var key = BuildPredictionKey(predictionKey, predictionKeyOwner, predictionInputSequence);
             OnConfirmActivationKey?.Invoke(abilityIndex, key);
             OnConfirmActivation?.Invoke(abilityIndex, predictionKey);
@@ -248,11 +299,13 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnServerRejectActivation(int abilityIndex, int predictionKey)
         {
+            AssertRuntimeThread();
             OnRejectActivation?.Invoke(abilityIndex, predictionKey);
         }
 
         public void OnServerRejectActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence)
         {
+            AssertRuntimeThread();
             var key = BuildPredictionKey(predictionKey, predictionKeyOwner, predictionInputSequence);
             OnRejectActivationKey?.Invoke(abilityIndex, key);
             OnRejectActivation?.Invoke(abilityIndex, predictionKey);
@@ -260,6 +313,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnAbilityEnded(int abilityIndex)
         {
+            AssertRuntimeThread();
             var spec = TryResolveAbilitySpec(abilityIndex);
             if (spec?.GetPrimaryInstance() != null)
             {
@@ -271,6 +325,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnAbilityCancelled(int abilityIndex)
         {
+            AssertRuntimeThread();
             var spec = TryResolveAbilitySpec(abilityIndex);
             if (spec?.GetPrimaryInstance() != null)
             {
@@ -282,11 +337,16 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnAbilityMulticast(AbilityMulticastData data)
         {
+            AssertRuntimeThread();
             OnAbilityMulticastReceived?.Invoke(data);
         }
 
         public void OnReplicatedEffectApplied(EffectReplicationData data)
         {
+            AssertRuntimeThread();
+            if (!AcceptTargetNetworkId(data.TargetNetworkId, nameof(OnReplicatedEffectApplied)))
+                return;
+
             if (_remoteEffectToLocal.ContainsKey(data.EffectInstanceId))
             {
                 OnReplicatedEffectUpdated(ToEffectUpdateData(data));
@@ -336,6 +396,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnReplicatedEffectRemoved(int effectInstanceId)
         {
+            AssertRuntimeThread();
             bool handled = (EffectMutationHandler != null && EffectMutationHandler.TryRemoveReplicatedEffect(effectInstanceId))
                 || (TryRemoveReplicatedEffect != null && TryRemoveReplicatedEffect(effectInstanceId));
 
@@ -362,6 +423,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnReplicatedStackChanged(int effectInstanceId, int newStackCount)
         {
+            AssertRuntimeThread();
             bool handled = (EffectMutationHandler != null && EffectMutationHandler.TryApplyReplicatedStackChange(effectInstanceId, newStackCount))
                 || (TryApplyReplicatedStackChange != null && TryApplyReplicatedStackChange(effectInstanceId, newStackCount));
 
@@ -385,6 +447,10 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnReplicatedEffectUpdated(EffectUpdateData data)
         {
+            AssertRuntimeThread();
+            if (!AcceptTargetNetworkId(data.TargetNetworkId, nameof(OnReplicatedEffectUpdated)))
+                return;
+
             bool handled = (EffectMutationHandler != null && EffectMutationHandler.TryApplyReplicatedEffectUpdate(data))
                 || (TryApplyReplicatedEffectUpdate != null && TryApplyReplicatedEffectUpdate(data));
 
@@ -414,6 +480,10 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnReplicatedAttributeUpdate(AttributeUpdateData data)
         {
+            AssertRuntimeThread();
+            if (!AcceptTargetNetworkId(data.TargetNetworkId, nameof(OnReplicatedAttributeUpdate)))
+                return;
+
             if (data.Attributes == null || data.AttributeCount <= 0)
                 return;
 
@@ -436,12 +506,17 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnReplicatedTagUpdate(TagUpdateData data)
         {
+            AssertRuntimeThread();
+            if (!AcceptTargetNetworkId(data.TargetNetworkId, nameof(OnReplicatedTagUpdate)))
+                return;
+
             ApplyTagArray(data.AddedTagHashes, data.AddedCount, add: true);
             ApplyTagArray(data.RemovedTagHashes, data.RemovedCount, add: false);
         }
 
         public GASFullStateData CaptureFullState()
         {
+            AssertRuntimeThread();
             int abilityCount = FillGrantedAbilitiesFromAsc(ref _grantedAbilitiesBuffer);
             int effectCount = FillActiveEffects(_asc.ActiveEffects, ref _currentEffectsScratch);
             int attributeCount = FillAttributeEntriesFromAsc(ref _attributeEntriesBuffer);
@@ -467,6 +542,13 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void OnFullState(GASFullStateData data)
         {
+            AssertRuntimeThread();
+            if (data.TargetNetworkId != NetworkId)
+            {
+                Debug.LogWarning($"[GAS Integration] Ignored full state for target {data.TargetNetworkId}; adapter target is {NetworkId}.");
+                return;
+            }
+
             ApplyFullStateAbilities(data.Abilities, data.AbilityCount);
             ApplyFullStateEffects(data.Effects, data.EffectCount);
 
@@ -495,14 +577,25 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             _asc.ConsumePendingStateChanges();
             _lastServerStateVersion = data.StateVersion;
             _lastServerStateChecksum = data.StateChecksum;
+            _lastStateSyncSequence = 0;
+            _lastRejectedStateSyncSequence = 0;
             OnFullStateReceived?.Invoke(data);
         }
 
         public bool OnStateSyncMetadata(GASStateSyncMetadata metadata)
         {
+            AssertRuntimeThread();
             GASStateDriftReason reason = GASStateDriftReason.None;
 
-            if (_lastStateSyncSequence != 0 && metadata.Sequence <= _lastStateSyncSequence)
+            if (metadata.TargetNetworkId != NetworkId)
+            {
+                reason = GASStateDriftReason.TargetNetworkIdMismatch;
+            }
+            else if (metadata.CurrentVersion < metadata.BaseVersion)
+            {
+                reason = GASStateDriftReason.InvalidVersionRange;
+            }
+            else if (_lastStateSyncSequence != 0 && !IsSequenceNewer(metadata.Sequence, _lastStateSyncSequence))
             {
                 reason = GASStateDriftReason.OutOfOrderSequence;
             }
@@ -519,31 +612,60 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
                 }
             }
 
-            _lastStateSyncSequence = metadata.Sequence;
             if (reason == GASStateDriftReason.None)
             {
+                _lastStateSyncSequence = metadata.Sequence;
                 _lastServerStateVersion = metadata.CurrentVersion;
                 _lastServerStateChecksum = metadata.StateChecksum;
                 return true;
             }
 
+            _lastRejectedStateSyncSequence = metadata.Sequence;
             OnStateDriftDetected?.Invoke(metadata, reason);
             return false;
+        }
+
+        private static bool IsSequenceNewer(uint incoming, uint lastAccepted)
+        {
+            return incoming != lastAccepted && unchecked((int)(incoming - lastAccepted)) > 0;
         }
 
         private void ApplyFullStateAbilities(GrantedAbilityEntry[] abilities, int abilityCount)
         {
             int safeCount = abilities != null ? Math.Min(abilityCount, abilities.Length) : 0;
             var specs = _asc.GetActivatableAbilities();
+            _abilitySpecByDefinitionIdScratch.Clear();
+            _fullStateAbilityDefinitionIdsScratch.Clear();
+
+            for (int i = 0; i < safeCount; i++)
+            {
+                int abilityDefinitionId = abilities[i].AbilityDefinitionId;
+                if (abilityDefinitionId != 0)
+                {
+                    _fullStateAbilityDefinitionIdsScratch.Add(abilityDefinitionId);
+                }
+            }
+
+            for (int i = 0; i < specs.Count; i++)
+            {
+                var spec = specs[i];
+                var ability = spec.AbilityCDO ?? spec.Ability;
+                int abilityId = ability != null ? _idRegistry.GetAbilityDefinitionId(ability) : 0;
+                if (abilityId != 0)
+                {
+                    _abilitySpecByDefinitionIdScratch[abilityId] = spec;
+                }
+            }
 
             for (int i = specs.Count - 1; i >= 0; i--)
             {
                 var spec = specs[i];
                 var ability = spec.AbilityCDO ?? spec.Ability;
                 int abilityId = ability != null ? _idRegistry.GetAbilityDefinitionId(ability) : 0;
-                if (!ContainsAbilityDefinitionId(abilities, safeCount, abilityId))
+                if (abilityId == 0 || !_fullStateAbilityDefinitionIdsScratch.Contains(abilityId))
                 {
                     _asc.ClearAbility(spec);
+                    _abilitySpecByDefinitionIdScratch.Remove(abilityId);
                 }
             }
 
@@ -553,7 +675,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
                 if (entry.AbilityDefinitionId == 0)
                     continue;
 
-                var existingSpec = TryResolveAbilitySpec(entry.AbilityDefinitionId);
+                _abilitySpecByDefinitionIdScratch.TryGetValue(entry.AbilityDefinitionId, out var existingSpec);
                 if (existingSpec != null)
                 {
                     existingSpec.Level = Math.Max(1, entry.Level);
@@ -562,7 +684,11 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
                 if (_idRegistry.TryResolveAbilityDefinition(entry.AbilityDefinitionId, out var ability) && ability != null)
                 {
-                    _asc.GrantAbility(ability, Math.Max(1, entry.Level));
+                    var granted = _asc.GrantAbility(ability, Math.Max(1, entry.Level));
+                    if (granted != null)
+                    {
+                        _abilitySpecByDefinitionIdScratch[entry.AbilityDefinitionId] = granted;
+                    }
                 }
             }
         }
@@ -601,22 +727,18 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             }
         }
 
-        private static bool ContainsAbilityDefinitionId(GrantedAbilityEntry[] abilities, int count, int abilityDefinitionId)
+        private bool AcceptTargetNetworkId(uint targetNetworkId, string operation)
         {
-            if (abilityDefinitionId == 0)
-                return false;
+            if (targetNetworkId == NetworkId)
+                return true;
 
-            for (int i = 0; i < count; i++)
-            {
-                if (abilities[i].AbilityDefinitionId == abilityDefinitionId)
-                    return true;
-            }
-
+            Debug.LogWarning($"[GAS Integration] Ignored {operation} for target {targetNetworkId}; adapter target is {NetworkId}.");
             return false;
         }
 
         public ReplicatedAbilitySystemStateDelta CapturePendingReplicatedStateDelta()
         {
+            AssertRuntimeThread();
             var changeMask = _asc.PendingStateChangeMask;
 
             int grantedAbilityCount = changeMask.HasFlag(AbilitySystemStateChangeMask.GrantedAbilities)
@@ -681,6 +803,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             NetworkedAbilityBridge bridge,
             IReadOnlyList<INetConnection> observers)
         {
+            AssertRuntimeThread();
             if (bridge == null)
                 throw new ArgumentNullException(nameof(bridge));
 
@@ -737,6 +860,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         public void Dispose()
         {
+            AssertRuntimeThread();
             _idRegistry.UnregisterAsc(NetworkId);
             _remoteEffectToLocal.Clear();
             _localEffectToRemote.Clear();
