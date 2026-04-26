@@ -1,7 +1,7 @@
 #if GAMEPLAY_FRAMEWORK_PRESENT && GAMEPLAY_TAGS_PRESENT
-
 using CycloneGames.GameplayFramework.Runtime;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime.Integrations.GameplayTags
