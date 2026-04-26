@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
    /// <summary>
    /// Handles tag renaming and migration. When tags are renamed, old names are

@@ -5,7 +5,7 @@ using System.Reflection;
 using System.Text;
 using System.Linq;
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayAbilities.Editor
 {

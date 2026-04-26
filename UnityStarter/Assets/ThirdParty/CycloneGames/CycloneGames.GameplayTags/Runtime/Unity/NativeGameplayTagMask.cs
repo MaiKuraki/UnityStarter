@@ -2,7 +2,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using Unity.Collections;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 #if CYCLONE_HAS_BURST
 using Unity.Burst;
 #endif

@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 using CycloneGames.GameplayAbilities.Core;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 

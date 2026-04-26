@@ -7,11 +7,12 @@ using System.Linq;
 using System.Text;
 using Unio;
 using Unity.Collections;
+using CycloneGames.GameplayTags.Core;
 
 using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("CycloneGames.GameplayTags.Editor")]
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Unity.Runtime
 {
    internal class FileGameplayTagSource : IGameplayTagSource, IDeleteTagHandler
    {

@@ -1,7 +1,7 @@
 #if CYCLONE_HAS_ENTITIES
 using System.Runtime.CompilerServices;
 using Unity.Entities;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayTags.Unity
 {

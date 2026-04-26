@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
    /// <summary>
    /// An attribute to define gameplay tags at the assembly level.
