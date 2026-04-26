@@ -715,7 +715,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             int corePredictionCapacity = 32,
             int maxSetByCallerPerEffect = 8,
             int targetDataObjectCapacity = 16,
-            int predictionTransactionRecordCapacity = DefaultPredictionTransactionRecordCapacity)
+            int predictionTransactionRecordCapacity = DefaultPredictionTransactionRecordCapacity,
+            int tagDeltaCapacity = 16)
         {
             EnsureListCapacity(attributeSets, Math.Min(attributeCapacity, 8));
             EnsureListCapacity(activeEffects, activeEffectCapacity);
@@ -728,10 +729,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             EnsureListCapacity(tickingAbilities, tickingAbilityCapacity);
             EnsureDictionaryCapacity(tickingAbilityIndexBySpec, tickingAbilityCapacity);
             EnsureListCapacity(dirtyAttributes, dirtyAttributeCapacity);
+            EnsureListCapacity(dirtyAttributeValueSnapshots, dirtyAttributeCapacity);
             EnsureListCapacity(pendingPredictedEffects, activeEffectCapacity);
             EnsureListCapacity(predictedAttributeSnapshots, predictedAttributeCapacity);
             EnsureListCapacity(predictionWindows, predictionWindowCapacity);
             EnsureDictionaryCapacity(predictionWindowIndexByKey, predictionWindowCapacity);
+            EnsureListCapacity(pendingAddedTagSnapshots, tagDeltaCapacity);
+            EnsureListCapacity(pendingRemovedTagSnapshots, tagDeltaCapacity);
             EnsureListCapacity(pendingRemovedEffectNetIds, activeEffectCapacity);
             EnsureListCapacity(pendingRemovedAbilityDefs, abilityCapacity);
 
@@ -4187,10 +4191,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             triggerEventAbilities.Clear();
             triggerTagAddedAbilities.Clear();
             triggerTagRemovedAbilities.Clear();
-            dirtyAttributeValueSnapshots.Clear();
-            pendingRemovedEffectNetIds.Clear();
-            pendingRemovedAbilityDefs.Clear();
+            ClearPendingStateChanges();
             stateVersion = 0;
+            attributeRegistryVersion = 0;
             lastReplicatedStateVersion = 0;
             outgoingDeltaSequence = 0;
             OnGameplayEffectAppliedToSelf = null;
@@ -4402,10 +4405,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private ulong stateVersion;
         private ulong lastReplicatedStateVersion;
         private uint outgoingDeltaSequence;
+        private uint attributeRegistryVersion;
         private readonly HashSet<string> dirtyAttributeNames = new HashSet<string>(StringComparer.Ordinal);
         private readonly List<GameplayAttribute> dirtyAttributeValueSnapshots = new List<GameplayAttribute>(32);
         private readonly HashSet<GameplayTag> pendingAddedTags = new HashSet<GameplayTag>();
         private readonly HashSet<GameplayTag> pendingRemovedTags = new HashSet<GameplayTag>();
+        private readonly List<GameplayTag> pendingAddedTagSnapshots = new List<GameplayTag>(8);
+        private readonly List<GameplayTag> pendingRemovedTagSnapshots = new List<GameplayTag>(8);
         // Delta tracking: NetworkIds of effects removed since last snapshot
         private readonly List<int> pendingRemovedEffectNetIds = new List<int>(8);
         // Delta tracking: ability definitions removed since last snapshot
@@ -4416,6 +4422,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private bool tagsDirty;
 
         public ulong StateVersion => stateVersion;
+        public uint AttributeRegistryVersion => attributeRegistryVersion;
         public AbilitySystemStateChangeMask PendingStateChangeMask
         {
             get
@@ -4435,6 +4442,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public bool IsAttributeStructureDirty => attributeStructureDirty;
         public IReadOnlyCollection<string> DirtyAttributeNames => dirtyAttributeNames;
+        public IReadOnlyList<GameplayAttribute> DirtyAttributeValueSnapshots => dirtyAttributeValueSnapshots;
         public IReadOnlyCollection<GameplayTag> PendingAddedTags => pendingAddedTags;
         public IReadOnlyCollection<GameplayTag> PendingRemovedTags => pendingRemovedTags;
 
@@ -4497,8 +4505,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (tagsDirty)
             {
                 buffer.ChangeMask |= AbilitySystemStateChangeMask.Tags;
-                buffer.AddedTagCount = CopyTagsNonAlloc(pendingAddedTags, buffer.EnsureAddedTagCapacity(pendingAddedTags.Count));
-                buffer.RemovedTagCount = CopyTagsNonAlloc(pendingRemovedTags, buffer.EnsureRemovedTagCapacity(pendingRemovedTags.Count));
+                buffer.AddedTagCount = CopyTagsNonAlloc(pendingAddedTagSnapshots, buffer.EnsureAddedTagCapacity(pendingAddedTagSnapshots.Count));
+                buffer.RemovedTagCount = CopyTagsNonAlloc(pendingRemovedTagSnapshots, buffer.EnsureRemovedTagCapacity(pendingRemovedTagSnapshots.Count));
             }
 
             ClearPendingStateChanges();
@@ -4619,15 +4627,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return index;
         }
 
-        private static int CopyTagsNonAlloc(HashSet<GameplayTag> tags, GameplayTag[] entries)
+        private static int CopyTagsNonAlloc(List<GameplayTag> tags, GameplayTag[] entries)
         {
-            int index = 0;
-            foreach (var tag in tags)
+            int count = tags.Count;
+            for (int i = 0; i < count; i++)
             {
-                entries[index++] = tag;
+                entries[i] = tags[i];
             }
 
-            return index;
+            return count;
         }
 
         private void ClearPendingStateChanges()
@@ -4640,6 +4648,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             dirtyAttributeValueSnapshots.Clear();
             pendingAddedTags.Clear();
             pendingRemovedTags.Clear();
+            pendingAddedTagSnapshots.Clear();
+            pendingRemovedTagSnapshots.Clear();
             pendingRemovedEffectNetIds.Clear();
             pendingRemovedAbilityDefs.Clear();
         }
@@ -4679,6 +4689,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void MarkAttributeStructureDirty()
         {
             attributeStructureDirty = true;
+            unchecked
+            {
+                attributeRegistryVersion++;
+            }
             stateVersion++;
         }
 
@@ -4692,13 +4706,27 @@ namespace CycloneGames.GameplayAbilities.Runtime
             tagsDirty = true;
             if (newCount > 0)
             {
-                pendingRemovedTags.Remove(tag);
-                pendingAddedTags.Add(tag);
+                if (pendingRemovedTags.Remove(tag))
+                {
+                    RemoveTagSnapshot(pendingRemovedTagSnapshots, tag);
+                }
+
+                if (pendingAddedTags.Add(tag))
+                {
+                    pendingAddedTagSnapshots.Add(tag);
+                }
             }
             else
             {
-                pendingAddedTags.Remove(tag);
-                pendingRemovedTags.Add(tag);
+                if (pendingAddedTags.Remove(tag))
+                {
+                    RemoveTagSnapshot(pendingAddedTagSnapshots, tag);
+                }
+
+                if (pendingRemovedTags.Add(tag))
+                {
+                    pendingRemovedTagSnapshots.Add(tag);
+                }
             }
 
             // Bug fix: when a tag actually appears or disappears, any active effect whose
@@ -4708,6 +4736,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
             MarkAttributesDirtyForEffectsWithOngoingRequirements();
 
             stateVersion++;
+        }
+
+        private static void RemoveTagSnapshot(List<GameplayTag> tags, GameplayTag tag)
+        {
+            for (int i = tags.Count - 1; i >= 0; i--)
+            {
+                if (tags[i].Equals(tag))
+                {
+                    int lastIndex = tags.Count - 1;
+                    tags[i] = tags[lastIndex];
+                    tags.RemoveAt(lastIndex);
+                    return;
+                }
+            }
         }
 
         private void MarkAttributesDirtyForEffectsWithOngoingRequirements()
