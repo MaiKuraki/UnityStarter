@@ -104,14 +104,26 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
         private readonly Dictionary<ActiveGameplayEffect, int> _localEffectToRemote =
             new Dictionary<ActiveGameplayEffect, int>(64);
 
+        private readonly List<int> _remoteEffectIds = new List<int>(64);
+
         private readonly Dictionary<int, EffectReplicationData> _replicatedEffectStates =
             new Dictionary<int, EffectReplicationData>(64);
+
+        private readonly List<int> _replicatedEffectStateIds = new List<int>(64);
 
         private readonly Dictionary<int, SetByCallerEntry[]> _replicatedSetByCallerBaselineArrays =
             new Dictionary<int, SetByCallerEntry[]>(64);
 
         private readonly Dictionary<string, int> _attributeIdByName =
             new Dictionary<string, int>(32, StringComparer.Ordinal);
+
+        private readonly Dictionary<int, GameplayAttribute> _attributeById =
+            new Dictionary<int, GameplayAttribute>(64);
+
+        private readonly List<int> _attributeIds =
+            new List<int>(64);
+
+        private uint _cachedAttributeRegistryVersion;
 
         private readonly Dictionary<int, EffectReplicationData> _currentEffectsByIdScratch =
             new Dictionary<int, EffectReplicationData>(64);
@@ -258,6 +270,13 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             EnsureArrayCapacity(ref _grantedAbilitiesBuffer, abilityCapacity);
             EnsureArrayCapacity(ref _attributeEntriesBuffer, attributeCapacity);
             EnsureArrayCapacity(ref _dirtyAttributeEntriesBuffer, attributeCapacity);
+            EnsureListCapacity(_attributeIds, attributeCapacity);
+            EnsureListCapacity(_remoteEffectIds, activeEffectCapacity);
+            EnsureListCapacity(_replicatedEffectStateIds, activeEffectCapacity);
+            EnsureListCapacity(_addedEffectsScratch, activeEffectCapacity);
+            EnsureListCapacity(_updatedEffectsScratch, activeEffectCapacity);
+            EnsureListCapacity(_stackChangedEffectsScratch, activeEffectCapacity);
+            EnsureListCapacity(_removedEffectIdsScratch, activeEffectCapacity);
             EnsureArrayCapacity(ref _addedTagHashesBuffer, tagDeltaCapacity);
             EnsureArrayCapacity(ref _removedTagHashesBuffer, tagDeltaCapacity);
             EnsureArrayCapacity(ref _fullStateTagHashesBuffer, tagDeltaCapacity);
@@ -375,8 +394,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             if (_asc.ActiveEffects.Count > beforeCount)
             {
                 var localEffect = _asc.ActiveEffects[_asc.ActiveEffects.Count - 1];
-                _remoteEffectToLocal[data.EffectInstanceId] = localEffect;
-                _localEffectToRemote[localEffect] = data.EffectInstanceId;
+                TrackRemoteEffectMapping(data.EffectInstanceId, localEffect);
 
                 int setByCallerCount = FillSetByCallerScratch(data.SetByCallerEntries, data.SetByCallerCount);
                 _asc.TryApplyReplicatedEffectUpdate(
@@ -391,7 +409,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
                     setByCallerCount);
             }
 
-            _replicatedEffectStates[data.EffectInstanceId] = data;
+            TrackReplicatedEffectState(data.EffectInstanceId, data);
         }
 
         public void OnReplicatedEffectRemoved(int effectInstanceId)
@@ -407,13 +425,8 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
             if (handled)
             {
-                if (_remoteEffectToLocal.TryGetValue(effectInstanceId, out var removedEffect))
-                {
-                    _localEffectToRemote.Remove(removedEffect);
-                }
-
-                _remoteEffectToLocal.Remove(effectInstanceId);
-                _replicatedEffectStates.Remove(effectInstanceId);
+                RemoveRemoteEffectMapping(effectInstanceId);
+                RemoveReplicatedEffectState(effectInstanceId);
                 return;
             }
 
@@ -435,7 +448,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             if (_replicatedEffectStates.TryGetValue(effectInstanceId, out var existing))
             {
                 existing.StackCount = newStackCount;
-                _replicatedEffectStates[effectInstanceId] = existing;
+                TrackReplicatedEffectState(effectInstanceId, existing);
             }
 
             if (handled)
@@ -469,7 +482,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
                     setByCallerCount);
             }
 
-            _replicatedEffectStates[data.EffectInstanceId] = ToEffectReplicationData(data);
+            TrackReplicatedEffectState(data.EffectInstanceId, ToEffectReplicationData(data));
 
             if (handled)
                 return;
@@ -491,10 +504,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             for (int i = 0; i < count; i++)
             {
                 var entry = data.Attributes[i];
-                if (!_idRegistry.TryResolveAttributeName(entry.AttributeId, out var attributeName))
-                    continue;
-
-                var attribute = _asc.GetAttribute(attributeName);
+                var attribute = ResolveAttributeById(entry.AttributeId);
                 var owningSet = attribute?.OwningSet;
                 if (attribute == null || owningSet == null)
                     continue;
@@ -708,11 +718,12 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             }
 
             _removedEffectIdsScratch.Clear();
-            foreach (var pair in _remoteEffectToLocal)
+            for (int i = 0; i < _remoteEffectIds.Count; i++)
             {
-                if (!_currentEffectsByIdScratch.ContainsKey(pair.Key))
+                int effectInstanceId = _remoteEffectIds[i];
+                if (!_currentEffectsByIdScratch.ContainsKey(effectInstanceId))
                 {
-                    _removedEffectIdsScratch.Add(pair.Key);
+                    _removedEffectIdsScratch.Add(effectInstanceId);
                 }
             }
 
@@ -863,9 +874,15 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             AssertRuntimeThread();
             _idRegistry.UnregisterAsc(NetworkId);
             _remoteEffectToLocal.Clear();
+            _remoteEffectIds.Clear();
             _localEffectToRemote.Clear();
             _replicatedEffectStates.Clear();
+            _replicatedEffectStateIds.Clear();
             _replicatedSetByCallerBaselineArrays.Clear();
+            _attributeIdByName.Clear();
+            _attributeById.Clear();
+            _attributeIds.Clear();
+            _cachedAttributeRegistryVersion = 0;
         }
 
         private GameplayAbilitySpec TryResolveAbilitySpec(int abilityDefinitionId)
@@ -880,6 +897,86 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             return null;
         }
 
+        private void TrackRemoteEffectMapping(int effectInstanceId, ActiveGameplayEffect effect)
+        {
+            if (effectInstanceId == 0 || effect == null)
+                return;
+
+            if (_localEffectToRemote.TryGetValue(effect, out int previousEffectInstanceId) &&
+                previousEffectInstanceId != effectInstanceId)
+            {
+                RemoveRemoteEffectMapping(previousEffectInstanceId);
+            }
+
+            if (_remoteEffectToLocal.TryGetValue(effectInstanceId, out var previousEffect) &&
+                previousEffect != null &&
+                !ReferenceEquals(previousEffect, effect))
+            {
+                _localEffectToRemote.Remove(previousEffect);
+            }
+
+            if (!_remoteEffectToLocal.ContainsKey(effectInstanceId))
+            {
+                _remoteEffectIds.Add(effectInstanceId);
+            }
+
+            _remoteEffectToLocal[effectInstanceId] = effect;
+            _localEffectToRemote[effect] = effectInstanceId;
+        }
+
+        private void RemoveRemoteEffectMapping(int effectInstanceId)
+        {
+            if (effectInstanceId == 0)
+                return;
+
+            if (_remoteEffectToLocal.TryGetValue(effectInstanceId, out var removedEffect))
+            {
+                _localEffectToRemote.Remove(removedEffect);
+                _remoteEffectToLocal.Remove(effectInstanceId);
+                RemoveIntSwapBack(_remoteEffectIds, effectInstanceId);
+            }
+        }
+
+        private void TrackReplicatedEffectState(int effectInstanceId, EffectReplicationData state)
+        {
+            if (effectInstanceId == 0)
+                return;
+
+            if (!_replicatedEffectStates.ContainsKey(effectInstanceId))
+            {
+                _replicatedEffectStateIds.Add(effectInstanceId);
+            }
+
+            _replicatedEffectStates[effectInstanceId] = state;
+        }
+
+        private void RemoveReplicatedEffectState(int effectInstanceId)
+        {
+            if (effectInstanceId == 0)
+                return;
+
+            if (_replicatedEffectStates.Remove(effectInstanceId))
+            {
+                RemoveIntSwapBack(_replicatedEffectStateIds, effectInstanceId);
+            }
+
+            _replicatedSetByCallerBaselineArrays.Remove(effectInstanceId);
+        }
+
+        private static void RemoveIntSwapBack(List<int> values, int value)
+        {
+            for (int i = values.Count - 1; i >= 0; i--)
+            {
+                if (values[i] == value)
+                {
+                    int lastIndex = values.Count - 1;
+                    values[i] = values[lastIndex];
+                    values.RemoveAt(lastIndex);
+                    return;
+                }
+            }
+        }
+
         private AbilitySystemComponent ResolveSourceAsc(uint sourceNetworkId)
         {
             if (sourceNetworkId == 0)
@@ -887,6 +984,68 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
             _idRegistry.TryResolveAsc(sourceNetworkId, out var sourceAsc);
             return sourceAsc;
+        }
+
+        private int TrackAttribute(GameplayAttribute attribute)
+        {
+            RefreshAttributeCacheIfNeeded();
+
+            if (attribute == null || string.IsNullOrEmpty(attribute.Name))
+                return 0;
+
+            if (!_attributeIdByName.TryGetValue(attribute.Name, out int attributeId))
+            {
+                attributeId = _idRegistry.GetAttributeId(attribute);
+                if (attributeId == 0)
+                    return 0;
+
+                _attributeIdByName[attribute.Name] = attributeId;
+            }
+
+            if (!_attributeById.ContainsKey(attributeId))
+            {
+                _attributeIds.Add(attributeId);
+            }
+
+            _attributeById[attributeId] = attribute;
+            return attributeId;
+        }
+
+        private GameplayAttribute ResolveAttributeById(int attributeId)
+        {
+            RefreshAttributeCacheIfNeeded();
+
+            if (attributeId == 0)
+                return null;
+
+            if (_attributeById.TryGetValue(attributeId, out var cached) &&
+                cached != null &&
+                cached.OwningSet != null)
+            {
+                return cached;
+            }
+
+            if (!_idRegistry.TryResolveAttributeName(attributeId, out var attributeName))
+                return null;
+
+            var attribute = _asc.GetAttribute(attributeName);
+            if (attribute == null)
+                return null;
+
+            TrackAttribute(attribute);
+            return attribute;
+        }
+
+        private void RefreshAttributeCacheIfNeeded()
+        {
+            uint registryVersion = _asc.AttributeRegistryVersion;
+            if (registryVersion == _cachedAttributeRegistryVersion)
+                return;
+
+            _attributeIdByName.Clear();
+            _attributeById.Clear();
+            _attributeIds.Clear();
+            _cachedAttributeRegistryVersion = registryVersion;
         }
 
         private void ApplySetByCaller(GameplayEffectSpec spec, EffectReplicationData data)
@@ -1014,9 +1173,13 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             {
                 foreach (var attribute in attributeSets[i].GetAttributes())
                 {
+                    int attributeId = TrackAttribute(attribute);
+                    if (attributeId == 0)
+                        continue;
+
                     entries[index++] = new AttributeEntry
                     {
-                        AttributeId = _idRegistry.GetAttributeId(attribute),
+                        AttributeId = attributeId,
                         BaseValue = attribute.BaseValue,
                         CurrentValue = attribute.CurrentValue
                     };
@@ -1062,30 +1225,34 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
 
         private int FillDirtyAttributeEntriesFromAsc(ref AttributeEntry[] entries)
         {
-            var dirtyNames = _asc.DirtyAttributeNames;
-            if (dirtyNames == null || dirtyNames.Count == 0)
+            var dirtyAttributes = _asc.DirtyAttributeValueSnapshots;
+            if (dirtyAttributes == null || dirtyAttributes.Count == 0)
                 return 0;
 
-            EnsureArrayCapacity(ref entries, dirtyNames.Count);
+            EnsureArrayCapacity(ref entries, dirtyAttributes.Count);
             return FillDirtyAttributeEntriesFromAsc(entries);
         }
 
         private int FillDirtyAttributeEntriesFromAsc(AttributeEntry[] entries)
         {
-            var dirtyNames = _asc.DirtyAttributeNames;
-            if (dirtyNames == null || entries == null)
+            var dirtyAttributes = _asc.DirtyAttributeValueSnapshots;
+            if (dirtyAttributes == null || entries == null)
                 return 0;
 
             int index = 0;
-            foreach (var attributeName in dirtyNames)
+            for (int i = 0; i < dirtyAttributes.Count; i++)
             {
-                var attribute = _asc.GetAttribute(attributeName);
+                var attribute = dirtyAttributes[i];
                 if (attribute == null)
+                    continue;
+
+                int attributeId = TrackAttribute(attribute);
+                if (attributeId == 0)
                     continue;
 
                 entries[index++] = new AttributeEntry
                 {
-                    AttributeId = _idRegistry.GetAttributeId(attribute),
+                    AttributeId = attributeId,
                     BaseValue = attribute.BaseValue,
                     CurrentValue = attribute.CurrentValue
                 };
@@ -1268,6 +1435,14 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
             }
         }
 
+        private static void EnsureListCapacity<T>(List<T> list, int count)
+        {
+            if (list != null && count > list.Capacity)
+            {
+                list.Capacity = count;
+            }
+        }
+
         private int FillTagDiff(int[] current, int currentCount, int[] target, int targetCount, ref int[] destination)
         {
             _targetTagHashSetScratch.Clear();
@@ -1303,6 +1478,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
         private void SyncReplicatedEffectBaseline(EffectReplicationData[] effects, int count)
         {
             _replicatedEffectStates.Clear();
+            _replicatedEffectStateIds.Clear();
 
             if (effects == null)
                 return;
@@ -1324,7 +1500,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
                     effect.SetByCallerCount = setByCallerCount;
                 }
 
-                _replicatedEffectStates[effect.EffectInstanceId] = effect;
+                TrackReplicatedEffectState(effect.EffectInstanceId, effect);
             }
         }
 
@@ -1391,10 +1567,11 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
                 _updatedEffectsScratch.Add(ToEffectUpdateData(current));
             }
 
-            foreach (var pair in _replicatedEffectStates)
+            for (int i = 0; i < _replicatedEffectStateIds.Count; i++)
             {
-                if (!_currentEffectsByIdScratch.ContainsKey(pair.Key))
-                    _removedEffectIdsScratch.Add(pair.Key);
+                int effectInstanceId = _replicatedEffectStateIds[i];
+                if (!_currentEffectsByIdScratch.ContainsKey(effectInstanceId))
+                    _removedEffectIdsScratch.Add(effectInstanceId);
             }
 
             for (int i = 0; i < _removedEffectIdsScratch.Count; i++)
@@ -1405,9 +1582,8 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
                     _localEffectToRemote.Remove(removedEffect);
                 }
 
-                _replicatedEffectStates.Remove(removedId);
-                _replicatedSetByCallerBaselineArrays.Remove(removedId);
-                _remoteEffectToLocal.Remove(removedId);
+                RemoveReplicatedEffectState(removedId);
+                RemoveRemoteEffectMapping(removedId);
             }
 
             SyncReplicatedEffectBaseline(_currentEffectsScratch, currentEffectCount);
@@ -1549,8 +1725,7 @@ namespace CycloneGames.Networking.GAS.Integrations.GameplayAbilities
                 return existing;
 
             int next = _nextLocalEffectInstanceId++;
-            _localEffectToRemote[effect] = next;
-            _remoteEffectToLocal[next] = effect;
+            TrackRemoteEffectMapping(next, effect);
             return next;
         }
     }
