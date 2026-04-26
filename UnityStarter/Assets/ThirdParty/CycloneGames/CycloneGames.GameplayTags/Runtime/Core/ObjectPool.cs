@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
     /// <summary>
     /// A generic object pool with capacity management, smart shrinking, and statistics tracking.

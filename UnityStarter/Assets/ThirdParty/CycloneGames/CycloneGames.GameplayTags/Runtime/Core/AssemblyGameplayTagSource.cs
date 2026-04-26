@@ -1,7 +1,7 @@
 using System;
 using System.Reflection;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
    internal class AssemblyGameplayTagSource : IGameplayTagSource
    {

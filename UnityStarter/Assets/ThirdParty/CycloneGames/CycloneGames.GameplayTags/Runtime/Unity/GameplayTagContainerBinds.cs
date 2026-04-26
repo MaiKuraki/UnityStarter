@@ -2,9 +2,10 @@ using System;
 using System.Collections.Generic;
 #if UNITY_5_3_OR_NEWER
 using UnityEngine;
+using CycloneGames.GameplayTags.Core;
 #endif
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Unity.Runtime
 {
     public class GameplayTagContainerBinds
     {

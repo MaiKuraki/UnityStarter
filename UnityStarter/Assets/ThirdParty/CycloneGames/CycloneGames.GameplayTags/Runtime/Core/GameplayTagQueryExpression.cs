@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
     /// <summary>
     /// A single node in a GameplayTagQuery tree. It can contain a list of tags to check

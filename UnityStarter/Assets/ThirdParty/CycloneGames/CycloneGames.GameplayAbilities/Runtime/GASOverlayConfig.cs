@@ -204,7 +204,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Check if an effect's granted tags indicate it's a debuff.
         /// </summary>
-        public bool IsDebuffEffect(GameplayTags.Runtime.GameplayTagContainer grantedTags)
+        public bool IsDebuffEffect(GameplayTags.Core.GameplayTagContainer grantedTags)
         {
             if (grantedTags == null || grantedTags.IsEmpty || DebuffTagSubstrings.Count == 0)
                 return false;
