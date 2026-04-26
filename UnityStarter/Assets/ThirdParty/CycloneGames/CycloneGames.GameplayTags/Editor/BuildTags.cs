@@ -3,7 +3,7 @@ using System.IO;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayTags.Editor
 {

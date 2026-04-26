@@ -1,7 +1,7 @@
 using Cysharp.Threading.Tasks;
 using System.Collections.Generic;
 using System.Threading;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 using UnityEngine;
 using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.GameplayAbilities.Core;
@@ -170,7 +170,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Handle dynamic, code-based cues.
             if (runtimeCueHandlers.TryGetValue(cueTag, out var handlers))
             {
-                using (CycloneGames.GameplayTags.Runtime.Pools.ListPool<IGameplayCueHandler>.Get(out var safeHandlers))
+                using (CycloneGames.GameplayTags.Core.Pools.ListPool<IGameplayCueHandler>.Get(out var safeHandlers))
                 {
                     safeHandlers.AddRange(handlers);
                     for (int i = 0; i < safeHandlers.Count; i++)
@@ -243,7 +243,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (target == null || !predictionKey.IsValid || !activeInstances.TryGetValue(target, out var instanceList)) return;
 
-            using (CycloneGames.GameplayTags.Runtime.Pools.ListPool<ActiveCueInstance>.Get(out var toRemove))
+            using (CycloneGames.GameplayTags.Core.Pools.ListPool<ActiveCueInstance>.Get(out var toRemove))
             {
                 for (int i = 0; i < instanceList.Count; i++)
                 {
@@ -279,7 +279,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (target == null || !activeInstances.TryGetValue(target, out var instanceList)) return;
 
             // Use ListPool to avoid GC allocation
-            using (CycloneGames.GameplayTags.Runtime.Pools.ListPool<ActiveCueInstance>.Get(out var toRemove))
+            using (CycloneGames.GameplayTags.Core.Pools.ListPool<ActiveCueInstance>.Get(out var toRemove))
             {
                 for (int i = 0; i < instanceList.Count; i++)
                 {

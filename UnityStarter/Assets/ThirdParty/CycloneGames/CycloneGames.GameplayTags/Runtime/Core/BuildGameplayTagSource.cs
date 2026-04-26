@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
    /// <summary>
    /// Build tag binary format:

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
    /// <summary>
    /// Immutable snapshot of all tag data. Published atomically via Volatile.Write
@@ -28,7 +28,7 @@ namespace CycloneGames.GameplayTags.Runtime
       /// <summary>Total number of tag definitions including the None tag at index 0.</summary>
       internal readonly int TotalTagCount;
 
-      // Core flat arrays — all indexed by runtimeIndex (0 = None)
+      // Core flat arrays - all indexed by runtimeIndex (0 = None)
       internal readonly GameplayTag[] Tags;
       internal readonly string[] TagNames;
       internal readonly string[] TagDescriptions;
@@ -59,7 +59,7 @@ namespace CycloneGames.GameplayTags.Runtime
          TotalTagCount = definitions.Count;
          int tagCount = Math.Max(0, TotalTagCount - 1);
 
-         // Build name→index lookup
+         // Build name->index lookup
          NameToRuntimeIndex = new Dictionary<string, int>(TotalTagCount, StringComparer.Ordinal);
          for (int i = 0; i < TotalTagCount; i++)
          {

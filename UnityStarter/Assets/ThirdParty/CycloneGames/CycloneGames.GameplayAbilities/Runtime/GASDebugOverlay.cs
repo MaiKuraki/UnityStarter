@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using System.Text;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime

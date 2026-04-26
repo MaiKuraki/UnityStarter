@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
     /// <summary>
     /// The operator to use when evaluating a list of expressions or tags.

@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.GameplayTags.Runtime
+namespace CycloneGames.GameplayTags.Core
 {
     /// <summary>
     /// An assembly-level attribute that directs the GameplayTagManager to scan a specified static class

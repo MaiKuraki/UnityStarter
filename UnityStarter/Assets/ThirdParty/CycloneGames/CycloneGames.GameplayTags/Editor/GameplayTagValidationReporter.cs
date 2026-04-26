@@ -2,7 +2,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using System.Collections.Generic;
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 using UnityEditor.SceneManagement;
 
 namespace CycloneGames.GameplayTags.Editor
