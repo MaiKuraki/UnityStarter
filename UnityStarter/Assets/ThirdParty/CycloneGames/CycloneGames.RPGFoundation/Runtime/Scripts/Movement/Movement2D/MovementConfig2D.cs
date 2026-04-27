@@ -9,7 +9,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         TopDown
     }
 
-    [CreateAssetMenu(fileName = "MovementConfig2D", menuName = "CycloneGames/RPG Foundation/Movement Config 2D")]
+    [CreateAssetMenu(fileName = "MovementConfig2D", menuName = "CycloneGames/RPG Foundation/Movement/Movement Config 2D")]
     public class MovementConfig2D : Movement.MovementConfigBase
     {
         // Movement Type

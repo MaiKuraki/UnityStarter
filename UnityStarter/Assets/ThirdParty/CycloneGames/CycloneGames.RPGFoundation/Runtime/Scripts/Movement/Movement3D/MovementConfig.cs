@@ -2,7 +2,7 @@ using UnityEngine;
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement
 {
-    [CreateAssetMenu(fileName = "MovementConfig", menuName = "CycloneGames/RPG Foundation/Movement Config")]
+    [CreateAssetMenu(fileName = "MovementConfig", menuName = "CycloneGames/RPG Foundation/Movement/Movement Config")]
     public class MovementConfig : MovementConfigBase
     {
         // Special Movement - displayed in Custom Editor

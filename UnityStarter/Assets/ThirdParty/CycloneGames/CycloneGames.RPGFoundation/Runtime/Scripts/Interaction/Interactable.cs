@@ -20,6 +20,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         [SerializeField] protected InteractionChannel channel = InteractionChannel.Channel0;
 
         [SerializeField] protected float interactionCooldown;
+
+        [Tooltip("Minimum distance the interactable must move before updating its spatial grid position.")]
+        [SerializeField] protected float positionUpdateThreshold = 1f;
+
         [SerializeField] protected bool resetToIdleOnComplete = true;
 
         [SerializeField] protected bool useLocalization;
@@ -53,7 +57,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private string _pendingActionId;
         private InstigatorHandle _currentInstigator;
         private InteractionCancelReason _lastCancelReason;
-        private CancellationTokenSource _distanceCheckCts;
 
         // Requirements stored as array for 0-GC iteration
         private IInteractionRequirement[] _requirements;
@@ -76,6 +79,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         public float HoldDuration => holdDuration;
         public float MaxInteractionRange => maxInteractionRange;
         public bool IsBusy => IsInteracting;
+        public float PositionUpdateThreshold => positionUpdateThreshold;
 
         public Vector3 Position
         {
@@ -115,7 +119,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         protected virtual void OnDestroy()
         {
             CancelInteraction(InteractionCancelReason.TargetDestroyed);
-            StopDistanceMonitor();
+            _system?.UnregisterDistanceMonitor(this);
             OnProgressChanged = null;
             OnInteractionCancelled = null;
         }
@@ -144,8 +148,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             if (_system == null) return;
             Vector3 pos = Position;
             Vector3 diff = pos - _lastRegisteredPosition;
-            // Only update grid if moved more than 1 unit (avoid thrashing)
-            if (diff.x * diff.x + diff.y * diff.y + diff.z * diff.z > 1f)
+            // Only update grid if moved more than configured threshold (avoid thrashing)
+            float thresholdSqr = positionUpdateThreshold * positionUpdateThreshold;
+            if (diff.x * diff.x + diff.y * diff.y + diff.z * diff.z > thresholdSqr)
             {
                 _lastRegisteredPosition = pos;
                 _system.UpdatePosition(this);
@@ -222,13 +227,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             _interactionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
             // Start distance monitoring if configured
-            StartDistanceMonitor();
+            _system?.RegisterDistanceMonitor(this, instigator, maxInteractionRange);
 
             try
             {
                 if (!TrySetState(InteractionStateType.Starting))
                 {
-                    StopDistanceMonitor();
+                    _system?.UnregisterDistanceMonitor(this);
                     _currentInstigator = null;
                     _interactionCts?.Dispose();
                     _interactionCts = null;
@@ -265,7 +270,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             }
             finally
             {
-                StopDistanceMonitor();
+                _system?.UnregisterDistanceMonitor(this);
                 _pendingActionId = null;
                 _currentInstigator = null;
                 _interactionCts?.Dispose();
@@ -333,43 +338,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             _interactionCts?.Cancel();
             _interactionCts?.Dispose();
             _interactionCts = null;
-        }
-
-        private void StartDistanceMonitor()
-        {
-            if (maxInteractionRange <= 0f || _currentInstigator == null) return;
-            if (!_currentInstigator.TryGetPosition(out _)) return;
-
-            _distanceCheckCts = CancellationTokenSource.CreateLinkedTokenSource(_interactionCts.Token);
-            MonitorDistanceAsync(_distanceCheckCts.Token).Forget();
-        }
-
-        private void StopDistanceMonitor()
-        {
-            _distanceCheckCts?.Cancel();
-            _distanceCheckCts?.Dispose();
-            _distanceCheckCts = null;
-        }
-
-        private async UniTaskVoid MonitorDistanceAsync(CancellationToken ct)
-        {
-            float maxRangeSqr = maxInteractionRange * maxInteractionRange;
-            try
-            {
-                while (!ct.IsCancellationRequested)
-                {
-                    await UniTask.Yield(ct);
-                    if (_currentInstigator == null) break;
-                    if (!_currentInstigator.TryGetPosition(out Vector3 instigatorPos)) break;
-                    Vector3 diff = Position - instigatorPos;
-                    if (diff.sqrMagnitude > maxRangeSqr)
-                    {
-                        CancelInteraction(InteractionCancelReason.OutOfRange);
-                        return;
-                    }
-                }
-            }
-            catch (OperationCanceledException) { }
         }
 
 #if UNITY_EDITOR

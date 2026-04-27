@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using VitalRouter;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -15,6 +16,14 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private IDisposable _subscription;
         private SpatialHashGrid _spatialGrid;
         private bool _initialized;
+        private readonly List<DistanceMonitorEntry> _distanceMonitors = new(16);
+
+        private struct DistanceMonitorEntry
+        {
+            public IInteractable Target;
+            public InstigatorHandle Instigator;
+            public float MaxRangeSqr;
+        }
 
         private static InteractionSystem s_instance;
 
@@ -54,7 +63,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             this.cellSize = cellSize;
             _spatialGrid = new SpatialHashGrid(cellSize);
             EffectPoolSystem.Initialize();
-            InteractionDetector.ClearComponentCache();
             _initialized = true;
         }
 
@@ -63,10 +71,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             if (!_initialized) return;
             _subscription?.Dispose();
             _subscription = null;
+            _distanceMonitors.Clear();
             _spatialGrid?.Dispose();
             _spatialGrid = null;
             EffectPoolSystem.Dispose();
-            InteractionDetector.ClearComponentCache();
             OnAnyInteractionStarted = null;
             OnAnyInteractionCompleted = null;
             _initialized = false;
@@ -85,6 +93,50 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         public void UpdatePosition(IInteractable interactable)
         {
             _spatialGrid?.UpdatePosition(interactable, is2DMode);
+        }
+
+        public void RegisterDistanceMonitor(IInteractable target, InstigatorHandle instigator, float maxRange)
+        {
+            if (target == null || maxRange <= 0f) return;
+            for (int i = 0; i < _distanceMonitors.Count; i++)
+                if (_distanceMonitors[i].Target == target) return;
+            _distanceMonitors.Add(new DistanceMonitorEntry
+            {
+                Target = target,
+                Instigator = instigator,
+                MaxRangeSqr = maxRange * maxRange
+            });
+        }
+
+        public void UnregisterDistanceMonitor(IInteractable target)
+        {
+            for (int i = _distanceMonitors.Count - 1; i >= 0; i--)
+            {
+                if (_distanceMonitors[i].Target == target)
+                {
+                    _distanceMonitors.RemoveAt(i);
+                    return;
+                }
+            }
+        }
+
+        private void LateUpdate()
+        {
+            for (int i = _distanceMonitors.Count - 1; i >= 0; i--)
+            {
+                var entry = _distanceMonitors[i];
+                if (entry.Target == null || entry.Instigator == null || !entry.Target.IsInteracting)
+                {
+                    _distanceMonitors.RemoveAt(i);
+                    continue;
+                }
+                if (!entry.Instigator.TryGetPosition(out Vector3 pos)) continue;
+                if ((entry.Target.Position - pos).sqrMagnitude > entry.MaxRangeSqr)
+                {
+                    entry.Target.ForceEndInteraction(InteractionCancelReason.OutOfRange);
+                    _distanceMonitors.RemoveAt(i);
+                }
+            }
         }
 
         public async UniTask On(InteractionCommand command)

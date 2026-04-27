@@ -14,6 +14,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private List<ValidationIssue> _issues = new();
         private bool _autoFix = true;
         private int _fixedCount;
+        private bool _pendingRefresh;
 
         private enum Severity { Info, Warning, Error }
 
@@ -42,6 +43,8 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private void OnGUI()
         {
+            _pendingRefresh = false;
+
             DrawToolbar();
             DrawSummary();
 
@@ -50,6 +53,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             EditorGUILayout.EndScrollView();
 
             DrawFooter();
+
+            if (_pendingRefresh)
+                RunValidation();
         }
 
         private void DrawToolbar()
@@ -163,7 +169,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 if (GUILayout.Button("Fix", GUILayout.Width(40)))
                 {
                     issue.FixAction.Invoke();
-                    RunValidation();
+                    _pendingRefresh = true;
                 }
             }
 
