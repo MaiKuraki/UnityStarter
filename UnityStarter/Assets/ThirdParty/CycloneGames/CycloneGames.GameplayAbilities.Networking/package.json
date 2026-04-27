@@ -1,0 +1,27 @@
+{
+  "name": "com.cyclone-games.gameplay-abilities-networking",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.GameplayAbilities.Networking",
+  "description": "Network bridge for CycloneGames.GameplayAbilities. Provides RPC-based ability activation, effect replication, attribute/tag sync, prediction key lifecycle, full-state join/reconnect, and security policies.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.networking": "1.0.0",
+    "com.cyclone-games.gameplay-abilities": "1.0.0",
+    "com.cyclone-games.gameplay-tags": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "GAS",
+    "GameplayAbilities",
+    "Networking",
+    "AbilitySystem",
+    "Replication"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

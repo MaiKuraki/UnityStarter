@@ -5,7 +5,7 @@ using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 
-namespace CycloneGames.GameplayTags.Editor
+namespace CycloneGames.GameplayTags.Unity.Editor
 {
     [CustomPropertyDrawer(typeof(GameplayTag))]
     public class GameplayTagPropertyDrawer : PropertyDrawer

@@ -5,7 +5,7 @@ using System.Collections.Generic;
 using CycloneGames.GameplayTags.Core;
 using UnityEditor.SceneManagement;
 
-namespace CycloneGames.GameplayTags.Editor
+namespace CycloneGames.GameplayTags.Unity.Editor
 {
     public class GameplayTagValidationReporter : EditorWindow
     {

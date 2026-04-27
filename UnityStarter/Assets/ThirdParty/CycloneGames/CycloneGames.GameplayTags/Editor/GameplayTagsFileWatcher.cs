@@ -3,7 +3,7 @@ using UnityEditor;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayTags.Unity.Runtime;
 
-namespace CycloneGames.GameplayTags.Editor
+namespace CycloneGames.GameplayTags.Unity.Editor
 {
    [InitializeOnLoad]
    public static class GameplayTagsFileWatcher

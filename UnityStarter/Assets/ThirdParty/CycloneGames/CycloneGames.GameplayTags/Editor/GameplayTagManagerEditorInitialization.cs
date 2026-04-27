@@ -1,7 +1,7 @@
 using CycloneGames.GameplayTags.Core;
 using UnityEditor;
 
-namespace CycloneGames.GameplayTags.Editor
+namespace CycloneGames.GameplayTags.Unity.Editor
 {
     /// <summary>
     /// This class ensures that the GameplayTagManager is initialized when the Unity editor loads.
