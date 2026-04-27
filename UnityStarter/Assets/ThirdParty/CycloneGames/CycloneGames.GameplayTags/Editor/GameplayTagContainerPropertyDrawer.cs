@@ -4,7 +4,7 @@ using UnityEngine;
 using System.Text;
 using CycloneGames.GameplayTags.Core;
 
-namespace CycloneGames.GameplayTags.Editor
+namespace CycloneGames.GameplayTags.Unity.Editor
 {
    [CustomPropertyDrawer(typeof(GameplayTagContainer))]
    public class GameplayTagContainerPropertyDrawer : PropertyDrawer

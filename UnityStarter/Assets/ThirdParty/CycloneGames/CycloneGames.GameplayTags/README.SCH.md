@@ -91,7 +91,7 @@ CycloneGames.GameplayTags.Core        ← 纯 C#（无 Unity 引用，allowUnsaf
     ↑
 CycloneGames.GameplayTags.Unity       ← Unity 集成（Burst/Jobs/ECS，条件编译）
     ↑
-CycloneGames.GameplayTags.Editor      ← IMGUI 编辑器窗口 & Inspector
+CycloneGames.GameplayTags.Unity.Editor      ← IMGUI 编辑器窗口 & Inspector
     ↑
 CycloneGames.GameplayTags.SourceGenerator  ← Roslyn Source Generator（编译时）
 ```

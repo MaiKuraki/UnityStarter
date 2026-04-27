@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.GameplayAbilities.Networking.Unity.Editor",
+    "rootNamespace": "CycloneGames.GameplayAbilities.Networking",
+    "references": [
+        "CycloneGames.GameplayAbilities.Networking.Core",
+        "CycloneGames.GameplayAbilities.Networking.Unity.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

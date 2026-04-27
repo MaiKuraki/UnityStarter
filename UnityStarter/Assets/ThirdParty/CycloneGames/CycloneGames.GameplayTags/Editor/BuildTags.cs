@@ -5,7 +5,7 @@ using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 using CycloneGames.GameplayTags.Core;
 
-namespace CycloneGames.GameplayTags.Editor
+namespace CycloneGames.GameplayTags.Unity.Editor
 {
    public class BuildTags : IPreprocessBuildWithReport, IPostprocessBuildWithReport
    {

@@ -2,7 +2,8 @@
     "name": "CycloneGames.Networking.DOD.Runtime",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.Networking.Runtime",
+        "CycloneGames.Networking.Core",
+        "CycloneGames.Networking.Unity.Runtime",
         "Unity.Burst",
         "Unity.Collections",
         "Unity.Mathematics",
