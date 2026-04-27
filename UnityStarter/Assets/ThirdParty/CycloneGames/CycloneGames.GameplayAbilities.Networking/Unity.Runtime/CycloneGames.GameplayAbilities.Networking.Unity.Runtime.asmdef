@@ -1,0 +1,20 @@
+{
+    "name": "CycloneGames.GameplayAbilities.Networking.Unity.Runtime",
+    "rootNamespace": "CycloneGames.GameplayAbilities.Networking",
+    "references": [
+        "CycloneGames.Networking.Core",
+        "CycloneGames.GameplayAbilities.Networking.Core",
+        "CycloneGames.GameplayAbilities.Core",
+        "CycloneGames.GameplayAbilities.Runtime",
+        "CycloneGames.GameplayTags.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

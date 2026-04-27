@@ -91,7 +91,7 @@ CycloneGames.GameplayTags.Core        ← Pure C# (no Unity references, allowUns
     ↑
 CycloneGames.GameplayTags.Unity       ← Unity integration (Burst/Jobs/ECS, conditional)
     ↑
-CycloneGames.GameplayTags.Editor      ← IMGUI editor windows & inspectors
+CycloneGames.GameplayTags.Unity.Editor      ← IMGUI editor windows & inspectors
     ↑
 CycloneGames.GameplayTags.SourceGenerator  ← Roslyn Source Generator (compile-time)
 ```

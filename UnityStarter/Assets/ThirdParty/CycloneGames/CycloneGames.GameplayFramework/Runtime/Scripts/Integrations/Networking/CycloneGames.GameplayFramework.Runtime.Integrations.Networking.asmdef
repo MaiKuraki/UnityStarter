@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Integrations.Networking",
     "references": [
         "CycloneGames.GameplayFramework.Runtime",
-        "CycloneGames.Networking.Runtime"
+        "CycloneGames.Networking.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

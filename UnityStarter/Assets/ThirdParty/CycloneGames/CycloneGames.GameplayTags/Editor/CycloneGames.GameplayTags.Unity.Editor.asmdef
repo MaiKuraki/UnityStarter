@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.GameplayTags.Unity.Editor",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.GameplayTags.Unity.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
