@@ -4,7 +4,7 @@ using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 
-namespace CycloneGames.GameplayTags.Editor
+namespace CycloneGames.GameplayTags.Unity.Editor
 {
     public class GameplayTagTreeView : TreeView
     {

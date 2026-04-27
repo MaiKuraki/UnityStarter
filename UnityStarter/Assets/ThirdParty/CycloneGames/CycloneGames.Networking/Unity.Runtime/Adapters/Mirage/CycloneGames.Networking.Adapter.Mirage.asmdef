@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.Networking.Adapter.Mirage",
+    "rootNamespace": "",
+    "references": [
+        "Mirage",
+        "CycloneGames.Networking.Core",
+        "CycloneGames.Logger"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "MIRAGE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.mirage.networking",
+            "expression": "",
+            "define": "MIRAGE"
+        }
+    ],
+    "noEngineReferences": false
+}

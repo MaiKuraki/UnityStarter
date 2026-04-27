@@ -1,0 +1,14 @@
+{
+    "name": "CycloneGames.Networking.Core",
+    "rootNamespace": "CycloneGames.Networking",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}
