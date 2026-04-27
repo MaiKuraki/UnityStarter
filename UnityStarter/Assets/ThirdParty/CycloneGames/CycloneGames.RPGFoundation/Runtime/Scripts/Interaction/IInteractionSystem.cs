@@ -41,6 +41,17 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         /// <param name="instigator">The instigator initiating the interaction (e.g., player).</param>
         UniTask ProcessInteractionAsync(IInteractable target, InstigatorHandle instigator);
 
+        /// <summary>
+        /// Register an interactable for centralized distance monitoring.
+        /// The system checks each frame whether the instigator has moved beyond maxRange,
+        /// automatically cancelling the interaction with <see cref="InteractionCancelReason.OutOfRange"/>.
+        /// Replaces per-interactable UniTask polling with a single batched loop.
+        /// </summary>
+        void RegisterDistanceMonitor(IInteractable target, InstigatorHandle instigator, float maxRange);
+
+        /// <summary>Remove an interactable from distance monitoring.</summary>
+        void UnregisterDistanceMonitor(IInteractable target);
+
         /// <summary>Fired when any interaction begins globally. Parameters: (target, instigator).</summary>
         event Action<IInteractable, InstigatorHandle> OnAnyInteractionStarted;
 

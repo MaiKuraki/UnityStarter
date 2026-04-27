@@ -55,6 +55,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         [Tooltip("Time without target before entering sleep mode (milliseconds)")]
         [SerializeField] private float sleepEnterMs = 1000f;
 
+        [Header("LOS Optimization")]
+        [Tooltip("Maximum LOS raycasts per detection cycle. 0 = unlimited.")]
+        [SerializeField] private int maxLosChecksPerFrame;
+        [Tooltip("Cache LOS results for stationary objects across frames.")]
+        [SerializeField] private bool useLosSpatialCache = true;
+
         [Header("References")]
         [SerializeField] private Transform detectionOrigin;
 
@@ -81,11 +87,18 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         public IReadOnlyList<InteractionCandidate> NearbyInteractables => _nearbyCandidates;
         public event Action<IReadOnlyList<InteractionCandidate>> OnNearbyInteractablesChanged;
 
-        // Lock-free component cache using double-checked pattern
-        private static Dictionary<int, IInteractable> s_componentCache = new(128);
-        private static int s_cacheGeneration;
-        private static float s_lastCacheCleanupTime;
-        private const float CacheCleanupInterval = 10f;
+        // Per-detector component cache (replaces static Copy-on-Write to eliminate GC at scale)
+        private Dictionary<int, IInteractable> _componentCache;
+
+        // LOS optimization
+        private struct LosCacheEntry
+        {
+            public bool IsObstructed;
+            public Vector3 CachedPosition;
+            public float CachedTime;
+        }
+        private Dictionary<int, LosCacheEntry> _losCache;
+        private int _losCheckCount;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         private readonly System.Text.StringBuilder _debugSb = new(512);
@@ -109,6 +122,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             _colliderBuffer2D = new Collider2D[maxInteractables];
             _raycastHits3D = new RaycastHit[16];
             _raycastHits2D = new RaycastHit2D[16];
+            _componentCache = new Dictionary<int, IInteractable>(maxInteractables);
+            _losCache = new Dictionary<int, LosCacheEntry>(maxInteractables);
             _noTargetStartTime = Time.time;
             _cachedInstigator = new GameObjectInstigator(gameObject);
         }
@@ -130,19 +145,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
             _lastDetectionTime = currentTime;
 
-            // Periodic cache cleanup (infrequent, amortized)
-            if (currentTime - s_lastCacheCleanupTime > CacheCleanupInterval)
-            {
-                CleanComponentCache();
-                s_lastCacheCleanupTime = currentTime;
-            }
-
             PerformDetection();
         }
 
         private void OnDestroy()
         {
             _currentInteractable?.Dispose();
+            _componentCache?.Clear();
+            _componentCache = null;
+            _losCache?.Clear();
+            _losCache = null;
             OnNearbyInteractablesChanged = null;
         }
 
@@ -193,6 +205,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
         private void PerformDetection()
         {
+            _losCheckCount = 0;
             if (detectionMode == DetectionMode.SpatialHash && _system?.SpatialGrid != null)
                 PerformSpatialHashDetection();
             else if (detectionMode == DetectionMode.Physics2D)
@@ -246,17 +259,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 float dist = math.sqrt(distSqr);
                 Vector3 dir = dist > 0.001f ? diff / dist : originFwd;
 
-                // LOS check: use Physics or Physics2D based on mode
-                if (is2D)
-                {
-                    if (IsObstructed2D(originPos, dir, dist)) continue;
-                }
-                else
-                {
-                    MonoBehaviour mb = interactable as MonoBehaviour;
-                    Transform targetTransform = mb != null ? mb.transform : null;
-                    if (IsObstructed3D(originPos, dir, dist, targetTransform)) continue;
-                }
+                MonoBehaviour mb = interactable as MonoBehaviour;
+                Transform targetTransform = mb != null ? mb.transform : null;
+                if (is2D
+                    ? CheckLos2D(new Vector2(originPos.x, originPos.y), new Vector2(dir.x, dir.y), dist, interactable)
+                    : CheckLos3D(originPos, dir, dist, targetTransform, interactable))
+                    continue;
 
                 float dot = Vector3.Dot(originFwd, dir);
                 float score = interactable.Priority * priorityWeight + dot * angleWeight - (dist / detectionRadius) * distanceWeight;
@@ -322,7 +330,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 float dist = math.sqrt(distSqr);
                 Vector3 dir = dist > 0.001f ? diff / dist : originFwd;
 
-                if (IsObstructed3D(originPos, dir, dist, col.transform))
+                if (CheckLos3D(originPos, dir, dist, col.transform, interactable))
                 {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     _debugSb.Append("  [").Append(col.name).AppendLine("] Blocked");
@@ -392,7 +400,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 float dist = math.sqrt(distSqr);
                 Vector2 dir = dist > 0.001f ? diff / dist : originFwd;
 
-                if (IsObstructed2D(origin2D, dir, dist))
+                if (CheckLos2D(origin2D, dir, dist, interactable))
                 {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                     _debugSb.Append("  [").Append(col.name).AppendLine("] Blocked");
@@ -417,23 +425,29 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void EnsureSortBufferCapacity(int candidateCount)
         {
+            if (candidateCount > maxInteractables) candidateCount = maxInteractables;
             if (_nearbySortBuffer.Length < candidateCount)
                 _nearbySortBuffer = new InteractionCandidate[candidateCount];
         }
 
         private void ApplyNearbyAndBest()
         {
-            // Sort candidates by score descending (insertion sort — fast for small N)
-            for (int i = 1; i < _nearbyCount; i++)
+            // Sort candidates by score descending
+            if (_nearbyCount > 32)
+                QuickSortByScore(_nearbySortBuffer, 0, _nearbyCount - 1);
+            else
             {
-                var key = _nearbySortBuffer[i];
-                int j = i - 1;
-                while (j >= 0 && _nearbySortBuffer[j].Score < key.Score)
+                for (int i = 1; i < _nearbyCount; i++)
                 {
-                    _nearbySortBuffer[j + 1] = _nearbySortBuffer[j];
-                    j--;
+                    var key = _nearbySortBuffer[i];
+                    int j = i - 1;
+                    while (j >= 0 && _nearbySortBuffer[j].Score < key.Score)
+                    {
+                        _nearbySortBuffer[j + 1] = _nearbySortBuffer[j];
+                        j--;
+                    }
+                    _nearbySortBuffer[j + 1] = key;
                 }
-                _nearbySortBuffer[j + 1] = key;
             }
 
             // Populate nearby list (capped at maxNearbyCandidates)
@@ -494,76 +508,119 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             return false;
         }
 
-        // 3D cache: lock-free read, copy-on-write for thread safety
-        private static IInteractable GetCachedInteractable3D(Collider col)
+        private bool CheckLos3D(Vector3 origin, Vector3 dir, float dist, Transform targetTransform, IInteractable interactable)
         {
-            int id = col.GetInstanceID();
-            var cache = s_componentCache;
+            if (maxLosChecksPerFrame > 0 && _losCheckCount >= maxLosChecksPerFrame)
+                return false;
 
-            if (cache.TryGetValue(id, out IInteractable cached))
+            if (useLosSpatialCache && interactable is MonoBehaviour mb)
             {
-                if (cached is UnityEngine.Object obj && obj == null)
+                int key = mb.GetInstanceID();
+                if (_losCache.TryGetValue(key, out var entry))
                 {
-                    // Stale entry — will be cleaned up in periodic sweep
-                    return null;
+                    if ((entry.CachedPosition - interactable.Position).sqrMagnitude < 0.0001f
+                        && Time.time - entry.CachedTime < 0.5f)
+                        return entry.IsObstructed;
                 }
-                return cached;
             }
 
-            IInteractable interactable = col.GetComponent<IInteractable>();
-            if (interactable != null)
+            _losCheckCount++;
+            bool obstructed = IsObstructed3D(origin, dir, dist, targetTransform);
+
+            if (useLosSpatialCache && interactable is MonoBehaviour mb2)
             {
-                // Copy-on-write: create new dictionary snapshot
-                var newCache = new Dictionary<int, IInteractable>(cache);
-                newCache[id] = interactable;
-                s_componentCache = newCache;
+                int key = mb2.GetInstanceID();
+                _losCache[key] = new LosCacheEntry
+                {
+                    IsObstructed = obstructed,
+                    CachedPosition = interactable.Position,
+                    CachedTime = Time.time
+                };
             }
 
-            return interactable;
+            return obstructed;
         }
 
-        // 2D cache: same pattern as 3D
-        private static IInteractable GetCachedInteractable2D(Collider2D col)
+        private bool CheckLos2D(Vector2 origin, Vector2 dir, float dist, IInteractable interactable)
+        {
+            if (maxLosChecksPerFrame > 0 && _losCheckCount >= maxLosChecksPerFrame)
+                return false;
+
+            if (useLosSpatialCache && interactable is MonoBehaviour mb)
+            {
+                int key = mb.GetInstanceID();
+                if (_losCache.TryGetValue(key, out var entry))
+                {
+                    if ((entry.CachedPosition - (Vector3)interactable.Position).sqrMagnitude < 0.0001f
+                        && Time.time - entry.CachedTime < 0.5f)
+                        return entry.IsObstructed;
+                }
+            }
+
+            _losCheckCount++;
+            bool obstructed = IsObstructed2D(origin, dir, dist);
+
+            if (useLosSpatialCache && interactable is MonoBehaviour mb2)
+            {
+                int key = mb2.GetInstanceID();
+                _losCache[key] = new LosCacheEntry
+                {
+                    IsObstructed = obstructed,
+                    CachedPosition = interactable.Position,
+                    CachedTime = Time.time
+                };
+            }
+
+            return obstructed;
+        }
+
+        private static void QuickSortByScore(InteractionCandidate[] arr, int left, int right)
+        {
+            if (left >= right) return;
+            int mid = (left + right) / 2;
+            if (arr[left].Score < arr[mid].Score) { var t = arr[left]; arr[left] = arr[mid]; arr[mid] = t; }
+            if (arr[left].Score < arr[right].Score) { var t = arr[left]; arr[left] = arr[right]; arr[right] = t; }
+            if (arr[mid].Score < arr[right].Score) { var t = arr[mid]; arr[mid] = arr[right]; arr[right] = t; }
+            float pivot = arr[right].Score;
+            int i = left - 1;
+            for (int j = left; j < right; j++)
+            {
+                if (arr[j].Score >= pivot) { i++; var t = arr[i]; arr[i] = arr[j]; arr[j] = t; }
+            }
+            var ts = arr[i + 1]; arr[i + 1] = arr[right]; arr[right] = ts;
+            int partition = i + 1;
+            QuickSortByScore(arr, left, partition - 1);
+            QuickSortByScore(arr, partition + 1, right);
+        }
+
+        private IInteractable GetCachedInteractable3D(Collider col)
         {
             int id = col.GetInstanceID();
-            var cache = s_componentCache;
-
-            if (cache.TryGetValue(id, out IInteractable cached))
+            if (_componentCache.TryGetValue(id, out IInteractable cached))
             {
                 if (cached is UnityEngine.Object obj && obj == null)
                     return null;
                 return cached;
             }
-
             IInteractable interactable = col.GetComponent<IInteractable>();
             if (interactable != null)
-            {
-                var newCache = new Dictionary<int, IInteractable>(cache);
-                newCache[id] = interactable;
-                s_componentCache = newCache;
-            }
-
+                _componentCache[id] = interactable;
             return interactable;
         }
 
-        private static void CleanComponentCache()
+        private IInteractable GetCachedInteractable2D(Collider2D col)
         {
-            var cache = s_componentCache;
-            var newCache = new Dictionary<int, IInteractable>(cache.Count);
-
-            foreach (var kvp in cache)
+            int id = col.GetInstanceID();
+            if (_componentCache.TryGetValue(id, out IInteractable cached))
             {
-                if (kvp.Value is UnityEngine.Object obj && obj == null) continue;
-                if (kvp.Value == null) continue;
-                newCache[kvp.Key] = kvp.Value;
+                if (cached is UnityEngine.Object obj && obj == null)
+                    return null;
+                return cached;
             }
-
-            s_componentCache = newCache;
-        }
-
-        public static void ClearComponentCache()
-        {
-            s_componentCache = new Dictionary<int, IInteractable>(128);
+            IInteractable interactable = col.GetComponent<IInteractable>();
+            if (interactable != null)
+                _componentCache[id] = interactable;
+            return interactable;
         }
 
         public void TryInteract()
