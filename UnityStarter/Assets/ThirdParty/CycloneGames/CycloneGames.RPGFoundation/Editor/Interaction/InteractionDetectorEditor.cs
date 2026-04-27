@@ -32,6 +32,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private SerializedProperty _sleepIntervalMs;
         private SerializedProperty _sleepEnterMs;
 
+        private SerializedProperty _maxLosChecksPerFrame;
+        private SerializedProperty _useLosSpatialCache;
+
         private SerializedProperty _detectionOrigin;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -40,6 +43,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private static bool _detectionFoldout = true;
         private static bool _scoringFoldout = true;
+        private static bool _losFoldout = true;
         private static bool _lodFoldout = true;
         private static bool _nearbyFoldout = true;
         private static bool _debugFoldout = true;
@@ -97,6 +101,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             _sleepIntervalMs = serializedObject.FindProperty("sleepIntervalMs");
             _sleepEnterMs = serializedObject.FindProperty("sleepEnterMs");
 
+            _maxLosChecksPerFrame = serializedObject.FindProperty("maxLosChecksPerFrame");
+            _useLosSpatialCache = serializedObject.FindProperty("useLosSpatialCache");
+
             _detectionOrigin = serializedObject.FindProperty("detectionOrigin");
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -122,6 +129,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
             DrawDetectionSettings();
             DrawScoringSettings();
+            DrawLosSettings();
             DrawLODSettings();
             DrawNearbySettings();
             DrawDebugSettings();
@@ -259,6 +267,30 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                     EditorGUILayout.PropertyField(_priorityWeight, new GUIContent("Priority Weight", "Multiplier for Priority in scoring. Higher = Priority dominates."));
                     EditorGUILayout.PropertyField(_distanceWeight, new GUIContent("Distance Weight", "Penalty for farther objects"));
                     EditorGUILayout.PropertyField(_angleWeight, new GUIContent("Angle Weight", "Bonus for objects in front"));
+                }
+                EditorGUI.indentLevel--;
+            }
+            EditorGUILayout.EndFoldoutHeaderGroup();
+        }
+
+        private void DrawLosSettings()
+        {
+            _losFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_losFoldout, "👁 Line of Sight");
+            if (_losFoldout)
+            {
+                EditorGUI.indentLevel++;
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                {
+                    EditorGUILayout.HelpBox(
+                        "Limits per-frame raycast count to avoid physics bottlenecks\n" +
+                        "when many interactables overlap in the detection area.\n" +
+                        "Spatial cache reuses LOS results for stationary objects.",
+                        MessageType.None);
+
+                    EditorGUILayout.PropertyField(_maxLosChecksPerFrame,
+                        new GUIContent("Max Raycasts/Frame", "Maximum LOS checks per detection cycle. 0 = unlimited."));
+                    EditorGUILayout.PropertyField(_useLosSpatialCache,
+                        new GUIContent("Cache Stationary Results", "Reuse LOS results for objects that haven't moved (0.5s TTL)."));
                 }
                 EditorGUI.indentLevel--;
             }
