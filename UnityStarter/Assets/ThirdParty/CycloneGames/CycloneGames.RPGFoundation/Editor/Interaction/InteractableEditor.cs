@@ -22,6 +22,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private SerializedProperty _channel;
         private SerializedProperty _holdDuration;
         private SerializedProperty _maxInteractionRange;
+        private SerializedProperty _positionUpdateThreshold;
         private SerializedProperty _actions;
 
         private SerializedProperty _useLocalization;
@@ -66,6 +67,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             _channel = serializedObject.FindProperty("channel");
             _holdDuration = serializedObject.FindProperty("holdDuration");
             _maxInteractionRange = serializedObject.FindProperty("maxInteractionRange");
+            _positionUpdateThreshold = serializedObject.FindProperty("positionUpdateThreshold");
             _actions = serializedObject.FindProperty("actions");
 
             _useLocalization = serializedObject.FindProperty("useLocalization");
@@ -191,14 +193,21 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
                     GUI.color = Color.white;
 
+                    bool interacting = _target.IsInteracting;
+                    Color interactColor = interacting ? ColorInteracting : ColorDisabled;
                     EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField("Is Interacting", GUILayout.Width(100));
-                    EditorGUILayout.Toggle(_target.IsInteracting);
+                    EditorGUILayout.LabelField("Interacting", GUILayout.Width(100));
+                    GUI.color = interactColor;
+                    EditorGUILayout.LabelField(interacting ? "Yes" : "—", EditorStyles.boldLabel);
+                    GUI.color = Color.white;
                     EditorGUILayout.EndHorizontal();
 
+                    bool canInteract = _target.IsInteractable;
                     EditorGUILayout.BeginHorizontal();
                     EditorGUILayout.LabelField("Can Interact", GUILayout.Width(100));
-                    EditorGUILayout.Toggle(_target.IsInteractable);
+                    GUI.color = canInteract ? ColorIdle : ColorCooldown;
+                    EditorGUILayout.LabelField(canInteract ? "Available" : "Blocked", EditorStyles.boldLabel);
+                    GUI.color = Color.white;
                     EditorGUILayout.EndHorizontal();
 
                     // Hold interaction progress
@@ -318,6 +327,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                     EditorGUILayout.Space(4);
 
                     EditorGUILayout.PropertyField(_holdDuration, new GUIContent("Hold Duration", "Required hold time in seconds. 0 = instant interaction."));
+                    EditorGUILayout.PropertyField(_positionUpdateThreshold, new GUIContent("Position Update Threshold", "Min distance the object must move before updating its spatial grid position."));
                     if (_holdDuration.floatValue > 0)
                     {
                         EditorGUI.indentLevel++;
@@ -406,6 +416,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             "interactionDistance", "interactionPoint", "interactionCooldown",
             "resetToIdleOnComplete", "useLocalization", "promptData",
             "channel", "actions", "holdDuration", "maxInteractionRange",
+            "positionUpdateThreshold",
             "onInteract", "onFocus", "onDefocus"
         };
 
