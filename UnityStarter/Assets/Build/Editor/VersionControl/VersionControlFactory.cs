@@ -1,3 +1,4 @@
+using System.IO;
 using UnityEngine;
 
 namespace Build.VersionControl.Editor
@@ -26,6 +27,45 @@ namespace Build.VersionControl.Editor
                     Debug.LogWarning($"[VC] Unknown version control type: {vcType}. Using fallback provider.");
                     return new VersionControlProviderFallback();
             }
+        }
+
+        /// <summary>
+        /// Auto-detects the version control system in use by checking for
+        /// well-known marker files/directories and environment variables.
+        /// </summary>
+        public static VersionControlType Detect()
+        {
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+
+            // Walk upward to find Git root (handles nested Unity projects)
+            string dir = Path.GetFullPath(Application.dataPath);
+            string root = Path.GetPathRoot(dir);
+            while (dir != null && dir.Length >= root.Length)
+            {
+                if (Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git")))
+                {
+                    Debug.Log("[VC] Detected version control: Git");
+                    return VersionControlType.Git;
+                }
+                if (Directory.Exists(Path.Combine(dir, ".svn")))
+                {
+                    Debug.Log("[VC] Detected version control: SVN");
+                    return VersionControlType.SVN;
+                }
+                dir = Path.GetDirectoryName(dir);
+            }
+
+            // Check Perforce environment variables
+            if (!string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("P4PORT"))
+                || !string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("P4USER"))
+                || !string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("P4CLIENT")))
+            {
+                Debug.Log("[VC] Detected version control: Perforce (via environment variables)");
+                return VersionControlType.Perforce;
+            }
+
+            Debug.Log("[VC] No version control detected. Defaulting to Git.");
+            return VersionControlType.Git;
         }
 
         private sealed class VersionControlProviderFallback : VersionControlProviderBase

@@ -28,7 +28,7 @@ namespace Build.Pipeline.Editor
 
         private static BuildData buildData;
 
-        private static VersionControlType DefaultVersionControlType = VersionControlType.Git;
+        private static VersionControlType DefaultVersionControlType = VersionControlFactory.Detect();
         private static IVersionControlProvider VersionControlProvider;
         private static void InitializeVersionControl(VersionControlType vcType)
         {
