@@ -438,7 +438,7 @@ namespace Build.Pipeline.Editor
             }
             else // GitCommitCount (default)
             {
-                IVersionControlProvider provider = VersionControlFactory.CreateProvider(VersionControlType.Git);
+                IVersionControlProvider provider = VersionControlFactory.CreateProvider(VersionControlFactory.Detect());
                 if (provider == null)
                 {
                     Debug.LogWarning("[AddressablesVersionBuildProcessor] Git provider not available, using default version '0'");

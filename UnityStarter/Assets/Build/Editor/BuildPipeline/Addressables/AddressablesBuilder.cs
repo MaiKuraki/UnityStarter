@@ -752,7 +752,7 @@ namespace Build.Pipeline.Editor
             }
             else
             {
-                IVersionControlProvider provider = VersionControlFactory.CreateProvider(VersionControlType.Git);
+                IVersionControlProvider provider = VersionControlFactory.CreateProvider(VersionControlFactory.Detect());
                 string count = provider.GetCommitCount();
                 if (string.IsNullOrEmpty(count)) count = "0";
                 return $"{config.versionPrefix}.{count}";
