@@ -29,23 +29,23 @@ namespace Build.Pipeline.Editor
                 throw new Exception($"Error creating destination directory: {destinationFolderPath}. Exception: {ex.Message}");
             }
 
+            // Pre-build ignore extension set for O(1) lookup
+            HashSet<string> ignoreSet = null;
+            if (ignoreExtensions != null && ignoreExtensions.Length > 0)
+            {
+                ignoreSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string ext in ignoreExtensions)
+                {
+                    ignoreSet.Add(ext);
+                }
+            }
+
             // Get the files in the source directory and copy them to the destination directory
             foreach (string sourceFilePath in Directory.GetFiles(sourceFolderPath, "*", SearchOption.AllDirectories))
             {
-                // Check ignore extensions
-                if (ignoreExtensions != null)
+                if (ignoreSet != null && ignoreSet.Contains(Path.GetExtension(sourceFilePath)))
                 {
-                    string ext = Path.GetExtension(sourceFilePath);
-                    bool skip = false;
-                    foreach (string ignoreExt in ignoreExtensions)
-                    {
-                        if (ext.Equals(ignoreExt, StringComparison.OrdinalIgnoreCase))
-                        {
-                            skip = true;
-                            break;
-                        }
-                    }
-                    if (skip) continue;
+                    continue;
                 }
 
                 // Create a relative path that is the same for both source and destination

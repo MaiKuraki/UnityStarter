@@ -9,6 +9,7 @@ namespace Build.Pipeline.Editor
 {
     public static class AddressablesBuilder
     {
+        public const string DEFAULT_BUILD_OUTPUT_DIR = "Build/AddressablesContent";
         private const string DEBUG_FLAG = "<color=cyan>[Addressables]</color>";
 
         [MenuItem("Build/Addressables/Build Content (From Config)", priority = 100)]
@@ -103,8 +104,8 @@ namespace Build.Pipeline.Editor
                             string outputDir = useBuildOutputDirectory;
                             if (string.IsNullOrEmpty(outputDir))
                             {
-                                outputDir = "Build/AddressablesContent";
-                                Debug.Log($"{DEBUG_FLAG} BuildOutputDirectory is empty, using default path: {outputDir}");
+                                outputDir = DEFAULT_BUILD_OUTPUT_DIR;
+                            Debug.Log($"{DEBUG_FLAG} BuildOutputDirectory is empty, using default path: {outputDir}");
                             }
                             CopyBuildResultToOutput(buildTarget, outputDir, useBuildRemoteCatalog);
                         }
@@ -549,7 +550,7 @@ namespace Build.Pipeline.Editor
                 string targetDir = outputDirectory;
                 if (string.IsNullOrEmpty(targetDir))
                 {
-                    targetDir = "Build/AddressablesContent";
+                    targetDir = DEFAULT_BUILD_OUTPUT_DIR;
                 }
 
                 string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));

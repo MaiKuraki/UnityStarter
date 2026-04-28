@@ -13,31 +13,22 @@ namespace Build.Pipeline.Editor
             try
             {
                 Debug.Log($"{DEBUG_FLAG} Probing Buildalon for SyncSolution...");
-                var assemblies = System.AppDomain.CurrentDomain.GetAssemblies();
-                bool toolsFound = false;
-                bool invoked = false;
-                foreach (var asm in assemblies)
-                {
-                    var toolsType = asm.GetType("Buildalon.Editor.BuildPipeline.UnityPlayerBuildTools");
-                    if (toolsType == null) continue;
-                    toolsFound = true;
-                    var syncMethod = toolsType.GetMethod("SyncSolution", BindingFlags.Public | BindingFlags.Static);
-                    if (syncMethod != null)
-                    {
-                        syncMethod.Invoke(null, null);
-                        Debug.Log($"{DEBUG_FLAG} Buildalon SyncSolution executed.");
-                        invoked = true;
-                    }
-                    return;
-                }
-                if (!toolsFound)
+                Type toolsType = ReflectionCache.GetType("Buildalon.Editor.BuildPipeline.UnityPlayerBuildTools");
+                if (toolsType == null)
                 {
                     Debug.Log($"{DEBUG_FLAG} Buildalon not detected. Skipping SyncSolution.");
+                    return;
                 }
-                else if (!invoked)
+
+                MethodInfo syncMethod = ReflectionCache.GetMethod(toolsType, "SyncSolution", BindingFlags.Public | BindingFlags.Static);
+                if (syncMethod == null)
                 {
                     Debug.Log($"{DEBUG_FLAG} Buildalon detected but SyncSolution method not found.");
+                    return;
                 }
+
+                syncMethod.Invoke(null, null);
+                Debug.Log($"{DEBUG_FLAG} Buildalon SyncSolution executed.");
             }
             catch (Exception ex)
             {
