@@ -473,8 +473,21 @@ namespace CycloneGames.UIFramework.Runtime
                 onUIWindowCreated?.Invoke(null);
                 return null;
             }
+
+            // UIRoot might be created later by foundation bootstrap (e.g. delayed resolver entry),
+            // so always try to resolve it again right before layer lookup.
+            var currentRoot = TryGetUIRoot();
+            if (currentRoot == null)
+            {
+                CLogger.LogError($"{DEBUG_FLAG} UIRoot is null while opening '{windowName}'. Ensure foundation UIRoot entry is instantiated before opening UI.");
+                CleanupOpenState(windowName, openCts);
+                tcs.TrySetException(new System.NullReferenceException($"UIRoot is null for {windowName}"));
+                onUIWindowCreated?.Invoke(null);
+                return null;
+            }
+
             string layerName = windowConfig.Layer.LayerName;
-            UILayer uiLayer = uiRoot.GetUILayer(layerName);
+            UILayer uiLayer = currentRoot.GetUILayer(layerName);
 
             if (uiLayer == null)
             {
