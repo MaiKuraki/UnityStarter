@@ -1,90 +1,70 @@
+using System;
 using System.Diagnostics;
-using Build.Data;
-using UnityEditor;
+using System.Text;
 using UnityEngine;
 
 namespace Build.VersionControl.Editor
 {
-    public class VersionControlProviderGit : IVersionControlProvider
+    public class VersionControlProviderGit : VersionControlProviderBase
     {
-        public string GetCommitHash()
-        {
-            ProcessStartInfo startInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                Arguments = "rev-parse HEAD",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+        private const string GIT_EXECUTABLE = "git";
+        private const int PROCESS_TIMEOUT_MS = 10000;
 
-            using (Process process = Process.Start(startInfo))
-            {
-                string output = process.StandardOutput.ReadToEnd();
-                process.WaitForExit();
-                return output.Trim();
-            }
+        public override string GetCommitHash()
+        {
+            return RunGitCommand("rev-parse --short=7 HEAD") ?? "unknown";
         }
 
-        public string GetCommitCount()
+        public override string GetCommitCount()
         {
-            ProcessStartInfo startInfo = new ProcessStartInfo
-            {
-                FileName = "git",
-                Arguments = "rev-list --count HEAD",
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            using (Process process = Process.Start(startInfo))
-            {
-                string output = process.StandardOutput.ReadToEnd();
-                process.WaitForExit();
-                return output.Trim();
-            }
+            return RunGitCommand("rev-list --count HEAD") ?? "0";
         }
 
-        public void UpdateVersionInfoAsset(string assetPath, string commitHash, string commitCount)
+        public override string GetBranchName()
         {
-            var versionInfoData = AssetDatabase.LoadAssetAtPath<VersionInfoData>(assetPath);
-            if (versionInfoData == null)
-            {
-                UnityEngine.Debug.Log($"VersionInfoData asset not found at {assetPath}, creating a new one.");
-                versionInfoData = ScriptableObject.CreateInstance<VersionInfoData>();
+            return RunGitCommand("rev-parse --abbrev-ref HEAD") ?? "unknown";
+        }
 
-                string directory = System.IO.Path.GetDirectoryName(assetPath);
-                if (!System.IO.Directory.Exists(directory))
+        public override string GetCommitDate()
+        {
+            return RunGitCommand("log -1 --format=%ci") ?? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+        }
+
+        private static string RunGitCommand(string arguments)
+        {
+            try
+            {
+                var startInfo = new ProcessStartInfo
                 {
-                    System.IO.Directory.CreateDirectory(directory);
+                    FileName = GIT_EXECUTABLE,
+                    Arguments = arguments,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                    StandardOutputEncoding = Encoding.UTF8
+                };
+
+                using (var process = new Process { StartInfo = startInfo })
+                {
+                    process.Start();
+                    string output = process.StandardOutput.ReadToEnd();
+                    process.WaitForExit(PROCESS_TIMEOUT_MS);
+
+                    if (process.ExitCode != 0)
+                    {
+                        string error = process.StandardError.ReadToEnd();
+                        UnityEngine.Debug.LogWarning($"[VC] Git command failed (exit {process.ExitCode}): git {arguments}\n{error}");
+                        return null;
+                    }
+
+                    return output.Trim();
                 }
-
-                AssetDatabase.CreateAsset(versionInfoData, assetPath);
             }
-
-            versionInfoData.commitHash = commitHash ?? "Unknown";
-            versionInfoData.commitCount = commitCount ?? "0";
-            versionInfoData.buildDate = System.DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-
-            // Mark the object as "dirty" so Unity knows it has changed
-            EditorUtility.SetDirty(versionInfoData);
-            // Save the changes to disk
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
-
-            UnityEngine.Debug.Log($"Version information updated in asset: {assetPath}");
-        }
-
-        public void ClearVersionInfoAsset(string assetPath)
-        {
-            var versionInfoData = AssetDatabase.LoadAssetAtPath<VersionInfoData>(assetPath);
-            if (versionInfoData != null)
+            catch (Exception ex)
             {
-                versionInfoData.commitHash = string.Empty;
-                versionInfoData.commitCount = string.Empty;
-                versionInfoData.buildDate = string.Empty;
-                EditorUtility.SetDirty(versionInfoData);
-                AssetDatabase.SaveAssets();
+                UnityEngine.Debug.LogWarning($"[VC] Git command error: git {arguments}\n{ex.Message}");
+                return null;
             }
         }
     }

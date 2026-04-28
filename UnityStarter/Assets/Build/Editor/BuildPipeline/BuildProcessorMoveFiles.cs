@@ -152,10 +152,19 @@ namespace Build.Pipeline.Editor
                     }
 
                     // Move the file or directory back to its original location.
-                    if (File.Exists(tempPath) || Directory.Exists(tempPath))
+                    if (Directory.Exists(tempPath))
                     {
-                        // Directory.Move works for both files and directories, simplifying the logic.
                         Directory.Move(tempPath, originalPath);
+                        Debug.Log($"<b>[BuildProcessor]</b> Restored: {tempPath} -> {originalPath}");
+                    }
+                    else if (File.Exists(tempPath))
+                    {
+                        // If the destination already exists (e.g., .meta restored via rebuild), delete it first
+                        if (File.Exists(originalPath))
+                        {
+                            File.Delete(originalPath);
+                        }
+                        File.Move(tempPath, originalPath);
                         Debug.Log($"<b>[BuildProcessor]</b> Restored: {tempPath} -> {originalPath}");
                     }
                 }

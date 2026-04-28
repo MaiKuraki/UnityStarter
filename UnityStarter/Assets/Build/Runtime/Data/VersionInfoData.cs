@@ -19,11 +19,17 @@ namespace Build.Data
     public class VersionInfoData : ScriptableObject
     {
         [Header("Build Information")]
-        [Tooltip("The Git commit hash at the time of the build.")]
+        [Tooltip("The Git commit hash (or Perforce changelist number) at the time of the build.")]
         public string commitHash;
 
-        [Tooltip("The total number of commits at the time of the build.")]
+        [Tooltip("The total number of commits (or changelist count) at the time of the build.")]
         public string commitCount;
+
+        [Tooltip("The branch name (Git) or stream name (Perforce) at the time of the build.")]
+        public string commitBranch;
+
+        [Tooltip("The date and time of the commit/changelist used for this build.")]
+        public string commitDate;
 
         [Tooltip("The date and time the build was created.")]
         public string buildDate;

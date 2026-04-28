@@ -30,6 +30,7 @@ namespace Build.Pipeline.Editor
         }
 
         private const string DEBUG_FLAG = "<color=cyan>[HybridCLR]</color>";
+        private const string DEFAULT_HYBRIDCLR_DATA_DIR = "HybridCLRData";
 
         [MenuItem("Build/HybridCLR/Generate All", priority = 100)]
         public static void Build()
@@ -595,7 +596,7 @@ namespace Build.Pipeline.Editor
 
             // Fallback to standard path structure
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            return Path.Combine(projectRoot, "HybridCLRData", "HotUpdateDlls", target.ToString());
+            return Path.Combine(projectRoot, DEFAULT_HYBRIDCLR_DATA_DIR, "HotUpdateDlls", target.ToString());
         }
 
         private static string GetAOTDllSourceDir(BuildTarget target)
@@ -624,7 +625,7 @@ namespace Build.Pipeline.Editor
             // Fallback: Use the standard HybridCLR directory structure
             // HybridCLR uses "AssembliesPostIl2CppStrip" not "StrippedAOTDlls"
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            return Path.Combine(projectRoot, "HybridCLRData", "AssembliesPostIl2CppStrip", target.ToString());
+            return Path.Combine(projectRoot, DEFAULT_HYBRIDCLR_DATA_DIR, "AssembliesPostIl2CppStrip", target.ToString());
         }
 
         /// <summary>
