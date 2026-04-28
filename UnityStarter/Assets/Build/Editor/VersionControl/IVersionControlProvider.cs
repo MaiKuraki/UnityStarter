@@ -4,7 +4,9 @@ namespace Build.VersionControl.Editor
     {
         string GetCommitHash();
         string GetCommitCount();
-        void UpdateVersionInfoAsset(string assetPath, string commitHash, string commitCount);
+        string GetBranchName();
+        string GetCommitDate();
+        void UpdateVersionInfoAsset(string assetPath, string commitHash, string commitCount, string commitBranch, string commitDate);
         void ClearVersionInfoAsset(string assetPath);
     }
 }

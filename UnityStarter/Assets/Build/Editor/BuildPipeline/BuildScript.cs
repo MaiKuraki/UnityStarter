@@ -189,6 +189,8 @@ namespace Build.Pipeline.Editor
             // Version Control Configuration
             string commitHash = INVALID_FLAG;
             string commitCount = INVALID_FLAG;
+            string commitBranch = INVALID_FLAG;
+            string commitDate = INVALID_FLAG;
             string fullBuildVersion = INVALID_FLAG;
             string vcStatus = "[Y] Available";
 
@@ -199,6 +201,8 @@ namespace Build.Pipeline.Editor
                 {
                     commitHash = VersionControlProvider.GetCommitHash();
                     commitCount = VersionControlProvider.GetCommitCount();
+                    commitBranch = VersionControlProvider.GetBranchName();
+                    commitDate = VersionControlProvider.GetCommitDate();
                     fullBuildVersion = $"{buildData.ApplicationVersion}.{commitCount}";
                 }
                 else
@@ -220,6 +224,8 @@ namespace Build.Pipeline.Editor
             sb.AppendLine($"  VC Status\t\t\t{vcStatus}");
             sb.AppendLine($"  Current Commit Hash\t\t{commitHash}");
             sb.AppendLine($"  Commit Count\t\t\t{commitCount}");
+            sb.AppendLine($"  Branch\t\t\t{commitBranch}");
+            sb.AppendLine($"  Commit Date\t\t\t{commitDate}");
             sb.AppendLine($"  Full Build Version\t\t{fullBuildVersion}");
 
             // Build Target Configuration
@@ -690,7 +696,7 @@ namespace Build.Pipeline.Editor
 
         /// <summary>
         /// Entry point for CI/CD. Parses command line arguments to configure the build.
-        /// Usage: -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget <Target> -output <Path> [-clean] [-debug] [-buildHybridCLR] [-buildYooAsset] [-buildAddressables] [-version <Version>] [-outputBasePath <Path>]
+        /// Usage: -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget <Target> -output <Path> [-clean] [-fast] [-debug] [-buildHybridCLR] [-buildYooAsset] [-buildAddressables] [-version <Version>] [-outputBasePath <Path>]
         /// </summary>
         public static void PerformBuild_CI()
         {
@@ -711,6 +717,7 @@ namespace Build.Pipeline.Editor
             string overrideVersion = null;
             string overrideOutputBasePath = null;
             bool clean = false;
+            bool fast = false;
             bool isDebugBuild = false;
             bool forceHybridCLR = false;
             bool forceYooAsset = false;
@@ -741,6 +748,10 @@ namespace Build.Pipeline.Editor
                 else if (args[i] == "-clean")
                 {
                     clean = true;
+                }
+                else if (args[i] == "-fast")
+                {
+                    fast = true;
                 }
                 else if (args[i] == "-debug")
                 {
@@ -862,7 +873,7 @@ namespace Build.Pipeline.Editor
             if (string.IsNullOrEmpty(outputPath))
             {
                 string basePath = buildData.OutputBasePath;
-                outputPath = $"{GetPlatformFolderName(buildTarget)}/{ApplicationName}";
+                outputPath = $"{basePath}/{GetPlatformFolderName(buildTarget)}/{ApplicationName}";
                 if (!isFolder && buildTarget == BuildTarget.StandaloneWindows64) outputPath += ".exe";
                 if (!isFolder && buildTarget == BuildTarget.Android) outputPath += ".apk";
                 // Note: Linux executable has no extension by default
@@ -876,7 +887,8 @@ namespace Build.Pipeline.Editor
                 bCleanBuild: clean,
                 bDeleteDebugFiles: !isDebugBuild,
                 bOutputIsFolderTarget: isFolder,
-                bIsDebugBuild: isDebugBuild);
+                bIsDebugBuild: isDebugBuild,
+                bIsFastBuild: fast);
         }
 
         #endregion
@@ -1085,6 +1097,11 @@ namespace Build.Pipeline.Editor
             // Check if version info asset exists using project-relative path
             bool versionInfoAssetExisted = File.Exists(VersionInfoAssetPath);
 
+            // Track whether the Resources directory was created by this build.
+            // Uses absolute path to avoid CWD dependency.
+            string resourcesAbsolutePath = Path.GetFullPath(Path.Combine(Application.dataPath, "Resources"));
+            bool resourcesDirectoryExistedBeforeBuild = Directory.Exists(resourcesAbsolutePath);
+
             try
             {
                 // Load Build Data
@@ -1153,7 +1170,9 @@ namespace Build.Pipeline.Editor
                 InitializeVersionControl(DefaultVersionControlType);
                 string commitHash = VersionControlProvider?.GetCommitHash();
                 string commitCount = VersionControlProvider?.GetCommitCount();
-                VersionControlProvider?.UpdateVersionInfoAsset(VersionInfoAssetPath, commitHash, commitCount);
+                string commitBranch = VersionControlProvider?.GetBranchName();
+                string commitDate = VersionControlProvider?.GetCommitDate();
+                VersionControlProvider?.UpdateVersionInfoAsset(VersionInfoAssetPath, commitHash, commitCount, commitBranch, commitDate);
 
                 string buildNumber = string.IsNullOrEmpty(commitCount) ? "0" : commitCount;
                 string appVersion = buildData != null ? buildData.ApplicationVersion : "v0.1";
@@ -1300,6 +1319,7 @@ namespace Build.Pipeline.Editor
             }
             finally
             {
+                // Step 1: Clean up VersionInfoData asset
                 if (versionInfoAssetExisted)
                 {
                     VersionControlProvider?.ClearVersionInfoAsset(VersionInfoAssetPath);
@@ -1310,6 +1330,13 @@ namespace Build.Pipeline.Editor
                     {
                         AssetDatabase.DeleteAsset(VersionInfoAssetPath);
                     }
+                }
+
+                // Step 2: Clean up Resources directory if auto-created by this build.
+                // Must run AFTER VersionInfoData cleanup (step 1) so the directory is empty.
+                if (!resourcesDirectoryExistedBeforeBuild)
+                {
+                    TryCleanupResourcesDirectory(resourcesAbsolutePath, VersionInfoAssetPath);
                 }
 
                 // Cleanup auto-created Addressables version files
@@ -1494,6 +1521,83 @@ namespace Build.Pipeline.Editor
             catch (Exception ex)
             {
                 Debug.LogWarning($"{DEBUG_FLAG} Addressables clean skipped: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Deletes the Resources directory and its .meta if the directory is empty.
+        /// Called after build to clean up directories auto-created by the build pipeline.
+        /// Only deletes if the directory contains no user files — if the user placed
+        /// other assets in Resources/, it is preserved.
+        /// </summary>
+        private static void TryCleanupResourcesDirectory(string resourcesAbsolutePath, string versionInfoAssetPath)
+        {
+            try
+            {
+                if (!Directory.Exists(resourcesAbsolutePath))
+                {
+                    return;
+                }
+
+                // AssetDatabase.DeleteAsset is synchronous but Unity may defer
+                // actual filesystem deletion; verify the file is gone.
+                string assetAbsolutePath = Path.GetFullPath(versionInfoAssetPath);
+                if (File.Exists(assetAbsolutePath))
+                {
+                    AssetDatabase.DeleteAsset(versionInfoAssetPath);
+                }
+
+                AssetDatabase.Refresh();
+
+                if (!Directory.Exists(resourcesAbsolutePath))
+                {
+                    return;
+                }
+
+                string[] entries = Directory.GetFileSystemEntries(resourcesAbsolutePath);
+                bool hasOnlyIgnorableFiles = true;
+                foreach (string entry in entries)
+                {
+                    string name = Path.GetFileName(entry);
+                    if (name == ".DS_Store" || name == "Thumbs.db" || name == "desktop.ini")
+                    {
+                        continue;
+                    }
+                    hasOnlyIgnorableFiles = false;
+                    break;
+                }
+
+                if (!hasOnlyIgnorableFiles)
+                {
+                    Debug.Log($"{DEBUG_FLAG} Resources directory contains user files, preserving: {resourcesAbsolutePath}");
+                    return;
+                }
+
+                foreach (string entry in entries)
+                {
+                    try { File.Delete(entry); } catch { }
+                }
+
+                // Prefer AssetDatabase API — it handles .meta cleanup automatically
+                string resourcesAssetPath = "Assets/Resources";
+                bool deletedByAssetDB = AssetDatabase.DeleteAsset(resourcesAssetPath);
+
+                if (!deletedByAssetDB && Directory.Exists(resourcesAbsolutePath))
+                {
+                    string metaPath = resourcesAbsolutePath + ".meta";
+                    if (File.Exists(metaPath))
+                    {
+                        File.Delete(metaPath);
+                    }
+                    Directory.Delete(resourcesAbsolutePath, false);
+                }
+
+                AssetDatabase.Refresh();
+                Debug.Log($"{DEBUG_FLAG} Cleaned up auto-created Resources directory.");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Failed to cleanup Resources directory: {ex.Message}");
             }
         }
     }

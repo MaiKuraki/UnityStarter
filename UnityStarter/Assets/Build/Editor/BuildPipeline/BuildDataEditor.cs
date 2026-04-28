@@ -440,7 +440,7 @@ namespace Build.Pipeline.Editor
 
         private void CheckForDuplicates()
         {
-            if (!hasCheckedForDuplicates || Event.current.type == EventType.Layout)
+            if (!hasCheckedForDuplicates)
             {
                 allConfigGuids = AssetDatabase.FindAssets("t:BuildData");
                 hasCheckedForDuplicates = true;
