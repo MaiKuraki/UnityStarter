@@ -12,6 +12,7 @@ namespace Build.Pipeline.Editor
     public static class YooAssetBuilder
     {
         private const string DEBUG_FLAG = "<color=cyan>[YooAsset]</color>";
+        public const string DEFAULT_BUILD_OUTPUT_DIR = "Build/HotUpdateBundle";
 
         [MenuItem("Build/YooAsset/Build Bundles (From Config)", priority = 100)]
         public static void BuildFromConfig()
@@ -154,7 +155,7 @@ namespace Build.Pipeline.Editor
                     string targetDir = useBuildOutputDirectory;
                     if (string.IsNullOrEmpty(targetDir))
                     {
-                        targetDir = "Build/HotUpdateBundle";
+                        targetDir = DEFAULT_BUILD_OUTPUT_DIR;
                     }
 
                     if (targetDir.StartsWith("/"))
@@ -455,16 +456,32 @@ namespace Build.Pipeline.Editor
             }
         }
 
+        private static readonly Dictionary<string, Type> _typeByNameCache = new Dictionary<string, Type>();
+
         private static Type FindTypeByName(string className)
         {
+            if (_typeByNameCache.TryGetValue(className, out Type cached))
+                return cached;
+
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                foreach (var type in assembly.GetTypes())
+                try
                 {
-                    if (type.Name == className)
-                        return type;
+                    foreach (var type in assembly.GetTypes())
+                    {
+                        if (type.Name == className)
+                        {
+                            _typeByNameCache[className] = type;
+                            return type;
+                        }
+                    }
+                }
+                catch (ReflectionTypeLoadException)
+                {
+                    // Assembly has missing dependencies, skip it
                 }
             }
+            _typeByNameCache[className] = null;
             return null;
         }
 

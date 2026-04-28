@@ -608,6 +608,8 @@ namespace Build.Pipeline.Editor
         /// <summary>
         /// Ensures Encryption VM is generated and compiled, waiting for compilation if necessary.
         /// This should be called before BuildPlayer to ensure the class is available during obfuscation.
+        /// WARNING: Uses Thread.Sleep polling which blocks the Editor main thread. 
+        /// Caller should ensure no user interaction is expected during the wait period.
         /// </summary>
         /// <param name="maxWaitSeconds">Maximum safety timeout in seconds (default: 300 seconds / 5 minutes as safety net)</param>
         public static void EnsureEncryptionVMGeneratedAndCompiled(int maxWaitSeconds = 300)

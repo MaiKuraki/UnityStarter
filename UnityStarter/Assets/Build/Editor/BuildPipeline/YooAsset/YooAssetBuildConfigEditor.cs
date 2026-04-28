@@ -149,7 +149,7 @@ namespace Build.Pipeline.Editor
             if (GUILayout.Button("Open Build Output Folder"))
             {
                 string path = buildOutputDirectory.stringValue;
-                if (string.IsNullOrEmpty(path)) path = "Build/HotUpdateBundle";
+                if (string.IsNullOrEmpty(path)) path = YooAssetBuilder.DEFAULT_BUILD_OUTPUT_DIR;
                 
                 string fullPath = Path.GetFullPath(Path.Combine(Application.dataPath, "..", path));
                 if (Directory.Exists(fullPath))
