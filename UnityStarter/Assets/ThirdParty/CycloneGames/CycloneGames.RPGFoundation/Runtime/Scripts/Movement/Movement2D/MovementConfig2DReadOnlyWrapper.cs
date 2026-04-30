@@ -15,37 +15,37 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         }
 
         // Base config properties
-        public float walkSpeed => _config.walkSpeed;
-        public float runSpeed => _config.runSpeed;
-        public float sprintSpeed => _config.sprintSpeed;
-        public float crouchSpeed => _config.crouchSpeed;
-        public float jumpForce => _config.jumpForce;
-        public int maxJumpCount => _config.maxJumpCount;
-        public Movement.AnimationSystemType animationSystem => _config.animationSystem;
-        public Movement.AnimancerParameterMode animancerParameterMode => _config.animancerParameterMode;
-        public string movementSpeedParameter => _config.movementSpeedParameter;
-        public string isGroundedParameter => _config.isGroundedParameter;
-        public string jumpTrigger => _config.jumpTrigger;
+        public float walkSpeed => _config.WalkSpeed;
+        public float runSpeed => _config.RunSpeed;
+        public float sprintSpeed => _config.SprintSpeed;
+        public float crouchSpeed => _config.CrouchSpeed;
+        public float jumpForce => _config.JumpForce;
+        public int maxJumpCount => _config.MaxJumpCount;
+        public Movement.AnimationSystemType animationSystem => _config.AnimationSystem;
+        public Movement.AnimancerParameterMode animancerParameterMode => _config.AnimancerParameterMode;
+        public string movementSpeedParameter => _config.MovementSpeedParameter;
+        public string isGroundedParameter => _config.IsGroundedParameter;
+        public string jumpTrigger => _config.JumpTrigger;
 
         // 2D-specific properties
-        public MovementType2D movementType => _config.movementType;
-        public float airControlMultiplier => _config.airControlMultiplier;
-        public float coyoteTime => _config.coyoteTime;
-        public float jumpBufferTime => _config.jumpBufferTime;
-        public float gravity => _config.gravity;
-        public float maxFallSpeed => _config.maxFallSpeed;
-        public float groundCheckDistance => _config.groundCheckDistance;
-        public LayerMask groundLayer => _config.groundLayer;
-        public Vector2 groundCheckSize => _config.groundCheckSize;
-        public Vector2 groundCheckOffset => _config.groundCheckOffset;
-        public bool lockZAxis => _config.lockZAxis;
-        public float slideSpeed => _config.slideSpeed;
-        public float wallJumpForceX => _config.wallJumpForceX;
-        public float wallJumpForceY => _config.wallJumpForceY;
-        public bool facingRight => _config.facingRight;
-        public string verticalSpeedParameter => _config.verticalSpeedParameter;
-        public string rollTrigger => _config.rollTrigger;
-        public string inputXParameter => _config.inputXParameter;
-        public string inputYParameter => _config.inputYParameter;
+        public MovementType2D movementType => _config.MovementType;
+        public float airControlMultiplier => _config.AirControlMultiplier;
+        public float coyoteTime => _config.CoyoteTime;
+        public float jumpBufferTime => _config.JumpBufferTime;
+        public float gravity => _config.Gravity;
+        public float maxFallSpeed => _config.MaxFallSpeed;
+        public float groundCheckDistance => _config.GroundCheckDistance;
+        public LayerMask groundLayer => _config.GroundLayer;
+        public Vector2 groundCheckSize => _config.GroundCheckSize;
+        public Vector2 groundCheckOffset => _config.GroundCheckOffset;
+        public bool lockZAxis => _config.LockZAxis;
+        public float slideSpeed => _config.SlideSpeed;
+        public float wallJumpForceX => _config.WallJumpForceX;
+        public float wallJumpForceY => _config.WallJumpForceY;
+        public bool facingRight => _config.FacingRight;
+        public string verticalSpeedParameter => _config.VerticalSpeedParameter;
+        public string rollTrigger => _config.RollTrigger;
+        public string inputXParameter => _config.InputXParameter;
+        public string inputYParameter => _config.InputYParameter;
     }
 }

@@ -9,7 +9,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
         public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
         {
-            float speed = context.GetFinalSpeed(context.Config.crouchSpeed, StateType);
+            float speed = context.GetFinalSpeed(context.Config.CrouchSpeed, StateType);
             float horizontalVelocity = context.InputDirection.x * speed;
 
 #if UNITY_6000_0_OR_NEWER
@@ -26,7 +26,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 context.AnimationController.SetFloat(hash, context.CurrentSpeed);
             }
         }

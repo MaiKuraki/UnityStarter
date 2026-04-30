@@ -13,7 +13,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.climbingParameter);
+                int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
                 if (hash != 0)
                 {
                     context.AnimationController.SetBool(hash, true);
@@ -23,7 +23,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
-            float climbSpeed = context.GetAttributeValue(MovementAttribute.ClimbSpeed, context.Config.ladderClimbSpeed);
+            float climbSpeed = context.GetAttributeValue(MovementAttribute.ClimbSpeed, context.Config.LadderClimbSpeed);
             
             float verticalInput = context.InputDirection.z;
             float horizontalInput = context.InputDirection.x;
@@ -38,7 +38,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int speedHash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                int speedHash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 if (speedHash != 0)
                 {
                     context.AnimationController.SetFloat(speedHash, context.CurrentSpeed);
@@ -50,7 +50,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
         {
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.climbingParameter);
+                int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
                 if (hash != 0)
                 {
                     context.AnimationController.SetBool(hash, false);

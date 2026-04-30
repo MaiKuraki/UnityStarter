@@ -9,8 +9,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
         public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
         {
-            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.runSpeed);
-            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.airControlMultiplier);
+            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
+            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.AirControlMultiplier);
             float airControlSpeed = runSpeed * airControl;
             float horizontalVelocity = context.InputDirection.x * airControlSpeed;
 
@@ -19,16 +19,23 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 #else
             float verticalVelocity = context.Rigidbody.velocity.y;
 #endif
-            verticalVelocity = math.max(verticalVelocity, -context.Config.maxFallSpeed);
+            verticalVelocity = math.max(verticalVelocity, -context.Config.MaxFallSpeed);
 
             velocity = new float2(horizontalVelocity, verticalVelocity);
             context.CurrentSpeed = math.abs(horizontalVelocity);
             context.CurrentVelocity = velocity;
 
+            // BeltScroll: accumulate Y input as pending depth while airborne
+            if (context.Config.MovementType == MovementType2D.BeltScroll)
+            {
+                float depthSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
+                context.PendingDepth += context.InputDirection.y * depthSpeed * context.DeltaTime;
+            }
+
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int speedHash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
-                int verticalHash = AnimationParameterCache.GetHash(context.Config.verticalSpeedParameter);
+                int speedHash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
+                int verticalHash = AnimationParameterCache.GetHash(context.Config.VerticalSpeedParameter);
                 context.AnimationController.SetFloat(speedHash, context.CurrentSpeed);
                 context.AnimationController.SetFloat(verticalHash, velocity.y);
             }
@@ -56,7 +63,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             if (context.JumpPressed)
             {
                 context.JumpPressed = false;
-                if (context.Config != null && context.JumpCount < context.Config.maxJumpCount)
+                int resolvedMaxJump = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
+                if (context.Config != null && context.JumpCount < resolvedMaxJump)
                 {
                     return StatePool<MovementStateBase2D>.GetState<JumpState2D>();
                 }

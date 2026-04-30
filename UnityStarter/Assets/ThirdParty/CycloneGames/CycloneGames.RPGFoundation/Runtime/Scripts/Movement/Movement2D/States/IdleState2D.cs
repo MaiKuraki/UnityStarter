@@ -12,7 +12,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             // For BeltScroll and TopDown modes, stop Y movement when idle
             // For Platformer, preserve physics-driven Y velocity (for falling)
             float verticalVelocity = 0f;
-            if (context.Config.movementType == MovementType2D.Platformer)
+            if (context.Config.MovementType == MovementType2D.Platformer)
             {
 #if UNITY_6000_0_OR_NEWER
                 verticalVelocity = context.Rigidbody.linearVelocity.y;
@@ -28,7 +28,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             // Update animation parameter
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 context.AnimationController.SetFloat(hash, 0f);
             }
         }

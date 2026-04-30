@@ -5,83 +5,122 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
     [CreateAssetMenu(fileName = "MovementConfig", menuName = "CycloneGames/RPG Foundation/Movement/Movement Config")]
     public class MovementConfig : MovementConfigBase
     {
-        // Special Movement - displayed in Custom Editor
-        public float rollDistance = 5f;
-        public float rollDuration = 0.5f;
-        public float swimSpeed = 3f;
-        public float flySpeed = 6f;
+        [SerializeField] private float rollDistance = 5f;
+        [SerializeField] private float rollDuration = 0.5f;
+        [SerializeField] private float swimSpeed = 3f;
+        [SerializeField] private float flySpeed = 6f;
 
-        // Physics - displayed in Custom Editor
-        public float gravity = -20f;
-        public float airControlMultiplier = 0.5f;
-        public float groundedCheckDistance = 0.025f;
-        public LayerMask groundLayer = 1;
+        [SerializeField] private float gravity = -20f;
+        [SerializeField] private float airControlMultiplier = 0.5f;
+        [SerializeField] private float groundedCheckDistance = 0.025f;
+        [SerializeField] private LayerMask groundLayer = 1;
         [Tooltip("Layer mask for collision detection during movement. If empty, uses groundLayer.")]
-        public LayerMask collisionLayer = 0;
-        public float slopeLimit = 45f;
-        public float stepHeight = 0.3f;
+        [SerializeField] private LayerMask collisionLayer = 0;
+        [SerializeField] private float slopeLimit = 45f;
+        [SerializeField] private float stepHeight = 0.3f;
         [Tooltip("Minimum time (seconds) character must be airborne before triggering fall animation. Prevents false triggers on stairs.")]
         [Range(0.05f, 0.3f)]
-        public float minAirborneTimeForFall = 0.1f;
+        [SerializeField] private float minAirborneTimeForFall = 0.1f;
 
-        // Moving Platform - displayed in Custom Editor
         [Tooltip("Enable moving platform support. Character will move with platforms.")]
-        public bool enableMovingPlatform = true;
+        [SerializeField] private bool enableMovingPlatform = true;
         [Tooltip("Inherit platform rotation. Character will rotate with rotating platforms.")]
-        public bool inheritPlatformRotation = true;
+        [SerializeField] private bool inheritPlatformRotation = true;
         [Tooltip("Inherit platform momentum when jumping off. Character will keep platform velocity.")]
-        public bool inheritPlatformMomentum = true;
+        [SerializeField] private bool inheritPlatformMomentum = true;
         [Tooltip("Layer mask for detecting moving platforms. If empty, uses groundLayer.")]
-        public LayerMask platformLayer = 0;
+        [SerializeField] private LayerMask platformLayer = 0;
 
-        // Ceiling Detection - displayed in Custom Editor
         [Tooltip("Enable ceiling detection to prevent head clipping during jumps.")]
-        public bool enableCeilingDetection = true;
+        [SerializeField] private bool enableCeilingDetection = true;
         [Tooltip("Extra distance above character to check for ceiling.")]
-        public float ceilingCheckDistance = 0.1f;
+        [SerializeField] private float ceilingCheckDistance = 0.1f;
 
-        // Gap Bridging - displayed in Custom Editor
         [Tooltip("Enable gap bridging to auto-jump across small gaps while running.")]
-        public bool enableGapBridging = true;
+        [SerializeField] private bool enableGapBridging = true;
         [Tooltip("Minimum speed required to trigger gap bridging (m/s).")]
-        public float minSpeedForGapBridge = 3f;
+        [SerializeField] private float minSpeedForGapBridge = 3f;
         [Tooltip("Maximum gap distance that can be bridged (m).")]
-        public float maxGapDistance = 0.5f;
+        [SerializeField] private float maxGapDistance = 0.5f;
         [Tooltip("Maximum height difference allowed for gap bridging (m).")]
-        public float maxGapHeightDiff = 0.3f;
+        [SerializeField] private float maxGapHeightDiff = 0.3f;
 
-        // Ladder Climbing - displayed in Custom Editor
-        public bool enableLadderClimbing = true;
-        public float ladderClimbSpeed = 3f;
-        public LayerMask ladderLayer = 0;
+        [SerializeField] private bool enableLadderClimbing = true;
+        [SerializeField] private float ladderClimbSpeed = 3f;
+        [SerializeField] private LayerMask ladderLayer = 0;
 
-        // Wall Climbing - displayed in Custom Editor
-        public bool enableWallClimbing = false;
-        public float wallClimbSpeed = 2f;
-        public LayerMask wallLayer = 0;
-        public float wallCheckDistance = 0.5f;
-        public float wallClingDuration = 0.5f;
-        public float wallSlideSpeed = 2f;
+        [SerializeField] private bool enableWallClimbing = false;
+        [SerializeField] private float wallClimbSpeed = 2f;
+        [SerializeField] private LayerMask wallLayer = 0;
+        [SerializeField] private float wallCheckDistance = 0.5f;
+        [SerializeField] private float wallClingDuration = 0.5f;
+        [SerializeField] private float wallSlideSpeed = 2f;
 
-        // Wall Jump - displayed in Custom Editor
-        public bool enableWallJump = true;
-        public float wallJumpForceHorizontal = 8f;
-        public float wallJumpForceVertical = 10f;
-        public float wallJumpCooldown = 0.1f;
+        [SerializeField] private bool enableWallJump = true;
+        [SerializeField] private float wallJumpForceHorizontal = 8f;
+        [SerializeField] private float wallJumpForceVertical = 10f;
+        [SerializeField] private float wallJumpCooldown = 0.1f;
         [Tooltip("Minimum angle difference (degrees) to consider as different wall for continuous wall jump.")]
         [Range(30f, 120f)]
-        public float differentWallAngle = 60f;
+        [SerializeField] private float differentWallAngle = 60f;
 
-        // AI Pathfinding - displayed in Custom Editor
         [Tooltip("Pathfinding system to use for AI navigation. Requires corresponding package installed.")]
-        public PathfindingSystem pathfindingSystem = PathfindingSystem.None;
+        [SerializeField] private PathfindingSystem pathfindingSystem = PathfindingSystem.None;
 
-        // Rotation - displayed in Custom Editor
-        public float rotationSpeed = 10f;
+        [SerializeField] private float rotationSpeed = 10f;
 
-        // Animation Parameters (Additional) - displayed in Custom Editor
-        public string rollTrigger = "Roll";
-        public string climbingParameter = "IsClimbing";
-        public string wallSlidingParameter = "IsWallSliding";
+        // Feel - displayed in Custom Editor
+        [Tooltip("Time after leaving ground that jump input is still accepted.")]
+        [SerializeField] private float coyoteTime = 0.1f;
+        [Tooltip("Time before landing that jump input is buffered.")]
+        [SerializeField] private float jumpBufferTime = 0.1f;
+
+        [SerializeField] private string rollTrigger = "Roll";
+        [SerializeField] private string climbingParameter = "IsClimbing";
+        [SerializeField] private string wallSlidingParameter = "IsWallSliding";
+
+        public float RollDistance => rollDistance;
+        public float RollDuration => rollDuration;
+        public float SwimSpeed => swimSpeed;
+        public float FlySpeed => flySpeed;
+        public float Gravity => gravity;
+        public float AirControlMultiplier => airControlMultiplier;
+        public float GroundedCheckDistance => groundedCheckDistance;
+        public LayerMask GroundLayer => groundLayer;
+        public LayerMask CollisionLayer => collisionLayer;
+        public float SlopeLimit => slopeLimit;
+        public float StepHeight => stepHeight;
+        public float MinAirborneTimeForFall => minAirborneTimeForFall;
+        public bool EnableMovingPlatform => enableMovingPlatform;
+        public bool InheritPlatformRotation => inheritPlatformRotation;
+        public bool InheritPlatformMomentum => inheritPlatformMomentum;
+        public LayerMask PlatformLayer => platformLayer;
+        public bool EnableCeilingDetection => enableCeilingDetection;
+        public float CeilingCheckDistance => ceilingCheckDistance;
+        public bool EnableGapBridging => enableGapBridging;
+        public float MinSpeedForGapBridge => minSpeedForGapBridge;
+        public float MaxGapDistance => maxGapDistance;
+        public float MaxGapHeightDiff => maxGapHeightDiff;
+        public bool EnableLadderClimbing => enableLadderClimbing;
+        public float LadderClimbSpeed => ladderClimbSpeed;
+        public LayerMask LadderLayer => ladderLayer;
+        public bool EnableWallClimbing => enableWallClimbing;
+        public float WallClimbSpeed => wallClimbSpeed;
+        public LayerMask WallLayer => wallLayer;
+        public float WallCheckDistance => wallCheckDistance;
+        public float WallClingDuration => wallClingDuration;
+        public float WallSlideSpeed => wallSlideSpeed;
+        public bool EnableWallJump => enableWallJump;
+        public float WallJumpForceHorizontal => wallJumpForceHorizontal;
+        public float WallJumpForceVertical => wallJumpForceVertical;
+        public float WallJumpCooldown => wallJumpCooldown;
+        public float DifferentWallAngle => differentWallAngle;
+        public PathfindingSystem PathfindingSystem => pathfindingSystem;
+        public float RotationSpeed => rotationSpeed;
+        public float CoyoteTime => coyoteTime;
+        public float JumpBufferTime => jumpBufferTime;
+        public string RollTrigger => rollTrigger;
+        public string ClimbingParameter => climbingParameter;
+        public string WallSlidingParameter => wallSlidingParameter;
     }
 }
