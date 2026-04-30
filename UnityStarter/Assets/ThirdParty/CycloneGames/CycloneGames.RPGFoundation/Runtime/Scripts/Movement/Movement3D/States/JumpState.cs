@@ -9,36 +9,37 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
         public override void OnEnter(ref MovementContext context)
         {
             // Check jump count limit before allowing jump
-            if (context.Config != null && context.JumpCount >= context.Config.maxJumpCount)
+            int resolvedMaxJumpCount = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
+            if (context.Config != null && context.JumpCount >= resolvedMaxJumpCount)
             {
                 return;
             }
 
-            float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.jumpForce);
+            float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.JumpForce);
             context.VerticalVelocity = jumpForce;
             context.JumpCount++;
             context.JumpPressed = false;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.jumpTrigger);
+                int hash = AnimationParameterCache.GetHash(context.Config.JumpTrigger);
                 context.AnimationController.SetTrigger(hash);
             }
         }
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
-            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.runSpeed);
-            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.airControlMultiplier);
+            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
+            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.AirControlMultiplier);
             float maxSpeed = runSpeed * airControl;
-            
+
             float3 worldInputDirection = context.GetWorldInputDirection();
             float inputMagnitude = context.InputMagnitude;
-            
+
             float actualSpeed = maxSpeed * inputMagnitude;
             float3 movement = worldInputDirection * actualSpeed;
 
-            float gravity = context.GetAttributeValue(MovementAttribute.Gravity, context.Config.gravity);
+            float gravity = context.GetAttributeValue(MovementAttribute.Gravity, context.Config.Gravity);
             context.VerticalVelocity += gravity * context.DeltaTime;
 
             float3 horizontal = movement * context.DeltaTime;
@@ -50,7 +51,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 context.AnimationController.SetFloat(hash, context.CurrentSpeed);
             }
         }
@@ -73,6 +74,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
                 }
             }
 
+            int resolvedMaxJumpCount = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
+
             // Transition to FallState when reaching apex or descending
             // This must be checked BEFORE multi-jump to prevent extra jumps at apex
             if (context.VerticalVelocity <= 0)
@@ -81,16 +84,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
             }
 
             // Multi-jump: Allow additional jumps while rising (VerticalVelocity > 0) if within jump count limit
-            if (context.JumpPressed && context.Config != null && context.JumpCount < context.Config.maxJumpCount)
+            if (context.JumpPressed && context.Config != null && context.JumpCount < resolvedMaxJumpCount)
             {
-                float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.jumpForce);
+                float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.JumpForce);
                 context.VerticalVelocity = jumpForce;
                 context.JumpCount++;
                 context.JumpPressed = false;
 
                 if (context.AnimationController != null && context.AnimationController.IsValid)
                 {
-                    int hash = AnimationParameterCache.GetHash(context.Config.jumpTrigger);
+                    int hash = AnimationParameterCache.GetHash(context.Config.JumpTrigger);
                     context.AnimationController.SetTrigger(hash);
                 }
             }

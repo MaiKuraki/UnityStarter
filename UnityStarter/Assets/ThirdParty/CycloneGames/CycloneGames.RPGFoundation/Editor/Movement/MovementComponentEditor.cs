@@ -770,7 +770,7 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             if (config == null) return;
 
             // Check if stepHeight is appropriate
-            if (config.stepHeight > capsuleCollider.radius)
+            if (config.StepHeight > capsuleCollider.radius)
             {
                 EditorGUILayout.Space(5);
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -782,7 +782,7 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
                 EditorGUILayout.Space(3);
 
                 EditorGUILayout.HelpBox(
-                    $"Step Height ({config.stepHeight:F3}) is larger than Capsule Radius ({capsuleCollider.radius:F3}).\n\n" +
+                    $"Step Height ({config.StepHeight:F3}) is larger than Capsule Radius ({capsuleCollider.radius:F3}).\n\n" +
                     "This may cause issues:\n" +
                     "• Character may clip through geometry when stepping up\n" +
                     "• Step detection may fail for stairs\n\n" +
@@ -795,7 +795,7 @@ namespace CycloneGames.RPGFoundation.Editor.Movement
             }
 
             // Check for missing layer masks
-            if (config.groundLayer == 0)
+            if (config.GroundLayer == 0)
             {
                 EditorGUILayout.Space(5);
                 EditorGUILayout.HelpBox(

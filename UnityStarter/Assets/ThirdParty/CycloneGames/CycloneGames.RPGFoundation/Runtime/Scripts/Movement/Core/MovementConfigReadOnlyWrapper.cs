@@ -12,16 +12,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             _config = config;
         }
 
-        public float walkSpeed => _config.walkSpeed;
-        public float runSpeed => _config.runSpeed;
-        public float sprintSpeed => _config.sprintSpeed;
-        public float crouchSpeed => _config.crouchSpeed;
-        public float jumpForce => _config.jumpForce;
-        public int maxJumpCount => _config.maxJumpCount;
-        public AnimationSystemType animationSystem => _config.animationSystem;
-        public AnimancerParameterMode animancerParameterMode => _config.animancerParameterMode;
-        public string movementSpeedParameter => _config.movementSpeedParameter;
-        public string isGroundedParameter => _config.isGroundedParameter;
-        public string jumpTrigger => _config.jumpTrigger;
+        public float walkSpeed => _config.WalkSpeed;
+        public float runSpeed => _config.RunSpeed;
+        public float sprintSpeed => _config.SprintSpeed;
+        public float crouchSpeed => _config.CrouchSpeed;
+        public float jumpForce => _config.JumpForce;
+        public int maxJumpCount => _config.MaxJumpCount;
+        public AnimationSystemType animationSystem => _config.AnimationSystem;
+        public AnimancerParameterMode animancerParameterMode => _config.AnimancerParameterMode;
+        public string movementSpeedParameter => _config.MovementSpeedParameter;
+        public string isGroundedParameter => _config.IsGroundedParameter;
+        public string jumpTrigger => _config.JumpTrigger;
     }
 }

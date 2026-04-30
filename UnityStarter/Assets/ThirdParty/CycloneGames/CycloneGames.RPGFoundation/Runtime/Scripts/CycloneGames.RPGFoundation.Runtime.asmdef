@@ -12,6 +12,7 @@
         "CycloneGames.Logger",
         "CycloneGames.Factory.Runtime",
         "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayAbilities.Runtime",
         "Kybernetik.Animancer",
         "Unity.AI.Navigation",
         "AstarPathfindingProject",
@@ -62,6 +63,11 @@
             "name": "com.arongranberg.astar",
             "expression": "",
             "define": "ALINE_PRESENT"
+        },
+        {
+            "name": "com.cyclone-games.gameplay-abilities",
+            "expression": "",
+            "define": "GAMEPLAY_ABILITIES_PRESENT"
         },
         {
             "name": "com.unity.modules.terrainphysics",

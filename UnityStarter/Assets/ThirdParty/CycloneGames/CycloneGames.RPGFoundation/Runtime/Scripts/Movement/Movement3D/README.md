@@ -23,7 +23,7 @@ Configure your movement speeds, jump force, and other parameters in the Inspecto
 
 ### Step 2: Add Component
 
-Add `MovementComponent` to your character GameObject that has a `CharacterController`.
+Add `MovementComponent` to your character GameObject that has a `Rigidbody` and `CapsuleCollider`.
 
 Assign your created `MovementConfig` to the component.
 

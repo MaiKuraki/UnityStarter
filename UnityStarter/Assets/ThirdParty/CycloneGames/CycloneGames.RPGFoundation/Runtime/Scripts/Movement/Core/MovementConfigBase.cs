@@ -26,35 +26,43 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
     /// </summary>
     public abstract class MovementConfigBase : ScriptableObject
     {
-        // Ground Movement - displayed in Custom Editor
-        public float walkSpeed = 1.5f;
-        public float runSpeed = 3f;
-        public float sprintSpeed = 6f;
-        public float crouchSpeed = 1f;
+        [SerializeField] private float walkSpeed = 1.5f;
+        [SerializeField] private float runSpeed = 3f;
+        [SerializeField] private float sprintSpeed = 6f;
+        [SerializeField] private float crouchSpeed = 1f;
 
-        // Jump - displayed in Custom Editor
-        public float jumpForce = 6f;
-        public int maxJumpCount = 1;
+        [SerializeField] private float jumpForce = 6f;
+        [SerializeField] private int maxJumpCount = 1;
 
-        // Animation System Configuration - displayed in Custom Editor
         [Tooltip("Animation system to use for character animations.\n" +
                  "• Unity Animator: Standard Unity Animator Controller\n" +
                  "• Animancer: Animancer animation system")]
-        public AnimationSystemType animationSystem = AnimationSystemType.UnityAnimator;
+        [SerializeField] private AnimationSystemType animationSystem = AnimationSystemType.UnityAnimator;
 
         [Tooltip("Parameter mode for Animancer (only used when Animation System is Animancer).\n" +
                  "• Animator Hash: Use Animator hash values (for HybridAnimancerComponent with Animator Controller)\n" +
                  "• String Parameter: Use direct string parameters (for AnimancerComponent Parameters mode)")]
-        public AnimancerParameterMode animancerParameterMode = AnimancerParameterMode.StringParameter;
+        [SerializeField] private AnimancerParameterMode animancerParameterMode = AnimancerParameterMode.StringParameter;
 
-        // Animation Parameters - displayed in Custom Editor
         [Tooltip("Parameter name for movement speed (Float)")]
-        public string movementSpeedParameter = "MovementSpeed";
+        [SerializeField] private string movementSpeedParameter = "MovementSpeed";
 
         [Tooltip("Parameter name for grounded state (Bool)")]
-        public string isGroundedParameter = "IsGrounded";
+        [SerializeField] private string isGroundedParameter = "IsGrounded";
 
         [Tooltip("Parameter name for jump trigger (Trigger)")]
-        public string jumpTrigger = "Jump";
+        [SerializeField] private string jumpTrigger = "Jump";
+
+        public float WalkSpeed => walkSpeed;
+        public float RunSpeed => runSpeed;
+        public float SprintSpeed => sprintSpeed;
+        public float CrouchSpeed => crouchSpeed;
+        public float JumpForce => jumpForce;
+        public int MaxJumpCount => maxJumpCount;
+        public AnimationSystemType AnimationSystem => animationSystem;
+        public AnimancerParameterMode AnimancerParameterMode => animancerParameterMode;
+        public string MovementSpeedParameter => movementSpeedParameter;
+        public string IsGroundedParameter => isGroundedParameter;
+        public string JumpTrigger => jumpTrigger;
     }
 }

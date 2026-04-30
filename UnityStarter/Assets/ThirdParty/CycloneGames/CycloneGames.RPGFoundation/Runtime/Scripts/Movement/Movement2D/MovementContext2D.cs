@@ -15,6 +15,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         public MovementConfig2D Config;
 
         public float2 InputDirection;
+        public float2 WorldUp;
         public float DeltaTime;
         public float FixedDeltaTime;
 
@@ -40,6 +41,17 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D
         public float LastWallJumpTime;
 
         public IMovementAuthority MovementAuthority;
+
+        // Wall climb per-instance state (moved from WallClimbState2D for flyweight safety)
+        public int WallClimbSide;
+        public float WallClingTimer;
+        public bool IsWallSliding;
+
+        // BeltScroll depth recovery
+        public float PendingDepth;
+
+        // Facing direction (separate from movement direction, used by TopDown/BeltScroll)
+        public float2 LookDirection;
 
         /// <summary>
         /// Gets final value for an attribute after applying modifiers.

@@ -10,36 +10,35 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
         public override void OnEnter(ref MovementContext2D context)
         {
             // Check jump count limit before allowing jump
-            if (context.Config != null && context.JumpCount >= context.Config.maxJumpCount)
+            int resolvedMaxJumpCount = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
+            if (context.Config != null && context.JumpCount >= resolvedMaxJumpCount)
             {
                 return;
             }
 
-            float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.jumpForce);
+            float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.JumpForce);
+            float2 jumpVelocity = context.WorldUp * jumpForce;
 #if UNITY_6000_0_OR_NEWER
             float horizontalVelocity = context.Rigidbody.linearVelocity.x;
+            context.Rigidbody.linearVelocity = new UnityEngine.Vector2(horizontalVelocity + jumpVelocity.x, jumpVelocity.y);
 #else
             float horizontalVelocity = context.Rigidbody.velocity.x;
-#endif
-#if UNITY_6000_0_OR_NEWER
-            context.Rigidbody.linearVelocity = new UnityEngine.Vector2(horizontalVelocity, jumpForce);
-#else
-            context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, jumpForce);
+            context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity + jumpVelocity.x, jumpVelocity.y);
 #endif
             context.JumpCount++;
             context.JumpPressed = false;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.jumpTrigger);
+                int hash = AnimationParameterCache.GetHash(context.Config.JumpTrigger);
                 context.AnimationController.SetTrigger(hash);
             }
         }
 
         public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
         {
-            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.runSpeed);
-            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.airControlMultiplier);
+            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
+            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.AirControlMultiplier);
             float airControlSpeed = runSpeed * airControl;
             float horizontalVelocity = context.InputDirection.x * airControlSpeed;
 
@@ -53,8 +52,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int speedHash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
-                int verticalHash = AnimationParameterCache.GetHash(context.Config.verticalSpeedParameter);
+                int speedHash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
+                int verticalHash = AnimationParameterCache.GetHash(context.Config.VerticalSpeedParameter);
                 context.AnimationController.SetFloat(speedHash, context.CurrentSpeed);
                 context.AnimationController.SetFloat(verticalHash, velocity.y);
             }
@@ -95,18 +94,17 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             }
 
             // Multi-jump: Allow additional jumps while rising (velocity.y > 0) if within jump count limit
-            if (context.JumpPressed && context.Config != null && context.JumpCount < context.Config.maxJumpCount)
+            int resolvedMaxJumpCount = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
+            if (context.JumpPressed && context.Config != null && context.JumpCount < resolvedMaxJumpCount)
             {
-                float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.jumpForce);
+                float jumpForce = context.GetAttributeValue(MovementAttribute.JumpForce, context.Config.JumpForce);
+                float2 jumpVelocity = context.WorldUp * jumpForce;
 #if UNITY_6000_0_OR_NEWER
                 float horizontalVelocity = context.Rigidbody.linearVelocity.x;
+                context.Rigidbody.linearVelocity = new UnityEngine.Vector2(horizontalVelocity + jumpVelocity.x, jumpVelocity.y);
 #else
                 float horizontalVelocity = context.Rigidbody.velocity.x;
-#endif
-# if UNITY_6000_0_OR_NEWER
-                context.Rigidbody.linearVelocity = new UnityEngine.Vector2(horizontalVelocity, jumpForce);
-#else
-                context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity, jumpForce);
+                context.Rigidbody.velocity = new UnityEngine.Vector2(horizontalVelocity + jumpVelocity.x, jumpVelocity.y);
 #endif
 
                 context.JumpCount++;
@@ -114,7 +112,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
                 if (context.AnimationController != null && context.AnimationController.IsValid)
                 {
-                    int hash = AnimationParameterCache.GetHash(context.Config.jumpTrigger);
+                    int hash = AnimationParameterCache.GetHash(context.Config.JumpTrigger);
                     context.AnimationController.SetTrigger(hash);
                 }
             }
