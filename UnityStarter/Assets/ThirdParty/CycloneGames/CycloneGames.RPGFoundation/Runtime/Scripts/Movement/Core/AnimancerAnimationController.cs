@@ -14,18 +14,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
     /// </summary>
     public sealed class AnimancerAnimationController : IAnimationController
     {
-        private readonly Animator _animator;
 #if ANIMANCER_PRESENT
+        private readonly Animator _animator;
         private readonly object _animancerComponent;
         private readonly ParameterDictionary _parameters;
+        private readonly bool _useAnimatorMode;
+        private readonly HashSet<int> _validParameterHashes;
+        private readonly HashSet<int> _triggeredParameters;
 #endif
         private readonly Dictionary<int, string> _hashToNameMap;
-        private readonly bool _useAnimatorMode;
         private readonly bool _isValid;
-        private readonly HashSet<int> _validParameterHashes;
-
-        // Track triggered parameters for auto-reset in Parameters mode
-        private readonly HashSet<int> _triggeredParameters;
 
         public bool IsValid => _isValid;
 
@@ -62,12 +60,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
                 _parameters = ac.Parameters;
             }
 #else
-            _animator = null;
             _hashToNameMap = parameterNameMap ?? new Dictionary<int, string>();
-            _useAnimatorMode = false;
             _isValid = false;
-            _validParameterHashes = new HashSet<int>();
-            _triggeredParameters = new HashSet<int>();
             UnityEngine.Debug.LogWarning(
                 "[AnimancerAnimationController] Animancer package is not installed. " +
                 "The assigned animancerComponent will be ignored. Install com.kybernetik.animancer to enable Animancer support.");
