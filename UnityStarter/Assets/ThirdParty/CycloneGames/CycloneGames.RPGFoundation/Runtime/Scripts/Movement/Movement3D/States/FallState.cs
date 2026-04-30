@@ -9,8 +9,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
-            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.runSpeed);
-            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.airControlMultiplier);
+            float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
+            float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.AirControlMultiplier);
             float maxSpeed = runSpeed * airControl;
 
             float3 worldInputDirection = context.GetWorldInputDirection();
@@ -19,7 +19,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
             float actualSpeed = maxSpeed * inputMagnitude;
             float3 desiredVelocity = worldInputDirection * actualSpeed;
 
-            float gravity = context.GetAttributeValue(MovementAttribute.Gravity, context.Config.gravity);
+            float gravity = context.GetAttributeValue(MovementAttribute.Gravity, context.Config.Gravity);
             float3 worldUp = context.WorldUp;
 
             // Handle non-walkable slope sliding
@@ -54,7 +54,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 context.AnimationController.SetFloat(hash, context.CurrentSpeed);
             }
         }
@@ -81,7 +81,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
             if (context.JumpPressed)
             {
                 context.JumpPressed = false;
-                if (context.Config != null && context.JumpCount < context.Config.maxJumpCount)
+                int resolvedMaxJump = (int)context.GetAttributeValue(MovementAttribute.MaxJumpCount, context.Config.MaxJumpCount);
+                if (context.Config != null && context.JumpCount < resolvedMaxJump)
                 {
                     return StatePool<MovementStateBase>.GetState<JumpState>();
                 }

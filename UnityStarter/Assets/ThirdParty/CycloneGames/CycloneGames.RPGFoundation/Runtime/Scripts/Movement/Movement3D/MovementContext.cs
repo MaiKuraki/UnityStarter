@@ -44,6 +44,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
         public IMovementAuthority MovementAuthority;
 
+        // Wall climb per-instance state (moved from WallClimbState for flyweight safety)
+        public Vector3 WallClimbNormal;
+        public float WallClingTimer;
+        public bool IsWallSliding;
+
         /// <summary>
         /// Converts InputDirection from local space to world space, projecting onto plane perpendicular to WorldUp.
         /// Returns a normalized direction vector. Use InputMagnitude to get the input strength.

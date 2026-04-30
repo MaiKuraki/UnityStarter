@@ -15,59 +15,70 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
     public sealed class AnimancerAnimationController : IAnimationController
     {
         private readonly Animator _animator;
+#if ANIMANCER_PRESENT
         private readonly object _animancerComponent;
+        private readonly ParameterDictionary _parameters;
+#endif
         private readonly Dictionary<int, string> _hashToNameMap;
         private readonly bool _useAnimatorMode;
         private readonly bool _isValid;
         private readonly HashSet<int> _validParameterHashes;
-        private readonly object _cachedParameters;  // Cached to avoid per-frame reflection
+
+        // Track triggered parameters for auto-reset in Parameters mode
+        private readonly HashSet<int> _triggeredParameters;
 
         public bool IsValid => _isValid;
 
-        /// <summary>
-        /// Creates an adapter for Animancer component.
-        /// Automatically detects if Animator is available (HybridAnimancerComponent) or uses Parameters system.
-        /// </summary>
-        /// <param name="animancerComponent">AnimancerComponent or HybridAnimancerComponent instance</param>
-        /// <param name="parameterNameMap">Optional: Map of parameter hashes to names for Parameters mode</param>
         public AnimancerAnimationController(UnityEngine.Object animancerComponent, Dictionary<int, string> parameterNameMap = null)
         {
+#if ANIMANCER_PRESENT
             _animancerComponent = animancerComponent;
             _animator = ExtractAnimatorFromAnimancer(animancerComponent);
             _hashToNameMap = parameterNameMap ?? new Dictionary<int, string>();
 
-            // Only use Animator mode if Animator has a Controller assigned
-            // Without a Controller, there are no parameters to set
             _useAnimatorMode = _animator != null && _animator.isActiveAndEnabled && _animator.runtimeAnimatorController != null;
 
-            // Cache valid parameter hashes from Animator Controller if using Animator mode
-            // Note: We can only cache parameters in Editor mode, in Runtime we'll use try-catch
             _validParameterHashes = new HashSet<int>();
+            _triggeredParameters = new HashSet<int>();
+
 #if UNITY_EDITOR
             if (_useAnimatorMode && _animator != null && _animator.runtimeAnimatorController != null)
             {
                 var controller = _animator.runtimeAnimatorController as UnityEditor.Animations.AnimatorController;
                 if (controller != null)
                 {
-                    foreach (var param in controller.parameters)
+                    for (int i = 0; i < controller.parameters.Length; i++)
                     {
-                        _validParameterHashes.Add(param.nameHash);
+                        _validParameterHashes.Add(controller.parameters[i].nameHash);
                     }
                 }
             }
 #endif
 
-            _isValid = _useAnimatorMode || (_animancerComponent != null && IsAnimancerComponentValid());
+            _isValid = _useAnimatorMode || (animancerComponent != null && IsAnimancerComponentValid());
 
-            // Cache Parameters property once to avoid repeated reflection
-            _cachedParameters = CacheParametersProperty();
+            if (animancerComponent is AnimancerComponent ac)
+            {
+                _parameters = ac.Parameters;
+            }
+#else
+            _animator = null;
+            _hashToNameMap = parameterNameMap ?? new Dictionary<int, string>();
+            _useAnimatorMode = false;
+            _isValid = false;
+            _validParameterHashes = new HashSet<int>();
+            _triggeredParameters = new HashSet<int>();
+            UnityEngine.Debug.LogWarning(
+                "[AnimancerAnimationController] Animancer package is not installed. " +
+                "The assigned animancerComponent will be ignored. Install com.kybernetik.animancer to enable Animancer support.");
+#endif
         }
 
+#if ANIMANCER_PRESENT
         private static Animator ExtractAnimatorFromAnimancer(UnityEngine.Object component)
         {
             if (component == null) return null;
 
-#if ANIMANCER_PRESENT
             if (component is HybridAnimancerComponent hybrid)
             {
                 return hybrid.Animator;
@@ -77,136 +88,49 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
                 return regular.Animator;
             }
             return null;
-#else
-            try
-            {
-                var type = component.GetType();
-                var animatorProperty = type.GetProperty("Animator",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy);
-
-                if (animatorProperty != null)
-                {
-                    return animatorProperty.GetValue(component) as Animator;
-                }
-            }
-            catch (System.Exception)
-            {
-                // Silently fail - component may not have Animator property
-                // This is expected for AnimancerComponent (Parameters mode)
-            }
-
-            return null;
-#endif
         }
 
         private bool IsAnimancerComponentValid()
         {
             if (_animancerComponent == null) return false;
-
             var component = _animancerComponent as MonoBehaviour;
             return component != null && component.isActiveAndEnabled;
         }
 
-        private object CacheParametersProperty()
-        {
-            if (_animancerComponent == null) return null;
-
-#if ANIMANCER_PRESENT
-            if (_animancerComponent is AnimancerComponent animancer)
-            {
-                return animancer.Parameters;
-            }
-            return null;
-#else
-            try
-            {
-                var type = _animancerComponent.GetType();
-                var parametersProperty = type.GetProperty("Parameters",
-                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy);
-
-                return parametersProperty?.GetValue(_animancerComponent);
-            }
-            catch (System.Exception)
-            {
-                return null;
-            }
-#endif
-        }
-
-        private object GetParametersProperty()
-        {
-            return _cachedParameters;
-        }
-
-        private void SetParameterValue<T>(int parameterHash, T value)
-        {
-            if (!_hashToNameMap.TryGetValue(parameterHash, out string parameterName))
-            {
-                return;
-            }
-
-            var parameters = GetParametersProperty();
-            if (parameters == null) return;
-
-#if ANIMANCER_PRESENT
-            if (parameters is ParameterDictionary paramDict)
-            {
-                paramDict.SetValue(parameterName, value);
-            }
-#else
-            try
-            {
-                var setValueMethod = parameters.GetType().GetMethod("SetValue",
-                    new[] { typeof(string), typeof(T) });
-
-                if (setValueMethod != null)
-                {
-                    setValueMethod.Invoke(parameters, new object[] { parameterName, value });
-                }
-            }
-            catch (System.Exception)
-            {
-
-            }
-#endif
-        }
-
-        /// <summary>
-        /// Checks if a parameter exists in the Animator Controller.
-        /// In Editor: validates against cached parameter hashes.
-        /// In Runtime: trusts Animator mode if available (returns true to use Animator API).
-        /// </summary>
         private bool IsParameterValid(int parameterHash)
         {
             if (_useAnimatorMode)
             {
-                // Editor mode: check against cached valid hashes
                 if (_validParameterHashes.Count > 0)
                 {
                     return _validParameterHashes.Contains(parameterHash);
                 }
-                // Runtime mode: trust Animator API directly, let Unity handle invalid parameters
                 return true;
             }
-            else
-            {
-                // In Parameters mode, check if we have the parameter name in our map
-                return _hashToNameMap.ContainsKey(parameterHash);
-            }
+            return _hashToNameMap.ContainsKey(parameterHash);
         }
+
+        private void SetParameterValue<T>(int parameterHash, T value)
+        {
+            if (_parameters == null) return;
+            if (!_hashToNameMap.TryGetValue(parameterHash, out string parameterName)) return;
+
+            _parameters.SetValue(parameterName, value);
+        }
+#endif
 
         public void SetFloat(int parameterHash, float value)
         {
             if (!_isValid) return;
+#if ANIMANCER_PRESENT
+            ResetTriggeredParameters();
 
             if (_useAnimatorMode)
             {
-                // Check if parameter exists before setting to avoid warnings
                 if (IsParameterValid(parameterHash))
                 {
                     _animator.SetFloat(parameterHash, value);
                 }
-                // If parameter doesn't exist in Animator Controller, try Parameters mode as fallback
                 else if (_hashToNameMap.ContainsKey(parameterHash))
                 {
                     SetParameterValue(parameterHash, value);
@@ -216,11 +140,14 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             {
                 SetParameterValue(parameterHash, value);
             }
+#endif
         }
 
         public void SetBool(int parameterHash, bool value)
         {
             if (!_isValid) return;
+#if ANIMANCER_PRESENT
+            ResetTriggeredParameters();
 
             if (_useAnimatorMode)
             {
@@ -237,12 +164,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             {
                 SetParameterValue(parameterHash, value);
             }
+#endif
         }
 
         public void SetTrigger(int parameterHash)
         {
             if (!_isValid) return;
-
+#if ANIMANCER_PRESENT
             if (_useAnimatorMode)
             {
                 if (IsParameterValid(parameterHash))
@@ -252,15 +180,34 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
                 else if (_hashToNameMap.ContainsKey(parameterHash))
                 {
                     SetParameterValue(parameterHash, true);
+                    _triggeredParameters.Add(parameterHash);
                 }
             }
             else
             {
-                // For triggers in Parameters mode, we set a bool to true
-                // Note: Animancer Parameters don't have native trigger support
-                // This is a workaround - you may need to handle triggers differently
                 SetParameterValue(parameterHash, true);
+                _triggeredParameters.Add(parameterHash);
             }
+#endif
+        }
+
+        /// <summary>
+        /// In Parameters mode, resets previously triggered bool parameters to false.
+        /// This simulates Animator's trigger auto-reset behavior.
+        /// </summary>
+        private void ResetTriggeredParameters()
+        {
+#if ANIMANCER_PRESENT
+            if (_triggeredParameters.Count == 0) return;
+
+            var toReset = new HashSet<int>(_triggeredParameters);
+            _triggeredParameters.Clear();
+
+            foreach (int hash in toReset)
+            {
+                SetParameterValue(hash, false);
+            }
+#endif
         }
     }
 }

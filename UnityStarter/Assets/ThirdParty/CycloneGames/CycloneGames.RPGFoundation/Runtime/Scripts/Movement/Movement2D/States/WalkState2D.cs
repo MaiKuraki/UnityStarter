@@ -9,13 +9,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
         public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
         {
-            float speed = context.GetFinalSpeed(context.Config.walkSpeed, StateType);
+            float speed = context.GetFinalSpeed(context.Config.WalkSpeed, StateType);
             float horizontalVelocity = context.InputDirection.x * speed;
 
             // For BeltScroll and TopDown modes, Y input controls depth/vertical movement
             float verticalVelocity = 0f;
-            if (context.Config.movementType == MovementType2D.BeltScroll ||
-                context.Config.movementType == MovementType2D.TopDown)
+            if (context.Config.MovementType == MovementType2D.BeltScroll ||
+                context.Config.MovementType == MovementType2D.TopDown)
             {
                 verticalVelocity = context.InputDirection.y * speed;
             }
@@ -34,7 +34,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 context.AnimationController.SetFloat(hash, context.CurrentSpeed);
             }
         }
