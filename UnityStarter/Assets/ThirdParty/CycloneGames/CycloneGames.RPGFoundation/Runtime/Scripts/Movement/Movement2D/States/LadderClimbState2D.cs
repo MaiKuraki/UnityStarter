@@ -14,14 +14,14 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = Movement.AnimationParameterCache.GetHash(context.Config.climbingParameter);
+                int hash = Movement.AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
                 if (hash != 0) context.AnimationController.SetBool(hash, true);
             }
         }
 
         public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
         {
-            float climbSpeed = context.Config.ladderClimbSpeed;
+            float climbSpeed = context.Config.LadderClimbSpeed;
             float verticalInput = context.InputDirection.y;
             float horizontalInput = context.InputDirection.x;
             
@@ -33,7 +33,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
         {
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = Movement.AnimationParameterCache.GetHash(context.Config.climbingParameter);
+                int hash = Movement.AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
                 if (hash != 0) context.AnimationController.SetBool(hash, false);
             }
         }

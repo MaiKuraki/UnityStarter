@@ -33,8 +33,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
         private Seeker _seeker;
         private MovementComponent _movement3D;
-        private object _movement2D; // Use object to avoid direct reference to MovementComponent2D
-        private System.Reflection.MethodInfo _setInputDirection2D;
+        private Movement2D.MovementComponent2D _movement2D;
         private Path _currentPath;
         private int _currentWaypoint;
         private bool _hasDestination;
@@ -99,31 +98,19 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
         {
             _seeker = GetComponent<Seeker>();
             _movement3D = GetComponent<MovementComponent>();
-
-            // Try to get MovementComponent2D via reflection to avoid compile-time dependency
-            var movement2DType = System.Type.GetType("CycloneGames.RPGFoundation.Runtime.Movement.MovementComponent2D, CycloneGames.RPGFoundation.Runtime");
-            if (movement2DType != null)
-            {
-                _movement2D = GetComponent(movement2DType);
-                if (_movement2D != null)
-                {
-                    _setInputDirection2D = movement2DType.GetMethod("SetInputDirection", new[] { typeof(Vector2) });
-                }
-            }
+            _movement2D = GetComponent<Movement2D.MovementComponent2D>();
         }
 
         private void Update()
         {
             if (!_hasDestination) return;
 
-            // Auto repath
             if (repathRate > 0 && Time.time - _lastRepathTime > repathRate)
             {
                 _seeker.StartPath(transform.position, _destination, OnPathComplete);
                 _lastRepathTime = Time.time;
             }
 
-            // Follow path
             if (_currentPath != null && !HasReachedDestination)
             {
                 FollowPath();
@@ -150,7 +137,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
         public void StopNavigation()
         {
-            _seeker.CancelCurrentPathRequest();
+            if (_seeker != null)
+            {
+                _seeker.CancelCurrentPathRequest();
+            }
             _currentPath = null;
             _hasDestination = false;
             _currentWaypoint = 0;
@@ -177,7 +167,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
             Vector3 targetWaypoint = _currentPath.vectorPath[_currentWaypoint];
             Vector3 direction = CurrentDirection;
 
-            // Check if reached current waypoint
             float waypointDist = is2DMode
                 ? Vector2.Distance(transform.position, targetWaypoint)
                 : Vector3.Distance(transform.position, targetWaypoint);
@@ -192,10 +181,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
                 }
             }
 
-            // Apply movement
-            if (is2DMode && _movement2D != null && _setInputDirection2D != null)
+            if (is2DMode && _movement2D != null)
             {
-                _setInputDirection2D.Invoke(_movement2D, new object[] { new Vector2(direction.x, direction.y) * speedMultiplier });
+                _movement2D.SetInputDirection(new Vector2(direction.x, direction.y) * speedMultiplier);
             }
             else if (_movement3D != null)
             {
@@ -206,9 +194,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
 
         private void StopMovement()
         {
-            if (is2DMode && _movement2D != null && _setInputDirection2D != null)
+            if (is2DMode && _movement2D != null)
             {
-                _setInputDirection2D.Invoke(_movement2D, new object[] { Vector2.zero });
+                _movement2D.SetInputDirection(Vector2.zero);
             }
             else if (_movement3D != null)
             {

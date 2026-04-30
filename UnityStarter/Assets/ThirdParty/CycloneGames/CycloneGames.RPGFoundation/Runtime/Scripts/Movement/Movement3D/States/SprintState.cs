@@ -8,7 +8,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
-            float maxSpeed = context.GetFinalSpeed(context.Config.sprintSpeed, StateType);
+            float maxSpeed = context.GetFinalSpeed(context.Config.SprintSpeed, StateType);
             float3 worldInputDirection = context.GetWorldInputDirection();
             float inputMagnitude = context.InputMagnitude;
 
@@ -24,7 +24,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 context.AnimationController.SetFloat(hash, math.length(movement));
             }
         }

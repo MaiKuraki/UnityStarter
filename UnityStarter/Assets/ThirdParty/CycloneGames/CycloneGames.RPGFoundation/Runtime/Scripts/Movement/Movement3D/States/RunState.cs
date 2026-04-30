@@ -11,7 +11,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
         public override void OnUpdate(ref MovementContext context, out float3 displacement)
         {
             // Safely get run speed from config
-            float configSpeed = context.Config != null ? context.Config.runSpeed : kDefaultRunSpeed;
+            float configSpeed = context.Config != null ? context.Config.RunSpeed : kDefaultRunSpeed;
             float maxSpeed = context.GetFinalSpeed(configSpeed, StateType);
 
             // Get normalized world direction and input magnitude
@@ -31,7 +31,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
 
             if (context.AnimationController != null && context.AnimationController.IsValid && context.Config != null)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 context.AnimationController.SetFloat(hash, math.length(movement));
             }
         }

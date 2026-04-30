@@ -1,6 +1,6 @@
-using CycloneGames.RPGFoundation.Runtime.Movement;
 using Unity.Mathematics;
 using UnityEngine;
+using CycloneGames.RPGFoundation.Runtime.Movement;
 
 namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
 {
@@ -8,85 +8,82 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
     {
         public override Movement.MovementStateType StateType => Movement.MovementStateType.Climb;
 
-        private int _wallSide; // 1 = wall on right, -1 = wall on left
-        private float _clingTimer;
-        private bool _isSliding;
-
-        public void SetWallSide(int side)
-        {
-            _wallSide = side;
-        }
+        public void SetWallSide(int side) { }
 
         public override void OnEnter(ref MovementContext2D context)
         {
-            context.VerticalVelocity = 0f;
-            _clingTimer = 0f;
-            _isSliding = false;
+            context.WallClingTimer = 0f;
+            context.IsWallSliding = false;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = Movement.AnimationParameterCache.GetHash(context.Config.climbingParameter);
-                if (hash != 0) context.AnimationController.SetBool(hash, true);
+                int hash = Movement.AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
+                if (hash != 0)
+                {
+                    context.AnimationController.SetBool(hash, true);
+                }
             }
         }
 
         public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
         {
             velocity = float2.zero;
-            
-            _clingTimer += context.DeltaTime;
-            
-            if (_clingTimer >= context.Config.wallClingDuration)
+
+            context.WallClingTimer += context.DeltaTime;
+
+            if (context.WallClingTimer >= context.Config.WallClingDuration)
             {
-                _isSliding = true;
+                context.IsWallSliding = true;
             }
 
-            if (_isSliding)
+            if (context.IsWallSliding)
             {
-                float slideSpeed = context.Config.wallSlideSpeed;
-                velocity = new float2(0, -slideSpeed);
+                float slideSpeed = context.Config.WallSlideSpeed;
+                velocity = new float2(0, -slideSpeed) * context.DeltaTime;
                 context.CurrentSpeed = slideSpeed;
-                
+
                 if (context.AnimationController != null && context.AnimationController.IsValid)
                 {
-                    int slideHash = Movement.AnimationParameterCache.GetHash(context.Config.wallSlidingParameter);
-                    if (slideHash != 0) context.AnimationController.SetBool(slideHash, true);
+                    int slideHash = Movement.AnimationParameterCache.GetHash(context.Config.WallClimbSpeed.ToString());
+                    context.AnimationController.SetBool(slideHash, true);
                 }
             }
             else
             {
-                float climbSpeed = context.Config.wallClimbSpeed;
+                float climbSpeed = context.GetAttributeValue(Movement.MovementAttribute.ClimbSpeed, context.Config.WallClimbSpeed);
                 float verticalInput = context.InputDirection.y;
                 float horizontalInput = context.InputDirection.x;
-                
-                // Allow both vertical and horizontal movement while clinging (for vines, nets, etc.)
-                velocity = new float2(horizontalInput, verticalInput) * climbSpeed;
-                context.CurrentSpeed = math.length(velocity);
-            }
-        }
 
-        public override void OnExit(ref MovementContext2D context)
-        {
-            if (context.AnimationController != null && context.AnimationController.IsValid)
-            {
-                int hash = Movement.AnimationParameterCache.GetHash(context.Config.climbingParameter);
-                if (hash != 0) context.AnimationController.SetBool(hash, false);
-                
-                int slideHash = Movement.AnimationParameterCache.GetHash(context.Config.wallSlidingParameter);
-                if (slideHash != 0) context.AnimationController.SetBool(slideHash, false);
+                float2 moveDir = new float2(horizontalInput, verticalInput);
+                if (math.lengthsq(moveDir) > 0.001f)
+                {
+                    moveDir = math.normalize(moveDir);
+                }
+
+                velocity = moveDir * climbSpeed * context.DeltaTime;
+                context.CurrentSpeed = math.length(moveDir) * climbSpeed;
+
+                if (context.AnimationController != null && context.AnimationController.IsValid)
+                {
+                    int climbHash = Movement.AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
+                    context.AnimationController.SetBool(climbHash, true);
+                }
             }
+
+            context.CurrentVelocity = velocity / math.max(context.DeltaTime, 0.0001f);
         }
 
         public override MovementStateBase2D EvaluateTransition(ref MovementContext2D context)
         {
-            // Wall jump with direction based on wall side
-            if (context.JumpPressed && context.Config.enableWallJump)
+            if (context.JumpPressed && context.Config.EnableWallJump)
             {
                 context.IsWallJumping = true;
-                context.WallJumpDirection = new Vector2(-_wallSide * context.Config.wallJumpForceX, context.Config.wallJumpForceY);
-                context.LastWallSide = _wallSide;
+                context.WallJumpDirection = new Vector2(
+                    -context.WallClimbSide * context.Config.WallJumpForceX,
+                    context.Config.WallJumpForceY);
+                context.LastWallSide = context.WallClimbSide;
                 context.LastWallJumpTime = Time.time;
-                
+
                 return StatePool<MovementStateBase2D>.GetState<JumpState2D>();
             }
 
@@ -96,6 +93,22 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement2D.States
             }
 
             return null;
+        }
+
+        public override void OnExit(ref MovementContext2D context)
+        {
+            context.WallClimbSide = 0;
+            context.WallClingTimer = 0f;
+            context.IsWallSliding = false;
+
+            if (context.AnimationController != null && context.AnimationController.IsValid)
+            {
+                int hash = Movement.AnimationParameterCache.GetHash(context.Config.ClimbingParameter);
+                if (hash != 0)
+                {
+                    context.AnimationController.SetBool(hash, false);
+                }
+            }
         }
     }
 }

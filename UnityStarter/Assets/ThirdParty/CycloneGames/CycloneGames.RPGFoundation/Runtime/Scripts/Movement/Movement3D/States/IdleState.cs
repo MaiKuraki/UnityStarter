@@ -22,7 +22,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement.States
             // Update animation parameter
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(context.Config.movementSpeedParameter);
+                int hash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 context.AnimationController.SetFloat(hash, 0f);
             }
         }

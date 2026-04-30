@@ -18,7 +18,7 @@ namespace CycloneGames.RPGFoundation.Runtime
     /// Physics-based movement component using Rigidbody + CapsuleCollider.
     /// </summary>
     [RequireComponent(typeof(Rigidbody), typeof(CapsuleCollider))]
-    public class MovementComponent : MonoBehaviour, IMovementStateQuery3D
+    public class MovementComponent : MonoBehaviour, IMovementStateQuery3D, IMovementSnapshotProvider
 #if GAMEPLAY_FRAMEWORK_PRESENT
         , IInitialRotationSettable
 #endif
@@ -151,6 +151,8 @@ namespace CycloneGames.RPGFoundation.Runtime
         private Vector3 _velocity;
         private Vector3 _updatedPosition;
 
+        // Set to false to disable ground constraint entirely (e.g. for flying/swimming states).
+        // Currently always true; ground constraint is managed per-frame via _unconstrainedTimer.
         private bool _isConstrainedToGround = true;
         private float _unconstrainedTimer;
 
@@ -207,15 +209,19 @@ namespace CycloneGames.RPGFoundation.Runtime
         private Vector3 _pendingForce;
         private float _gapBridgeCooldown;
 
+        // Coyote time and jump buffer (mirrors 2D behavior)
+        private float _coyoteTimeCounter;
+        private float _jumpBufferCounter;
+
         #endregion
 
         // Use fixedDeltaTime in FixedUpdate context for physics consistency
         private float DeltaTime => (ignoreTimeScale ? Time.fixedUnscaledDeltaTime : Time.fixedDeltaTime) * LocalTimeScale;
 
         // Use collisionLayer if set, otherwise fall back to groundLayer
-        private LayerMask CollisionLayers => config != null && config.collisionLayer != 0
-            ? config.collisionLayer
-            : (config != null ? config.groundLayer : Physics.DefaultRaycastLayers);
+        private LayerMask CollisionLayers => config != null && config.CollisionLayer != 0
+            ? config.CollisionLayer
+            : (config != null ? config.GroundLayer : Physics.DefaultRaycastLayers);
 
         #region IMovementStateQuery
 
@@ -273,6 +279,9 @@ namespace CycloneGames.RPGFoundation.Runtime
             if (_unconstrainedTimer > 0)
                 _unconstrainedTimer -= deltaTime;
 
+            HandleCoyoteTime(deltaTime);
+            HandleJumpBuffer(deltaTime);
+
             // Use transform.position for stability (rigidbody.position may be interpolated)
             _updatedPosition = transform.position;
 
@@ -286,7 +295,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             // Now update platform tracking with current ground info
             UpdateMovingPlatformTracking();
 
-            if (_context.IsGrounded && config != null && config.enableGapBridging)
+            if (_context.IsGrounded && config != null && config.EnableGapBridging)
                 TryBridgeGap();
 
             ExecuteStateMachine();
@@ -338,6 +347,9 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         private void OnDestroy()
         {
+            OnStateChanged = null;
+            OnLanded = null;
+            OnJumpStart = null;
         }
 
         #endregion
@@ -362,7 +374,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             if (config != null)
             {
                 // cosine of slope limit angle - surfaces with normal.y >= this are walkable
-                _minSlopeLimit = Mathf.Cos(config.slopeLimit * Mathf.Deg2Rad);
+                _minSlopeLimit = Mathf.Cos(config.SlopeLimit * Mathf.Deg2Rad);
             }
             else
             {
@@ -388,9 +400,9 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             if (animancerComponent != null)
             {
+#if ANIMANCER_PRESENT
                 _isUsingAnimancer = true;
 
-#if ANIMANCER_PRESENT
                 if (animancerComponent is HybridAnimancerComponent hybridAnimancer)
                 {
                     _isUsingHybridAnimancer = true;
@@ -402,9 +414,6 @@ namespace CycloneGames.RPGFoundation.Runtime
                 {
                     _isUsingHybridAnimancer = false;
                 }
-#else
-                TryExtractAnimatorViaReflection();
-#endif
 
                 _cachedParameterMap = CreateParameterNameMap();
                 animationController = new AnimancerAnimationController(animancerComponent, _cachedParameterMap);
@@ -413,8 +422,14 @@ namespace CycloneGames.RPGFoundation.Runtime
                 {
                     CLogger.LogWarning("[MovementComponent] Root motion requires HybridAnimancerComponent.");
                 }
+#else
+                CLogger.LogWarning(
+                    "[MovementComponent] Animancer component assigned but Animancer package is not installed. " +
+                    "Falling back to Unity Animator. Install com.kybernetik.animancer to use Animancer.");
+#endif
             }
-            else
+
+            if (animationController == null)
             {
                 if (characterAnimator == null)
                     characterAnimator = GetComponent<Animator>();
@@ -425,44 +440,15 @@ namespace CycloneGames.RPGFoundation.Runtime
             _context.AnimationController = animationController;
         }
 
-#if !ANIMANCER_PRESENT
-        private void TryExtractAnimatorViaReflection()
-        {
-            try
-            {
-                var animancerType = animancerComponent.GetType();
-                bool isHybrid = animancerType.Name.Contains("Hybrid");
-
-                if (isHybrid)
-                {
-                    _isUsingHybridAnimancer = true;
-                    var animatorProp = animancerType.GetProperty("Animator",
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.FlattenHierarchy);
-
-                    if (animatorProp != null)
-                    {
-                        _hybridAnimancerAnimator = animatorProp.GetValue(animancerComponent) as Animator;
-                        if (_hybridAnimancerAnimator != null && characterAnimator == null)
-                            characterAnimator = _hybridAnimancerAnimator;
-                    }
-                }
-            }
-            catch (Exception)
-            {
-                CLogger.LogError("[MovementComponent] Failed to extract Animator from AnimancerComponent.");
-            }
-        }
-#endif
-
         private Dictionary<int, string> CreateParameterNameMap()
         {
             var map = new Dictionary<int, string>();
             if (config == null) return map;
 
-            AddParameterToMap(map, config.movementSpeedParameter);
-            AddParameterToMap(map, config.isGroundedParameter);
-            AddParameterToMap(map, config.jumpTrigger);
-            AddParameterToMap(map, config.rollTrigger);
+            AddParameterToMap(map, config.MovementSpeedParameter);
+            AddParameterToMap(map, config.IsGroundedParameter);
+            AddParameterToMap(map, config.JumpTrigger);
+            AddParameterToMap(map, config.RollTrigger);
 
             return map;
         }
@@ -479,9 +465,9 @@ namespace CycloneGames.RPGFoundation.Runtime
         private void PreWarmAnimationParameters()
         {
             if (config == null) return;
-            AnimationParameterCache.PreWarm(config.movementSpeedParameter, config.isGroundedParameter, config.jumpTrigger);
-            if (!string.IsNullOrEmpty(config.rollTrigger))
-                AnimationParameterCache.PreWarm(config.rollTrigger);
+            AnimationParameterCache.PreWarm(config.MovementSpeedParameter, config.IsGroundedParameter, config.JumpTrigger);
+            if (!string.IsNullOrEmpty(config.RollTrigger))
+                AnimationParameterCache.PreWarm(config.RollTrigger);
         }
 
         private void CacheTargetAnimator()
@@ -580,7 +566,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             // Update animation grounded parameter
             if (_context.AnimationController != null && _context.AnimationController.IsValid)
             {
-                int hash = AnimationParameterCache.GetHash(config.isGroundedParameter);
+                int hash = AnimationParameterCache.GetHash(config.IsGroundedParameter);
                 _context.AnimationController.SetBool(hash, _context.IsGrounded);
             }
 
@@ -597,7 +583,7 @@ namespace CycloneGames.RPGFoundation.Runtime
 #if UNITY_EDITOR
             // Update runtime debug info
             _debugConfigAssigned = config != null;
-            _debugConfigRunSpeed = config != null ? config.runSpeed : -1f;
+            _debugConfigRunSpeed = config != null ? config.RunSpeed : -1f;
             _debugCurrentSpeed = _context.CurrentSpeed;
             _debugDeltaTime = DeltaTime;
             _debugCurrentState = _currentState?.StateType.ToString() ?? "None";
@@ -614,7 +600,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             _debugGroundHasRigidbody = _groundCollider != null && _groundCollider.attachedRigidbody != null;
             if (_groundCollider != null && config != null)
             {
-                LayerMask platformMask = config.platformLayer != 0 ? config.platformLayer : config.groundLayer;
+                LayerMask platformMask = config.PlatformLayer != 0 ? config.PlatformLayer : config.GroundLayer;
                 _debugGroundLayerMatch = ((1 << _groundCollider.gameObject.layer) & platformMask) != 0;
             }
             else
@@ -792,7 +778,7 @@ namespace CycloneGames.RPGFoundation.Runtime
                 // If grounded and hit non-walkable, try step up
                 if (_isGrounded && !collisionResult.isWalkable && collisionResult.hitLocation == HitLocation.Sides)
                 {
-                    if (config != null && config.stepHeight > 0f)
+                    if (config != null && config.StepHeight > 0f)
                     {
                         if (TryStepUp(ref displacement, collisionResult))
                         {
@@ -1217,9 +1203,9 @@ namespace CycloneGames.RPGFoundation.Runtime
         /// </summary>
         private bool TryStepUp(ref Vector3 displacement, CollisionResult obstacleHit)
         {
-            if (config == null || config.stepHeight <= 0f) return false;
+            if (config == null || config.StepHeight <= 0f) return false;
 
-            float stepHeight = config.stepHeight;
+            float stepHeight = config.StepHeight;
             Vector3 forwardDir = Vector3.ProjectOnPlane(displacement, WorldUp).normalized;
 
             if (forwardDir.sqrMagnitude < kKindaSmallNumber)
@@ -1267,7 +1253,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             Vector3 finalBottom = stepForwardPos + transform.rotation * _capsuleBottomCenter;
             float downDist = stepHeight + kMaxGroundDistance * 2f;
 
-            if (!Physics.CapsuleCast(finalBottom, finalTop, sweepRadius, -WorldUp, out RaycastHit downHit, downDist, config.groundLayer, QueryTriggerInteraction.Ignore))
+            if (!Physics.CapsuleCast(finalBottom, finalTop, sweepRadius, -WorldUp, out RaycastHit downHit, downDist, config.GroundLayer, QueryTriggerInteraction.Ignore))
                 return false;
 
             if (ShouldIgnore(downHit.collider))
@@ -1299,7 +1285,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             float slopeAngle = Mathf.Acos(Mathf.Clamp01(slopeDot)) * Mathf.Rad2Deg;
 
             // Only slide on slopes steeper than limit
-            if (slopeAngle <= config.slopeLimit)
+            if (slopeAngle <= config.SlopeLimit)
                 return;
 
             // Calculate slide direction (down the slope, perpendicular to normal in vertical plane)
@@ -1310,11 +1296,11 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             // Slide speed increases with slope angle
             // At slopeLimit: 0, at 90 degrees: full gravity
-            float angleRatio = (slopeAngle - config.slopeLimit) / (90f - config.slopeLimit);
+            float angleRatio = (slopeAngle - config.SlopeLimit) / (90f - config.SlopeLimit);
             angleRatio = Mathf.Clamp01(angleRatio);
 
             // Apply gravity-based sliding
-            float slideAcceleration = Mathf.Abs(config.gravity) * angleRatio;
+            float slideAcceleration = Mathf.Abs(config.Gravity) * angleRatio;
             float slideSpeed = slideAcceleration * deltaTime;
 
             Vector3 slideDisplacement = slideDirection * slideSpeed;
@@ -1421,7 +1407,7 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             // Compute sweep distance - larger when previously grounded
             float heightCheckAdjust = _wasGrounded ? kMaxGroundDistance + kKindaSmallNumber : -kMaxGroundDistance;
-            float sweepDistance = Mathf.Max(kMaxGroundDistance, config.stepHeight + heightCheckAdjust);
+            float sweepDistance = Mathf.Max(kMaxGroundDistance, config.StepHeight + heightCheckAdjust);
 
             ComputeGroundDistance(_updatedPosition, sweepDistance, out _currentGround);
 
@@ -1477,7 +1463,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             bottom += WorldUp * shrinkHeight;
 
             bool foundGround = Physics.CapsuleCast(bottom, top, actualSweepRadius, -WorldUp, out RaycastHit hitResult,
-                actualSweepDistance, config.groundLayer, QueryTriggerInteraction.Ignore);
+                actualSweepDistance, config.GroundLayer, QueryTriggerInteraction.Ignore);
 
             if (foundGround)
             {
@@ -1517,7 +1503,7 @@ namespace CycloneGames.RPGFoundation.Runtime
                 Vector3 rayOrigin = characterPosition + WorldUp * (capsuleBottomY + capsuleRadius);
 
                 if (Physics.Raycast(rayOrigin, -WorldUp, out RaycastHit rayHit, raycastDistance,
-                    config.groundLayer, QueryTriggerInteraction.Ignore))
+                    config.GroundLayer, QueryTriggerInteraction.Ignore))
                 {
                     if (!ShouldIgnore(rayHit.collider))
                     {
@@ -1631,7 +1617,7 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             // For mesh surfaces, do a raycast from above for accurate normal
             Vector3 rayOrigin = hit.point + WorldUp * 0.1f;
-            if (Physics.Raycast(rayOrigin, -WorldUp, out RaycastHit rayHit, 0.2f, config.groundLayer, QueryTriggerInteraction.Ignore))
+            if (Physics.Raycast(rayOrigin, -WorldUp, out RaycastHit rayHit, 0.2f, config.GroundLayer, QueryTriggerInteraction.Ignore))
             {
                 if (rayHit.collider == hit.collider)
                     return rayHit.normal;
@@ -1710,7 +1696,7 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         private void ApplyMovingPlatform()
         {
-            if (config == null || !config.enableMovingPlatform || !_movingPlatform.isOnPlatform)
+            if (config == null || !config.EnableMovingPlatform || !_movingPlatform.isOnPlatform)
                 return;
 
             if (_movingPlatform.platformTransform == null)
@@ -1734,7 +1720,7 @@ namespace CycloneGames.RPGFoundation.Runtime
                 _updatedPosition += deltaPos;
             }
 
-            if (config.inheritPlatformRotation)
+            if (config.InheritPlatformRotation)
             {
                 Quaternion deltaRot = _movingPlatform.GetPlatformDeltaRotation(transform);
                 if (Quaternion.Angle(Quaternion.identity, deltaRot) > 0.01f)
@@ -1747,7 +1733,7 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         private void UpdateMovingPlatformTracking()
         {
-            if (config == null || !config.enableMovingPlatform)
+            if (config == null || !config.EnableMovingPlatform)
             {
                 if (_movingPlatform.isOnPlatform) _movingPlatform.Clear();
                 return;
@@ -1755,7 +1741,7 @@ namespace CycloneGames.RPGFoundation.Runtime
 
             if (!_context.IsGrounded)
             {
-                if (_movingPlatform.isOnPlatform && config.inheritPlatformMomentum)
+                if (_movingPlatform.isOnPlatform && config.InheritPlatformMomentum)
                     _inheritedPlatformVelocity = _movingPlatform.platformVelocity;
                 if (_movingPlatform.isOnPlatform) _movingPlatform.Clear();
                 return;
@@ -1768,7 +1754,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             if (_groundCollider != null)
             {
                 Rigidbody groundRb = _groundCollider.attachedRigidbody;
-                LayerMask platformMask = config.platformLayer != 0 ? config.platformLayer : config.groundLayer;
+                LayerMask platformMask = config.PlatformLayer != 0 ? config.PlatformLayer : config.GroundLayer;
                 bool isValidPlatform = groundRb != null && ((1 << _groundCollider.gameObject.layer) & platformMask) != 0;
 
                 if (isValidPlatform)
@@ -1888,7 +1874,7 @@ namespace CycloneGames.RPGFoundation.Runtime
                 return;
             }
 
-            float rotationSpeed = _context.GetAttributeValue(MovementAttribute.RotationSpeed, config.rotationSpeed);
+            float rotationSpeed = _context.GetAttributeValue(MovementAttribute.RotationSpeed, config.RotationSpeed);
             float t = rotationSpeed * DeltaTime;
 
             if (angleDeg > 135f)
@@ -1909,7 +1895,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             {
                 Quaternion toUp = Quaternion.FromToRotation(currentUp, worldUp);
                 quaternion targetRotation = math.mul((quaternion)toUp, _currentRotation);
-                float rotationSpeed = _context.GetAttributeValue(MovementAttribute.RotationSpeed, config.rotationSpeed);
+                float rotationSpeed = _context.GetAttributeValue(MovementAttribute.RotationSpeed, config.RotationSpeed);
                 _currentRotation = math.slerp(_currentRotation, targetRotation, rotationSpeed * DeltaTime);
                 transform.rotation = _currentRotation;
             }
@@ -1929,7 +1915,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             bool wasPressed = _context.JumpPressed;
             _context.JumpPressed = pressed;
 
-            if (pressed && !wasPressed && _context.IsGrounded)
+            if (pressed && !wasPressed && CanJump())
                 RequestStateChange(MovementStateType.Jump);
         }
 
@@ -2040,7 +2026,11 @@ namespace CycloneGames.RPGFoundation.Runtime
                 MovementStateType.Crouch => StatePool<MovementStateBase>.GetState<CrouchState>(),
                 MovementStateType.Jump => StatePool<MovementStateBase>.GetState<JumpState>(),
                 MovementStateType.Fall => StatePool<MovementStateBase>.GetState<FallState>(),
-                _ => null
+                MovementStateType.Roll => StatePool<MovementStateBase>.GetState<RollState>(),
+                MovementStateType.Swim => StatePool<MovementStateBase>.GetState<SwimState>(),
+                MovementStateType.Fly => StatePool<MovementStateBase>.GetState<FlyState>(),
+                MovementStateType.Climb => StatePool<MovementStateBase>.GetState<WallClimbState>(),
+                _ => StatePool<MovementStateBase>.GetState<IdleState>()
             };
         }
 
@@ -2050,29 +2040,29 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         private bool TryBridgeGap()
         {
-            if (config == null || !config.enableGapBridging) return false;
+            if (config == null || !config.EnableGapBridging) return false;
             if (_gapBridgeCooldown > 0) return false;
-            if (_context.CurrentSpeed < config.minSpeedForGapBridge) return false;
+            if (_context.CurrentSpeed < config.MinSpeedForGapBridge) return false;
 
             Vector3 moveDir = new Vector3(_context.CurrentVelocity.x, 0, _context.CurrentVelocity.z).normalized;
             if (moveDir.sqrMagnitude < 0.01f) return false;
 
             Vector3 frontPoint = transform.position + moveDir * _radius;
-            if (Physics.Raycast(frontPoint, Vector3.down, config.groundedCheckDistance * 3, config.groundLayer))
+            if (Physics.Raycast(frontPoint, Vector3.down, config.GroundedCheckDistance * 3, config.GroundLayer))
                 return false;
 
-            for (float dist = 0.5f; dist <= config.maxGapDistance; dist += 0.3f)
+            for (float dist = 0.5f; dist <= config.MaxGapDistance; dist += 0.3f)
             {
                 Vector3 checkPoint = frontPoint + moveDir * dist + Vector3.up * 0.5f;
 
                 if (Physics.Raycast(checkPoint, Vector3.down, out RaycastHit hit,
-                    1f + config.maxGapHeightDiff, config.groundLayer))
+                    1f + config.MaxGapHeightDiff, config.GroundLayer))
                 {
                     float heightDiff = Mathf.Abs(hit.point.y - transform.position.y);
-                    if (heightDiff <= config.maxGapHeightDiff)
+                    if (heightDiff <= config.MaxGapHeightDiff)
                     {
                         float jumpHeight = 0.3f + heightDiff * 0.5f;
-                        float jumpVelocity = Mathf.Sqrt(2f * Mathf.Abs(config.gravity) * jumpHeight);
+                        float jumpVelocity = Mathf.Sqrt(2f * Mathf.Abs(config.Gravity) * jumpHeight);
 
                         _context.VerticalVelocity = jumpVelocity;
                         _gapBridgeCooldown = 0.3f;
@@ -2089,6 +2079,59 @@ namespace CycloneGames.RPGFoundation.Runtime
 
         #region External Movement
 
+        private void HandleCoyoteTime(float deltaTime)
+        {
+            if (config == null) return;
+
+            bool isAirState = _currentState != null &&
+                             (_currentState.StateType == MovementStateType.Jump ||
+                              _currentState.StateType == MovementStateType.Fall);
+
+            if (!_context.WasGrounded && _context.IsGrounded)
+            {
+                _coyoteTimeCounter = 0f;
+            }
+            else if (_context.WasGrounded && !_context.IsGrounded && !isAirState)
+            {
+                _coyoteTimeCounter = config.CoyoteTime;
+            }
+            else if (_coyoteTimeCounter > 0f)
+            {
+                _coyoteTimeCounter -= deltaTime;
+            }
+        }
+
+        private void HandleJumpBuffer(float deltaTime)
+        {
+            if (config == null) return;
+
+            if (_jumpBufferCounter > 0f)
+            {
+                _jumpBufferCounter -= deltaTime;
+            }
+
+            if (_context.JumpPressed && !_context.IsGrounded && _coyoteTimeCounter <= 0f)
+            {
+                _jumpBufferCounter = config.JumpBufferTime;
+            }
+            else if (_jumpBufferCounter > 0f && _context.IsGrounded)
+            {
+                _jumpBufferCounter = 0f;
+                RequestStateChange(MovementStateType.Jump);
+            }
+        }
+
+        private bool CanJump()
+        {
+            if (config == null) return false;
+
+            if (_context.IsGrounded) return true;
+            if (_coyoteTimeCounter > 0f) return true;
+
+            int resolvedMaxJump = (int)_context.GetAttributeValue(MovementAttribute.MaxJumpCount, config.MaxJumpCount);
+            return _context.JumpCount < resolvedMaxJump;
+        }
+
         public void MoveWithVelocity(Vector3 worldVelocity)
         {
             if (config == null) return;
@@ -2103,7 +2146,7 @@ namespace CycloneGames.RPGFoundation.Runtime
                 float speed = worldVelocity.magnitude;
                 if (_context.AnimationController != null && _context.AnimationController.IsValid)
                 {
-                    int hash = AnimationParameterCache.GetHash(config.movementSpeedParameter);
+                    int hash = AnimationParameterCache.GetHash(config.MovementSpeedParameter);
                     _context.AnimationController.SetFloat(hash, speed);
                 }
             }
@@ -2129,6 +2172,56 @@ namespace CycloneGames.RPGFoundation.Runtime
         }
 #endif
 
+        #region Network Snapshot
+
+        public MovementSnapshot GetSnapshot()
+        {
+            return new MovementSnapshot
+            {
+                Position = transform.position,
+                Velocity = _velocity,
+                WorldUp = WorldUp,
+                StateType = CurrentState,
+                VerticalVelocity = _context.VerticalVelocity,
+                IsGrounded = _context.IsGrounded,
+                JumpCount = _context.JumpCount,
+                Tick = Time.frameCount,
+                Timestamp = Time.time
+            };
+        }
+
+        public void ApplySnapshot(in MovementSnapshot snapshot)
+        {
+            _updatedPosition = snapshot.Position;
+            _velocity = snapshot.Velocity;
+            WorldUp = snapshot.WorldUp;
+            _context.VerticalVelocity = snapshot.VerticalVelocity;
+            _context.IsGrounded = snapshot.IsGrounded;
+            _context.JumpCount = snapshot.JumpCount;
+
+            transform.position = snapshot.Position;
+            _rigidbody.position = snapshot.Position;
+
+            if (_currentState?.StateType != snapshot.StateType)
+            {
+                RequestStateChange(snapshot.StateType);
+            }
+        }
+
+        public void ResetFromSnapshot(in MovementSnapshot snapshot)
+        {
+            ApplySnapshot(snapshot);
+            _context.WasGrounded = snapshot.IsGrounded;
+            _context.CurrentSpeed = 0f;
+            _context.CurrentVelocity = float3.zero;
+            _context.InputDirection = float3.zero;
+            _pendingImpulse = Vector3.zero;
+            _pendingForce = Vector3.zero;
+            _unconstrainedTimer = 0f;
+        }
+
+        #endregion
+
 #if UNITY_EDITOR
         private void OnDrawGizmos()
         {
@@ -2153,7 +2246,7 @@ namespace CycloneGames.RPGFoundation.Runtime
                 // Ground detection ray
                 float capsuleBottomY = center.y - halfHeight;
                 Vector3 rayOrigin = pos + currentWorldUp * (capsuleBottomY + radius);
-                float rayDist = config.stepHeight + 0.1f;
+                float rayDist = config.StepHeight + 0.1f;
 
                 Gizmos.color = Color.yellow;
                 Gizmos.DrawLine(rayOrigin, rayOrigin - currentWorldUp * rayDist);
@@ -2170,14 +2263,14 @@ namespace CycloneGames.RPGFoundation.Runtime
 
                     // Slope angle indicator
                     float slopeAngle = Vector3.Angle(_groundNormal, currentWorldUp);
-                    Gizmos.color = slopeAngle <= config.slopeLimit ? Color.green : Color.red;
+                    Gizmos.color = slopeAngle <= config.SlopeLimit ? Color.green : Color.red;
                     DrawAngleArc(_groundPoint, _groundNormal, currentWorldUp, slopeAngle);
                 }
 
                 // Step height indicator
                 Gizmos.color = new Color(1f, 0.5f, 0f, 0.5f);
                 Vector3 stepBottom = pos + currentWorldUp * capsuleBottomY;
-                Vector3 stepTop = stepBottom + currentWorldUp * config.stepHeight;
+                Vector3 stepTop = stepBottom + currentWorldUp * config.StepHeight;
                 Gizmos.DrawLine(stepBottom + transform.right * radius, stepTop + transform.right * radius);
                 Gizmos.DrawLine(stepBottom - transform.right * radius, stepTop - transform.right * radius);
                 Gizmos.DrawLine(stepBottom + transform.forward * radius, stepTop + transform.forward * radius);
@@ -2284,7 +2377,7 @@ namespace CycloneGames.RPGFoundation.Runtime
             if (_isGrounded)
             {
                 float slopeAngle = Vector3.Angle(_groundNormal, WorldUp);
-                sb.AppendLine($"Slope Angle: {slopeAngle:F1}° (Limit: {config?.slopeLimit ?? 45}°)");
+                sb.AppendLine($"Slope Angle: {slopeAngle:F1}° (Limit: {config?.SlopeLimit ?? 45}°)");
             }
 
             sb.AppendLine($"Velocity: {_velocity.magnitude:F2} m/s");

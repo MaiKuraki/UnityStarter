@@ -28,5 +28,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Movement
     public interface IMovementStateQuery2D : IMovementStateQuery
     {
         Vector2 Velocity { get; }
+        Vector2 LookDirection { get; }
     }
 }
