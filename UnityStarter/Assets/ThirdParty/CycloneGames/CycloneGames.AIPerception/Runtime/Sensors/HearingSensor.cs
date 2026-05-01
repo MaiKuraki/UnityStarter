@@ -19,6 +19,11 @@ namespace CycloneGames.AIPerception.Runtime
         public bool UseOcclusion;
         public LayerMask OcclusionLayer;
         [Range(0f, 1f)] public float OcclusionAttenuation;
+
+        [Header("Memory")]
+        [Tooltip("Seconds to remember a target after it leaves sensor range. 0 disables memory.")]
+        [Range(0f, 60f)]
+        public float MemoryDuration;
         
         public static HearingSensorConfig Default => new HearingSensorConfig
         {
@@ -28,7 +33,8 @@ namespace CycloneGames.AIPerception.Runtime
             FilterByType = false,
             UseOcclusion = true,
             OcclusionLayer = Physics.DefaultRaycastLayers,
-            OcclusionAttenuation = 0.5f
+            OcclusionAttenuation = 0.5f,
+            MemoryDuration = 5f
         };
     }
     
@@ -46,6 +52,9 @@ namespace CycloneGames.AIPerception.Runtime
         private NativeList<PerceptibleHandle> _stagingHandles;
         private NativeList<DetectionResult> _stagingResults;
         
+        // Stimulus memory — persists after target leaves sensor range
+        private NativeList<StimulusMemoryEntry> _memoryEntries;
+        
         // Job data (reused each frame)
         private NativeArray<float> _jobAudibility;
         private NativeArray<PerceptibleData> _jobTargetData;
@@ -62,8 +71,8 @@ namespace CycloneGames.AIPerception.Runtime
         public bool IsEnabled { get; set; } = true;
         public float UpdateInterval => _config.UpdateInterval;
         public float LastUpdateTime => _lastUpdateTime;
-        public bool HasDetection => _detectedHandles.IsCreated && _detectedHandles.Length > 0;
-        public int DetectedCount => _detectedHandles.IsCreated ? _detectedHandles.Length : 0;
+        public bool HasDetection => (_detectedHandles.IsCreated && _detectedHandles.Length > 0) || (_memoryEntries.IsCreated && _memoryEntries.Length > 0);
+        public int DetectedCount => (_detectedHandles.IsCreated ? _detectedHandles.Length : 0) + (_memoryEntries.IsCreated ? _memoryEntries.Length : 0);
         
         public float Radius => _config.Radius;
         public float3 Position => _sensorTransform != null ? (float3)_sensorTransform.position : float3.zero;
@@ -83,6 +92,7 @@ namespace CycloneGames.AIPerception.Runtime
             _detectionResults = new NativeList<DetectionResult>(32, Allocator.Persistent);
             _stagingHandles = new NativeList<PerceptibleHandle>(32, Allocator.Persistent);
             _stagingResults = new NativeList<DetectionResult>(32, Allocator.Persistent);
+            _memoryEntries = new NativeList<StimulusMemoryEntry>(32, Allocator.Persistent);
         }
         
         public void UpdateSensor(float deltaTime)
@@ -101,7 +111,7 @@ namespace CycloneGames.AIPerception.Runtime
                 return;
             }
             
-            registry.RebuildData();
+            // RebuildData is called once per frame by SensorManager.Update
             int targetCount = registry.GetDataCount();
             
             if (targetCount == 0)
@@ -112,15 +122,15 @@ namespace CycloneGames.AIPerception.Runtime
                 return;
             }
             
-            // Create a copy for job processing
-            _jobTargetData = registry.CreateNativeDataCopy(Allocator.TempJob);
-            _jobTargetCount = targetCount;
+            // Create a spatially filtered copy for job processing
+            _jobTargetData = registry.CreateNativeDataCopyInRange(Position, _config.Radius, Allocator.TempJob);
+            _jobTargetCount = _jobTargetData.Length;
             
             // Allocate job output
-            if (!_jobAudibility.IsCreated || _jobAudibility.Length < targetCount)
+            if (!_jobAudibility.IsCreated || _jobAudibility.Length < _jobTargetCount)
             {
                 if (_jobAudibility.IsCreated) _jobAudibility.Dispose();
-                _jobAudibility = new NativeArray<float>(targetCount, Allocator.Persistent);
+                _jobAudibility = new NativeArray<float>(_jobTargetCount, Allocator.Persistent);
             }
             
             // Schedule Burst job for sphere query
@@ -134,7 +144,7 @@ namespace CycloneGames.AIPerception.Runtime
                 Audibility = _jobAudibility
             };
             
-            _currentJobHandle = job.Schedule(targetCount, 64);
+            _currentJobHandle = job.Schedule(_jobTargetCount, 64);
             _jobScheduled = true;
             
             var manager = SensorManager.Instance;
@@ -153,6 +163,7 @@ namespace CycloneGames.AIPerception.Runtime
                 _detectedHandles.Clear();
                 _detectionResults.Clear();
                 ProcessJobResultsInternal(_jobTargetData, _jobTargetCount, _detectedHandles, _detectionResults);
+                MergeMemory();
                 
                 if (_jobTargetData.IsCreated)
                 {
@@ -190,6 +201,7 @@ namespace CycloneGames.AIPerception.Runtime
                 _detectedHandles.Add(_stagingHandles[i]);
                 _detectionResults.Add(_stagingResults[i]);
             }
+            MergeMemory();
             
             if (_jobTargetData.IsCreated)
             {
@@ -240,7 +252,92 @@ namespace CycloneGames.AIPerception.Runtime
                 });
             }
         }
-        
+
+        private void MergeMemory()
+        {
+            if (_config.MemoryDuration <= 0f || !_memoryEntries.IsCreated) return;
+
+            float now = Time.time;
+            var refreshed = new NativeArray<bool>(_memoryEntries.Length, Allocator.Temp);
+
+            for (int i = 0; i < _detectionResults.Length; i++)
+            {
+                var dr = _detectionResults[i];
+                int memIdx = FindMemoryIndex(dr.Target);
+
+                if (memIdx >= 0)
+                {
+                    var entry = _memoryEntries[memIdx];
+                    entry.LastDetectedTime = now;
+                    entry.LastKnownPosition = dr.LastKnownPosition;
+                    entry.PeakVisibility = math.max(entry.PeakVisibility, dr.Visibility);
+                    entry.DistanceAtDetection = dr.Distance;
+                    _memoryEntries[memIdx] = entry;
+                    refreshed[memIdx] = true;
+                }
+                else
+                {
+                    _memoryEntries.Add(new StimulusMemoryEntry
+                    {
+                        Target = dr.Target,
+                        LastKnownPosition = dr.LastKnownPosition,
+                        LastDetectedTime = now,
+                        PeakVisibility = dr.Visibility,
+                        SensorType = (int)SensorType.Hearing,
+                        DistanceAtDetection = dr.Distance
+                    });
+                }
+            }
+
+            for (int i = _memoryEntries.Length - 1; i >= 0; i--)
+            {
+                if (i < refreshed.Length && refreshed[i]) continue;
+
+                var entry = _memoryEntries[i];
+                float age = now - entry.LastDetectedTime;
+
+                if (age >= _config.MemoryDuration)
+                {
+                    _memoryEntries.RemoveAtSwapBack(i);
+                    continue;
+                }
+
+                float visibility = entry.PeakVisibility * (1f - age / _config.MemoryDuration);
+                if (visibility <= 0.01f)
+                {
+                    _memoryEntries.RemoveAtSwapBack(i);
+                    continue;
+                }
+
+                var memResult = new DetectionResult
+                {
+                    Target = entry.Target,
+                    Distance = entry.DistanceAtDetection,
+                    LastKnownPosition = entry.LastKnownPosition,
+                    DetectionTime = entry.LastDetectedTime,
+                    Visibility = visibility,
+                    SensorType = (int)SensorType.Hearing,
+                    IsFromMemory = true
+                };
+
+                _detectionResults.Add(memResult);
+                _detectedHandles.Add(entry.Target);
+            }
+
+            if (refreshed.IsCreated) refreshed.Dispose();
+        }
+
+        private int FindMemoryIndex(PerceptibleHandle target)
+        {
+            for (int i = 0; i < _memoryEntries.Length; i++)
+            {
+                if (_memoryEntries[i].Target == target) return i;
+            }
+            return -1;
+        }
+
+        public int MemoryCount => _memoryEntries.IsCreated ? _memoryEntries.Length : 0;
+
         private void CompleteJob()
         {
             if (_jobScheduled)
@@ -278,6 +375,7 @@ namespace CycloneGames.AIPerception.Runtime
             if (_stagingResults.IsCreated) _stagingResults.Dispose();
             if (_jobAudibility.IsCreated) _jobAudibility.Dispose();
             if (_jobTargetData.IsCreated) _jobTargetData.Dispose();
+            if (_memoryEntries.IsCreated) _memoryEntries.Dispose();
         }
     }
 }

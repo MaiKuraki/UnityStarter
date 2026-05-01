@@ -87,4 +87,45 @@ namespace CycloneGames.AIPerception.Runtime.Jobs
             Audibility[index] = audibility;
         }
     }
+
+    /// <summary>
+    /// Burst-compiled job for proximity detection (pure sphere without occlusion).
+    /// Uses DetectionRadius from perceptibles for combined trigger zone calculation.
+    /// </summary>
+    [BurstCompile(FloatPrecision.Standard, FloatMode.Fast)]
+    public struct ProximityQueryJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<PerceptibleData> Targets;
+        [ReadOnly] public float3 Origin;
+        [ReadOnly] public float Radius;
+        [ReadOnly] public int TargetTypeId;
+        [ReadOnly] public bool FilterByType;
+
+        // Output: proximity intensity (0 = outside range, 1 = at center)
+        [WriteOnly] public NativeArray<float> Proximity;
+
+        public void Execute(int index)
+        {
+            Proximity[index] = 0f;
+
+            var target = Targets[index];
+
+            if (!target.IsDetectable) return;
+            if (FilterByType && target.TypeId != TargetTypeId) return;
+
+            float3 toTarget = target.Position - Origin;
+            float distSq = math.lengthsq(toTarget);
+
+            float effectiveRadius = Radius + target.DetectionRadius;
+            float effectiveRadiusSq = effectiveRadius * effectiveRadius;
+
+            if (distSq > effectiveRadiusSq) return;
+
+            float dist = math.sqrt(distSq);
+            float proximity = 1f - (dist / effectiveRadius);
+            proximity = math.clamp(proximity, 0f, 1f);
+
+            Proximity[index] = proximity;
+        }
+    }
 }

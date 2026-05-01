@@ -2,7 +2,7 @@
 
 [English](./README.md) | 简体中文
 
-高性能 AI 感知系统，集成 Jobs/Burst 优化、零 GC 设计和跨平台支持。
+产品级 AI 感知系统，集成 Burst/Jobs 优化、零 GC 设计、3D 空间分区、刺激记忆、LOD 和跨平台支持。
 
 ---
 
@@ -13,69 +13,84 @@
 3. [快速开始](#快速开始)
 4. [核心概念](#核心概念)
 5. [组件参考](#组件参考)
-6. [传感器配置](#传感器配置)
-7. [类型系统](#类型系统)
-8. [运行时调试工具](#运行时调试工具)
-9. [扩展系统](#扩展系统)
-10. [性能](#性能)
-11. [平台支持](#平台支持)
+6. [传感器参考](#传感器参考)
+    - [视觉传感器 (Sight)](#视觉传感器-sight)
+    - [听觉传感器 (Hearing)](#听觉传感器-hearing)
+    - [邻近传感器 (Proximity)](#邻近传感器-proximity)
+7. [刺激记忆 (Stimulus Memory)](#刺激记忆-stimulus-memory)
+8. [LOD 系统](#lod-系统)
+9. [空间分区](#空间分区)
+10. [类型系统](#类型系统)
+11. [Job 调度模式](#job-调度模式)
+12. [编辑器工具](#编辑器工具)
+13. [运行时调试工具](#运行时调试工具)
+14. [扩展系统](#扩展系统)
+15. [性能与规模](#性能与规模)
+16. [平台支持](#平台支持)
+17. [API 参考](#api-参考)
+18. [故障排除](#故障排除)
 
 ---
 
 ## 特性
 
-- **零 GC 运行时**：使用 `NativeList`、`NativeArray` 和句柄 - 游戏运行时无垃圾回收
-- **Burst 编译**：SIMD 优化的并行传感器查询，性能最大化
-- **跨平台**：WebGL、移动端优化、主机支持
-- **编辑器调试工具**：可视化视锥体、球形范围和实时检测覆盖层
-- **可扩展类型系统**：运行时注册自定义可感知类型
+| 分类 | 能力 |
+|------|------|
+| **传感器** | Sight（锥体 + LOS）、Hearing（球体 + 遮挡）、Proximity（半径触发） |
+| **零 GC 运行时** | `NativeList`/`NativeArray` + 代际句柄 — 运行时零堆分配 |
+| **Burst/Jobs** | `IJobParallelFor` 预过滤 + SIMD 加速 |
+| **刺激记忆** | 目标离开传感器范围后仍被记住，可见度线性衰减 |
+| **LOD** | 基于距离的更新频率缩放，3 级预设 |
+| **空间索引** | 3D 网格空间分区，O(k) 范围查询 |
+| **延迟模式** | `LateUpdate` 批量 Job 完成，适用于 100+ 传感器场景 |
+| **编辑器工具** | 自定义 Inspector、全局 Gizmo 开关、LOD 预览、运行时统计 |
+| **调试覆盖层** | 游戏内 GUI 窗口，显示实时检测和记忆条目 |
+| **类型系统** | 基于整数的可扩展分类系统 |
+| **跨平台** | WebGL 降级、移动端优化、主机就绪 |
+| **容量控制** | 可配置注册表容量，自动扩容 + 阈值告警 |
 
 ---
 
 ## 安装
 
-1. 将 `CycloneGames.AIPerception` 文件夹复制到项目的 `Assets` 目录
+1. 将 `CycloneGames.AIPerception` 复制到项目的 `Assets` 目录。
 2. 确保已安装以下 Unity 包：
-   - `com.unity.collections`
-   - `com.unity.burst`
-   - `com.unity.mathematics`
+   - `com.unity.collections` (2.1+)
+   - `com.unity.burst` (1.8+)
+   - `com.unity.mathematics` (1.3+)
 
 ---
 
 ## 快速开始
 
-### 第一步：为可检测对象添加 Perceptible
+### 第一步：标记可检测对象
 
-为任何需要被 AI 检测的对象（玩家、敌人、NPC 等）添加 `PerceptibleComponent`：
+为任何需要被 AI 检测的 GameObject 添加 `PerceptibleComponent`：
 
-```csharp
-// 通过菜单：Component > CycloneGames > AI > Perceptible
-// 或通过代码：
-gameObject.AddComponent<PerceptibleComponent>();
+```
+Component > CycloneGames > AI > Perceptible
 ```
 
-配置组件：
-
-- **Type ID**：对象分类（0=默认，1=玩家，2=敌人等）
-- **Is Detectable**：开关检测
-- **Detection Radius**：碰撞检测大小
+```csharp
+var perceptible = gameObject.AddComponent<PerceptibleComponent>();
+perceptible.SetTypeId(PerceptibleTypes.Enemy);
+```
 
 ### 第二步：为 AI 代理添加感知
 
-为需要检测其他对象的 AI 角色添加 `AIPerceptionComponent`：
+为 AI 角色添加 `AIPerceptionComponent`：
 
-```csharp
-// 通过菜单：Component > CycloneGames > AI > AI Perception
-// 或通过代码：
-gameObject.AddComponent<AIPerceptionComponent>();
+```
+Component > CycloneGames > AI > AI Perception
 ```
 
-启用并配置传感器：
+在 Inspector 中配置：
+- **Sight Sensor**：锥体 FOV、最大距离、LOS
+- **Hearing Sensor**：半径、遮挡衰减
+- **Proximity Sensor**：触发半径
+- 各传感器可独立设置 **Memory Duration（记忆时长）**
 
-- **Sight Sensor**：带视线检测的锥形视觉检测
-- **Hearing Sensor**：带遮挡的球形声音检测
-
-### 第三步：查询检测结果
+### 第三步：查询结果
 
 ```csharp
 using CycloneGames.AIPerception;
@@ -84,31 +99,22 @@ public class AIBrain : MonoBehaviour
 {
     private AIPerceptionComponent _perception;
 
-    void Start()
-    {
-        _perception = GetComponent<AIPerceptionComponent>();
-    }
+    void Start() => _perception = GetComponent<AIPerceptionComponent>();
 
     void Update()
     {
-        // 检查视觉检测
+        // 视觉 — 实时检测
         if (_perception.HasSightDetection)
         {
             var target = _perception.GetClosestSightTarget();
-            if (target != null)
-            {
-                Debug.Log($"我看到了 {target.gameObject.name}！");
-            }
+            Debug.Log($"看到: {((PerceptibleComponent)target).name}");
         }
 
-        // 检查声音检测
-        if (_perception.HasHearingDetection)
+        // 邻近 — 近距离警戒
+        if (_perception.HasProximityDetection)
         {
-            var source = _perception.GetClosestHearingTarget();
-            if (source != null)
-            {
-                Debug.Log($"我听到了声音，位置在 {source.Position}！");
-            }
+            var nearest = _perception.GetClosestProximityTarget();
+            Debug.Log($"附近有人，位置: {nearest.Position}");
         }
     }
 }
@@ -118,60 +124,35 @@ public class AIBrain : MonoBehaviour
 
 ## 核心概念
 
-### 架构概览
+### 架构
 
-```mermaid
-flowchart LR
-    subgraph Input[" "]
-        P1[PerceptibleComponent]
-        P2[PerceptibleComponent]
-        P3[PerceptibleComponent]
-    end
-
-    P1 --> Registry
-    P2 --> Registry
-    P3 --> Registry
-
-    Registry["PerceptibleRegistry<br/>句柄 + NativeArray"]
-
-    Registry --> Manager
-
-    subgraph Processing[" "]
-        Manager["SensorManager<br/>Job 调度 + LOD"]
-        Manager --> Sight["SightSensor<br/>锥形查询 + LOS"]
-        Manager --> Hearing["HearingSensor<br/>球形查询 + 遮挡"]
-    end
-
-    Sight --> Results
-    Hearing --> Results
-
-    Results["检测结果 DetectionResult[]"] --> AI["AIPerceptionComponent<br/>查询接口"]
+```
+PerceptibleComponent ──注册──> PerceptibleRegistry（代际句柄）
+                                      │
+                                 RebuildData（每帧1次）
+                                      │
+                                SpatialGrid（3D 单元排序）
+                                      │
+AIPerceptionComponent ──创建──> SightSensor ──> SightConeQueryJob [Burst]
+                         │     HearingSensor ──> SphereQueryJob   [Burst]
+                         │     ProximitySensor ──> ProximityQueryJob [Burst]
+                         │           │
+                         │     ProcessJobResults
+                         │           │
+                         │     MergeMemory（刺激持久化）
+                         │           │
+                         └── 查询 API <── DetectionResult[]（实时 + 记忆）
 ```
 
-### 核心组件
+### 关键类型
 
-| 组件                    | 用途                                |
-| ----------------------- | ----------------------------------- |
-| `PerceptibleComponent`  | 使对象可被 AI 传感器检测            |
-| `AIPerceptionComponent` | 赋予 AI 检测可感知对象的能力        |
-| `PerceptibleRegistry`   | 使用代际句柄的 O(1) 查找中央注册表  |
-| `SensorManager`         | 管理传感器更新，支持 LOD 和作业调度 |
-| `SightSensor`           | 带视线检查的锥形视觉检测            |
-| `HearingSensor`         | 带遮挡的球形音频检测                |
-
-### 代际句柄
-
-系统使用 `PerceptibleHandle` 而非直接引用来避免 GC：
-
-```csharp
-public readonly struct PerceptibleHandle
-{
-    public readonly int Id;          // 注册表中的槽位索引
-    public readonly int Generation;  // 有效性计数器
-}
-```
-
-当对象被销毁时，其槽位的代数会递增，使旧句柄失效。
+| 类型 | 作用 |
+|------|------|
+| `PerceptibleHandle` | 值类型句柄（Id + Generation）— 无 GC、无悬垂引用 |
+| `PerceptibleData` | Blittable 结构体，Burst Job 输入 |
+| `DetectionResult` | 传感器输出：目标、距离、位置、可见度、`IsFromMemory` |
+| `StimulusMemoryEntry` | 目标离开范围后持久化；可见度线性衰减 |
+| `SensorLODLevel` | 距离阈值 + 频率倍率 |
 
 ---
 
@@ -179,279 +160,421 @@ public readonly struct PerceptibleHandle
 
 ### PerceptibleComponent
 
-使 GameObject 可被 AI 传感器检测。
+使 GameObject 可被 AI 检测。`[DisallowMultipleComponent]`，实现 `IPerceptible`。
 
-| 属性               | 类型      | 说明                                     |
-| ------------------ | --------- | ---------------------------------------- |
-| `Type ID`          | int       | 类别 ID（见[类型系统](#类型系统)）       |
-| `Tag`              | string    | 可选的自定义标签用于过滤                 |
-| `Detection Radius` | float     | 邻近检测大小                             |
-| `Is Detectable`    | bool      | 启用/禁用检测                            |
-| `LOS Point`        | Transform | 可选的视线检测点（为空时使用 transform） |
-| `Is Sound Source`  | bool      | 启用音频发射                             |
-| `Loudness`         | float     | 声音音量倍数（0-10）                     |
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| Type ID | `int` | 0 | 可感知类型分类 |
+| Tag | `string` | "" | 可选过滤标签 |
+| Detection Radius | `float` | 1 | 邻近触发大小 |
+| Is Detectable | `bool` | true | 开关检测 |
+| LOS Point | `Transform` | null | 视线检测原点（为空时使用 transform） |
+| Is Sound Source | `bool` | false | 标记为音频发射器 |
+| Loudness | `float` | 1 | 音量（0–10） |
 
-**运行时属性：**
+**运行时 API：**
 
-- `Handle`：此可感知对象的代际句柄
-- `Position`：当前世界位置
-- `GetDetectors()`：当前检测到此对象的 AI 列表
+```csharp
+bool detected = perceptible.IsDetectable;          // 已启用且激活
+var handle    = perceptible.Handle;                 // 代际句柄
+var pos       = perceptible.Position;               // float3 世界位置
+var detectors = perceptible.GetDetectors();         // 谁在检测我们
+perceptible.SetLoudness(0.5f);                      // 动态音量
+perceptible.ShowDebugOverlay = true;                // 开关调试窗口
+```
 
 ### AIPerceptionComponent
 
-为检测可感知对象提供传感器。
+AI 代理的传感器宿主。`[DisallowMultipleComponent]`。
 
-| 属性                 | 类型    | 说明                             |
-| -------------------- | ------- | -------------------------------- |
-| `Enable Sight`       | bool    | 启用视觉检测                     |
-| `Enable Hearing`     | bool    | 启用音频检测                     |
-| `Show Debug Overlay` | bool    | 切换运行时调试 UI                |
-| `Toggle Key`         | KeyCode | 切换调试覆盖层的按键（默认：F3） |
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| Enable Sight | `bool` | true | 视觉传感器 |
+| Sight Config | `SightSensorConfig` | 默认 | 锥体、范围、LOS、记忆 |
+| Enable Hearing | `bool` | false | 听觉传感器 |
+| Hearing Config | `HearingSensorConfig` | 默认 | 半径、遮挡、记忆 |
+| Enable Proximity | `bool` | false | 邻近传感器 |
+| Proximity Config | `ProximitySensorConfig` | 默认 | 半径、记忆 |
+| Show Debug Overlay | `bool` | false | 运行时 GUI 窗口 |
 
-**运行时属性：**
+**运行时 API：**
 
-- `HasSightDetection`：有目标可见时为 true
-- `HasHearingDetection`：听到声音时为 true
-- `SightDetectedCount`：可见目标数量
-- `HearingDetectedCount`：听到的声音数量
-- `GetClosestSightTarget()`：最近的可见可感知对象
-- `GetClosestHearingTarget()`：最近的声源
+```csharp
+// 检测查询
+bool hasSight     = perception.HasSightDetection;
+bool hasProximity = perception.HasProximityDetection;
+int sightCount    = perception.SightDetectedCount;
+int memCount      = perception.SightSensor.MemoryCount;
+
+// 获取最近目标
+IPerceptible target  = perception.GetClosestSightTarget();
+IPerceptible nearest = perception.GetClosestProximityTarget();
+
+// 直接访问传感器
+SightSensor sight = perception.SightSensor;
+var result = sight.GetResult(0);  // 第 0 个 DetectionResult
+```
+
+### PerceptionManagerComponent
+
+全局系统驱动。自动创建为 `[PerceptionManager]` 并置于 `DontDestroyOnLoad`。
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| Deferred Job Completion | `bool` | false | LateUpdate 批量完成 Job |
+| LOD Reference | `Transform` | null | 距离参考点（摄像机/玩家） |
+| LOD Levels | `SensorLODLevel[]` | 3 级 | 距离 → 频率倍率 |
+
+```csharp
+// 访问单例
+var mgr = PerceptionManagerComponent.Instance;
+mgr.UseDeferredJobCompletion = true;
+```
 
 ---
 
-## 传感器配置
+## 传感器参考
 
-### 视觉传感器
+### 视觉传感器 (Sight)
 
-带可选视线检测的锥形检测。
+锥形视觉检测，Burst 预过滤 + 主线程 LOS 射线。
 
-| 属性                | 范围      | 说明                                |
-| ------------------- | --------- | ----------------------------------- |
-| `Half Angle`        | 0-180°    | 视野半角（60° = 总共 120° FOV）     |
-| `Max Distance`      | 0-200m    | 最大检测距离                        |
-| `Update Interval`   | 0-5s      | 传感器更新间隔（越低 CPU 消耗越高） |
-| `Obstacle Layer`    | LayerMask | 阻挡视线的层                        |
-| `Use Line of Sight` | bool      | 启用射线可见性检查                  |
-| `Filter by Type`    | bool      | 只检测特定类型                      |
-| `Target Type ID`    | int       | 要过滤的类型（启用过滤时）          |
+| 属性 | 范围 | 默认值 | 说明 |
+|------|------|--------|------|
+| Half Angle | 0–180 度 | 60 | 视野半角 |
+| Max Distance | 0–200 m | 30 | 检测距离 |
+| Update Interval | 0–5 s | 0.1 | 更新间隔 |
+| Obstacle Layer | LayerMask | 默认 | 阻挡视线的层 |
+| Use Line of Sight | bool | true | 射线可见性检查 |
+| Filter by Type | bool | false | 仅检测特定类型 |
+| Target Type ID | int | 0 | 过滤类型 ID |
+| Memory Duration | 0–60 s | 3 | 离开视野后的记忆时长 |
 
 > [!TIP]
->
-> 大多数情况下将 `Update Interval` 设为 0.1-0.2 秒。更低的值会增加 CPU 使用但提供更快的检测。
+> 远处敌人可将 Update Interval 设为 0.2s。不需要穿墙时禁用 LOS 可显著提升性能。
 
-> [!WARNING]
->
-> 使用 `Obstacle Layer` 时，排除 Player/Enemy 层以避免目标阻挡自身的检测。
+### 听觉传感器 (Hearing)
 
-### 听觉传感器
+球形声音检测，带墙壁遮挡衰减。
 
-带声音遮挡的球形检测。
+| 属性 | 范围 | 默认值 | 说明 |
+|------|------|--------|------|
+| Radius | 0–100 m | 15 | 检测球半径 |
+| Update Interval | 0–5 s | 0.2 | 更新间隔 |
+| Use Occlusion | bool | true | 墙壁衰减 |
+| Occlusion Layer | LayerMask | 默认 | 阻隔声音的层 |
+| Occlusion Attenuation | 0–1 | 0.5 | 穿墙音量衰减 |
+| Filter by Type | bool | false | 仅检测特定类型 |
+| Target Type ID | int | 6 | 过滤类型 ID |
+| Memory Duration | 0–60 s | 5 | 声音消失后的记忆时长 |
 
-| 属性                    | 范围      | 说明                           |
-| ----------------------- | --------- | ------------------------------ |
-| `Radius`                | 0-100m    | 检测球半径                     |
-| `Update Interval`       | 0-5s      | 传感器更新间隔                 |
-| `Use Occlusion`         | bool      | 启用墙壁衰减                   |
-| `Occlusion Layer`       | LayerMask | 阻挡声音的层                   |
-| `Occlusion Attenuation` | 0-1       | 穿墙声音衰减（0.5 = 50% 音量） |
-| `Filter by Type`        | bool      | 只检测特定类型                 |
-| `Target Type ID`        | int       | 要过滤的类型                   |
+### 邻近传感器 (Proximity)
+
+简单球体触发检测 — 无 LOS、无遮挡。适用于近战范围、危险区域、个人空间。
+
+| 属性 | 范围 | 默认值 | 说明 |
+|------|------|--------|------|
+| Radius | 0–50 m | 5 | 触发球半径 |
+| Update Interval | 0–5 s | 0.15 | 更新间隔 |
+| Filter by Type | bool | false | 仅检测特定类型 |
+| Target Type ID | int | 0 | 过滤类型 ID |
+| Memory Duration | 0–60 s | 2 | 离开范围后的记忆时长 |
+
+---
+
+## 刺激记忆 (Stimulus Memory)
+
+目标离开传感器范围后不会立即被遗忘。记忆系统会保留条目，可见度随时间线性衰减。
+
+```
+检测 → MemoryEntry（PeakVisibility, LastDetectedTime）
+         │
+         ├── 重新检测到 → 刷新 LastDetectedTime，更新 PeakVisibility
+         │
+         └── 未检测到 → age 增加
+                 │
+                 ├── age < MemoryDuration → 作为 IsFromMemory 结果输出
+                 └── age >= MemoryDuration → RemoveAtSwapBack
+```
+
+**按传感器配置：**
+
+```csharp
+sightConfig.MemoryDuration = 3f;     // 记住看到的 3 秒
+hearingConfig.MemoryDuration = 5f;   // 记住听到的 5 秒
+proximityConfig.MemoryDuration = 0f; // 邻近不需要记忆
+```
+
+**查询记忆：**
+
+```csharp
+int remembered = perception.SightSensor.MemoryCount;
+for (int i = 0; i < perception.SightSensor.DetectedCount; i++)
+{
+    var r = perception.SightSensor.GetResult(i);
+    if (r.IsFromMemory)
+        Debug.Log($"记忆中的目标，位置: {r.LastKnownPosition}，可见度: {r.Visibility:F2}");
+}
+```
+
+> [!TIP]
+> 长记忆时长（5–10s）创造"追猎"型 AI，会搜索最后已知位置。短时长（1–2s）创造"反应"型 AI，只追可见目标。
+
+---
+
+## LOD 系统
+
+基于距离的更新频率缩放，降低远处 AI 的 CPU 开销。
+
+```
+传感器位置 → 到 LOD Reference 的距离 → LOD 倍率 → 实际更新间隔
+
+默认等级：
+  0–30m:   1.00x（全频率）
+  30–80m:  0.50x（半频率）
+  80–200m: 0.10x（最低频率）
+```
+
+**配置：**
+
+```csharp
+// Inspector 中：PerceptionManagerComponent > LOD
+// 将 Reference 设为 Camera.main 或 Player Transform
+// 按需配置等级
+```
+
+或通过代码：
+
+```csharp
+SensorManager.Instance.ConfigureLOD(
+    Camera.main.transform,
+    new[] {
+        new SensorLODLevel { Distance = 30f, FrequencyMultiplier = 1.0f },
+        new SensorLODLevel { Distance = 100f, FrequencyMultiplier = 0.25f },
+    }
+);
+```
+
+**编辑器预览：** PerceptionManager Inspector 显示彩色距离带横条，一目了然地展示 LOD 等级。
+
+**SceneView Gizmo：** 选中 PerceptionManager 可看到同心 LOD 距离环 + 倍率标签。
+
+---
+
+## 空间分区
+
+所有传感器使用 3D 均匀网格空间索引，避免 O(n) 全量扫描。
+
+```
+世界 → 网格单元（默认 20m）
+        │
+   RebuildData: 按单元键排序 PerceptibleData[]
+   查询:        遍历重叠单元 → 连续切片拷贝
+```
+
+| 数据规模 | 无网格 | 有网格（20m 单元，50m 范围） |
+|----------|--------|---------------------------|
+| 1,000 个 | 1,000/job | ~80/job（12x） |
+| 10,000 个 | 10,000/job | ~200/job（50x） |
+| 100,000 个 | 100,000/job | ~500/job（200x） |
+
+网格为全 3D（X/Y/Z），正确处理多层建筑和飞行单位。
 
 ---
 
 ## 类型系统
 
-感知系统使用可扩展的整数类型系统。
+基于整数的可扩展分类系统，支持运行时注册。
 
-### 内置类型
+| ID | 常量 | 说明 |
+|----|------|------|
+| 0 | `PerceptibleTypes.Default` | 未指定 |
+| 1 | `PerceptibleTypes.Player` | 玩家角色 |
+| 2 | `PerceptibleTypes.Enemy` | 敌方 NPC |
+| 3 | `PerceptibleTypes.Ally` | 友方 NPC |
+| 4 | `PerceptibleTypes.Neutral` | 中立实体 |
+| 5 | `PerceptibleTypes.Interactable` | 可交互对象 |
+| 6 | `PerceptibleTypes.SoundSource` | 音频发射器 |
 
-| ID  | 常量                            | 说明        |
-| --- | ------------------------------- | ----------- |
-| 0   | `PerceptibleTypes.Default`      | 默认/未指定 |
-| 1   | `PerceptibleTypes.Player`       | 玩家角色    |
-| 2   | `PerceptibleTypes.Enemy`        | 敌人角色    |
-| 3   | `PerceptibleTypes.Ally`         | 友方 NPC    |
-| 4   | `PerceptibleTypes.Neutral`      | 中立实体    |
-| 5   | `PerceptibleTypes.Interactable` | 可交互对象  |
-| 6   | `PerceptibleTypes.SoundSource`  | 音频发射器  |
-
-### 注册自定义类型
+**自定义类型：**
 
 ```csharp
-// 在启动时注册
-public static class GamePerceptibleTypes
+public static class MyTypes
 {
     public static int Treasure;
     public static int Trap;
-    public static int Vehicle;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
-    static void Initialize()
+    static void Init()
     {
         Treasure = PerceptibleTypes.RegisterType("Treasure");
         Trap = PerceptibleTypes.RegisterType("Trap");
-        Vehicle = PerceptibleTypes.RegisterType("Vehicle");
     }
 }
-
-// 使用
-perceptible.TypeId = GamePerceptibleTypes.Treasure;
 ```
 
-### 按类型过滤
-
-在传感器上启用 `Filter by Type` 以只检测特定类型：
+**类型过滤：**
 
 ```csharp
-// 只检测敌人
 sightConfig.FilterByType = true;
-sightConfig.TargetTypeId = PerceptibleTypes.Enemy;
+sightConfig.TargetTypeId = PerceptibleTypes.Enemy; // 只检测敌人
 ```
+
+---
+
+## Job 调度模式
+
+### 立即模式（默认）
+
+Job 在 `Update()` 内完成。结果立即可用。适合开发阶段。
+
+### 延迟模式
+
+Job 在 `LateUpdate()` 中批量完成。适合 100+ 传感器的大规模场景。
+
+```
+Update():     调度 Job → 显示上一帧结果
+LateUpdate(): 完成全部 → 原子交换 → 显示新结果
+```
+
+```csharp
+PerceptionManagerComponent.Instance.UseDeferredJobCompletion = true;
+```
+
+---
+
+## 编辑器工具
+
+### 自定义 Inspector
+
+| 组件 | Inspector 功能 |
+|------|---------------|
+| AIPerceptionComponent | 彩色折叠面板、传感器开关、运行时统计（S/H/P 计数）、调试覆盖层按钮、Memory Duration 滑块 |
+| PerceptibleComponent | 类型/检测/声音分区、LOS Point 提示、运行时被检测者列表 |
+| PerceptionManagerComponent | 性能开关、LOD Reference 选择器、LOD 预览横条、运行时传感器计数 |
+
+### 菜单命令
+
+```
+Tools > CycloneGames > AI Perception
+  ├── Show All Debug Overlays   — 打开所有运行时调试窗口
+  ├── Hide All Debug Overlays   — 关闭所有
+  └── Always Show Gizmos        — 在 SceneView 中显示全部 AI 的传感器范围
+```
+
+启用 "Always Show Gizmos" 后，无需逐个选中即可看到场景中所有 AI 的传感器线框。
 
 ---
 
 ## 运行时调试工具
 
-### Gizmo 可视化
-
-选中带有 `AIPerceptionComponent` 的 AI 可看到：
-
-- **黄色锥体**：视觉传感器视野
-- **蓝色球体**：听觉传感器范围
-- **绿色线条**：到检测目标的连接
-
 ### 调试覆盖层
 
-在 Inspector 中切换运行时调试覆盖层
+每个 AI 和 Perceptible 可显示游戏内 GUI 窗口。通过 Inspector 按钮或全局菜单切换。
 
-**覆盖层示例显示：**
+```
++---------------------------+
+| AI Perception - Enemy     |
+| SIGHT                     |
+|   已启用: True            |
+|   检测到: 2               |
+|   > Player (Player)       |    <- 实时检测
+|     距离: 5.2m 可见: 87%  |
+|   < Enemy_02 (Enemy)[mem] |    <- 刺激记忆
+|     距离: 12.1m 可见: 45% |
+| HEARING                   |
+|   ~ (无声音)              |
+| PROXIMITY                 |
+|   * Player (Player)       |
+|     距离: 2.1m 邻近: 95%  |
++---------------------------+
+```
 
-> **AI Perception - Enemy**
->
-> **SIGHT**
->
-> - 已启用: True
-> - 检测到: 1
->
->   - ► Player (Player)
->   - 距离: 5.2m 可见度: 87%
->
->   **HEARING**
->
-> - 已启用: True
-> - 检测到: 0
->   - (无目标)
+实时条目：`>`、`~`、`*`。记忆条目：`<`、`~M`、`.M`并带 `[mem]` 后缀。
+
+### Gizmo 可视化
+
+| 模式 | 显示内容 |
+|------|---------|
+| **选中时** | 全细节：锥体弧、球体盘、检测连线、记忆虚线 |
+| **Always Show Gizmos** | 全部 AI 的简化线框 |
+
+### LOD Gizmo
+
+选中 PerceptionManager 可看到同心距离环 + 倍率标签（x1.00、x0.50、x0.10）。
 
 ---
 
 ## 扩展系统
 
-### 创建派生的 Perceptible
+### 自定义 Perceptible
 
 ```csharp
 public class WeaponPerceptible : PerceptibleComponent
 {
-    [SerializeField] private WeaponType _weaponType;
     [SerializeField] private int _dangerLevel;
-
-    public WeaponType Type => _weaponType;
     public int DangerLevel => _dangerLevel;
 }
 ```
 
-### 创建派生的 AI Perception
+### 自定义 AI Perception
 
 ```csharp
 public class AdvancedPerception : AIPerceptionComponent
 {
     [SerializeField] private float _alertLevel;
-    [SerializeField] private bool _useEnhancedVision;
 
     protected override void Update()
     {
         base.Update();
-
-        if (HasSightDetection)
-        {
-            _alertLevel = Mathf.Min(_alertLevel + Time.deltaTime, 1f);
-        }
-        else
-        {
-            _alertLevel = Mathf.Max(_alertLevel - Time.deltaTime * 0.5f, 0f);
-        }
+        _alertLevel = HasSightDetection
+            ? Mathf.Min(_alertLevel + Time.deltaTime, 1f)
+            : Mathf.Max(_alertLevel - Time.deltaTime * 0.5f, 0f);
     }
 }
 ```
 
----
+### 自定义传感器
 
-## Jobs 调度模式 (Job Scheduling Mode)
-
-系统支持两种 Jobs 调度模式，适应不同的使用场景：
-
-### 立即模式 (Immediate Mode) - 默认
-
-Job 在 `Update()` 期间立即完成。最适合开发和调试。
-
-```csharp
-// 默认行为 - 无需配置
-PerceptionManagerComponent.Instance.UseDeferredJobCompletion = false;
-```
-
-**优点：**
-
-- 调试更简单
-- 结果立即可用
-- 无延迟
-
-### 延迟模式 (Deferred Mode) - 高性能
-
-Job 在 `LateUpdate()` 中批量完成。最适合拥有 100+ 传感器的的大规模场景。
-
-```csharp
-// 通过代码启用
-PerceptionManagerComponent.Instance.UseDeferredJobCompletion = true;
-
-// 或在 PerceptionManager GameObject 上的 Inspector 中启用
-```
-
-**优点：**
-
-- 通过 Job 批处理提高 CPU 利用率
-- 减少同步点
-- 最适合大量并发传感器
-
-**工作原理：**
-
-```
-Update():     传感器调度 Job → 上一帧结果保持可见
-LateUpdate(): 所有 Job 完成 → 原子交换到新结果
-```
-
-> [!TIP]
-> 在拥有许多 AI Agent 的生产版本中启用 **延迟模式**。在开发过程中使用 **立即模式** 以便更轻松地调试。
+实现 `ISensor` 和 `IDisposable` 接口，通过 `SensorManager.Instance.Register()` 注册。
 
 ---
 
-## 性能
+## 性能与规模
 
-### 优化技巧
+### 优化清单
 
-1. **增加更新间隔**：0.1-0.2 秒通常足够
-2. **使用类型过滤**：只检测相关类型
-3. **不需要时禁用 LOS**：射线检测开销大
-4. **使用 LOD**：减少远距离 AI 的传感器频率
-5. **启用延迟模式**：对于 100+ 传感器，批量 Job 完成效率更高
+1. **更新间隔**：0.1–0.2s 对大多数情况足够
+2. **类型过滤**：只扫描相关类型
+3. **禁用 LOS**：无墙体场景可跳过射线
+4. **启用 LOD**：远处传感器频率降低 2–10x
+5. **延迟模式**：100+ 并发传感器时启用
+6. **Memory Duration = 0**：不需要记忆的传感器关闭记忆
+
+### 规模限制
+
+| 场景 | 容量 | 建议 |
+|------|------|------|
+| < 100 传感器, < 1K 目标 | 默认 | 无需调优 |
+| 100–500 传感器, 1K–10K 目标 | 默认 | 启用 Deferred + LOD |
+| 500+ 传感器, 10K+ 目标 | `SetMaxCapacity(32768)` | 启用所有优化 |
+| 无限制 | `SetMaxCapacity(0)` | 监控内存使用 |
+
+```csharp
+// 为大型场景增加注册表容量
+PerceptibleRegistry.Instance.SetMaxCapacity(32768);
+```
 
 ---
 
 ## 平台支持
 
-| 平台              | 策略            | 性能 |
-| ----------------- | --------------- | ---- |
-| Windows/Mac/Linux | 完整 Burst SIMD | 最优 |
-| Android/iOS       | ARM NEON        | 优秀 |
-| WebGL             | 主线程运行      | 良好 |
+| 平台 | 策略 | 性能 |
+|------|------|------|
+| Windows / Mac / Linux | 完整 Burst SIMD | 最优 |
+| Android / iOS | ARM NEON | 优秀 |
+| WebGL | 主线程降级 | 良好 |
+| 主机平台 | 平台 Burst | 优秀 |
 
 ---
 
@@ -460,62 +583,81 @@ LateUpdate(): 所有 Job 完成 → 原子交换到新结果
 ### PerceptibleRegistry
 
 ```csharp
-// 获取单例实例
-var registry = PerceptibleRegistry.Instance;
+var r = PerceptibleRegistry.Instance;
 
-// 注册可感知对象（返回句柄）
-PerceptibleHandle handle = registry.Register(perceptible);
-
-// 从句柄获取可感知对象
-IPerceptible p = registry.Get(handle);
-
-// 检查句柄是否仍然有效
-bool valid = registry.IsValid(handle);
-
-// 标记数据为脏（触发重建）
-registry.MarkDirty();
+PerceptibleHandle h = r.Register(perceptible);  // O(1)
+r.Unregister(h);                                  // O(1)
+IPerceptible p = r.Get(h);                       // O(1)
+bool valid = r.IsValid(h);                       // O(1)
+r.MarkDirty();                                    // 强制重建
+r.SetMaxCapacity(16384);                          // 可配置上限（0 = 无限）
+int count = r.Count;
+int dataCount = r.GetDataCount();
 ```
 
 ### SensorManager
 
 ```csharp
-// 获取单例实例
-var manager = SensorManager.Instance;
+var m = SensorManager.Instance;
 
-// 注册传感器
-manager.Register(sensor);
+m.Register(sensor);
+m.Unregister(sensor);
+m.ConfigureLOD(referenceTransform, lodLevels);
+m.UseDeferredJobCompletion = true;
+```
 
-// 注销传感器
-manager.Unregister(sensor);
+### AIPerceptionComponent
 
-// 通过 ID 获取传感器
-ISensor sensor = manager.GetSensor(sensorId);
+```csharp
+// 检测状态
+bool hasAny = perception.HasAnyDetection;
+int sightCount = perception.SightDetectedCount;
+int hearingCount = perception.HearingDetectedCount;
+int proximityCount = perception.ProximityDetectedCount;
+
+// 最近目标
+IPerceptible t = perception.GetClosestSightTarget();
+IPerceptible t = perception.GetClosestHearingTarget();
+IPerceptible t = perception.GetClosestProximityTarget();
+
+// 传感器
+SightSensor s = perception.SightSensor;
+int memCount = s.MemoryCount;
+DetectionResult r = s.GetResult(index);
+
+// 调试
+perception.ShowDebugOverlay = true;
 ```
 
 ---
 
 ## 故障排除
 
-### 目标可见但显示 "LOS Blocked"
-
-**原因**：Obstacle Layer 包含了目标所在的层。
-
-**解决方案**：从 Obstacle Layer 中移除 Player/Enemy 层。只包含环境层（墙壁、障碍物）。
-
 ### 检测不工作
 
-**检查清单**：
+1. PerceptibleComponent：已启用且 `Is Detectable` 已勾选
+2. AIPerceptionComponent：传感器开关已打开
+3. 目标在范围内（检查 MaxDistance / Radius）
+4. 目标在视野内（仅 Sight）
+5. 无障碍物阻挡 LOS（或禁用 LOS）
+6. 检查 FilterByType — 确保 TypeId 匹配
 
-1. ✅ `PerceptibleComponent` 已启用且 `Is Detectable` 已勾选
-2. ✅ `AIPerceptionComponent` 传感器已启用
-3. ✅ 目标在传感器范围内
-4. ✅ 目标在视野内（对于视觉）
-5. ✅ 无障碍物阻挡 LOS（或禁用 LOS）
+### 目标可见但 "LOS Blocked"
 
-### 调试覆盖层显示 "Invalid (?)"
+Obstacle Layer 可能包含目标所在层。只将环境层（墙壁、地板）加入 Obstacle Layer。
 
-**原因**：PerceptibleData 和 PerceptibleHandle 之间的句柄不匹配。
+### 记忆条目未出现
 
-**解决方案**：确保使用具有正确注册表 ID 映射的最新版本。
+确保传感器配置中 `MemoryDuration > 0`。通过 `MemoryCount` 检查。
 
----
+### Inspector 标签显示为空白
+
+本模块使用纯文本标签，兼容 Unity Editor 默认字体。如果出现空白，请检查 Editor 字体设置。
+
+### 注册表容量耗尽
+
+```
+[AIPerception] Registry capacity exhausted (16384). Increase via SetMaxCapacity().
+```
+
+在启动时调用 `PerceptibleRegistry.Instance.SetMaxCapacity(32768)`，或设为 0 实现无限增长。

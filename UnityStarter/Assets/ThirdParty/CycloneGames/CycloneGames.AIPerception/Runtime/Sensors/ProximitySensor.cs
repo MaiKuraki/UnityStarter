@@ -8,121 +8,104 @@ using CycloneGames.AIPerception.Runtime.Jobs;
 namespace CycloneGames.AIPerception.Runtime
 {
     [Serializable]
-    public struct SightSensorConfig
+    public struct ProximitySensorConfig
     {
-        [Range(0f, 180f)] public float HalfAngle;
-        [Range(0f, 200f)] public float MaxDistance;
+        [Range(0f, 50f)] public float Radius;
         [Range(0f, 5f)] public float UpdateInterval;
-        public LayerMask ObstacleLayer;
-        public bool UseLineOfSight;
-        
-        [Tooltip("Only detect targets of this type. Use PerceptibleTypes constants (0=Default, 1=Character, etc.)")]
         public int TargetTypeId;
-        
-        [Tooltip("If enabled, only targets matching TargetTypeId will be detected")]
         public bool FilterByType;
-        
+
         [Header("Memory")]
         [Tooltip("Seconds to remember a target after it leaves sensor range. 0 disables memory.")]
         [Range(0f, 60f)]
         public float MemoryDuration;
-        
-        public static SightSensorConfig Default => new SightSensorConfig
+
+        public static ProximitySensorConfig Default => new ProximitySensorConfig
         {
-            HalfAngle = 60f,
-            MaxDistance = 30f,
-            UpdateInterval = 0.1f,
-            ObstacleLayer = Physics.DefaultRaycastLayers,
-            UseLineOfSight = true,
+            Radius = 5f,
+            UpdateInterval = 0.15f,
             TargetTypeId = PerceptibleTypes.Default,
             FilterByType = false,
-            MemoryDuration = 3f
+            MemoryDuration = 2f
         };
     }
-    
-    public class SightSensor : ISensor, IDisposable
+
+    public class ProximitySensor : ISensor, IDisposable
     {
         private readonly int _sensorId;
         private readonly Transform _sensorTransform;
-        private SightSensorConfig _config;
-        
+        private ProximitySensorConfig _config;
+
         // Detection results (stable for reading)
         private NativeList<PerceptibleHandle> _detectedHandles;
         private NativeList<DetectionResult> _detectionResults;
-        
-        // Staging buffer for deferred mode (write during job processing)
+
+        // Staging buffer for deferred mode
         private NativeList<PerceptibleHandle> _stagingHandles;
         private NativeList<DetectionResult> _stagingResults;
         
         // Stimulus memory — persists after target leaves sensor range
         private NativeList<StimulusMemoryEntry> _memoryEntries;
-        
+
         // Job data (reused each frame)
-        private NativeArray<int> _jobPassedFilter;
+        private NativeArray<float> _jobProximity;
         private NativeArray<PerceptibleData> _jobTargetData;
         private JobHandle _currentJobHandle;
         private bool _jobScheduled;
         private int _jobTargetCount;
         private bool _hasPendingResults;
-        
-        // Pre-allocated buffer for RaycastNonAlloc (0GC LOS checks)
-        private RaycastHit[] _losRaycastBuffer;
-        
+
         private float _lastUpdateTime;
         private bool _disposed;
-        
+
         public int SensorId => _sensorId;
-        public SensorType Type => SensorType.Sight;
+        public SensorType Type => SensorType.Proximity;
         public bool IsEnabled { get; set; } = true;
         public float UpdateInterval => _config.UpdateInterval;
         public float LastUpdateTime => _lastUpdateTime;
         public bool HasDetection => (_detectedHandles.IsCreated && _detectedHandles.Length > 0) || (_memoryEntries.IsCreated && _memoryEntries.Length > 0);
         public int DetectedCount => (_detectedHandles.IsCreated ? _detectedHandles.Length : 0) + (_memoryEntries.IsCreated ? _memoryEntries.Length : 0);
-        
-        public float HalfAngle => _config.HalfAngle;
-        public float MaxDistance => _config.MaxDistance;
+
+        public float Radius => _config.Radius;
         public float3 Position => _sensorTransform != null ? (float3)_sensorTransform.position : float3.zero;
-        public float3 Forward => _sensorTransform != null ? (float3)_sensorTransform.forward : new float3(0, 0, 1);
-        
-        public SightSensor(Transform sensorTransform, SightSensorConfig config)
+
+        public ProximitySensor(Transform sensorTransform, ProximitySensorConfig config)
         {
             _sensorId = SensorManager.Instance?.GenerateSensorId() ?? 0;
             _sensorTransform = sensorTransform;
             _config = config;
-            
+
             Initialize();
         }
-        
+
         public void Initialize()
         {
             _detectedHandles = new NativeList<PerceptibleHandle>(32, Allocator.Persistent);
             _detectionResults = new NativeList<DetectionResult>(32, Allocator.Persistent);
             _stagingHandles = new NativeList<PerceptibleHandle>(32, Allocator.Persistent);
             _stagingResults = new NativeList<DetectionResult>(32, Allocator.Persistent);
-            _losRaycastBuffer = new RaycastHit[32];
             _memoryEntries = new NativeList<StimulusMemoryEntry>(32, Allocator.Persistent);
         }
-        
+
         public void UpdateSensor(float deltaTime)
         {
             if (_disposed || _sensorTransform == null) return;
-            
+
             // Complete previous job if any
             CompleteJob();
-            
+
             var registry = PerceptibleRegistry.Instance;
             if (registry == null || registry.IsDisposed)
             {
-                // Clear results if registry is gone
                 _detectedHandles.Clear();
                 _detectionResults.Clear();
                 _lastUpdateTime = Time.time;
                 return;
             }
-            
+
             // RebuildData is called once per frame by SensorManager.Update
             int targetCount = registry.GetDataCount();
-            
+
             if (targetCount == 0)
             {
                 _detectedHandles.Clear();
@@ -130,55 +113,48 @@ namespace CycloneGames.AIPerception.Runtime
                 _lastUpdateTime = Time.time;
                 return;
             }
-            
+
             // Create a spatially filtered copy for job processing
-            _jobTargetData = registry.CreateNativeDataCopyInRange(Position, _config.MaxDistance, Allocator.TempJob);
+            _jobTargetData = registry.CreateNativeDataCopyInRange(Position, _config.Radius, Allocator.TempJob);
             _jobTargetCount = _jobTargetData.Length;
-            
+
             // Allocate job output
-            if (!_jobPassedFilter.IsCreated || _jobPassedFilter.Length < _jobTargetCount)
+            if (!_jobProximity.IsCreated || _jobProximity.Length < _jobTargetCount)
             {
-                if (_jobPassedFilter.IsCreated) _jobPassedFilter.Dispose();
-                _jobPassedFilter = new NativeArray<int>(_jobTargetCount, Allocator.Persistent);
+                if (_jobProximity.IsCreated) _jobProximity.Dispose();
+                _jobProximity = new NativeArray<float>(_jobTargetCount, Allocator.Persistent);
             }
-            
-            // Schedule Burst job for pre-filtering
-            var job = new SightConeQueryJob
+
+            // Schedule Burst job for sphere query
+            var job = new ProximityQueryJob
             {
                 Targets = _jobTargetData,
                 Origin = Position,
-                Forward = Forward,
-                MaxDistanceSq = _config.MaxDistance * _config.MaxDistance,
-                CosHalfAngle = math.cos(math.radians(_config.HalfAngle)),
+                Radius = _config.Radius,
                 TargetTypeId = _config.TargetTypeId,
                 FilterByType = _config.FilterByType,
-                PassedFilter = _jobPassedFilter
+                Proximity = _jobProximity
             };
-            
+
             _currentJobHandle = job.Schedule(_jobTargetCount, 64);
             _jobScheduled = true;
-            
+
             var manager = SensorManager.Instance;
             if (manager != null && manager.UseDeferredJobCompletion)
             {
-                // Deferred mode: add to batch, process in LateUpdate
-                // Keep previous results visible until new ones are ready
                 manager.AddToBatch(_currentJobHandle);
                 _hasPendingResults = true;
             }
             else
             {
-                // Immediate mode: complete now and process
                 _currentJobHandle.Complete();
                 _jobScheduled = false;
-                
-                // Clear and write directly to main buffers
+
                 _detectedHandles.Clear();
                 _detectionResults.Clear();
                 ProcessJobResultsInternal(_jobTargetData, _jobTargetCount, _detectedHandles, _detectionResults);
                 MergeMemory();
-                
-                // Dispose temp data
+
                 if (_jobTargetData.IsCreated)
                 {
                     _jobTargetData.Dispose();
@@ -186,10 +162,10 @@ namespace CycloneGames.AIPerception.Runtime
                 }
                 _jobTargetCount = 0;
             }
-            
+
             _lastUpdateTime = Time.time;
         }
-        
+
         public void ProcessJobResults()
         {
             if (!_hasPendingResults) return;
@@ -198,16 +174,13 @@ namespace CycloneGames.AIPerception.Runtime
                 _hasPendingResults = false;
                 return;
             }
-            
-            // Complete job if not already done
+
             CompleteJob();
-            
-            // Write to staging buffer first
+
             _stagingHandles.Clear();
             _stagingResults.Clear();
             ProcessJobResultsInternal(_jobTargetData, _jobTargetCount, _stagingHandles, _stagingResults);
-            
-            // Swap: copy staging to main (atomic from reader's perspective)
+
             _detectedHandles.Clear();
             _detectionResults.Clear();
             for (int i = 0; i < _stagingHandles.Length; i++)
@@ -216,8 +189,7 @@ namespace CycloneGames.AIPerception.Runtime
                 _detectionResults.Add(_stagingResults[i]);
             }
             MergeMemory();
-            
-            // Dispose temp data
+
             if (_jobTargetData.IsCreated)
             {
                 _jobTargetData.Dispose();
@@ -226,52 +198,23 @@ namespace CycloneGames.AIPerception.Runtime
             _jobTargetCount = 0;
             _hasPendingResults = false;
         }
-        
+
         private void ProcessJobResultsInternal(
-            NativeArray<PerceptibleData> targets, 
+            NativeArray<PerceptibleData> targets,
             int count,
             NativeList<PerceptibleHandle> outHandles,
             NativeList<DetectionResult> outResults)
         {
             float3 origin = Position;
-            float3 forward = Forward;
-            float cosHalfAngle = math.cos(math.radians(_config.HalfAngle));
-            
+
             for (int i = 0; i < count; i++)
             {
-                if (_jobPassedFilter[i] == 0) continue;
-                
+                float proximity = _jobProximity[i];
+                if (proximity < 0.01f) continue;
+
                 var target = targets[i];
-                
-                // LOS check on main thread (requires Physics)
-                if (_config.UseLineOfSight)
-                {
-                    Vector3 rayOrigin = origin;
-                    Vector3 rayDir = math.normalize(target.LOSPoint - origin);
-                    float rayDist = math.distance(origin, target.LOSPoint);
-                    
-                    int hitCount = Physics.RaycastNonAlloc(rayOrigin, rayDir, _losRaycastBuffer, rayDist, _config.ObstacleLayer);
-                    bool blocked = false;
-                    
-                    for (int j = 0; j < hitCount; j++)
-                    {
-                        var hit = _losRaycastBuffer[j];
-                        float distToTarget = math.distance(hit.point, (Vector3)target.LOSPoint);
-                        if (distToTarget > target.DetectionRadius + 0.1f)
-                        {
-                            blocked = true;
-                            break;
-                        }
-                    }
-                    
-                    if (blocked) continue;
-                }
-                
-                float3 toTarget = target.Position - origin;
-                float dist = math.length(toTarget);
-                float3 dir = toTarget / dist;
-                float dot = math.dot(forward, dir);
-                
+                float dist = math.distance(origin, target.Position);
+
                 outHandles.Add(target.ToHandle());
                 outResults.Add(new DetectionResult
                 {
@@ -279,8 +222,8 @@ namespace CycloneGames.AIPerception.Runtime
                     Distance = dist,
                     LastKnownPosition = target.Position,
                     DetectionTime = Time.time,
-                    Visibility = (dot - cosHalfAngle) / (1f - cosHalfAngle),
-                    SensorType = 0
+                    Visibility = proximity,
+                    SensorType = (int)SensorType.Proximity
                 });
             }
         }
@@ -290,10 +233,8 @@ namespace CycloneGames.AIPerception.Runtime
             if (_config.MemoryDuration <= 0f || !_memoryEntries.IsCreated) return;
 
             float now = Time.time;
-
-            // Mark all existing memory entries as not refreshed yet
             var refreshed = new NativeArray<bool>(_memoryEntries.Length, Allocator.Temp);
-            // Step 1: For each current detection, update or add memory entry
+
             for (int i = 0; i < _detectionResults.Length; i++)
             {
                 var dr = _detectionResults[i];
@@ -301,7 +242,6 @@ namespace CycloneGames.AIPerception.Runtime
 
                 if (memIdx >= 0)
                 {
-                    // Refresh existing memory
                     var entry = _memoryEntries[memIdx];
                     entry.LastDetectedTime = now;
                     entry.LastKnownPosition = dr.LastKnownPosition;
@@ -312,20 +252,18 @@ namespace CycloneGames.AIPerception.Runtime
                 }
                 else
                 {
-                    // New memory entry
                     _memoryEntries.Add(new StimulusMemoryEntry
                     {
                         Target = dr.Target,
                         LastKnownPosition = dr.LastKnownPosition,
                         LastDetectedTime = now,
                         PeakVisibility = dr.Visibility,
-                        SensorType = (int)SensorType.Sight,
+                        SensorType = (int)SensorType.Proximity,
                         DistanceAtDetection = dr.Distance
                     });
                 }
             }
 
-            // Step 2: Expire stale entries and emit them as memory-only results
             for (int i = _memoryEntries.Length - 1; i >= 0; i--)
             {
                 if (i < refreshed.Length && refreshed[i]) continue;
@@ -353,11 +291,10 @@ namespace CycloneGames.AIPerception.Runtime
                     LastKnownPosition = entry.LastKnownPosition,
                     DetectionTime = entry.LastDetectedTime,
                     Visibility = visibility,
-                    SensorType = (int)SensorType.Sight,
+                    SensorType = (int)SensorType.Proximity,
                     IsFromMemory = true
                 };
 
-                // Insert memory result in the right position relative to detection results
                 _detectionResults.Add(memResult);
                 _detectedHandles.Add(entry.Target);
             }
@@ -376,13 +313,6 @@ namespace CycloneGames.AIPerception.Runtime
 
         public int MemoryCount => _memoryEntries.IsCreated ? _memoryEntries.Length : 0;
 
-        public DetectionResult GetResult(int index)
-        {
-            return index >= 0 && index < _detectionResults.Length 
-                ? _detectionResults[index] 
-                : default;
-        }
-
         private void CompleteJob()
         {
             if (_jobScheduled)
@@ -391,7 +321,7 @@ namespace CycloneGames.AIPerception.Runtime
                 _jobScheduled = false;
             }
         }
-        
+
         public void GetDetectedHandles(ref NativeList<PerceptibleHandle> results)
         {
             for (int i = 0; i < _detectedHandles.Length; i++)
@@ -399,22 +329,28 @@ namespace CycloneGames.AIPerception.Runtime
                 results.Add(_detectedHandles[i]);
             }
         }
-        
+
+        public DetectionResult GetResult(int index)
+        {
+            return index >= 0 && index < _detectionResults.Length
+                ? _detectionResults[index]
+                : default;
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
             _disposed = true;
-            
+
             CompleteJob();
-            
+
             if (_detectedHandles.IsCreated) _detectedHandles.Dispose();
             if (_detectionResults.IsCreated) _detectionResults.Dispose();
             if (_stagingHandles.IsCreated) _stagingHandles.Dispose();
             if (_stagingResults.IsCreated) _stagingResults.Dispose();
-            if (_jobPassedFilter.IsCreated) _jobPassedFilter.Dispose();
+            if (_jobProximity.IsCreated) _jobProximity.Dispose();
             if (_jobTargetData.IsCreated) _jobTargetData.Dispose();
             if (_memoryEntries.IsCreated) _memoryEntries.Dispose();
-            _losRaycastBuffer = null;
         }
     }
 }
