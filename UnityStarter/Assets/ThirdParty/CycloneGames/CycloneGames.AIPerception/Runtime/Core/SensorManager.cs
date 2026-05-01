@@ -1,10 +1,29 @@
 using System;
 using System.Collections.Generic;
 using Unity.Jobs;
+using Unity.Mathematics;
 using UnityEngine;
 
 namespace CycloneGames.AIPerception.Runtime
 {
+    [Serializable]
+    public struct SensorLODLevel
+    {
+        [Tooltip("Beyond this distance (m), apply this LOD level")]
+        public float Distance;
+
+        [Tooltip("Frequency multiplier at this distance (1.0 = full, 0.5 = half, 0.25 = quarter)")]
+        [Range(0.05f, 1f)]
+        public float FrequencyMultiplier;
+
+        public static readonly SensorLODLevel[] DefaultLevels = new[]
+        {
+            new SensorLODLevel { Distance = 30f, FrequencyMultiplier = 0.5f },
+            new SensorLODLevel { Distance = 80f, FrequencyMultiplier = 0.25f },
+            new SensorLODLevel { Distance = 200f, FrequencyMultiplier = 0.1f },
+        };
+    }
+
     /// <summary>
     /// Centralized sensor tick manager with LOD support and job scheduling.
     /// Supports two modes:
@@ -37,6 +56,11 @@ namespace CycloneGames.AIPerception.Runtime
         private JobHandle _batchedJobHandle;
         private bool _hasScheduledJobs;
         
+        // LOD configuration
+        private Transform _lodReference;
+        private SensorLODLevel[] _lodLevels;
+        private bool _lodEnabled;
+        
         /// <summary>
         /// When true, jobs are batched and completed in LateUpdate for better performance.
         /// When false (default), jobs complete immediately for simpler debugging.
@@ -45,6 +69,34 @@ namespace CycloneGames.AIPerception.Runtime
 
         public int SensorCount => _sensors.Count;
         public bool IsDisposed { get; private set; }
+
+        /// <summary>
+        /// Configures LOD (Level of Detail) for sensor update frequency.
+        /// Sensors farther than LOD distance thresholds update less frequently.
+        /// Set reference to null to disable LOD.
+        /// </summary>
+        public void ConfigureLOD(Transform reference, SensorLODLevel[] levels)
+        {
+            _lodReference = reference;
+            _lodLevels = levels;
+            _lodEnabled = reference != null && levels != null && levels.Length > 0;
+        }
+
+        private float GetLODMultiplier(float3 sensorPosition)
+        {
+            if (!_lodEnabled || _lodReference == null) return 1f;
+
+            float dist = math.distance(sensorPosition, (float3)_lodReference.position);
+
+            for (int i = 0; i < _lodLevels.Length; i++)
+            {
+                if (dist <= _lodLevels[i].Distance)
+                    return _lodLevels[i].FrequencyMultiplier;
+            }
+
+            // Beyond all LOD levels — use the last (most aggressive) multiplier
+            return _lodLevels[_lodLevels.Length - 1].FrequencyMultiplier;
+        }
 
         public SensorManager()
         {
@@ -84,10 +136,14 @@ namespace CycloneGames.AIPerception.Runtime
         /// <summary>
         /// Updates all sensors. Call once per frame from Update().
         /// In deferred mode, jobs are scheduled but not completed here.
+        /// Sensors must not throw — exceptions indicate programming errors and will propagate.
         /// </summary>
         public void Update(float deltaTime)
         {
             if (IsDisposed) return;
+
+            // Rebuild perceptible data once per frame for all sensors to share
+            PerceptibleRegistry.Instance?.RebuildData();
 
             float currentTime = Time.time;
             int count = _sensors.Count;
@@ -97,16 +153,13 @@ namespace CycloneGames.AIPerception.Runtime
                 var sensor = _sensors[i];
                 if (sensor == null || !sensor.IsEnabled) continue;
 
-                if (currentTime - sensor.LastUpdateTime >= sensor.UpdateInterval)
+                float effectiveInterval = sensor.UpdateInterval;
+                if (_lodEnabled)
+                    effectiveInterval = sensor.UpdateInterval * GetLODMultiplier(sensor.Position);
+
+                if (currentTime - sensor.LastUpdateTime >= effectiveInterval)
                 {
-                    try
-                    {
-                        sensor.UpdateSensor(deltaTime);
-                    }
-                    catch (Exception e)
-                    {
-                        Debug.LogError($"[AIPerception] Sensor {sensor.SensorId} update failed: {e.Message}");
-                    }
+                    sensor.UpdateSensor(deltaTime);
                 }
             }
         }

@@ -56,7 +56,7 @@ namespace CycloneGames.AIPerception.Runtime
     }
 
     /// <summary>
-    /// Sensor detection result.
+    /// Sensor detection result. Visibility decays with age for memory entries.
     /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     public struct DetectionResult
@@ -65,8 +65,24 @@ namespace CycloneGames.AIPerception.Runtime
         public float Distance;
         public float3 LastKnownPosition;
         public float DetectionTime;
-        public float Visibility; // 0-1 for sight, 0-1 loudness for hearing
-        public int SensorType; // 0=Sight, 1=Hearing
+        public float Visibility; // 0-1 for sight, 0-1 loudness for hearing, decays in memory
+        public int SensorType; // 0=Sight, 1=Hearing, 2=Proximity
+        public bool IsFromMemory; // True if this result is from stimulus memory, not current detection
+    }
+
+    /// <summary>
+    /// Stimulus memory entry — persists after target leaves sensor range.
+    /// Visibility decays linearly from <see cref="DetectionResult.Visibility"/> to 0 over MemoryDuration.
+    /// </summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct StimulusMemoryEntry
+    {
+        public PerceptibleHandle Target;
+        public float3 LastKnownPosition;
+        public float LastDetectedTime;
+        public float PeakVisibility;
+        public int SensorType;
+        public float DistanceAtDetection;
     }
 
     /// <summary>
