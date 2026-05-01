@@ -9,6 +9,26 @@ namespace CycloneGames.AIPerception.Editor
     public class PerceptibleComponentEditor : UnityEditor.Editor
     {
         private static readonly Color HeaderColor = new Color(0.2f, 0.8f, 0.6f, 1f);
+        private static readonly Color DerivedSectionBgColor = new Color(0.6f, 0.4f, 0.8f, 0.25f);
+        private static readonly Color DerivedLabelColor = new Color(0.8f, 0.6f, 1f);
+        private static readonly Color RuntimeStatsBgColor = new Color(0.15f, 0.15f, 0.15f, 0.8f);
+        private static readonly Color RuntimeStatsTextColor = new Color(0.8f, 0.8f, 0.8f);
+
+        // Cached GUIStyles (0-allocation in OnInspectorGUI)
+        private static GUIStyle _headerStyle;
+        private static GUIStyle _derivedLabelStyle;
+        private static GUIStyle _runtimeStatsStyle;
+
+        // Cached GUIContent (0-allocation in OnInspectorGUI)
+        private static readonly GUIContent LabelTypeId = new GUIContent("Type ID");
+        private static readonly GUIContent LabelTag = new GUIContent("Tag");
+        private static readonly GUIContent LabelDetectionRadius = new GUIContent("Detection Radius");
+        private static readonly GUIContent LabelIsDetectable = new GUIContent("Is Detectable");
+        private static readonly GUIContent LabelLosPoint = new GUIContent("LOS Point (Optional)");
+        private static readonly GUIContent LabelIsSoundSource = new GUIContent("Is Sound Source");
+        private static readonly GUIContent LabelLoudness = new GUIContent("Loudness");
+        private static readonly GUIContent LabelShowDebugOverlay = new GUIContent("Show Debug Overlay");
+        private static readonly GUIContent LabelDerivedFields = new GUIContent("Custom Fields");
 
         private SerializedProperty _typeId;
         private SerializedProperty _tag;
@@ -46,30 +66,26 @@ namespace CycloneGames.AIPerception.Editor
             serializedObject.ApplyModifiedProperties();
         }
 
-        /// <summary>
-        /// Override this to customize the header drawing.
-        /// </summary>
         protected virtual void DrawCustomHeader()
         {
             EditorGUILayout.Space(2);
             var rect = GUILayoutUtility.GetRect(0, 28, GUILayout.ExpandWidth(true));
             EditorGUI.DrawRect(rect, HeaderColor);
 
-            var style = new GUIStyle(EditorStyles.boldLabel)
+            if (_headerStyle == null)
             {
-                fontSize = 14,
-                alignment = TextAnchor.MiddleCenter
-            };
-            style.normal.textColor = Color.white;
+                _headerStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    fontSize = 14,
+                    alignment = TextAnchor.MiddleCenter
+                };
+                _headerStyle.normal.textColor = Color.white;
+            }
 
-            EditorGUI.LabelField(rect, "Perceptible", style);
+            EditorGUI.LabelField(rect, "Perceptible", _headerStyle);
             EditorGUILayout.Space(4);
         }
 
-        /// <summary>
-        /// Draws any serialized fields from derived classes.
-        /// Override this to customize derived field drawing.
-        /// </summary>
         protected virtual void DrawDerivedClassFields()
         {
             // Check if this is a derived class
@@ -78,6 +94,15 @@ namespace CycloneGames.AIPerception.Editor
             // Find and draw fields from derived classes
             var iterator = serializedObject.GetIterator();
             bool hasFields = false;
+
+            if (_derivedLabelStyle == null)
+            {
+                _derivedLabelStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    alignment = TextAnchor.MiddleLeft
+                };
+                _derivedLabelStyle.normal.textColor = DerivedLabelColor;
+            }
 
             // Collect derived class fields
             if (iterator.NextVisible(true)) // Skip script field
@@ -92,15 +117,13 @@ namespace CycloneGames.AIPerception.Editor
                         hasFields = true;
                         EditorGUILayout.Space(8);
                         var bgRect = GUILayoutUtility.GetRect(0, 20, GUILayout.ExpandWidth(true));
-                        EditorGUI.DrawRect(bgRect, new Color(0.6f, 0.4f, 0.8f, 0.25f));
+                        EditorGUI.DrawRect(bgRect, DerivedSectionBgColor);
 
                         var foldoutRect = new Rect(bgRect.x + 2, bgRect.y + 2, 14, 16);
                         _showDerivedFieldsFoldout = EditorGUI.Foldout(foldoutRect, _showDerivedFieldsFoldout, GUIContent.none, true);
 
                         var labelRect = new Rect(bgRect.x + 18, bgRect.y + 1, bgRect.width - 18, 18);
-                        var labelStyle = new GUIStyle(EditorStyles.boldLabel);
-                        labelStyle.normal.textColor = new Color(0.8f, 0.6f, 1f);
-                        EditorGUI.LabelField(labelRect, "📦 Custom Fields", labelStyle);
+                        EditorGUI.LabelField(labelRect, LabelDerivedFields, _derivedLabelStyle);
                     }
 
                     if (_showDerivedFieldsFoldout)
@@ -125,14 +148,14 @@ namespace CycloneGames.AIPerception.Editor
         protected virtual void DrawMainSection()
         {
             EditorGUILayout.LabelField("Type", EditorStyles.miniBoldLabel);
-            EditorGUILayout.PropertyField(_typeId, new GUIContent("Type ID"));
-            EditorGUILayout.PropertyField(_tag, new GUIContent("Tag"));
+            EditorGUILayout.PropertyField(_typeId, LabelTypeId);
+            EditorGUILayout.PropertyField(_tag, LabelTag);
 
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("Detection", EditorStyles.miniBoldLabel);
-            EditorGUILayout.PropertyField(_detectionRadius, new GUIContent("Detection Radius"));
-            EditorGUILayout.PropertyField(_isDetectable, new GUIContent("Is Detectable"));
-            EditorGUILayout.PropertyField(_losPoint, new GUIContent("LOS Point (Optional)"));
+            EditorGUILayout.PropertyField(_detectionRadius, LabelDetectionRadius);
+            EditorGUILayout.PropertyField(_isDetectable, LabelIsDetectable);
+            EditorGUILayout.PropertyField(_losPoint, LabelLosPoint);
 
             if (_losPoint.objectReferenceValue == null)
             {
@@ -141,15 +164,15 @@ namespace CycloneGames.AIPerception.Editor
 
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("Sound", EditorStyles.miniBoldLabel);
-            EditorGUILayout.PropertyField(_isSoundSource, new GUIContent("Is Sound Source"));
+            EditorGUILayout.PropertyField(_isSoundSource, LabelIsSoundSource);
             if (_isSoundSource.boolValue)
             {
-                EditorGUILayout.PropertyField(_loudness, new GUIContent("Loudness"));
+                EditorGUILayout.PropertyField(_loudness, LabelLoudness);
             }
 
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("Debug", EditorStyles.miniBoldLabel);
-            EditorGUILayout.PropertyField(_showDebugOverlay, new GUIContent("Show Debug Overlay"));
+            EditorGUILayout.PropertyField(_showDebugOverlay, LabelShowDebugOverlay);
 
             if (Application.isPlaying)
             {
@@ -163,14 +186,18 @@ namespace CycloneGames.AIPerception.Editor
             var perceptible = (PerceptibleComponent)target;
 
             var statsRect = GUILayoutUtility.GetRect(0, 22, GUILayout.ExpandWidth(true));
-            EditorGUI.DrawRect(statsRect, new Color(0.15f, 0.15f, 0.15f, 0.8f));
+            EditorGUI.DrawRect(statsRect, RuntimeStatsBgColor);
 
-            var style = new GUIStyle(EditorStyles.boldLabel)
+            if (_runtimeStatsStyle == null)
             {
-                alignment = TextAnchor.MiddleCenter
-            };
-            style.normal.textColor = new Color(0.8f, 0.8f, 0.8f);
-            EditorGUI.LabelField(statsRect, "Runtime Info", style);
+                _runtimeStatsStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    alignment = TextAnchor.MiddleCenter
+                };
+                _runtimeStatsStyle.normal.textColor = RuntimeStatsTextColor;
+            }
+
+            EditorGUI.LabelField(statsRect, "Runtime Info", _runtimeStatsStyle);
 
             GUI.enabled = false;
             EditorGUILayout.IntField("ID", perceptible.PerceptibleId);

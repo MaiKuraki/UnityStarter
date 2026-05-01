@@ -57,10 +57,11 @@ namespace CycloneGames.AIPerception.Runtime
     public interface IPerceptible
     {
         int PerceptibleId { get; }
-        int PerceptibleTypeId { get; } // Changed from enum to int for extensibility
+        int PerceptibleTypeId { get; }
         bool IsDetectable { get; }
         float3 Position { get; }
         float DetectionRadius { get; }
+        float Loudness { get; }
         float3 GetLOSPoint();
 
         // Optional: Custom tag for filtering
