@@ -140,6 +140,20 @@ namespace CycloneGames.AIPerception.Runtime
                         }
                     }
                 }
+
+                // Check proximity
+                if (perception.ProximitySensor != null)
+                {
+                    for (int i = 0; i < perception.ProximitySensor.DetectedCount; i++)
+                    {
+                        var result = perception.ProximitySensor.GetResult(i);
+                        if (result.Target == _handle)
+                        {
+                            _detectedBy.Add((perception, DetectionReason.ProximityAlert, result.DetectionTime));
+                            break;
+                        }
+                    }
+                }
             }
         }
 
@@ -244,13 +258,13 @@ namespace CycloneGames.AIPerception.Runtime
                     switch (reason)
                     {
                         case DetectionReason.VisualContact:
-                            _sb.Append("👁 ");
+                            _sb.Append("[Sight] ");
                             break;
                         case DetectionReason.SoundHeard:
-                            _sb.Append("👂 ");
+                            _sb.Append("[Hear]  ");
                             break;
                         case DetectionReason.ProximityAlert:
-                            _sb.Append("⚠ ");
+                            _sb.Append("[Prox]  ");
                             break;
                         default:
                             _sb.Append("? ");

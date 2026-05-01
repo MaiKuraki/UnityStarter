@@ -1,4 +1,5 @@
 using Unity.Collections;
+using Unity.Mathematics;
 
 namespace CycloneGames.AIPerception.Runtime
 {
@@ -17,6 +18,7 @@ namespace CycloneGames.AIPerception.Runtime
         bool IsEnabled { get; set; }
         float UpdateInterval { get; }
         float LastUpdateTime { get; }
+        float3 Position { get; }
 
         void Initialize();
         void UpdateSensor(float deltaTime);
