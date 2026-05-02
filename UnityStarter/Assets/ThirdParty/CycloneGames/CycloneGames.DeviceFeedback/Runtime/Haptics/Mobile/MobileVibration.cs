@@ -33,6 +33,23 @@ namespace CycloneGames.DeviceFeedback.Runtime
 
         public static void Init() => _ = Instance;
 
+        /// <summary>
+        /// Shut down and release all native resources (JNI, CoreHaptics engine, etc.).
+        /// Call this on application quit or before scene teardown in tests.
+        /// After Shutdown(), subsequent calls will re-initialize lazily.
+        /// </summary>
+        public static void Shutdown()
+        {
+            lock (s_lock)
+            {
+                if (s_instance != null)
+                {
+                    s_instance.Dispose();
+                    s_instance = null;
+                }
+            }
+        }
+
         public static bool IsAvailable => Instance.IsAvailable;
         public static bool HasVibrator => Instance.HasVibrator;
 

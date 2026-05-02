@@ -77,12 +77,15 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly CompositeDisposable _actionWiringSubscriptions = new();
         private readonly CancellationTokenSource _cancellation;
         private readonly InputActionAsset _inputActionAsset;
+        private readonly PlayerSlotConfig _config; // Stored for runtime rebinding/reset
         private bool _isInputBlocked;
+        private bool _isDisposed;
 
         public InputPlayer(int playerId, InputUser user, PlayerSlotConfig config, InputDevice initialDevice = null)
         {
             PlayerId = playerId;
             User = user;
+            _config = config;
 
             _cancellation = new CancellationTokenSource();
             _subscriptions = new CompositeDisposable();
@@ -505,6 +508,9 @@ namespace CycloneGames.InputSystem.Runtime
 
         public void Dispose()
         {
+            if (_isDisposed) return;
+            _isDisposed = true;
+
             _cancellation.Cancel();
             _cancellation.Dispose();
             _subscriptions?.Dispose();
@@ -1172,5 +1178,182 @@ namespace CycloneGames.InputSystem.Runtime
                 return mouse != null && mouse.middleButton.isPressed;
             }
         }
+
+        #region Chord Detection
+
+        public Observable<Unit> GetChordObservable(string actionName1, string actionName2, float windowMs = 300f)
+        {
+            var ps1 = GetPressStateObservable(actionName1);
+            var ps2 = GetPressStateObservable(actionName2);
+            if (ReferenceEquals(ps1, EmptyObservables.Bool) || ReferenceEquals(ps2, EmptyObservables.Bool))
+                return EmptyObservables.Unit;
+            return CreateChordStream(ps1, ps2, windowMs);
+        }
+
+        public Observable<Unit> GetChordObservable(string actionMapName, string actionName1, string actionName2, float windowMs = 300f)
+        {
+            var ps1 = GetPressStateObservable(actionMapName, actionName1);
+            var ps2 = GetPressStateObservable(actionMapName, actionName2);
+            if (ReferenceEquals(ps1, EmptyObservables.Bool) || ReferenceEquals(ps2, EmptyObservables.Bool))
+                return EmptyObservables.Unit;
+            return CreateChordStream(ps1, ps2, windowMs);
+        }
+
+        public Observable<Unit> GetChordObservable(int actionId1, int actionId2, float windowMs = 300f)
+        {
+            var ps1 = GetPressStateObservable(actionId1);
+            var ps2 = GetPressStateObservable(actionId2);
+            if (ReferenceEquals(ps1, EmptyObservables.Bool) || ReferenceEquals(ps2, EmptyObservables.Bool))
+                return EmptyObservables.Unit;
+            return CreateChordStream(ps1, ps2, windowMs);
+        }
+
+        /// <summary>
+        /// Creates a chord stream: emits when both press states become true within windowMs,
+        /// resets when either goes false. Zero-GC in emission path.
+        /// </summary>
+        private static Observable<Unit> CreateChordStream(Observable<bool> press1, Observable<bool> press2, float windowMs)
+        {
+            return Observable.Create<Unit>(observer =>
+            {
+                float thresholdSec = windowMs / 1000f;
+                float pressTime1 = -1f;
+                float pressTime2 = -1f;
+                bool chordEmitted = false;
+                var gate = new object();
+
+                var d1 = press1.Subscribe(pressed =>
+                {
+                    lock (gate)
+                    {
+                        if (pressed)
+                        {
+                            pressTime1 = Time.realtimeSinceStartup;
+                            if (pressTime2 >= 0f && !chordEmitted)
+                            {
+                                float elapsed = pressTime1 - pressTime2;
+                                if (elapsed >= 0f && elapsed <= thresholdSec)
+                                {
+                                    chordEmitted = true;
+                                    observer.OnNext(Unit.Default);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            pressTime1 = -1f;
+                            chordEmitted = false;
+                        }
+                    }
+                });
+
+                var d2 = press2.Subscribe(pressed =>
+                {
+                    lock (gate)
+                    {
+                        if (pressed)
+                        {
+                            pressTime2 = Time.realtimeSinceStartup;
+                            if (pressTime1 >= 0f && !chordEmitted)
+                            {
+                                float elapsed = pressTime2 - pressTime1;
+                                if (elapsed >= 0f && elapsed <= thresholdSec)
+                                {
+                                    chordEmitted = true;
+                                    observer.OnNext(Unit.Default);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            pressTime2 = -1f;
+                            chordEmitted = false;
+                        }
+                    }
+                });
+
+                return Disposable.Combine(d1, d2);
+            });
+        }
+
+        #endregion
+
+        #region Runtime Rebinding
+
+        public bool RebindAction(string actionMapName, string actionName, string oldBinding, string newBinding)
+        {
+            if (_isDisposed) return false;
+            if (string.IsNullOrEmpty(actionMapName) || string.IsNullOrEmpty(actionName)) return false;
+            if (string.IsNullOrEmpty(oldBinding) || string.IsNullOrEmpty(newBinding)) return false;
+
+            var actionMap = _inputActionAsset.FindActionMap(actionMapName);
+            if (actionMap == null) return false;
+
+            var action = actionMap.FindAction(actionName);
+            if (action == null) return false;
+
+            var bindings = action.bindings;
+            int bindingCount = bindings.Count;
+            for (int i = 0; i < bindingCount; i++)
+            {
+                if (string.Equals(bindings[i].effectivePath, oldBinding, StringComparison.Ordinal))
+                {
+                    action.ApplyBindingOverride(i, new InputBinding { overridePath = newBinding });
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public bool ResetActionBinding(string actionMapName, string actionName)
+        {
+            if (_isDisposed) return false;
+            if (string.IsNullOrEmpty(actionMapName) || string.IsNullOrEmpty(actionName)) return false;
+
+            var actionMap = _inputActionAsset.FindActionMap(actionMapName);
+            if (actionMap == null) return false;
+
+            var action = actionMap.FindAction(actionName);
+            if (action == null) return false;
+
+            action.RemoveAllBindingOverrides();
+            return true;
+        }
+
+        public void ResetAllActionBindings()
+        {
+            if (_isDisposed) return;
+            foreach (var actionMap in _inputActionAsset.actionMaps)
+            {
+                foreach (var action in actionMap.actions)
+                {
+                    action.RemoveAllBindingOverrides();
+                }
+            }
+        }
+
+        public string[] GetActionBindings(string actionMapName, string actionName)
+        {
+            if (string.IsNullOrEmpty(actionMapName) || string.IsNullOrEmpty(actionName))
+                return System.Array.Empty<string>();
+
+            var actionMap = _inputActionAsset.FindActionMap(actionMapName);
+            if (actionMap == null) return System.Array.Empty<string>();
+
+            var action = actionMap.FindAction(actionName);
+            if (action == null) return System.Array.Empty<string>();
+
+            var bindings = action.bindings;
+            int bindingCount = bindings.Count;
+            var result = new string[bindingCount];
+            for (int i = 0; i < bindingCount; i++)
+            {
+                result[i] = bindings[i].effectivePath;
+            }
+            return result;
+        }
+
+        #endregion
     }
 }

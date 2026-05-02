@@ -1,5 +1,3 @@
-using UnityEngine;
-
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
 {
     public class RuntimeDebugLogNode : RuntimeNode
@@ -8,10 +6,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (!string.IsNullOrEmpty(Message))
+            {
 #if UNITY_5_3_OR_NEWER
-            Debug.Log($"[RuntimeBT] {Message}");
+                UnityEngine.Debug.Log("[RuntimeBT] " + Message);
 #else
-            System.Console.WriteLine($"[RuntimeBT] {Message}");
+                System.Console.WriteLine("[RuntimeBT] " + Message);
+#endif
+            }
 #endif
             return RuntimeState.Success;
         }
