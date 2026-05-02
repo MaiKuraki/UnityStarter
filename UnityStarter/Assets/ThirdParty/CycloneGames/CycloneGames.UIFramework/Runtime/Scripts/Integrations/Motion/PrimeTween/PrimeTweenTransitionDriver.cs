@@ -1,46 +1,31 @@
-#if LIT_MOTION_PRESENT
+#if PRIME_TWEEN_PRESENT
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
-using LitMotion;
+using PrimeTween;
 
 namespace CycloneGames.UIFramework.Runtime
 {
     /// <summary>
-    /// Extensible LitMotion-based transition driver.
-    /// 
+    /// Extensible PrimeTween-based transition driver.
+    ///
     /// INHERITANCE:
     /// External projects can inherit and override animation methods:
-    /// 
-    /// public class MyDriver : LitMotionTransitionDriver
+    ///
+    /// public class MyDriver : PrimeTweenTransitionDriver
     /// {
-    ///     protected override UniTask AnimateFade(...) { ... custom logic ... }
-    ///     protected override UniTask AnimateScale(...) { ... custom logic ... }
-    /// }
-    /// 
-    /// Or implement completely custom transitions:
-    /// 
-    /// public class MyDriver : LitMotionTransitionDriver
-    /// {
-    ///     public MyDriver(MyCustomConfig config) : base(config) { }
-    ///     
-    ///     protected override UniTask PlayOpenCoreAsync(...)
-    ///     {
-    ///         // Handle MyCustomConfig here
-    ///     }
+    ///     protected override Tween CreateFadeTween(...) { ... custom logic ... }
+    ///     protected override Tween CreateScaleTween(...) { ... custom logic ... }
     /// }
     /// </summary>
-    public class LitMotionTransitionDriver : IUIWindowTransitionDriver
+    public class PrimeTweenTransitionDriver : IUIWindowTransitionDriver
     {
         protected readonly TransitionConfigBase OpenConfig;
         protected readonly TransitionConfigBase CloseConfig;
         protected readonly Ease EaseIn;
         protected readonly Ease EaseOut;
 
-        /// <summary>
-        /// Creates a driver with the same config for open and close.
-        /// </summary>
-        public LitMotionTransitionDriver(
+        public PrimeTweenTransitionDriver(
             TransitionConfigBase config,
             Ease easeIn = Ease.OutQuad,
             Ease easeOut = Ease.InQuad)
@@ -48,10 +33,7 @@ namespace CycloneGames.UIFramework.Runtime
         {
         }
 
-        /// <summary>
-        /// Creates a driver with separate configs for open and close.
-        /// </summary>
-        public LitMotionTransitionDriver(
+        public PrimeTweenTransitionDriver(
             TransitionConfigBase openConfig,
             TransitionConfigBase closeConfig,
             Ease easeIn = Ease.OutQuad,
@@ -68,6 +50,7 @@ namespace CycloneGames.UIFramework.Runtime
             if (window == null || ct.IsCancellationRequested) return;
 
             var context = CreateContext(window);
+            KillExistingTweens(context);
             SetupInitialState(context, OpenConfig, true);
             if (!context.GameObject.activeSelf) context.GameObject.SetActive(true);
 
@@ -84,6 +67,7 @@ namespace CycloneGames.UIFramework.Runtime
             if (window == null || ct.IsCancellationRequested) return;
 
             var context = CreateContext(window);
+            KillExistingTweens(context);
             context.CanvasGroup.interactable = false;
             context.CanvasGroup.blocksRaycasts = false;
 
@@ -92,108 +76,101 @@ namespace CycloneGames.UIFramework.Runtime
             context.CanvasGroup.alpha = 0f;
         }
 
-        /// <summary>
-        /// Override to customize open animation logic.
-        /// </summary>
         protected virtual async UniTask PlayOpenCoreAsync(TransitionContext ctx, TransitionConfigBase config, CancellationToken ct)
         {
-            await AnimateConfigAsync(ctx, config, true, EaseIn, ct);
+            var tween = CreateAnimationTween(ctx, config, true, EaseIn);
+            await AwaitTweenAsync(tween, ct);
         }
 
-        /// <summary>
-        /// Override to customize close animation logic.
-        /// </summary>
         protected virtual async UniTask PlayCloseCoreAsync(TransitionContext ctx, TransitionConfigBase config, CancellationToken ct)
         {
-            await AnimateConfigAsync(ctx, config, false, EaseOut, ct);
+            var tween = CreateAnimationTween(ctx, config, false, EaseOut);
+            await AwaitTweenAsync(tween, ct);
         }
 
-        /// <summary>
-        /// Handles animation based on config type. Override to support custom config types.
-        /// </summary>
-        protected virtual async UniTask AnimateConfigAsync(TransitionContext ctx, TransitionConfigBase config, bool isOpen, Ease ease, CancellationToken ct)
+        protected virtual Tween CreateAnimationTween(TransitionContext ctx, TransitionConfigBase config, bool isOpen, Ease ease)
         {
             switch (config)
             {
                 case FadeConfig fade:
-                    await AnimateFade(ctx, fade.Duration, isOpen, ease, ct);
-                    break;
+                    return CreateFadeTween(ctx, fade.Duration, isOpen, ease);
                 case ScaleConfig scale:
-                    await AnimateScale(ctx, scale, isOpen, ease, ct);
-                    break;
+                    return CreateScaleTween(ctx, scale, isOpen, ease);
                 case SlideConfig slide:
-                    await AnimateSlide(ctx, slide, isOpen, ease, ct);
-                    break;
+                    if (ctx.RectTransform != null)
+                        return CreateSlideTween(ctx, slide, isOpen, ease);
+                    return default;
                 case CompositeConfig composite:
-                    await AnimateComposite(ctx, composite, isOpen, ease, ct);
-                    break;
+                    return CreateCompositeTween(ctx, composite, isOpen, ease);
                 default:
-                    // Unknown config type - do fade as fallback
-                    await AnimateFade(ctx, config.Duration, isOpen, ease, ct);
-                    break;
+                    return CreateFadeTween(ctx, config.Duration, isOpen, ease);
             }
         }
 
-        /// <summary>Override to customize fade animation.</summary>
-        protected virtual async UniTask AnimateFade(TransitionContext ctx, float duration, bool isOpen, Ease ease, CancellationToken ct)
+        protected virtual Tween CreateFadeTween(TransitionContext ctx, float duration, bool isOpen, Ease ease)
         {
-            float from = isOpen ? 0f : ctx.CanvasGroup.alpha;
             float to = isOpen ? 1f : 0f;
-            var handle = LMotion.Create(from, to, duration)
-                .WithEase(ease)
-                .Bind(v => ctx.CanvasGroup.alpha = v);
-            try { await handle.ToUniTask(cancellationToken: ct); }
-            catch (System.OperationCanceledException) { handle.Cancel(); }
+            return Tween.Alpha(ctx.CanvasGroup, to, duration, ease, useUnscaledTime: true);
         }
 
-        /// <summary>Override to customize scale animation.</summary>
-        protected virtual async UniTask AnimateScale(TransitionContext ctx, ScaleConfig config, bool isOpen, Ease ease, CancellationToken ct)
+        protected virtual Tween CreateScaleTween(TransitionContext ctx, ScaleConfig config, bool isOpen, Ease ease)
         {
-            // Read current scale factor relative to OriginalScale for seamless mid-interrupt
-            float currentScaleFactor = ctx.OriginalScale.x != 0f
-                ? ctx.Transform.localScale.x / ctx.OriginalScale.x
-                : 1f;
-            float from = isOpen ? config.ScaleFrom : currentScaleFactor;
-            float to = isOpen ? 1f : config.ScaleFrom;
-            var handle = LMotion.Create(from, to, config.Duration)
-                .WithEase(ease)
-                .Bind(v => ctx.Transform.localScale = ctx.OriginalScale * v);
-            try { await handle.ToUniTask(cancellationToken: ct); }
-            catch (System.OperationCanceledException) { handle.Cancel(); }
+            Vector3 to = isOpen ? ctx.OriginalScale : ctx.OriginalScale * config.ScaleFrom;
+            return Tween.Scale(ctx.Transform, to, config.Duration, ease, useUnscaledTime: true);
         }
 
-        /// <summary>Override to customize slide animation.</summary>
-        protected virtual async UniTask AnimateSlide(TransitionContext ctx, SlideConfig config, bool isOpen, Ease ease, CancellationToken ct)
+        protected virtual Tween CreateSlideTween(TransitionContext ctx, SlideConfig config, bool isOpen, Ease ease)
         {
-            if (ctx.RectTransform == null) return;
-            Vector2 offset = GetSlideOffset(ctx.RectTransform, config);
-            // Use current position as 'from' for close to handle mid-open interruption
-            Vector2 from = isOpen ? offset : ctx.RectTransform.anchoredPosition;
-            Vector2 to = isOpen ? ctx.OriginalPosition : offset;
-            var handle = LMotion.Create(from, to, config.Duration)
-                .WithEase(ease)
-                .Bind(v => ctx.RectTransform.anchoredPosition = v);
-            try { await handle.ToUniTask(cancellationToken: ct); }
-            catch (System.OperationCanceledException) { handle.Cancel(); }
+            Vector2 to = isOpen ? ctx.OriginalPosition : GetSlideOffset(ctx.RectTransform, config);
+            return Tween.UIAnchoredPosition(ctx.RectTransform, to, config.Duration, ease, useUnscaledTime: true);
         }
 
-        /// <summary>Override to customize composite animation.</summary>
-        protected virtual async UniTask AnimateComposite(TransitionContext ctx, CompositeConfig config, bool isOpen, Ease ease, CancellationToken ct)
+        /// <summary>
+        /// Creates a composite animation. In PrimeTween, Sequence and Tween are separate types
+        /// with no implicit conversion, so we fire all sub-tweens simultaneously (they animate
+        /// different properties — alpha, scale, position — so there is no conflict) and return
+        /// a dummy delay tween that matches the composite duration for await purposes.
+        /// </summary>
+        protected virtual Tween CreateCompositeTween(TransitionContext ctx, CompositeConfig config, bool isOpen, Ease ease)
         {
-            int taskCount = (config.UseFade ? 1 : 0) + (config.Scale != null ? 1 : 0) + (config.Slide != null ? 1 : 0);
-            if (taskCount == 0) return;
-
-            var tasks = new UniTask[taskCount];
-            int idx = 0;
-
             if (config.UseFade)
-                tasks[idx++] = AnimateFade(ctx, config.Duration, isOpen, ease, ct);
+                CreateFadeTween(ctx, config.Duration, isOpen, ease);
             if (config.Scale != null)
-                tasks[idx++] = AnimateScale(ctx, config.Scale, isOpen, ease, ct);
-            if (config.Slide != null)
-                tasks[idx] = AnimateSlide(ctx, config.Slide, isOpen, ease, ct);
+                CreateScaleTween(ctx, config.Scale, isOpen, ease);
+            if (config.Slide != null && ctx.RectTransform != null)
+                CreateSlideTween(ctx, config.Slide, isOpen, ease);
 
-            await UniTask.WhenAll(tasks);
+            return Tween.Delay(config.Duration, useUnscaledTime: true);
+        }
+
+        private static async UniTask AwaitTweenAsync(Tween tween, CancellationToken ct)
+        {
+            if (!tween.isAlive) return;
+
+            var tcs = new UniTaskCompletionSource();
+            // Capture tween reference in a one-element array to avoid struct-copy staleness
+            // across the async boundary — the tween struct may have been replaced by .OnComplete().
+            var tweenHolder = new Tween[1];
+            tweenHolder[0] = tween.OnComplete(tcs, static state => state.TrySetResult());
+
+            try
+            {
+                await tcs.Task.AttachExternalCancellation(ct);
+            }
+            catch (System.OperationCanceledException)
+            {
+                if (tweenHolder[0].isAlive)
+                    tweenHolder[0].Stop();
+                throw;
+            }
+        }
+
+        protected virtual void KillExistingTweens(TransitionContext ctx)
+        {
+            Tween.StopAll(onTarget: ctx.CanvasGroup);
+            Tween.StopAll(onTarget: ctx.Transform);
+            if (ctx.RectTransform != null)
+                Tween.StopAll(onTarget: ctx.RectTransform);
         }
 
         protected virtual void SetupInitialState(TransitionContext ctx, TransitionConfigBase config, bool isOpen)
@@ -263,10 +240,6 @@ namespace CycloneGames.UIFramework.Runtime
             };
         }
 
-        /// <summary>
-        /// Context object containing all necessary references for animation.
-        /// Passed to all animation methods for extensibility.
-        /// </summary>
         protected struct TransitionContext
         {
             public GameObject GameObject;
