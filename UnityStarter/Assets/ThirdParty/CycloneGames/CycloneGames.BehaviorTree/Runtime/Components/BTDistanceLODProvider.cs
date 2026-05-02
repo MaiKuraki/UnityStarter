@@ -55,12 +55,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             _keys = new RuntimeBehaviorTree[_capacity];
             _values = new TreeLODData[_capacity];
             _count = 0;
-
-            if (_referencePoint == null)
-            {
-                var player = GameObject.FindGameObjectWithTag("Player");
-                if (player != null) _referencePoint = player.transform;
-            }
         }
 
         public void RegisterTree(RuntimeBehaviorTree tree, Transform treeTransform)

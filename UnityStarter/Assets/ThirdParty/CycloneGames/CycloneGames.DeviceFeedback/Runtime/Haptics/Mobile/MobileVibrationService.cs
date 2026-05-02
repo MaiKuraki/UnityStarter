@@ -63,6 +63,10 @@ namespace CycloneGames.DeviceFeedback.Runtime
         private static int[] s_typeBuf = Array.Empty<int>();
         private static float[] s_durationBuf = Array.Empty<float>();
 
+        // Pre-API 26 on/off pattern buffers
+        private static long[] s_buildBuf = Array.Empty<long>();
+        private static long[] s_onOffPatternBuf = Array.Empty<long>();
+
         private static void EnsureBuffers(int count)
         {
             if (s_timingBuf.Length >= count) return;
@@ -239,8 +243,7 @@ namespace CycloneGames.DeviceFeedback.Runtime
             if (_coreHapticsAvailable)
                 _CoreHapticsStop();
 #elif UNITY_WEBGL
-            if (Application.platform == RuntimePlatform.WebGLPlayer)
-                VibrateWebgl(0);
+            VibrateWebgl(0);
 #endif
         }
 
@@ -258,7 +261,9 @@ namespace CycloneGames.DeviceFeedback.Runtime
         public void Vibrate()
         {
             if (!CanOperate()) return;
-#if UNITY_ANDROID || UNITY_IOS
+#if UNITY_ANDROID
+            VibrateAndroid(200);
+#elif UNITY_IOS
             Handheld.Vibrate();
 #elif UNITY_WEBGL
             VibrateWebgl(200);
@@ -365,7 +370,19 @@ namespace CycloneGames.DeviceFeedback.Runtime
         {
             if (!CanOperate()) return;
 #if UNITY_IOS
-            _notificationOccurred(s_notifStyleNames[(int)style]);
+            if (_coreHapticsAvailable)
+            {
+                switch (style)
+                {
+                    case IOSNotificationStyle.Success: _CoreHapticsPlayTransient(0.7f, 0.6f); break;
+                    case IOSNotificationStyle.Warning: _CoreHapticsPlayTransient(0.5f, 0.4f); break;
+                    case IOSNotificationStyle.Error:   _CoreHapticsPlayTransient(0.8f, 0.9f); break;
+                }
+            }
+            else
+            {
+                _notificationOccurred(s_notifStyleNames[(int)style]);
+            }
 #endif
         }
 
@@ -513,8 +530,11 @@ namespace CycloneGames.DeviceFeedback.Runtime
         private static void BuildOnOffPattern(int sampleCount, out long[] onOffPattern)
         {
             const int threshold = 20;
-            // Worst case: alternating on/off for every segment
-            var list = new long[sampleCount * 2 + 1];
+            int worstCase = sampleCount * 2 + 1;
+
+            if (s_buildBuf.Length < worstCase)
+                s_buildBuf = new long[worstCase];
+
             int idx = 0;
             long pauseAccum = 0;
             long vibrateAccum = 0;
@@ -525,7 +545,7 @@ namespace CycloneGames.DeviceFeedback.Runtime
                 {
                     if (vibrateAccum == 0)
                     {
-                        list[idx++] = pauseAccum;
+                        s_buildBuf[idx++] = pauseAccum;
                         pauseAccum = 0;
                     }
                     vibrateAccum += s_timingBuf[i];
@@ -534,7 +554,7 @@ namespace CycloneGames.DeviceFeedback.Runtime
                 {
                     if (vibrateAccum > 0)
                     {
-                        list[idx++] = vibrateAccum;
+                        s_buildBuf[idx++] = vibrateAccum;
                         vibrateAccum = 0;
                     }
                     pauseAccum += s_timingBuf[i];
@@ -542,17 +562,24 @@ namespace CycloneGames.DeviceFeedback.Runtime
             }
             if (vibrateAccum > 0)
             {
-                if (idx == 0) list[idx++] = 0;
-                list[idx++] = vibrateAccum;
+                if (idx == 0) s_buildBuf[idx++] = 0;
+                s_buildBuf[idx++] = vibrateAccum;
             }
 
             if (idx == 0)
             {
-                onOffPattern = new long[] { 0, 1 };
+                if (s_onOffPatternBuf.Length < 2)
+                    s_onOffPatternBuf = new long[2];
+                s_onOffPatternBuf[0] = 0;
+                s_onOffPatternBuf[1] = 1;
+                onOffPattern = s_onOffPatternBuf;
                 return;
             }
-            onOffPattern = new long[idx];
-            Array.Copy(list, onOffPattern, idx);
+
+            if (s_onOffPatternBuf.Length < idx)
+                s_onOffPatternBuf = new long[idx];
+            Array.Copy(s_buildBuf, s_onOffPatternBuf, idx);
+            onOffPattern = s_onOffPatternBuf;
         }
 
         // Android API 30+ Composition API — device-tuned haptic primitives.
@@ -637,7 +664,18 @@ namespace CycloneGames.DeviceFeedback.Runtime
         private void VibrateNotificationImpl(string iosStyle, int fallbackMs, long[] androidPattern = null)
         {
 #if UNITY_IOS
-            _notificationOccurred(iosStyle);
+            if (_coreHapticsAvailable)
+            {
+                // Map notification style to CoreHaptics transient parameters:
+                // Success = clear ascending feel; Warning = moderate alert; Error = sharp denial
+                if (iosStyle == "Success")            _CoreHapticsPlayTransient(0.7f, 0.6f);
+                else if (iosStyle == "Warning")       _CoreHapticsPlayTransient(0.5f, 0.4f);
+                else if (iosStyle == "Error")         _CoreHapticsPlayTransient(0.8f, 0.9f);
+            }
+            else
+            {
+                _notificationOccurred(iosStyle);
+            }
 #elif UNITY_ANDROID
             if (androidPattern != null)
                 VibrateAndroidPattern(androidPattern, -1);

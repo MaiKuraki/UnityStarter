@@ -85,5 +85,37 @@ namespace CycloneGames.InputSystem.Runtime
         /// Safe to call even if no mouse is present (returns false).
         /// </summary>
         bool IsMiddleMouseButtonPressed { get; }
+
+        /// <summary>
+        /// Overrides a specific device binding path for an action. Only the matching binding is replaced.
+        /// Returns true if the old binding was found and overridden.
+        /// </summary>
+        bool RebindAction(string actionMapName, string actionName, string oldBinding, string newBinding);
+
+        /// <summary>
+        /// Resets a specific action's bindings to their original configuration (removes all overrides).
+        /// Returns true if the action was found.
+        /// </summary>
+        bool ResetActionBinding(string actionMapName, string actionName);
+
+        /// <summary>
+        /// Resets all actions' bindings to their original configuration.
+        /// </summary>
+        void ResetAllActionBindings();
+
+        /// <summary>
+        /// Returns the current effective binding paths for an action (including any overrides).
+        /// Returns an empty array if the action is not found.
+        /// </summary>
+        string[] GetActionBindings(string actionMapName, string actionName);
+
+        /// <summary>
+        /// Emits when two button actions are pressed within the specified time window of each other.
+        /// Resets when either button is released. Useful for combo input like A+B.
+        /// Returns empty observable if either action is not configured as Button type.
+        /// </summary>
+        Observable<Unit> GetChordObservable(string actionName1, string actionName2, float windowMs = 300f);
+        Observable<Unit> GetChordObservable(string actionMapName, string actionName1, string actionName2, float windowMs = 300f);
+        Observable<Unit> GetChordObservable(int actionId1, int actionId2, float windowMs = 300f);
     }
 }
