@@ -8,6 +8,8 @@ namespace CycloneGames.UIFramework.Runtime
         void OnEnter(UIWindow window);
         void OnExit(UIWindow window);
         void Update(UIWindow window);
+        /// <summary>Returns true when this state performs work in Update(). Default is false.</summary>
+        bool RequiresUpdate { get; }
     }
 
     public abstract class UIWindowState : IUIWindowState
@@ -16,5 +18,6 @@ namespace CycloneGames.UIFramework.Runtime
         public abstract void OnEnter(UIWindow window);
         public abstract void OnExit(UIWindow window);
         public virtual void Update(UIWindow window) { } // Default empty update
+        public virtual bool RequiresUpdate => false;
     }
 }

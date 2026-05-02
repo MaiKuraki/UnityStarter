@@ -51,6 +51,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         // Tracks active windows for quick access and management
         private Dictionary<string, UIWindow> activeWindows = new Dictionary<string, UIWindow>();
+        // Parallel list for zero-allocation iteration (avoids Dictionary.Enumerator per-frame in GetPerformanceStats).
+        private List<UIWindow> _activeWindowList = new List<UIWindow>(16);
 
         // Window binders for custom initialization/MVP decoupling
         private List<IUIWindowBinder> windowBinders = new List<IUIWindowBinder>(4);
@@ -275,6 +277,7 @@ namespace CycloneGames.UIFramework.Runtime
             _pendingSceneSweepTargetHandle = -1;
 
             activeWindows.Clear();
+            _activeWindowList.Clear();
             _navigationService?.Clear();
 
             foreach (var kv in uiOpenTCS) kv.Value.TrySetCanceled();
@@ -356,6 +359,7 @@ namespace CycloneGames.UIFramework.Runtime
                     UnregisterSceneBoundWindow(existingWindow);
                     _navigationService?.Unregister(windowName);
                     activeWindows.Remove(windowName);
+                    _activeWindowList.Remove(existingWindow);
                     uiOpenTCS.Remove(windowName);
                     ReleaseConfigHandle(windowName);
                     ReleaseWindowAsset(windowName);
@@ -628,6 +632,7 @@ namespace CycloneGames.UIFramework.Runtime
             uiWindowInstance._binders = _windowBindersCache;
             uiLayer.AddWindow(uiWindowInstance);
             activeWindows[windowName] = uiWindowInstance;
+            _activeWindowList.Add(uiWindowInstance);
             RegisterSceneBoundWindow(uiWindowInstance);
             _navigationService?.Register(windowName);
 
@@ -906,23 +911,13 @@ namespace CycloneGames.UIFramework.Runtime
             leaving.Close();
 
             // Notify binders AFTER close lifecycle so Dispose runs after OnViewClosed.
-            var binders = _windowBindersCache;
-            if (binders != null)
-            {
-                for (int i = 0; i < binders.Length; i++)
-                {
-                    try { binders[i].OnWindowDestroying(leaving); }
-                    catch (System.Exception ex)
-                    {
-                        CLogger.LogError($"{DEBUG_FLAG} WindowBinder {binders[i].GetType().Name} failed during OnWindowDestroying for {windowName}: {ex.Message}");
-                    }
-                }
-            }
+            NotifyBindersWindowDestroying(leaving, windowName);
 
             if (activeWindows.ContainsKey(windowName))
             {
                 _navigationService?.Unregister(windowName);
                 activeWindows.Remove(windowName);
+                _activeWindowList.Remove(leaving);
                 uiOpenTCS.Remove(windowName);
                 ReleaseConfigHandle(windowName);
                 ReleaseWindowAsset(windowName);
@@ -949,14 +944,25 @@ namespace CycloneGames.UIFramework.Runtime
                     // Wait briefly for the cancellation to propagate and clean up
                     if (uiOpenTCS.TryGetValue(windowName, out var openTcs))
                     {
-                        try { await openTcs.Task.SuppressCancellationThrow(); } catch { /* swallow */ }
+                        try
+                        {
+                            await openTcs.Task.SuppressCancellationThrow();
+                        }
+                        catch (System.OperationCanceledException)
+                        {
+                            // Expected — the open task was cancelled.
+                        }
+                        catch (System.Exception ex)
+                        {
+                            CLogger.LogWarning($"{DEBUG_FLAG} Unexpected exception while awaiting cancelled open for '{windowName}': {ex.Message}");
+                        }
                     }
                     // If the open was cancelled before instantiation, there's nothing to close
-                if (!activeWindows.ContainsKey(windowName))
-                {
-                    CLogger.LogInfo($"{DEBUG_FLAG} Open for '{windowName}' was cancelled before it was ready. Nothing to close.");
-                    return;
-                }
+                    if (!activeWindows.ContainsKey(windowName))
+                    {
+                        CLogger.LogInfo($"{DEBUG_FLAG} Open for '{windowName}' was cancelled before it was ready. Nothing to close.");
+                        return;
+                    }
                 }
 
                 if (!activeWindows.TryGetValue(windowName, out UIWindow windowToClose))
@@ -971,6 +977,7 @@ namespace CycloneGames.UIFramework.Runtime
                     if (windowToClose != null) UnregisterSceneBoundWindow(windowToClose);
                     _navigationService?.Unregister(windowName);
                     activeWindows.Remove(windowName);
+                    _activeWindowList.Remove(windowToClose);
                     uiOpenTCS.Remove(windowName);
                     ReleaseConfigHandle(windowName);
                     ReleaseWindowAsset(windowName);
@@ -998,22 +1005,13 @@ namespace CycloneGames.UIFramework.Runtime
 
                 // Notify binders AFTER the close lifecycle completes so presenters receive
                 // OnViewClosing / OnViewClosed before Dispose().
-                for (int i = 0; i < windowBinders.Count; i++)
-                {
-                    try
-                    {
-                        windowBinders[i].OnWindowDestroying(windowToClose);
-                    }
-                    catch (System.Exception ex)
-                    {
-                        CLogger.LogError($"{DEBUG_FLAG} WindowBinder {windowBinders[i].GetType().Name} failed during OnWindowDestroying for {windowName}: {ex.Message}");
-                    }
-                }
+                NotifyBindersWindowDestroying(windowToClose, windowName);
 
                 // Cleanup
                 UnregisterSceneBoundWindow(windowToClose);
                 _navigationService?.Unregister(windowName);
                 activeWindows.Remove(windowName);
+                _activeWindowList.Remove(windowToClose);
                 uiOpenTCS.Remove(windowName);
                 ReleaseConfigHandle(windowName);
                 ReleaseWindowAsset(windowName);
@@ -1092,23 +1090,21 @@ namespace CycloneGames.UIFramework.Runtime
             int totalLayerWindowCount = 0;
             if (root != null)
             {
-                for (int i = 0; i < root.transform.childCount; i++)
+                var layers = root.Layers;
+                for (int i = 0; i < layers.Count; i++)
                 {
-                    Transform child = root.transform.GetChild(i);
-                    if (child == null) continue;
-                    UILayer layer = child.GetComponent<UILayer>();
+                    UILayer layer = layers[i];
                     if (layer == null) continue;
-
                     layerCount++;
                     totalLayerWindowCount += layer.WindowCount;
                 }
             }
 
             int isolatedWindowCanvasCount = 0;
-            foreach (var kv in activeWindows)
+            for (int i = 0; i < _activeWindowList.Count; i++)
             {
-                UIWindow window = kv.Value;
-                if (window == null || window.gameObject == null) continue;
+                UIWindow window = _activeWindowList[i];
+                if (ReferenceEquals(window, null) || window.gameObject == null) continue;
                 if (window.GetComponent<Canvas>() != null)
                 {
                     isolatedWindowCanvasCount++;
@@ -1135,14 +1131,11 @@ namespace CycloneGames.UIFramework.Runtime
             UIRoot root = TryGetUIRoot();
             if (root == null) return;
 
-            for (int i = 0; i < root.transform.childCount; i++)
+            var layers = root.Layers;
+            for (int i = 0; i < layers.Count; i++)
             {
-                Transform child = root.transform.GetChild(i);
-                if (child == null) continue;
-
-                UILayer layer = child.GetComponent<UILayer>();
+                UILayer layer = layers[i];
                 if (layer == null) continue;
-
                 int sortingOrder = layer.UICanvas != null ? layer.UICanvas.sortingOrder : 0;
                 results.Add(new UILayerRuntimeStats(layer.LayerName, sortingOrder, layer.WindowCount));
             }
@@ -1182,6 +1175,7 @@ namespace CycloneGames.UIFramework.Runtime
             _pendingSceneSweepTargetHandle = -1;
 
             activeWindows.Clear();
+            _activeWindowList.Clear();
             uiOpenTCS.Clear();
 
             CLogger.LogInfo($"{DEBUG_FLAG} UIManager is being destroyed.");
@@ -1272,6 +1266,23 @@ namespace CycloneGames.UIFramework.Runtime
             uiOpenTCS.Remove(windowName);
             _openCancellations.Remove(windowName);
             openCts?.Dispose();
+        }
+
+        private void NotifyBindersWindowDestroying(UIWindow window, string windowName)
+        {
+            var binders = _windowBindersCache;
+            if (binders == null) return;
+            for (int i = 0; i < binders.Length; i++)
+            {
+                try
+                {
+                    binders[i].OnWindowDestroying(window);
+                }
+                catch (System.Exception ex)
+                {
+                    CLogger.LogError($"{DEBUG_FLAG} WindowBinder {binders[i].GetType().Name} failed during OnWindowDestroying for {windowName}: {ex.Message}");
+                }
+            }
         }
 
         private void ApplyWindowCanvasIsolation(UIWindow window, UIWindowConfiguration config, UILayer layer)

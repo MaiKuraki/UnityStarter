@@ -14,6 +14,8 @@ namespace CycloneGames.UIFramework.Runtime
 
         public Camera UICamera => uiCamera;
         public Canvas UIRootCanvas => rootCanvas;
+        /// <summary>Cached layer list for zero-alloc iteration by UIManager.</summary>
+        internal List<UILayer> Layers => layerList;
         public UIAssetContextProvider AssetContextProvider =>
             GetComponent<UIAssetContextProvider>() ?? GetComponentInParent<UIAssetContextProvider>();
         private RectTransform uiRootRTF;

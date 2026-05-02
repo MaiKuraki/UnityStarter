@@ -87,7 +87,7 @@ namespace CycloneGames.UIFramework.Runtime
                 // Resolver stack: iterate from top (most recent scope) to bottom
                 for (int i = _resolverStack.Count - 1; i >= 0; i--)
                 {
-                    var entry = _resolverStack[i];
+                    ResolverEntry entry = _resolverStack[i];
 
                     if (entry.Cache.TryGetValue(type, out var cached))
                         return cached;
@@ -97,6 +97,9 @@ namespace CycloneGames.UIFramework.Runtime
                         var resolved = entry.Resolver(type);
                         if (resolved != null)
                         {
+                            // ResolverEntry is a value type, but Cache is a Dictionary (reference type).
+                            // Writing through the struct copy is safe: both the copy and the list element
+                            // share the same Dictionary instance via the Cache reference.
                             entry.Cache[type] = resolved;
                             return resolved;
                         }
