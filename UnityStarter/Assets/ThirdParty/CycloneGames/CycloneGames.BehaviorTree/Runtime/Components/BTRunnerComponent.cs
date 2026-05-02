@@ -132,14 +132,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (_runtimeTree == null || _runtimeTree.Blackboard == null) return;
 
-            // Transfer initial objects
             if (_initialObjects != null)
             {
                 for (int i = 0; i < _initialObjects.Length; i++)
                 {
                     var data = _initialObjects[i];
                     if (data == null || string.IsNullOrEmpty(data.Key)) continue;
-                    _runtimeTree.Blackboard.SetObject(Animator.StringToHash(data.Key), data.Value);
+                    _runtimeTree.Blackboard.SetObject(data.Key, data.Value);
                 }
             }
         }
@@ -213,7 +212,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (string.IsNullOrEmpty(message)) return;
             if (_runtimeTree == null) return;
-            _runtimeTree.Blackboard.SetObject(Animator.StringToHash(MESSAGE_KEY), message);
+            _runtimeTree.Blackboard.SetObject(MESSAGE_KEY, message);
         }
 
         public void BTSetData(string key, object value)
@@ -221,11 +220,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (string.IsNullOrEmpty(key)) return;
             if (_runtimeTree == null) return;
 
-            int hash = Animator.StringToHash(key);
-            if (value is int i) _runtimeTree.Blackboard.SetInt(hash, i);
-            else if (value is float f) _runtimeTree.Blackboard.SetFloat(hash, f);
-            else if (value is bool b) _runtimeTree.Blackboard.SetBool(hash, b);
-            else _runtimeTree.Blackboard.SetObject(hash, value);
+            if (value is int i) _runtimeTree.Blackboard.SetInt(key, i);
+            else if (value is float f) _runtimeTree.Blackboard.SetFloat(key, f);
+            else if (value is bool b) _runtimeTree.Blackboard.SetBool(key, b);
+            else _runtimeTree.Blackboard.SetObject(key, value);
         }
 
         public void BTRemoveData(string key)

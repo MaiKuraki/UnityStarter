@@ -1,0 +1,55 @@
+using System.Runtime.CompilerServices;
+
+namespace CycloneGames.BehaviorTree.Runtime.Core
+{
+    /// <summary>
+    /// Pure C# string hash utility for blackboard key hashing.
+    /// Provides a deterministic FNV-1a hash as an alternative to
+    /// Animator.StringToHash, enabling compilation on non-Unity targets.
+    ///
+    /// Usage:
+    ///   int key = BTHash.FNV1A("Health");  // deterministic, same result every process
+    ///   int key = BTHash.FNV1ACaseInsensitive("Health"); // case-insensitive variant
+    ///
+    /// Note: These produce different hash values than Animator.StringToHash.
+    /// Choose one at project initialization and use consistently.
+    /// </summary>
+    public static class BTHash
+    {
+        private const uint FNV_OFFSET_BASIS = 2166136261u;
+        private const uint FNV_PRIME = 16777619u;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int FNV1A(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return 0;
+
+            uint hash = FNV_OFFSET_BASIS;
+            int len = value.Length;
+            for (int i = 0; i < len; i++)
+            {
+                hash ^= (byte)value[i];
+                hash *= FNV_PRIME;
+            }
+            return (int)hash;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int FNV1ACaseInsensitive(string value)
+        {
+            if (string.IsNullOrEmpty(value)) return 0;
+
+            uint hash = FNV_OFFSET_BASIS;
+            int len = value.Length;
+            for (int i = 0; i < len; i++)
+            {
+                char c = value[i];
+                if (c >= 'A' && c <= 'Z')
+                    c = (char)(c + 32);
+                hash ^= (byte)c;
+                hash *= FNV_PRIME;
+            }
+            return (int)hash;
+        }
+    }
+}
