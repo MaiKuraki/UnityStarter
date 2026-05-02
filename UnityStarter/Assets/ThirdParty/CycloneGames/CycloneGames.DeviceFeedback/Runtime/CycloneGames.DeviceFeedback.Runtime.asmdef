@@ -6,7 +6,12 @@
         "Android",
         "Editor",
         "iOS",
-        "WebGL"
+        "LinuxStandalone64",
+        "macOSStandalone",
+        "tvOS",
+        "VisionOS",
+        "WebGL",
+        "WindowsStandalone64"
     ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
