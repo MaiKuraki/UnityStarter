@@ -29,6 +29,9 @@ namespace CycloneGames.UIFramework.Runtime
         private readonly ReaderWriterLockSlim _lock = new ReaderWriterLockSlim(LockRecursionPolicy.NoRecursion);
         private bool _disposed;
 
+        // Cached result for CurrentWindow — invalidated on Unregister/Clear, repopulated on next read.
+        private string _cachedCurrentWindow;
+
         // ── Internal node ──────────────────────────────────────────────────────
 
         private sealed class Node
@@ -49,12 +52,21 @@ namespace CycloneGames.UIFramework.Runtime
                 _lock.EnterReadLock();
                 try
                 {
-                    // Walk insertion order in reverse to find the last registered live window
+                    // Fast path: cached value is still alive in the graph
+                    if (_cachedCurrentWindow != null && _nodes.ContainsKey(_cachedCurrentWindow))
+                        return _cachedCurrentWindow;
+
+                    // Slow path: walk insertion order in reverse to find the last registered live window
                     for (int i = _insertionOrder.Count - 1; i >= 0; i--)
                     {
                         string name = _insertionOrder[i].WindowName;
-                        if (_nodes.ContainsKey(name)) return name;
+                        if (_nodes.ContainsKey(name))
+                        {
+                            _cachedCurrentWindow = name;
+                            return name;
+                        }
                     }
+                    _cachedCurrentWindow = null;
                     return null;
                 }
                 finally { _lock.ExitReadLock(); }
@@ -92,6 +104,7 @@ namespace CycloneGames.UIFramework.Runtime
                 };
                 _nodes[windowName] = node;
                 _insertionOrder.Add(new UINavigationEntry(windowName, openerName, context));
+                _cachedCurrentWindow = windowName; // most recent registration is always the new current
 
                 // Register this window as a child of its opener
                 if (!string.IsNullOrEmpty(openerName) && _nodes.TryGetValue(openerName, out var openerNode))
@@ -111,6 +124,7 @@ namespace CycloneGames.UIFramework.Runtime
             try
             {
                 UnregisterInternal(windowName, policy);
+                _cachedCurrentWindow = null; // invalidate — the removed window or cascaded children may have been current
             }
             finally { _lock.ExitWriteLock(); }
         }
@@ -178,6 +192,7 @@ namespace CycloneGames.UIFramework.Runtime
             {
                 _nodes.Clear();
                 _insertionOrder.Clear();
+                _cachedCurrentWindow = null;
             }
             finally { _lock.ExitWriteLock(); }
         }
@@ -223,7 +238,13 @@ namespace CycloneGames.UIFramework.Runtime
                         result.Add(n.OpenerName);
                     current = n.OpenerName;
                 }
-                result.Reverse();
+                // In-place reverse — guaranteed zero allocation on all Mono/IL2CPP runtimes
+                for (int i = 0, j = result.Count - 1; i < j; i++, j--)
+                {
+                    string temp = result[i];
+                    result[i] = result[j];
+                    result[j] = temp;
+                }
                 return result;
             }
             finally { _lock.ExitReadLock(); }

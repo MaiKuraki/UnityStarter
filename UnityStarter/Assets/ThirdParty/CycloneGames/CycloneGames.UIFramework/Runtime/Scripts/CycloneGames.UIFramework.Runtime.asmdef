@@ -10,7 +10,8 @@
         "LitMotion",
         "UniTask.DOTween",
         "DOTween.Modules",
-        "VContainer"
+        "VContainer",
+        "PrimeTween.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -29,6 +30,11 @@
             "name": "jp.hadashikick.vcontainer",
             "expression": "",
             "define": "VCONTAINER_PRESENT"
+        },
+        {
+            "name": "com.kyrylokuzyk.primetween",
+            "expression": "",
+            "define": "PRIME_TWEEN_PRESENT"
         }
     ],
     "noEngineReferences": false
