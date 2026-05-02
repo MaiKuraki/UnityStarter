@@ -30,6 +30,7 @@ namespace CycloneGames.InputSystem.Runtime
         private InputAction _joinAction;
         private string _userConfigUri;
         private bool _isInitialized = false;
+        private bool _isDisposed = false;
         private bool _isDeviceLockingOnJoinEnabled = false;
         private IDisposable _cursorSubscription;
 
@@ -707,6 +708,9 @@ namespace CycloneGames.InputSystem.Runtime
 
         public void Dispose()
         {
+            if (_isDisposed) return;
+            _isDisposed = true;
+
             _cursorSubscription?.Dispose();
             _cursorSubscription = null;
             StopListeningForPlayers();
@@ -716,6 +720,71 @@ namespace CycloneGames.InputSystem.Runtime
             }
             _registerPlayers.Clear();
             _isInitialized = false;
+        }
+
+        /// <summary>
+        /// Overrides a specific device binding for an action on the given player.
+        /// Returns true if the old binding was found and overridden.
+        /// </summary>
+        public bool RebindAction(int playerId, string actionMapName, string actionName, string oldBinding, string newBinding)
+        {
+            if (!_registerPlayers.TryGetValue(playerId, out var service)) return false;
+            return service.RebindAction(actionMapName, actionName, oldBinding, newBinding);
+        }
+
+        /// <summary>
+        /// Resets a specific action's bindings to their original configuration for the given player.
+        /// </summary>
+        public bool ResetActionBinding(int playerId, string actionMapName, string actionName)
+        {
+            if (!_registerPlayers.TryGetValue(playerId, out var service)) return false;
+            return service.ResetActionBinding(actionMapName, actionName);
+        }
+
+        /// <summary>
+        /// Resets all actions' bindings for the given player to their original configuration.
+        /// </summary>
+        public void ResetAllActionBindings(int playerId)
+        {
+            if (_registerPlayers.TryGetValue(playerId, out var service))
+            {
+                service.ResetAllActionBindings();
+            }
+        }
+
+        /// <summary>
+        /// Returns the current effective binding paths for an action on the given player.
+        /// </summary>
+        public string[] GetActionBindings(int playerId, string actionMapName, string actionName)
+        {
+            if (!_registerPlayers.TryGetValue(playerId, out var service)) return System.Array.Empty<string>();
+            return service.GetActionBindings(actionMapName, actionName);
+        }
+
+        /// <summary>
+        /// Returns a chord observable for two button actions on the given player.
+        /// </summary>
+        public Observable<Unit> GetChordObservable(int playerId, string actionMapName, string actionName1, string actionName2, float windowMs = 300f)
+        {
+            if (!_registerPlayers.TryGetValue(playerId, out var service)) return EmptyObservables.Unit;
+            return service.GetChordObservable(actionMapName, actionName1, actionName2, windowMs);
+        }
+
+        public List<BindingConflict> CheckBindingConflicts(int playerId)
+        {
+            var config = GetPlayerConfig(playerId, false);
+            return InputBindingValidator.DetectConflicts(config);
+        }
+
+        public List<BindingConflict> CheckBindingConflicts(int playerId, string contextName)
+        {
+            var config = GetPlayerConfig(playerId, false);
+            return InputBindingValidator.DetectConflicts(config, contextName);
+        }
+
+        public static string FormatConflictsReport(List<BindingConflict> conflicts)
+        {
+            return InputBindingValidator.FormatConflictsReport(conflicts);
         }
     }
 }

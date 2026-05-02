@@ -1,7 +1,6 @@
 using R3;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine;
 
 namespace CycloneGames.InputSystem.Runtime
@@ -92,15 +91,17 @@ namespace CycloneGames.InputSystem.Runtime
             IInputPlayer[] ownersCopy;
             lock (_owners)
             {
-                if (_owners.Count == 0) return;
-                ownersCopy = _owners.ToArray();
+                int count = _owners.Count;
+                if (count == 0) return;
+                ownersCopy = new IInputPlayer[count];
+                _owners.CopyTo(ownersCopy);
                 _owners.Clear();
             }
 
             // Iterate copy to avoid "Collection modified" exception during callbacks
-            foreach (var owner in ownersCopy)
+            for (int i = 0; i < ownersCopy.Length; i++)
             {
-                owner.RemoveContext(this);
+                ownersCopy[i].RemoveContext(this);
             }
         }
     }

@@ -211,6 +211,10 @@ namespace CycloneGames.InputSystem.Editor
 
         public void FromData(InputConfiguration data)
         {
+            if (data.JoinAction != null)
+            {
+                _joinAction.FromData(data.JoinAction);
+            }
             _playerSlots = data.PlayerSlots.Select(p =>
             {
                 var drawerData = new PlayerSlotDrawerData();
@@ -223,6 +227,7 @@ namespace CycloneGames.InputSystem.Editor
         {
             return new InputConfiguration
             {
+                JoinAction = _joinAction.ToData(),
                 PlayerSlots = _playerSlots.Select(p => p.ToData()).ToList()
             };
         }

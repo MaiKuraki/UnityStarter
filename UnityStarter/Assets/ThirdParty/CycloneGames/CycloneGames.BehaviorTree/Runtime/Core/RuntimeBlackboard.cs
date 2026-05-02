@@ -22,6 +22,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
     /// - Observer system for push-based key change notifications
     /// - Unified HashSet for O(1) HasKey checks
     /// </summary>
+    public delegate int StringHashFunction(string key);
+
     public class RuntimeBlackboard : IDisposable
     {
         private readonly Dictionary<int, int> _intData;
@@ -47,6 +49,27 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public RuntimeBlackboard Parent { get; set; }
         public IRuntimeBTContext Context { get; set; }
+
+        private StringHashFunction _stringHashFunc;
+
+        /// <summary>
+        /// Default hash function for all RuntimeBlackboard instances.
+        /// Set once at app startup to choose a hashing strategy:
+        /// Animator.StringToHash (Unity default), BTHash.FNV1A (pure C#), or custom.
+        /// Changing after trees are compiled will cause key mismatch.
+        /// </summary>
+        public static StringHashFunction DefaultStringHashFunc { get; set; } = Animator.StringToHash;
+
+        /// <summary>
+        /// Per-instance hash override. Falls back to DefaultStringHashFunc when null.
+        /// </summary>
+        public StringHashFunction StringHashFunc
+        {
+            get => _stringHashFunc ?? DefaultStringHashFunc;
+            set => _stringHashFunc = value;
+        }
+
+        private int Hash(string key) => (_stringHashFunc ?? DefaultStringHashFunc)(key);
 
         public RuntimeBlackboard(RuntimeBlackboard parent = null, int initialCapacity = 8)
         {
@@ -261,24 +284,24 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         #endregion
 
         #region String-Key Convenience Methods
-        public void SetInt(string key, int value) => SetInt(Animator.StringToHash(key), value);
-        public int GetInt(string key, int defaultValue = 0) => GetInt(Animator.StringToHash(key), defaultValue);
+        public void SetInt(string key, int value) => SetInt(Hash(key), value);
+        public int GetInt(string key, int defaultValue = 0) => GetInt(Hash(key), defaultValue);
 
-        public void SetFloat(string key, float value) => SetFloat(Animator.StringToHash(key), value);
-        public float GetFloat(string key, float defaultValue = 0f) => GetFloat(Animator.StringToHash(key), defaultValue);
+        public void SetFloat(string key, float value) => SetFloat(Hash(key), value);
+        public float GetFloat(string key, float defaultValue = 0f) => GetFloat(Hash(key), defaultValue);
 
-        public void SetBool(string key, bool value) => SetBool(Animator.StringToHash(key), value);
-        public bool GetBool(string key, bool defaultValue = false) => GetBool(Animator.StringToHash(key), defaultValue);
+        public void SetBool(string key, bool value) => SetBool(Hash(key), value);
+        public bool GetBool(string key, bool defaultValue = false) => GetBool(Hash(key), defaultValue);
 
-        public void SetVector3(string key, Vector3 value) => SetVector3(Animator.StringToHash(key), value);
-        public Vector3 GetVector3(string key, Vector3 defaultValue = default) => GetVector3(Animator.StringToHash(key), defaultValue);
+        public void SetVector3(string key, Vector3 value) => SetVector3(Hash(key), value);
+        public Vector3 GetVector3(string key, Vector3 defaultValue = default) => GetVector3(Hash(key), defaultValue);
 
-        public void SetObject(string key, object value) => SetObject(Animator.StringToHash(key), value);
-        public T GetObject<T>(string key) => GetObject<T>(Animator.StringToHash(key));
+        public void SetObject(string key, object value) => SetObject(Hash(key), value);
+        public T GetObject<T>(string key) => GetObject<T>(Hash(key));
 
-        public bool HasKey(string key) => HasKey(Animator.StringToHash(key));
-        public void Remove(string key) => Remove(Animator.StringToHash(key));
-        public ulong GetStamp(string key) => GetStamp(Animator.StringToHash(key));
+        public bool HasKey(string key) => HasKey(Hash(key));
+        public void Remove(string key) => Remove(Hash(key));
+        public ulong GetStamp(string key) => GetStamp(Hash(key));
         #endregion
 
         #region TryGet Methods (precise type probing, 0GC)
@@ -331,11 +354,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         }
 
         // String-key overloads
-        public bool TryGetInt(string key, out int value) => TryGetInt(Animator.StringToHash(key), out value);
-        public bool TryGetFloat(string key, out float value) => TryGetFloat(Animator.StringToHash(key), out value);
-        public bool TryGetBool(string key, out bool value) => TryGetBool(Animator.StringToHash(key), out value);
-        public bool TryGetVector3(string key, out Vector3 value) => TryGetVector3(Animator.StringToHash(key), out value);
-        public bool TryGetObject<T>(string key, out T value) where T : class => TryGetObject(Animator.StringToHash(key), out value);
+        public bool TryGetInt(string key, out int value) => TryGetInt(Hash(key), out value);
+        public bool TryGetFloat(string key, out float value) => TryGetFloat(Hash(key), out value);
+        public bool TryGetBool(string key, out bool value) => TryGetBool(Hash(key), out value);
+        public bool TryGetVector3(string key, out Vector3 value) => TryGetVector3(Hash(key), out value);
+        public bool TryGetObject<T>(string key, out T value) where T : class => TryGetObject<T>(Hash(key), out value);
         #endregion
 
         public void Clear()
@@ -523,7 +546,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         /// </summary>
         public void AddObserver(string key, BlackboardObserverCallback callback)
         {
-            AddObserver(Animator.StringToHash(key), callback);
+            AddObserver(Hash(key), callback);
         }
 
         /// <summary>
@@ -541,7 +564,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public void RemoveObserver(string key, BlackboardObserverCallback callback)
         {
-            RemoveObserver(Animator.StringToHash(key), callback);
+            RemoveObserver(Hash(key), callback);
         }
 
         /// <summary>
@@ -619,9 +642,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private void FillSortedKeys<T>(Dictionary<int, T> source)
         {
             _sortedKeyScratch.Clear();
-            foreach (var key in source.Keys)
+            foreach (var kvp in source)
             {
-                _sortedKeyScratch.Add(key);
+                _sortedKeyScratch.Add(kvp.Key);
             }
 
             _sortedKeyScratch.Sort();
