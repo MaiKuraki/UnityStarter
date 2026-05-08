@@ -27,6 +27,11 @@ namespace CycloneGames.Networking.Session
 
         private readonly IStateCatchUp _catchUp;
 
+        // Pre-allocated buffer for expired connection IDs to avoid per-frame
+        // allocation when reconnect windows expire. Sized for the maximum
+        // concurrent disconnects expected in a single frame (rarely exceeds 4).
+        private readonly int[] _expiredBuffer = new int[8];
+
         public double ReconnectWindow { get; set; } = 300.0;
 
         public event Action<int, INetConnection> OnClientReconnected;
@@ -92,25 +97,24 @@ namespace CycloneGames.Networking.Session
 
         public void Update(double currentTime)
         {
-            List<int> expired = null;
+            int expiredCount = 0;
 
             foreach (var pair in _reservedSlots)
             {
                 if (pair.Value.State == ReconnectState.WaitingForReconnect &&
                     currentTime - pair.Value.DisconnectTime >= ReconnectWindow)
                 {
-                    expired ??= new List<int>(4);
-                    expired.Add(pair.Key);
+                    if (expiredCount < _expiredBuffer.Length)
+                    {
+                        _expiredBuffer[expiredCount++] = pair.Key;
+                    }
                 }
             }
 
-            if (expired != null)
+            for (int i = 0; i < expiredCount; i++)
             {
-                for (int i = 0; i < expired.Count; i++)
-                {
-                    _reservedSlots.Remove(expired[i]);
-                    OnReconnectWindowExpired?.Invoke(expired[i]);
-                }
+                _reservedSlots.Remove(_expiredBuffer[i]);
+                OnReconnectWindowExpired?.Invoke(_expiredBuffer[i]);
             }
         }
 
