@@ -321,5 +321,24 @@ namespace CycloneGames.GameplayFramework.Runtime
             base.OnDestroy();
         }
         #endregion
+
+        #region Migration
+        public override ActorMigrationState CaptureMigrationState(int ownerConnectionId, int instigatorActorId)
+        {
+            return base.CaptureMigrationState(ownerConnectionId, instigatorActorId);
+        }
+
+        public override void RestoreMigrationState(in ActorMigrationState state)
+        {
+            base.RestoreMigrationState(state);
+            RuntimeComponentsInitialized = false;
+        }
+
+        public override void PostMigration()
+        {
+            base.PostMigration();
+            InitializeRuntimeComponents();
+        }
+        #endregion
     }
 }

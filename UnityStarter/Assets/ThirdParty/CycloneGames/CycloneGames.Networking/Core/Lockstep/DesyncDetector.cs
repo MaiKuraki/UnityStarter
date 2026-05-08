@@ -116,7 +116,10 @@ namespace CycloneGames.Networking.Lockstep
 
         /// <summary>
         /// Validate a remote peer's hash for a given frame.
-        /// Returns true if hashes match (or if local hash is not available yet).
+        /// Returns true if hashes match, or if the frame is in the future
+        /// (not yet computed locally).
+        /// Returns true with a warning if the frame has aged out of the
+        /// history window—the caller should treat this as a potential blind spot.
         /// </summary>
         public bool ValidateRemoteHash(int frame, ulong remoteHash)
         {
@@ -125,6 +128,17 @@ namespace CycloneGames.Networking.Lockstep
 
             // If we haven't computed this frame's hash yet, can't validate
             if (frame > _currentFrame) return true;
+
+            // Frame has aged out of the history window. The ring buffer slot
+            // may now contain a hash from a different frame that happens to
+            // hash-collide with the remote value, silently accepting a desync.
+            // We still return true (can't validate what we no longer have),
+            // but fire a diagnostic event so the caller can log or react.
+            if (frame <= _currentFrame - _hashHistory.Length)
+            {
+                OnDesyncDetected?.Invoke(frame, localHash, remoteHash);
+                return true;
+            }
 
             if (localHash != remoteHash)
             {

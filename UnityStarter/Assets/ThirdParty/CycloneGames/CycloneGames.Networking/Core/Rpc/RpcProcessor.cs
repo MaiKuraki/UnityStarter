@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using CycloneGames.Networking.Buffers;
@@ -17,10 +17,14 @@ namespace CycloneGames.Networking.Rpc
     /// </summary>
     public sealed class RpcProcessor
     {
-        private readonly Dictionary<ushort, RpcHandler> _handlers = new Dictionary<ushort, RpcHandler>(64);
-        private readonly object _handlersLock = new object();
+        private readonly ConcurrentDictionary<ushort, RpcHandler> _handlers = new();
+        private readonly ConcurrentQueue<ushort> _recycledIds = new();
         private readonly INetworkManager _networkManager;
         private int _nextAutoId = NetworkConstants.RpcMsgIdMin;
+
+        private static readonly ushort MaxAutoId = NetworkConstants.UserMsgIdMin > NetworkConstants.RpcMsgIdMin
+            ? (ushort)(NetworkConstants.UserMsgIdMin - 1)
+            : ushort.MaxValue;
 
         private struct RpcHandler
         {
@@ -36,11 +40,52 @@ namespace CycloneGames.Networking.Rpc
 
         /// <summary>
         /// Register a typed RPC handler. Returns the assigned RPC ID.
+        /// Automatically recycles IDs from previously unregistered handlers.
         /// </summary>
+        /// <exception cref="OverflowException">
+        /// Thrown if all 65435+ auto-assignable RPC IDs are in use simultaneously.
+        /// This requires &gt;65K concurrently registered RPC types and should never
+        /// occur in normal game code.
+        /// </exception>
         public ushort Register<T>(Action<INetConnection, T> handler, RpcTarget target = RpcTarget.Server,
             NetworkChannel channel = NetworkChannel.Reliable) where T : unmanaged
         {
-            ushort id = (ushort)Interlocked.Increment(ref _nextAutoId);
+            ushort id;
+            if (_recycledIds.TryDequeue(out ushort recycled))
+            {
+                id = recycled;
+            }
+            else
+            {
+                int next = Interlocked.Increment(ref _nextAutoId);
+                if (next > ushort.MaxValue)
+                {
+                    // Wrapped past ushort range. Scan for any recyclables that
+                    // arrived after our increment; if still none, the ID space
+                    // is genuinely exhausted.
+                    if (!_recycledIds.TryDequeue(out recycled))
+                        throw new OverflowException(
+                            "RpcProcessor: auto-assignable RPC ID space exhausted. " +
+                            "Too many concurrently registered handlers.");
+                    id = recycled;
+                }
+                else
+                {
+                    id = (ushort)next;
+                    if (id > MaxAutoId)
+                    {
+                        // We encroached on reserved user/system message ranges despite
+                        // not having wrapped. This means the RPC range was configured
+                        // too narrow for the actual handler count.
+                        if (!_recycledIds.TryDequeue(out recycled))
+                            throw new OverflowException(
+                                $"RpcProcessor: auto-assignable RPC ID range exhausted " +
+                                $"(max={MaxAutoId}). Increase the RPC range or reduce handler count.");
+                        id = recycled;
+                    }
+                }
+            }
+
             RegisterWithId<T>(id, handler, target, channel);
             return id;
         }
@@ -48,19 +93,16 @@ namespace CycloneGames.Networking.Rpc
         public void RegisterWithId<T>(ushort rpcId, Action<INetConnection, T> handler,
             RpcTarget target = RpcTarget.Server, NetworkChannel channel = NetworkChannel.Reliable) where T : unmanaged
         {
-            lock (_handlersLock)
+            _handlers[rpcId] = new RpcHandler
             {
-                _handlers[rpcId] = new RpcHandler
+                Invoke = (conn, reader) =>
                 {
-                    Invoke = (conn, reader) =>
-                    {
-                        T data = reader.ReadBlittable<T>();
-                        handler(conn, data);
-                    },
-                    Target = target,
-                    Channel = channel
-                };
-            }
+                    T data = reader.ReadBlittable<T>();
+                    handler(conn, data);
+                },
+                Target = target,
+                Channel = channel
+            };
 
             // Register with the network manager to receive messages on this ID
             _networkManager.RegisterHandler<RpcPayload>(rpcId, OnRpcReceived);
@@ -72,11 +114,10 @@ namespace CycloneGames.Networking.Rpc
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Send<T>(ushort rpcId, in T data, INetConnection target = null) where T : unmanaged
         {
-            RpcHandler handler;
-            lock (_handlersLock)
-            {
-                if (!_handlers.TryGetValue(rpcId, out handler)) return;
-            }
+            // ConcurrentDictionary.TryGetValue is lock-free for reads.
+            // The handler Invoke closure is an object reference that remains valid
+            // even if the handler is concurrently unregistered.
+            if (!_handlers.TryGetValue(rpcId, out RpcHandler handler)) return;
 
             using var buffer = NetworkBufferPool.Get();
             buffer.WriteBlittable(data);
@@ -99,21 +140,18 @@ namespace CycloneGames.Networking.Rpc
 
         public void Unregister(ushort rpcId)
         {
-            lock (_handlersLock)
+            if (_handlers.TryRemove(rpcId, out _))
             {
-                _handlers.Remove(rpcId);
+                _recycledIds.Enqueue(rpcId);
+                _networkManager.UnregisterHandler(rpcId);
             }
-            _networkManager.UnregisterHandler(rpcId);
         }
 
         private void OnRpcReceived(INetConnection conn, RpcPayload payload)
         {
-            RpcHandler handler;
-            lock (_handlersLock)
-            {
-                if (!_handlers.TryGetValue(payload.RpcId, out handler))
-                    return;
-            }
+            if (!_handlers.TryGetValue(payload.RpcId, out RpcHandler handler))
+                return;
+
             using var reader = NetworkBufferPool.GetWithData(payload.Data);
             handler.Invoke(conn, reader);
         }

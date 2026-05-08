@@ -239,6 +239,26 @@ namespace CycloneGames.GameplayFramework.Runtime
         }
         #endregion
 
+        #region Migration
+        public override ActorMigrationState CaptureMigrationState(int ownerConnectionId, int instigatorActorId)
+        {
+            return base.CaptureMigrationState(ownerConnectionId, instigatorActorId);
+        }
+
+        public override void RestoreMigrationState(in ActorMigrationState state)
+        {
+            base.RestoreMigrationState(state);
+            pendingMovementInput = Vector3.zero;
+            lastMovementInput = Vector3.zero;
+        }
+
+        public override void PostMigration()
+        {
+            base.PostMigration();
+            ConsumeMovementInputVector();
+        }
+        #endregion
+
         protected override void Update()
         {
             base.Update();
