@@ -73,7 +73,17 @@ namespace CycloneGames.Networking.StateSync
             }
         }
 
-        // Force set without dirty tracking (initial sync)
+        /// <summary>
+        /// Force-set the value without marking dirty and without firing OnChanged.
+        /// Use for initial sync or snapshot application where the caller does not
+        /// want the value change to trigger a network replication.
+        /// </summary>
+        /// <remarks>
+        /// Caller must ensure this is invoked from the same thread that reads
+        /// <see cref="Value"/>; unlike the property setter, this method does not
+        /// issue a <see cref="Thread.MemoryBarrier"/>. The write may not be
+        /// visible to other threads until a subsequent barrier or volatile access.
+        /// </remarks>
         public void SetSilent(T value) => _value = value;
         public void SetDirty() => _dirty = true;
 
