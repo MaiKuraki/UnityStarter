@@ -33,6 +33,7 @@ namespace CycloneGames.Networking.Spawning
     {
         private readonly Dictionary<uint, ISpawnedObject> _spawned = new Dictionary<uint, ISpawnedObject>(256);
         private readonly Dictionary<int, INetConnection> _connectionCache = new Dictionary<int, INetConnection>(16);
+        private readonly Queue<uint> _recycledIds = new Queue<uint>();
         private uint _nextNetworkId = 1;
 
         public IReadOnlyDictionary<uint, ISpawnedObject> SpawnedObjects => _spawned;
@@ -43,10 +44,18 @@ namespace CycloneGames.Networking.Spawning
 
         public uint Spawn(ISpawnedObject obj, INetConnection owner = null)
         {
-            if (_nextNetworkId == 0)
-                throw new OverflowException("NetworkSpawnManager: Network ID space exhausted (uint.MaxValue reached).");
+            uint id;
+            if (_recycledIds.Count > 0)
+            {
+                id = _recycledIds.Dequeue();
+            }
+            else
+            {
+                if (_nextNetworkId == 0)
+                    throw new OverflowException("NetworkSpawnManager: Network ID space exhausted (uint.MaxValue reached).");
+                id = _nextNetworkId++;
+            }
 
-            uint id = _nextNetworkId++;
             obj.NetworkId = id;
             obj.OwnerConnectionId = owner?.ConnectionId ?? -1;
             obj.HasAuthority = owner != null;
@@ -66,6 +75,7 @@ namespace CycloneGames.Networking.Spawning
 
             obj.OnNetworkDespawn();
             _spawned.Remove(networkId);
+            _recycledIds.Enqueue(networkId);
             OnDespawned?.Invoke(obj);
         }
 
@@ -99,6 +109,7 @@ namespace CycloneGames.Networking.Spawning
         {
             DespawnAll();
             _nextNetworkId = 1;
+            _recycledIds.Clear();
             _connectionCache.Clear();
         }
     }
