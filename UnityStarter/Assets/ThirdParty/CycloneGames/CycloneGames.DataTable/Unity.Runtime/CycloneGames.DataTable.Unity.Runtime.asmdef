@@ -1,0 +1,16 @@
+{
+    "name": "CycloneGames.DataTable.Unity.Runtime",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.DataTable.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": true,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

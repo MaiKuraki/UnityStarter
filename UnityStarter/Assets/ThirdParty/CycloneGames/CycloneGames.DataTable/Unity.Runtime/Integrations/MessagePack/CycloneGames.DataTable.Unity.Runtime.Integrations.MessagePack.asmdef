@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.DataTable.Core",
+        "CycloneGames.DataTable.Unity.Runtime",
+        "MessagePack.Unity"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "MESSAGEPACK"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.github.messagepack-csharp",
+            "expression": "",
+            "define": "MESSAGEPACK"
+        }
+    ],
+    "noEngineReferences": false
+}

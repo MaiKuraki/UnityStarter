@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.DataTable.Unity.Runtime.Integrations.Luban",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.DataTable.Core",
+        "CycloneGames.DataTable.Unity.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
