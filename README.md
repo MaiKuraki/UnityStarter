@@ -1,11 +1,10 @@
 ![Unity Project Starter](<https://capsule-render.vercel.app/api?type=waving&height=220&color=gradient&text=Unity%20Project%20Starter&section=header&reversal=false&textBg=false&desc=GameplayFramework%20│%20GameplayAbility(GAS)%20│%20UIFramework%20│%20HotUpdate%20Ready%20(HybridCLR)%20│%20CI/CD%20Ready&descAlign=50&descAlignY=58&descSize=16&fontAlignY=30&fontSize=72>)
 
-A production-ready, modular Unity project template that provides a solid foundation for game development. Inspired by **Unreal Engine** architecture patterns, this template integrates proven gameplay systems, high-performance infrastructure, and modern development workflows.
+A production-ready, modular Unity project template inspired by **Unreal Engine** architecture. Built for large-scale commercial game development with performance-first systems, comprehensive tooling, and modern CI/CD workflows.
 
 <p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
 > [!NOTE]
->
 > If you find this project helpful, please consider giving it a star ⭐. Thank you!
 
 ![Unity](https://img.shields.io/badge/Unity-2022.3%20LTS-black?logo=unity)
@@ -16,313 +15,161 @@ A production-ready, modular Unity project template that provides a solid foundat
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Key Features](#key-features)
-3. [Architecture](#architecture)
-4. [Module Catalog](#module-catalog)
-5. [Getting Started](#getting-started)
-6. [Technology Stack](#technology-stack)
-7. [Related Projects](#related-projects)
+2. [Architecture](#architecture)
+3. [Module Catalog](#module-catalog)
+4. [Getting Started](#getting-started)
+5. [Technology Stack](#technology-stack)
+6. [Related Projects](#related-projects)
 
 ## Overview
 
-This template is designed for developers who want to start with a professional, battle-tested foundation rather than building everything from scratch. It provides:
+UnityStarter is a battle-tested foundation for professional game projects — not a collection of isolated utilities, but a coherent full-stack game framework. It provides:
 
-- **Modular Architecture**: All systems are decoupled Unity Packages with independent Assembly Definitions
-- **Unreal Engine Patterns**: Proven architecture concepts (Gameplay Framework, GAS, Gameplay Tags)
-- **Performance-First**: Zero/low-GC systems for critical paths
-- **Production-Ready**: Tested in commercial projects, CI/CD ready, cross-platform optimized
-- **Developer-Friendly**: Comprehensive documentation, clear examples, flexible DI/IoC support
-
-### What This Template Provides
-
-- ✅ Complete gameplay framework (Actor/Pawn/Controller/GameMode pattern)
-- ✅ Data-driven ability system (GAS-inspired)
-- ✅ High-performance infrastructure (logging, pooling, audio)
-- ✅ Hot update solution (code + assets)
-- ✅ Code obfuscation integration (Obfuz) for code protection
-- ✅ Build pipeline with CI/CD integration
-- ✅ Modern input system with context stacks
-- ✅ UI framework with hierarchical management and MVP architecture support
-- ✅ Cross-platform device feedback (haptics, rumble, lighting)
-- ✅ Localization framework (BCP 47, CLDR plurals, pseudo-localization)
-- ✅ AI behavior tree with visual editor and 10,000+ agent scaling
-- ✅ AI perception system with Jobs/Burst optimization
-
-> **📖 Documentation**: Each module has comprehensive documentation. See the [Module Catalog](#module-catalog) section for links to detailed guides.
-
-## Key Features
-
-### Modular Design
-
-Every system is a self-contained Unity Package. Import only what you need, remove what you don't. Each module has:
-
-- Independent Assembly Definition (asmdef)
-- Complete package.json configuration
-- Comprehensive documentation
-- Sample implementations
-
-### Unreal Engine-Inspired Architecture
-
-Implements proven patterns from Unreal Engine:
-
-- **Gameplay Framework**: Actor/Pawn/Controller separation for scalable game architecture
-- **Gameplay Ability System**: Data-driven abilities, attributes, and effects
-- **Gameplay Tags**: Hierarchical tag system for decoupled game logic
-
-### Performance-Oriented
-
-Critical systems are optimized for GC:
-
-- **Logger**: Zero-GC multi-threaded logging with file rotation
-- **Factory**: High-performance object pooling with O(1) operations
-- **Audio**: Low-GC audio management with Wwise-like API
-
-### Hot Update Ready
-
-Complete solution for updating games without app store resubmission:
-
-- **HybridCLR**: C# code hot-updates via DLL compilation
-- **Asset Management**: YooAsset or Addressables for asset hot-updates
-- **Code Protection**: Integrated Obfuz obfuscation for hot update assemblies
-- **Unified Pipeline**: Streamlined build workflow for rapid iteration
-
-### DI/IoC Support
-
-Pre-configured adapters for popular dependency injection frameworks:
-
-> [!NOTE]
->
-> All **listed frameworks have been** tested in production environments.
-
-- [VContainer](https://github.com/hadashiA/VContainer) (Recommended)
-- [StrangeIoC](https://github.com/strangeioc/strangeioc)
-- [Extenject (Zenject)](https://github.com/Mathijs-Bakker/Extenject) (No longer actively maintained)
-
-> **Note**: Switch between Git branches to see implementation examples for each DI framework. The **GameplayFramework** and **Factory** modules include DI samples.
-
-<img src="./Docs/ProjectDescription/Main/Des_01.png" alt="Branch Select" style="width: 50%; height: auto; max-width: 360px;" />
-
-### CI/CD Integration
-
-Command-line build interface for automated pipelines:
-
-- Automatic versioning from Git
-- Multi-platform builds (Windows, Mac, Android, WebGL)
-- Hot update build workflows with optional code obfuscation
-- Integration with Jenkins, TeamCity, GitHub Actions
+- **Complete game architecture** — Actor/Pawn/Controller/GameMode pattern from Unreal Engine
+- **Full combat system** — GAS-inspired abilities, attributes, effects, cooldowns, and costs
+- **Production AI** — visual behavior tree editor with Burst/DOD scaling to 10,000+ agents
+- **Dual-mode networking** — state synchronization + lockstep rollback with 5 AOI strategies
+- **Performance-first** — zero-GC hot paths across all core systems
+- **Modular design** — 24+ self-contained packages, import only what you need
+- **Hot update ready** — HybridCLR (C#) + YooAsset/Addressables (assets) + Obfuz (code protection)
+- **Developer tooling** — custom Roslyn analyzers, build pipeline, cheat console, UI profiler
+- **Cross-engine core** — key modules target `netstandard2.0` with zero Unity API, Godot-ready
 
 ## Architecture
 
-### Project Structure
-
-```
-.
-├── Docs/                          # Project documentation
-├── Tools/                         # Utility scripts (renaming, cleanup, etc.)
-└── UnityStarter/                  # Unity project root
-    ├── Assets/
-    │   ├── Build/                 # Build pipeline & hot update
-    │   │   └── [See Build/README.md for details]
-    │   └── ThirdParty/
-    │       └── CycloneGames/      # Core framework modules
-    │           └── [Each module has its own README]
-    ├── Packages/                  # Package manifests
-    └── ProjectSettings/           # Unity settings
+```text
+UnityStarter/
+├── Assets/
+│   ├── Build/                  # Build pipeline & CI/CD (HybridCLR, Obfuz, YooAsset/Addressables)
+│   ├── Plugins/                # Third-party native plugins
+│   ├── Settings/               # URP PipelineAssets (Performant / Balanced / HighFidelity)
+│   ├── ThirdParty/CycloneGames/ # Core framework (22+ modules, 80+ asmdef)
+│   └── UnityStarter/           # Project-specific code & scenes
+├── Analyzers/                  # Roslyn analyzers (22 implemented rules) [standalone .sln]
+├── Packages/                   # UPM manifest
+├── ProjectSettings/            # Unity project configuration
+└── Tools/                      # Go utility scripts
 ```
 
-### Module Organization
-
-All modules follow the same structure:
-
-- **Runtime/**: Core functionality
-- **Editor/**: Editor tools and utilities
-- **Samples/**: Example implementations
-- **README.md / README.SCH.md**: Comprehensive documentation
-
-### Dependency Management
-
-Modules are designed to be:
-
-- **Loosely Coupled**: Minimal dependencies between modules
-- **Optional**: Most modules can work independently
-- **Composable**: Mix and match based on your needs
+Every module follows the same internal structure: `Runtime/` (core) → `Editor/` (tools) → optional `Core/` (engine-agnostic) → optional `Integrations/` (cross-module bridges) → `Samples/`. Each has bilingual `README.md` + `README.SCH.md`.
 
 ## Module Catalog
 
-> **📚 Important**: Each module has detailed documentation in its directory. Click the module name to view its README, or navigate to `{ModulePath}/README.md` for comprehensive guides.
+> **📚** Each module has detailed documentation at `{ModulePath}/README.md`. Click the links below to jump directly.
 
 ### 🎮 Gameplay Systems
 
-| Module                | Path                             | Description                                                                                                                                                                                                                                 | Documentation                                                                                     |
-| --------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| **UIFramework**       | `CycloneGames.UIFramework`       | Hierarchical UI management. Layer-based, MVP architecture, transitions, asset integration.                                                                                                                                                  | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md)       |
-| **GameplayFramework** | `CycloneGames.GameplayFramework` | UE-style gameplay architecture (Actor/Pawn/Controller/GameMode). DI-friendly, scalable foundation for game projects.                                                                                                                        | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.md) |
-| **GameplayAbilities** | `CycloneGames.GameplayAbilities` | Data-driven ability system (GAS-inspired). ScriptableObject-based abilities, attributes, effects, and status management.                                                                                                                    | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.md) |
-| **GameplayTags**      | `CycloneGames.GameplayTags`      | Hierarchical tag system for decoupled game logic. Runtime registration, auto-generation, and tag-based queries.                                                                                                                             | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.md)      |
-| **RPGFoundation**     | `CycloneGames.RPGFoundation`     | RPG-specific extensions (movement, combat, etc.). Foundation components for RPG-type games.                                                                                                                                                 | [See module directory](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation)    |
-| **BehaviorTree**      | `CycloneGames.BehaviorTree`      | Production-grade AI behavior tree. Dual-layer SO→Runtime architecture, 30+ built-in nodes, triple-tier scaling (1–10,000+ agents), multiplayer networking, Burst/DOD mass simulation, GraphView editor with animated runtime visualization. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.md)      |
-| **AIPerception**      | `CycloneGames.AIPerception`      | High-performance AI perception system. Jobs/Burst optimized 0GC sensor queries, visual debug tools, extensible type system.                                                                                                                 | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.md)      |
+| Module | Description | Docs |
+| --- | --- | --- |
+| **GameplayFramework** | UE-style Actor/Pawn/Controller/GameMode. DI-friendly, extensible game architecture. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.md) |
+| **GameplayAbilities** | Data-driven ability system (GAS). ScriptableObject abilities, attributes, effects, cost/cooldown, cues. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.md) |
+| **GameplayAbilities.Networking** | Networked GAS: client prediction, rollback, state replication, 14 message types, drift detection. | Module directory |
+| **GameplayTags** | Hierarchical tag system. Source-generated, zero-allocation queries, Unity Editor integration. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.md) |
+| **BehaviorTree** | Visual AI behavior tree. GraphView editor, DOD/Burst mass simulation, 30+ nodes, network sync. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.md) |
+| **AIPerception** | Burst-accelerated AI sensors. Visual/deep/proximity queries, spatial grid, 0 GC per tick. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.md) |
+| **RPGFoundation** | RPG extensions: inventory, attributes, quests, 2D/3D movement controllers. | Module directory |
+| **UIFramework** | Hierarchical UI with window state machine, MVP support, tween backends, dynamic atlas. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md) |
 
 ### 🏗️ Core Infrastructure
 
-| Module              | Path                           | Description                                                                                                                                                                                                                          | Documentation                                                                                   |
-| ------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| **Factory**         | `CycloneGames.Factory`         | High-performance object pooling. Thread-safe, auto-scaling pools with O(1) operations. Zero-GC allocation.                                                                                                                           | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.md)         |
-| **Logger**          | `CycloneGames.Logger`          | Zero-GC logging system. Multi-threaded, file rotation, cross-platform (including WebGL). Pluggable processors.                                                                                                                       | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.md)          |
-| **AssetManagement** | `CycloneGames.AssetManagement` | DI-first asset loading abstraction with W-TinyLFU cache, And seamless YooAsset/Addressables integration.                                                                                                                             | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md) |
-| **Audio**           | `CycloneGames.Audio`           | High-performance audio management. Wwise-like API, low-GC, advanced features using Unity native audio.                                                                                                                               | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.md)           |
-| **Localization**    | `CycloneGames.Localization`    | Commercial-grade localization framework. BCP 47 locales, automatic fallback chains, CLDR plural rules (25+ languages), pseudo-localization QA, locale selection chain, entry metadata, multi-language editor tools, zero-GC runtime. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Localization/README.md)    |
-
-### 🕹️ Input & Device Interaction
-
-| Module             | Path                          | Description                                                                                                                 | Documentation                                                                                  |
-| ------------------ | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| **InputSystem**    | `CycloneGames.InputSystem`    | Reactive input wrapper with context stacks. Local co-op support, device auto-detection, runtime YAML keybind configuration. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.md)    |
-| **DeviceFeedback** | `CycloneGames.DeviceFeedback` | Multi-platform hardware feedback. Mobile haptics (Android / iOS / WebGL), gamepad rumble, device light bar control.         | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.md) |
-
-### 🛠️ Utilities & Services
-
-| Module         | Path                      | Description                                                                                                     | Documentation                                                                         |
-| -------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| **Utility**    | `CycloneGames.Utility`    | Common utilities. FPS counter, safe area fitting, file operations, performance tools, splash screen control.    | See module directory                                                                  |
-| **Service**    | `CycloneGames.Services`   | Game service abstractions. Camera management, graphics settings, device configuration with YAML-based settings. | See module directory                                                                  |
-| **Cheat**      | `CycloneGames.Cheat`      | Type-safe debug command pipeline. VitalRouter integration, async operations, thread-safe execution.             | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat/README.md) |
-| **FontAssets** | `CycloneGames.FontAssets` | Multilingual font collections. Latin, Chinese (Simplified/Traditional), Japanese, Korean character sets.        | See module directory                                                                  |
-
-### 🔧 Build & Deployment
-
-| Module    | Path           | Description                                                                                                                                      | Documentation                                    |
-| --------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
-| **Build** | `Assets/Build` | Comprehensive build pipeline. HybridCLR + Obfuz + asset management integration. Full app builds, hot updates with code obfuscation, CI/CD ready. | [README.md](UnityStarter/Assets/Build/README.md) |
+| Module | Description | Docs |
+| --- | --- | --- |
+| **Factory** | High-performance object pooling. Thread-safe, auto-scaling, O(1) operations, DOD variant. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.md) |
+| **Logger** | Structured logging. Multi-threaded, file rotation, pluggable processors, WebGL support. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.md) |
+| **AssetManagement** | Asset loading abstraction. W-TinyLFU cache, YooAsset/Addressables/Resources backends. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md) |
+| **DataTable** | Config data pipeline. Luban/MessagePack backends, zero-GC O(1) queries, engine-agnostic Core. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/README.md) |
+| **Audio** | Audio management with Wwise-like API. Bank system, platform profiles, voice policies. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.md) |
+| **Localization** | BCP 47 locale framework. CLDR plurals (25+ languages), fallback chains, pseudo-localization QA. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Localization/README.md) |
 
 ### 🌐 Networking
 
-| Module         | Path                      | Description                                                                                                                                                                                   | Documentation                                                                              |
-| -------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| **Networking** | `CycloneGames.Networking` | Production-grade network abstraction layer. Zero-GC runtime, pluggable serializers (Json, MessagePack, ProtoBuf), Mirror adapter, thread-safe cross-thread messaging, connection diagnostics. | [README.md](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.md) |
+| Module | Description | Docs |
+| --- | --- | --- |
+| **Networking** | Network abstraction layer. Pluggable transports (Mirror/Mirage), QoS channels, 4 serializers, Burst AOI. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.md) |
 
-### 🧰 Tools
+### 🕹️ Input & Device
 
-| Module    | Path     | Description                                                                  | Documentation                |
-| --------- | -------- | ---------------------------------------------------------------------------- | ---------------------------- |
-| **Tools** | `Tools/` | Project utilities. Renaming tool, cleanup scripts, common development tasks. | [README.md](Tools/README.md) |
+| Module | Description | Docs |
+| --- | --- | --- |
+| **InputSystem** | Reactive input with context stacks. Local multiplayer, device auto-detection, runtime rebinding. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.md) |
+| **DeviceFeedback** | Cross-platform haptics. Mobile vibration (Android/iOS/WebGL), gamepad rumble, device light control. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.md) |
+
+### 🧰 Developer Tools
+
+| Module | Description | Docs |
+| --- | --- | --- |
+| **Analyzers** | Custom Roslyn analyzers. 22 implemented rules across 5 categories, 2 CodeFix providers. | [README](UnityStarter/Analyzers/CycloneGames.Analyzers/README.md) |
+| **Cheat** | Type-safe debug command console. VitalRouter integration, async commands, thread-safe execution. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat/README.md) |
+| **Utility** | Common utilities: FPS counter, safe area, splash screen, file operations. | Module directory |
+| **Services** | Service abstractions: camera management, graphics settings, device configuration. | Module directory |
+| **FontAssets** | Multilingual font collection. Latin, CJK (Simplified/Traditional/Japanese/Korean). | Module directory |
+
+### 🎯 2D & Platform
+
+| Module | Description | Docs |
+| --- | --- | --- |
+| **Foundation2D** | 2D game foundation. Performance benchmarks, platformer components, sprite management. | Module directory |
+
+### 🔧 Build & Deployment
+
+| Module | Description | Docs |
+| --- | --- | --- |
+| **Build** | Complete build pipeline. HybridCLR + Obfuz + asset management. CLI-driven, CI/CD ready. | [README](UnityStarter/Assets/Build/README.md) |
 
 ## Getting Started
 
 ### Prerequisites
 
-- **Unity 2022.3 LTS or later**
+- **Unity 2022.3 LTS** or later (6000.3 LTS also supported)
 - **Git** (for automatic versioning in Build module)
-- Basic familiarity with Unity and C#
 
-### Step 1: Clone the Repository
+### Quick Start
 
 ```bash
 git clone https://github.com/MaiKuraki/UnityStarter.git
 ```
 
-### Step 2: Rename the Project (Optional)
+1. **Open in Unity** — point Unity Hub to the `UnityStarter/` directory
+2. **Explore** — start with `GameplayFramework` to understand the architecture
+3. **Read the docs** — every module has `README.md` + `README.SCH.md`
+4. **Configure builds** — see [Build Module](UnityStarter/Assets/Build/README.md) for CI/CD setup
 
-If using as a full project template:
+### Using Individual Modules
 
-1. Locate `Tools/Executable/rename_project` executable
-2. Copy it to `UnityStarter/` directory
-3. Run from command line - it will guide you through:
-   - Project folder renaming
-   - Company name updates
-   - Application name changes
-   - Configuration file updates
-
-### Step 3: Open in Unity
-
-1. Open Your Project from UnityHub
-
-### Step 4: Explore Modules
-
-1. **Start with Core Modules**: Begin with `GameplayFramework`
-2. **Read Documentation**: Each module has a `README.md` in its directory
-3. **Check Samples**: Most modules include sample scenes and scripts
-4. **Configure Build**: See [Build Module Documentation](UnityStarter/Assets/Build/README.md) for setup
-
-### Step 5: Import Specific Modules (For Existing Projects)
-
-If you only need specific modules:
-
-**Recommended Method (Package Manager):**
-
-1. Copy module folder outside your `Assets` directory
-2. In Unity: **Window > Package Manager**
-3. Click **+ > Add package from disk...**
-4. Select the module's `package.json` file
-
-**Simple Method (Direct Copy):**
-
-1. Copy module folder from `UnityStarter/Assets/ThirdParty/CycloneGames/`
-2. Paste into your project's `Assets` folder
-
-> **💡 Tip**: Check each module's README for specific setup instructions and dependencies.
+Copy the module folder from `UnityStarter/Assets/ThirdParty/CycloneGames/` into your own project. Check the module's README for any dependencies — most modules are self-contained.
 
 ## Technology Stack
 
-### Core Dependencies
+### Runtime
 
-- **Unity**: 2022.3 LTS+
-- **UniTask**: Async/await for Unity ([GitHub](https://github.com/Cysharp/UniTask))
-- **R3**: Reactive programming ([GitHub](https://github.com/Cysharp/R3))
-- **LitMotion**: Animation/tweening ([GitHub](https://github.com/annulusgames/LitMotion))
-- **VYaml**: YAML serialization ([GitHub](https://github.com/hadashiA/VYaml))
-- **VitalRouter**: Message bus ([GitHub](https://github.com/hadashiA/VitalRouter))
+| Package | Purpose |
+| --- | --- |
+| `UniTask` (Cysharp) | Zero-allocation async/await |
+| `R3` (Cysharp) | Reactive data streams |
+| `VContainer` (hadashiA) | DI/IoC container |
+| `VitalRouter` (hadashiA) | Message routing |
+| `VYaml` (hadashiA) | YAML serialization |
+| `LitMotion` (annulusgames) | Tween animation |
+| `PrimeTween` | Alternative tween backend |
+| `MessagePack-CSharp` | Binary serialization |
+| `Unity Debug Sheet` (harumak) | In-game debug panel |
 
-### Optional Dependencies
+### Build & Pipeline
 
-- **HybridCLR**: C# hot-update ([GitHub](https://github.com/focus-creative-games/hybridclr))
-- **Obfuz**: Code obfuscation ([GitHub](https://github.com/Code-Philosophy/Obfuz))
-- **Obfuz4HybridCLR**: Obfuz extension for HybridCLR ([GitHub](https://github.com/Code-Philosophy/Obfuz4HybridCLR))
-- **YooAsset**: Asset management ([GitHub](https://github.com/tuyoogame/YooAsset))
-- **Addressables**: Unity's asset management (via Package Manager)
-- **Mirror**: Networking ([GitHub](https://github.com/MirrorNetworking/Mirror))
-- **Navigathena**: Scene management ([GitHub](https://github.com/mackysoft/Navigathena))
-- **MessagePack**: Binary serialization ([GitHub](https://github.com/MessagePack-CSharp/MessagePack-CSharp))
-
-> See `UnityStarter/Packages/manifest.json` for complete dependency list.
+| Tool | Purpose |
+| --- | --- |
+| `HybridCLR` | C# hot update |
+| `YooAsset` / `Addressables` | Asset hot update & management |
+| `Obfuz` / `Obfuz4HybridCLR` | Code obfuscation |
+| `Mirror` / `Mirage` | Network transports |
+| `Navigathena` | Scene management |
+| `Unity MCP` | AI-assisted development |
 
 ## Related Projects
 
-Projects built using this template:
-
-- **[Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse)** - Collection of rhythm game mechanics and gameplay types
-- **[Unity Gameplay Ability System Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)** - Example project demonstrating GAS implementation
+- **[Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse)** — Rhythm game mechanics collection
+- **[Unity GAS Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)** — GAS demonstration project
 
 ---
 
-## Documentation Guide
-
-> **📚 Each module has comprehensive documentation in its directory.**
-
-### How to Find Module Documentation
-
-1. **Navigate to Module Directory**: `UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.{ModuleName}/`
-2. **Look for README Files**:
-   - `README.md` - English documentation
-   - `README.SCH.md` - Simplified Chinese documentation
-3. **Check Samples Folder**: Most modules include example implementations
-
-### Key Documentation Links
-
-- **[GameplayFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.md)** - Complete guide to Actor/Pawn/Controller architecture
-- **[GameplayAbilities](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.md)** - GAS system tutorial with step-by-step examples
-- **[Build](UnityStarter/Assets/Build/README.md)** - Build pipeline setup and CI/CD integration
-- **[InputSystem](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.md)** - Input system configuration and usage
-- **[UIFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md)** - UI framework architecture and examples
-- **[AssetManagement](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md)** - Asset loading and version management
-- **[DeviceFeedback](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.md)** - Cross-platform haptics, rumble, and lighting
-- **[BehaviorTree](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.md)** - AI behavior tree with dual-layer architecture and scaling guide
-- **[AIPerception](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.md)** - AI perception system with Burst-optimized sensor queries
-- **[Localization](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Localization/README.md)** - Localization framework with BCP 47, CLDR plurals, and pseudo-localization
-- **[Networking](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.md)** - Network abstraction layer with pluggable transports
-
----
-
-**License**: See [LICENSE](LICENSE) file for details.
-
-**Support**: For questions and discussions, please open an issue on GitHub.
+**License**: [MIT](LICENSE) · **Support**: [GitHub Issues](https://github.com/MaiKuraki/UnityStarter/issues)
