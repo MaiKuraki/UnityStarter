@@ -3,7 +3,8 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.DataTable.Core",
-        "CycloneGames.DataTable.Unity.Runtime"
+        "CycloneGames.DataTable.Unity.Runtime",
+        "Luban.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -11,7 +12,15 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "defineConstraints": [
+        "LUBAN"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.code-philosophy.luban",
+            "expression": "",
+            "define": "LUBAN"
+        }
+    ],
     "noEngineReferences": false
 }

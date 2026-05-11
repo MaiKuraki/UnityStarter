@@ -14,7 +14,7 @@ namespace CycloneGames.DataTable.Unity.Integrations.Luban
     /// </code>
     /// </para>
     /// <para>
-    /// After registration, query via DataTableRegistry.Get&lt;TbItem&gt;().
+    /// After registration, query via DataTableRegistry.Get<TbItem>().
     /// </para>
     /// </summary>
     public static class LubanConfigProvider
@@ -28,19 +28,19 @@ namespace CycloneGames.DataTable.Unity.Integrations.Luban
         }
 
         /// <summary>
-        /// Register multiple Luban-generated tables at once via reflection.
-        /// Prefer calling RegisterLubanTable individually when possible (AOT-safe, no reflection).
+        /// Register multiple Luban-generated tables at once.
+        /// Prefer calling RegisterLubanTable individually when possible to avoid the params-array allocation.
         /// <para>
         /// Usage: <c>LubanConfigProvider.RegisterLubanTables((typeof(TbItem), tables.TbItem), (typeof(TbSkill), tables.TbSkill))</c>
         /// </para>
         /// </summary>
         public static void RegisterLubanTables(params (Type type, object table)[] tables)
         {
+            if (tables == null) throw new ArgumentNullException(nameof(tables));
+
             foreach (var (type, table) in tables)
             {
-                var method = typeof(DataTableRegistry).GetMethod(nameof(DataTableRegistry.Register));
-                var generic = method?.MakeGenericMethod(type);
-                generic?.Invoke(null, new[] { table });
+                DataTableRegistry.Register(type, table);
             }
         }
     }

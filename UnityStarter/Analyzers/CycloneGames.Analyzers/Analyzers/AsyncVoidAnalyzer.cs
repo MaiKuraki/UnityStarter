@@ -11,7 +11,7 @@ namespace CycloneGames.Analyzers
     /// Detects <c>async void</c> methods in Runtime (non-Editor, non-Sample) code.
     ///
     /// Exception: methods used as C# event handlers (<c>+=</c> subscription) or UnityEvent
-    /// callbacks are skipped — in C#, event handlers MUST return void, so <c>async void</c>
+    /// callbacks are skipped. In C#, event handlers MUST return void, so <c>async void</c>
     /// is the only valid syntax for async event handlers.
     /// </summary>
     [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -47,7 +47,7 @@ namespace CycloneGames.Analyzers
                 normalized.Contains("/Tests/")) return;
 
             // Skip if this method is used as a C# event handler (subscribed via +=)
-            // In C#, event handlers must return void — async void is the only option.
+            // In C#, event handlers must return void, so async void is the only option.
             var methodName = methodDecl.Identifier.Text;
             if (IsEventSubscriber(methodDecl, methodName)) return;
 

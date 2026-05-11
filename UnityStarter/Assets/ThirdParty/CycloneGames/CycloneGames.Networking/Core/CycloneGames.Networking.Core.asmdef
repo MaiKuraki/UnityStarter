@@ -1,7 +1,9 @@
 {
     "name": "CycloneGames.Networking.Core",
     "rootNamespace": "CycloneGames.Networking",
-    "references": [],
+    "references": [
+        "CycloneGames.DeterministicMath.Core"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": true,

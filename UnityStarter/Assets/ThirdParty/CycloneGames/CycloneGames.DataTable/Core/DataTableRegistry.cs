@@ -19,10 +19,24 @@ namespace CycloneGames.DataTable
         /// <summary>Register a table instance. Call once per table during startup.</summary>
         public static void Register<TTable>(TTable table) where TTable : class
         {
+            Register(typeof(TTable), table);
+        }
+
+        /// <summary>Register a table instance under an explicit table type. Call once per table during startup.</summary>
+        public static void Register(Type tableType, object table)
+        {
             if (table == null) throw new ArgumentNullException(nameof(table));
+            if (tableType == null) throw new ArgumentNullException(nameof(tableType));
+            if (!tableType.IsInstanceOfType(table))
+            {
+                throw new ArgumentException(
+                    $"Table instance type {table.GetType().FullName} is not assignable to {tableType.FullName}.",
+                    nameof(table));
+            }
+
             lock (_tables)
             {
-                _tables[typeof(TTable)] = table;
+                _tables[tableType] = table;
             }
         }
 

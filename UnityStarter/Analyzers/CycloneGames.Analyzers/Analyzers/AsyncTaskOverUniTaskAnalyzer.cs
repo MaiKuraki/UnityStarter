@@ -8,7 +8,7 @@ using Microsoft.CodeAnalysis.Diagnostics;
 namespace CycloneGames.Analyzers
 {
     /// <summary>
-    /// Flags <c>async Task</c> / <c>async Task&lt;T&gt;</c> method return types
+    /// Flags <c>async Task</c> / <c>async Task<T></c> method return types
     /// in projects that reference UniTask. In those projects, UniTask (struct, poolable)
     /// is preferred over Task (class, always allocates) per the project's async convention.
     ///
@@ -50,23 +50,14 @@ namespace CycloneGames.Analyzers
             // Must be async
             if (!methodDecl.Modifiers.Any(SyntaxKind.AsyncKeyword)) return;
 
-            // Check return type: Task or Task<T>
             var returnType = methodDecl.ReturnType;
-            var returnTypeText = returnType.ToString();
-
-            if (returnTypeText != "Task" &&
-                !returnTypeText.StartsWith("Task<"))
-                return;
-
-            // Verify it's System.Threading.Tasks.Task, not a user-defined "Task" type
             var symbolInfo = context.SemanticModel.GetSymbolInfo(returnType);
-            if (symbolInfo.Symbol is INamedTypeSymbol typeSymbol)
-            {
-                var fullName = typeSymbol.ToString();
-                if (fullName != "System.Threading.Tasks.Task" &&
-                    !fullName.StartsWith("System.Threading.Tasks.Task<"))
-                    return;
-            }
+            if (symbolInfo.Symbol is not INamedTypeSymbol typeSymbol) return;
+
+            var fullName = typeSymbol.ToString();
+            if (fullName != "System.Threading.Tasks.Task" &&
+                !fullName.StartsWith("System.Threading.Tasks.Task<"))
+                return;
 
             // Skip Editor / Samples / Tests
             var filePath = methodDecl.SyntaxTree.FilePath.Replace('\\', '/');

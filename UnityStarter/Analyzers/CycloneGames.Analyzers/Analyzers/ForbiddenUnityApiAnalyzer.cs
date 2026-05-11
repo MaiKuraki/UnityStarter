@@ -11,8 +11,8 @@ namespace CycloneGames.Analyzers
     /// Detects forbidden Unity APIs (GameObject.Find, FindObjectOfType, SendMessage,
     /// Invoke, Resources.Load) in production Runtime code.
     ///
-    /// Lazy-init caching pattern (null-check field → assign result → return cached)
-    /// is downgraded from Error to Info — it's acceptable singleton resolution but
+    /// Lazy-init caching pattern (null-check field, assign result, return cached)
+    /// is downgraded from Error to Info. It is acceptable singleton resolution but
     /// DI or [SerializeField] references are preferred.
     /// </summary>
     [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -56,8 +56,6 @@ namespace CycloneGames.Analyzers
             context.RegisterSyntaxNodeAction(AnalyzeMemberAccess, SyntaxKind.SimpleMemberAccessExpression);
         }
 
-        // ── Helpers ───────────────────────────────────────────────────────
-
         private static bool IsLazyInitCachePattern(InvocationExpressionSyntax invocation)
         {
             // Pattern: result is assigned to a field, and the containing method
@@ -70,7 +68,7 @@ namespace CycloneGames.Analyzers
             // Example (unacceptable):
             //   var enemies = FindObjectsByType<Enemy>();  // no caching
 
-            // Walk up: invocation → AssignmentExpression → IfStatement? → Method
+            // Walk up through assignment, optional if statement, and method nodes.
             if (invocation.Parent is not EqualsValueClauseSyntax equalsValueClause) return false;
             if (equalsValueClause.Parent is not AssignmentExpressionSyntax assignment) return false;
 
@@ -123,8 +121,6 @@ namespace CycloneGames.Analyzers
             return false;
         }
 
-        // ── Analyzers ─────────────────────────────────────────────────────
-
         private void AnalyzeInvocation(SyntaxNodeAnalysisContext context)
         {
             var invocation = (InvocationExpressionSyntax)context.Node;
@@ -134,7 +130,7 @@ namespace CycloneGames.Analyzers
 
             var containingType = methodSymbol.ContainingType?.ToString();
 
-            // ── GameObject.Find / FindObjectOfType / FindFirstObjectByType etc. ──
+            // Scene scan APIs.
             if (containingType == "UnityEngine.Object" || containingType == "UnityEngine.GameObject")
             {
                 if (methodSymbol.Name == "Find" && containingType == "UnityEngine.GameObject")
@@ -158,7 +154,7 @@ namespace CycloneGames.Analyzers
                 }
             }
 
-            // ── SendMessage / BroadcastMessage ──
+            // String-based message APIs.
             if (containingType == "UnityEngine.Component" || containingType == "UnityEngine.GameObject")
             {
                 if (methodSymbol.Name == "SendMessage" ||
@@ -172,7 +168,7 @@ namespace CycloneGames.Analyzers
                 }
             }
 
-            // ── MonoBehaviour.Invoke / InvokeRepeating ──
+            // String-based MonoBehaviour timer APIs.
             if (containingType == "UnityEngine.MonoBehaviour")
             {
                 if (methodSymbol.Name == "Invoke" ||
@@ -190,7 +186,7 @@ namespace CycloneGames.Analyzers
 
         /// <summary>
         /// Reports the diagnostic, downgrading severity to Info if the call
-        /// uses a lazy-init caching pattern (field null-check → assign).
+        /// uses a lazy-init caching pattern.
         /// </summary>
         private static void ReportWithCacheAwareness(
             SyntaxNodeAnalysisContext context,

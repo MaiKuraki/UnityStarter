@@ -12,11 +12,11 @@ namespace CycloneGames.Analyzers
 {
     /// <summary>
     /// Detects circular method-call dependencies between static classes.
-    /// A cycle like A→B→C→A causes <c>TypeInitializationException</c> at
+    /// A cycle like A -> B -> C -> A causes <c>TypeInitializationException</c> at
     /// unpredictable times depending on which class is accessed first.
     ///
-    /// Algorithm: build directed call graph → DFS with recursion-stack tracking
-    /// to find all cycles → canonical-form deduplication → report each invocation
+    /// Algorithm: build directed call graph, use DFS with recursion-stack tracking
+    /// to find all cycles, deduplicate canonical forms, and report each invocation
     /// in each unique cycle at its exact source location.
     /// </summary>
     [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -32,8 +32,6 @@ namespace CycloneGames.Analyzers
             context.RegisterCompilationStartAction(OnCompilationStart);
         }
 
-        // ── Compilation start: build the dependency graph ──────────────
-
         private static void OnCompilationStart(CompilationStartAnalysisContext context)
         {
             // Graph: dict[caller][callee] = list of invocation sites
@@ -46,8 +44,6 @@ namespace CycloneGames.Analyzers
             context.RegisterCompilationEndAction(
                 endCtx => DetectCycles(endCtx, callGraph));
         }
-
-        // ── Phase 1: collect all static-class → static-class calls ─────
 
         private static void CollectCall(
             SyntaxNodeAnalysisContext ctx,
@@ -64,7 +60,7 @@ namespace CycloneGames.Analyzers
             var callerName = callerType.ToString();
             var calleeName = calleeMethod.ContainingType.ToString();
 
-            // Self-call — not a dependency edge
+            // Self-call is not a dependency edge.
             if (callerName == calleeName) return;
 
             var calleeMap = callGraph.GetOrAdd(callerName, _ => new ConcurrentDictionary<string, List<InvocationExpressionSyntax>>());
@@ -74,8 +70,6 @@ namespace CycloneGames.Analyzers
             // the syntax-walk phase (before CompilationEnd), so no lock needed.
             lock (sites) { sites.Add(invocation); }
         }
-
-        // ── Phase 2: DFS-based cycle detection with dedup ───────────────
 
         private static void DetectCycles(
             CompilationAnalysisContext ctx,
@@ -142,12 +136,9 @@ namespace CycloneGames.Analyzers
             inStack.Remove(current);
         }
 
-        // ── Canonical form: lexicographically smallest rotation ─────────
-        // A→B→C→A, B→C→A→B, C→A→B→C all normalize to A→B→C→A
-
         private static string CanonicalForm(List<string> cycle)
         {
-            if (cycle.Count <= 1) return string.Join("→", cycle);
+            if (cycle.Count <= 1) return string.Join(" -> ", cycle);
 
             // Find the lexicographically smallest starting position
             int bestStart = 0;
@@ -160,13 +151,11 @@ namespace CycloneGames.Analyzers
             var sb = new StringBuilder();
             for (int i = 0; i < cycle.Count; i++)
             {
-                if (i > 0) sb.Append("→");
+                if (i > 0) sb.Append(" -> ");
                 sb.Append(cycle[(bestStart + i) % cycle.Count]);
             }
             return sb.ToString();
         }
-
-        // ── Report diagnostics at each invocation site in the cycle ────
 
         private static void ReportCycle(
             string canonical,
@@ -178,7 +167,7 @@ namespace CycloneGames.Analyzers
             var cycleDesc = new StringBuilder();
             for (int i = 0; i < rawCycle.Count; i++)
             {
-                if (i > 0) cycleDesc.Append(" → ");
+                if (i > 0) cycleDesc.Append(" -> ");
                 cycleDesc.Append(rawCycle[i]);
             }
 

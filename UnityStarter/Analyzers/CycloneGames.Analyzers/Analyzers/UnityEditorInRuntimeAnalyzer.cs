@@ -9,7 +9,7 @@ namespace CycloneGames.Analyzers
 {
     /// <summary>
     /// Detects <c>UnityEditor</c> namespace usage in files outside Editor/Test/Sample folders.
-    /// Skips code inside <c>#if UNITY_EDITOR</c> preprocessor blocks — those are correctly
+    /// Skips code inside <c>#if UNITY_EDITOR</c> preprocessor blocks. Those are correctly
     /// stripped from production builds and are safe.
     /// </summary>
     [DiagnosticAnalyzer(LanguageNames.CSharp)]

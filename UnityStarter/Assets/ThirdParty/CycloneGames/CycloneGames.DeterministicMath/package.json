@@ -1,0 +1,12 @@
+{
+  "name": "com.cyclone-games.deterministic-math",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.DeterministicMath",
+  "description": "Cross-platform deterministic fixed-point math: Q32.32 arithmetic, CORDIC trigonometry, quaternion rotations, and 2D collision detection. Zero-GC, pure C#, no Unity dependencies.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {},
+  "keywords": ["CycloneGames", "Deterministic", "FixedPoint", "Lockstep", "Rollback"],
+  "author": { "name": "CycloneGames", "email": "", "url": "" },
+  "samples": []
+}

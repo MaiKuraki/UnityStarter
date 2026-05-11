@@ -116,7 +116,7 @@ flowchart LR
 | Assembly | Layer | Dependencies | Purpose |
 | --- | --- | --- | --- |
 | `CycloneGames.DataTable.Core` | Core | *none* | `IDataRow`, `IDataTable<T>`, `DataTable<T>`, `DataTableRegistry`, `DataTableLogger` |
-| `CycloneGames.DataTable.Unity.Runtime` | Unity Adapter | Core | `DataTableUnityBootstrap`, `LubanLib/*` |
+| `CycloneGames.DataTable.Unity.Runtime` | Unity Adapter | Core | `DataTableUnityBootstrap` |
 | `CycloneGames.DataTable.Unity.Editor` | Editor | Unity.Runtime | `DataTableLubanRunner` (Luban build menu) |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | Integration | Core + Unity.Runtime | `LubanConfigProvider` |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | Integration | Core + Unity.Runtime + MessagePack | `MessagePackConfigProvider` |
@@ -273,7 +273,7 @@ using CycloneGames.DataTable.Unity.Integrations.MessagePack;
 var bytes = File.ReadAllBytes(Path.Combine(Application.streamingAssetsPath, "monster.bytes"));
 
 // Build and register — pure, synchronous, no hidden loading
-MessagePackConfigProvider.Build<MonsterRow>(bytes);
+MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
 
 var slime = DataTableRegistry.Get<DataTable<MonsterRow>>().Get(1);
 Debug.Log($"Slime HP: {slime.Hp}"); // 50
@@ -526,7 +526,7 @@ DataTableLogger.LogInfo    = msg => logger.Info(msg);
 
 **Assembly:** `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban`  
 **Namespace:** `CycloneGames.DataTable.Unity.Integrations.Luban`  
-**Dependency:** `LubanLib` classes bundled in `Unity.Runtime/LubanLib/` (ByteBuf, BeanBase, ITypeId, StringUtil)
+**Dependency:** `Luban.Runtime` from `com.code-philosophy.luban`. DataTable does not bundle Luban runtime types.
 
 **`LubanConfigProvider`** is a thin registration helper. You are responsible for loading `.bytes` files and constructing Luban's generated `Tables` object:
 
@@ -568,7 +568,7 @@ This assembly only compiles when the MessagePack package is installed (guarded b
 var bytes = YourAssetPipeline.Load("monster.bytes");
 
 // 2. Build and register in one call — synchronous, no hidden loading
-var table = MessagePackConfigProvider.Build<MonsterRow>(bytes);
+var table = MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
 
 // 3. Query
 var slime = DataTableRegistry.Get<DataTable<MonsterRow>>().Get(1);
@@ -578,6 +578,7 @@ var slime = DataTableRegistry.Get<DataTable<MonsterRow>>().Get(1);
 - Must implement `IDataRow`
 - Must be annotated with `[MessagePackObject]` and `[Key(n)]` attributes
 - Properties must have `{ get; set; }`
+- New generated data should serialize `TRow[]`; legacy `List<TRow>` payloads can use `BuildList`
 
 ---
 
@@ -635,7 +636,7 @@ public async UniTask InitializeConfigs()
     var bytes = handle.ReadBytes();
     handle.Dispose();
 
-    MessagePackConfigProvider.Build<MonsterRow>(bytes);
+    MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
 }
 
 // Sync variant (YooAsset only):
@@ -646,7 +647,7 @@ public void InitializeConfigsSync()
     var bytes = handle.ReadBytes();
     handle.Dispose();
 
-    MessagePackConfigProvider.Build<MonsterRow>(bytes);
+    MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
 }
 ```
 
@@ -663,7 +664,7 @@ public async UniTask InitializeConfigs()
     var bytes = handle.Asset.bytes;
     handle.Dispose();
 
-    MessagePackConfigProvider.Build<MonsterRow>(bytes);
+    MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
 }
 ```
 
@@ -695,7 +696,7 @@ private async UniTask LoadTable<TRow>(IAssetPackage package, string fileName)
     var bytes = handle.ReadBytes();
     handle.Dispose();
 
-    MessagePackConfigProvider.Build<TRow>(bytes);
+    MessagePackConfigProvider.Build<TRow>(bytes, GeneratedResolverOptions);
 }
 ```
 
@@ -922,7 +923,7 @@ var ta = Resources.Load<TextAsset>("DataTable/monster");
 var bytes = ta.bytes;
 ```
 
-Once you have the bytes, pass them to `MessagePackConfigProvider.Build<T>(bytes)` or construct `DataTable<T>` directly.
+Once you have the bytes, pass them to `MessagePackConfigProvider.Build<T>(bytes, options)` or construct `DataTable<T>` directly.
 
 ```
 

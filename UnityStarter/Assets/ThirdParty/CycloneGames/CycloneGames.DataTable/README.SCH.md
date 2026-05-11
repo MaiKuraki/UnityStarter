@@ -114,7 +114,7 @@ flowchart LR
 | 程序集 | 层级 | 依赖 | 职责 |
 | --- | --- | --- | --- |
 | `CycloneGames.DataTable.Core` | 核心 | *无* | `IDataRow`、`IDataTable<T>`、`DataTable<T>`、`DataTableRegistry`、`DataTableLogger` |
-| `CycloneGames.DataTable.Unity.Runtime` | Unity 适配 | Core | `DataTableUnityBootstrap`、`LubanLib/*` |
+| `CycloneGames.DataTable.Unity.Runtime` | Unity 适配 | Core | `DataTableUnityBootstrap` |
 | `CycloneGames.DataTable.Unity.Editor` | 编辑器 | Unity.Runtime | `DataTableLubanRunner`（Luban 构建菜单） |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | 集成 | Core + Unity.Runtime | `LubanConfigProvider` |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | 集成 | Core + Unity.Runtime + MessagePack | `MessagePackConfigProvider` |
@@ -272,7 +272,7 @@ using CycloneGames.DataTable.Unity.Integrations.MessagePack;
 var bytes = File.ReadAllBytes(Path.Combine(Application.streamingAssetsPath, "monster.bytes"));
 
 // 2. 构建并注册——纯同步，无隐藏加载
-MessagePackConfigProvider.Build<MonsterRow>(bytes);
+MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
 
 // 3. 查询
 var slime = DataTableRegistry.Get<DataTable<MonsterRow>>().Get(1);
@@ -525,7 +525,7 @@ DataTableLogger.LogInfo    = msg => logger.Info(msg);
 
 **程序集：** `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban`  
 **命名空间：** `CycloneGames.DataTable.Unity.Integrations.Luban`  
-**依赖：** `LubanLib` 类库已内置在 `Unity.Runtime/LubanLib/` 中（ByteBuf、BeanBase、ITypeId、StringUtil）
+**依赖：** 来自 `com.code-philosophy.luban` 的 `Luban.Runtime`。DataTable 不再内置 Luban runtime 类型。
 
 **`LubanConfigProvider`** 是一个轻量注册助手。你需要自己加载 `.bytes` 文件并构建 Luban 的 `Tables` 对象：
 
@@ -567,7 +567,7 @@ LubanConfigProvider.RegisterLubanTables(
 var bytes = YourAssetPipeline.Load("monster.bytes");
 
 // 2. 一步构建并注册——同步，无隐藏加载
-var table = MessagePackConfigProvider.Build<MonsterRow>(bytes);
+var table = MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
 
 // 3. 查询
 var slime = DataTableRegistry.Get<DataTable<MonsterRow>>().Get(1);
@@ -631,7 +631,7 @@ public async UniTask InitializeConfigs()
     var bytes = handle.ReadBytes();
     handle.Dispose();
 
-    MessagePackConfigProvider.Build<MonsterRow>(bytes);
+    MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
 }
 
 // 同步变体（仅 YooAsset）：
@@ -642,7 +642,7 @@ public void InitializeConfigsSync()
     var bytes = handle.ReadBytes();
     handle.Dispose();
 
-    MessagePackConfigProvider.Build<MonsterRow>(bytes);
+    MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
 }
 ```
 
@@ -659,7 +659,7 @@ public async UniTask InitializeConfigs()
     var bytes = handle.Asset.bytes;
     handle.Dispose();
 
-    MessagePackConfigProvider.Build<MonsterRow>(bytes);
+    MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
 }
 ```
 
@@ -691,7 +691,7 @@ private async UniTask LoadTable<TRow>(IAssetPackage package, string fileName)
     var bytes = handle.ReadBytes();
     handle.Dispose();
 
-    MessagePackConfigProvider.Build<TRow>(bytes);
+    MessagePackConfigProvider.Build<TRow>(bytes, GeneratedResolverOptions);
 }
 ```
 
@@ -921,7 +921,7 @@ var ta = Resources.Load<TextAsset>("DataTable/monster");
 var bytes = ta.bytes;
 ```
 
-拿到 bytes 后，调用 `MessagePackConfigProvider.Build<T>(bytes)` 或直接构建 `DataTable<T>`。
+拿到 bytes 后，调用 `MessagePackConfigProvider.Build<T>(bytes, options)` 或直接构建 `DataTable<T>`。
 
 ### "Luban build script not found"
 

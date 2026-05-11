@@ -1,5 +1,4 @@
 using System.IO;
-using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
@@ -10,21 +9,39 @@ namespace CycloneGames.DataTable.Unity.Editor
     {
         private SerializedProperty _dataTableProjectDir;
         private SerializedProperty _scriptName;
+        private SerializedProperty _scriptArguments;
+        private SerializedProperty _timeoutSeconds;
         private SerializedProperty _autoRefreshAssets;
 
-        private static readonly GUIContent RefreshLabel = new GUIContent("Auto Refresh Assets");
+        private DataTableLubanRunRequest _cachedRequest;
+        private string _cachedValidationError;
+        private string[] _cachedScripts = System.Array.Empty<string>();
+        private int _lastTargetHash;
+        private bool _showResolvedBuildScript;
+
+        private static readonly GUIContent ProjectDirLabel = new GUIContent("Project Dir");
         private static readonly GUIContent ScriptNameLabel = new GUIContent("Script Name");
+        private static readonly GUIContent ScriptArgumentsLabel = new GUIContent("Script Arguments");
+        private static readonly GUIContent TimeoutLabel = new GUIContent("Timeout Seconds");
+        private static readonly GUIContent RefreshLabel = new GUIContent("Auto Refresh Assets");
 
         private static GUIStyle _richMiniLabel;
         private static GUIStyle _richWrapMiniLabel;
-        private static GUIStyle RichMiniLabel => _richMiniLabel ?? (_richMiniLabel = new GUIStyle(EditorStyles.miniLabel) { richText = true });
-        private static GUIStyle RichWrapMiniLabel => _richWrapMiniLabel ?? (_richWrapMiniLabel = new GUIStyle(EditorStyles.miniLabel) { richText = true, wordWrap = true });
 
-        private void OnEnable()
+        protected static GUIStyle RichMiniLabel =>
+            _richMiniLabel ?? (_richMiniLabel = new GUIStyle(EditorStyles.miniLabel) { richText = true });
+
+        protected static GUIStyle RichWrapMiniLabel =>
+            _richWrapMiniLabel ?? (_richWrapMiniLabel = new GUIStyle(EditorStyles.miniLabel) { richText = true, wordWrap = true });
+
+        protected virtual void OnEnable()
         {
             _dataTableProjectDir = serializedObject.FindProperty("DataTableProjectDir");
             _scriptName = serializedObject.FindProperty("ScriptName");
+            _scriptArguments = serializedObject.FindProperty("ScriptArguments");
+            _timeoutSeconds = serializedObject.FindProperty("TimeoutSeconds");
             _autoRefreshAssets = serializedObject.FindProperty("AutoRefreshAssets");
+            RefreshValidationCache();
         }
 
         public override void OnInspectorGUI()
@@ -34,270 +51,271 @@ namespace CycloneGames.DataTable.Unity.Editor
             DrawSettingsHeader();
             EditorGUILayout.Space(5);
 
-            DrawProjectDirField();
+            EditorGUI.BeginChangeCheck();
+            DrawProjectDirectoryField();
             EditorGUILayout.Space(5);
-
-            DrawScriptNameField();
+            DrawProjectDirectoryPreview();
             EditorGUILayout.Space(5);
+            DrawRunnerFields();
+            if (EditorGUI.EndChangeCheck())
+            {
+                serializedObject.ApplyModifiedProperties();
+                RefreshValidationCache();
+                serializedObject.Update();
+            }
 
-            DrawAutoRefreshField();
             EditorGUILayout.Space(10);
-
             DrawPathPreview();
             EditorGUILayout.Space(10);
-
             DrawValidation();
             EditorGUILayout.Space(10);
-
             DrawActions();
+            EditorGUILayout.Space(10);
+            DrawExtensionFields();
 
             serializedObject.ApplyModifiedProperties();
         }
 
-        private static void DrawSettingsHeader()
+        protected virtual void DrawSettingsHeader()
         {
             EditorGUILayout.LabelField("DataTable Settings", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
-                "Module-level settings for the DataTable pipeline. Currently configures the " +
-                "Luban code-generation step. You can place this asset anywhere under Assets/ — " +
-                "the system will auto-discover it. Only one instance should exist in the project.",
+                "Configures the default DataTable generation workflow. Projects can derive from " +
+                "DataTableSettings and override its virtual methods for custom profiles, paths, or CI behavior.",
                 MessageType.Info);
         }
 
-        private void DrawProjectDirField()
+        protected virtual void DrawProjectDirectoryField()
         {
-            EditorGUILayout.PropertyField(_dataTableProjectDir);
-            var settings = (DataTableSettings)target;
-            var projectRoot = GetProjectRoot();
-            var resolved = Path.GetFullPath(Path.Combine(projectRoot, settings.DataTableProjectDir));
-            var dirExists = Directory.Exists(resolved);
-
-            EditorGUI.indentLevel++;
-            if (dirExists)
-            {
-                EditorGUILayout.LabelField(
-                    new GUIContent($"<color=#5a5>✓ Dir exists: {resolved}</color>"),
-                    RichWrapMiniLabel);
-            }
-            else
-            {
-                EditorGUILayout.LabelField(
-                    new GUIContent($"<color=#c55>✗ Dir not found: {resolved}</color>"),
-                    RichWrapMiniLabel);
-                EditorGUILayout.HelpBox(
-                    "The directory above does not exist on disk. The build will fail unless you " +
-                    "create it with a valid Luban project (including Excel/ and build scripts).",
-                    MessageType.Warning);
-            }
-
-            EditorGUILayout.LabelField(
-                new GUIContent($"<color=#888>Project root: {projectRoot}</color>"),
-                RichWrapMiniLabel);
-            EditorGUI.indentLevel--;
+            DrawPropertyIfPresent(_dataTableProjectDir, ProjectDirLabel);
         }
 
-        private void DrawScriptNameField()
+        protected virtual void DrawRunnerFields()
         {
-            EditorGUILayout.PropertyField(_scriptName, ScriptNameLabel);
-            var settings = (DataTableSettings)target;
-            var projectRoot = GetProjectRoot();
-            var resolvedDir = Path.GetFullPath(Path.Combine(projectRoot, settings.DataTableProjectDir));
-            var ext = Application.platform == RuntimePlatform.WindowsEditor ? ".bat" : ".sh";
-            var fullScriptPath = Path.Combine(resolvedDir, settings.ScriptName + ext);
+            DrawPropertyIfPresent(_scriptName, ScriptNameLabel);
+            DrawPropertyIfPresent(_scriptArguments, ScriptArgumentsLabel);
+            DrawPropertyIfPresent(_timeoutSeconds, TimeoutLabel);
+            DrawPropertyIfPresent(_autoRefreshAssets, RefreshLabel);
+        }
 
-            EditorGUI.indentLevel++;
+        protected virtual void DrawPathPreview()
+        {
+            var request = GetCachedRequest();
+            _showResolvedBuildScript = EditorGUILayout.Foldout(
+                _showResolvedBuildScript,
+                "Resolved Build Script",
+                true);
 
-            var scriptExists = File.Exists(fullScriptPath);
-            if (Directory.Exists(resolvedDir))
+            if (!_showResolvedBuildScript)
             {
-                if (scriptExists)
-                {
-                    EditorGUILayout.LabelField(
-                        new GUIContent($"<color=#5a5>✓ Script found: {fullScriptPath}</color>"),
-                        RichMiniLabel);
-                }
-                else
-                {
-                    EditorGUILayout.LabelField(
-                        new GUIContent($"<color=#c55>✗ Script not found: {fullScriptPath}</color>"),
-                        RichMiniLabel);
-
-                    var dirInfo = new DirectoryInfo(resolvedDir);
-                    if (dirInfo.Exists)
-                    {
-                        var scripts = dirInfo.GetFiles("*.bat")
-                            .Select(f => f.Name)
-                            .Union(dirInfo.GetFiles("*.sh").Select(f => f.Name))
-                            .ToArray();
-
-                        foreach (var script in scripts)
-                        {
-                            EditorGUILayout.LabelField(
-                                new GUIContent($"   └ <color=#888>{script}</color> (found in directory)"),
-                                RichMiniLabel);
-                        }
-
-                        if (scripts.Length > 0)
-                        {
-                            EditorGUILayout.HelpBox(
-                                "The directory contains build scripts but none match the configured " +
-                                "name. Did you mean one of the scripts listed above?",
-                                MessageType.Warning);
-                        }
-                        else
-                        {
-                            EditorGUILayout.HelpBox(
-                                "No .bat or .sh scripts found in the directory. Make sure your Luban " +
-                                "project is set up correctly with build scripts.",
-                                MessageType.Error);
-                        }
-                    }
-                }
+                EditorGUI.indentLevel++;
+                EditorGUILayout.LabelField("Script Path", request.ScriptPath, EditorStyles.miniLabel);
+                EditorGUI.indentLevel--;
+                return;
             }
-            EditorGUI.indentLevel--;
-        }
-
-        private void DrawAutoRefreshField()
-        {
-            EditorGUILayout.PropertyField(_autoRefreshAssets, RefreshLabel);
-
-            EditorGUI.indentLevel++;
-            EditorGUILayout.HelpBox(
-                "When enabled, AssetDatabase.Refresh() is called automatically after a successful " +
-                "Luban build to import newly generated .bytes files and C# scripts.\n\n" +
-                "This does NOT trigger the Luban build itself — you must still run " +
-                "Tools > CycloneGames > DataTable > Run Luban Build manually (or invoke " +
-                "DataTableLubanRunner.Run() from a CI script).\n\n" +
-                "Disable this if you prefer to refresh assets manually, or if your build " +
-                "pipeline handles asset refresh separately.",
-                MessageType.Info);
-            EditorGUI.indentLevel--;
-        }
-
-        private void DrawPathPreview()
-        {
-            EditorGUILayout.LabelField("Resolved Build Script", EditorStyles.boldLabel);
-
-            var settings = (DataTableSettings)target;
-            var projectRoot = GetProjectRoot();
-            var resolvedDir = Path.GetFullPath(Path.Combine(projectRoot, settings.DataTableProjectDir));
-            var ext = Application.platform == RuntimePlatform.WindowsEditor ? ".bat" : ".sh";
-            var scriptPath = Path.Combine(resolvedDir, settings.ScriptName + ext);
-
-            EditorGUILayout.HelpBox(
-                "These are the resolved paths based on your configuration above. " +
-                "They show exactly where the build step will look for scripts on this machine.",
-                MessageType.None);
 
             var savedWidth = EditorGUIUtility.labelWidth;
-            EditorGUIUtility.labelWidth = 105f;
+            EditorGUIUtility.labelWidth = 120f;
 
-            EditorGUILayout.LabelField("Project Root", projectRoot);
-            EditorGUILayout.LabelField("Project Dir", settings.DataTableProjectDir);
-            EditorGUILayout.LabelField("Resolved Dir", resolvedDir);
-            EditorGUILayout.LabelField("Script Path", scriptPath);
+            EditorGUILayout.LabelField("Project Root", request.ProjectRoot);
+            EditorGUILayout.LabelField("Project Dir", request.ProjectDirectory);
+            EditorGUILayout.LabelField("Work Dir", request.WorkingDirectory);
+            EditorGUILayout.LabelField("Script Path", request.ScriptPath);
+            EditorGUILayout.LabelField("Arguments", string.IsNullOrEmpty(request.ScriptArguments) ? "(none)" : request.ScriptArguments);
 
             EditorGUIUtility.labelWidth = savedWidth;
-
-            EditorGUILayout.Space(3);
-
-            var platform = Application.platform == RuntimePlatform.WindowsEditor
-                ? "Windows (cmd.exe)"
-                : "macOS/Linux (/bin/bash)";
-            EditorGUILayout.HelpBox(
-                $"Platform  : {platform}\n" +
-                $"Work Dir  : {resolvedDir}\n" +
-                $"Execute   : {new FileInfo(scriptPath).Name}",
-                MessageType.Info);
         }
 
-        private void DrawValidation()
+        protected virtual void DrawProjectDirectoryPreview()
         {
+            var request = GetCachedRequest();
+            var directoryExists = Directory.Exists(request.WorkingDirectory);
+            var projectRootExists = Directory.Exists(request.ProjectRoot);
+
+            EditorGUILayout.LabelField("Project Directory", EditorStyles.boldLabel);
+
+            EditorGUI.indentLevel++;
+            EditorGUILayout.LabelField(
+                new GUIContent(projectRootExists
+                    ? "<color=#5a5>OK Project root: " + request.ProjectRoot + "</color>"
+                    : "<color=#c55>Missing project root: " + request.ProjectRoot + "</color>"),
+                RichWrapMiniLabel);
+
+            EditorGUILayout.LabelField(
+                new GUIContent(directoryExists
+                    ? "<color=#5a5>OK DataTable dir: " + request.WorkingDirectory + "</color>"
+                    : "<color=#c55>Missing DataTable dir: " + request.WorkingDirectory + "</color>"),
+                RichWrapMiniLabel);
+
+            if (!string.IsNullOrEmpty(request.ProjectDirectory))
+            {
+                EditorGUILayout.LabelField(
+                    new GUIContent("<color=#888>Configured dir: " + request.ProjectDirectory + "</color>"),
+                    RichWrapMiniLabel);
+            }
+
+            EditorGUI.indentLevel--;
+        }
+
+        protected virtual void DrawValidation()
+        {
+            var request = GetCachedRequest();
             EditorGUILayout.LabelField("Validation", EditorStyles.boldLabel);
 
-            var settings = (DataTableSettings)target;
-            var projectRoot = GetProjectRoot();
-            var resolvedDir = Path.GetFullPath(Path.Combine(projectRoot, settings.DataTableProjectDir));
-            var ext = Application.platform == RuntimePlatform.WindowsEditor ? ".bat" : ".sh";
-            var scriptPath = Path.Combine(resolvedDir, settings.ScriptName + ext);
-
-            var dirExists = Directory.Exists(resolvedDir);
-            var scriptExists = File.Exists(scriptPath);
-
-            if (dirExists && scriptExists)
+            if (string.IsNullOrEmpty(_cachedValidationError))
             {
                 EditorGUILayout.HelpBox(
                     "Ready. The configured Luban project directory and build script both exist.",
                     MessageType.Info);
-            }
-            else if (dirExists && !scriptExists)
-            {
-                EditorGUILayout.HelpBox(
-                    "The Luban project directory exists but the build script was not found. " +
-                    "Check the Script Name field — does it match your .bat/.sh file?",
-                    MessageType.Warning);
-            }
-            else if (!dirExists)
-            {
-                EditorGUILayout.HelpBox(
-                    "The Luban project directory does not exist. Create it and set up a Luban " +
-                    "project with Excel files and build scripts. See the module README for setup instructions.",
-                    MessageType.Warning);
+                return;
             }
 
-            if (settings.DataTableProjectDir.Contains(".."))
+            EditorGUILayout.HelpBox(_cachedValidationError, MessageType.Warning);
+
+            if (Directory.Exists(request.WorkingDirectory) && _cachedScripts.Length > 0)
             {
-                if (!resolvedDir.StartsWith(projectRoot) && !Directory.Exists(resolvedDir))
+                EditorGUILayout.LabelField("Scripts Found", EditorStyles.miniBoldLabel);
+                for (int i = 0; i < _cachedScripts.Length; i++)
                 {
-                    EditorGUILayout.HelpBox(
-                        "The configured path uses '..' to point outside the project. This is normal " +
-                        "for multi-repo setups but ensure the directory actually exists.",
-                        MessageType.Warning);
+                    EditorGUILayout.LabelField("  " + _cachedScripts[i], RichMiniLabel);
                 }
             }
         }
 
-        private void DrawActions()
+        protected virtual void DrawActions()
         {
             EditorGUILayout.LabelField("Quick Actions", EditorStyles.boldLabel);
 
-            EditorGUILayout.BeginHorizontal();
-
-            if (GUILayout.Button("Reveal Settings Asset"))
+            using (new EditorGUILayout.HorizontalScope())
             {
-                var path = AssetDatabase.GetAssetPath(target);
-                EditorUtility.RevealInFinder(path);
+                if (DrawButton("Refresh"))
+                {
+                    RefreshValidationCache();
+                }
+
+                if (DrawButton("Reveal Settings Asset"))
+                {
+                    var path = AssetDatabase.GetAssetPath(target);
+                    if (!string.IsNullOrEmpty(path))
+                    {
+                        EditorUtility.RevealInFinder(path);
+                    }
+                }
             }
 
-            if (GUILayout.Button("Run Luban Build"))
+            using (new EditorGUILayout.HorizontalScope())
             {
-                DataTableLubanRunner.Run();
+                if (DrawButton("Open Project Directory"))
+                {
+                    OpenProjectDirectory();
+                }
+
+                if (DrawButton("Run Luban Build"))
+                {
+                    var result = DataTableLubanRunner.RunWithResult((DataTableSettings)target);
+                    if (!result.Success)
+                    {
+                        EditorUtility.DisplayDialog("Luban Build Failed", result.ErrorMessage, "OK");
+                    }
+                }
             }
-
-            EditorGUILayout.EndHorizontal();
-
-            EditorGUILayout.BeginHorizontal();
-
-            if (GUILayout.Button("Open Project Directory"))
-            {
-                var settings = (DataTableSettings)target;
-                var projectRoot = GetProjectRoot();
-                var resolvedDir = Path.GetFullPath(Path.Combine(projectRoot, settings.DataTableProjectDir));
-                if (Directory.Exists(resolvedDir))
-                    EditorUtility.RevealInFinder(resolvedDir);
-                else
-                    EditorUtility.DisplayDialog(
-                        "Directory Not Found",
-                        $"The directory does not exist:\n{resolvedDir}\n\nCreate it first.",
-                        "OK");
-            }
-
-            EditorGUILayout.EndHorizontal();
         }
 
-        private static string GetProjectRoot()
+        /// <summary>
+        /// Derived editors can override this to draw project-specific fields after the base UI.
+        /// </summary>
+        protected virtual void DrawExtensionFields()
         {
-            return Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+        }
+
+        protected virtual DataTableLubanRunRequest CreatePreviewRequest()
+        {
+            return ((DataTableSettings)target).CreateLubanRunRequest();
+        }
+
+        protected void RefreshValidationCache()
+        {
+            _cachedRequest = CreatePreviewRequest();
+            _cachedValidationError = DataTableLubanRunner.ValidateRequest(_cachedRequest);
+            _cachedScripts = FindBuildScripts(_cachedRequest.WorkingDirectory);
+            _lastTargetHash = ComputeTargetHash();
+        }
+
+        protected DataTableLubanRunRequest GetCachedRequest()
+        {
+            if (_cachedRequest == null || _lastTargetHash != ComputeTargetHash())
+            {
+                RefreshValidationCache();
+            }
+
+            return _cachedRequest;
+        }
+
+        private void OpenProjectDirectory()
+        {
+            var request = GetCachedRequest();
+            if (Directory.Exists(request.WorkingDirectory))
+            {
+                EditorUtility.RevealInFinder(request.WorkingDirectory);
+                return;
+            }
+
+            EditorUtility.DisplayDialog(
+                "Directory Not Found",
+                "The directory does not exist:\n" + request.WorkingDirectory,
+                "OK");
+        }
+
+        private static void DrawPropertyIfPresent(SerializedProperty property, GUIContent label)
+        {
+            if (property != null)
+            {
+                EditorGUILayout.PropertyField(property, label);
+            }
+        }
+
+        private static bool DrawButton(string label)
+        {
+            var rect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
+            return GUI.Button(rect, label);
+        }
+
+        private static string[] FindBuildScripts(string directory)
+        {
+            if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            {
+                return System.Array.Empty<string>();
+            }
+
+            var batFiles = Directory.GetFiles(directory, "*.bat", SearchOption.TopDirectoryOnly);
+            var shFiles = Directory.GetFiles(directory, "*.sh", SearchOption.TopDirectoryOnly);
+            var scripts = new string[batFiles.Length + shFiles.Length];
+            for (int i = 0; i < batFiles.Length; i++)
+            {
+                scripts[i] = Path.GetFileName(batFiles[i]);
+            }
+
+            for (int i = 0; i < shFiles.Length; i++)
+            {
+                scripts[batFiles.Length + i] = Path.GetFileName(shFiles[i]);
+            }
+
+            return scripts;
+        }
+
+        private int ComputeTargetHash()
+        {
+            var settings = (DataTableSettings)target;
+            unchecked
+            {
+                var hash = 17;
+                hash = hash * 31 + (settings.DataTableProjectDir == null ? 0 : settings.DataTableProjectDir.GetHashCode());
+                hash = hash * 31 + (settings.ScriptName == null ? 0 : settings.ScriptName.GetHashCode());
+                hash = hash * 31 + (settings.ScriptArguments == null ? 0 : settings.ScriptArguments.GetHashCode());
+                hash = hash * 31 + settings.TimeoutSeconds;
+                hash = hash * 31 + (settings.AutoRefreshAssets ? 1 : 0);
+                return hash;
+            }
         }
     }
 }

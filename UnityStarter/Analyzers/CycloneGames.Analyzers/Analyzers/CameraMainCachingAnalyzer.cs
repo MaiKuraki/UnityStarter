@@ -18,11 +18,6 @@ namespace CycloneGames.Analyzers
             "OnGUI"
         };
 
-        private static readonly string[] AllowedCachingMethods =
-        {
-            "Awake", "Start", "OnEnable", "Initialize", "Init"
-        };
-
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
             ImmutableArray.Create(DiagnosticRules.CameraMainInHotPath);
 
@@ -33,41 +28,35 @@ namespace CycloneGames.Analyzers
             context.RegisterSyntaxNodeAction(AnalyzeMemberAccess, SyntaxKind.SimpleMemberAccessExpression);
         }
 
-        private void AnalyzeMemberAccess(SyntaxNodeAnalysisContext context)
+        private static void AnalyzeMemberAccess(SyntaxNodeAnalysisContext context)
         {
             var memberAccess = (MemberAccessExpressionSyntax)context.Node;
-
-            // Must be Camera.main pattern
             if (memberAccess.Name.Identifier.Text != "main") return;
 
             var symbolInfo = context.SemanticModel.GetSymbolInfo(memberAccess);
-            if (symbolInfo.Symbol is IPropertySymbol prop &&
-                prop.ContainingType?.ToString() == "UnityEngine.Camera" &&
-                prop.Name == "main")
-            {
-                // Check if we're inside a hot path method
-                var containingMethod = memberAccess.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
-                if (containingMethod == null) return;
+            if (symbolInfo.Symbol is not IPropertySymbol prop) return;
+            if (prop.ContainingType?.ToString() != "UnityEngine.Camera" || prop.Name != "main") return;
 
-                var methodName = containingMethod.Identifier.Text;
+            var containingMethod = memberAccess.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault();
+            if (containingMethod == null) return;
 
-                // Skip if in a caching method (Awake/Start etc.)
-                if (IsAllowedCachingMethod(methodName)) return;
+            var methodName = containingMethod.Identifier.Text;
+            if (!IsHotPathMethod(methodName)) return;
 
-                var diagnostic = Diagnostic.Create(
-                    DiagnosticRules.CameraMainInHotPath,
-                    memberAccess.GetLocation(),
-                    methodName);
-                context.ReportDiagnostic(diagnostic);
-            }
+            var diagnostic = Diagnostic.Create(
+                DiagnosticRules.CameraMainInHotPath,
+                memberAccess.GetLocation(),
+                methodName);
+            context.ReportDiagnostic(diagnostic);
         }
 
-        private static bool IsAllowedCachingMethod(string methodName)
+        private static bool IsHotPathMethod(string methodName)
         {
-            foreach (var name in AllowedCachingMethods)
+            foreach (var name in HotPathMethodNames)
             {
                 if (methodName == name) return true;
             }
+
             return false;
         }
     }

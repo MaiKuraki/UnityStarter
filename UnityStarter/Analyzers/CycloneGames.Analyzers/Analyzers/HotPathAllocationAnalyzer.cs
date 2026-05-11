@@ -51,13 +51,13 @@ namespace CycloneGames.Analyzers
             var methodSymbol = context.SemanticModel.GetDeclaredSymbol(methodDecl);
             if (methodSymbol == null) return;
 
-            // 1. Check foreach (skip value-type enumerators — zero GC in IL2CPP)
+            // 1. Check foreach and skip known zero-allocation enumerators in IL2CPP.
             foreach (var forEachStmt in methodDecl.DescendantNodes().OfType<ForEachStatementSyntax>())
             {
                 var typeInfo = context.SemanticModel.GetTypeInfo(forEachStmt.Expression);
                 var fullTypeName = typeInfo.Type?.ToString() ?? "";
 
-                // Value-type enumerators produce zero GC — safe in hot paths
+                // Value-type enumerators produce zero GC and are safe in hot paths.
                 if (IsZeroAllocationEnumerator(fullTypeName)) continue;
 
                 var typeName = typeInfo.Type?.Name ?? "collection";
@@ -91,7 +91,7 @@ namespace CycloneGames.Analyzers
             }
 
             // 3. Check string concatenation (interpolation and Format).
-            //    Skip logging calls and exception constructors — those are one-time error paths.
+            //    Skip logging calls and exception constructors because those are one-time error paths.
             foreach (var interpolation in methodDecl.DescendantNodes().OfType<InterpolatedStringExpressionSyntax>())
             {
                 if (IsLogOrExceptionArgument(interpolation)) continue;
@@ -122,8 +122,6 @@ namespace CycloneGames.Analyzers
             }
         }
 
-        // ── Zero-allocation enumerator types ──────────────────────────────
-
         private static bool IsZeroAllocationEnumerator(string fullTypeName)
         {
             return fullTypeName.StartsWith("System.Collections.Generic.List<") ||
@@ -135,8 +133,6 @@ namespace CycloneGames.Analyzers
                    fullTypeName.StartsWith("System.Collections.Immutable.ImmutableArray<") ||
                    fullTypeName.StartsWith("System.Collections.Generic.Dictionary<");
         }
-
-        // ── Logging / exception detection ─────────────────────────────────
 
         private static bool IsLogOrExceptionArgument(ExpressionSyntax node)
         {
