@@ -146,3 +146,10 @@ mono_crash.*
 
 ## Log Example
 AppLog.txt
+
+## Analyzer
+![Aa]nalyzers/
+![Aa]nalyzers/CycloneGames.Analyzers.sln
+![Aa]nalyzers/CycloneGames.Analyzers/CycloneGames.Analyzers.csproj
+[Aa]nalyzers/CycloneGames.Analyzers/bin
+[Aa]nalyzers/CycloneGames.Analyzers/obj

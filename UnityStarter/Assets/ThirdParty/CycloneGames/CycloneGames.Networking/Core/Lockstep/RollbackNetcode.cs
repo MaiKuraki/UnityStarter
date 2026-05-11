@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using CycloneGames.DeterministicMath;
 
 namespace CycloneGames.Networking.Lockstep
 {
