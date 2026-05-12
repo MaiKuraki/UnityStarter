@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.Networking.Tests.Editor",
+    "rootNamespace": "CycloneGames.Networking.Tests.Editor",
+    "references": [
+        "CycloneGames.Networking.Core",
+        "CycloneGames.Networking.Unity.Runtime",
+        "CycloneGames.DeterministicMath.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

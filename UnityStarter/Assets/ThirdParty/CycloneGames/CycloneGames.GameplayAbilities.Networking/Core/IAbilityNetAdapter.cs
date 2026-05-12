@@ -10,7 +10,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         void ConfirmAbilityActivation(INetConnection owner, int abilityId, int predictionKey);
         void RejectAbilityActivation(INetConnection owner, int abilityId, int predictionKey);
         void ReplicateEffectApplied(IReadOnlyList<INetConnection> observers, int effectDefinitionId,
-            uint targetNetworkId, uint sourceNetworkId, int stackCount, float duration, int predictionKey);
+            uint targetNetworkId, uint sourceNetworkId, int stackCount, long durationRaw, int predictionKey);
         void ReplicateEffectRemoved(IReadOnlyList<INetConnection> observers,
             uint targetNetworkId, int effectInstanceId);
     }

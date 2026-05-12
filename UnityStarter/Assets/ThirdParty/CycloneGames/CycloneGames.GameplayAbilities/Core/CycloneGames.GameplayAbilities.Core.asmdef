@@ -4,7 +4,8 @@
     "references": [
         "CycloneGames.Logger",
         "CycloneGames.GameplayTags.Core",
-        "CycloneGames.Factory.Runtime"
+        "CycloneGames.Factory.Runtime",
+        "CycloneGames.DeterministicMath.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

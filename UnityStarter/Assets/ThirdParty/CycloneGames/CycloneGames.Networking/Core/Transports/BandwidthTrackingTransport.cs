@@ -40,6 +40,7 @@ namespace CycloneGames.Networking.Transports
             _inner.OnConnectedToServer += () => OnConnectedToServer?.Invoke();
             _inner.OnDisconnectedFromServer += () => OnDisconnectedFromServer?.Invoke();
             _inner.OnError += (conn, err, msg) => OnError?.Invoke(conn, err, msg);
+            _inner.OnDataReceived += HandleDataReceived;
         }
 
         /// <summary>
@@ -66,6 +67,7 @@ namespace CycloneGames.Networking.Transports
         public event Action OnConnectedToServer;
         public event Action OnDisconnectedFromServer;
         public event Action<INetConnection, TransportError, string> OnError;
+        public event Action<INetConnection, ArraySegment<byte>, int> OnDataReceived;
 
         public void StartServer()
         {
@@ -94,6 +96,12 @@ namespace CycloneGames.Networking.Transports
             _meter.RecordSend(payload.Count * connections.Count);
         }
 
+        private void HandleDataReceived(INetConnection connection, ArraySegment<byte> payload, int channelId)
+        {
+            _meter.RecordReceive(payload.Count);
+            OnDataReceived?.Invoke(connection, payload, channelId);
+        }
+
         #endregion
 
         #region IPollableTransport
@@ -113,6 +121,7 @@ namespace CycloneGames.Networking.Transports
 
         public void Dispose()
         {
+            _inner.OnDataReceived -= HandleDataReceived;
             if (_inner is IDisposable d)
                 d.Dispose();
         }

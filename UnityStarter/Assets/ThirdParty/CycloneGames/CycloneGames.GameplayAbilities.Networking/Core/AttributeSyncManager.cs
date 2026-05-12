@@ -139,8 +139,8 @@ namespace CycloneGames.GameplayAbilities.Networking
                 _fullSyncEntries[count++] = new AttributeEntry
                 {
                     AttributeId = attrId,
-                    BaseValue = baseVal,
-                    CurrentValue = curVal
+                    BaseValueRaw = GASNetFixed.FromFloat(baseVal),
+                    CurrentValueRaw = GASNetFixed.FromFloat(curVal)
                 };
             }
 
@@ -188,8 +188,8 @@ namespace CycloneGames.GameplayAbilities.Networking
                     _dirtyEntries[i] = new AttributeEntry
                     {
                         AttributeId = attributeId,
-                        BaseValue = baseValue,
-                        CurrentValue = currentValue
+                        BaseValueRaw = GASNetFixed.FromFloat(baseValue),
+                        CurrentValueRaw = GASNetFixed.FromFloat(currentValue)
                     };
                     return;
                 }
@@ -198,8 +198,8 @@ namespace CycloneGames.GameplayAbilities.Networking
                 _dirtyEntries[_dirtyCount++] = new AttributeEntry
                 {
                     AttributeId = attributeId,
-                    BaseValue = baseValue,
-                    CurrentValue = currentValue
+                    BaseValueRaw = GASNetFixed.FromFloat(baseValue),
+                    CurrentValueRaw = GASNetFixed.FromFloat(currentValue)
                 };
             }
 
