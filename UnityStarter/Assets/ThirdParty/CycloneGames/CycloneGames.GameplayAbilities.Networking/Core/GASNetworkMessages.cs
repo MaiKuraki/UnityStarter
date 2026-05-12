@@ -47,9 +47,9 @@ namespace CycloneGames.GameplayAbilities.Networking
         public int EffectDefinitionId;
         public int Level;
         public int StackCount;
-        public float Duration;
-        public float TimeRemaining;
-        public float PeriodTimeRemaining;
+        public long DurationRaw;
+        public long TimeRemainingRaw;
+        public long PeriodTimeRemainingRaw;
         public int PredictionKey;
         public int PredictionKeyOwner;
         public int PredictionInputSequence;
@@ -60,7 +60,7 @@ namespace CycloneGames.GameplayAbilities.Networking
     public struct SetByCallerEntry
     {
         public int TagHash;
-        public float Value;
+        public long ValueRaw;
     }
 
     public struct EffectRemoveData
@@ -84,9 +84,9 @@ namespace CycloneGames.GameplayAbilities.Networking
         public int EffectDefinitionId;
         public int Level;
         public int StackCount;
-        public float Duration;
-        public float TimeRemaining;
-        public float PeriodTimeRemaining;
+        public long DurationRaw;
+        public long TimeRemainingRaw;
+        public long PeriodTimeRemainingRaw;
         public int PredictionKey;
         public int PredictionKeyOwner;
         public int PredictionInputSequence;
@@ -105,8 +105,8 @@ namespace CycloneGames.GameplayAbilities.Networking
     public struct AttributeEntry
     {
         public int AttributeId;
-        public float BaseValue;
-        public float CurrentValue;
+        public long BaseValueRaw;
+        public long CurrentValueRaw;
     }
 
     public struct TagUpdateData

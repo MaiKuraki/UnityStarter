@@ -154,11 +154,13 @@ namespace CycloneGames.Networking.Lockstep
         public void ReceiveRemoteInput(int peerId, int frame, in TInput input)
         {
             if (peerId < 0 || peerId >= _peerCount || peerId == _localPeerId) return;
+            if (frame <= _currentFrame - _bufferSize || frame >= _currentFrame + _bufferSize) return;
 
             int slot = frame & _bufferMask;
 
             // Store confirmed input
             _confirmedInputs[slot, peerId] = input;
+            _inputConfirmed[slot, peerId] = true;
             _peerLastInput[peerId] = input;
 
             if (frame > _peerLastConfirmedFrame[peerId])
@@ -185,8 +187,6 @@ namespace CycloneGames.Networking.Lockstep
                     Rollback(frame);
                 }
             }
-
-            _inputConfirmed[slot, peerId] = true;
 
             // Update global confirmed frame
             UpdateLastConfirmedFrame();

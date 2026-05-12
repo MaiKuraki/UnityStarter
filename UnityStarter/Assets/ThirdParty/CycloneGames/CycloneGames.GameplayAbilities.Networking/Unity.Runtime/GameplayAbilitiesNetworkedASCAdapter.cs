@@ -158,6 +158,10 @@ namespace CycloneGames.GameplayAbilities.Networking
         private int[] _removedTagHashesBuffer = Array.Empty<int>();
         private int[] _fullStateTagHashesBuffer = Array.Empty<int>();
         private int[] _currentFullStateTagHashesBuffer = Array.Empty<int>();
+        private EffectReplicationData[] _checksumEffectsBuffer = Array.Empty<EffectReplicationData>();
+        private GrantedAbilityEntry[] _checksumGrantedAbilitiesBuffer = Array.Empty<GrantedAbilityEntry>();
+        private AttributeEntry[] _checksumAttributeEntriesBuffer = Array.Empty<AttributeEntry>();
+        private int[] _checksumTagHashesBuffer = Array.Empty<int>();
         private SetByCallerEntry[][] _currentEffectSetByCallerEntries = Array.Empty<SetByCallerEntry[]>();
 
         private readonly HashSet<int> _targetTagHashSetScratch =
@@ -281,6 +285,10 @@ namespace CycloneGames.GameplayAbilities.Networking
             EnsureArrayCapacity(ref _removedTagHashesBuffer, tagDeltaCapacity);
             EnsureArrayCapacity(ref _fullStateTagHashesBuffer, tagDeltaCapacity);
             EnsureArrayCapacity(ref _currentFullStateTagHashesBuffer, tagDeltaCapacity);
+            EnsureArrayCapacity(ref _checksumEffectsBuffer, activeEffectCapacity);
+            EnsureArrayCapacity(ref _checksumGrantedAbilitiesBuffer, abilityCapacity);
+            EnsureArrayCapacity(ref _checksumAttributeEntriesBuffer, attributeCapacity);
+            EnsureArrayCapacity(ref _checksumTagHashesBuffer, tagDeltaCapacity);
             EnsureSetByCallerScratchCapacity(maxSetByCallerPerEffect);
 
             if (activeEffectCapacity > 0 && maxSetByCallerPerEffect > 0)
@@ -401,9 +409,9 @@ namespace CycloneGames.GameplayAbilities.Networking
                     localEffect,
                     Math.Max(1, data.Level),
                     data.StackCount,
-                    data.Duration,
-                    data.TimeRemaining,
-                    data.PeriodTimeRemaining,
+                    GASNetFixed.ToFloat(data.DurationRaw),
+                    GASNetFixed.ToFloat(data.TimeRemainingRaw),
+                    GASNetFixed.ToFloat(data.PeriodTimeRemainingRaw),
                     _setByCallerTagsScratch,
                     _setByCallerValuesScratch,
                     setByCallerCount);
@@ -474,9 +482,9 @@ namespace CycloneGames.GameplayAbilities.Networking
                     localEffect,
                     Math.Max(1, data.Level),
                     data.StackCount,
-                    data.Duration,
-                    data.TimeRemaining,
-                    data.PeriodTimeRemaining,
+                    GASNetFixed.ToFloat(data.DurationRaw),
+                    GASNetFixed.ToFloat(data.TimeRemainingRaw),
+                    GASNetFixed.ToFloat(data.PeriodTimeRemainingRaw),
                     _setByCallerTagsScratch,
                     _setByCallerValuesScratch,
                     setByCallerCount);
@@ -509,8 +517,8 @@ namespace CycloneGames.GameplayAbilities.Networking
                 if (attribute == null || owningSet == null)
                     continue;
 
-                owningSet.SetBaseValue(attribute, entry.BaseValue);
-                owningSet.SetCurrentValue(attribute, entry.CurrentValue);
+                owningSet.SetBaseValue(attribute, GASNetFixed.ToFloat(entry.BaseValueRaw));
+                owningSet.SetCurrentValue(attribute, GASNetFixed.ToFloat(entry.CurrentValueRaw));
             }
         }
 
@@ -538,7 +546,15 @@ namespace CycloneGames.GameplayAbilities.Networking
             {
                 TargetNetworkId = NetworkId,
                 StateVersion = _asc.StateVersion,
-                StateChecksum = _asc.ComputeReplicatedStateChecksum(),
+                StateChecksum = ComputeNetworkStateChecksum(
+                    _grantedAbilitiesBuffer,
+                    abilityCount,
+                    _currentEffectsScratch,
+                    effectCount,
+                    _attributeEntriesBuffer,
+                    attributeCount,
+                    _fullStateTagHashesBuffer,
+                    tagCount),
                 AbilityCount = abilityCount,
                 Abilities = _grantedAbilitiesBuffer,
                 EffectCount = effectCount,
@@ -615,7 +631,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             }
             else if (EnableStrictChecksumValidation && metadata.StateChecksum != 0)
             {
-                uint localChecksum = _asc.ComputeReplicatedStateChecksum();
+                uint localChecksum = ComputeCurrentNetworkStateChecksum();
                 if (localChecksum != metadata.StateChecksum)
                 {
                     reason = GASStateDriftReason.ChecksumMismatch;
@@ -792,6 +808,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (_stateDeltaBuffer.HasChanges)
             {
                 _stateDeltaBuffer.Sequence = ++_outgoingStateSyncSequence;
+                _stateDeltaBuffer.StateChecksum = ComputeCurrentNetworkStateChecksum();
             }
 
             return new ReplicatedAbilitySystemStateDelta(
@@ -1059,7 +1076,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 var entry = data.SetByCallerEntries[i];
                 if (_idRegistry.TryResolveTag(entry.TagHash, out var tag) && tag.IsValid && !tag.IsNone)
                 {
-                    spec.SetSetByCallerMagnitude(tag, entry.Value);
+                    spec.SetSetByCallerMagnitude(tag, GASNetFixed.ToFloat(entry.ValueRaw));
                 }
             }
         }
@@ -1079,7 +1096,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 if (_idRegistry.TryResolveTag(entry.TagHash, out var tag) && tag.IsValid && !tag.IsNone)
                 {
                     _setByCallerTagsScratch[resolvedCount] = tag;
-                    _setByCallerValuesScratch[resolvedCount] = entry.Value;
+                    _setByCallerValuesScratch[resolvedCount] = GASNetFixed.ToFloat(entry.ValueRaw);
                     resolvedCount++;
                 }
             }
@@ -1180,8 +1197,8 @@ namespace CycloneGames.GameplayAbilities.Networking
                     entries[index++] = new AttributeEntry
                     {
                         AttributeId = attributeId,
-                        BaseValue = attribute.BaseValue,
-                        CurrentValue = attribute.CurrentValue
+                        BaseValueRaw = GASNetFixed.FromFloat(attribute.BaseValue),
+                        CurrentValueRaw = GASNetFixed.FromFloat(attribute.CurrentValue)
                     };
                 }
             }
@@ -1253,8 +1270,8 @@ namespace CycloneGames.GameplayAbilities.Networking
                 entries[index++] = new AttributeEntry
                 {
                     AttributeId = attributeId,
-                    BaseValue = attribute.BaseValue,
-                    CurrentValue = attribute.CurrentValue
+                    BaseValueRaw = GASNetFixed.FromFloat(attribute.BaseValue),
+                    CurrentValueRaw = GASNetFixed.FromFloat(attribute.CurrentValue)
                 };
             }
 
@@ -1307,9 +1324,9 @@ namespace CycloneGames.GameplayAbilities.Networking
                     EffectDefinitionId = effect.Spec.Def != null ? _idRegistry.GetEffectDefinitionId(effect.Spec.Def) : 0,
                     Level = effect.Spec.Level,
                     StackCount = effect.StackCount,
-                    Duration = effect.Spec.Duration,
-                    TimeRemaining = effect.TimeRemaining,
-                    PeriodTimeRemaining = effect.PeriodTimeRemaining,
+                    DurationRaw = GASNetFixed.FromFloat(effect.Spec.Duration),
+                    TimeRemainingRaw = GASNetFixed.FromFloat(effect.TimeRemaining),
+                    PeriodTimeRemainingRaw = GASNetFixed.FromFloat(effect.PeriodTimeRemaining),
                     PredictionKey = predictionKey.Key,
                     PredictionKeyOwner = predictionKey.Owner.Value,
                     PredictionInputSequence = predictionKey.InputSequence,
@@ -1366,10 +1383,11 @@ namespace CycloneGames.GameplayAbilities.Networking
                 networkEntries[i] = new SetByCallerEntry
                 {
                     TagHash = _idRegistry.GetTagHash(_setByCallerTagsScratch[i]),
-                    Value = _setByCallerValuesScratch[i]
+                    ValueRaw = GASNetFixed.FromFloat(_setByCallerValuesScratch[i])
                 };
             }
 
+            Array.Sort(networkEntries, 0, copiedCount, SetByCallerEntryComparer.Instance);
             return networkEntries;
         }
 
@@ -1607,9 +1625,9 @@ namespace CycloneGames.GameplayAbilities.Networking
                 && previous.EffectInstanceId == current.EffectInstanceId
                 && previous.EffectDefinitionId == current.EffectDefinitionId
                 && previous.Level == current.Level
-                && AreApproximatelyEqual(previous.Duration, current.Duration)
-                && AreApproximatelyEqual(previous.TimeRemaining, current.TimeRemaining)
-                && AreApproximatelyEqual(previous.PeriodTimeRemaining, current.PeriodTimeRemaining)
+                && previous.DurationRaw == current.DurationRaw
+                && previous.TimeRemainingRaw == current.TimeRemainingRaw
+                && previous.PeriodTimeRemainingRaw == current.PeriodTimeRemainingRaw
                 && previous.PredictionKey == current.PredictionKey
                 && previous.PredictionKeyOwner == current.PredictionKeyOwner
                 && previous.PredictionInputSequence == current.PredictionInputSequence
@@ -1624,18 +1642,13 @@ namespace CycloneGames.GameplayAbilities.Networking
                 && previous.EffectDefinitionId == current.EffectDefinitionId
                 && previous.Level == current.Level
                 && previous.StackCount == current.StackCount
-                && AreApproximatelyEqual(previous.Duration, current.Duration)
-                && AreApproximatelyEqual(previous.TimeRemaining, current.TimeRemaining)
-                && AreApproximatelyEqual(previous.PeriodTimeRemaining, current.PeriodTimeRemaining)
+                && previous.DurationRaw == current.DurationRaw
+                && previous.TimeRemainingRaw == current.TimeRemainingRaw
+                && previous.PeriodTimeRemainingRaw == current.PeriodTimeRemainingRaw
                 && previous.PredictionKey == current.PredictionKey
                 && previous.PredictionKeyOwner == current.PredictionKeyOwner
                 && previous.PredictionInputSequence == current.PredictionInputSequence
                 && AreSetByCallerEntriesEqual(previous.SetByCallerEntries, previous.SetByCallerCount, current.SetByCallerEntries, current.SetByCallerCount);
-        }
-
-        private static bool AreApproximatelyEqual(float left, float right)
-        {
-            return Math.Abs(left - right) <= 0.0001f;
         }
 
         private static bool AreSetByCallerEntriesEqual(
@@ -1658,7 +1671,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 if (leftEntries[i].TagHash != rightEntries[i].TagHash)
                     return false;
 
-                if (!AreApproximatelyEqual(leftEntries[i].Value, rightEntries[i].Value))
+                if (leftEntries[i].ValueRaw != rightEntries[i].ValueRaw)
                     return false;
             }
 
@@ -1680,9 +1693,9 @@ namespace CycloneGames.GameplayAbilities.Networking
                 EffectDefinitionId = data.EffectDefinitionId,
                 Level = data.Level,
                 StackCount = data.StackCount,
-                Duration = data.Duration,
-                TimeRemaining = data.TimeRemaining,
-                PeriodTimeRemaining = data.PeriodTimeRemaining,
+                DurationRaw = data.DurationRaw,
+                TimeRemainingRaw = data.TimeRemainingRaw,
+                PeriodTimeRemainingRaw = data.PeriodTimeRemainingRaw,
                 PredictionKey = data.PredictionKey,
                 PredictionKeyOwner = data.PredictionKeyOwner,
                 PredictionInputSequence = data.PredictionInputSequence,
@@ -1708,15 +1721,54 @@ namespace CycloneGames.GameplayAbilities.Networking
                 EffectDefinitionId = data.EffectDefinitionId,
                 Level = data.Level,
                 StackCount = data.StackCount,
-                Duration = data.Duration,
-                TimeRemaining = data.TimeRemaining,
-                PeriodTimeRemaining = data.PeriodTimeRemaining,
+                DurationRaw = data.DurationRaw,
+                TimeRemainingRaw = data.TimeRemainingRaw,
+                PeriodTimeRemainingRaw = data.PeriodTimeRemainingRaw,
                 PredictionKey = data.PredictionKey,
                 PredictionKeyOwner = data.PredictionKeyOwner,
                 PredictionInputSequence = data.PredictionInputSequence,
                 SetByCallerCount = data.SetByCallerCount,
                 SetByCallerEntries = data.SetByCallerEntries
             };
+        }
+
+        private uint ComputeCurrentNetworkStateChecksum()
+        {
+            int abilityCount = FillGrantedAbilitiesFromAsc(ref _checksumGrantedAbilitiesBuffer);
+            int effectCount = FillActiveEffects(_asc.ActiveEffects, ref _checksumEffectsBuffer);
+            int attributeCount = FillAttributeEntriesFromAsc(ref _checksumAttributeEntriesBuffer);
+            int tagCount = FillTagHashesFromAsc(ref _checksumTagHashesBuffer);
+
+            return ComputeNetworkStateChecksum(
+                _checksumGrantedAbilitiesBuffer,
+                abilityCount,
+                _checksumEffectsBuffer,
+                effectCount,
+                _checksumAttributeEntriesBuffer,
+                attributeCount,
+                _checksumTagHashesBuffer,
+                tagCount);
+        }
+
+        private static uint ComputeNetworkStateChecksum(
+            GrantedAbilityEntry[] abilities,
+            int abilityCount,
+            EffectReplicationData[] effects,
+            int effectCount,
+            AttributeEntry[] attributes,
+            int attributeCount,
+            int[] tagHashes,
+            int tagCount)
+        {
+            return GASNetworkStateChecksum.Compute(
+                abilities,
+                abilityCount,
+                effects,
+                effectCount,
+                attributes,
+                attributeCount,
+                tagHashes,
+                tagCount);
         }
 
         private int GetOrCreateEffectInstanceId(ActiveGameplayEffect effect)
@@ -1727,6 +1779,16 @@ namespace CycloneGames.GameplayAbilities.Networking
             int next = _nextLocalEffectInstanceId++;
             TrackRemoteEffectMapping(next, effect);
             return next;
+        }
+
+        private sealed class SetByCallerEntryComparer : IComparer<SetByCallerEntry>
+        {
+            public static readonly SetByCallerEntryComparer Instance = new SetByCallerEntryComparer();
+
+            public int Compare(SetByCallerEntry x, SetByCallerEntry y)
+            {
+                return x.TagHash.CompareTo(y.TagHash);
+            }
         }
     }
 }

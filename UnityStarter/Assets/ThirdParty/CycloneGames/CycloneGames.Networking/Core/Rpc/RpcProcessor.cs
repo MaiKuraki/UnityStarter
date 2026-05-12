@@ -119,10 +119,7 @@ namespace CycloneGames.Networking.Rpc
             // even if the handler is concurrently unregistered.
             if (!_handlers.TryGetValue(rpcId, out RpcHandler handler)) return;
 
-            using var buffer = NetworkBufferPool.Get();
-            buffer.WriteBlittable(data);
-
-            var payload = new RpcPayload { RpcId = rpcId, Data = buffer.ToArraySegment() };
+            var payload = RpcPayload.FromBlittable(rpcId, data);
 
             switch (handler.Target)
             {
@@ -152,7 +149,7 @@ namespace CycloneGames.Networking.Rpc
             if (!_handlers.TryGetValue(payload.RpcId, out RpcHandler handler))
                 return;
 
-            using var reader = NetworkBufferPool.GetWithData(payload.Data);
+            using var reader = NetworkBufferPool.GetWithData(payload.AsSegment());
             handler.Invoke(conn, reader);
         }
     }
@@ -160,6 +157,31 @@ namespace CycloneGames.Networking.Rpc
     public struct RpcPayload
     {
         public ushort RpcId;
-        public ArraySegment<byte> Data;
+        public byte[] Data;
+        public int Length;
+
+        public ArraySegment<byte> AsSegment()
+        {
+            return Data == null
+                ? default
+                : new ArraySegment<byte>(Data, 0, Length);
+        }
+
+        public static RpcPayload FromBlittable<T>(ushort rpcId, in T value) where T : unmanaged
+        {
+            using var buffer = NetworkBufferPool.Get();
+            buffer.WriteBlittable(value);
+            ArraySegment<byte> segment = buffer.ToArraySegment();
+
+            byte[] data = new byte[segment.Count];
+            Buffer.BlockCopy(segment.Array!, segment.Offset, data, 0, segment.Count);
+
+            return new RpcPayload
+            {
+                RpcId = rpcId,
+                Data = data,
+                Length = data.Length
+            };
+        }
     }
 }

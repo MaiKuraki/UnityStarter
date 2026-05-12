@@ -100,6 +100,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
         public event Action OnConnectedToServer;
         public event Action OnDisconnectedFromServer;
         public event Action<INetConnection, TransportError, string> OnError;
+        public event Action<INetConnection, ArraySegment<byte>, int> OnDataReceived;
 
         // Internal State
         private readonly Dictionary<ushort, Action<INetConnection, ArraySegment<byte>>> _handlers =
@@ -572,17 +573,23 @@ namespace CycloneGames.Networking.Adapter.Mirror
         // Internal Handlers
         private void OnServerDataReceived(NetworkConnectionToClient conn, CycloneRawMessage msg)
         {
+            var connection = new MirrorNetConnection(conn, GetConnectionData(conn.connectionId));
+            OnDataReceived?.Invoke(connection, msg.Payload, 0);
+
             if (_handlers.TryGetValue(msg.MsgId, out var handler))
             {
-                handler(new MirrorNetConnection(conn, GetConnectionData(conn.connectionId)), msg.Payload);
+                handler(connection, msg.Payload);
             }
         }
 
         private void OnClientDataReceived(CycloneRawMessage msg)
         {
+            var connection = new MirrorNetConnection(NetworkClient.connection, default);
+            OnDataReceived?.Invoke(connection, msg.Payload, 0);
+
             if (_handlers.TryGetValue(msg.MsgId, out var handler))
             {
-                handler(new MirrorNetConnection(NetworkClient.connection, default), msg.Payload);
+                handler(connection, msg.Payload);
             }
         }
     }

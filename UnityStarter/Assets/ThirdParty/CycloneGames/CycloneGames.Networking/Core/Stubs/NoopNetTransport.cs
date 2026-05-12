@@ -23,6 +23,7 @@ namespace CycloneGames.Networking.Stubs
         public event Action OnConnectedToServer;
         public event Action OnDisconnectedFromServer;
         public event Action<INetConnection, TransportError, string> OnError;
+        public event Action<INetConnection, ArraySegment<byte>, int> OnDataReceived;
 
         public void StartServer() { }
         public void StartClient(string address) { }
@@ -40,6 +41,7 @@ namespace CycloneGames.Networking.Stubs
             OnConnectedToServer?.Invoke();
             OnDisconnectedFromServer?.Invoke();
             OnError?.Invoke(null, TransportError.None, null);
+            OnDataReceived?.Invoke(null, default, 0);
         }
     }
 }
