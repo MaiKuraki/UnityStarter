@@ -1588,7 +1588,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private static uint HashFloat(uint hash, float value)
         {
-            return HashInt(hash, BitConverter.SingleToInt32Bits(value));
+            long raw = GASFixedValue.FromFloat(value).RawValue;
+            hash = HashInt(hash, unchecked((int)raw));
+            return HashInt(hash, unchecked((int)(raw >> 32)));
         }
 
         private static uint HashString(uint hash, string value)

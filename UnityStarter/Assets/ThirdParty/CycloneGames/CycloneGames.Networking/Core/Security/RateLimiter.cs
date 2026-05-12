@@ -1,13 +1,12 @@
+using System;
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
-using System.Threading;
 
 namespace CycloneGames.Networking.Security
 {
     /// <summary>
     /// Per-connection rate limiter using token bucket algorithm.
     /// Protects against packet flooding and DDoS from malicious clients.
-    /// Lock-free on the consume hot path after bucket creation.
     /// </summary>
     public sealed class RateLimiter
     {
@@ -27,15 +26,15 @@ namespace CycloneGames.Networking.Security
         /// <summary>
         /// Check if a message from this connection should be allowed.
         /// Returns false if the connection has exceeded its rate limit.
-        /// Lock-free on the hot path; bucket creation uses ConcurrentDictionary's
-        /// built-in GetOrAdd which is lock-free for reads.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryConsume(int connectionId, int payloadBytes, float currentTime)
         {
+            if (payloadBytes < 0) return false;
+
             ConnectionBucket bucket = _buckets.GetOrAdd(connectionId,
                 _ => new ConnectionBucket(MaxMessagesPerSecond, MaxBytesPerSecond, BurstLimit, currentTime));
-            return bucket.TryConsume(payloadBytes, currentTime);
+            return bucket.TryConsume(payloadBytes, currentTime, MaxMessagesPerSecond, MaxBytesPerSecond, BurstLimit);
         }
 
         /// <summary>
@@ -44,7 +43,8 @@ namespace CycloneGames.Networking.Security
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool WouldAllow(int connectionId, float currentTime)
         {
-            return !_buckets.TryGetValue(connectionId, out var bucket) || bucket.WouldAllow(currentTime);
+            return !_buckets.TryGetValue(connectionId, out var bucket)
+                   || bucket.WouldAllow(currentTime, MaxMessagesPerSecond, MaxBytesPerSecond, BurstLimit);
         }
 
         public void RemoveConnection(int connectionId)
@@ -58,14 +58,14 @@ namespace CycloneGames.Networking.Security
         }
 
         /// <summary>
-        /// Get current stats for a connection.
+        /// Get current one-second-equivalent consumed budget for a connection.
         /// </summary>
         public bool GetStats(int connectionId, out int messagesThisSecond, out long bytesThisSecond)
         {
             if (_buckets.TryGetValue(connectionId, out var bucket))
             {
-                messagesThisSecond = bucket.MessagesThisWindow;
-                bytesThisSecond = bucket.BytesThisWindow;
+                bucket.GetStats(MaxMessagesPerSecond, MaxBytesPerSecond, BurstLimit,
+                    out messagesThisSecond, out bytesThisSecond);
                 return true;
             }
             messagesThisSecond = 0;
@@ -74,88 +74,90 @@ namespace CycloneGames.Networking.Security
         }
 
         /// <summary>
-        /// Lock-free token bucket per connection.
-        /// All state mutations use <see cref="Interlocked"/> for thread safety
-        /// without lock acquisition on the consume hot path.
+        /// Token bucket per connection. The lock is per connection, so contention is
+        /// isolated to the connection currently being checked.
         /// </summary>
         private sealed class ConnectionBucket
         {
-            private readonly int _maxMessages;
-            private readonly long _maxBytes;
-            private readonly int _burstLimit;
-
-            private int _messageCount;
-            private long _byteCount;
+            private readonly object _syncRoot = new object();
+            private double _messageTokens;
+            private double _byteTokens;
             private float _windowStart;
             private int _violations;
 
-            public int MessagesThisWindow => Volatile.Read(ref _messageCount);
-            public long BytesThisWindow => Interlocked.Read(ref _byteCount);
-            public int Violations => Volatile.Read(ref _violations);
+            public int Violations => _violations;
 
             public ConnectionBucket(int maxMessages, long maxBytes, int burstLimit, float currentTime)
             {
-                _maxMessages = maxMessages;
-                _maxBytes = maxBytes;
-                _burstLimit = burstLimit;
+                _messageTokens = GetMessageCapacity(maxMessages, burstLimit);
+                _byteTokens = GetByteCapacity(maxBytes);
                 _windowStart = currentTime;
             }
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool TryConsume(int bytes, float currentTime)
+            public bool TryConsume(int bytes, float currentTime, int maxMessages, long maxBytes, int burstLimit)
             {
-                RefreshWindow(currentTime);
-
-                int msgCount = Interlocked.Increment(ref _messageCount);
-                if (msgCount > _maxMessages + _burstLimit)
+                lock (_syncRoot)
                 {
-                    Interlocked.Decrement(ref _messageCount);
-                    Interlocked.Increment(ref _violations);
-                    return false;
-                }
+                    Refill(currentTime, maxMessages, maxBytes, burstLimit);
 
-                long byteTotal = Interlocked.Add(ref _byteCount, bytes);
-                if (byteTotal > _maxBytes)
-                {
-                    Interlocked.Add(ref _byteCount, -bytes);
-                    Interlocked.Decrement(ref _messageCount);
-                    Interlocked.Increment(ref _violations);
-                    return false;
-                }
-
-                return true;
-            }
-
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool WouldAllow(float currentTime)
-            {
-                RefreshWindow(currentTime);
-                return Volatile.Read(ref _messageCount) < _maxMessages + _burstLimit;
-            }
-
-            /// <summary>
-            /// Reset counters when the 1-second window elapses.
-            /// Handles clock corrections (NTP time jumps backwards) by resetting
-            /// the window start to current time rather than letting the window drift.
-            /// </summary>
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            private void RefreshWindow(float currentTime)
-            {
-                float windowStart = _windowStart;
-                float elapsed = currentTime - windowStart;
-
-                if (elapsed >= 1f || elapsed < 0f)
-                {
-                    // Only one thread should perform the reset. CompareExchange
-                    // ensures atomicity: if another thread raced ahead and already
-                    // updated _windowStart, the CAS fails and we skip the reset.
-                    float expected = windowStart;
-                    if (Interlocked.CompareExchange(ref _windowStart, currentTime, expected) == expected)
+                    if (_messageTokens < 1d || _byteTokens < bytes)
                     {
-                        Interlocked.Exchange(ref _messageCount, 0);
-                        Interlocked.Exchange(ref _byteCount, 0);
+                        _violations++;
+                        return false;
                     }
+
+                    _messageTokens -= 1d;
+                    _byteTokens -= bytes;
+                    return true;
                 }
+            }
+
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            public bool WouldAllow(float currentTime, int maxMessages, long maxBytes, int burstLimit)
+            {
+                lock (_syncRoot)
+                {
+                    Refill(currentTime, maxMessages, maxBytes, burstLimit);
+                    return _messageTokens >= 1d;
+                }
+            }
+
+            public void GetStats(int maxMessages, long maxBytes, int burstLimit,
+                out int messagesThisSecond, out long bytesThisSecond)
+            {
+                lock (_syncRoot)
+                {
+                    double messageCapacity = GetMessageCapacity(maxMessages, burstLimit);
+                    double byteCapacity = GetByteCapacity(maxBytes);
+
+                    messagesThisSecond = (int)Math.Max(0d, Math.Ceiling(messageCapacity - _messageTokens));
+                    bytesThisSecond = (long)Math.Max(0d, Math.Ceiling(byteCapacity - _byteTokens));
+                }
+            }
+
+            private void Refill(float currentTime, int maxMessages, long maxBytes, int burstLimit)
+            {
+                float elapsed = currentTime - _windowStart;
+                if (elapsed < 0f)
+                    elapsed = 0f;
+
+                double messageCapacity = GetMessageCapacity(maxMessages, burstLimit);
+                double byteCapacity = GetByteCapacity(maxBytes);
+
+                _messageTokens = Math.Min(messageCapacity, _messageTokens + elapsed * maxMessages);
+                _byteTokens = Math.Min(byteCapacity, _byteTokens + elapsed * maxBytes);
+                _windowStart = currentTime;
+            }
+
+            private static double GetMessageCapacity(int maxMessages, int burstLimit)
+            {
+                return Math.Max(1, maxMessages) + Math.Max(0, burstLimit);
+            }
+
+            private static double GetByteCapacity(long maxBytes)
+            {
+                return Math.Max(1L, maxBytes);
             }
         }
     }

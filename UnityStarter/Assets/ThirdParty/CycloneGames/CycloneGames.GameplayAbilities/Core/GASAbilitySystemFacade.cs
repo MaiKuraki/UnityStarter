@@ -140,6 +140,76 @@ namespace CycloneGames.GameplayAbilities.Core
         public void SetNumericAttributeBase(GASAttributeId attributeId, float value)
         {
             state.SetAttributeBase(attributeId, value);
+            SendStateDelta();
+        }
+
+        public void SetNumericAttributeBaseRaw(GASAttributeId attributeId, long valueRaw)
+        {
+            state.SetAttributeBaseRaw(attributeId, valueRaw);
+            SendStateDelta();
+        }
+
+        public bool ApplyInstantModifier(GASAttributeId attributeId, GASModifierOp op, float magnitude)
+        {
+            bool applied = state.ApplyInstantModifier(new GASModifierData(attributeId, op, magnitude));
+            if (applied)
+            {
+                SendStateDelta();
+            }
+
+            return applied;
+        }
+
+        public bool ApplyInstantModifierRaw(GASAttributeId attributeId, GASModifierOp op, long magnitudeRaw)
+        {
+            bool applied = state.ApplyInstantModifierRaw(attributeId, op, magnitudeRaw);
+            if (applied)
+            {
+                SendStateDelta();
+            }
+
+            return applied;
+        }
+
+        public bool ApplyInstantModifierRaw(GASAttributeId attributeId, GASModifierOp op, long magnitudeRaw, GASPredictionKey predictionKey)
+        {
+            bool applied = state.ApplyInstantModifierRaw(attributeId, op, magnitudeRaw, predictionKey);
+            if (applied)
+            {
+                SendStateDelta();
+            }
+
+            return applied;
+        }
+
+        public bool GetGameplayAttributeRawValue(GASAttributeId attributeId, out long currentValueRaw)
+        {
+            if (state.TryGetAttribute(attributeId, out var attribute))
+            {
+                currentValueRaw = attribute.CurrentValueRaw;
+                return true;
+            }
+
+            currentValueRaw = default;
+            return false;
+        }
+
+        public bool GetGameplayAttributeRawValues(GASAttributeId attributeId, out long baseValueRaw, out long currentValueRaw)
+        {
+            if (state.TryGetAttribute(attributeId, out var attribute))
+            {
+                baseValueRaw = attribute.BaseValueRaw;
+                currentValueRaw = attribute.CurrentValueRaw;
+                return true;
+            }
+
+            baseValueRaw = default;
+            currentValueRaw = default;
+            return false;
+        }
+
+        private void SendStateDelta()
+        {
             if (network != null)
             {
                 var checksum = state.ComputeChecksum();
