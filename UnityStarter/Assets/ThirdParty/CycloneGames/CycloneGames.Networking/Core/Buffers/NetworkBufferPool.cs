@@ -18,7 +18,7 @@ namespace CycloneGames.Networking.Buffers
             if (_pool.TryDequeue(out var buffer))
             {
                 Interlocked.Decrement(ref _count);
-                buffer.Reset();
+                buffer.MarkRented();
                 return buffer;
             }
             return new NetworkBuffer();
@@ -34,6 +34,7 @@ namespace CycloneGames.Networking.Buffers
         public static void Return(NetworkBuffer buffer)
         {
             if (buffer == null) return;
+            if (!buffer.TryMarkReturned()) return;
 
             buffer.ReturnToPool();
 

@@ -91,6 +91,11 @@ namespace CycloneGames.Networking.Diagnostics
             add => _inner.OnError += value;
             remove => _inner.OnError -= value;
         }
+        public event Action<INetConnection, ArraySegment<byte>, int> OnDataReceived
+        {
+            add => _inner.OnDataReceived += value;
+            remove => _inner.OnDataReceived -= value;
+        }
 
         public void StartServer() => _inner.StartServer();
         public void StartClient(string address) => _inner.StartClient(address);

@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.DeterministicMath;
 
 namespace CycloneGames.GameplayAbilities.Core
 {
@@ -260,11 +261,16 @@ namespace CycloneGames.GameplayAbilities.Core
 
         public void SetAttributeBase(GASAttributeId attributeId, float baseValue)
         {
+            SetAttributeBaseRaw(attributeId, GASFixedValue.FromFloat(baseValue).RawValue);
+        }
+
+        public void SetAttributeBaseRaw(GASAttributeId attributeId, long baseValueRaw)
+        {
             int index = EnsureAttribute(attributeId);
             attributes[index] = new GASAttributeValueData(
                 attributeId,
-                baseValue,
-                EvaluateCurrentValue(attributeId, baseValue),
+                baseValueRaw,
+                EvaluateCurrentValueRaw(attributeId, baseValueRaw),
                 attributes[index].AggregatorVersion + 1u);
             Version++;
         }
@@ -280,17 +286,27 @@ namespace CycloneGames.GameplayAbilities.Core
             var attribute = attributes[index];
             if (predictionKey.IsValid)
             {
-                RecordPredictedAttributeChange(predictionKey, modifier.AttributeId, attribute.BaseValue);
+                RecordPredictedAttributeChange(predictionKey, modifier.AttributeId, attribute.BaseValueRaw);
             }
 
-            float baseValue = ApplyModifierToBase(attribute.BaseValue, modifier);
+            long baseValueRaw = ApplyModifierToBaseRaw(attribute.BaseValueRaw, modifier);
             attributes[index] = new GASAttributeValueData(
                 modifier.AttributeId,
-                baseValue,
-                EvaluateCurrentValue(modifier.AttributeId, baseValue),
+                baseValueRaw,
+                EvaluateCurrentValueRaw(modifier.AttributeId, baseValueRaw),
                 attribute.AggregatorVersion + 1u);
             Version++;
             return true;
+        }
+
+        public bool ApplyInstantModifierRaw(GASAttributeId attributeId, GASModifierOp op, long magnitudeRaw)
+        {
+            return ApplyInstantModifier(new GASModifierData(attributeId, op, magnitudeRaw), default);
+        }
+
+        public bool ApplyInstantModifierRaw(GASAttributeId attributeId, GASModifierOp op, long magnitudeRaw, GASPredictionKey predictionKey)
+        {
+            return ApplyInstantModifier(new GASModifierData(attributeId, op, magnitudeRaw), predictionKey);
         }
 
         public GASActiveEffectHandle AddActiveEffect(
@@ -494,8 +510,8 @@ namespace CycloneGames.GameplayAbilities.Core
             {
                 var attr = attributes[i];
                 attrs = HashInt(attrs, attr.AttributeId.Value);
-                attrs = HashFloat(attrs, attr.BaseValue);
-                attrs = HashFloat(attrs, attr.CurrentValue);
+                attrs = HashLong(attrs, attr.BaseValueRaw);
+                attrs = HashLong(attrs, attr.CurrentValueRaw);
                 attrs = HashInt(attrs, (int)attr.AggregatorVersion);
             }
 
@@ -526,11 +542,11 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             EnsureAttributeCapacity(attributeCount + 1);
-            attributes[attributeCount] = new GASAttributeValueData(attributeId, 0f, 0f, 1u);
+            attributes[attributeCount] = new GASAttributeValueData(attributeId, 0L, 0L, 1u);
             return attributeCount++;
         }
 
-        private void RecordPredictedAttributeChange(GASPredictionKey predictionKey, GASAttributeId attributeId, float oldBaseValue)
+        private void RecordPredictedAttributeChange(GASPredictionKey predictionKey, GASAttributeId attributeId, long oldBaseValueRaw)
         {
             for (int i = 0; i < predictedAttributeChangeCount; i++)
             {
@@ -542,7 +558,7 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             EnsurePredictionCapacity(predictedAttributeChangeCount + 1);
-            predictedAttributeChanges[predictedAttributeChangeCount++] = new GASPredictedAttributeChange(predictionKey, attributeId, oldBaseValue);
+            predictedAttributeChanges[predictedAttributeChangeCount++] = new GASPredictedAttributeChange(predictionKey, attributeId, oldBaseValueRaw);
         }
 
         private void RemovePredictedAttributeChanges(GASPredictionKey predictionKey, bool restore)
@@ -560,8 +576,8 @@ namespace CycloneGames.GameplayAbilities.Core
                     int attrIndex = EnsureAttribute(change.AttributeId);
                     attributes[attrIndex] = new GASAttributeValueData(
                         change.AttributeId,
-                        change.OldBaseValue,
-                        EvaluateCurrentValue(change.AttributeId, change.OldBaseValue),
+                        change.OldBaseValueRaw,
+                        EvaluateCurrentValueRaw(change.AttributeId, change.OldBaseValueRaw),
                         attributes[attrIndex].AggregatorVersion + 1u);
                 }
 
@@ -591,11 +607,11 @@ namespace CycloneGames.GameplayAbilities.Core
         /// magnitude * stackCount but Multiply/Division use the raw magnitude
         /// (they compound multiplicatively across stacks).
         /// </summary>
-        private float EvaluateCurrentValue(GASAttributeId attributeId, float baseValue)
+        private long EvaluateCurrentValueRaw(GASAttributeId attributeId, long baseValueRaw)
         {
-            float add = 0f;
-            float multiply = 1f;
-            float overrideValue = 0f;
+            var add = FPInt64.Zero;
+            var multiply = FPInt64.OneValue;
+            var overrideValue = FPInt64.Zero;
             bool hasOverride = false;
 
             for (int i = 0; i < activeEffectCount; i++)
@@ -611,30 +627,31 @@ namespace CycloneGames.GameplayAbilities.Core
                         continue;
                     }
 
-                    float magnitude = modifier.Magnitude * effect.StackCount;
+                    var magnitude = FPInt64.FromRaw(modifier.MagnitudeRaw) * FPInt64.FromInt(effect.StackCount);
                     switch (modifier.Op)
                     {
                         case GASModifierOp.Add:
                             add += magnitude;
                             break;
                         case GASModifierOp.Multiply:
-                            multiply *= modifier.Magnitude;
+                            multiply *= FPInt64.FromRaw(modifier.MagnitudeRaw);
                             break;
                         case GASModifierOp.Division:
-                            if (Math.Abs(modifier.Magnitude) > float.Epsilon)
+                            if (modifier.MagnitudeRaw != 0)
                             {
-                                multiply /= modifier.Magnitude;
+                                multiply /= FPInt64.FromRaw(modifier.MagnitudeRaw);
                             }
                             break;
                         case GASModifierOp.Override:
                             hasOverride = true;
-                            overrideValue = modifier.Magnitude;
+                            overrideValue = FPInt64.FromRaw(modifier.MagnitudeRaw);
                             break;
                     }
                 }
             }
 
-            return hasOverride ? overrideValue : (baseValue + add) * multiply;
+            var baseValue = FPInt64.FromRaw(baseValueRaw);
+            return (hasOverride ? overrideValue : (baseValue + add) * multiply).RawValue;
         }
 
         /// <summary>
@@ -643,20 +660,22 @@ namespace CycloneGames.GameplayAbilities.Core
         /// the operation is silently skipped, returning the unmodified base value.
         /// This matches UE GAS behavior where a 0-magnitude Division modifier is a no-op.
         /// </summary>
-        private static float ApplyModifierToBase(float baseValue, GASModifierData modifier)
+        private static long ApplyModifierToBaseRaw(long baseValueRaw, GASModifierData modifier)
         {
+            var baseValue = FPInt64.FromRaw(baseValueRaw);
+            var magnitude = FPInt64.FromRaw(modifier.MagnitudeRaw);
             switch (modifier.Op)
             {
                 case GASModifierOp.Add:
-                    return baseValue + modifier.Magnitude;
+                    return (baseValue + magnitude).RawValue;
                 case GASModifierOp.Multiply:
-                    return baseValue * modifier.Magnitude;
+                    return (baseValue * magnitude).RawValue;
                 case GASModifierOp.Division:
-                    return Math.Abs(modifier.Magnitude) > float.Epsilon ? baseValue / modifier.Magnitude : baseValue;
+                    return modifier.MagnitudeRaw != 0 ? (baseValue / magnitude).RawValue : baseValueRaw;
                 case GASModifierOp.Override:
-                    return modifier.Magnitude;
+                    return modifier.MagnitudeRaw;
                 default:
-                    return baseValue;
+                    return baseValueRaw;
             }
         }
 
@@ -688,8 +707,8 @@ namespace CycloneGames.GameplayAbilities.Core
             var attribute = attributes[index];
             attributes[index] = new GASAttributeValueData(
                 attribute.AttributeId,
-                attribute.BaseValue,
-                EvaluateCurrentValue(attribute.AttributeId, attribute.BaseValue),
+                attribute.BaseValueRaw,
+                EvaluateCurrentValueRaw(attribute.AttributeId, attribute.BaseValueRaw),
                 attribute.AggregatorVersion + 1u);
         }
 
@@ -844,9 +863,10 @@ namespace CycloneGames.GameplayAbilities.Core
             }
         }
 
-        private static uint HashFloat(uint hash, float value)
+        private static uint HashLong(uint hash, long value)
         {
-            return HashInt(hash, BitConverter.SingleToInt32Bits(value));
+            hash = HashInt(hash, unchecked((int)value));
+            return HashInt(hash, unchecked((int)(value >> 32)));
         }
     }
 }

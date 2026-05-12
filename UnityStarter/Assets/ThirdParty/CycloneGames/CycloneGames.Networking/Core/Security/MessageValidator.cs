@@ -50,7 +50,8 @@ namespace CycloneGames.Networking.Security
         {
             if (buffer == null) return false;
             if (offset < 0 || length <= 0) return false;
-            if (offset + length > buffer.Length) return false;
+            if (offset > buffer.Length) return false;
+            if (length > buffer.Length - offset) return false;
             return length >= MinPayloadSize && length <= MaxPayloadSize;
         }
     }

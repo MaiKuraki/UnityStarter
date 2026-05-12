@@ -58,6 +58,7 @@ namespace CycloneGames.Networking.Transports
         public event Action OnConnectedToServer;
         public event Action OnDisconnectedFromServer;
         public event Action<INetConnection, TransportError, string> OnError;
+        public event Action<INetConnection, ArraySegment<byte>, int> OnDataReceived;
 
         #endregion
 
@@ -187,10 +188,19 @@ namespace CycloneGames.Networking.Transports
                 OnClientConnected?.Invoke(_localConnection);
             }
 
-            while (_channel.TryDequeue(!_isServer, out LocalLoopMessage msg))
+            while (_channel.TryDequeue(_isServer, out LocalLoopMessage msg))
             {
                 _localConnection.RecordReceive(msg.Length);
-                ReturnMessageBuffer(msg);
+                try
+                {
+                    OnDataReceived?.Invoke(_localConnection,
+                        new ArraySegment<byte>(msg.Buffer, 0, msg.Length),
+                        msg.ChannelId);
+                }
+                finally
+                {
+                    ReturnMessageBuffer(msg);
+                }
             }
         }
 
@@ -322,9 +332,9 @@ namespace CycloneGames.Networking.Transports
         internal void Enqueue(bool fromServer, in LocalLoopMessage msg)
         {
             if (fromServer)
-                _clientToServer.Enqueue(msg);
-            else
                 _serverToClient.Enqueue(msg);
+            else
+                _clientToServer.Enqueue(msg);
         }
 
         /// <summary>

@@ -17,6 +17,7 @@ namespace CycloneGames.Networking.Buffers
         private byte[] _buffer;
         private int _position;
         private int _length; // For reading: how much data is valid
+        private bool _returnedToPool;
 
         public int Position
         {
@@ -30,6 +31,12 @@ namespace CycloneGames.Networking.Buffers
         internal NetworkBuffer()
         {
             _buffer = ArrayPool<byte>.Shared.Rent(DefaultCapacity);
+        }
+
+        internal void MarkRented()
+        {
+            _returnedToPool = false;
+            Reset();
         }
 
         internal void SetBuffer(ArraySegment<byte> data)
@@ -217,6 +224,15 @@ namespace CycloneGames.Networking.Buffers
         public void Dispose()
         {
             NetworkBufferPool.Return(this);
+        }
+
+        internal bool TryMarkReturned()
+        {
+            if (_returnedToPool)
+                return false;
+
+            _returnedToPool = true;
+            return true;
         }
 
         internal void ReturnToPool()
