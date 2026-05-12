@@ -193,7 +193,7 @@ Requirements: UniTask >= 2.5.5
 By installing the following package, you will be able to use Unity-specific features such as integration with VContainer/UniTask.
 
 ```text
-https://github.com/hadashiA/VitalRouter.git?path=/src/VitalRouter.Unity/Assets/VitalRouter#2.4.0
+https://github.com/hadashiA/VitalRouter.git?path=/src/VitalRouter.Unity/Assets/VitalRouter#2.4.1
 ```
 
 ---

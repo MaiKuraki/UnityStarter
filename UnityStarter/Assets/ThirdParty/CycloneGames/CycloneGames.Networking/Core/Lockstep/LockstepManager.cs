@@ -18,6 +18,8 @@ namespace CycloneGames.Networking.Lockstep
     /// </summary>
     public sealed class LockstepManager<TInput> where TInput : unmanaged
     {
+        private const int InvalidFrame = int.MinValue;
+
         public delegate void SimulateFrameDelegate(int frame, ReadOnlySpan<TInput> peerInputs);
 
         private readonly int _peerCount;
@@ -28,6 +30,7 @@ namespace CycloneGames.Networking.Lockstep
         // Inputs indexed by [frame % bufferSize][peerId]
         private readonly TInput[,] _inputBuffer;
         private readonly bool[,] _inputReceived;
+        private readonly int[,] _inputFrames;
         private readonly int _bufferSize;
         private readonly int _bufferMask;
 
@@ -38,6 +41,7 @@ namespace CycloneGames.Networking.Lockstep
         // Per-frame state hash for desync detection
         private readonly ulong[] _stateHashes;
         private readonly bool[] _hashReceived;
+        private readonly int[] _hashFrames;
 
         public int CurrentFrame => _currentFrame;
         public int InputDelay => _inputDelay;
@@ -75,8 +79,12 @@ namespace CycloneGames.Networking.Lockstep
 
             _inputBuffer = new TInput[bufferSize, peerCount];
             _inputReceived = new bool[bufferSize, peerCount];
+            _inputFrames = new int[bufferSize, peerCount];
             _stateHashes = new ulong[bufferSize];
             _hashReceived = new bool[bufferSize];
+            _hashFrames = new int[bufferSize];
+            FillFrameStamps(_inputFrames, InvalidFrame);
+            FillFrameStamps(_hashFrames, InvalidFrame);
 
             _currentFrame = 0;
             _latestInputFrame = -1;
@@ -95,6 +103,7 @@ namespace CycloneGames.Networking.Lockstep
 
             _inputBuffer[slot, _localPeerId] = input;
             _inputReceived[slot, _localPeerId] = true;
+            _inputFrames[slot, _localPeerId] = targetFrame;
             _latestInputFrame = targetFrame;
 
             return targetFrame;
@@ -108,13 +117,14 @@ namespace CycloneGames.Networking.Lockstep
             if (peerId < 0 || peerId >= _peerCount || peerId == _localPeerId) return;
 
             // Reject stale frames that are too old (would collide in ring buffer)
-            if (frame < _currentFrame - _bufferSize) return;
+            if (frame <= _currentFrame - _bufferSize) return;
             // Reject frames too far in the future
-            if (frame > _currentFrame + _bufferSize) return;
+            if (frame >= _currentFrame + _bufferSize) return;
 
             int slot = frame & _bufferMask;
             _inputBuffer[slot, peerId] = input;
             _inputReceived[slot, peerId] = true;
+            _inputFrames[slot, peerId] = frame;
         }
 
         /// <summary>
@@ -162,6 +172,7 @@ namespace CycloneGames.Networking.Lockstep
             int slot = frame & _bufferMask;
             _stateHashes[slot] = hash;
             _hashReceived[slot] = true;
+            _hashFrames[slot] = frame;
         }
 
         /// <summary>
@@ -170,7 +181,7 @@ namespace CycloneGames.Networking.Lockstep
         public bool ValidateStateHash(int peerId, int frame, ulong remoteHash)
         {
             int slot = frame & _bufferMask;
-            if (!_hashReceived[slot]) return true; // Can't validate yet
+            if (!_hashReceived[slot] || _hashFrames[slot] != frame) return true; // Can't validate yet
 
             if (_stateHashes[slot] != remoteHash)
             {
@@ -190,7 +201,7 @@ namespace CycloneGames.Networking.Lockstep
             int slot = frame & _bufferMask;
             for (int i = 0; i < _peerCount; i++)
             {
-                if (!_inputReceived[slot, i]) return false;
+                if (!_inputReceived[slot, i] || _inputFrames[slot, i] != frame) return false;
                 outInputs[i] = _inputBuffer[slot, i];
             }
             return true;
@@ -206,6 +217,8 @@ namespace CycloneGames.Networking.Lockstep
             _stallCounter = 0;
             Array.Clear(_inputReceived, 0, _inputReceived.Length);
             Array.Clear(_hashReceived, 0, _hashReceived.Length);
+            FillFrameStamps(_inputFrames, InvalidFrame);
+            FillFrameStamps(_hashFrames, InvalidFrame);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -214,7 +227,7 @@ namespace CycloneGames.Networking.Lockstep
             int slot = _currentFrame & _bufferMask;
             for (int i = 0; i < _peerCount; i++)
             {
-                if (!_inputReceived[slot, i])
+                if (!_inputReceived[slot, i] || _inputFrames[slot, i] != _currentFrame)
                     return false;
             }
             return true;
@@ -233,7 +246,10 @@ namespace CycloneGames.Networking.Lockstep
 
             // Clear slot for reuse
             for (int i = 0; i < _peerCount; i++)
+            {
                 _inputReceived[slot, i] = false;
+                _inputFrames[slot, i] = InvalidFrame;
+            }
 
             _currentFrame++;
             OnFrameAdvanced?.Invoke(_currentFrame);
@@ -244,10 +260,25 @@ namespace CycloneGames.Networking.Lockstep
             int slot = frame & _bufferMask;
             for (int i = 0; i < _peerCount; i++)
             {
-                if (!_inputReceived[slot, i])
+                if (!_inputReceived[slot, i] || _inputFrames[slot, i] != frame)
                     return i;
             }
             return -1;
+        }
+
+        private static void FillFrameStamps(int[,] stamps, int value)
+        {
+            for (int i = 0; i < stamps.GetLength(0); i++)
+            {
+                for (int j = 0; j < stamps.GetLength(1); j++)
+                    stamps[i, j] = value;
+            }
+        }
+
+        private static void FillFrameStamps(int[] stamps, int value)
+        {
+            for (int i = 0; i < stamps.Length; i++)
+                stamps[i] = value;
         }
     }
 

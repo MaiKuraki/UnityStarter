@@ -13,6 +13,7 @@ namespace CycloneGames.Networking.Prediction
     {
         private readonly T[] _buffer;
         private readonly uint[] _ticks;
+        private readonly bool[] _valid;
         private readonly int _capacity;
         private readonly int _mask;
 
@@ -25,6 +26,7 @@ namespace CycloneGames.Networking.Prediction
             _mask = _capacity - 1;
             _buffer = new T[_capacity];
             _ticks = new uint[_capacity];
+            _valid = new bool[_capacity];
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -33,13 +35,14 @@ namespace CycloneGames.Networking.Prediction
             int index = (int)(tick.Value & _mask);
             _buffer[index] = value;
             _ticks[index] = tick.Value;
+            _valid[index] = true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGet(NetworkTick tick, out T value)
         {
             int index = (int)(tick.Value & _mask);
-            if (_ticks[index] == tick.Value)
+            if (_valid[index] && _ticks[index] == tick.Value)
             {
                 value = _buffer[index];
                 return true;
@@ -56,14 +59,13 @@ namespace CycloneGames.Networking.Prediction
 
         public void Clear()
         {
-            Array.Clear(_ticks, 0, _capacity);
+            Array.Clear(_valid, 0, _capacity);
         }
 
         public void Invalidate(NetworkTick tick)
         {
             int index = (int)(tick.Value & _mask);
-            // Set tick to 0 which won't match any valid tick (ticks start from 1+)
-            _ticks[index] = 0;
+            _valid[index] = false;
         }
 
         private static int NextPowerOfTwo(int v)

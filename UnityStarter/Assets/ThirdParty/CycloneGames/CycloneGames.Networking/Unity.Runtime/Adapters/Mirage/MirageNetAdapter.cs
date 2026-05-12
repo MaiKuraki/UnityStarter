@@ -79,6 +79,7 @@ namespace CycloneGames.Networking.Adapter.Mirage
         public event Action OnConnectedToServer;
         public event Action OnDisconnectedFromServer;
         public event Action<INetConnection, TransportError, string> OnError;
+        public event Action<INetConnection, ArraySegment<byte>, int> OnDataReceived;
 
         // Internal
         private readonly Dictionary<ushort, Action<INetConnection, ArraySegment<byte>>> _handlers =
@@ -148,7 +149,7 @@ namespace CycloneGames.Networking.Adapter.Mirage
 
             _server.MessageHandler.RegisterHandler<CycloneRawMessage>((player, msg) =>
             {
-                OnDataReceived(player, msg);
+                HandleDataReceived(player, msg);
             }, allowUnauthenticated: false);
         }
 
@@ -341,16 +342,25 @@ namespace CycloneGames.Networking.Adapter.Mirage
         }
 
         // Data Handlers
-        private void OnDataReceived(INetworkPlayer player, CycloneRawMessage msg)
+        private void HandleDataReceived(INetworkPlayer player, CycloneRawMessage msg)
         {
+            var connection = new MirageNetConnection(player, GetConnectionData(player));
+            OnDataReceived?.Invoke(connection, msg.Payload, 0);
+
             if (_handlers.TryGetValue(msg.MsgId, out var handler))
-                handler(new MirageNetConnection(player, GetConnectionData(player)), msg.Payload);
+                handler(connection, msg.Payload);
         }
 
         private void OnClientDataReceived(CycloneRawMessage msg)
         {
-            if (_handlers.TryGetValue(msg.MsgId, out var handler) && _client.Player != null)
-                handler(new MirageNetConnection(_client.Player, default), msg.Payload);
+            if (_client.Player == null)
+                return;
+
+            var connection = new MirageNetConnection(_client.Player, default);
+            OnDataReceived?.Invoke(connection, msg.Payload, 0);
+
+            if (_handlers.TryGetValue(msg.MsgId, out var handler))
+                handler(connection, msg.Payload);
         }
     }
 

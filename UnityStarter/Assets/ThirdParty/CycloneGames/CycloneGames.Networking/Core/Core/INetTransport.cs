@@ -90,6 +90,12 @@ namespace CycloneGames.Networking
         /// </summary>
         event Action<INetConnection, TransportError, string> OnError;
 
+        /// <summary>
+        /// Invoked when a raw payload is received from the transport.
+        /// The payload segment is only valid for the duration of the callback.
+        /// </summary>
+        event Action<INetConnection, ArraySegment<byte>, int> OnDataReceived;
+
         // --- Control ---
 
         void StartServer();
