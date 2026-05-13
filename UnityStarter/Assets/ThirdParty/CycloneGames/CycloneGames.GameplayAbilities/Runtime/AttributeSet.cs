@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using CycloneGames.GameplayAbilities.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -106,12 +107,26 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public float GetBaseValue(GameplayAttribute attribute) => attribute.BaseValue;
         public float GetCurrentValue(GameplayAttribute attribute) => attribute.CurrentValue;
+        public long GetBaseValueRaw(GameplayAttribute attribute) => attribute.BaseValueRaw;
+        public long GetCurrentValueRaw(GameplayAttribute attribute) => attribute.CurrentValueRaw;
+        public GASFixedValue GetBaseFixedValue(GameplayAttribute attribute) => attribute.BaseFixedValue;
+        public GASFixedValue GetCurrentFixedValue(GameplayAttribute attribute) => attribute.CurrentFixedValue;
 
         public void SetBaseValue(GameplayAttribute attribute, float value)
         {
-            if (Math.Abs(attribute.BaseValue - value) > float.Epsilon)
+            SetBaseValueRaw(attribute, GASFixedValue.FromFloat(value).RawValue);
+        }
+
+        public void SetBaseValue(GameplayAttribute attribute, GASFixedValue value)
+        {
+            SetBaseValueRaw(attribute, value.RawValue);
+        }
+
+        public void SetBaseValueRaw(GameplayAttribute attribute, long valueRaw)
+        {
+            if (attribute.BaseValueRaw != valueRaw)
             {
-                attribute.SetBaseValue(value);
+                attribute.SetBaseValueRaw(valueRaw);
                 OwningAbilitySystemComponent?.MarkAttributeDirty(attribute);
             }
         }
@@ -119,6 +134,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void SetCurrentValue(GameplayAttribute attribute, float value)
         {
             attribute.SetCurrentValue(value);
+        }
+
+        public void SetCurrentValue(GameplayAttribute attribute, GASFixedValue value)
+        {
+            attribute.SetCurrentValue(value);
+        }
+
+        public void SetCurrentValueRaw(GameplayAttribute attribute, long valueRaw)
+        {
+            attribute.SetCurrentValueRaw(valueRaw);
         }
 
         /// <summary>
@@ -151,6 +176,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public virtual void PreAttributeChange(GameplayAttribute attribute, ref float newValue) { }
         public virtual void PreAttributeBaseChange(GameplayAttribute attribute, ref float newBaseValue) { }
+        public virtual void PreAttributeChangeFixed(GameplayAttribute attribute, ref GASFixedValue newValue)
+        {
+            float value = newValue.ToFloat();
+            PreAttributeChange(attribute, ref value);
+            newValue = GASFixedValue.FromFloat(value);
+        }
+
+        public virtual void PreAttributeBaseChangeFixed(GameplayAttribute attribute, ref GASFixedValue newBaseValue)
+        {
+            float value = newBaseValue.ToFloat();
+            PreAttributeBaseChange(attribute, ref value);
+            newBaseValue = GASFixedValue.FromFloat(value);
+        }
 
         /// <summary>
         /// Called after a GameplayEffect is executed on this AttributeSet. This is the main entry point for attribute modifications.
@@ -179,25 +217,25 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var attribute = GetAttribute(data.Modifier.AttributeName);
             if (attribute == null) return;
 
-            float currentBase = GetBaseValue(attribute);
-            float newBase = currentBase;
+            var newBase = GetBaseFixedValue(attribute);
+            var magnitude = data.EvaluatedMagnitudeFixed;
             switch (data.Modifier.Operation)
             {
                 case EAttributeModifierOperation.Add:
-                    newBase += data.EvaluatedMagnitude;
+                    newBase += magnitude;
                     break;
                 case EAttributeModifierOperation.Multiply:
-                    newBase *= data.EvaluatedMagnitude;
+                    newBase *= magnitude;
                     break;
                 case EAttributeModifierOperation.Division:
-                    if (data.EvaluatedMagnitude != 0) newBase /= data.EvaluatedMagnitude;
+                    if (magnitude.RawValue != 0) newBase /= magnitude;
                     break;
                 case EAttributeModifierOperation.Override:
-                    newBase = data.EvaluatedMagnitude;
+                    newBase = magnitude;
                     break;
             }
 
-            PreAttributeBaseChange(attribute, ref newBase);
+            PreAttributeBaseChangeFixed(attribute, ref newBase);
 
             SetBaseValue(attribute, newBase);
             SetCurrentValue(attribute, newBase);
@@ -210,14 +248,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GameplayEffectSpec EffectSpec { get; }
         public ModifierInfo Modifier { get; }
         public float EvaluatedMagnitude { get; }
+        public long EvaluatedMagnitudeRaw { get; }
+        public GASFixedValue EvaluatedMagnitudeFixed => GASFixedValue.FromRaw(EvaluatedMagnitudeRaw);
         public AbilitySystemComponent Target { get; }
         public AbilitySystemComponent Source => EffectSpec.Source;
 
         public GameplayEffectModCallbackData(GameplayEffectSpec spec, ModifierInfo modifier, float magnitude, AbilitySystemComponent target)
+            : this(spec, modifier, GASFixedValue.FromFloat(magnitude).RawValue, target)
+        {
+        }
+
+        public GameplayEffectModCallbackData(GameplayEffectSpec spec, ModifierInfo modifier, long magnitudeRaw, AbilitySystemComponent target)
         {
             EffectSpec = spec;
             Modifier = modifier;
-            EvaluatedMagnitude = magnitude;
+            EvaluatedMagnitudeRaw = magnitudeRaw;
+            EvaluatedMagnitude = GASFixedValue.FromRaw(magnitudeRaw).ToFloat();
             Target = target;
         }
     }

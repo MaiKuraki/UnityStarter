@@ -9,9 +9,9 @@ namespace CycloneGames.GameplayAbilities.Networking
     /// 
     /// Usage:
     /// 1. Game code modifies attributes on the ASC
-    /// 2. Call MarkDirty(attributeId) or auto-detect via hooks
+    /// 2. Call MarkDirtyRaw(attributeId) or auto-detect via hooks
     /// 3. Each server tick, call FlushDirtyToObservers() to send only changed attributes
-    /// 4. On new client join, call SendFullSync() for complete state
+    /// 4. On new client join, call SendFullSyncRaw() for complete state
     /// 
     /// Supports ReplicationMode:
     /// - Full: all attribute changes replicated to all observers
@@ -64,7 +64,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         /// Mark an attribute as dirty for a specific ASC.
         /// Call this from the AttributeSet's PostGameplayEffectExecute or PreAttributeChange hooks.
         /// </summary>
-        public void MarkDirty(uint networkId, int attributeId, float baseValue, float currentValue)
+        public void MarkDirtyRaw(uint networkId, int attributeId, long baseValueRaw, long currentValueRaw)
         {
             if (!_dirtyMap.TryGetValue(networkId, out var set))
             {
@@ -72,7 +72,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 _dirtyMap[networkId] = set;
             }
 
-            set.SetDirty(attributeId, baseValue, currentValue);
+            set.SetDirtyRaw(attributeId, baseValueRaw, currentValueRaw);
         }
 
         /// <summary>
@@ -121,8 +121,8 @@ namespace CycloneGames.GameplayAbilities.Networking
         /// <summary>
         /// Send full attribute sync to a specific client (join/reconnect).
         /// </summary>
-        public void SendFullSync(INetConnection client, uint networkId,
-            IReadOnlyList<(int attributeId, float baseValue, float currentValue)> allAttributes,
+        public void SendFullSyncRaw(INetConnection client, uint networkId,
+            IReadOnlyList<AttributeEntry> allAttributes,
             bool isOwner)
         {
             EnsureArrayCapacity(ref _fullSyncEntries, allAttributes.Count);
@@ -130,18 +130,12 @@ namespace CycloneGames.GameplayAbilities.Networking
 
             for (int i = 0; i < allAttributes.Count; i++)
             {
-                var (attrId, baseVal, curVal) = allAttributes[i];
+                var entry = allAttributes[i];
 
-                // Non-owners only get public attributes
-                if (!isOwner && !_publicAttributes.Contains(attrId))
+                if (!isOwner && !_publicAttributes.Contains(entry.AttributeId))
                     continue;
 
-                _fullSyncEntries[count++] = new AttributeEntry
-                {
-                    AttributeId = attrId,
-                    BaseValueRaw = GASNetFixed.FromFloat(baseVal),
-                    CurrentValueRaw = GASNetFixed.FromFloat(curVal)
-                };
+                _fullSyncEntries[count++] = entry;
             }
 
             var data = new AttributeUpdateData
@@ -178,7 +172,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 _dirtyEntries = new AttributeEntry[Math.Max(1, initialCapacity)];
             }
 
-            public void SetDirty(int attributeId, float baseValue, float currentValue)
+            public void SetDirtyRaw(int attributeId, long baseValueRaw, long currentValueRaw)
             {
                 for (int i = 0; i < _dirtyCount; i++)
                 {
@@ -188,8 +182,8 @@ namespace CycloneGames.GameplayAbilities.Networking
                     _dirtyEntries[i] = new AttributeEntry
                     {
                         AttributeId = attributeId,
-                        BaseValueRaw = GASNetFixed.FromFloat(baseValue),
-                        CurrentValueRaw = GASNetFixed.FromFloat(currentValue)
+                        BaseValueRaw = baseValueRaw,
+                        CurrentValueRaw = currentValueRaw
                     };
                     return;
                 }
@@ -198,8 +192,8 @@ namespace CycloneGames.GameplayAbilities.Networking
                 _dirtyEntries[_dirtyCount++] = new AttributeEntry
                 {
                     AttributeId = attributeId,
-                    BaseValueRaw = GASNetFixed.FromFloat(baseValue),
-                    CurrentValueRaw = GASNetFixed.FromFloat(currentValue)
+                    BaseValueRaw = baseValueRaw,
+                    CurrentValueRaw = currentValueRaw
                 };
             }
 

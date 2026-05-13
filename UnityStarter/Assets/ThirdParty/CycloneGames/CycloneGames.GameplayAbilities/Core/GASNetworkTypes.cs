@@ -20,13 +20,16 @@ namespace CycloneGames.GameplayAbilities.Core
         public int TargetAscNetId;
         public int Level;
         public int StackCount;
-        public float Duration;
-        public float TimeRemaining;
-        public float PeriodTimeRemaining;
+        public long DurationRaw;
+        public long TimeRemainingRaw;
+        public long PeriodTimeRemainingRaw;
+        public GASFixedValue Duration => GASFixedValue.FromRaw(DurationRaw);
+        public GASFixedValue TimeRemaining => GASFixedValue.FromRaw(TimeRemainingRaw);
+        public GASFixedValue PeriodTimeRemaining => GASFixedValue.FromRaw(PeriodTimeRemainingRaw);
         public GASPredictionKey PredictionKey;
         /// <summary>Replicated SetByCaller entries addressed by GameplayTag.</summary>
         public GameplayTag[] SetByCallerTags;
-        public float[] SetByCallerValues;
+        public long[] SetByCallerValuesRaw;
         public int SetByCallerCount;
     }
 
@@ -38,22 +41,24 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly int SourceAscNetId;
         public readonly int TargetAscNetId;
         /// <summary>Raw magnitude value (e.g. damage dealt). Implementation-defined meaning.</summary>
-        public readonly float Magnitude;
+        public readonly long MagnitudeRaw;
         /// <summary>Magnitude normalized to [0..1] for visual scaling (e.g. hit sparks).</summary>
-        public readonly float NormalizedMagnitude;
+        public readonly long NormalizedMagnitudeRaw;
+        public GASFixedValue Magnitude => GASFixedValue.FromRaw(MagnitudeRaw);
+        public GASFixedValue NormalizedMagnitude => GASFixedValue.FromRaw(NormalizedMagnitudeRaw);
         public readonly GASPredictionKey PredictionKey;
 
-        public GASCueNetParams(int sourceAscNetId, int targetAscNetId, float magnitude, float normalizedMagnitude)
-            : this(sourceAscNetId, targetAscNetId, magnitude, normalizedMagnitude, default)
+        public GASCueNetParams(int sourceAscNetId, int targetAscNetId, long magnitudeRaw, long normalizedMagnitudeRaw)
+            : this(sourceAscNetId, targetAscNetId, magnitudeRaw, normalizedMagnitudeRaw, default)
         {
         }
 
-        public GASCueNetParams(int sourceAscNetId, int targetAscNetId, float magnitude, float normalizedMagnitude, GASPredictionKey predictionKey)
+        public GASCueNetParams(int sourceAscNetId, int targetAscNetId, long magnitudeRaw, long normalizedMagnitudeRaw, GASPredictionKey predictionKey)
         {
             SourceAscNetId = sourceAscNetId;
             TargetAscNetId = targetAscNetId;
-            Magnitude = magnitude;
-            NormalizedMagnitude = normalizedMagnitude;
+            MagnitudeRaw = magnitudeRaw;
+            NormalizedMagnitudeRaw = normalizedMagnitudeRaw;
             PredictionKey = predictionKey;
         }
     }

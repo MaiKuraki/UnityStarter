@@ -51,12 +51,7 @@ namespace CycloneGames.GameplayAbilities.Core
     {
         public readonly GameplayTags.Core.GameplayTag Tag;
         public readonly long ValueRaw;
-        public float Value => GASFixedValue.FromRaw(ValueRaw).ToFloat();
-
-        public GASSetByCallerTagStateData(GameplayTags.Core.GameplayTag tag, float value)
-            : this(tag, GASFixedValue.FromFloat(value).RawValue)
-        {
-        }
+        public GASFixedValue Value => GASFixedValue.FromRaw(ValueRaw);
 
         private GASSetByCallerTagStateData(GameplayTags.Core.GameplayTag tag, long valueRaw)
         {
@@ -86,62 +81,9 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly GASPredictionKey PredictionKey;
         public readonly GASSetByCallerTagStateData[] SetByCallerTagMagnitudes;
         public readonly int SetByCallerTagMagnitudeCount;
-        public float Duration => GASFixedValue.FromRaw(DurationRaw).ToFloat();
-        public float TimeRemaining => GASFixedValue.FromRaw(TimeRemainingRaw).ToFloat();
-        public float PeriodTimeRemaining => GASFixedValue.FromRaw(PeriodTimeRemainingRaw).ToFloat();
-
-        public GASActiveEffectStateData(
-            int instanceId,
-            object effectDefinition,
-            object sourceComponent,
-            int level,
-            int stackCount,
-            float duration,
-            float timeRemaining,
-            float periodTimeRemaining,
-            GASPredictionKey predictionKey,
-            GASSetByCallerTagStateData[] setByCallerTagMagnitudes)
-            : this(
-                instanceId,
-                effectDefinition,
-                sourceComponent,
-                level,
-                stackCount,
-                duration,
-                timeRemaining,
-                periodTimeRemaining,
-                predictionKey,
-                setByCallerTagMagnitudes,
-                setByCallerTagMagnitudes != null ? setByCallerTagMagnitudes.Length : 0)
-        {
-        }
-
-        public GASActiveEffectStateData(
-            int instanceId,
-            object effectDefinition,
-            object sourceComponent,
-            int level,
-            int stackCount,
-            float duration,
-            float timeRemaining,
-            float periodTimeRemaining,
-            GASPredictionKey predictionKey,
-            GASSetByCallerTagStateData[] setByCallerTagMagnitudes,
-            int setByCallerTagMagnitudeCount)
-            : this(
-                instanceId,
-                effectDefinition,
-                sourceComponent,
-                level,
-                stackCount,
-                GASFixedValue.FromFloat(duration).RawValue,
-                GASFixedValue.FromFloat(timeRemaining).RawValue,
-                GASFixedValue.FromFloat(periodTimeRemaining).RawValue,
-                predictionKey,
-                setByCallerTagMagnitudes,
-                setByCallerTagMagnitudeCount)
-        {
-        }
+        public GASFixedValue Duration => GASFixedValue.FromRaw(DurationRaw);
+        public GASFixedValue TimeRemaining => GASFixedValue.FromRaw(TimeRemainingRaw);
+        public GASFixedValue PeriodTimeRemaining => GASFixedValue.FromRaw(PeriodTimeRemainingRaw);
 
         private GASActiveEffectStateData(
             int instanceId,
@@ -205,13 +147,8 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly string AttributeName;
         public readonly long BaseValueRaw;
         public readonly long CurrentValueRaw;
-        public float BaseValue => GASFixedValue.FromRaw(BaseValueRaw).ToFloat();
-        public float CurrentValue => GASFixedValue.FromRaw(CurrentValueRaw).ToFloat();
-
-        public GASAttributeStateData(string attributeName, float baseValue, float currentValue)
-            : this(attributeName, GASFixedValue.FromFloat(baseValue).RawValue, GASFixedValue.FromFloat(currentValue).RawValue)
-        {
-        }
+        public GASFixedValue BaseValue => GASFixedValue.FromRaw(BaseValueRaw);
+        public GASFixedValue CurrentValue => GASFixedValue.FromRaw(CurrentValueRaw);
 
         private GASAttributeStateData(string attributeName, long baseValueRaw, long currentValueRaw)
         {
