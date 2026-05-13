@@ -526,7 +526,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         //  Attribute snapshot for rolling back instant-effect attribute changes on prediction failure.
         // Populated in ApplyModifier when currentPredictionKey.IsValid; cleared on confirm or rollback.
-        private readonly List<(GASPredictionKey key, GameplayAttribute attr, float oldBaseValue)> predictedAttributeSnapshots = new List<(GASPredictionKey, GameplayAttribute, float)>(8);
+        private readonly List<(GASPredictionKey key, GameplayAttribute attr, long oldBaseValueRaw)> predictedAttributeSnapshots = new List<(GASPredictionKey, GameplayAttribute, long)>(8);
 
         // --- Network ---
         // Monotonically-increasing counter for assigning stable NetworkIds to replicated ActiveGameplayEffects.
@@ -541,9 +541,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly Dictionary<ActiveGameplayEffect, GASActiveEffectHandle> coreActiveEffectHandles = new Dictionary<ActiveGameplayEffect, GASActiveEffectHandle>(32);
         private GASModifierData[] coreModifierBuffer = Array.Empty<GASModifierData>();
         private GameplayTag[] effectReplicationSetByCallerTags = Array.Empty<GameplayTag>();
-        private float[] effectReplicationSetByCallerValues = Array.Empty<float>();
+        private long[] effectReplicationSetByCallerValuesRaw = Array.Empty<long>();
         private GameplayTag[] stateApplySetByCallerTags = Array.Empty<GameplayTag>();
-        private float[] stateApplySetByCallerValues = Array.Empty<float>();
+        private long[] stateApplySetByCallerValuesRaw = Array.Empty<long>();
         private int[] targetDataNetworkIdBuffer = Array.Empty<int>();
         public GASAbilitySystemState CoreState => coreState;
         public GASAbilitySystemFacade Core => core;
@@ -1436,7 +1436,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 source?.AvatarGameObject,
                 target?.AvatarGameObject,
                 0,
-                0f,
+                0L,
                 cueParams.PredictionKey);
 
             GameplayCueManager.Default.HandleCue(cueTag, eventType, new GameplayCueParameters(parameters)).Forget();
@@ -1546,8 +1546,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 uint entryHash = 2166136261u;
                 entryHash = HashInt(entryHash, effect.NetworkId);
                 entryHash = HashInt(entryHash, effect.StackCount);
-                entryHash = HashFloat(entryHash, effect.TimeRemaining);
-                entryHash = HashFloat(entryHash, effect.PeriodTimeRemaining);
+                entryHash = HashLong(entryHash, effect.TimeRemainingRaw);
+                entryHash = HashLong(entryHash, effect.PeriodTimeRemainingRaw);
                 entryHash = HashInt(entryHash, effect.Spec?.Context?.PredictionKey.Key ?? 0);
                 hash = FoldUnordered(hash, entryHash);
             }
@@ -1559,8 +1559,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     uint entryHash = 2166136261u;
                     entryHash = HashString(entryHash, attribute.Name);
-                    entryHash = HashFloat(entryHash, attribute.BaseValue);
-                    entryHash = HashFloat(entryHash, attribute.CurrentValue);
+                    entryHash = HashLong(entryHash, attribute.BaseValueRaw);
+                    entryHash = HashLong(entryHash, attribute.CurrentValueRaw);
                     hash = FoldUnordered(hash, entryHash);
                 }
             }
@@ -1589,6 +1589,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private static uint HashFloat(uint hash, float value)
         {
             long raw = GASFixedValue.FromFloat(value).RawValue;
+            return HashLong(hash, raw);
+        }
+
+        private static uint HashLong(uint hash, long raw)
+        {
             hash = HashInt(hash, unchecked((int)raw));
             return HashInt(hash, unchecked((int)(raw >> 32)));
         }
@@ -1704,7 +1709,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var attributeId = GetOrCreateCoreAttributeId(attribute.Name);
             if (attributeId.IsValid)
             {
-                core.SetNumericAttributeBase(attributeId, attribute.BaseValue);
+                core.SetNumericAttributeBaseRaw(attributeId, attribute.BaseValueRaw);
             }
         }
 
@@ -1785,7 +1790,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 coreModifierBuffer[i] = new GASModifierData(
                     GetOrCreateCoreAttributeId(modifier.AttributeName),
                     ConvertModifierOp(modifier.Operation),
-                    spec.GetCalculatedMagnitude(i));
+                    spec.GetCalculatedMagnitudeRaw(i));
             }
 
             return coreModifierBuffer;
@@ -2658,15 +2663,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 SetActiveEffectNetworkId(existing, data.NetworkId);
             }
-            TryApplyReplicatedEffectUpdate(
+            TryApplyReplicatedEffectUpdateRaw(
                 existing,
                 data.Level,
                 data.StackCount,
-                data.Duration,
-                data.TimeRemaining,
-                data.PeriodTimeRemaining,
+                data.DurationRaw,
+                data.TimeRemainingRaw,
+                data.PeriodTimeRemainingRaw,
                 data.SetByCallerTags,
-                data.SetByCallerValues,
+                data.SetByCallerValuesRaw,
                 data.SetByCallerCount);
 
             if (data.PredictionKey.IsValid)
@@ -2692,7 +2697,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             var spec = GameplayEffectSpec.Create(effectDef, source, context, data.Level);
-            spec.ApplyReplicatedState(data.Level, data.Duration, data.SetByCallerTags, data.SetByCallerValues, data.SetByCallerCount);
+            spec.ApplyReplicatedStateRaw(data.Level, data.DurationRaw, data.SetByCallerTags, data.SetByCallerValuesRaw, data.SetByCallerCount);
 
             using (new NetworkReplicationScope(this))
             {
@@ -2811,7 +2816,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
-            predictedAttributeSnapshots.Add((predictionKey, attribute, attribute.BaseValue));
+            predictedAttributeSnapshots.Add((predictionKey, attribute, attribute.BaseValueRaw));
             IncrementPredictionWindowAttributeSnapshotCount(predictionKey);
         }
 
@@ -2833,7 +2838,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                 if (restore && snapshot.attr != null)
                 {
-                    snapshot.attr.SetBaseValue(snapshot.oldBaseValue);
+                    snapshot.attr.SetBaseValueRaw(snapshot.oldBaseValueRaw);
                     MarkAttributeDirty(snapshot.attr);
                 }
 
@@ -3183,8 +3188,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     var attribute = GetAttribute(modInfo.AttributeName);
                     if (attribute != null)
                     {
-                        float magnitude = modInfo.Magnitude.GetValueAtLevel(spec.Level);
-                        ApplyModifier(spec, attribute, modInfo, magnitude, true);
+                        ApplyModifier(spec, attribute, modInfo, GASFixedValue.FromFloat(modInfo.Magnitude.GetValueAtLevel(spec.Level)).RawValue, true);
                     }
                 }
             }
@@ -3200,7 +3204,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (attribute != null)
                 {
                     //  Modify the base value, so isFromExecution is true
-                    ApplyModifier(spec, attribute, mod, spec.GetCalculatedMagnitude(i), true);
+                    ApplyModifier(spec, attribute, mod, spec.GetCalculatedMagnitudeRaw(i), true);
                 }
             }
 
@@ -3376,11 +3380,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 var attr = dirtyAttributes[d];
                 attr.IsDirty = false;
 
-                float baseValue = attr.OwningSet.GetBaseValue(attr);
-                float additive = 0f;
-                float multiplicativeBiasSum = 0f;
-                float divisionBiasSum = 0f;
-                float overrideValue = 0f;
+                var baseValue = attr.OwningSet.GetBaseFixedValue(attr);
+                var additive = GASFixedValue.Zero;
+                var multiplicativeBiasSum = GASFixedValue.Zero;
+                var divisionBiasSum = GASFixedValue.Zero;
+                var overrideValue = GASFixedValue.Zero;
+                var one = GASFixedValue.One;
                 bool hasOverride = false;
 
                 var affectingEffects = attr.AffectingEffects;
@@ -3414,29 +3419,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         if (effect.Spec.TargetAttributes[m] != attr) continue;
 
                         // For non-snapshotted custom calculations, recalculate magnitude live
-                        float baseMagnitude;
+                        long baseMagnitudeRaw;
                         var mod = modifiers[m];
                         if (mod.SnapshotPolicy == EGameplayEffectAttributeCaptureSnapshot.NotSnapshot && mod.CustomCalculation != null)
                         {
-                            baseMagnitude = mod.CustomCalculation.CalculateMagnitude(effect.Spec);
-                            effect.Spec.ModifierMagnitudes[m] = baseMagnitude; // Update cached value
+                            effect.Spec.SetCalculatedMagnitude(m, mod.CustomCalculation.CalculateMagnitude(effect.Spec));
+                            baseMagnitudeRaw = effect.Spec.GetCalculatedMagnitudeRaw(m);
                         }
                         else
                         {
-                            baseMagnitude = effect.Spec.ModifierMagnitudes[m];
+                            baseMagnitudeRaw = effect.Spec.GetCalculatedMagnitudeRaw(m);
                         }
 
-                        float magnitude = baseMagnitude * stackCount;
+                        var magnitude = GASFixedValue.FromRaw(baseMagnitudeRaw) * GASFixedValue.FromInt(stackCount);
                         switch (modifiers[m].Operation)
                         {
                             case EAttributeModifierOperation.Add:
                                 additive += magnitude;
                                 break;
                             case EAttributeModifierOperation.Multiply:
-                                multiplicativeBiasSum += (magnitude - 1f);
+                                multiplicativeBiasSum += magnitude - one;
                                 break;
                             case EAttributeModifierOperation.Division:
-                                if (magnitude != 0f) divisionBiasSum += (magnitude - 1f);
+                                if (magnitude.RawValue != 0) divisionBiasSum += magnitude - one;
                                 break;
                             case EAttributeModifierOperation.Override:
                                 overrideValue = magnitude;
@@ -3446,13 +3451,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                 }
 
-                float multiplicative = 1f + multiplicativeBiasSum;
-                float division = 1f + divisionBiasSum;
-                if (division == 0f) division = 1f;
+                var multiplicative = one + multiplicativeBiasSum;
+                var division = one + divisionBiasSum;
+                if (division.RawValue == 0) division = one;
 
-                float finalValue = hasOverride ? overrideValue : ((baseValue + additive) * multiplicative / division);
+                var finalValue = hasOverride ? overrideValue : ((baseValue + additive) * multiplicative / division);
 
-                attr.OwningSet.PreAttributeChange(attr, ref finalValue);
+                attr.OwningSet.PreAttributeChangeFixed(attr, ref finalValue);
                 attr.OwningSet.SetCurrentValue(attr, finalValue);
             }
 
@@ -3665,8 +3670,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     var cueParams = new GASCueNetParams(
                         sourceAscNetId: spec.Source != null ? resolver.GetAbilitySystemNetworkId(spec.Source) : 0,
                         targetAscNetId: spec.Target != null ? resolver.GetAbilitySystemNetworkId(spec.Target) : 0,
-                        magnitude: 0f,
-                        normalizedMagnitude: 0f,
+                        magnitudeRaw: 0L,
+                        normalizedMagnitudeRaw: 0L,
                         predictionKey: spec.Context?.PredictionKey ?? default);
                     bridge.ServerBroadcastGameplayCue(spec.Target, cueTag, eventType, cueParams);
                 }
@@ -3710,23 +3715,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             var resolver = GASServices.ReplicationResolver;
             GameplayTag[] setByCallerTags;
-            float[] setByCallerValues;
+            long[] setByCallerValuesRaw;
             int setByCallerCount = effect.Spec.SetByCallerTagMagnitudeCount;
 
             if (setByCallerCount <= 0)
             {
                 setByCallerTags = Array.Empty<GameplayTag>();
-                setByCallerValues = Array.Empty<float>();
+                setByCallerValuesRaw = Array.Empty<long>();
                 setByCallerCount = 0;
             }
             else
             {
                 EnsureEffectReplicationSetByCallerCapacity(setByCallerCount);
-                setByCallerCount = effect.Spec.CopySetByCallerTagMagnitudes(
+                setByCallerCount = effect.Spec.CopySetByCallerTagMagnitudesRaw(
                     effectReplicationSetByCallerTags,
-                    effectReplicationSetByCallerValues);
+                    effectReplicationSetByCallerValuesRaw);
                 setByCallerTags = setByCallerCount > 0 ? effectReplicationSetByCallerTags : Array.Empty<GameplayTag>();
-                setByCallerValues = setByCallerCount > 0 ? effectReplicationSetByCallerValues : Array.Empty<float>();
+                setByCallerValuesRaw = setByCallerCount > 0 ? effectReplicationSetByCallerValuesRaw : Array.Empty<long>();
             }
 
             return new GASEffectReplicationData
@@ -3737,12 +3742,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 TargetAscNetId = resolver.GetAbilitySystemNetworkId(this),
                 Level = effect.Spec.Level,
                 StackCount = effect.StackCount,
-                Duration = effect.Spec.Duration,
-                TimeRemaining = effect.TimeRemaining,
-                PeriodTimeRemaining = effect.PeriodTimeRemaining,
+                DurationRaw = effect.Spec.DurationRaw,
+                TimeRemainingRaw = effect.TimeRemainingRaw,
+                PeriodTimeRemainingRaw = effect.PeriodTimeRemainingRaw,
                 PredictionKey = effect.Spec.Context?.PredictionKey ?? default,
                 SetByCallerTags = setByCallerTags,
-                SetByCallerValues = setByCallerValues,
+                SetByCallerValuesRaw = setByCallerValuesRaw,
                 SetByCallerCount = setByCallerCount,
             };
         }
@@ -3756,7 +3761,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             int next = Math.Max(count, effectReplicationSetByCallerTags.Length == 0 ? 4 : effectReplicationSetByCallerTags.Length * 2);
             Array.Resize(ref effectReplicationSetByCallerTags, next);
-            Array.Resize(ref effectReplicationSetByCallerValues, next);
+            Array.Resize(ref effectReplicationSetByCallerValuesRaw, next);
         }
 
         // --- Tag Management ---
@@ -3892,6 +3897,34 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             effect.ApplyReplicatedState(level, stackCount, duration, timeRemaining, periodTimeRemaining, setByCallerTags, setByCallerValues, setByCallerCount);
+            MarkActiveEffectsDirty();
+            MarkAttributesDirtyFromEffect(effect);
+            return true;
+        }
+
+        public bool TryApplyReplicatedEffectUpdateRaw(
+            ActiveGameplayEffect effect,
+            int level,
+            int stackCount,
+            long durationRaw,
+            long timeRemainingRaw,
+            long periodTimeRemainingRaw,
+            GameplayTag[] setByCallerTags,
+            long[] setByCallerValuesRaw,
+            int setByCallerCount)
+        {
+            AssertRuntimeThread();
+            if (effect == null || effect.IsExpired)
+            {
+                return false;
+            }
+
+            if (!TryFindActiveEffectIndex(effect, out _))
+            {
+                return false;
+            }
+
+            effect.ApplyReplicatedStateRaw(level, stackCount, durationRaw, timeRemainingRaw, periodTimeRemainingRaw, setByCallerTags, setByCallerValuesRaw, setByCallerCount);
             MarkActiveEffectsDirty();
             MarkAttributesDirtyFromEffect(effect);
             return true;
@@ -4353,7 +4386,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             return false;
         }
-        private void ApplyModifier(GameplayEffectSpec spec, GameplayAttribute attribute, ModifierInfo mod, float magnitude, bool isFromExecution)
+        private void ApplyModifier(GameplayEffectSpec spec, GameplayAttribute attribute, ModifierInfo mod, long magnitudeRaw, bool isFromExecution)
         {
             if (attribute == null)
             {
@@ -4383,7 +4416,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Otherwise, this is a permanent modification.
             // The AttributeSet is SOLELY responsible for handling it via PostGameplayEffectExecute.
             // The ASC's job is just to deliver the data.
-            var callbackData = new GameplayEffectModCallbackData(spec, mod, magnitude, this);
+            var callbackData = new GameplayEffectModCallbackData(spec, mod, magnitudeRaw, this);
             targetAttributeSet.PostGameplayEffectExecute(callbackData);
         }
         private void MarkAttributesDirtyFromEffect(ActiveGameplayEffect activeEffect)
@@ -4570,15 +4603,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     setByCallerCount = effect.Spec.CopySetByCallerTagStateData(setByCallerEntries);
                 }
 
-                entries[i] = new GASActiveEffectStateData(
+                entries[i] = GASActiveEffectStateData.FromRaw(
                     effectInstanceIdResolver != null ? effectInstanceIdResolver(effect) : 0,
                     effect.Spec.Def,
                     effect.Spec.Source,
                     effect.Spec.Level,
                     effect.StackCount,
-                    effect.Spec.Duration,
-                    effect.TimeRemaining,
-                    effect.PeriodTimeRemaining,
+                    effect.Spec.DurationRaw,
+                    effect.TimeRemainingRaw,
+                    effect.PeriodTimeRemainingRaw,
                     effect.Spec.Context?.PredictionKey ?? default,
                     setByCallerCount > 0 ? setByCallerEntries : Array.Empty<GASSetByCallerTagStateData>(),
                     setByCallerCount);
@@ -4605,7 +4638,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 foreach (var attr in attributeSets[setIndex].GetAttributes())
                 {
-                    entries[index++] = new GASAttributeStateData(attr.Name, attr.BaseValue, attr.CurrentValue);
+                    entries[index++] = GASAttributeStateData.FromRaw(attr.Name, attr.BaseValueRaw, attr.CurrentValueRaw);
                 }
             }
 
@@ -4622,7 +4655,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     attributes.TryGetValue(attribute.Name, out var registeredAttribute) &&
                     ReferenceEquals(registeredAttribute, attribute))
                 {
-                    entries[index++] = new GASAttributeStateData(attribute.Name, attribute.BaseValue, attribute.CurrentValue);
+                    entries[index++] = GASAttributeStateData.FromRaw(attribute.Name, attribute.BaseValueRaw, attribute.CurrentValueRaw);
                 }
             }
 
@@ -4785,8 +4818,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 ref readonly var entry = ref snapshot[i];
                 if (!attributes.TryGetValue(entry.AttributeName, out var attr)) continue;
-                attr.OwningSet.SetBaseValue(attr, entry.BaseValue);
-                attr.OwningSet.SetCurrentValue(attr, entry.CurrentValue);
+                attr.OwningSet.SetBaseValueRaw(attr, entry.BaseValueRaw);
+                attr.OwningSet.SetCurrentValueRaw(attr, entry.CurrentValueRaw);
             }
         }
 
@@ -4979,9 +5012,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 SourceAscNetId = source != null ? resolver.GetAbilitySystemNetworkId(source) : 0,
                 Level = snap.Level,
                 StackCount = snap.StackCount,
-                Duration = snap.Duration,
-                TimeRemaining = snap.TimeRemaining,
-                PeriodTimeRemaining = snap.PeriodTimeRemaining,
+                DurationRaw = snap.DurationRaw,
+                TimeRemainingRaw = snap.TimeRemainingRaw,
+                PeriodTimeRemainingRaw = snap.PeriodTimeRemainingRaw,
                 PredictionKey = snap.PredictionKey,
             };
 
@@ -4992,10 +5025,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 for (int j = 0; j < count; j++)
                 {
                     stateApplySetByCallerTags[j] = snap.SetByCallerTagMagnitudes[j].Tag;
-                    stateApplySetByCallerValues[j] = snap.SetByCallerTagMagnitudes[j].Value;
+                    stateApplySetByCallerValuesRaw[j] = snap.SetByCallerTagMagnitudes[j].ValueRaw;
                 }
                 data.SetByCallerTags = stateApplySetByCallerTags;
-                data.SetByCallerValues = stateApplySetByCallerValues;
+                data.SetByCallerValuesRaw = stateApplySetByCallerValuesRaw;
                 data.SetByCallerCount = count;
             }
         }
@@ -5009,7 +5042,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             int next = Math.Max(count, stateApplySetByCallerTags.Length == 0 ? 4 : stateApplySetByCallerTags.Length * 2);
             Array.Resize(ref stateApplySetByCallerTags, next);
-            Array.Resize(ref stateApplySetByCallerValues, next);
+            Array.Resize(ref stateApplySetByCallerValuesRaw, next);
         }
 
         private void EnsureTargetDataNetworkIdCapacity(int count)

@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -11,8 +12,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
     public class ActiveGameplayEffect : IGASPoolable
     {
         public GameplayEffectSpec Spec { get; private set; }
-        public float TimeRemaining => (float)timeRemaining;
-        public float PeriodTimeRemaining => (float)periodTimer;
+        public float TimeRemaining => GASFixedValue.FromRaw(TimeRemainingRaw).ToFloat();
+        public float PeriodTimeRemaining => periodTimerRaw >= 0L ? GASFixedValue.FromRaw(periodTimerRaw).ToFloat() : -1f;
+        public long TimeRemainingRaw => timeRemainingRaw;
+        public long PeriodTimeRemainingRaw => periodTimerRaw;
         public int StackCount { get; private set; }
         public bool IsExpired { get; private set; }
 
@@ -39,9 +42,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             OnInhibitionChanged?.Invoke(inhibited);
         }
 
-        private double timeRemaining;
-        private double periodTimer;
-        private double cachedPeriod;
+        private long timeRemainingRaw;
+        private long periodTimerRaw;
+        private long cachedPeriodRaw;
         private EDurationPolicy cachedDurationPolicy;
 
         public ActiveGameplayEffect() { }
@@ -57,14 +60,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             Spec?.ReturnToPool();
             Spec = null;
-            timeRemaining = 0d;
+            timeRemainingRaw = 0L;
             StackCount = 0;
             IsExpired = false;
             IsInhibited = false;
             NetworkId = 0;
             OnInhibitionChanged = null;
-            periodTimer = -1d;
-            cachedPeriod = 0d;
+            periodTimerRaw = -1L;
+            cachedPeriodRaw = 0L;
             cachedDurationPolicy = default;
         }
 
@@ -82,23 +85,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private void Initialize(GameplayEffectSpec spec)
         {
             Spec = spec;
-            timeRemaining = spec.Duration;
+            timeRemainingRaw = spec.DurationRaw;
             StackCount = 1;
             IsExpired = false;
 
-            cachedPeriod = spec.Def.Period;
+            cachedPeriodRaw = GASFixedValue.FromFloat(spec.Def.Period).RawValue;
             cachedDurationPolicy = spec.Def.DurationPolicy;
 
             // UE5: bExecutePeriodicEffectOnApplication
             // If true (default), first tick fires immediately (periodTimer = 0).
             // If false, first tick waits for the full period interval.
-            if (cachedPeriod > 0)
+            if (cachedPeriodRaw > 0L)
             {
-                periodTimer = spec.Def.ExecutePeriodicEffectOnApplication ? 0d : cachedPeriod;
+                periodTimerRaw = spec.Def.ExecutePeriodicEffectOnApplication ? 0L : cachedPeriodRaw;
             }
             else
             {
-                periodTimer = -1d;
+                periodTimerRaw = -1L;
             }
         }
 
@@ -120,12 +123,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (Spec.Def.Stacking.DurationPolicy == EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication)
             {
-                timeRemaining = Spec.Duration;
+                timeRemainingRaw = Spec.DurationRaw;
             }
 
-            if (periodTimer > 0d)
+            if (periodTimerRaw > 0L)
             {
-                periodTimer = cachedPeriod;
+                periodTimerRaw = cachedPeriodRaw;
             }
         }
 
@@ -155,12 +158,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
-                timeRemaining = Spec.Duration;
+                timeRemainingRaw = Spec.DurationRaw;
             }
 
-            if (periodTimer >= 0d)
+            if (periodTimerRaw >= 0L)
             {
-                periodTimer = cachedPeriod;
+                periodTimerRaw = cachedPeriodRaw;
             }
         }
 
@@ -170,9 +173,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void SetRemainingDuration(float newDuration)
         {
+            SetRemainingDurationRaw(GASFixedValue.FromFloat(newDuration).RawValue);
+        }
+
+        public void SetRemainingDurationRaw(long newDurationRaw)
+        {
             if (cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
-                timeRemaining = System.Math.Max(0d, newDuration);
+                timeRemainingRaw = Math.Max(0L, newDurationRaw);
             }
         }
 
@@ -209,16 +217,51 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
-                this.timeRemaining = Math.Max(0d, timeRemaining);
+                timeRemainingRaw = Math.Max(0L, GASFixedValue.FromFloat(timeRemaining).RawValue);
             }
 
-            if (cachedPeriod > 0d)
+            if (cachedPeriodRaw > 0L)
             {
-                periodTimer = Math.Max(0d, Math.Min(periodTimeRemaining, cachedPeriod));
+                periodTimerRaw = Math.Max(0L, Math.Min(GASFixedValue.FromFloat(periodTimeRemaining).RawValue, cachedPeriodRaw));
             }
             else
             {
-                periodTimer = -1d;
+                periodTimerRaw = -1L;
+            }
+
+            IsExpired = false;
+        }
+
+        public void ApplyReplicatedStateRaw(
+            int level,
+            int stackCount,
+            long durationRaw,
+            long timeRemainingRaw,
+            long periodTimeRemainingRaw,
+            GameplayTag[] setByCallerTags,
+            long[] setByCallerValuesRaw,
+            int setByCallerCount)
+        {
+            if (Spec == null || Spec.Def == null)
+            {
+                return;
+            }
+
+            Spec.ApplyReplicatedStateRaw(level, durationRaw, setByCallerTags, setByCallerValuesRaw, setByCallerCount);
+            SetReplicatedStackCount(stackCount);
+
+            if (cachedDurationPolicy == EDurationPolicy.HasDuration)
+            {
+                this.timeRemainingRaw = Math.Max(0L, timeRemainingRaw);
+            }
+
+            if (cachedPeriodRaw > 0L)
+            {
+                periodTimerRaw = Math.Max(0L, Math.Min(periodTimeRemainingRaw, cachedPeriodRaw));
+            }
+            else
+            {
+                periodTimerRaw = -1L;
             }
 
             IsExpired = false;
@@ -234,15 +277,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <returns>True if the effect expired this tick.</returns>
         public bool Tick(float deltaTime, AbilitySystemComponent asc)
         {
-            double deltaTime64 = deltaTime;
+            long deltaTimeRaw = GASFixedValue.FromFloat(deltaTime).RawValue;
 
             // Duration handling
             if (!IsExpired && cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
-                timeRemaining -= deltaTime64;
-                if (timeRemaining <= 0d)
+                timeRemainingRaw -= deltaTimeRaw;
+                if (timeRemainingRaw <= 0L)
                 {
-                    timeRemaining = 0d;
+                    timeRemainingRaw = 0L;
                     IsExpired = true;
                 }
             }
@@ -250,16 +293,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Periodic effect handling --skip entirely when inhibited (OngoingTagRequirements not met).
             // IsInhibited is kept current by AbilitySystemComponent.RecalculateDirtyAttributes(),
             // which runs at the START of each tick (before effects are ticked) when tags change.
-            if (!IsExpired && !IsInhibited && cachedPeriod > 0d)
+            if (!IsExpired && !IsInhibited && cachedPeriodRaw > 0L)
             {
-                periodTimer -= deltaTime64;
-                while (periodTimer <= 0d)
+                periodTimerRaw -= deltaTimeRaw;
+                while (periodTimerRaw <= 0L)
                 {
                     asc.ExecuteInstantEffect(this.Spec);
                     // Carry over leftover time to prevent drift; the while loop ensures we
                     // fire once per elapsed period and leave periodTimer in [0, cachedPeriod).
-                    periodTimer += cachedPeriod;
-                    if (cachedPeriod <= 0d) break; // safety: avoid infinite loop if period is zero
+                    periodTimerRaw += cachedPeriodRaw;
+                    if (cachedPeriodRaw <= 0L) break; // safety: avoid infinite loop if period is zero
                 }
             }
 

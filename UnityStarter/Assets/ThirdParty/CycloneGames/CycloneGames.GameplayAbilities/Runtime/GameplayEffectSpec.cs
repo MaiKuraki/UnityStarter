@@ -40,10 +40,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// The duration for this specific instance of the effect.
         /// </summary>
-        public float Duration { get; private set; }
+        public float Duration => GASFixedValue.FromRaw(DurationRaw).ToFloat();
+        public long DurationRaw { get; private set; }
 
         // Raw arrays for maximum performance (direct memory access)
         public float[] ModifierMagnitudes = System.Array.Empty<float>();
+        public long[] ModifierMagnitudeRawValues = System.Array.Empty<long>();
         public GameplayAttribute[] TargetAttributes = System.Array.Empty<GameplayAttribute>();
 
         /// <summary>
@@ -62,14 +64,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         // SetByCaller magnitude storage --null-lazy to avoid Dictionary allocation on specs that never use SetByCaller.
         // The vast majority of effect specs (damage, buffs, cooldowns) do not use this API.
-        private Dictionary<GameplayTag, float> setByCallerMagnitudes;
-        private Dictionary<string, float> setByCallerMagnitudesByName;
+        private Dictionary<GameplayTag, long> setByCallerMagnitudes;
+        private Dictionary<string, long> setByCallerMagnitudesByName;
 
-        private Dictionary<GameplayTag, float> GetOrCreateTagMagnitudes()
-            => setByCallerMagnitudes ??= new Dictionary<GameplayTag, float>();
+        private Dictionary<GameplayTag, long> GetOrCreateTagMagnitudes()
+            => setByCallerMagnitudes ??= new Dictionary<GameplayTag, long>();
 
-        private Dictionary<string, float> GetOrCreateNameMagnitudes()
-            => setByCallerMagnitudesByName ??= new Dictionary<string, float>(System.StringComparer.Ordinal);
+        private Dictionary<string, long> GetOrCreateNameMagnitudes()
+            => setByCallerMagnitudesByName ??= new Dictionary<string, long>(System.StringComparer.Ordinal);
 
         public GameplayEffectSpec() { }
 
@@ -93,11 +95,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Target = null;
             Context = null;
             Level = 0;
-            Duration = 0;
+            DurationRaw = 0L;
 
             // Fast clear of references --clear BOTH arrays so stale magnitudes never survive pool reuse.
             System.Array.Clear(TargetAttributes, 0, TargetAttributes.Length);
             System.Array.Clear(ModifierMagnitudes, 0, ModifierMagnitudes.Length);
+            System.Array.Clear(ModifierMagnitudeRawValues, 0, ModifierMagnitudeRawValues.Length);
             setByCallerMagnitudes?.Clear();
             setByCallerMagnitudesByName?.Clear();
             DynamicGrantedTags.Clear();
@@ -152,7 +155,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Def = def;
             Source = source;
             Level = level;
-            Duration = def.Duration;
+            DurationRaw = GASFixedValue.FromFloat(def.Duration).RawValue;
 
             Context = context ?? GASPool<GameplayEffectContext>.Shared.Get();
             if (source != null)
@@ -171,6 +174,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     : mod.Magnitude.GetValueAtLevel(level);
 
                 ModifierMagnitudes[i] = magnitude;
+                ModifierMagnitudeRawValues[i] = GASFixedValue.FromFloat(magnitude).RawValue;
                 TargetAttributes[i] = null;
             }
         }
@@ -181,6 +185,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 int newSize = System.Math.Max(count, ModifierMagnitudes.Length == 0 ? 8 : ModifierMagnitudes.Length * 2);
                 System.Array.Resize(ref ModifierMagnitudes, newSize);
+                System.Array.Resize(ref ModifierMagnitudeRawValues, newSize);
                 System.Array.Resize(ref TargetAttributes, newSize);
             }
         }
@@ -205,14 +210,25 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void SetSetByCallerMagnitude(GameplayTag dataTag, float magnitude)
         {
             if (dataTag.IsNone) return;
-            GetOrCreateTagMagnitudes()[dataTag] = magnitude;
+            GetOrCreateTagMagnitudes()[dataTag] = GASFixedValue.FromFloat(magnitude).RawValue;
+        }
+
+        public void SetSetByCallerMagnitude(GameplayTag dataTag, GASFixedValue magnitude)
+        {
+            SetSetByCallerMagnitudeRaw(dataTag, magnitude.RawValue);
+        }
+
+        public void SetSetByCallerMagnitudeRaw(GameplayTag dataTag, long magnitudeRaw)
+        {
+            if (dataTag.IsNone) return;
+            GetOrCreateTagMagnitudes()[dataTag] = magnitudeRaw;
         }
 
         public float GetSetByCallerMagnitude(GameplayTag dataTag, bool warnIfNotFound = true, float defaultValue = 0f)
         {
-            if (setByCallerMagnitudes != null && setByCallerMagnitudes.TryGetValue(dataTag, out float magnitude))
+            if (setByCallerMagnitudes != null && setByCallerMagnitudes.TryGetValue(dataTag, out long magnitudeRaw))
             {
-                return magnitude;
+                return GASFixedValue.FromRaw(magnitudeRaw).ToFloat();
             }
 
             if (warnIfNotFound)
@@ -230,14 +246,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 GASLog.Warning(sb => sb.Append("SetSetByCallerMagnitude: dataName cannot be null or empty."));
                 return;
             }
-            GetOrCreateNameMagnitudes()[dataName] = magnitude;
+            GetOrCreateNameMagnitudes()[dataName] = GASFixedValue.FromFloat(magnitude).RawValue;
+        }
+
+        public void SetSetByCallerMagnitude(string dataName, GASFixedValue magnitude)
+        {
+            SetSetByCallerMagnitudeRaw(dataName, magnitude.RawValue);
+        }
+
+        public void SetSetByCallerMagnitudeRaw(string dataName, long magnitudeRaw)
+        {
+            if (string.IsNullOrEmpty(dataName))
+            {
+                GASLog.Warning(sb => sb.Append("SetSetByCallerMagnitude: dataName cannot be null or empty."));
+                return;
+            }
+            GetOrCreateNameMagnitudes()[dataName] = magnitudeRaw;
         }
 
         public float GetSetByCallerMagnitude(string dataName, bool warnIfNotFound = true, float defaultValue = 0f)
         {
-            if (setByCallerMagnitudesByName != null && setByCallerMagnitudesByName.TryGetValue(dataName, out float magnitude))
+            if (setByCallerMagnitudesByName != null && setByCallerMagnitudesByName.TryGetValue(dataName, out long magnitudeRaw))
             {
-                return magnitude;
+                return GASFixedValue.FromRaw(magnitudeRaw).ToFloat();
             }
 
             if (warnIfNotFound)
@@ -282,7 +313,36 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
 
                 destinationTags[index] = pair.Key;
-                destinationValues[index] = pair.Value;
+                destinationValues[index] = GASFixedValue.FromRaw(pair.Value).ToFloat();
+                index++;
+            }
+
+            return index;
+        }
+
+        public int CopySetByCallerTagMagnitudesRaw(GameplayTag[] destinationTags, long[] destinationValuesRaw)
+        {
+            if (destinationTags == null || destinationValuesRaw == null || setByCallerMagnitudes == null || setByCallerMagnitudes.Count == 0)
+            {
+                return 0;
+            }
+
+            int capacity = System.Math.Min(destinationTags.Length, destinationValuesRaw.Length);
+            if (capacity <= 0)
+            {
+                return 0;
+            }
+
+            int index = 0;
+            foreach (var pair in setByCallerMagnitudes)
+            {
+                if (index >= capacity)
+                {
+                    break;
+                }
+
+                destinationTags[index] = pair.Key;
+                destinationValuesRaw[index] = pair.Value;
                 index++;
             }
 
@@ -304,7 +364,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     break;
                 }
 
-                destination[index++] = new GASSetByCallerTagStateData(pair.Key, pair.Value);
+                destination[index++] = GASSetByCallerTagStateData.FromRaw(pair.Key, pair.Value);
             }
 
             return index;
@@ -318,7 +378,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             int setByCallerCount)
         {
             Level = level;
-            Duration = duration;
+            DurationRaw = GASFixedValue.FromFloat(duration).RawValue;
 
             setByCallerMagnitudes?.Clear();
             if (setByCallerTags != null && setByCallerValues != null)
@@ -329,7 +389,34 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     var tag = setByCallerTags[i];
                     if (!tag.IsNone)
                     {
-                        GetOrCreateTagMagnitudes()[tag] = setByCallerValues[i];
+                        GetOrCreateTagMagnitudes()[tag] = GASFixedValue.FromFloat(setByCallerValues[i]).RawValue;
+                    }
+                }
+            }
+
+            RecalculateModifierMagnitudes();
+        }
+
+        public void ApplyReplicatedStateRaw(
+            int level,
+            long durationRaw,
+            GameplayTag[] setByCallerTags,
+            long[] setByCallerValuesRaw,
+            int setByCallerCount)
+        {
+            Level = level;
+            DurationRaw = durationRaw;
+
+            setByCallerMagnitudes?.Clear();
+            if (setByCallerTags != null && setByCallerValuesRaw != null)
+            {
+                int count = System.Math.Min(setByCallerCount, System.Math.Min(setByCallerTags.Length, setByCallerValuesRaw.Length));
+                for (int i = 0; i < count; i++)
+                {
+                    var tag = setByCallerTags[i];
+                    if (!tag.IsNone)
+                    {
+                        GetOrCreateTagMagnitudes()[tag] = setByCallerValuesRaw[i];
                     }
                 }
             }
@@ -362,6 +449,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return 0f;
         }
 
+        public long GetCalculatedMagnitudeRaw(int index)
+        {
+            if (index >= 0 && index < ModifierMagnitudeRawValues.Length)
+            {
+                return ModifierMagnitudeRawValues[index];
+            }
+            return 0L;
+        }
+
         public float GetCalculatedMagnitude(int index)
         {
             if (index >= 0 && index < ModifierMagnitudes.Length)
@@ -369,6 +465,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return ModifierMagnitudes[index];
             }
             return 0f;
+        }
+
+        public void SetCalculatedMagnitude(int index, float magnitude)
+        {
+            if (index < 0 || index >= ModifierMagnitudes.Length || index >= ModifierMagnitudeRawValues.Length)
+            {
+                return;
+            }
+
+            ModifierMagnitudes[index] = magnitude;
+            ModifierMagnitudeRawValues[index] = GASFixedValue.FromFloat(magnitude).RawValue;
         }
 
         #endregion
@@ -409,6 +516,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     : mod.Magnitude.GetValueAtLevel(Level);
 
                 ModifierMagnitudes[i] = magnitude;
+                ModifierMagnitudeRawValues[i] = GASFixedValue.FromFloat(magnitude).RawValue;
 
                 if (Target != null)
                 {

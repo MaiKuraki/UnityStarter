@@ -7,8 +7,10 @@ namespace CycloneGames.GameplayAbilities.Core
     /// </summary>
     public interface ISimulationTimeProvider
     {
-        float DeltaTime { get; }
-        float TotalTime { get; }
+        long DeltaTimeRaw { get; }
+        long TotalTimeRaw { get; }
+        GASFixedValue FixedDeltaTime { get; }
+        GASFixedValue FixedTotalTime { get; }
         int FrameCount { get; }
     }
 
@@ -17,8 +19,9 @@ namespace CycloneGames.GameplayAbilities.Core
     /// </summary>
     public interface ISimulationRandomProvider
     {
-        float NextFloat();
-        float NextFloat(float min, float max);
+        long NextRaw();
+        GASFixedValue NextFixed();
+        GASFixedValue NextFixed(GASFixedValue min, GASFixedValue max);
         int NextInt(int min, int max);
     }
 
@@ -48,9 +51,10 @@ namespace CycloneGames.GameplayAbilities.Core
             _frameCount++;
         }
 
-        /// <summary>Read-only. Call Advance() once per frame before reading this value.</summary>
-        public float DeltaTime => (float)_deltaTime;
-        public float TotalTime => (float)_stopwatch.Elapsed.TotalSeconds;
+        public long DeltaTimeRaw => GASFixedValue.FromDouble(_deltaTime).RawValue;
+        public long TotalTimeRaw => GASFixedValue.FromDouble(_stopwatch.Elapsed.TotalSeconds).RawValue;
+        public GASFixedValue FixedDeltaTime => GASFixedValue.FromRaw(DeltaTimeRaw);
+        public GASFixedValue FixedTotalTime => GASFixedValue.FromRaw(TotalTimeRaw);
         public int FrameCount => _frameCount;
     }
 
@@ -72,9 +76,13 @@ namespace CycloneGames.GameplayAbilities.Core
 
         private DefaultRandomProvider() { }
 
-        public float NextFloat() => (float)ThreadRandom.NextDouble();
-        public float NextFloat(float min, float max) => min + (float)ThreadRandom.NextDouble() * (max - min);
         public int NextInt(int min, int max) => ThreadRandom.Next(min, max);
+        public long NextRaw() => GASFixedValue.FromDouble(ThreadRandom.NextDouble()).RawValue;
+        public GASFixedValue NextFixed() => GASFixedValue.FromRaw(NextRaw());
+        public GASFixedValue NextFixed(GASFixedValue min, GASFixedValue max)
+        {
+            return min + (max - min) * NextFixed();
+        }
     }
 
     /// <summary>
@@ -82,21 +90,25 @@ namespace CycloneGames.GameplayAbilities.Core
     /// </summary>
     public sealed class DeterministicTimeProvider : ISimulationTimeProvider
     {
-        private double _totalTime;
-        private double _deltaTime;
+        private long _totalTimeRaw;
+        private long _deltaTimeRaw;
         private int _frameCount;
 
-        public float DeltaTime => (float)_deltaTime;
-        public float TotalTime => (float)_totalTime;
+        public long DeltaTimeRaw => _deltaTimeRaw;
+        public long TotalTimeRaw => _totalTimeRaw;
+        public GASFixedValue FixedDeltaTime => GASFixedValue.FromRaw(_deltaTimeRaw);
+        public GASFixedValue FixedTotalTime => GASFixedValue.FromRaw(_totalTimeRaw);
         public int FrameCount => _frameCount;
 
-        /// <summary>
-        /// Advances time by the specified delta.
-        /// </summary>
-        public void Tick(float deltaTime)
+        public void Tick(GASFixedValue deltaTime)
         {
-            _deltaTime = deltaTime;
-            _totalTime += deltaTime;
+            TickRaw(deltaTime.RawValue);
+        }
+
+        public void TickRaw(long deltaTimeRaw)
+        {
+            _deltaTimeRaw = deltaTimeRaw;
+            _totalTimeRaw += deltaTimeRaw;
             _frameCount++;
         }
 
@@ -105,8 +117,8 @@ namespace CycloneGames.GameplayAbilities.Core
         /// </summary>
         public void Reset()
         {
-            _totalTime = 0d;
-            _deltaTime = 0d;
+            _totalTimeRaw = 0L;
+            _deltaTimeRaw = 0L;
             _frameCount = 0;
         }
     }
@@ -116,15 +128,47 @@ namespace CycloneGames.GameplayAbilities.Core
     /// </summary>
     public sealed class DeterministicRandomProvider : ISimulationRandomProvider
     {
-        private readonly Random _random;
+        private uint _state;
 
         public DeterministicRandomProvider(int seed)
         {
-            _random = new Random(seed);
+            _state = seed == 0 ? 0x9E3779B9u : unchecked((uint)seed);
         }
 
-        public float NextFloat() => (float)_random.NextDouble();
-        public float NextFloat(float min, float max) => min + (float)_random.NextDouble() * (max - min);
-        public int NextInt(int min, int max) => _random.Next(min, max);
+        public int NextInt(int min, int max)
+        {
+            if (min >= max)
+            {
+                throw new ArgumentOutOfRangeException(nameof(max), "max must be greater than min.");
+            }
+
+            uint range = unchecked((uint)(max - min));
+            return min + (int)(NextUInt() % range);
+        }
+
+        public long NextRaw()
+        {
+            return NextUInt();
+        }
+
+        public GASFixedValue NextFixed()
+        {
+            return GASFixedValue.FromRaw(NextRaw());
+        }
+
+        public GASFixedValue NextFixed(GASFixedValue min, GASFixedValue max)
+        {
+            return min + (max - min) * NextFixed();
+        }
+
+        private uint NextUInt()
+        {
+            uint value = _state;
+            value ^= value << 13;
+            value ^= value >> 17;
+            value ^= value << 5;
+            _state = value == 0 ? 0x9E3779B9u : value;
+            return _state;
+        }
     }
 }

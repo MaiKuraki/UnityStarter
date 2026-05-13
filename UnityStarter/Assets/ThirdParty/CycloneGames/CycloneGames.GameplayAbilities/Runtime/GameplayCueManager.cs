@@ -265,7 +265,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         null,
                         target.AvatarGameObject,
                         0,
-                        0f,
+                        0L,
                         predictionKey));
 
                     await ReleaseTrackedCueInstanceAsync(itemToRemove, parameters);

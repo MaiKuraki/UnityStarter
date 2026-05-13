@@ -30,7 +30,8 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly object SourceObject;
         public readonly object TargetObject;
         public readonly int EffectLevel;
-        public readonly float EffectDuration;
+        public readonly long EffectDurationRaw;
+        public GASFixedValue EffectDuration => GASFixedValue.FromRaw(EffectDurationRaw);
         public readonly GASPredictionKey PredictionKey;
 
         public GameplayCueEventParams(
@@ -41,8 +42,8 @@ namespace CycloneGames.GameplayAbilities.Core
             object sourceObject,
             object targetObject,
             int effectLevel,
-            float effectDuration)
-            : this(source, target, effectDefinition, effectContext, sourceObject, targetObject, effectLevel, effectDuration, default)
+            long effectDurationRaw)
+            : this(source, target, effectDefinition, effectContext, sourceObject, targetObject, effectLevel, effectDurationRaw, default)
         {
         }
 
@@ -54,7 +55,7 @@ namespace CycloneGames.GameplayAbilities.Core
             object sourceObject,
             object targetObject,
             int effectLevel,
-            float effectDuration,
+            long effectDurationRaw,
             GASPredictionKey predictionKey)
         {
             Source = source;
@@ -64,7 +65,7 @@ namespace CycloneGames.GameplayAbilities.Core
             SourceObject = sourceObject;
             TargetObject = targetObject;
             EffectLevel = effectLevel;
-            EffectDuration = effectDuration;
+            EffectDurationRaw = effectDurationRaw;
             PredictionKey = predictionKey;
         }
     }

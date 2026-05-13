@@ -3,6 +3,7 @@
     "rootNamespace": "CycloneGames.GameplayAbilities.Networking.Tests.Editor",
     "references": [
         "CycloneGames.GameplayAbilities.Networking.Core",
+        "CycloneGames.Networking.Core",
         "CycloneGames.DeterministicMath.Core"
     ],
     "includePlatforms": [
