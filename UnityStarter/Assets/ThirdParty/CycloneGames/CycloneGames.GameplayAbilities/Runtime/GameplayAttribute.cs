@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CycloneGames.GameplayAbilities.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -11,13 +12,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
     {
         public string Name { get; }
         public AttributeSet OwningSet { get; internal set; }
-        private float _baseValue;
-        private float _currentValue;
+        private long baseValueRaw;
+        private long currentValueRaw;
         internal bool IsDirty;
         internal readonly List<ActiveGameplayEffect> AffectingEffects = new List<ActiveGameplayEffect>(8);
 
-        public float BaseValue => _baseValue;
-        public float CurrentValue => _currentValue;
+        public long BaseValueRaw => baseValueRaw;
+        public long CurrentValueRaw => currentValueRaw;
+        public GASFixedValue BaseFixedValue => GASFixedValue.FromRaw(baseValueRaw);
+        public GASFixedValue CurrentFixedValue => GASFixedValue.FromRaw(currentValueRaw);
+        public float BaseValue => BaseFixedValue.ToFloat();
+        public float CurrentValue => CurrentFixedValue.ToFloat();
 
         public event Action<float, float> OnCurrentValueChanged; // old, new
         public event Action<float, float> OnBaseValueChanged; // old, new
@@ -29,21 +34,41 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void SetBaseValue(float value)
         {
-            float oldValue = _baseValue;
-            _baseValue = value;
-            if (Math.Abs(oldValue - value) > float.Epsilon)
+            SetBaseValueRaw(GASFixedValue.FromFloat(value).RawValue);
+        }
+
+        public void SetBaseValue(GASFixedValue value)
+        {
+            SetBaseValueRaw(value.RawValue);
+        }
+
+        public void SetBaseValueRaw(long valueRaw)
+        {
+            long oldRaw = baseValueRaw;
+            baseValueRaw = valueRaw;
+            if (oldRaw != valueRaw)
             {
-                OnBaseValueChanged?.Invoke(oldValue, value);
+                OnBaseValueChanged?.Invoke(GASFixedValue.FromRaw(oldRaw).ToFloat(), GASFixedValue.FromRaw(valueRaw).ToFloat());
             }
         }
 
         public void SetCurrentValue(float value)
         {
-            float oldValue = _currentValue;
-            _currentValue = value;
-            if (Math.Abs(oldValue - value) > float.Epsilon)
+            SetCurrentValueRaw(GASFixedValue.FromFloat(value).RawValue);
+        }
+
+        public void SetCurrentValue(GASFixedValue value)
+        {
+            SetCurrentValueRaw(value.RawValue);
+        }
+
+        public void SetCurrentValueRaw(long valueRaw)
+        {
+            long oldRaw = currentValueRaw;
+            currentValueRaw = valueRaw;
+            if (oldRaw != valueRaw)
             {
-                OnCurrentValueChanged?.Invoke(oldValue, value);
+                OnCurrentValueChanged?.Invoke(GASFixedValue.FromRaw(oldRaw).ToFloat(), GASFixedValue.FromRaw(valueRaw).ToFloat());
             }
         }
     }

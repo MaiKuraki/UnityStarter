@@ -34,11 +34,11 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly long BaseValueRaw;
         public readonly long CurrentValueRaw;
         public readonly uint AggregatorVersion;
-        public float BaseValue => GASFixedValue.FromRaw(BaseValueRaw).ToFloat();
-        public float CurrentValue => GASFixedValue.FromRaw(CurrentValueRaw).ToFloat();
+        public GASFixedValue BaseValue => GASFixedValue.FromRaw(BaseValueRaw);
+        public GASFixedValue CurrentValue => GASFixedValue.FromRaw(CurrentValueRaw);
 
-        public GASAttributeValueData(GASAttributeId attributeId, float baseValue, float currentValue, uint aggregatorVersion)
-            : this(attributeId, GASFixedValue.FromFloat(baseValue).RawValue, GASFixedValue.FromFloat(currentValue).RawValue, aggregatorVersion)
+        public GASAttributeValueData(GASAttributeId attributeId, GASFixedValue baseValue, GASFixedValue currentValue, uint aggregatorVersion)
+            : this(attributeId, baseValue.RawValue, currentValue.RawValue, aggregatorVersion)
         {
         }
 
@@ -56,10 +56,10 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly GASAttributeId AttributeId;
         public readonly GASModifierOp Op;
         public readonly long MagnitudeRaw;
-        public float Magnitude => GASFixedValue.FromRaw(MagnitudeRaw).ToFloat();
+        public GASFixedValue Magnitude => GASFixedValue.FromRaw(MagnitudeRaw);
 
-        public GASModifierData(GASAttributeId attributeId, GASModifierOp op, float magnitude)
-            : this(attributeId, op, GASFixedValue.FromFloat(magnitude).RawValue)
+        public GASModifierData(GASAttributeId attributeId, GASModifierOp op, GASFixedValue magnitude)
+            : this(attributeId, op, magnitude.RawValue)
         {
         }
 
@@ -162,7 +162,7 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly GASPredictionKey PredictionKey;
         public readonly GASAttributeId AttributeId;
         public readonly long OldBaseValueRaw;
-        public float OldBaseValue => GASFixedValue.FromRaw(OldBaseValueRaw).ToFloat();
+        public GASFixedValue OldBaseValue => GASFixedValue.FromRaw(OldBaseValueRaw);
 
         public GASPredictedAttributeChange(GASPredictionKey predictionKey, GASAttributeId attributeId, long oldBaseValueRaw)
         {
