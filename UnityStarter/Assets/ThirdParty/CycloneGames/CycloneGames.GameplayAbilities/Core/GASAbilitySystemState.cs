@@ -259,9 +259,9 @@ namespace CycloneGames.GameplayAbilities.Core
             return true;
         }
 
-        public void SetAttributeBase(GASAttributeId attributeId, float baseValue)
+        public void SetAttributeBase(GASAttributeId attributeId, GASFixedValue baseValue)
         {
-            SetAttributeBaseRaw(attributeId, GASFixedValue.FromFloat(baseValue).RawValue);
+            SetAttributeBaseRaw(attributeId, baseValue.RawValue);
         }
 
         public void SetAttributeBaseRaw(GASAttributeId attributeId, long baseValueRaw)
@@ -304,9 +304,19 @@ namespace CycloneGames.GameplayAbilities.Core
             return ApplyInstantModifier(new GASModifierData(attributeId, op, magnitudeRaw), default);
         }
 
+        public bool ApplyInstantModifier(GASAttributeId attributeId, GASModifierOp op, GASFixedValue magnitude)
+        {
+            return ApplyInstantModifier(new GASModifierData(attributeId, op, magnitude.RawValue), default);
+        }
+
         public bool ApplyInstantModifierRaw(GASAttributeId attributeId, GASModifierOp op, long magnitudeRaw, GASPredictionKey predictionKey)
         {
             return ApplyInstantModifier(new GASModifierData(attributeId, op, magnitudeRaw), predictionKey);
+        }
+
+        public bool ApplyInstantModifier(GASAttributeId attributeId, GASModifierOp op, GASFixedValue magnitude, GASPredictionKey predictionKey)
+        {
+            return ApplyInstantModifier(new GASModifierData(attributeId, op, magnitude.RawValue), predictionKey);
         }
 
         public GASActiveEffectHandle AddActiveEffect(

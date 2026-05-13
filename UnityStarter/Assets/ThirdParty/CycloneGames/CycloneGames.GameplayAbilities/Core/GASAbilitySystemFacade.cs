@@ -137,21 +137,21 @@ namespace CycloneGames.GameplayAbilities.Core
             }
         }
 
-        public void SetNumericAttributeBase(GASAttributeId attributeId, float value)
-        {
-            state.SetAttributeBase(attributeId, value);
-            SendStateDelta();
-        }
-
         public void SetNumericAttributeBaseRaw(GASAttributeId attributeId, long valueRaw)
         {
             state.SetAttributeBaseRaw(attributeId, valueRaw);
             SendStateDelta();
         }
 
-        public bool ApplyInstantModifier(GASAttributeId attributeId, GASModifierOp op, float magnitude)
+        public void SetNumericAttributeBase(GASAttributeId attributeId, GASFixedValue value)
         {
-            bool applied = state.ApplyInstantModifier(new GASModifierData(attributeId, op, magnitude));
+            state.SetAttributeBase(attributeId, value);
+            SendStateDelta();
+        }
+
+        public bool ApplyInstantModifier(GASAttributeId attributeId, GASModifierOp op, GASFixedValue magnitude)
+        {
+            bool applied = state.ApplyInstantModifier(attributeId, op, magnitude);
             if (applied)
             {
                 SendStateDelta();
@@ -182,6 +182,17 @@ namespace CycloneGames.GameplayAbilities.Core
             return applied;
         }
 
+        public bool ApplyInstantModifier(GASAttributeId attributeId, GASModifierOp op, GASFixedValue magnitude, GASPredictionKey predictionKey)
+        {
+            bool applied = state.ApplyInstantModifier(attributeId, op, magnitude, predictionKey);
+            if (applied)
+            {
+                SendStateDelta();
+            }
+
+            return applied;
+        }
+
         public bool GetGameplayAttributeRawValue(GASAttributeId attributeId, out long currentValueRaw)
         {
             if (state.TryGetAttribute(attributeId, out var attribute))
@@ -191,6 +202,32 @@ namespace CycloneGames.GameplayAbilities.Core
             }
 
             currentValueRaw = default;
+            return false;
+        }
+
+        public bool GetGameplayAttributeFixedValue(GASAttributeId attributeId, out GASFixedValue currentValue)
+        {
+            if (state.TryGetAttribute(attributeId, out var attribute))
+            {
+                currentValue = GASFixedValue.FromRaw(attribute.CurrentValueRaw);
+                return true;
+            }
+
+            currentValue = default;
+            return false;
+        }
+
+        public bool GetGameplayAttributeFixedValues(GASAttributeId attributeId, out GASFixedValue baseValue, out GASFixedValue currentValue)
+        {
+            if (state.TryGetAttribute(attributeId, out var attribute))
+            {
+                baseValue = GASFixedValue.FromRaw(attribute.BaseValueRaw);
+                currentValue = GASFixedValue.FromRaw(attribute.CurrentValueRaw);
+                return true;
+            }
+
+            baseValue = default;
+            currentValue = default;
             return false;
         }
 
@@ -217,16 +254,5 @@ namespace CycloneGames.GameplayAbilities.Core
             }
         }
 
-        public bool GetGameplayAttributeValue(GASAttributeId attributeId, out float currentValue)
-        {
-            if (state.TryGetAttribute(attributeId, out var attribute))
-            {
-                currentValue = attribute.CurrentValue;
-                return true;
-            }
-
-            currentValue = default;
-            return false;
-        }
     }
 }

@@ -27,7 +27,7 @@ namespace CycloneGames.GameplayAbilities.Core
 
         IGameplayAttribute GetAttribute(string name);
 
-        void Tick(float deltaTime, bool isServer);
+        void TickRaw(long deltaTimeRaw, bool isServer);
     }
 
     /// <summary>
@@ -83,8 +83,10 @@ namespace CycloneGames.GameplayAbilities.Core
     public interface IGameplayAttribute
     {
         string Name { get; }
-        float BaseValue { get; }
-        float CurrentValue { get; }
+        long BaseValueRaw { get; }
+        long CurrentValueRaw { get; }
+        GASFixedValue BaseValue { get; }
+        GASFixedValue CurrentValue { get; }
     }
 
     /// <summary>
@@ -95,7 +97,8 @@ namespace CycloneGames.GameplayAbilities.Core
     public interface IGameplayEffectSpec
     {
         int Level { get; }
-        float Duration { get; }
+        long DurationRaw { get; }
+        GASFixedValue Duration { get; }
         IGameplayEffectContext Context { get; }
     }
 

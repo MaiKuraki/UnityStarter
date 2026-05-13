@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.CompilerServices;
 using CycloneGames.DeterministicMath;
 
@@ -7,7 +8,7 @@ namespace CycloneGames.GameplayAbilities.Core
     /// Deterministic gameplay numeric value used by the pure Core layer.
     /// Runtime and authoring layers may expose floats, but Core state stores raw fixed-point values.
     /// </summary>
-    public readonly struct GASFixedValue
+    public readonly struct GASFixedValue : IEquatable<GASFixedValue>, IComparable<GASFixedValue>
     {
         public readonly long RawValue;
 
@@ -32,6 +33,24 @@ namespace CycloneGames.GameplayAbilities.Core
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static GASFixedValue FromDouble(double value)
+        {
+            return new GASFixedValue(FPInt64.FromDouble(value).RawValue);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static GASFixedValue FromInt(int value)
+        {
+            return new GASFixedValue(FPInt64.FromInt(value).RawValue);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public FPInt64 ToFPInt64()
+        {
+            return FPInt64.FromRaw(RawValue);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public float ToFloat()
         {
             return FPInt64.FromRaw(RawValue).ToFloat();
@@ -41,6 +60,99 @@ namespace CycloneGames.GameplayAbilities.Core
         public double ToDouble()
         {
             return FPInt64.FromRaw(RawValue).ToDouble();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public int CompareTo(GASFixedValue other)
+        {
+            return RawValue.CompareTo(other.RawValue);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool Equals(GASFixedValue other)
+        {
+            return RawValue == other.RawValue;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is GASFixedValue other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            return RawValue.GetHashCode();
+        }
+
+        public override string ToString()
+        {
+            return ToDouble().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static GASFixedValue operator +(GASFixedValue left, GASFixedValue right)
+        {
+            return FromRaw((left.ToFPInt64() + right.ToFPInt64()).RawValue);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static GASFixedValue operator -(GASFixedValue left, GASFixedValue right)
+        {
+            return FromRaw((left.ToFPInt64() - right.ToFPInt64()).RawValue);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static GASFixedValue operator -(GASFixedValue value)
+        {
+            return FromRaw((-value.ToFPInt64()).RawValue);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static GASFixedValue operator *(GASFixedValue left, GASFixedValue right)
+        {
+            return FromRaw((left.ToFPInt64() * right.ToFPInt64()).RawValue);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static GASFixedValue operator /(GASFixedValue left, GASFixedValue right)
+        {
+            return FromRaw((left.ToFPInt64() / right.ToFPInt64()).RawValue);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator ==(GASFixedValue left, GASFixedValue right)
+        {
+            return left.RawValue == right.RawValue;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator !=(GASFixedValue left, GASFixedValue right)
+        {
+            return left.RawValue != right.RawValue;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator <(GASFixedValue left, GASFixedValue right)
+        {
+            return left.RawValue < right.RawValue;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator >(GASFixedValue left, GASFixedValue right)
+        {
+            return left.RawValue > right.RawValue;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator <=(GASFixedValue left, GASFixedValue right)
+        {
+            return left.RawValue <= right.RawValue;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool operator >=(GASFixedValue left, GASFixedValue right)
+        {
+            return left.RawValue >= right.RawValue;
         }
     }
 }
