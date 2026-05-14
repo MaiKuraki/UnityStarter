@@ -31,13 +31,14 @@ namespace CycloneGames.Audio.Runtime
 
         public override void ProcessNode(ActiveEvent activeEvent)
         {
-            if (this.input.ConnectedNodes == null || this.input.ConnectedNodes.Length == 0)
+            AudioNodeOutput[] connectedNodes = this.input != null ? this.input.ConnectedNodes : null;
+            if (connectedNodes == null || connectedNodes.Length == 0)
             {
                 Debug.LogWarningFormat("No connected nodes for {0}", this.name);
                 return;
             }
 
-            int count = this.input.ConnectedNodes.Length;
+            int count = connectedNodes.Length;
             int nodeNum;
 
             switch (mode)
@@ -116,21 +117,7 @@ namespace CycloneGames.Audio.Runtime
 
         private bool NeedsSortByNodeY()
         {
-            if (this.input == null || this.input.ConnectedNodes == null || this.input.ConnectedNodes.Length < 2)
-                return false;
-
-            float prevY = float.NegativeInfinity;
-            for (int i = 0; i < this.input.ConnectedNodes.Length; i++)
-            {
-                AudioNodeOutput output = this.input.ConnectedNodes[i];
-                float y = output != null && output.ParentNode != null
-                    ? output.ParentNode.NodeRect.y
-                    : prevY;
-                if (y < prevY)
-                    return true;
-                prevY = y;
-            }
-            return false;
+            return EditorUtilityCache.NeedsSortByNodeY(this.input);
         }
 
         private void AutoSortConnectionsIfNeeded()
@@ -142,20 +129,40 @@ namespace CycloneGames.Audio.Runtime
             EditorUtility.SetDirty(this);
         }
 
-        // ── Per-mode visual data ─────────────────────────────────────────
+        private static GUIStyle headerStyle;
+        private static GUIStyle patternStyle;
+        private static readonly GUIContent DescContent = new GUIContent();
+        private static readonly GUIContent PatternContent = new GUIContent();
+
         private struct ModeVisual
         {
-            public string icon;     // unicode glyph used as a badge
+            public string icon;
             public string label;    // short display name
             public string pattern;  // playback sequence diagram
             public string desc;     // one-sentence explanation
             public Color  tint;     // helpBox background tint
         }
 
-        // Three strategies and their visual representations:
-        //   Sequential      → fixed loop:  ①→②→③→①→②→③
-        //   Shuffle         → fair shuffle: ②→③→①‥reshuffle‥③→①→②
-        //   RandomNoRepeat  → biased random that avoids immediate repeats
+        private static void EnsureStyles()
+        {
+            if (headerStyle != null)
+            {
+                return;
+            }
+
+            headerStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                normal = { textColor = Color.white }
+            };
+
+            patternStyle = new GUIStyle(EditorStyles.wordWrappedMiniLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = new Color(0.80f, 0.92f, 0.80f) },
+                fontStyle = FontStyle.Italic
+            };
+        }
+
         private ModeVisual GetModeVisual()
         {
             switch (mode)
@@ -163,27 +170,27 @@ namespace CycloneGames.Audio.Runtime
                 case SequenceMode.Shuffle:
                     return new ModeVisual
                     {
-                        icon    = "⇄",
+                        icon    = "SHF",
                         label   = "Shuffle",
-                        pattern = "②→③→①  |  ③→①→②  |  …",
+                        pattern = "2 -> 3 -> 1  |  3 -> 1 -> 2  |  ...",
                         desc    = "Every branch plays once per cycle in a random order, then reshuffles. Most fair distribution.",
                         tint    = new Color(0.20f, 0.52f, 0.38f)
                     };
                 case SequenceMode.RandomNoRepeat:
                     return new ModeVisual
                     {
-                        icon    = "≠",
+                        icon    = "NR",
                         label   = "Random No Repeat",
-                        pattern = "②→①→②→③→①→③→…",
-                        desc    = "Avoids the immediately previous pick only. Same branch can reappear after one different pick (e.g. ②→①→②). Not a fair cycle.",
+                        pattern = "2 -> 1 -> 2 -> 3 -> 1 -> 3 -> ...",
+                        desc    = "Avoids the immediately previous pick only. Same branch can reappear after one different pick (for example, 2 -> 1 -> 2). Not a fair cycle.",
                         tint    = new Color(0.58f, 0.33f, 0.18f)
                     };
                 default: // Sequential
                     return new ModeVisual
                     {
-                        icon    = "▶",
+                        icon    = "SEQ",
                         label   = "Sequential",
-                        pattern = "①→②→③→①→②→③→…",
+                        pattern = "1 -> 2 -> 3 -> 1 -> 2 -> 3 -> ...",
                         desc    = "Plays branches in a fixed order, looping back to the first after the last.",
                         tint    = new Color(0.24f, 0.40f, 0.68f)
                     };
@@ -194,8 +201,10 @@ namespace CycloneGames.Audio.Runtime
         {
             ModeVisual v = GetModeVisual();
             float contentW = NodeWidth - 28f;
-            float descH    = EditorStyles.wordWrappedMiniLabel.CalcHeight(new GUIContent(v.desc),    contentW);
-            float patternH = EditorStyles.wordWrappedMiniLabel.CalcHeight(new GUIContent(v.pattern), contentW);
+            DescContent.text = v.desc;
+            PatternContent.text = v.pattern;
+            float descH    = EditorStyles.wordWrappedMiniLabel.CalcHeight(DescContent,    contentW);
+            float patternH = EditorStyles.wordWrappedMiniLabel.CalcHeight(PatternContent, contentW);
             // title bar + (mini label + dropdown) + gap + info card + bottom pad
             float boxH = RowH + RowGap + patternH + RowGap + descH + 24f;
             return TitleBarH + RowH + RowGap + RowH + RowGap + boxH + BottomPad;
@@ -223,6 +232,8 @@ namespace CycloneGames.Audio.Runtime
 
         protected override void DrawProperties()
         {
+            EnsureStyles();
+
             EditorGUI.BeginChangeCheck();
             autoSortByNodeY = EditorGUILayout.ToggleLeft("Auto Sort by Node Y", autoSortByNodeY);
             if (EditorGUI.EndChangeCheck())
@@ -236,29 +247,15 @@ namespace CycloneGames.Audio.Runtime
 
             ModeVisual v = GetModeVisual();
 
-            // ── Tinted info card ─────────────────────────────────────────
             Color oldBg = GUI.backgroundColor;
             GUI.backgroundColor = v.tint;
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             GUI.backgroundColor = oldBg;
 
-            // Icon badge + mode name on one line
-            GUIStyle headerStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                normal = { textColor = Color.white }
-            };
             EditorGUILayout.LabelField($"{v.icon}  {v.label}", headerStyle);
 
-            // Playback sequence diagram
-            GUIStyle patternStyle = new GUIStyle(EditorStyles.wordWrappedMiniLabel)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                normal    = { textColor = new Color(0.80f, 0.92f, 0.80f) },
-                fontStyle = FontStyle.Italic
-            };
             EditorGUILayout.LabelField(v.pattern, patternStyle);
 
-            // One-sentence description
             EditorGUILayout.LabelField(v.desc, EditorStyles.wordWrappedMiniLabel);
 
             EditorGUILayout.EndVertical();

@@ -50,9 +50,10 @@ namespace CycloneGames.Audio.Runtime
             this.snapshot.TransitionTo(effectiveTransitionTime);
             AudioManager.DelayRemoveActiveEvent(activeEvent, effectiveTransitionTime);
 
-            if (this.input.ConnectedNodes != null && this.input.ConnectedNodes.Length != 0)
+            AudioNodeOutput[] connectedNodes = this.input != null ? this.input.ConnectedNodes : null;
+            if (connectedNodes != null && connectedNodes.Length != 0)
             {
-                int nodeNum = Random.Range(0, this.input.ConnectedNodes.Length);
+                int nodeNum = Random.Range(0, connectedNodes.Length);
                 ProcessConnectedNode(nodeNum, activeEvent);
             }
         }

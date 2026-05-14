@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
-using System.Collections.Generic;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -120,23 +119,34 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public void SortConnections()
         {
-            List<AudioNodeOutput> updatedNodes = new List<AudioNodeOutput>();
-
-            while (updatedNodes.Count < this.connectedNodes.Length)
+            if (this.connectedNodes.Length <= 1)
             {
-                AudioNode nextNode = this.connectedNodes[0].ParentNode;
-                for (int i = 0; i < this.connectedNodes.Length; i++)
-                {
-                    AudioNode tempNode = this.connectedNodes[i].ParentNode;
-                    if (updatedNodes.Contains(nextNode.Output) || (tempNode.NodeRect.y < nextNode.NodeRect.y && !updatedNodes.Contains(tempNode.Output)))
-                    {
-                        nextNode = tempNode;
-                    }
-                }
-                updatedNodes.Add(nextNode.Output);
+                return;
             }
 
-            this.connectedNodes = updatedNodes.ToArray();
+            for (int i = 1; i < this.connectedNodes.Length; i++)
+            {
+                AudioNodeOutput current = this.connectedNodes[i];
+                AudioNode currentNode = current != null ? current.ParentNode : null;
+                float currentY = currentNode != null ? currentNode.NodeRect.y : float.MaxValue;
+                int insertIndex = i - 1;
+
+                while (insertIndex >= 0)
+                {
+                    AudioNodeOutput previous = this.connectedNodes[insertIndex];
+                    AudioNode previousNode = previous != null ? previous.ParentNode : null;
+                    float previousY = previousNode != null ? previousNode.NodeRect.y : float.MaxValue;
+                    if (previousY <= currentY)
+                    {
+                        break;
+                    }
+
+                    this.connectedNodes[insertIndex + 1] = previous;
+                    insertIndex--;
+                }
+
+                this.connectedNodes[insertIndex + 1] = current;
+            }
         }
 
         /// <summary>
@@ -150,18 +160,39 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            List<AudioNodeOutput> updatedNodes = new List<AudioNodeOutput>();
+            int keptCount = 0;
+            for (int i = 0; i < this.connectedNodes.Length; i++)
+            {
+                if (this.connectedNodes[i] != outputToDelete)
+                {
+                    keptCount++;
+                }
+            }
 
-            for (int i = this.connectedNodes.Length - 1; i >= 0; i--)
+            if (keptCount == this.connectedNodes.Length)
+            {
+                return;
+            }
+
+            if (keptCount == 0)
+            {
+                this.connectedNodes = System.Array.Empty<AudioNodeOutput>();
+                return;
+            }
+
+            AudioNodeOutput[] updatedNodes = new AudioNodeOutput[keptCount];
+            int writeIndex = 0;
+            for (int i = 0; i < this.connectedNodes.Length; i++)
             {
                 AudioNodeOutput tempOutput = this.connectedNodes[i];
                 if (tempOutput != outputToDelete)
                 {
-                    updatedNodes.Add(tempOutput);
+                    updatedNodes[writeIndex] = tempOutput;
+                    writeIndex++;
                 }
             }
 
-            this.connectedNodes = updatedNodes.ToArray();
+            this.connectedNodes = updatedNodes;
         }
 
         /// <summary>
@@ -169,7 +200,7 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public void RemoveAllConnections()
         {
-            this.connectedNodes = new AudioNodeOutput[0];
+            this.connectedNodes = System.Array.Empty<AudioNodeOutput>();
         }
 
 #endif

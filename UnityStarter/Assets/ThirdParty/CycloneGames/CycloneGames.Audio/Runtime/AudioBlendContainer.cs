@@ -16,13 +16,14 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="activeEvent">The existing runtime audio event</param>
         public override void ProcessNode(ActiveEvent activeEvent)
         {
-            if (this.input.ConnectedNodes == null || this.input.ConnectedNodes.Length == 0)
+            AudioNodeOutput[] connectedNodes = this.input != null ? this.input.ConnectedNodes : null;
+            if (connectedNodes == null || connectedNodes.Length == 0)
             {
                 Debug.LogWarningFormat("No connected nodes for {0}", this.name);
                 return;
             }
 
-            for (int i = 0; i < this.input.ConnectedNodes.Length; i++)
+            for (int i = 0; i < connectedNodes.Length; i++)
             {
                 ProcessConnectedNode(i, activeEvent);
             }

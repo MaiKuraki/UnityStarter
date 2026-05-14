@@ -19,18 +19,19 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="activeEvent">The existing runtime audio event</param>
         public override void ProcessNode(ActiveEvent activeEvent)
         {
-            if (this.input.ConnectedNodes == null || this.input.ConnectedNodes.Length == 0)
+            AudioNodeOutput[] connectedNodes = this.input != null ? this.input.ConnectedNodes : null;
+            if (connectedNodes == null || connectedNodes.Length == 0)
             {
                 Debug.LogWarningFormat("No connected nodes for {0}", this.name);
                 return;
             }
 
-            for (int i = 0; i < this.input.ConnectedNodes.Length; i++)
+            for (int i = 0; i < connectedNodes.Length; i++)
             {
-                AudioNode tempNode = this.input.ConnectedNodes[i].ParentNode;
-                if (tempNode.GetType() == typeof(AudioVoiceFile))
+                AudioNodeOutput output = connectedNodes[i];
+                AudioVoiceFile voiceNode = output != null ? output.ParentNode as AudioVoiceFile : null;
+                if (voiceNode != null)
                 {
-                    AudioVoiceFile voiceNode = (AudioVoiceFile)tempNode;
                     if (voiceNode.Language == AudioManager.CurrentLanguage)
                     {
                         ProcessConnectedNode(i, activeEvent);
@@ -39,37 +40,51 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
 
-            // Fallback: play first connected node if no language match found
-            if (this.input.ConnectedNodes.Length > 0)
-            {
-                Debug.LogWarningFormat("AudioManager: Event \"{0}\" not localized for language {1}, falling back to first node", activeEvent.name, AudioManager.CurrentLanguage);
-                ProcessConnectedNode(0, activeEvent);
-            }
-            else
-            {
-                Debug.LogErrorFormat("AudioManager: Event \"{0}\" has no connected voice files", activeEvent.name);
-            }
+            Debug.LogWarningFormat("AudioManager: Event \"{0}\" not localized for language {1}, falling back to first node", activeEvent.name, AudioManager.CurrentLanguage);
+            ProcessConnectedNode(0, activeEvent);
         }
 
 #if UNITY_EDITOR
 
-    private const float NodeWidth = 270f;
+        private const float NodeWidth = 270f;
 
-    private const string UsageText = "Chooses the connected Voice File whose Language matches CurrentLanguage. If none match, it uses the first branch.";
-    private const string LoadingText = "Embedded clips keep all language audio referenced by the bank. Use External Reference for per-language on-demand loading.";
+        private const string UsageText = "Chooses the connected Voice File whose Language matches CurrentLanguage. If none match, it uses the first branch.";
+        private const string LoadingText = "Embedded clips keep all language audio referenced by the bank. Use External Reference for per-language on-demand loading.";
 
-    private static float CalcHeight()
-    {
-        GUIStyle titleStyle = EditorStyles.boldLabel;
-        GUIStyle bodyStyle = EditorStyles.wordWrappedMiniLabel;
+        private static readonly GUIContent UsageContent = new GUIContent(UsageText);
+        private static readonly GUIContent LoadingContent = new GUIContent(LoadingText);
+        private static GUIStyle titleStyle;
+        private static GUIStyle wrapStyle;
 
-        float contentWidth = NodeWidth - 24f;
-        float usageHeight = bodyStyle.CalcHeight(new GUIContent(UsageText), contentWidth);
-        float loadingHeight = bodyStyle.CalcHeight(new GUIContent(LoadingText), contentWidth);
-        float titleHeight = titleStyle.lineHeight;
+        private static void EnsureStyles()
+        {
+            if (titleStyle != null)
+            {
+                return;
+            }
 
-        return 18f + 8f + titleHeight + usageHeight + 10f + titleHeight + loadingHeight + 16f;
-    }
+            titleStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                wordWrap = false
+            };
+
+            wrapStyle = new GUIStyle(EditorStyles.wordWrappedMiniLabel)
+            {
+                richText = true
+            };
+        }
+
+        private static float CalcHeight()
+        {
+            EnsureStyles();
+
+            float contentWidth = NodeWidth - 24f;
+            float usageHeight = wrapStyle.CalcHeight(UsageContent, contentWidth);
+            float loadingHeight = wrapStyle.CalcHeight(LoadingContent, contentWidth);
+            float titleHeight = titleStyle.lineHeight;
+
+            return 18f + 8f + titleHeight + usageHeight + 10f + titleHeight + loadingHeight + 16f;
+        }
 
         /// <summary>
         /// EDITOR: Set the initial values for the node's properties
@@ -96,28 +111,20 @@ namespace CycloneGames.Audio.Runtime
 
         protected override void DrawProperties()
         {
-            GUIStyle title = new GUIStyle(EditorStyles.boldLabel)
-            {
-                wordWrap = false
-            };
-
-            GUIStyle wrap = new GUIStyle(EditorStyles.wordWrappedMiniLabel)
-            {
-                richText = true
-            };
+            EnsureStyles();
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Usage", title);
+            EditorGUILayout.LabelField("Usage", titleStyle);
             EditorGUILayout.LabelField(
                 UsageText,
-                wrap);
+                wrapStyle);
             EditorGUILayout.EndVertical();
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Loading", title);
+            EditorGUILayout.LabelField("Loading", titleStyle);
             EditorGUILayout.LabelField(
                 LoadingText,
-                wrap);
+                wrapStyle);
             EditorGUILayout.EndVertical();
         }
 

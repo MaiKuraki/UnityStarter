@@ -7,7 +7,7 @@ namespace CycloneGames.Audio.Editor
     /// <summary>
     /// A minimal version of an ActiveEvent only containing what is needed for the profiler
     /// </summary>
-    public class ProfilerEvent
+    public sealed class ProfilerEvent
     {
         /// <summary>
         /// The name of the ActiveEvent being profiled
@@ -29,5 +29,14 @@ namespace CycloneGames.Audio.Editor
         /// The Active Event reference for the playing sound
         /// </summary>
         public ActiveEvent activeEvent;
+
+        public void Reset()
+        {
+            eventName = string.Empty;
+            clip = null;
+            emitterObject = null;
+            bus = null;
+            activeEvent = null;
+        }
     }
 }
