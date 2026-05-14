@@ -36,6 +36,7 @@ namespace CycloneGames.Audio.Editor
         private readonly List<ExternalAudioClipCacheEntryInfo> externalCacheEntries = new List<ExternalAudioClipCacheEntryInfo>();
         private readonly List<IAudioClipProvider> audioClipProviders = new List<IAudioClipProvider>();
         private readonly List<AudioCategoryVoiceStats> categoryVoiceStats = new List<AudioCategoryVoiceStats>();
+        private readonly Dictionary<string, int> duplicateNameCounts = new Dictionary<string, int>(128);
 
         // Search field state
         private string searchEventName = "";
@@ -45,6 +46,7 @@ namespace CycloneGames.Audio.Editor
         private Vector2 memoryScrollPos;
         private Vector2 eventMapScrollPos;
         private Vector2 externalCacheScrollPos;
+        private double nextRepaintTime;
 
         // Colors for visual styling
         private static readonly Color settingsColor = new Color(0.5f, 0.5f, 0.6f);
@@ -64,6 +66,7 @@ namespace CycloneGames.Audio.Editor
         private GUIStyle _statValueStyle;
         private GUIStyle _sectionLabelStyle;
         private bool _stylesInitialized;
+        private const double RepaintInterval = 0.25d;
 
         private void OnEnable()
         {
@@ -199,8 +202,12 @@ namespace CycloneGames.Audio.Editor
                 DrawExternalCacheSection(externalStats);
             }
 
-            // Auto-repaint during play mode
-            Repaint();
+            double now = EditorApplication.timeSinceStartup;
+            if (now >= nextRepaintTime)
+            {
+                nextRepaintTime = now + RepaintInterval;
+                Repaint();
+            }
         }
 
         private void DrawTitle()
@@ -439,12 +446,13 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.LabelField($"{eventCount} events", EditorStyles.miniLabel, GUILayout.Width(60));
 
             // Duplicate warning
-            var duplicates = AudioManager.ValidateBankForDuplicateNames(bank);
-            if (duplicates.Count > 0)
+            int duplicateCount = AudioManager.CountDuplicateEventNames(bank, duplicateNameCounts);
+            if (duplicateCount > 0)
             {
                 GUI.color = warningColor;
-                if (GUILayout.Button($"[!] {duplicates.Count} duplicates", EditorStyles.miniButton, GUILayout.Width(90)))
+                if (GUILayout.Button($"[!] {duplicateCount} duplicates", EditorStyles.miniButton, GUILayout.Width(90)))
                 {
+                    var duplicates = AudioManager.ValidateBankForDuplicateNames(bank);
                     string message = $"AudioBank '{bank.name}' has duplicate event names:\n\n";
                     foreach (var dup in duplicates)
                     {

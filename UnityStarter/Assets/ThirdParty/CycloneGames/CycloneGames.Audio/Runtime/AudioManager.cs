@@ -20,7 +20,7 @@ namespace CycloneGames.Audio.Runtime
     [Flags]
     public enum AudioFocusMode
     {
-        /// <summary>Fully manual — the game calls PauseAll / ResumeAll explicitly.</summary>
+        /// <summary>Fully manual; the game calls PauseAll / ResumeAll explicitly.</summary>
         None = 0,
 
         /// <summary>Auto-pause when OnApplicationPause(true) fires (mobile background, console Home).</summary>
@@ -142,6 +142,8 @@ namespace CycloneGames.Audio.Runtime
             activePoolConfig = null;
             activePlatformProfile = null;
             activePlatformSettings = AudioPlatformProfile.GetFallbackSettings();
+            reusableGlobalParameters.Clear();
+            globalParametersCacheDirty = true;
         }
 
         public static List<ActiveEvent> ActiveEvents { get; private set; }
@@ -172,7 +174,7 @@ namespace CycloneGames.Audio.Runtime
         // Per-frame cached category counts (avoids recomputing on multiple steals/frame)
         private static int categoryCountsCacheFrame = -1;
 
-        // Voice stealing victim cache — avoids O(N) scan for every steal in the same frame
+        // Voice stealing victim cache avoids O(N) scan for every steal in the same frame.
         private static int cachedStealVictimFrame = -1;
         private static ActiveEvent cachedStealVictim;
         private static float cachedStealVictimScore = float.MaxValue;
@@ -309,6 +311,7 @@ namespace CycloneGames.Audio.Runtime
         private static readonly Dictionary<string, int> reusableDuplicateCountCheck = new Dictionary<string, int>();
         private static readonly HashSet<string> reusableBankRegisteredNames = new HashSet<string>();
         private static readonly List<AudioParameter> reusableGlobalParameters = new List<AudioParameter>();
+        private static bool globalParametersCacheDirty = true;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         public static long TotalMemoryUsage { get; private set; }
@@ -945,7 +948,7 @@ namespace CycloneGames.Audio.Runtime
 
         /// <summary>
         /// Schedules an active event for deferred removal after the specified delay.
-        /// Processed in Update() — no async allocation, no CTS dependency.
+        /// Processed in Update() with no async allocation or CTS dependency.
         /// </summary>
         public static void DelayRemoveActiveEvent(ActiveEvent eventToRemove, float delay = 1)
         {
@@ -1791,7 +1794,7 @@ namespace CycloneGames.Audio.Runtime
 
             EnsureCategoryCountsCached();
 
-            // Cache victim scan per frame — multiple steal attempts reuse the same result
+            // Cache victim scan per frame so multiple steal attempts reuse the same result.
             int frame = Time.frameCount;
             if (cachedStealVictimFrame != frame)
             {
@@ -2318,6 +2321,7 @@ namespace CycloneGames.Audio.Runtime
             loadedBanks[bank.GetInstanceID()] = bank;
             loadedBanksCacheDirty = true;
             InitializeBankRuntimeState(bank);
+            globalParametersCacheDirty = true;
 
             if (registeredCount > 0)
                 Debug.Log($"AudioManager: Loaded {registeredCount} events from '{bank.name}'.");
@@ -2392,6 +2396,7 @@ namespace CycloneGames.Audio.Runtime
             loadedBanks.TryRemove(bank.GetInstanceID(), out _);
             loadedBanksCacheDirty = true;
             ResetBankRuntimeState(bank);
+            globalParametersCacheDirty = true;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (removedCount > 0)
@@ -2456,6 +2461,46 @@ namespace CycloneGames.Audio.Runtime
             return duplicates;
         }
 
+        internal static int CountDuplicateEventNames(AudioBank bank, Dictionary<string, int> reusableNameCounts)
+        {
+            if (reusableNameCounts == null)
+            {
+                throw new ArgumentNullException(nameof(reusableNameCounts));
+            }
+
+            reusableNameCounts.Clear();
+            if (bank?.AudioEvents == null)
+            {
+                return 0;
+            }
+
+            int duplicateNameCount = 0;
+            int eventCount = bank.AudioEvents.Count;
+            for (int i = 0; i < eventCount; i++)
+            {
+                AudioEvent audioEvent = bank.AudioEvents[i];
+                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
+                {
+                    continue;
+                }
+
+                if (!reusableNameCounts.TryGetValue(audioEvent.name, out int count))
+                {
+                    reusableNameCounts.Add(audioEvent.name, 1);
+                    continue;
+                }
+
+                count++;
+                reusableNameCounts[audioEvent.name] = count;
+                if (count == 2)
+                {
+                    duplicateNameCount++;
+                }
+            }
+
+            return duplicateNameCount;
+        }
+
         // Cached bank list for GetLoadedBanks() - avoids per-call allocation
         private static readonly List<AudioBank> cachedLoadedBanksList = new List<AudioBank>(16);
         private static bool loadedBanksCacheDirty = true;
@@ -2518,6 +2563,19 @@ namespace CycloneGames.Audio.Runtime
 
         private static void UpdateGlobalParameters(float deltaTime)
         {
+            if (globalParametersCacheDirty)
+            {
+                RebuildGlobalParametersCache();
+            }
+
+            for (int i = 0; i < reusableGlobalParameters.Count; i++)
+            {
+                reusableGlobalParameters[i].UpdateInterpolation(deltaTime);
+            }
+        }
+
+        private static void RebuildGlobalParametersCache()
+        {
             reusableGlobalParameters.Clear();
 
             var bankEnumerator = loadedBanks.GetEnumerator();
@@ -2537,10 +2595,7 @@ namespace CycloneGames.Audio.Runtime
             }
             bankEnumerator.Dispose();
 
-            for (int i = 0; i < reusableGlobalParameters.Count; i++)
-            {
-                reusableGlobalParameters[i].UpdateInterpolation(deltaTime);
-            }
+            globalParametersCacheDirty = false;
         }
 
         private static void ResetAudioSource(AudioSource source)
