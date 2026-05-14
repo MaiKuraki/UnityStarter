@@ -87,6 +87,7 @@ namespace CycloneGames.Audio.Editor
         /// Whether the right mouse button has been clicked
         /// </summary>
         private bool rightButtonClicked = false;
+        private bool middleButtonClicked = false;
         private bool leftButtonDown = false;
         /// <summary>
         /// The runtime event used to preview sounds in the graph
@@ -127,6 +128,14 @@ namespace CycloneGames.Audio.Editor
         private bool batchSetDoppler = false;
         private float batchDoppler = 1;
         private bool[] batchEventSelection = new bool[0];
+        private readonly Dictionary<string, int> duplicateNameCounts = new Dictionary<string, int>(128);
+        private readonly HashSet<string> reusableEventNameSet = new HashSet<string>();
+        private readonly List<AudioNodeOutput> reusableOutputBuffer = new List<AudioNodeOutput>(8);
+        private double nextRepaintTime;
+        private int duplicateCacheBankId;
+        private int duplicateCacheEventCount = -1;
+        private int cachedDuplicateEventNameCount;
+        private bool duplicateCacheDirty = true;
 
         /// <summary>
         /// The size in pixels of the node canvas for the graph
@@ -136,6 +145,8 @@ namespace CycloneGames.Audio.Editor
         /// The distance in pixels between nodes when added via script
         /// </summary>
         private const float HORIZONTAL_NODE_OFFSET = 400;
+        private const double PlayingRepaintInterval = 0.1d;
+        private const float EventListRowHeight = 22f;
 
         /// <summary>
         /// List of available editors for an AudioBank
@@ -173,11 +184,15 @@ namespace CycloneGames.Audio.Editor
 
         private void Update()
         {
-            Repaint();
-
             if (AudioManager.Languages == null || AudioManager.Languages.Length == 0)
             {
                 AudioManager.UpdateLanguages();
+            }
+
+            if (Application.isPlaying && EditorApplication.timeSinceStartup >= this.nextRepaintTime)
+            {
+                this.nextRepaintTime = EditorApplication.timeSinceStartup + PlayingRepaintInterval;
+                Repaint();
             }
         }
 
@@ -303,7 +318,13 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private void DrawEventList()
         {
+            AudioBank previousBank = this.audioBank;
             this.audioBank = EditorGUILayout.ObjectField(this.audioBank, typeof(AudioBank), false) as AudioBank;
+            if (this.audioBank != previousBank)
+            {
+                this.selectedEvent = null;
+                MarkDuplicateCacheDirty();
+            }
 
             if (this.audioBank == null)
             {
@@ -313,10 +334,12 @@ namespace CycloneGames.Audio.Editor
             // Check for duplicate names and show warning
             if (this.audioBank.EditorEvents != null)
             {
-                var duplicates = AudioManager.ValidateBankForDuplicateNames(this.audioBank);
-                if (duplicates.Count > 0)
+                EnsureDuplicateNameCache();
+                int duplicateCount = this.cachedDuplicateEventNameCount;
+                if (duplicateCount > 0)
                 {
-                    EditorGUILayout.HelpBox($"⚠{duplicates.Count} duplicate event name(s) detected. Only the first event of each name will be accessible via PlayEvent(string).",
+                    EditorGUILayout.HelpBox(
+                        $"{duplicateCount} duplicate event name(s) detected. Only the first event of each name will be accessible via PlayEvent(string).",
                         MessageType.Warning);
                 }
             }
@@ -333,35 +356,31 @@ namespace CycloneGames.Audio.Editor
             }
             EditorGUILayout.EndHorizontal();
 
-            this.eventListScrollPosition = EditorGUILayout.BeginScrollView(this.eventListScrollPosition, false, false, GUILayout.ExpandHeight(true));
-
             if (this.audioBank.EditorEvents != null)
             {
-                // Build duplicate name set for fast lookup
-                Dictionary<string, int> nameCounts = new Dictionary<string, int>();
-                AudioEvent tempEvent;
+                EnsureDuplicateNameCache();
                 int eventCount = this.audioBank.EditorEvents.Count;
-                for (int i = 0; i < eventCount; i++)
+                float viewportHeight = Mathf.Max(1f, this.position.height - 170f);
+                this.eventListScrollPosition = EditorGUILayout.BeginScrollView(
+                    this.eventListScrollPosition,
+                    false,
+                    false,
+                    GUILayout.ExpandHeight(true));
+
+                int firstVisible = Mathf.Clamp((int)(this.eventListScrollPosition.y / EventListRowHeight), 0, Mathf.Max(eventCount - 1, 0));
+                int visibleCount = Mathf.CeilToInt(viewportHeight / EventListRowHeight) + 2;
+                int lastVisible = Mathf.Min(eventCount, firstVisible + visibleCount);
+                float topPadding = firstVisible * EventListRowHeight;
+                float bottomPadding = Mathf.Max(0f, (eventCount - lastVisible) * EventListRowHeight);
+
+                if (topPadding > 0f)
                 {
-                    tempEvent = this.audioBank.EditorEvents[i];
-                    if (tempEvent != null && !string.IsNullOrEmpty(tempEvent.name))
-                    {
-                        if (!nameCounts.ContainsKey(tempEvent.name))
-                        {
-                            nameCounts[tempEvent.name] = 0;
-                        }
-                        nameCounts[tempEvent.name]++;
-                    }
+                    GUILayout.Space(topPadding);
                 }
 
-                for (int i = 0; i < eventCount; i++)
+                for (int i = firstVisible; i < lastVisible; i++)
                 {
-                    tempEvent = this.audioBank.EditorEvents[i];
-                    if (tempEvent == null)
-                    {
-                        continue;
-                    }
-
+                    AudioEvent tempEvent = this.audioBank.EditorEvents[i];
                     if (this.selectedEvent == tempEvent)
                     {
                         GUI.color = Color.white;
@@ -371,34 +390,93 @@ namespace CycloneGames.Audio.Editor
                         GUI.color = this.unselectedButton;
                     }
 
-                    // Show warning icon for duplicate names
-                    string displayName = tempEvent.name;
-                    bool isDuplicate = !string.IsNullOrEmpty(tempEvent.name) &&
-                                       nameCounts.TryGetValue(tempEvent.name, out int count) &&
+                    string displayName = tempEvent != null ? tempEvent.name : "<Missing Event>";
+                    bool isDuplicate = tempEvent != null &&
+                                       !string.IsNullOrEmpty(tempEvent.name) &&
+                                       this.duplicateNameCounts.TryGetValue(tempEvent.name, out int count) &&
                                        count > 1;
 
                     EditorGUILayout.BeginHorizontal();
                     if (isDuplicate)
                     {
-                        EditorGUILayout.LabelField("\u26a0", GUILayout.Width(20));
+                        EditorGUILayout.LabelField("!", GUILayout.Width(20));
                     }
                     else
                     {
                         EditorGUILayout.LabelField("", GUILayout.Width(20));
                     }
 
-                    if (GUILayout.Button(displayName, GUILayout.ExpandWidth(true)))
+                    using (new EditorGUI.DisabledScope(tempEvent == null))
                     {
-                        GUI.FocusControl(null);
-                        SelectEvent(tempEvent);
+                        if (GUILayout.Button(displayName, GUILayout.ExpandWidth(true)))
+                        {
+                            GUI.FocusControl(null);
+                            SelectEvent(tempEvent);
+                        }
                     }
                     EditorGUILayout.EndHorizontal();
 
                     GUI.color = Color.white;
                 }
+
+                if (bottomPadding > 0f)
+                {
+                    GUILayout.Space(bottomPadding);
+                }
+
+                EditorGUILayout.EndScrollView();
+            }
+        }
+
+        private void MarkDuplicateCacheDirty()
+        {
+            this.duplicateCacheDirty = true;
+        }
+
+        private void EnsureDuplicateNameCache()
+        {
+            if (this.audioBank == null || this.audioBank.EditorEvents == null)
+            {
+                this.duplicateNameCounts.Clear();
+                this.duplicateCacheBankId = 0;
+                this.duplicateCacheEventCount = -1;
+                this.cachedDuplicateEventNameCount = 0;
+                this.duplicateCacheDirty = false;
+                return;
             }
 
-            EditorGUILayout.EndScrollView();
+            int bankId = this.audioBank.GetInstanceID();
+            int eventCount = this.audioBank.EditorEvents.Count;
+            if (!this.duplicateCacheDirty && this.duplicateCacheBankId == bankId && this.duplicateCacheEventCount == eventCount)
+            {
+                return;
+            }
+
+            this.duplicateNameCounts.Clear();
+            this.cachedDuplicateEventNameCount = 0;
+            for (int i = 0; i < eventCount; i++)
+            {
+                AudioEvent audioEvent = this.audioBank.EditorEvents[i];
+                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name))
+                {
+                    continue;
+                }
+
+                if (!this.duplicateNameCounts.TryGetValue(audioEvent.name, out int count))
+                {
+                    count = 0;
+                }
+                else
+                {
+                    this.cachedDuplicateEventNameCount++;
+                }
+
+                this.duplicateNameCounts[audioEvent.name] = count + 1;
+            }
+
+            this.duplicateCacheBankId = bankId;
+            this.duplicateCacheEventCount = eventCount;
+            this.duplicateCacheDirty = false;
         }
 
         /// <summary>
@@ -721,7 +799,7 @@ namespace CycloneGames.Audio.Editor
             this.batchMinPitch = EditorGUILayout.FloatField("New Min Pitch", this.batchMinPitch);
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
-            this.batchSetMaxPitch = EditorGUILayout.Toggle("Set Max Pitch", this.batchSetMinPitch);
+            this.batchSetMaxPitch = EditorGUILayout.Toggle("Set Max Pitch", this.batchSetMaxPitch);
             this.batchMaxPitch = EditorGUILayout.FloatField("New Max Pitch", this.batchMaxPitch);
             GUILayout.EndHorizontal();
             GUILayout.BeginHorizontal();
@@ -816,7 +894,7 @@ namespace CycloneGames.Audio.Editor
 
                 if (duplicateCount > 0)
                 {
-                    EditorGUILayout.HelpBox($"⚠Warning: {duplicateCount} other event(s) in this bank have the same name. " +
+                    EditorGUILayout.HelpBox($"Warning: {duplicateCount} other event(s) in this bank have the same name. " +
                         $"Only the first one will be accessible via PlayEvent(string).", MessageType.Warning);
                 }
             }
@@ -880,6 +958,7 @@ namespace CycloneGames.Audio.Editor
                 }
                 EditorUtility.SetDirty(audioEvent);
                 EditorUtility.SetDirty(this.audioBank);
+                MarkDuplicateCacheDirty();
                 AssetDatabase.SaveAssets();
             }
 
@@ -1073,7 +1152,8 @@ namespace CycloneGames.Audio.Editor
 
             if (this.audioBank.EditorEvents != null)
             {
-                HashSet<string> existingNames = new HashSet<string>();
+                HashSet<string> existingNames = this.reusableEventNameSet;
+                existingNames.Clear();
                 AudioEvent existingEvent;
                 int eventCount = this.audioBank.EditorEvents.Count;
                 for (int i = 0; i < eventCount; i++)
@@ -1090,12 +1170,15 @@ namespace CycloneGames.Audio.Editor
                     uniqueName = $"{baseName} {counter}";
                     counter++;
                 }
+
+                existingNames.Clear();
             }
 
             newEvent.name = uniqueName;
             EditorUtility.SetDirty(newEvent);
             EditorUtility.SetDirty(this.audioBank);
             AssetDatabase.SaveAssets();
+            MarkDuplicateCacheDirty();
 
             SelectEvent(newEvent);
         }
@@ -1105,9 +1188,16 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private void ConfirmDeleteEvent()
         {
-            if (EditorUtility.DisplayDialog("Confrim Event Deletion", "Delete event \"" + this.selectedEvent.name + "\"?", "Yes", "No"))
+            if (this.selectedEvent == null)
+            {
+                return;
+            }
+
+            if (EditorUtility.DisplayDialog("Confirm Event Deletion", "Delete event \"" + this.selectedEvent.name + "\"?", "Yes", "No"))
             {
                 this.audioBank.DeleteEvent(this.selectedEvent);
+                this.selectedEvent = null;
+                MarkDuplicateCacheDirty();
             }
         }
 
@@ -1117,6 +1207,11 @@ namespace CycloneGames.Audio.Editor
         /// <param name="selection">The audio event to select and display in the graph</param>
         private void SelectEvent(AudioEvent selection)
         {
+            if (selection == null || selection.Output == null)
+            {
+                return;
+            }
+
             this.selectedEvent = selection;
             Rect output = this.selectedEvent.Output.NodeRect;
             this.panX = -output.x + (this.position.width - output.width - 20) - 360;
@@ -1181,6 +1276,9 @@ namespace CycloneGames.Audio.Editor
                 {
                     this.selectedOutput = null;
                     this.panGraph = false;
+                    this.rightButtonClicked = false;
+                    this.middleButtonClicked = false;
+                    this.hasPanned = false;
                 }
                 return;
             }
@@ -1251,6 +1349,10 @@ namespace CycloneGames.Audio.Editor
                     else if (e.button == 1)
                     {
                         HandleRightClick(e, mousePosInView);
+                    }
+                    else if (e.button == 2)
+                    {
+                        HandleMiddleClick(e);
                     }
                     break;
                 case EventType.MouseUp:
@@ -1338,6 +1440,8 @@ namespace CycloneGames.Audio.Editor
         {
             this.leftButtonDown = true;
             this.rightButtonClicked = false;
+            this.middleButtonClicked = false;
+            this.lastMousePos = e.mousePosition;
             this.selectedOutput = GetOutputAtPosition(mousePosInView);
             this.selectedInput = null;
 
@@ -1356,11 +1460,21 @@ namespace CycloneGames.Audio.Editor
         private void HandleRightClick(Event e, Vector2 mousePosInView)
         {
             this.rightButtonClicked = true;
-            if (this.selectedOutput == null)
-            {
-                this.panGraph = true;
-                this.lastMousePos = e.mousePosition;
-            }
+            this.middleButtonClicked = false;
+            this.panGraph = true;
+            this.lastMousePos = e.mousePosition;
+            e.Use();
+        }
+
+        private void HandleMiddleClick(Event e)
+        {
+            this.middleButtonClicked = true;
+            this.rightButtonClicked = false;
+            this.selectedInput = null;
+            this.selectedOutput = null;
+            this.panGraph = true;
+            this.lastMousePos = e.mousePosition;
+            e.Use();
         }
 
         /// <summary>
@@ -1418,7 +1532,9 @@ namespace CycloneGames.Audio.Editor
             this.selectedOutput = null;
             this.selectedInput = null;
             this.rightButtonClicked = false;
+            this.middleButtonClicked = false;
             this.leftButtonDown = false;
+            e.Use();
         }
 
         /// <summary>
@@ -1434,19 +1550,19 @@ namespace CycloneGames.Audio.Editor
                 selectedNode.MoveBy(-tempMove);
             }
 
-            if (this.selectedOutput == null)
+            if (e.type == EventType.MouseDrag && this.panGraph && (this.rightButtonClicked || this.middleButtonClicked))
             {
-                if (this.panGraph && this.selectedNode == null)
+                Vector2 delta = e.mousePosition - new Vector2(this.lastMousePos.x, this.lastMousePos.y);
+                if (delta.sqrMagnitude > 0f)
                 {
-                    if (Vector2.Distance(e.mousePosition, this.lastMousePos) > 0)
-                    {
-                        this.hasPanned = true;
-                        this.panX += (e.mousePosition.x - this.lastMousePos.x);
-                        this.panY += (e.mousePosition.y - this.lastMousePos.y);
-                    }
+                    this.hasPanned = true;
+                    this.panX += delta.x;
+                    this.panY += delta.y;
+                    Repaint();
+                    e.Use();
                 }
             }
-            else
+            else if (this.selectedOutput != null || this.selectedInput != null)
             {
                 // Force a repaint to ensure the preview line is visible during drag.
                 Repaint();
@@ -1472,12 +1588,16 @@ namespace CycloneGames.Audio.Editor
                 if (node.Input != null && node.Input.ConnectedNodes.Length > 0)
                 {
                     AudioNodeInput input = node.Input;
-                    // Must iterate over a copy, as we may modify the collection
-                    AudioNodeOutput[] outputs = new AudioNodeOutput[input.ConnectedNodes.Length];
-                    input.ConnectedNodes.CopyTo(outputs, 0);
-
-                    foreach (AudioNodeOutput output in outputs)
+                    this.reusableOutputBuffer.Clear();
+                    AudioNodeOutput[] connectedNodes = input.ConnectedNodes;
+                    for (int outputIndex = 0; outputIndex < connectedNodes.Length; outputIndex++)
                     {
+                        this.reusableOutputBuffer.Add(connectedNodes[outputIndex]);
+                    }
+
+                    for (int outputIndex = 0; outputIndex < this.reusableOutputBuffer.Count; outputIndex++)
+                    {
+                        AudioNodeOutput output = this.reusableOutputBuffer[outputIndex];
                         if (output == null) continue;
 
                         Vector2 start = output.Center;
@@ -1499,10 +1619,13 @@ namespace CycloneGames.Audio.Editor
                                 input.RemoveConnection(output);
                                 EditorUtility.SetDirty(input);
                                 Repaint();
+                                this.reusableOutputBuffer.Clear();
                                 return true;
                             }
                         }
                     }
+
+                    this.reusableOutputBuffer.Clear();
                 }
             }
 
@@ -1695,7 +1818,8 @@ namespace CycloneGames.Audio.Editor
         private void AddEvents(List<AudioClip> clips)
         {
             // Build set of existing names to avoid duplicates
-            HashSet<string> existingNames = new HashSet<string>();
+            HashSet<string> existingNames = this.reusableEventNameSet;
+            existingNames.Clear();
             if (this.audioBank.EditorEvents != null)
             {
                 AudioEvent existingEvent;
@@ -1744,8 +1868,10 @@ namespace CycloneGames.Audio.Editor
                 Debug.LogWarning($"AudioGraph: {duplicateCount} event(s) were renamed to avoid duplicate names when adding clips.");
             }
 
+            existingNames.Clear();
             EditorUtility.SetDirty(this.audioBank);
             AssetDatabase.SaveAssets();
+            MarkDuplicateCacheDirty();
         }
 
         /// <summary>

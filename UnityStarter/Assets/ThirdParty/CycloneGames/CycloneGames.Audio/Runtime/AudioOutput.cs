@@ -134,23 +134,13 @@ namespace CycloneGames.Audio.Runtime
         public float coneOuterVolume = 0.25f;
 
         /// <summary>
-        /// The width in pixels for the node's window in the graph
-        /// </summary>
-        private const float NodeWidth  = 310f;
-        private const float TitleBarH  = 18f;
-        private const float RowH       = 19f;
-        private const float RowGap     =  2f;
-        private const float SectionGap =  6f;
-        private const float BottomPad  = 10f;
-        private const float HelpBoxH   = 38f;  // HelpBox (~2 rows)
-
-        /// <summary>
         /// Apply all of the properties to the ActiveEvent and start processing the rest of the event's nodes
         /// </summary>
         /// <param name="activeEvent"></param>
         public override void ProcessNode(ActiveEvent activeEvent)
         {
-            if (this.input.ConnectedNodes == null || this.input.ConnectedNodes.Length == 0)
+            AudioNodeOutput[] connectedNodes = this.input != null ? this.input.ConnectedNodes : null;
+            if (connectedNodes == null || connectedNodes.Length == 0)
             {
                 Debug.LogWarningFormat("No connected nodes for {0}", this.name);
                 return;
@@ -213,6 +203,17 @@ namespace CycloneGames.Audio.Runtime
 #if UNITY_EDITOR
 
         /// <summary>
+        /// The width in pixels for the node's window in the graph
+        /// </summary>
+        private const float NodeWidth  = 310f;
+        private const float TitleBarH  = 18f;
+        private const float RowH       = 19f;
+        private const float RowGap     =  2f;
+        private const float SectionGap =  6f;
+        private const float BottomPad  = 10f;
+        private const float HelpBoxH   = 38f;
+
+        /// <summary>
         /// EDITOR: Initialize variables for output settings
         /// </summary>
         /// <param name="position">The position of the node window in the graph</param>
@@ -240,7 +241,7 @@ namespace CycloneGames.Audio.Runtime
             if (this.spatialBlend > 0f && (this.attenuationCurve == null || this.attenuationCurve.length == 0))
                 h += HelpBoxH + RowGap;
 
-            // Advanced 3D block — only rendered when spatialBlend > 0
+            // Advanced 3D block is only rendered when spatialBlend > 0.
             if (this.spatialBlend > 0f)
             {
                 h += SectionGap + R(1); // "Advanced 3D" header
@@ -291,7 +292,7 @@ namespace CycloneGames.Audio.Runtime
 
             // ---- Configuration warning ----
             if (this.spatialBlend > 0f && (this.attenuationCurve == null || this.attenuationCurve.length == 0))
-                EditorGUILayout.HelpBox("Attenuation curve is empty — will fall back to Logarithmic rolloff at runtime.", MessageType.Warning);
+                EditorGUILayout.HelpBox("Attenuation curve is empty; runtime will fall back to Logarithmic rolloff.", MessageType.Warning);
 
             // ---- Advanced 3D sub-section (only when spatial) ----
             if (this.spatialBlend > 0f)
@@ -303,7 +304,7 @@ namespace CycloneGames.Audio.Runtime
                 if (this.useSpreadCurve)
                 {
                     EditorGUI.indentLevel++;
-                    this.spreadCurve = EditorGUILayout.CurveField("Dist → Spread°", this.spreadCurve);
+                    this.spreadCurve = EditorGUILayout.CurveField("Dist -> Spread Deg", this.spreadCurve);
                     EditorGUI.indentLevel--;
                 }
 
@@ -311,7 +312,7 @@ namespace CycloneGames.Audio.Runtime
                 if (this.useDistanceLowPass)
                 {
                     EditorGUI.indentLevel++;
-                    this.distanceLowPassCurve = EditorGUILayout.CurveField("Dist → LP Hz", this.distanceLowPassCurve);
+                    this.distanceLowPassCurve = EditorGUILayout.CurveField("Dist -> LP Hz", this.distanceLowPassCurve);
                     EditorGUI.indentLevel--;
                 }
 
@@ -319,8 +320,8 @@ namespace CycloneGames.Audio.Runtime
                 if (this.useConeAttenuation)
                 {
                     EditorGUI.indentLevel++;
-                    this.coneInnerAngle  = EditorGUILayout.Slider("Inner°", this.coneInnerAngle,  0f, 360f);
-                    this.coneOuterAngle  = EditorGUILayout.Slider("Outer°", Mathf.Max(this.coneOuterAngle, this.coneInnerAngle), this.coneInnerAngle, 360f);
+                    this.coneInnerAngle  = EditorGUILayout.Slider("Inner Deg", this.coneInnerAngle,  0f, 360f);
+                    this.coneOuterAngle  = EditorGUILayout.Slider("Outer Deg", Mathf.Max(this.coneOuterAngle, this.coneInnerAngle), this.coneInnerAngle, 360f);
                     this.coneOuterVolume = EditorGUILayout.Slider("Out Vol", this.coneOuterVolume, 0f, 1f);
                     EditorGUI.indentLevel--;
                 }

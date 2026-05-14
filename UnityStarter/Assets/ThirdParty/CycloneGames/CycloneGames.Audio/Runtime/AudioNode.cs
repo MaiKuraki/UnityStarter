@@ -3,6 +3,7 @@
 
 using UnityEngine;
 #if UNITY_EDITOR
+using System.Collections.Generic;
 using UnityEditor;
 #endif
 
@@ -30,10 +31,6 @@ namespace CycloneGames.Audio.Runtime
         [SerializeField, HideInInspector]
         protected AudioNodeOutput output;
 
-        /// <summary>
-        /// The image used for node input and output connectors
-        /// </summary>
-        protected static Texture2D ConnectorTexture;
         /// <summary>
         /// The minimum possible value for an AudioSource's volume property
         /// </summary>
@@ -73,13 +70,22 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            if (nodeNum >= this.input.ConnectedNodes.Length)
+            AudioNodeOutput[] connectedNodes = this.input.ConnectedNodes;
+            if (connectedNodes == null || nodeNum < 0 || nodeNum >= connectedNodes.Length)
             {
                 Debug.LogWarningFormat("{0} tried to access invalid connected node {1}", this.name, nodeNum);
                 return;
             }
 
-            this.input.ConnectedNodes[nodeNum].ParentNode.ProcessNode(activeEvent);
+            AudioNodeOutput output = connectedNodes[nodeNum];
+            AudioNode parentNode = output != null ? output.ParentNode : null;
+            if (parentNode == null)
+            {
+                Debug.LogWarningFormat("{0} tried to process a missing connected node at index {1}", this.name, nodeNum);
+                return;
+            }
+
+            parentNode.ProcessNode(activeEvent);
         }
 
         /// <summary>
@@ -166,15 +172,7 @@ namespace CycloneGames.Audio.Runtime
 
         public void MoveBy(Vector2 offset)
         {
-            nodeRect.position -= offset;
-            if (this.input != null)
-            {
-                AudioNodeOutput[] outputs = this.input.ConnectedNodes;
-                for (int i = 0; i < outputs.Length; i++)
-                {
-                    outputs[i].ParentNode.MoveBy(offset);
-                }
-            }
+            EditorUtilityCache.MoveConnectedTree(this, offset);
         }
 
         /// <summary>
@@ -231,15 +229,16 @@ namespace CycloneGames.Audio.Runtime
             tempPos.y += (this.nodeRect.height / 2) - 5;
             this.input.Window.position = tempPos;
 
-            if (ConnectorTexture == null)
-            {
-                ConnectorTexture = EditorGUIUtility.Load("icons/animationkeyframe.png") as Texture2D;
-            }
-            GUI.DrawTexture(this.input.Window, ConnectorTexture);
+            GUI.DrawTexture(this.input.Window, EditorUtilityCache.ConnectorTexture);
 
             for (int i = 0; i < this.input.ConnectedNodes.Length; i++)
             {
                 AudioNodeOutput tempOutput = this.input.ConnectedNodes[i];
+                if (tempOutput == null)
+                {
+                    continue;
+                }
+
                 DrawCurve(tempOutput.Center, this.input.Center);
             }
         }
@@ -259,11 +258,7 @@ namespace CycloneGames.Audio.Runtime
             tempPos.y += (this.nodeRect.height / 2) - 10;
             this.output.Window.position = tempPos;
 
-            if (ConnectorTexture == null)
-            {
-                ConnectorTexture = EditorGUIUtility.Load("icons/animationkeyframe.png") as Texture2D;
-            }
-            GUI.DrawTexture(this.output.Window, ConnectorTexture);
+            GUI.DrawTexture(this.output.Window, EditorUtilityCache.ConnectorTexture);
         }
 
         /// <summary>
@@ -287,6 +282,82 @@ namespace CycloneGames.Audio.Runtime
             Handles.color = originalColor;
 
             Handles.EndGUI();
+        }
+
+        protected static class EditorUtilityCache
+        {
+            private static readonly HashSet<AudioNode> MoveVisitedNodes = new HashSet<AudioNode>(64);
+            private static Texture2D connectorTexture;
+
+            public static Texture2D ConnectorTexture
+            {
+                get
+                {
+                    if (connectorTexture == null)
+                    {
+                        connectorTexture = EditorGUIUtility.Load("icons/animationkeyframe.png") as Texture2D;
+                    }
+
+                    return connectorTexture;
+                }
+            }
+
+            public static bool NeedsSortByNodeY(AudioNodeInput input)
+            {
+                AudioNodeOutput[] connectedNodes = input != null ? input.ConnectedNodes : null;
+                if (connectedNodes == null || connectedNodes.Length < 2)
+                {
+                    return false;
+                }
+
+                float previousY = float.NegativeInfinity;
+                for (int i = 0; i < connectedNodes.Length; i++)
+                {
+                    AudioNodeOutput output = connectedNodes[i];
+                    float y = output != null && output.ParentNode != null ? output.ParentNode.NodeRect.y : previousY;
+                    if (y < previousY)
+                    {
+                        return true;
+                    }
+
+                    previousY = y;
+                }
+
+                return false;
+            }
+
+            public static void MoveConnectedTree(AudioNode root, Vector2 offset)
+            {
+                MoveVisitedNodes.Clear();
+                MoveConnectedTreeInternal(root, offset);
+                MoveVisitedNodes.Clear();
+            }
+
+            private static void MoveConnectedTreeInternal(AudioNode node, Vector2 offset)
+            {
+                if (node == null || !MoveVisitedNodes.Add(node))
+                {
+                    return;
+                }
+
+                node.nodeRect.position -= offset;
+
+                AudioNodeInput input = node.input;
+                AudioNodeOutput[] outputs = input != null ? input.ConnectedNodes : null;
+                if (outputs == null)
+                {
+                    return;
+                }
+
+                for (int i = 0; i < outputs.Length; i++)
+                {
+                    AudioNodeOutput output = outputs[i];
+                    if (output != null)
+                    {
+                        MoveConnectedTreeInternal(output.ParentNode, offset);
+                    }
+                }
+            }
         }
 
 #endif

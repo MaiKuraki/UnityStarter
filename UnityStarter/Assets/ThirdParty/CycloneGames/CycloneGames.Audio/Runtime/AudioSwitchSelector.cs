@@ -1,17 +1,17 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using UnityEngine;
-using System.Collections.Generic;
 #if UNITY_EDITOR
+using System.Collections.Generic;
 using UnityEditor;
 #endif
+using UnityEngine;
 
 namespace CycloneGames.Audio.Runtime
 {
     /// <summary>
     /// Routes playback to the connected branch whose explicit state assignment matches
-    /// the current AudioSwitch state. Routing is name-based, not position-based —
+    /// the current AudioSwitch state. Routing is name-based, not position-based;
     /// connection order and visual layout do not affect which branch plays.
     /// Each branch must be assigned a state via the editor mapping table.
     /// </summary>
@@ -29,7 +29,8 @@ namespace CycloneGames.Audio.Runtime
 
         public override void ProcessNode(ActiveEvent activeEvent)
         {
-            if (this.input.ConnectedNodes == null || this.input.ConnectedNodes.Length == 0)
+            AudioNodeOutput[] connectedNodes = this.input != null ? this.input.ConnectedNodes : null;
+            if (connectedNodes == null || connectedNodes.Length == 0)
             {
                 Debug.LogWarningFormat("No connected nodes for {0}", this.name);
                 return;
@@ -42,7 +43,7 @@ namespace CycloneGames.Audio.Runtime
             }
 
             string currentState = switchObject.CurrentStateName;
-            int branchCount = this.input.ConnectedNodes.Length;
+            int branchCount = connectedNodes.Length;
 
             for (int i = 0; i < branchCount; i++)
             {
@@ -65,37 +66,27 @@ namespace CycloneGames.Audio.Runtime
 
         [SerializeField]
         private bool autoSortByNodeY = true;
+        private readonly Dictionary<AudioNodeOutput, string> assignmentByOutput = new Dictionary<AudioNodeOutput, string>(8);
+        private readonly HashSet<string> seenAssignments = new HashSet<string>();
+        private static readonly GUIContent AssignSwitchContent = new GUIContent("Assign an AudioSwitch to configure branch assignments.");
+        private string[] cachedPopupOptions = new string[1] { "(unassigned)" };
+        private string[] cachedStateNames = new string[0];
 
         private bool NeedsSortByNodeY()
         {
-            if (this.input == null || this.input.ConnectedNodes == null || this.input.ConnectedNodes.Length < 2)
-                return false;
-
-            float prevY = float.NegativeInfinity;
-            for (int i = 0; i < this.input.ConnectedNodes.Length; i++)
-            {
-                AudioNodeOutput output = this.input.ConnectedNodes[i];
-                float y = output != null && output.ParentNode != null
-                    ? output.ParentNode.NodeRect.y
-                    : prevY;
-                if (y < prevY)
-                    return true;
-                prevY = y;
-            }
-            return false;
+            return EditorUtilityCache.NeedsSortByNodeY(this.input);
         }
 
         private void AutoSortConnectionsIfNeeded()
         {
             if (!autoSortByNodeY || this.input == null || !NeedsSortByNodeY()) return;
 
-            // Preserve branch-state mapping across the connection reorder.
-            Dictionary<AudioNodeOutput, string> assignmentByOutput = new Dictionary<AudioNodeOutput, string>();
+            this.assignmentByOutput.Clear();
             AudioNodeOutput[] before = this.input.ConnectedNodes;
             for (int i = 0; i < before.Length; i++)
             {
                 string assigned = i < branchStateAssignments.Length ? branchStateAssignments[i] : "";
-                assignmentByOutput[before[i]] = assigned;
+                this.assignmentByOutput[before[i]] = assigned;
             }
 
             this.input.SortConnections();
@@ -104,12 +95,13 @@ namespace CycloneGames.Audio.Runtime
             string[] reordered = new string[after.Length];
             for (int i = 0; i < after.Length; i++)
             {
-                if (after[i] != null && assignmentByOutput.TryGetValue(after[i], out string assignedState))
+                if (after[i] != null && this.assignmentByOutput.TryGetValue(after[i], out string assignedState))
                     reordered[i] = assignedState;
                 else
                     reordered[i] = "";
             }
 
+            this.assignmentByOutput.Clear();
             branchStateAssignments = reordered;
             EditorUtility.SetDirty(this.input);
             EditorUtility.SetDirty(this);
@@ -143,7 +135,7 @@ namespace CycloneGames.Audio.Runtime
             if (switchObject == null)
             {
                 h += EditorStyles.wordWrappedMiniLabel.CalcHeight(
-                    new GUIContent("Assign an AudioSwitch to configure branch assignments."), NodeWidth - 16f);
+                    AssignSwitchContent, NodeWidth - 16f);
                 h += BottomPad;
                 return h;
             }
@@ -165,7 +157,7 @@ namespace CycloneGames.Audio.Runtime
                 // Warning row (only one is shown in DrawProperties)
                 bool hasDuplicate = false;
                 bool hasUnassigned = false;
-                HashSet<string> seen = new HashSet<string>();
+                this.seenAssignments.Clear();
 
                 for (int i = 0; i < branchCount; i++)
                 {
@@ -179,9 +171,11 @@ namespace CycloneGames.Audio.Runtime
                         continue;
                     }
 
-                    if (!seen.Add(assigned))
+                    if (!this.seenAssignments.Add(assigned))
                         hasDuplicate = true;
                 }
+
+                this.seenAssignments.Clear();
 
                 if (hasDuplicate || hasUnassigned)
                     h += RowH + RowGap;
@@ -221,7 +215,7 @@ namespace CycloneGames.Audio.Runtime
             if (EditorGUI.EndChangeCheck())
             {
                 this.switchObject = newSwitch;
-                // Clear assignments when switch changes — old names are stale
+                // Clear assignments when switch changes because old names are stale.
                 this.branchStateAssignments = new string[0];
                 UnityEditor.EditorUtility.SetDirty(this);
             }
@@ -239,13 +233,8 @@ namespace CycloneGames.Audio.Runtime
 
             SyncAssignmentsArray(branchCount);
 
-            // Build popup options: "(unassigned)" + all state names
-            string[] popupOptions = new string[states.Length + 1];
-            popupOptions[0] = "(unassigned)";
-            for (int i = 0; i < states.Length; i++)
-                popupOptions[i + 1] = states[i];
+            string[] popupOptions = GetPopupOptions(states);
 
-            // ── Per-branch assignment ───────────────────────────────────
             EditorGUILayout.LabelField("Branch Assignments", EditorStyles.boldLabel);
 
             if (branchCount == 0)
@@ -275,7 +264,7 @@ namespace CycloneGames.Audio.Runtime
 
                 GUI.color = isActive ? new Color(0.45f, 0.80f, 0.45f) : Color.white;
                 EditorGUILayout.LabelField(
-                    $"{(isActive ? "▶ " : "   ")}{nodeName}",
+                    $"{(isActive ? "> " : "  ")}{nodeName}",
                     EditorStyles.miniLabel);
                 GUI.color = Color.white;
 
@@ -306,11 +295,48 @@ namespace CycloneGames.Audio.Runtime
                         branchStateAssignments[i] == branchStateAssignments[j])
                         hasDuplicate = true;
 
-            // ── Warnings ───────────────────────────────────────────────
             if (hasDuplicate)
-                EditorGUILayout.LabelField("⚠ Duplicate state assignments", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField("Duplicate state assignments", EditorStyles.miniLabel);
             else if (hasUnassigned)
-                EditorGUILayout.LabelField("⚠ Some branches are unassigned", EditorStyles.miniLabel);
+                EditorGUILayout.LabelField("Some branches are unassigned", EditorStyles.miniLabel);
+        }
+
+        private string[] GetPopupOptions(string[] states)
+        {
+            if (states == null)
+            {
+                states = System.Array.Empty<string>();
+            }
+
+            bool rebuild = this.cachedPopupOptions == null || this.cachedPopupOptions.Length != states.Length + 1 || this.cachedStateNames.Length != states.Length;
+            if (!rebuild)
+            {
+                for (int i = 0; i < states.Length; i++)
+                {
+                    if (this.cachedStateNames[i] != states[i])
+                    {
+                        rebuild = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!rebuild)
+            {
+                return this.cachedPopupOptions;
+            }
+
+            this.cachedPopupOptions = new string[states.Length + 1];
+            this.cachedStateNames = new string[states.Length];
+            this.cachedPopupOptions[0] = "(unassigned)";
+            for (int i = 0; i < states.Length; i++)
+            {
+                string state = states[i] ?? string.Empty;
+                this.cachedStateNames[i] = state;
+                this.cachedPopupOptions[i + 1] = state;
+            }
+
+            return this.cachedPopupOptions;
         }
 
 #endif

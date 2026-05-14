@@ -14,11 +14,21 @@ namespace CycloneGames.Audio.Editor
         /// <summary>
         /// Collection of currently playing events for the number of past saved frames
         /// </summary>
-        private List<ProfilerEvent[]> profilerFrames = new List<ProfilerEvent[]>();
+        private sealed class ProfilerFrame
+        {
+            public readonly List<ProfilerEvent> Events = new List<ProfilerEvent>(32);
+            public int Count;
+        }
+
+        private readonly ProfilerFrame[] profilerFrames = new ProfilerFrame[MaxFrames];
         /// <summary>
         /// The frame currently being viewed in the window
         /// </summary>
         private int currentFrame = 0;
+        private int profilerFrameCount;
+        private int profilerWriteIndex;
+        private double nextSampleTime;
+        private double nextRepaintTime;
         /// <summary>
         /// The vertical position of the next event to be displayed in the window
         /// </summary>
@@ -67,10 +77,11 @@ namespace CycloneGames.Audio.Editor
         /// The maximum number of saved previous frames in the profiler
         /// </summary>
         private const int MaxFrames = 300;
+        private const double SampleInterval = 0.05d;
+        private const double RepaintInterval = 0.1d;
 
-        // Cached lists to avoid per-frame allocations
-        private readonly List<AudioMixerGroup> _cachedBuses = new List<AudioMixerGroup>();
-        private readonly List<GameObject> _cachedEmitters = new List<GameObject>();
+        private readonly Dictionary<AudioMixerGroup, int> cachedBusIndices = new Dictionary<AudioMixerGroup, int>(32);
+        private readonly Dictionary<GameObject, int> cachedEmitterIndices = new Dictionary<GameObject, int>(32);
 
         /// <summary>
         /// Display the profiler window
@@ -82,37 +93,52 @@ namespace CycloneGames.Audio.Editor
             profiler.Show();
         }
 
+        private void OnEnable()
+        {
+            for (int i = 0; i < profilerFrames.Length; i++)
+            {
+                profilerFrames[i] ??= new ProfilerFrame();
+            }
+        }
+
         private void Update()
         {
-            if (EditorApplication.isPlaying && !EditorApplication.isPaused)
+            double now = EditorApplication.timeSinceStartup;
+            if (EditorApplication.isPlaying && !EditorApplication.isPaused && now >= this.nextSampleTime)
             {
+                this.nextSampleTime = now + SampleInterval;
                 CollectProfilerEvents();
             }
 
-            Repaint();
+            if (now >= this.nextRepaintTime)
+            {
+                this.nextRepaintTime = now + RepaintInterval;
+                Repaint();
+            }
         }
 
         private void OnGUI()
         {
             DrawEventList();
 
-            if (this.profilerFrames.Count > 0)
+            if (this.profilerFrameCount > 0)
             {
-                this.currentFrame = EditorGUILayout.IntSlider(this.currentFrame, 0, this.profilerFrames.Count - 1);
+                this.currentFrame = EditorGUILayout.IntSlider(this.currentFrame, 0, this.profilerFrameCount - 1);
             }
             else
             {
                 return;
             }
 
-            if (this.profilerFrames.Count > this.currentFrame)
+            int frameIndex = GetFrameIndex(this.currentFrame);
+            if (frameIndex >= 0)
             {
-                DrawProfilerFrame(this.profilerFrames[this.currentFrame]);
+                DrawProfilerFrame(this.profilerFrames[frameIndex]);
             }
 
             if (EditorApplication.isPlaying && !EditorApplication.isPaused)
             {
-                this.currentFrame = this.profilerFrames.Count - 1;
+                this.currentFrame = this.profilerFrameCount - 1;
             }
         }
 
@@ -121,12 +147,16 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private void CollectProfilerEvents()
         {
-            List<ActiveEvent> activeEvents = AudioManager.ActiveEvents;
-            ProfilerEvent[] currentEvents = new ProfilerEvent[activeEvents.Count];
-            for (int i = 0; i < currentEvents.Length; i++)
+            var activeEvents = AudioManager.ActiveEvents;
+            ProfilerFrame frame = this.profilerFrames[this.profilerWriteIndex];
+            EnsureFrameCapacity(frame, activeEvents.Count);
+            frame.Count = activeEvents.Count;
+
+            for (int i = 0; i < activeEvents.Count; i++)
             {
                 ActiveEvent tempActiveEvent = activeEvents[i];
-                ProfilerEvent tempProfilerEvent = new ProfilerEvent();
+                ProfilerEvent tempProfilerEvent = frame.Events[i];
+                tempProfilerEvent.Reset();
                 tempProfilerEvent.eventName = tempActiveEvent.name;
                 
                 if (tempActiveEvent.SourceCount > 0)
@@ -141,14 +171,32 @@ namespace CycloneGames.Audio.Editor
                 }
                 
                 tempProfilerEvent.activeEvent = tempActiveEvent;
-                currentEvents[i] = tempProfilerEvent;
             }
-            this.profilerFrames.Add(currentEvents);
 
-            while(this.profilerFrames.Count > MaxFrames)
+            this.profilerWriteIndex = (this.profilerWriteIndex + 1) % MaxFrames;
+            if (this.profilerFrameCount < MaxFrames)
             {
-                this.profilerFrames.RemoveAt(0);
+                this.profilerFrameCount++;
             }
+        }
+
+        private static void EnsureFrameCapacity(ProfilerFrame frame, int count)
+        {
+            while (frame.Events.Count < count)
+            {
+                frame.Events.Add(new ProfilerEvent());
+            }
+        }
+
+        private int GetFrameIndex(int displayIndex)
+        {
+            if (displayIndex < 0 || displayIndex >= this.profilerFrameCount)
+            {
+                return -1;
+            }
+
+            int oldestIndex = this.profilerFrameCount < MaxFrames ? 0 : this.profilerWriteIndex;
+            return (oldestIndex + displayIndex) % MaxFrames;
         }
 
         private void DrawEventList()
@@ -172,34 +220,51 @@ namespace CycloneGames.Audio.Editor
         /// Draw the nodes for the specified frame
         /// </summary>
         /// <param name="profilerEvents">The frame to show the ActiveEvents for</param>
-        private void DrawProfilerFrame(ProfilerEvent[] profilerEvents)
+        private void DrawProfilerFrame(ProfilerFrame profilerFrame)
         {
             this.eventY = 20;
             this.emitterY = 20;
             this.busY = 20;
             
-            // Clear and reuse cached lists instead of allocating new ones
-            _cachedBuses.Clear();
-            _cachedEmitters.Clear();
-            var buses = _cachedBuses;
-            var emitters = _cachedEmitters;
+            this.cachedBusIndices.Clear();
+            this.cachedEmitterIndices.Clear();
+            int nullEmitterIndex = -1;
+            int nullBusIndex = -1;
 
             BeginWindows();
-            for (int i = 0; i < profilerEvents.Length; i++)
+            for (int i = 0; i < profilerFrame.Count; i++)
             {
-                bool addedEmitter = false;
-                ProfilerEvent tempEvent = profilerEvents[i];
+                ProfilerEvent tempEvent = profilerFrame.Events[i];
                 //this.currentProfiledEvent = tempEvent;
-                if (tempEvent == null)
+                if (tempEvent == null || tempEvent.activeEvent == null)
                 {
                     continue;
                 }
 
                 //GUI.Window(i, new Rect(eventX, this.eventY, WindowWidth, WindowHeight), DrawWindow, tempEvent.eventName);
                 tempEvent.activeEvent.DrawNode(i, new Rect(eventX, this.eventY, WindowWidth, WindowHeight));
-                if (!emitters.Contains(tempEvent.emitterObject))
+                int emitterIndex;
+                bool addedEmitter = false;
+                if (tempEvent.emitterObject == null)
                 {
-                    emitters.Add(tempEvent.emitterObject);
+                    if (nullEmitterIndex < 0)
+                    {
+                        nullEmitterIndex = this.cachedEmitterIndices.Count + (nullEmitterIndex >= 0 ? 1 : 0);
+                        emitterIndex = nullEmitterIndex;
+                        GUI.Window(i + 200, new Rect(emitterX, this.emitterY, WindowWidth, WindowHeight), DrawWindow, "No emitter");
+                        DrawCurve(new Vector2(eventX + WindowWidth, this.eventY), new Vector2(emitterX, this.emitterY));
+                        addedEmitter = true;
+                    }
+                    else
+                    {
+                        emitterIndex = nullEmitterIndex;
+                        DrawCurve(new Vector2(eventX + WindowWidth, this.eventY), new Vector2(emitterX, 20 + WindowYInterval * emitterIndex));
+                    }
+                }
+                else if (!this.cachedEmitterIndices.TryGetValue(tempEvent.emitterObject, out emitterIndex))
+                {
+                    emitterIndex = this.cachedEmitterIndices.Count + (nullEmitterIndex >= 0 ? 1 : 0);
+                    this.cachedEmitterIndices.Add(tempEvent.emitterObject, emitterIndex);
                     string emitterName = tempEvent.emitterObject == null ? "No emitter" : tempEvent.emitterObject.name;
                     GUI.Window(i + 200, new Rect(emitterX, this.emitterY, WindowWidth, WindowHeight), DrawWindow, emitterName);
                     DrawCurve(new Vector2(eventX + WindowWidth, this.eventY), new Vector2(emitterX, this.emitterY));
@@ -207,30 +272,38 @@ namespace CycloneGames.Audio.Editor
                 }
                 else
                 {
-                    //Draw a line to this emitter
-                    int emitterNum = emitters.IndexOf(tempEvent.emitterObject);
-                    DrawCurve(new Vector2(eventX + WindowWidth, this.eventY), new Vector2(emitterX, 20 + WindowYInterval * emitterNum));
+                    DrawCurve(new Vector2(eventX + WindowWidth, this.eventY), new Vector2(emitterX, 20 + WindowYInterval * emitterIndex));
                 }
 
-                if (!buses.Contains(tempEvent.bus))
+                float emitterLineY = 20 + WindowYInterval * emitterIndex;
+                int busIndex;
+                if (tempEvent.bus == null)
                 {
-                    buses.Add(tempEvent.bus);
-                    if (tempEvent.bus == null)
+                    if (nullBusIndex < 0)
                     {
+                        nullBusIndex = this.cachedBusIndices.Count + (nullBusIndex >= 0 ? 1 : 0);
+                        busIndex = nullBusIndex;
                         GUI.Window(i + 100, new Rect(busX, this.busY, WindowWidth, WindowHeight), DrawWindow, "-No Bus-");
+                        DrawCurve(new Vector2(emitterX + WindowWidth, emitterLineY), new Vector2(busX, this.busY));
+                        this.busY += WindowYInterval;
                     }
                     else
                     {
-                        GUI.Window(i + 100, new Rect(busX, this.busY, WindowWidth, WindowHeight), DrawWindow, tempEvent.bus.name);
+                        busIndex = nullBusIndex;
+                        DrawCurve(new Vector2(emitterX + WindowWidth, this.emitterY), new Vector2(busX, 20 + WindowYInterval * busIndex));
                     }
-                    DrawCurve(new Vector2(emitterX + WindowWidth, this.emitterY), new Vector2(busX, this.busY));
+                }
+                else if (!this.cachedBusIndices.TryGetValue(tempEvent.bus, out busIndex))
+                {
+                    busIndex = this.cachedBusIndices.Count + (nullBusIndex >= 0 ? 1 : 0);
+                    this.cachedBusIndices.Add(tempEvent.bus, busIndex);
+                    GUI.Window(i + 100, new Rect(busX, this.busY, WindowWidth, WindowHeight), DrawWindow, tempEvent.bus.name);
+                    DrawCurve(new Vector2(emitterX + WindowWidth, emitterLineY), new Vector2(busX, this.busY));
                     this.busY += WindowYInterval;
                 }
                 else
                 {
-                    //Draw a line to this bus
-                    int busNum = buses.IndexOf(tempEvent.bus);
-                    DrawCurve(new Vector2(emitterX + WindowWidth, this.emitterY), new Vector2(busX, 20 + WindowYInterval * busNum));
+                    DrawCurve(new Vector2(emitterX + WindowWidth, emitterLineY), new Vector2(busX, 20 + WindowYInterval * busIndex));
                 }
 
                 this.eventY += WindowYInterval;

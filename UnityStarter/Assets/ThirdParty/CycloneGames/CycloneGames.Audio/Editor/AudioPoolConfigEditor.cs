@@ -54,7 +54,19 @@ namespace CycloneGames.Audio.Editor
 
         // Cached GUIStyles to avoid per-frame allocations
         private GUIStyle _titleStyle;
+        private GUIStyle _barLabelStyle;
         private bool _stylesInitialized;
+        private double _nextRuntimeRepaintTime;
+        private double _nextRuntimeTextUpdateTime;
+        private string _runtimePoolSizeText = string.Empty;
+        private string _runtimeInUseText = string.Empty;
+        private string _runtimeAvailableText = string.Empty;
+        private string _runtimeUsageText = string.Empty;
+        private string _runtimePeakUsageText = string.Empty;
+        private string _runtimeExpansionsText = string.Empty;
+        private string _runtimeStealsText = string.Empty;
+
+        private const double RuntimeRepaintInterval = 0.25d;
 
         private void OnEnable()
         {
@@ -90,6 +102,11 @@ namespace CycloneGames.Audio.Editor
                 alignment = TextAnchor.MiddleCenter
             };
 
+            _barLabelStyle = new GUIStyle(EditorStyles.miniLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                normal = { textColor = Color.white }
+            };
         }
 
         public override void OnInspectorGUI()
@@ -113,7 +130,7 @@ namespace CycloneGames.Audio.Editor
             // Runtime notice
             if (isPlaying)
             {
-                EditorGUILayout.HelpBox("🔒 Configuration is read-only during Play Mode.\nChanges must be made when not playing.", MessageType.Info);
+                EditorGUILayout.HelpBox("Configuration is read-only during Play Mode.\nChanges must be made when not playing.", MessageType.Info);
                 EditorGUILayout.Space(5);
             }
 
@@ -165,7 +182,7 @@ namespace CycloneGames.Audio.Editor
 
         private void CheckForDuplicates()
         {
-            if (!hasCheckedForDuplicates || Event.current.type == EventType.Layout)
+            if (!hasCheckedForDuplicates)
             {
                 allConfigGuids = AssetDatabase.FindAssets("t:AudioPoolConfig");
                 hasCheckedForDuplicates = true;
@@ -179,7 +196,7 @@ namespace CycloneGames.Audio.Editor
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
                 GUI.color = warningColor;
-                EditorGUILayout.LabelField("⚠ Multiple Configs Detected", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField("Multiple Configs Detected", EditorStyles.boldLabel);
                 GUI.color = Color.white;
 
                 EditorGUILayout.LabelField($"Found {allConfigGuids.Length} AudioPoolConfig assets. Only one should exist.", EditorStyles.wordWrappedLabel);
@@ -238,12 +255,7 @@ namespace CycloneGames.Audio.Editor
                     Rect fillRect = new Rect(barRect.x, barRect.y, barRect.width * ratio, barRect.height);
                     EditorGUI.DrawRect(fillRect, new Color(0.3f, 0.7f, 0.4f));
 
-                    var labelStyle = new GUIStyle(EditorStyles.miniLabel)
-                    {
-                        alignment = TextAnchor.MiddleCenter,
-                        normal = { textColor = Color.white }
-                    };
-                    EditorGUI.LabelField(barRect, $"{config.GetInitialPoolSizeForPlatform()} / {config.GetMaxPoolSizeForDevice()}", labelStyle);
+                    EditorGUI.LabelField(barRect, $"{config.GetInitialPoolSizeForPlatform()} / {config.GetMaxPoolSizeForDevice()}", _barLabelStyle);
                 }
 
                 EditorGUI.indentLevel--;
@@ -402,15 +414,17 @@ namespace CycloneGames.Audio.Editor
 
             if (showRuntimeStats)
             {
+                UpdateRuntimeStatText();
+
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 EditorGUI.indentLevel++;
 
                 using (new EditorGUI.DisabledScope(true))
                 {
                     DrawStatRow("Device Tier", AudioManager.PoolStats.DeviceTier);
-                    DrawStatRow("Pool Size", $"{AudioManager.PoolStats.CurrentSize} / {AudioManager.PoolStats.MaxSize}");
-                    DrawStatRow("In Use", $"{AudioManager.PoolStats.InUse}");
-                    DrawStatRow("Available", $"{AudioManager.PoolStats.Available}");
+                    DrawStatRow("Pool Size", _runtimePoolSizeText);
+                    DrawStatRow("In Use", _runtimeInUseText);
+                    DrawStatRow("Available", _runtimeAvailableText);
 
                     // Usage bar
                     EditorGUILayout.Space(3);
@@ -426,25 +440,41 @@ namespace CycloneGames.Audio.Editor
                     Rect fillRect = new Rect(barRect.x, barRect.y, barRect.width * ratio, barRect.height);
                     EditorGUI.DrawRect(fillRect, barColor);
 
-                    var labelStyle = new GUIStyle(EditorStyles.miniLabel)
-                    {
-                        alignment = TextAnchor.MiddleCenter,
-                        normal = { textColor = Color.white }
-                    };
-                    EditorGUI.LabelField(barRect, $"{ratio:P0} Usage", labelStyle);
+                    EditorGUI.LabelField(barRect, _runtimeUsageText, _barLabelStyle);
 
                     EditorGUILayout.Space(5);
-                    DrawStatRow("Peak Usage", $"{AudioManager.PoolStats.PeakUsage}");
-                    DrawStatRow("Expansions", $"{AudioManager.PoolStats.TotalExpansions}");
-                    DrawStatRow("Voice Steals", $"{AudioManager.PoolStats.TotalSteals}");
+                    DrawStatRow("Peak Usage", _runtimePeakUsageText);
+                    DrawStatRow("Expansions", _runtimeExpansionsText);
+                    DrawStatRow("Voice Steals", _runtimeStealsText);
                 }
 
                 EditorGUI.indentLevel--;
                 EditorGUILayout.EndVertical();
 
-                // Auto-repaint
-                Repaint();
+                if (EditorApplication.timeSinceStartup >= _nextRuntimeRepaintTime)
+                {
+                    _nextRuntimeRepaintTime = EditorApplication.timeSinceStartup + RuntimeRepaintInterval;
+                    Repaint();
+                }
             }
+        }
+
+        private void UpdateRuntimeStatText()
+        {
+            double now = EditorApplication.timeSinceStartup;
+            if (_runtimePoolSizeText.Length > 0 && now < _nextRuntimeTextUpdateTime)
+            {
+                return;
+            }
+
+            _nextRuntimeTextUpdateTime = now + RuntimeRepaintInterval;
+            _runtimePoolSizeText = AudioManager.PoolStats.CurrentSize.ToString() + " / " + AudioManager.PoolStats.MaxSize.ToString();
+            _runtimeInUseText = AudioManager.PoolStats.InUse.ToString();
+            _runtimeAvailableText = AudioManager.PoolStats.Available.ToString();
+            _runtimeUsageText = AudioManager.PoolStats.UsageRatio.ToString("P0") + " Usage";
+            _runtimePeakUsageText = AudioManager.PoolStats.PeakUsage.ToString();
+            _runtimeExpansionsText = AudioManager.PoolStats.TotalExpansions.ToString();
+            _runtimeStealsText = AudioManager.PoolStats.TotalSteals.ToString();
         }
 
         #region Utility Methods
