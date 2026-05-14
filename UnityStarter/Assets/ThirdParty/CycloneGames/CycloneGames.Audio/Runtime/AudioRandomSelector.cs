@@ -1,11 +1,11 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-using UnityEngine;
-using System.Collections.Generic;
 #if UNITY_EDITOR
+using System.Collections.Generic;
 using UnityEditor;
 #endif
+using UnityEngine;
 
 namespace CycloneGames.Audio.Runtime
 {
@@ -35,23 +35,15 @@ namespace CycloneGames.Audio.Runtime
 
         public override void ProcessNode(ActiveEvent activeEvent)
         {
-            if (this.input.ConnectedNodes == null || this.input.ConnectedNodes.Length == 0)
+            AudioNodeOutput[] connectedNodes = this.input != null ? this.input.ConnectedNodes : null;
+            if (connectedNodes == null || connectedNodes.Length == 0)
             {
                 Debug.LogWarningFormat("No connected nodes for {0}", this.name);
                 return;
             }
 
-            int count = this.input.ConnectedNodes.Length;
-            int nodeNum;
-
-            if (weights != null && weights.Length == count && HasNonZeroWeight())
-            {
-                nodeNum = WeightedRandom(count);
-            }
-            else
-            {
-                nodeNum = Random.Range(0, count);
-            }
+            int count = connectedNodes.Length;
+            int nodeNum = weights != null && weights.Length == count ? WeightedRandom(count) : Random.Range(0, count);
 
             if (avoidRepeat && count > 1 && nodeNum == lastSelectedIndex)
             {
@@ -66,26 +58,27 @@ namespace CycloneGames.Audio.Runtime
         {
             float totalWeight = 0f;
             for (int i = 0; i < count; i++)
+            {
                 totalWeight += Mathf.Max(0f, weights[i]);
+            }
 
             if (totalWeight <= 0f)
+            {
                 return Random.Range(0, count);
+            }
 
             float roll = Random.Range(0f, totalWeight);
             float cumulative = 0f;
             for (int i = 0; i < count; i++)
             {
                 cumulative += Mathf.Max(0f, weights[i]);
-                if (roll < cumulative) return i;
+                if (roll < cumulative)
+                {
+                    return i;
+                }
             }
-            return count - 1;
-        }
 
-        private bool HasNonZeroWeight()
-        {
-            for (int i = 0; i < weights.Length; i++)
-                if (weights[i] > 0f) return true;
-            return false;
+            return count - 1;
         }
 
 #if UNITY_EDITOR
@@ -101,37 +94,23 @@ namespace CycloneGames.Audio.Runtime
 
         [SerializeField]
         private bool autoSortByNodeY = true;
+        private readonly Dictionary<AudioNodeOutput, float> weightByOutput = new Dictionary<AudioNodeOutput, float>(8);
 
         private bool NeedsSortByNodeY()
         {
-            if (this.input == null || this.input.ConnectedNodes == null || this.input.ConnectedNodes.Length < 2)
-                return false;
-
-            float prevY = float.NegativeInfinity;
-            for (int i = 0; i < this.input.ConnectedNodes.Length; i++)
-            {
-                AudioNodeOutput output = this.input.ConnectedNodes[i];
-                float y = output != null && output.ParentNode != null
-                    ? output.ParentNode.NodeRect.y
-                    : prevY;
-                if (y < prevY)
-                    return true;
-                prevY = y;
-            }
-            return false;
+            return EditorUtilityCache.NeedsSortByNodeY(this.input);
         }
 
         private void AutoSortConnectionsIfNeeded()
         {
             if (!autoSortByNodeY || this.input == null || !NeedsSortByNodeY()) return;
 
-            // Preserve weight mapping when the connection order changes.
-            Dictionary<AudioNodeOutput, float> weightByOutput = new Dictionary<AudioNodeOutput, float>();
+            this.weightByOutput.Clear();
             AudioNodeOutput[] before = this.input.ConnectedNodes;
             for (int i = 0; i < before.Length; i++)
             {
                 float weight = (weights != null && i < weights.Length) ? weights[i] : 1f;
-                weightByOutput[before[i]] = weight;
+                this.weightByOutput[before[i]] = weight;
             }
 
             this.input.SortConnections();
@@ -140,11 +119,12 @@ namespace CycloneGames.Audio.Runtime
             float[] reordered = new float[after.Length];
             for (int i = 0; i < after.Length; i++)
             {
-                reordered[i] = (after[i] != null && weightByOutput.TryGetValue(after[i], out float w))
+                reordered[i] = (after[i] != null && this.weightByOutput.TryGetValue(after[i], out float w))
                     ? Mathf.Max(0f, w)
                     : 1f;
             }
 
+            this.weightByOutput.Clear();
             weights = reordered;
             EditorUtility.SetDirty(this.input);
             EditorUtility.SetDirty(this);
@@ -195,7 +175,7 @@ namespace CycloneGames.Audio.Runtime
             int connCount = (input != null && input.ConnectedNodes != null) ? input.ConnectedNodes.Length : 0;
             if (connCount == 0) return;
 
-            // Sync weights array — preserve existing values, default new slots to 1
+            // Sync weights array while preserving existing values and defaulting new slots to 1.
             if (weights == null || weights.Length != connCount)
             {
                 float[] newWeights = new float[connCount];
