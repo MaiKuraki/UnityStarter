@@ -222,26 +222,91 @@ namespace CycloneGames.Audio.Runtime
 
         public bool ValidateAudioFiles()
         {
+            if (this.output == null)
+            {
+                Debug.LogErrorFormat("Missing output node in event: {0}", this.name);
+                return false;
+            }
+
+            if (this.nodes == null)
+            {
+                Debug.LogErrorFormat("Missing node list in event: {0}", this.name);
+                return false;
+            }
+
             for (int i = 0; i < this.nodes.Count; i++)
             {
-                AudioFile tempNode = this.nodes[i] as AudioFile;
-
-                if (tempNode != null)
+                AudioNode node = this.nodes[i];
+                if (node == null)
                 {
-                    if (tempNode.File != null)
-                    {
-                        if (tempNode.File.length <= 0)
-                        {
-                            Debug.LogErrorFormat("Invalid clip length in node {0}, event: {1}", tempNode.name, this.name);
-                            return false;
-                        }
-                    }
-                    else
-                    {
-                        Debug.LogErrorFormat("Null clip in node {0}, event: {1}", tempNode.name, this.name);
-                        return false;
-                    }
+                    Debug.LogErrorFormat("Null node in event: {0}", this.name);
+                    return false;
                 }
+
+                if (node is AudioFile audioFile)
+                {
+                    if (!ValidateAudioFileNode(audioFile)) return false;
+                }
+                else if (node is AudioVoiceFile voiceFile)
+                {
+                    if (!ValidateVoiceFileNode(voiceFile)) return false;
+                }
+                else if (node is AudioBlendFile blendFile)
+                {
+                    if (!ValidateBlendFileNode(blendFile)) return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool ValidateAudioFileNode(AudioFile node)
+        {
+            if (node.SourceMode == AudioFile.AudioFileSourceMode.ExternalReference)
+                return ValidateAudioClipReference(node.ExternalReference, node.name);
+
+            return ValidateClip(node.File, node.name);
+        }
+
+        private bool ValidateVoiceFileNode(AudioVoiceFile node)
+        {
+            if (node.SourceMode == AudioFile.AudioFileSourceMode.ExternalReference)
+                return ValidateAudioClipReference(node.ExternalReference, node.name);
+
+            return ValidateClip(node.File, node.name);
+        }
+
+        private bool ValidateBlendFileNode(AudioBlendFile node)
+        {
+            if (node.SourceMode == AudioFile.AudioFileSourceMode.ExternalReference)
+                return ValidateAudioClipReference(node.ExternalReference, node.name);
+
+            return ValidateClip(node.File, node.name);
+        }
+
+        private bool ValidateClip(AudioClip clip, string nodeName)
+        {
+            if (clip == null)
+            {
+                Debug.LogErrorFormat("Null clip in node {0}, event: {1}", nodeName, this.name);
+                return false;
+            }
+
+            if (clip.length <= 0)
+            {
+                Debug.LogErrorFormat("Invalid clip length in node {0}, event: {1}", nodeName, this.name);
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool ValidateAudioClipReference(AudioClipReference reference, string nodeName)
+        {
+            if (reference == null || string.IsNullOrWhiteSpace(reference.Location))
+            {
+                Debug.LogErrorFormat("Invalid AudioClipReference in node {0}, event: {1}", nodeName, this.name);
+                return false;
             }
 
             return true;
