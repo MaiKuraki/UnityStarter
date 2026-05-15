@@ -245,22 +245,19 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawQuickStats()
         {
+            AudioRuntimeStats stats = AudioManager.GetRuntimeStats();
+
             EditorGUILayout.BeginHorizontal();
 
-            // Active Sources
-            DrawStatBox("Active", AudioManager.PoolStats.InUse.ToString(), poolColor);
+            DrawStatBox("Active", stats.PoolInUse.ToString(), poolColor);
 
-            // Loaded Banks
-            DrawStatBox("Banks", AudioManager.GetLoadedBankCount().ToString(), banksColor);
+            DrawStatBox("Banks", stats.LoadedBanks.ToString(), banksColor);
 
-            // Active Events
-            DrawStatBox("Events", AudioManager.ActiveEvents.Count.ToString(), activeColor);
+            DrawStatBox("Events", stats.ActiveEvents.ToString(), activeColor);
 
-            // Memory
-            DrawStatBox("Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage), memoryColor);
+            DrawStatBox("Memory", ToMemorySizeString(stats.TotalMemoryUsage), memoryColor);
 
-            // External cache
-            DrawStatBox("Ext Cache", AudioClipResolver.GetExternalCacheStats().EntryCount.ToString(), cacheColor);
+            DrawStatBox("Ext Cache", stats.ExternalCacheEntries.ToString(), cacheColor);
 
             EditorGUILayout.EndHorizontal();
         }
@@ -279,28 +276,33 @@ namespace CycloneGames.Audio.Editor
 
         private void DrawStatisticsSection()
         {
+            AudioRuntimeStats stats = AudioManager.GetRuntimeStats();
+
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            DrawStatRow("Registered Events", AudioManager.GetRegisteredEventCount().ToString());
-            DrawStatRow("Loaded Banks", AudioManager.GetLoadedBankCount().ToString());
-            DrawStatRow("Active Events", AudioManager.ActiveEvents.Count.ToString());
-            DrawStatRow("Total Memory", ToMemorySizeString(AudioManager.TotalMemoryUsage));
+            DrawStatRow("Registered Events", stats.RegisteredEvents.ToString());
+            DrawStatRow("Loaded Banks", stats.LoadedBanks.ToString());
+            DrawStatRow("Active Events", stats.ActiveEvents.ToString());
+            DrawStatRow("Peak Active Events", stats.PeakActiveEvents.ToString());
+            DrawStatRow("Total Played", stats.TotalEventsPlayed.ToString());
+            DrawStatRow("Queued Commands", stats.QueuedCommands.ToString());
+            DrawStatRow("Pending Removals", stats.PendingRemovals.ToString());
+            DrawStatRow("Total Memory", ToMemorySizeString(stats.TotalMemoryUsage));
             DrawStatRow("Platform Profile", $"{AudioManager.PoolStats.PlatformProfile} [{AudioManager.PoolStats.PlatformTarget}]");
-            DrawStatRow("Repeat Throttled", AudioManager.PoolStats.TotalRepeatTriggerRejections.ToString());
-            DrawStatRow("Audibility Culled", AudioManager.PoolStats.TotalAudibilityCulls.ToString());
+            DrawStatRow("Repeat Throttled", stats.RepeatTriggerRejections.ToString());
+            DrawStatRow("Audibility Culled", stats.AudibilityCulls.ToString());
 
-            ExternalAudioClipCacheStats cacheStats = AudioClipResolver.GetExternalCacheStats();
             EditorGUILayout.Space(4);
             EditorGUILayout.LabelField("External Audio Cache", _sectionLabelStyle);
-            DrawStatRow("Cached Entries", cacheStats.EntryCount.ToString());
-            DrawStatRow("Loading", cacheStats.LoadingCount.ToString());
-            DrawStatRow("Loaded", cacheStats.LoadedCount.ToString());
-            DrawStatRow("Failed", cacheStats.FailedCount.ToString());
-            DrawStatRow("Total Refs", cacheStats.TotalRefCount.ToString());
-            DrawStatRow("Load Requests", cacheStats.TotalLoadRequests.ToString());
-            DrawStatRow("Cache Hits", cacheStats.CacheHitCount.ToString());
-            DrawStatRow("Cache Misses", cacheStats.CacheMissCount.ToString());
-            DrawStatRow("Failures (Total)", cacheStats.TotalFailureCount.ToString());
+            DrawStatRow("Cached Entries", stats.ExternalCacheEntries.ToString());
+            DrawStatRow("Loading", stats.ExternalLoadingCount.ToString());
+            DrawStatRow("Loaded", stats.ExternalLoadedCount.ToString());
+            DrawStatRow("Failed", stats.ExternalFailedCount.ToString());
+            DrawStatRow("Total Refs", stats.ExternalTotalRefCount.ToString());
+            DrawStatRow("Load Requests", stats.ExternalTotalLoadRequests.ToString());
+            DrawStatRow("Cache Hits", stats.ExternalCacheHits.ToString());
+            DrawStatRow("Cache Misses", stats.ExternalCacheMisses.ToString());
+            DrawStatRow("Failures (Total)", stats.ExternalTotalFailures.ToString());
 
             AudioManager.GetCategoryVoiceStats(categoryVoiceStats);
             if (categoryVoiceStats.Count > 0)
