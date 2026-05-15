@@ -69,6 +69,9 @@ namespace CycloneGames.Audio.Runtime
             return sourceMode;
         }
 
+        public AudioClipReference ExternalReference => this.externalReference;
+        public AudioClip File => this.file;
+
         // ---- ProcessNode ----
         public override void ProcessNode(ActiveEvent activeEvent)
         {
@@ -137,9 +140,6 @@ namespace CycloneGames.Audio.Runtime
         private const float RowH      = 19f;
         private const float RowGap    =  2f;
         private const float BottomPad =  8f;
-
-        /// <summary>Public accessor for batch-editor use.</summary>
-        public AudioClip File => this.file;
 
         public override void InitializeNode(Vector2 position)
         {
