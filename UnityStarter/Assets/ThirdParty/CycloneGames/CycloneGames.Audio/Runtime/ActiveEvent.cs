@@ -196,7 +196,6 @@ namespace CycloneGames.Audio.Runtime
             if (sourceCount == 0 && !hasSnapshotTransition && !isAsync)
             {
                 status = EventStatus.Error;
-                AudioManager.AddPreviousEvent(this);
                 return;
             }
 
@@ -578,7 +577,7 @@ namespace CycloneGames.Audio.Runtime
 
         /// <summary>
         /// Runs on the LOD tick. Evaluates distance low-pass, spread curve, cone attenuation,
-        /// and occlusion raycast — then applies results to each AudioSource.
+        /// and occlusion raycast, then applies results to each AudioSource.
         /// Zero allocation; GetComponent avoided via per-event LPF cache.
         /// </summary>
         private void UpdateSpatial3D(float dt)
@@ -835,7 +834,7 @@ namespace CycloneGames.Audio.Runtime
             }
             sourceCount = 0;
 
-            // Clear parameters without reallocating — instances are reused via ReInitialize
+            // Clear parameters without reallocating; instances are reused via ReInitialize.
             activeParameterCount = 0;
 
             status = EventStatus.Initialized;
