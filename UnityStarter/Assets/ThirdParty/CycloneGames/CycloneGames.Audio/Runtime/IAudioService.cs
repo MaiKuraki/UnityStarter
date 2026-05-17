@@ -146,6 +146,128 @@ namespace CycloneGames.Audio.Runtime
         float GetGlobalVolume();
 
         /// <summary>
+        /// Set a global game parameter value. Events without an emitter-specific override read this value.
+        /// </summary>
+        /// <param name="parameter">The parameter asset to update.</param>
+        /// <param name="value">Target value, clamped to the parameter range.</param>
+        void SetParameterValue(AudioParameter parameter, float value);
+
+        /// <summary>
+        /// Set a global game parameter by registered name.
+        /// </summary>
+        /// <param name="parameterName">Case-sensitive parameter name registered from a loaded bank.</param>
+        /// <param name="value">Target value, clamped to the parameter range.</param>
+        /// <returns><c>true</c> if the parameter was found.</returns>
+        bool SetParameterValue(string parameterName, float value);
+
+        /// <summary>
+        /// Set an emitter-scoped game parameter override. Active events attached to the emitter read this value.
+        /// </summary>
+        /// <param name="parameter">The parameter asset to update.</param>
+        /// <param name="emitterObject">Emitter scope for the override. A null emitter updates the global value.</param>
+        /// <param name="value">Target value, clamped to the parameter range.</param>
+        void SetParameterValue(AudioParameter parameter, GameObject emitterObject, float value);
+
+        /// <summary>
+        /// Set an emitter-scoped game parameter override by registered name.
+        /// </summary>
+        /// <param name="parameterName">Case-sensitive parameter name registered from a loaded bank.</param>
+        /// <param name="emitterObject">Emitter scope for the override. A null emitter updates the global value.</param>
+        /// <param name="value">Target value, clamped to the parameter range.</param>
+        /// <returns><c>true</c> if the parameter was found.</returns>
+        bool SetParameterValue(string parameterName, GameObject emitterObject, float value);
+
+        /// <summary>
+        /// Get the current global game parameter value.
+        /// </summary>
+        /// <param name="parameter">The parameter asset to read.</param>
+        /// <returns>The current smoothed value.</returns>
+        float GetParameterValue(AudioParameter parameter);
+
+        /// <summary>
+        /// Try to get a global game parameter value by registered name.
+        /// </summary>
+        /// <param name="parameterName">Case-sensitive parameter name registered from a loaded bank.</param>
+        /// <param name="value">The current smoothed value when found; otherwise 0.</param>
+        /// <returns><c>true</c> if the parameter was found.</returns>
+        bool TryGetParameterValue(string parameterName, out float value);
+
+        /// <summary>
+        /// Resolve a registered game parameter by name.
+        /// </summary>
+        /// <param name="parameterName">Case-sensitive parameter name registered from a loaded bank.</param>
+        /// <returns>The parameter asset, or <c>null</c> when not found.</returns>
+        AudioParameter GetParameterByName(string parameterName);
+
+        /// <summary>
+        /// Get the current emitter-scoped value, falling back to the global value when no override exists.
+        /// </summary>
+        /// <param name="parameter">The parameter asset to read.</param>
+        /// <param name="emitterObject">Emitter scope for the override.</param>
+        /// <returns>The current smoothed value.</returns>
+        float GetParameterValue(AudioParameter parameter, GameObject emitterObject);
+
+        /// <summary>
+        /// Clear an emitter-scoped game parameter override.
+        /// </summary>
+        /// <param name="parameter">The parameter asset whose override should be removed.</param>
+        /// <param name="emitterObject">Emitter scope for the override.</param>
+        /// <returns><c>true</c> if an override existed and was removed.</returns>
+        bool ClearParameterValue(AudioParameter parameter, GameObject emitterObject);
+
+        /// <summary>
+        /// Clear an emitter-scoped game parameter override by registered name.
+        /// </summary>
+        /// <param name="parameterName">Case-sensitive parameter name registered from a loaded bank.</param>
+        /// <param name="emitterObject">Emitter scope for the override.</param>
+        /// <returns><c>true</c> if an override existed and was removed.</returns>
+        bool ClearParameterValue(string parameterName, GameObject emitterObject);
+
+        /// <summary>
+        /// Set a global audio state group by integer index.
+        /// </summary>
+        /// <param name="stateGroup">The state group asset to update.</param>
+        /// <param name="stateValue">State index clamped to the group's configured state list.</param>
+        void SetState(AudioStateGroup stateGroup, int stateValue);
+
+        /// <summary>
+        /// Set a global audio state by registered state group and state names.
+        /// </summary>
+        /// <param name="stateGroupName">Case-sensitive state group name registered from a loaded bank.</param>
+        /// <param name="stateName">Case-sensitive state name inside the group.</param>
+        /// <returns><c>true</c> if the command was accepted and the names were valid enough to attempt.</returns>
+        bool SetState(string stateGroupName, string stateName);
+
+        /// <summary>
+        /// Execute a reusable audio action event using a GameObject emitter context.
+        /// </summary>
+        /// <param name="actionEvent">The action event asset to execute.</param>
+        /// <param name="emitterObject">Optional emitter object used by play actions that do not specify an explicit position.</param>
+        void ExecuteActionEvent(AudioActionEvent actionEvent, GameObject emitterObject);
+
+        /// <summary>
+        /// Execute a reusable audio action event using a world-space position context.
+        /// </summary>
+        /// <param name="actionEvent">The action event asset to execute.</param>
+        /// <param name="position">World-space position used by play actions that do not specify an explicit position.</param>
+        void ExecuteActionEvent(AudioActionEvent actionEvent, Vector3 position);
+
+        /// <summary>
+        /// Resolve a registered audio state group by name.
+        /// </summary>
+        /// <param name="stateGroupName">Case-sensitive state group name registered from a loaded bank.</param>
+        /// <returns>The state group asset, or <c>null</c> when not found.</returns>
+        AudioStateGroup GetStateGroupByName(string stateGroupName);
+
+        /// <summary>
+        /// Try to read the current state name from a registered state group.
+        /// </summary>
+        /// <param name="stateGroupName">Case-sensitive state group name registered from a loaded bank.</param>
+        /// <param name="stateName">Current state name when found; otherwise an empty string.</param>
+        /// <returns><c>true</c> if the state group was found.</returns>
+        bool TryGetState(string stateGroupName, out string stateName);
+
+        /// <summary>
         /// Set volume on an AudioMixer exposed parameter (e.g. "MusicVolume", "SFXVolume").
         /// <para>
         /// Values are in decibels: <c>0 dB</c> = unity gain, <c>-80 dB</c> = silence.

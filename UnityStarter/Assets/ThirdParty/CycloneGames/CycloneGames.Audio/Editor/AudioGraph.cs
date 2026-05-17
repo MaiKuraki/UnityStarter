@@ -8,6 +8,12 @@ namespace CycloneGames.Audio.Editor
 {
     public class AudioGraph : EditorWindow
     {
+        private const float EventListPanelWidth = 200f;
+        private const float EventPropertyMinWidth = 290f;
+        private const float EventPropertyMaxWidth = 410f;
+        private const float EventTopMinHeight = 225f;
+        private const float EventTopMaxHeight = 335f;
+
         /// <summary>
         /// The AudioBank currently being edited
         /// </summary>
@@ -50,6 +56,7 @@ namespace CycloneGames.Audio.Editor
         /// Number of columns for switch grid layout
         /// </summary>
         private int switchGridColumns = 2;
+        private int stateGridColumns = 2;
         /// <summary>
         /// Current position of the scroll box for the list of AudioEvents
         /// </summary>
@@ -100,7 +107,7 @@ namespace CycloneGames.Audio.Editor
         /// <summary>
         /// Names for the available editor types
         /// </summary>
-        private readonly string[] editorTypeNames = { "Events", "Parameters", "Batch Edit", "Switches" };
+        private readonly string[] editorTypeNames = { "Events", "Parameters", "Batch Edit", "Switches", "States" };
         /// <summary>
         /// The color to display a button for an event that is not currently being edited
         /// </summary>
@@ -156,7 +163,8 @@ namespace CycloneGames.Audio.Editor
             Events,
             Parameters,
             BatchEdit,
-            Switches
+            Switches,
+            States
         }
 
         /// <summary>
@@ -253,6 +261,9 @@ namespace CycloneGames.Audio.Editor
                     break;
                 case EditorTypes.Switches:
                     DrawSwitchList();
+                    break;
+                case EditorTypes.States:
+                    DrawStateGroupList();
                     break;
                 case EditorTypes.BatchEdit:
                     DrawBatchEditor();
@@ -544,8 +555,8 @@ namespace CycloneGames.Audio.Editor
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 if (tempParameter.DrawParameterEditor())
                 {
+                    EditorUtility.SetDirty(tempParameter);
                     EditorUtility.SetDirty(this.audioBank);
-                    AssetDatabase.SaveAssets();
                 }
                 if (GUILayout.Button("Delete Parameter"))
                 {
@@ -592,8 +603,8 @@ namespace CycloneGames.Audio.Editor
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(columnWidth));
                 if (tempParameter.DrawParameterEditor())
                 {
+                    EditorUtility.SetDirty(tempParameter);
                     EditorUtility.SetDirty(this.audioBank);
-                    AssetDatabase.SaveAssets();
                 }
                 if (GUILayout.Button("Delete Parameter"))
                 {
@@ -692,8 +703,8 @@ namespace CycloneGames.Audio.Editor
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 if (tempSwitch.DrawSwitchEditor())
                 {
+                    EditorUtility.SetDirty(tempSwitch);
                     EditorUtility.SetDirty(this.audioBank);
-                    AssetDatabase.SaveAssets();
                 }
                 if (GUILayout.Button("Delete Switch"))
                 {
@@ -739,8 +750,8 @@ namespace CycloneGames.Audio.Editor
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(columnWidth));
                 if (tempSwitch.DrawSwitchEditor())
                 {
+                    EditorUtility.SetDirty(tempSwitch);
                     EditorUtility.SetDirty(this.audioBank);
-                    AssetDatabase.SaveAssets();
                 }
                 if (GUILayout.Button("Delete Switch"))
                 {
@@ -769,6 +780,180 @@ namespace CycloneGames.Audio.Editor
             {
                 // Fill remaining columns with empty space to maintain grid alignment
                 while (currentColumn < this.switchGridColumns)
+                {
+                    GUILayout.Space(columnWidth);
+                    currentColumn++;
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+        }
+
+        private void DrawStateGroupList()
+        {
+            if (this.audioBank == null)
+            {
+                EditorGUILayout.HelpBox("No AudioBank selected.", MessageType.Info);
+                return;
+            }
+
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            if (GUILayout.Button("Add State Group", EditorStyles.toolbarButton))
+            {
+                this.audioBank.AddStateGroup();
+            }
+            if (GUILayout.Button("Add Mix Profile", EditorStyles.toolbarButton))
+            {
+                this.audioBank.AddStateMixProfile();
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.LabelField("Columns:", GUILayout.Width(60));
+            this.stateGridColumns = EditorGUILayout.IntSlider(this.stateGridColumns, 1, 4, GUILayout.Width(150));
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space();
+
+            this.parameterListScrollPosition = EditorGUILayout.BeginScrollView(this.parameterListScrollPosition, GUILayout.ExpandHeight(true));
+
+            if (this.audioBank.EditorStateGroups == null || this.audioBank.EditorStateGroups.Count == 0)
+            {
+                EditorGUILayout.HelpBox("No state groups. Click 'Add State Group' to create one.", MessageType.Info);
+            }
+            else if (this.stateGridColumns > 1)
+            {
+                DrawStateGroupGrid();
+            }
+            else
+            {
+                DrawStateGroupSingleColumn();
+            }
+
+            DrawStateMixProfiles();
+
+            EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawStateMixProfiles()
+        {
+            EditorGUILayout.Space(8);
+            EditorGUILayout.LabelField("State Mix Profiles", EditorStyles.boldLabel);
+
+            if (this.audioBank.EditorStateMixProfiles == null || this.audioBank.EditorStateMixProfiles.Count == 0)
+            {
+                EditorGUILayout.HelpBox("No state mix profiles. Click 'Add Mix Profile' to create one.", MessageType.Info);
+                return;
+            }
+
+            for (int i = 0; i < this.audioBank.EditorStateMixProfiles.Count; i++)
+            {
+                AudioStateMixProfile profile = this.audioBank.EditorStateMixProfiles[i];
+                if (profile == null)
+                {
+                    continue;
+                }
+
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                if (profile.DrawStateMixProfileEditor())
+                {
+                    EditorUtility.SetDirty(profile);
+                    EditorUtility.SetDirty(this.audioBank);
+                }
+
+                if (GUILayout.Button("Delete Mix Profile"))
+                {
+                    this.audioBank.DeleteStateMixProfile(profile);
+                    EditorGUILayout.EndVertical();
+                    break;
+                }
+
+                EditorGUILayout.EndVertical();
+                EditorGUILayout.Space(5);
+            }
+        }
+
+        private void DrawStateGroupSingleColumn()
+        {
+            int stateGroupCount = this.audioBank.EditorStateGroups.Count;
+            for (int i = 0; i < stateGroupCount; i++)
+            {
+                AudioStateGroup stateGroup = this.audioBank.EditorStateGroups[i];
+                if (stateGroup == null)
+                {
+                    continue;
+                }
+
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                if (stateGroup.DrawStateGroupEditor())
+                {
+                    EditorUtility.SetDirty(stateGroup);
+                    EditorUtility.SetDirty(this.audioBank);
+                }
+
+                if (GUILayout.Button("Delete State Group"))
+                {
+                    this.audioBank.DeleteStateGroup(stateGroup);
+                    EditorGUILayout.EndVertical();
+                    break;
+                }
+
+                EditorGUILayout.EndVertical();
+                EditorGUILayout.Space(5);
+            }
+        }
+
+        private void DrawStateGroupGrid()
+        {
+            int stateGroupCount = this.audioBank.EditorStateGroups.Count;
+            int currentColumn = 0;
+            bool deletedStateGroup = false;
+            float availableWidth = this.position.width - 40;
+            float columnWidth = (availableWidth / this.stateGridColumns) - 10;
+            columnWidth = Mathf.Max(columnWidth, 200f);
+
+            for (int i = 0; i < stateGroupCount; i++)
+            {
+                AudioStateGroup stateGroup = this.audioBank.EditorStateGroups[i];
+                if (stateGroup == null)
+                {
+                    continue;
+                }
+
+                if (currentColumn == 0)
+                {
+                    EditorGUILayout.BeginHorizontal();
+                }
+
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(columnWidth));
+                if (stateGroup.DrawStateGroupEditor())
+                {
+                    EditorUtility.SetDirty(stateGroup);
+                    EditorUtility.SetDirty(this.audioBank);
+                }
+
+                if (GUILayout.Button("Delete State Group"))
+                {
+                    this.audioBank.DeleteStateGroup(stateGroup);
+                    EditorGUILayout.EndVertical();
+                    deletedStateGroup = true;
+                    if (currentColumn >= 0)
+                    {
+                        EditorGUILayout.EndHorizontal();
+                    }
+                    break;
+                }
+
+                EditorGUILayout.EndVertical();
+                currentColumn++;
+                if (currentColumn >= this.stateGridColumns)
+                {
+                    EditorGUILayout.EndHorizontal();
+                    EditorGUILayout.Space(5);
+                    currentColumn = 0;
+                }
+            }
+
+            if (!deletedStateGroup && currentColumn > 0)
+            {
+                while (currentColumn < this.stateGridColumns)
                 {
                     GUILayout.Space(columnWidth);
                     currentColumn++;
@@ -1090,7 +1275,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.BeginHorizontal();
 
             // Left Panel for Event List
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(200), GUILayout.ExpandHeight(true));
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(EventListPanelWidth), GUILayout.ExpandHeight(true));
             DrawEventList();
             EditorGUILayout.EndVertical();
 
@@ -1098,10 +1283,12 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.BeginVertical();
 
             // Top section for properties, split into two
-            EditorGUILayout.BeginHorizontal(GUILayout.Height(160));
+            float topPanelHeight = GetEventTopPanelHeight();
+            float propertyPanelWidth = GetEventPropertyPanelWidth();
+            EditorGUILayout.BeginHorizontal(GUILayout.Height(topPanelHeight));
 
             // Event Properties (left side of top)
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(360));
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(propertyPanelWidth));
             if (this.selectedEvent != null)
             {
                 DrawEventProperties(this.selectedEvent);
@@ -1136,6 +1323,17 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.EndVertical();
 
             EditorGUILayout.EndHorizontal();
+        }
+
+        private float GetEventTopPanelHeight()
+        {
+            return Mathf.Clamp(this.position.height * 0.31f, EventTopMinHeight, EventTopMaxHeight);
+        }
+
+        private float GetEventPropertyPanelWidth()
+        {
+            float rightPanelWidth = Mathf.Max(1f, this.position.width - EventListPanelWidth - 24f);
+            return Mathf.Clamp(rightPanelWidth * 0.38f, EventPropertyMinWidth, EventPropertyMaxWidth);
         }
 
         /// <summary>
@@ -1214,7 +1412,7 @@ namespace CycloneGames.Audio.Editor
 
             this.selectedEvent = selection;
             Rect output = this.selectedEvent.Output.NodeRect;
-            this.panX = -output.x + (this.position.width - output.width - 20) - 360;
+            this.panX = -output.x + (this.position.width - output.width - 20f) - GetEventPropertyPanelWidth();
             this.panY = -output.y + (this.position.height / 2) - 200;
         }
 

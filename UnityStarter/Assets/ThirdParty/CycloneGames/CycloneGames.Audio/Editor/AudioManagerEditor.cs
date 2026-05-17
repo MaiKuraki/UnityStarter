@@ -27,6 +27,7 @@ namespace CycloneGames.Audio.Editor
         private SerializedProperty _poolConfigOverrideProp;
         private SerializedProperty _voicePolicyProfileOverrideProp;
         private SerializedProperty _platformProfileOverrideProp;
+        private SerializedProperty _duckingProfileOverrideProp;
         private SerializedProperty _mainMixerProp;
 
         // Cached lists to avoid per-frame allocations
@@ -75,6 +76,7 @@ namespace CycloneGames.Audio.Editor
             _poolConfigOverrideProp = serializedObject.FindProperty("poolConfigOverride");
             _voicePolicyProfileOverrideProp = serializedObject.FindProperty("voicePolicyProfileOverride");
             _platformProfileOverrideProp = serializedObject.FindProperty("platformProfileOverride");
+            _duckingProfileOverrideProp = serializedObject.FindProperty("duckingProfileOverride");
             _mainMixerProp = serializedObject.FindProperty("mainMixer");
         }
 
@@ -235,6 +237,7 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.PropertyField(_poolConfigOverrideProp, new GUIContent("Pool Config Override"));
             EditorGUILayout.PropertyField(_voicePolicyProfileOverrideProp, new GUIContent("Voice Policy Override"));
             EditorGUILayout.PropertyField(_platformProfileOverrideProp, new GUIContent("Platform Profile Override"));
+            EditorGUILayout.PropertyField(_duckingProfileOverrideProp, new GUIContent("Ducking Profile Override"));
             EditorGUILayout.Space(3);
             EditorGUILayout.PropertyField(_mainMixerProp);
 
@@ -281,12 +284,17 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
             DrawStatRow("Registered Events", stats.RegisteredEvents.ToString());
+            DrawStatRow("Registered Parameters", stats.RegisteredParameters.ToString());
+            DrawStatRow("Registered States", stats.RegisteredStateGroups.ToString());
+            DrawStatRow("State Mix Profiles", stats.RegisteredStateMixProfiles.ToString());
+            DrawStatRow("Ducking Rules", $"{stats.ActiveDuckingRuleCount}/{stats.DuckingRuleCount}");
             DrawStatRow("Loaded Banks", stats.LoadedBanks.ToString());
             DrawStatRow("Active Events", stats.ActiveEvents.ToString());
             DrawStatRow("Peak Active Events", stats.PeakActiveEvents.ToString());
             DrawStatRow("Total Played", stats.TotalEventsPlayed.ToString());
             DrawStatRow("Queued Commands", stats.QueuedCommands.ToString());
             DrawStatRow("Pending Removals", stats.PendingRemovals.ToString());
+            DrawStatRow("Scoped Parameters", stats.ScopedParameterOverrides.ToString());
             DrawStatRow("Total Memory", ToMemorySizeString(stats.TotalMemoryUsage));
             DrawStatRow("Platform Profile", $"{AudioManager.PoolStats.PlatformProfile} [{AudioManager.PoolStats.PlatformTarget}]");
             DrawStatRow("Repeat Throttled", stats.RepeatTriggerRejections.ToString());
