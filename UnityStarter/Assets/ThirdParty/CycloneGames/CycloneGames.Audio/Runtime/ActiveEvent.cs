@@ -474,7 +474,7 @@ namespace CycloneGames.Audio.Runtime
             SetAllSourcePitches(eventPitch);
 
             // Cache fast-path flags to avoid per-frame checks
-            is3D = rootEvent.Output != null && rootEvent.Output.spatialBlend > 0.01f;
+            is3D = rootEvent.Output != null && rootEvent.Output.EffectiveSpatialBlend > 0.01f;
             hasActiveParameters = activeParameterCount > 0;
 
             useGaze = HasGazeProperty();
@@ -584,7 +584,7 @@ namespace CycloneGames.Audio.Runtime
         {
             if (sourceCount == 0 || rootEvent == null) return;
             AudioOutput output = rootEvent.Output;
-            if (output == null || output.spatialBlend <= 0f) return;
+            if (output == null || output.EffectiveSpatialBlend <= 0f) return;
 
             // Compute listener distance
             Vector3 listenerPos = AudioManager.GetReferenceListenerPosition();
@@ -593,21 +593,25 @@ namespace CycloneGames.Audio.Runtime
             cachedSqrDistance = sqrDist;
 
             float dist = Mathf.Sqrt(sqrDist);
-            float range = output.MaxDistance - output.MinDistance;
+            float minDistance = output.EffectiveMinDistance;
+            float maxDistance = output.EffectiveMaxDistance;
+            float range = maxDistance - minDistance;
             float normDist = (range > 0.001f)
-                ? Mathf.Clamp01((dist - output.MinDistance) / range)
-                : (dist >= output.MaxDistance ? 1f : 0f);
+                ? Mathf.Clamp01((dist - minDistance) / range)
+                : (dist >= maxDistance ? 1f : 0f);
 
             // ---- Distance Low-Pass (air absorption) ----
             float targetDistLP = 22000f;
-            if (output.useDistanceLowPass && output.distanceLowPassCurve != null)
-                targetDistLP = output.distanceLowPassCurve.Evaluate(normDist);
+            AnimationCurve distanceLowPassCurve = output.EffectiveDistanceLowPassCurve;
+            if (output.EffectiveUseDistanceLowPass && distanceLowPassCurve != null)
+                targetDistLP = distanceLowPassCurve.Evaluate(normDist);
             distanceLPCutoff = targetDistLP;
 
             // ---- Spread Curve ----
-            if (output.useSpreadCurve && output.spreadCurve != null)
+            AnimationCurve spreadCurve = output.EffectiveSpreadCurve;
+            if (output.EffectiveUseSpreadCurve && spreadCurve != null)
             {
-                float spreadDeg = output.spreadCurve.Evaluate(normDist) * 360f;
+                float spreadDeg = spreadCurve.Evaluate(normDist) * 360f;
                 if (Mathf.Abs(spreadDeg - currentSpread) > 0.5f)
                 {
                     currentSpread = spreadDeg;
@@ -621,7 +625,7 @@ namespace CycloneGames.Audio.Runtime
 
             // ---- Cone Attenuation ----
             float newConeScale = 1f;
-            if (output.useConeAttenuation && emitterTransform != null)
+            if (output.EffectiveUseConeAttenuation && emitterTransform != null)
             {
                 Vector3 toListener = listenerPos - emitterPos;
                 float toListenerSqr = toListener.sqrMagnitude;
@@ -632,16 +636,16 @@ namespace CycloneGames.Audio.Runtime
                     toListener.x *= invLen; toListener.y *= invLen; toListener.z *= invLen;
                     float dot = Vector3.Dot(emitterTransform.forward, toListener);
                     float angleDeg = Mathf.Acos(Mathf.Clamp(dot, -1f, 1f)) * Mathf.Rad2Deg;
-                    float halfInner = output.coneInnerAngle * 0.5f;
-                    float halfOuter = output.coneOuterAngle * 0.5f;
+                    float halfInner = output.EffectiveConeInnerAngle * 0.5f;
+                    float halfOuter = output.EffectiveConeOuterAngle * 0.5f;
                     if (angleDeg <= halfInner)
                         newConeScale = 1f;
                     else if (angleDeg >= halfOuter)
-                        newConeScale = output.coneOuterVolume;
+                        newConeScale = output.EffectiveConeOuterVolume;
                     else
                         newConeScale = halfOuter > halfInner
-                            ? Mathf.Lerp(1f, output.coneOuterVolume, (angleDeg - halfInner) / (halfOuter - halfInner))
-                            : output.coneOuterVolume;
+                            ? Mathf.Lerp(1f, output.EffectiveConeOuterVolume, (angleDeg - halfInner) / (halfOuter - halfInner))
+                            : output.EffectiveConeOuterVolume;
                 }
             }
             coneVolumeScale = newConeScale;
@@ -670,9 +674,9 @@ namespace CycloneGames.Audio.Runtime
 
             // ---- Apply to AudioSources ----
             float finalLPCutoff = Mathf.Min(distanceLPCutoff, occlusionCutoff);
-            bool needsLPF = output.useDistanceLowPass || occlusionFactor > 0.001f;
+            bool needsLPF = output.EffectiveUseDistanceLowPass || occlusionFactor > 0.001f;
             float combinedVolumeScale = coneVolumeScale * occlusionVolumeScale;
-            bool hasVolumeModifier = output.useConeAttenuation || occlSettings.enabled;
+            bool hasVolumeModifier = output.EffectiveUseConeAttenuation || occlSettings.enabled;
 
             // Cache LPF components once per active event lifetime (avoids repeated GetComponent)
             if (!lpFiltersCached && needsLPF)
@@ -709,12 +713,13 @@ namespace CycloneGames.Audio.Runtime
 
             if (count == 0) return;
 
+            int parameterScopeId = emitterTransform != null ? emitterTransform.gameObject.GetInstanceID() : 0;
             for (int i = 0; i < count && i < MaxParametersPerEvent; i++)
             {
                 var p = eventParams[i];
                 if (p != null)
                 {
-                    activeParameters[activeParameterCount].ReInitialize(p);
+                    activeParameters[activeParameterCount].ReInitialize(p, parameterScopeId);
                     activeParameterCount++;
                 }
             }

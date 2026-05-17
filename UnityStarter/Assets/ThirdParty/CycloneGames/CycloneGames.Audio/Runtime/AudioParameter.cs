@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using UnityEngine;
@@ -8,6 +8,76 @@ using UnityEditor;
 
 namespace CycloneGames.Audio.Runtime
 {
+    internal readonly struct AudioParameterScopeKey : System.IEquatable<AudioParameterScopeKey>
+    {
+        public readonly int ParameterId;
+        public readonly int ScopeId;
+
+        public AudioParameterScopeKey(int parameterId, int scopeId)
+        {
+            ParameterId = parameterId;
+            ScopeId = scopeId;
+        }
+
+        public bool Equals(AudioParameterScopeKey other)
+        {
+            return ParameterId == other.ParameterId && ScopeId == other.ScopeId;
+        }
+
+        public override bool Equals(object obj)
+        {
+            return obj is AudioParameterScopeKey other && Equals(other);
+        }
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return (ParameterId * 397) ^ ScopeId;
+            }
+        }
+    }
+
+    internal sealed class AudioScopedParameterValue
+    {
+        private AudioParameter parameter;
+        private float currentValue;
+        private float targetValue;
+
+        public float CurrentValue => currentValue;
+
+        public void Initialize(AudioParameter newParameter, float value)
+        {
+            parameter = newParameter;
+            float clamped = Clamp(value);
+            currentValue = clamped;
+            targetValue = clamped;
+        }
+
+        public void SetTarget(float value)
+        {
+            if (parameter == null) return;
+
+            targetValue = Clamp(value);
+            if (parameter.InterpolationSpeed <= 0f)
+            {
+                currentValue = targetValue;
+            }
+        }
+
+        public void Update(float deltaTime)
+        {
+            if (parameter == null || parameter.InterpolationSpeed <= 0f || currentValue == targetValue) return;
+
+            currentValue = Mathf.MoveTowards(currentValue, targetValue, parameter.InterpolationSpeed * deltaTime);
+        }
+
+        private float Clamp(float value)
+        {
+            return parameter != null ? Mathf.Clamp(value, parameter.MinValue, parameter.MaxValue) : value;
+        }
+    }
+
     /// <summary>
     /// A runtime value that affects audio properties on an AudioEvent.
     /// Supports min/max range enforcement and optional value interpolation (smoothing).

@@ -22,16 +22,22 @@ namespace CycloneGames.Audio.Runtime
         private float[] weights = new float[0];
 
         /// <summary>
-        /// Index of the last selected node (-1 if none).
-        /// Used for avoidRepeat mode.
+        /// Ring buffer of recently selected node indices.
         /// </summary>
-        private int lastSelectedIndex = -1;
+        private readonly int[] recentSelectionHistory = new int[MaxAvoidRepeatHistory];
+        private int recentSelectionWriteIndex;
+        private int recentSelectionCount;
 
         /// <summary>
-        /// When true, avoids playing the same node twice in a row (when more than one node exists).
+        /// When true, avoids recently selected nodes when enough alternatives exist.
         /// </summary>
         [SerializeField]
         private bool avoidRepeat = false;
+        [SerializeField]
+        [Range(1, MaxAvoidRepeatHistory)]
+        private int avoidRepeatHistory = 1;
+
+        private const int MaxAvoidRepeatHistory = 8;
 
         public override void ProcessNode(ActiveEvent activeEvent)
         {
@@ -43,34 +49,36 @@ namespace CycloneGames.Audio.Runtime
             }
 
             int count = connectedNodes.Length;
-            int nodeNum = weights != null && weights.Length == count ? WeightedRandom(count) : Random.Range(0, count);
+            int historyCount = avoidRepeat ? Mathf.Min(Mathf.Max(avoidRepeatHistory, 1), count - 1) : 0;
+            int nodeNum = weights != null && weights.Length == count
+                ? WeightedRandom(count, historyCount)
+                : UniformRandom(count, historyCount);
 
-            if (avoidRepeat && count > 1 && nodeNum == lastSelectedIndex)
-            {
-                nodeNum = (nodeNum + Random.Range(1, count)) % count;
-            }
-
-            lastSelectedIndex = nodeNum;
+            AddRecentSelection(nodeNum);
             ProcessConnectedNode(nodeNum, activeEvent);
         }
 
-        private int WeightedRandom(int count)
+        private int WeightedRandom(int count, int historyCount)
         {
             float totalWeight = 0f;
             for (int i = 0; i < count; i++)
             {
+                if (historyCount > 0 && IsInRecentHistory(i, historyCount)) continue;
                 totalWeight += Mathf.Max(0f, weights[i]);
             }
 
             if (totalWeight <= 0f)
             {
-                return Random.Range(0, count);
+                return UniformRandom(count, 0);
             }
 
             float roll = Random.Range(0f, totalWeight);
             float cumulative = 0f;
+            int lastEligible = -1;
             for (int i = 0; i < count; i++)
             {
+                if (historyCount > 0 && IsInRecentHistory(i, historyCount)) continue;
+                lastEligible = i;
                 cumulative += Mathf.Max(0f, weights[i]);
                 if (roll < cumulative)
                 {
@@ -78,19 +86,69 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
 
+            return lastEligible >= 0 ? lastEligible : Random.Range(0, count);
+        }
+
+        private int UniformRandom(int count, int historyCount)
+        {
+            if (historyCount <= 0 || count <= 1)
+                return Random.Range(0, count);
+
+            int eligibleCount = 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (!IsInRecentHistory(i, historyCount))
+                    eligibleCount++;
+            }
+
+            if (eligibleCount <= 0)
+                return Random.Range(0, count);
+
+            int selectedOrdinal = Random.Range(0, eligibleCount);
+            for (int i = 0; i < count; i++)
+            {
+                if (IsInRecentHistory(i, historyCount)) continue;
+                if (selectedOrdinal == 0) return i;
+                selectedOrdinal--;
+            }
+
             return count - 1;
+        }
+
+        private bool IsInRecentHistory(int index, int historyCount)
+        {
+            int count = Mathf.Min(Mathf.Min(historyCount, recentSelectionCount), recentSelectionHistory.Length);
+            for (int i = 0; i < count; i++)
+            {
+                int historyIndex = recentSelectionWriteIndex - 1 - i;
+                if (historyIndex < 0) historyIndex += recentSelectionHistory.Length;
+                if (recentSelectionHistory[historyIndex] == index)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private void AddRecentSelection(int index)
+        {
+            recentSelectionHistory[recentSelectionWriteIndex] = index;
+            recentSelectionWriteIndex++;
+            if (recentSelectionWriteIndex >= recentSelectionHistory.Length)
+                recentSelectionWriteIndex = 0;
+            if (recentSelectionCount < recentSelectionHistory.Length)
+                recentSelectionCount++;
         }
 
 #if UNITY_EDITOR
 
-        private const float NodeWidth   = 280f;
+        private const float NodeWidth   = 290f;
         private const float TitleBarH   = 18f;  // Unity GUI.Window internal title bar
         private const float RowH        = 19f;
         private const float RowGap      =  2f;
         private const float BottomPad   =  8f;
-        private const float NameFieldMinW = 112f;
-        private const float WeightFieldW = 48f;
-        private const float ProbFieldW   = 44f;
+        private const float NameFieldMinW = 108f;
+        private const float WeightFieldW = 42f;
+        private const float ProbFieldW   = 54f;
 
         [SerializeField]
         private bool autoSortByNodeY = true;
@@ -142,8 +200,8 @@ namespace CycloneGames.Audio.Runtime
 
         private float CalcHeight(int connCount)
         {
-            // title bar + auto-sort row + avoid-repeat row + padding
-            float h = TitleBarH + RowH + RowGap + RowH + RowGap + BottomPad;
+            // title bar + auto-sort row + avoid-repeat rows + padding
+            float h = TitleBarH + RowH + RowGap + RowH + RowGap + RowH + RowGap + BottomPad;
             if (connCount > 0)
                 h += (RowH + RowGap) + (RowH + RowGap) + connCount * (RowH + RowGap); // "Weights:" + table header + per-node rows
             return h;
@@ -171,6 +229,14 @@ namespace CycloneGames.Audio.Runtime
             avoidRepeat = EditorGUILayout.Toggle("Avoid Repeat", avoidRepeat);
             if (EditorGUI.EndChangeCheck())
                 EditorUtility.SetDirty(this);
+
+            using (new EditorGUI.DisabledScope(!avoidRepeat))
+            {
+                EditorGUI.BeginChangeCheck();
+                avoidRepeatHistory = EditorGUILayout.IntSlider("Avoid Recent", avoidRepeatHistory, 1, MaxAvoidRepeatHistory);
+                if (EditorGUI.EndChangeCheck())
+                    EditorUtility.SetDirty(this);
+            }
 
             int connCount = (input != null && input.ConnectedNodes != null) ? input.ConnectedNodes.Length : 0;
             if (connCount == 0) return;

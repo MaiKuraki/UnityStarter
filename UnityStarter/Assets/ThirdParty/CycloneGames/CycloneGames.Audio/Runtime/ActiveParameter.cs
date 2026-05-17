@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 namespace CycloneGames.Audio.Runtime
@@ -13,6 +13,7 @@ namespace CycloneGames.Audio.Runtime
         private float localCurrentResult;
         private bool useLocalOverride;
         private float interpolationSpeed;
+        private int scopeId;
 
         /// <summary>
         /// Constructor: Create a new ActiveParameter (used for initial pool allocation)
@@ -22,9 +23,10 @@ namespace CycloneGames.Audio.Runtime
         /// <summary>
         /// Re-initialize this instance with a new EventParameter, avoiding heap allocation.
         /// </summary>
-        public void ReInitialize(AudioEventParameter root)
+        public void ReInitialize(AudioEventParameter root, int parameterScopeId)
         {
             this.rootParameter = root;
+            this.scopeId = parameterScopeId;
             this.interpolationSpeed = root?.parameter != null ? root.parameter.InterpolationSpeed : 0f;
             Reset();
         }
@@ -92,7 +94,7 @@ namespace CycloneGames.Audio.Runtime
         private float GetGlobalValue()
         {
             if (rootParameter?.parameter == null) return 0f;
-            return rootParameter.parameter.EvaluateCurrentValue();
+            return AudioManager.GetParameterValue(rootParameter.parameter, scopeId);
         }
 
         private float ClampToParameter(float value)

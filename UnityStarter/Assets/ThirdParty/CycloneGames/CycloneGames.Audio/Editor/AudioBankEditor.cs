@@ -241,6 +241,10 @@ namespace CycloneGames.Audio.Editor
             ReportBuilder.Append("Runtime: active events ").Append(stats.ActiveEvents)
                 .Append(", pending removals ").Append(stats.PendingRemovals)
                 .Append(", queued commands ").Append(stats.QueuedCommands)
+                .Append(", registered parameters ").Append(stats.RegisteredParameters)
+                .Append(", registered states ").Append(stats.RegisteredStateGroups)
+                .Append(", state mix profiles ").Append(stats.RegisteredStateMixProfiles)
+                .Append(", scoped parameters ").Append(stats.ScopedParameterOverrides)
                 .AppendLine();
             ReportBuilder.Append("External cache: entries ").Append(stats.ExternalCacheEntries)
                 .Append(", refs ").Append(stats.ExternalTotalRefCount)
@@ -736,6 +740,8 @@ namespace CycloneGames.Audio.Editor
     {
         private const string BuildValidationEditorPrefsKey = "CycloneGames.Audio.ValidateBanksBeforeBuild";
         private static readonly Dictionary<string, int> EventNameCounts = new Dictionary<string, int>(128);
+        private static readonly Dictionary<string, int> AssetNameCounts = new Dictionary<string, int>(64);
+        private static readonly Dictionary<string, int> StateNameCounts = new Dictionary<string, int>(16);
         private static readonly HashSet<AudioNode> VisitedNodes = new HashSet<AudioNode>();
         private static readonly HashSet<AudioNode> StackNodes = new HashSet<AudioNode>();
         private static readonly AudioBankValidationReport BatchReport = new AudioBankValidationReport();
@@ -828,6 +834,8 @@ namespace CycloneGames.Audio.Editor
 
             report.Clear();
             EventNameCounts.Clear();
+            AssetNameCounts.Clear();
+            StateNameCounts.Clear();
             VisitedNodes.Clear();
             StackNodes.Clear();
 
@@ -841,15 +849,22 @@ namespace CycloneGames.Audio.Editor
             if (events == null || events.Count == 0)
             {
                 report.Add(AudioBankValidationSeverity.Warning, $"Bank '{bank.name}' has no events.", bank);
-                return;
             }
-
-            BuildEventNameCounts(events);
-
-            for (int i = 0; i < events.Count; i++)
+            else
             {
-                ValidateEvent(events[i], report);
+                BuildEventNameCounts(events);
+
+                for (int i = 0; i < events.Count; i++)
+                {
+                    ValidateEvent(events[i], report);
+                }
             }
+
+            ValidateParameters(bank, report);
+            ValidateSwitches(bank, report);
+            ValidateStateGroups(bank, report);
+            ValidateStateMixProfiles(bank, report);
+            ValidateReferencedActionEvents(bank, report);
 
             if (report.Issues.Count == 0)
             {
@@ -936,6 +951,8 @@ namespace CycloneGames.Audio.Editor
                 report.Add(AudioBankValidationSeverity.Error, $"AudioEvent '{audioEvent.name}' is missing an AudioOutput node.", audioEvent);
                 return;
             }
+
+            ValidateAudioOutputNode(audioEvent, audioEvent.Output, report);
 
             List<AudioNode> nodes = audioEvent.Nodes;
             if (nodes == null || nodes.Count == 0)
@@ -1086,6 +1103,466 @@ namespace CycloneGames.Audio.Editor
             }
         }
 
+        private static void ValidateAudioOutputNode(AudioEvent audioEvent, AudioOutput output, AudioBankValidationReport report)
+        {
+            if (output.EffectiveSpatialBlend <= 0f) return;
+
+            if (output.EffectiveMaxDistance < output.EffectiveMinDistance)
+            {
+                report.Add(AudioBankValidationSeverity.Error, $"AudioEvent '{audioEvent.name}' output has MaxDistance below MinDistance.", output);
+            }
+
+            AnimationCurve attenuationCurve = output.EffectiveAttenuationCurve;
+            if (attenuationCurve == null || attenuationCurve.length == 0)
+            {
+                report.Add(AudioBankValidationSeverity.Warning, $"AudioEvent '{audioEvent.name}' output has no attenuation curve; runtime falls back to logarithmic rolloff.", output);
+            }
+
+            if (output.EffectiveUseDistanceLowPass)
+            {
+                AnimationCurve lowPassCurve = output.EffectiveDistanceLowPassCurve;
+                if (lowPassCurve == null || lowPassCurve.length == 0)
+                    report.Add(AudioBankValidationSeverity.Warning, $"AudioEvent '{audioEvent.name}' output enables distance low-pass with an empty curve.", output);
+            }
+
+            if (output.EffectiveUseSpreadCurve)
+            {
+                AnimationCurve spreadCurve = output.EffectiveSpreadCurve;
+                if (spreadCurve == null || spreadCurve.length == 0)
+                    report.Add(AudioBankValidationSeverity.Warning, $"AudioEvent '{audioEvent.name}' output enables spread curve with an empty curve.", output);
+            }
+        }
+
+        private static void ValidateParameters(AudioBank bank, AudioBankValidationReport report)
+        {
+            IReadOnlyList<AudioParameter> parameters = bank.Parameters;
+            if (parameters == null) return;
+
+            AssetNameCounts.Clear();
+            for (int i = 0; i < parameters.Count; i++)
+            {
+                AudioParameter parameter = parameters[i];
+                if (parameter == null)
+                {
+                    report.Add(AudioBankValidationSeverity.Error, $"Bank '{bank.name}' contains a missing AudioParameter reference.", bank);
+                    continue;
+                }
+
+                CountAssetName(parameter.name);
+            }
+
+            for (int i = 0; i < parameters.Count; i++)
+            {
+                AudioParameter parameter = parameters[i];
+                if (parameter == null) continue;
+
+                if (string.IsNullOrEmpty(parameter.name))
+                {
+                    report.Add(AudioBankValidationSeverity.Error, "AudioParameter has an empty name.", parameter);
+                }
+                else if (AssetNameCounts.TryGetValue(parameter.name, out int count) && count > 1)
+                {
+                    report.Add(AudioBankValidationSeverity.Error, $"AudioParameter name '{parameter.name}' is duplicated in this bank.", parameter);
+                }
+            }
+
+            AssetNameCounts.Clear();
+        }
+
+        private static void ValidateSwitches(AudioBank bank, AudioBankValidationReport report)
+        {
+            IReadOnlyList<AudioSwitch> switches = bank.Switches;
+            if (switches == null) return;
+
+            AssetNameCounts.Clear();
+            for (int i = 0; i < switches.Count; i++)
+            {
+                AudioSwitch audioSwitch = switches[i];
+                if (audioSwitch == null)
+                {
+                    report.Add(AudioBankValidationSeverity.Error, $"Bank '{bank.name}' contains a missing AudioSwitch reference.", bank);
+                    continue;
+                }
+
+                CountAssetName(audioSwitch.name);
+            }
+
+            for (int i = 0; i < switches.Count; i++)
+            {
+                AudioSwitch audioSwitch = switches[i];
+                if (audioSwitch == null) continue;
+
+                if (string.IsNullOrEmpty(audioSwitch.name))
+                {
+                    report.Add(AudioBankValidationSeverity.Error, "AudioSwitch has an empty name.", audioSwitch);
+                }
+                else if (AssetNameCounts.TryGetValue(audioSwitch.name, out int count) && count > 1)
+                {
+                    report.Add(AudioBankValidationSeverity.Error, $"AudioSwitch name '{audioSwitch.name}' is duplicated in this bank.", audioSwitch);
+                }
+
+                ValidateStateNameArray("AudioSwitch", audioSwitch.name, audioSwitch.StateNames, audioSwitch.DefaultValue, audioSwitch, report);
+            }
+
+            AssetNameCounts.Clear();
+        }
+
+        private static void ValidateStateGroups(AudioBank bank, AudioBankValidationReport report)
+        {
+            IReadOnlyList<AudioStateGroup> stateGroups = bank.StateGroups;
+            if (stateGroups == null) return;
+
+            AssetNameCounts.Clear();
+            for (int i = 0; i < stateGroups.Count; i++)
+            {
+                AudioStateGroup stateGroup = stateGroups[i];
+                if (stateGroup == null)
+                {
+                    report.Add(AudioBankValidationSeverity.Error, $"Bank '{bank.name}' contains a missing AudioStateGroup reference.", bank);
+                    continue;
+                }
+
+                CountAssetName(stateGroup.name);
+            }
+
+            for (int i = 0; i < stateGroups.Count; i++)
+            {
+                AudioStateGroup stateGroup = stateGroups[i];
+                if (stateGroup == null) continue;
+
+                if (string.IsNullOrEmpty(stateGroup.name))
+                {
+                    report.Add(AudioBankValidationSeverity.Error, "AudioStateGroup has an empty name.", stateGroup);
+                }
+                else if (AssetNameCounts.TryGetValue(stateGroup.name, out int count) && count > 1)
+                {
+                    report.Add(AudioBankValidationSeverity.Error, $"AudioStateGroup name '{stateGroup.name}' is duplicated in this bank.", stateGroup);
+                }
+
+                ValidateStateNameArray("AudioStateGroup", stateGroup.name, stateGroup.StateNames, stateGroup.DefaultValue, stateGroup, report);
+            }
+
+            AssetNameCounts.Clear();
+        }
+
+        private static void ValidateStateMixProfiles(AudioBank bank, AudioBankValidationReport report)
+        {
+            IReadOnlyList<AudioStateMixProfile> profiles = bank.StateMixProfiles;
+            if (profiles == null) return;
+
+            for (int i = 0; i < profiles.Count; i++)
+            {
+                AudioStateMixProfile profile = profiles[i];
+                if (profile == null)
+                {
+                    report.Add(AudioBankValidationSeverity.Error, $"Bank '{bank.name}' contains a missing AudioStateMixProfile reference.", bank);
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(profile.name))
+                {
+                    report.Add(AudioBankValidationSeverity.Error, "AudioStateMixProfile has an empty name.", profile);
+                }
+
+                IReadOnlyList<AudioStateMixRule> rules = profile.Rules;
+                if (rules == null || rules.Count == 0)
+                {
+                    report.Add(AudioBankValidationSeverity.Warning, $"AudioStateMixProfile '{profile.name}' has no rules.", profile);
+                    continue;
+                }
+
+                for (int ruleIndex = 0; ruleIndex < rules.Count; ruleIndex++)
+                {
+                    ValidateStateMixRule(bank, profile, rules[ruleIndex], ruleIndex, report);
+                }
+            }
+        }
+
+        private static void ValidateStateMixRule(AudioBank bank, AudioStateMixProfile profile, AudioStateMixRule rule, int ruleIndex, AudioBankValidationReport report)
+        {
+            if (rule == null)
+            {
+                report.Add(AudioBankValidationSeverity.Error, $"AudioStateMixProfile '{profile.name}' has a missing rule at index {ruleIndex}.", profile);
+                return;
+            }
+
+            AudioStateGroup stateGroup = rule.StateGroup;
+            if (stateGroup == null)
+            {
+                report.Add(AudioBankValidationSeverity.Error, $"AudioStateMixProfile '{profile.name}' rule {ruleIndex} has no state group.", profile);
+                return;
+            }
+
+            if (!BankContainsStateGroup(bank, stateGroup))
+            {
+                report.Add(AudioBankValidationSeverity.Warning, $"AudioStateMixProfile '{profile.name}' rule {ruleIndex} references state group '{stateGroup.name}' outside this bank.", profile);
+            }
+
+            if (string.IsNullOrEmpty(rule.StateName))
+            {
+                report.Add(AudioBankValidationSeverity.Error, $"AudioStateMixProfile '{profile.name}' rule {ruleIndex} has an empty state name.", profile);
+            }
+            else if (stateGroup.GetStateIndex(rule.StateName) < 0)
+            {
+                report.Add(AudioBankValidationSeverity.Error, $"AudioStateMixProfile '{profile.name}' rule {ruleIndex} references missing state '{rule.StateName}'.", profile);
+            }
+
+            switch (rule.TargetType)
+            {
+                case AudioStateMixTargetType.Parameter:
+                    if (rule.Parameter == null)
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioStateMixProfile '{profile.name}' rule {ruleIndex} has no AudioParameter target.", profile);
+                    }
+                    else if (!BankContainsParameter(bank, rule.Parameter))
+                    {
+                        report.Add(AudioBankValidationSeverity.Warning, $"AudioStateMixProfile '{profile.name}' rule {ruleIndex} references parameter '{rule.Parameter.name}' outside this bank.", profile);
+                    }
+                    break;
+                case AudioStateMixTargetType.MixerParameter:
+                    if (string.IsNullOrEmpty(rule.MixerParameterName))
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioStateMixProfile '{profile.name}' rule {ruleIndex} has an empty mixer parameter name.", profile);
+                    }
+                    break;
+                case AudioStateMixTargetType.Snapshot:
+                    if (rule.Snapshot == null)
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioStateMixProfile '{profile.name}' rule {ruleIndex} has no AudioMixerSnapshot target.", profile);
+                    }
+                    else if (rule.SnapshotTransitionTime < 0f)
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioStateMixProfile '{profile.name}' rule {ruleIndex} has a negative snapshot transition time.", profile);
+                    }
+                    break;
+            }
+        }
+
+        private static bool BankContainsStateGroup(AudioBank bank, AudioStateGroup stateGroup)
+        {
+            IReadOnlyList<AudioStateGroup> stateGroups = bank.StateGroups;
+            if (stateGroups == null) return false;
+
+            for (int i = 0; i < stateGroups.Count; i++)
+            {
+                if (stateGroups[i] == stateGroup)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool BankContainsParameter(AudioBank bank, AudioParameter parameter)
+        {
+            IReadOnlyList<AudioParameter> parameters = bank.Parameters;
+            if (parameters == null) return false;
+
+            for (int i = 0; i < parameters.Count; i++)
+            {
+                if (parameters[i] == parameter)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void ValidateReferencedActionEvents(AudioBank bank, AudioBankValidationReport report)
+        {
+            string[] guids = AssetDatabase.FindAssets("t:AudioActionEvent");
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                AudioActionEvent actionEvent = AssetDatabase.LoadAssetAtPath<AudioActionEvent>(path);
+                if (actionEvent == null) continue;
+                if (!ActionEventTouchesBank(bank, actionEvent)) continue;
+
+                ValidateActionEvent(bank, actionEvent, report);
+            }
+        }
+
+        private static bool ActionEventTouchesBank(AudioBank bank, AudioActionEvent actionEvent)
+        {
+            int actionCount = actionEvent.ActionCount;
+            for (int i = 0; i < actionCount; i++)
+            {
+                AudioEventAction action = actionEvent.GetAction(i);
+                if (action == null) continue;
+
+                if (action.AudioEvent != null && BankContainsEvent(bank, action.AudioEvent))
+                    return true;
+                if (action.Parameter != null && BankContainsParameter(bank, action.Parameter))
+                    return true;
+                if (action.StateGroup != null && BankContainsStateGroup(bank, action.StateGroup))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void ValidateActionEvent(AudioBank bank, AudioActionEvent actionEvent, AudioBankValidationReport report)
+        {
+            int actionCount = actionEvent.ActionCount;
+            if (actionCount == 0)
+            {
+                report.Add(AudioBankValidationSeverity.Warning, $"AudioActionEvent '{actionEvent.name}' has no actions.", actionEvent);
+                return;
+            }
+
+            for (int i = 0; i < actionCount; i++)
+            {
+                ValidateAction(bank, actionEvent, actionEvent.GetAction(i), i, report);
+            }
+        }
+
+        private static void ValidateAction(AudioBank bank, AudioActionEvent actionEvent, AudioEventAction action, int actionIndex, AudioBankValidationReport report)
+        {
+            if (action == null)
+            {
+                report.Add(AudioBankValidationSeverity.Error, $"AudioActionEvent '{actionEvent.name}' has a missing action at index {actionIndex}.", actionEvent);
+                return;
+            }
+
+            switch (action.ActionType)
+            {
+                case AudioActionType.PlayEvent:
+                case AudioActionType.StopEvent:
+                    if (action.AudioEvent == null)
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} has no AudioEvent target.", actionEvent);
+                    }
+                    else if (!BankContainsEvent(bank, action.AudioEvent))
+                    {
+                        report.Add(AudioBankValidationSeverity.Warning, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} references event '{action.AudioEvent.name}' outside bank '{bank.name}'.", actionEvent);
+                    }
+                    break;
+                case AudioActionType.StopEventByName:
+                    if (string.IsNullOrEmpty(action.EventName))
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} has an empty event name.", actionEvent);
+                    }
+                    break;
+                case AudioActionType.SetParameter:
+                    if (action.Parameter == null)
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} has no AudioParameter target.", actionEvent);
+                    }
+                    else if (!BankContainsParameter(bank, action.Parameter))
+                    {
+                        report.Add(AudioBankValidationSeverity.Warning, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} references parameter '{action.Parameter.name}' outside bank '{bank.name}'.", actionEvent);
+                    }
+                    break;
+                case AudioActionType.SetParameterByName:
+                    if (string.IsNullOrEmpty(action.ParameterName))
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} has an empty parameter name.", actionEvent);
+                    }
+                    break;
+                case AudioActionType.SetState:
+                    if (action.StateGroup == null)
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} has no state group target.", actionEvent);
+                    }
+                    else if (!BankContainsStateGroup(bank, action.StateGroup))
+                    {
+                        report.Add(AudioBankValidationSeverity.Warning, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} references state group '{action.StateGroup.name}' outside bank '{bank.name}'.", actionEvent);
+                    }
+                    break;
+                case AudioActionType.SetStateByName:
+                    if (string.IsNullOrEmpty(action.StateGroupName) || string.IsNullOrEmpty(action.StateName))
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} has an empty state group or state name.", actionEvent);
+                    }
+                    break;
+                case AudioActionType.SetMixerParameter:
+                    if (string.IsNullOrEmpty(action.MixerParameterName))
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} has an empty mixer parameter name.", actionEvent);
+                    }
+                    break;
+                case AudioActionType.TransitionSnapshot:
+                    if (action.Snapshot == null)
+                    {
+                        report.Add(AudioBankValidationSeverity.Error, $"AudioActionEvent '{actionEvent.name}' action {actionIndex} has no AudioMixerSnapshot target.", actionEvent);
+                    }
+                    break;
+            }
+        }
+
+        private static bool BankContainsEvent(AudioBank bank, AudioEvent audioEvent)
+        {
+            List<AudioEvent> events = bank.AudioEvents;
+            if (events == null) return false;
+
+            for (int i = 0; i < events.Count; i++)
+            {
+                if (events[i] == audioEvent)
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static void CountAssetName(string assetName)
+        {
+            if (string.IsNullOrEmpty(assetName)) return;
+
+            if (AssetNameCounts.TryGetValue(assetName, out int count))
+            {
+                AssetNameCounts[assetName] = count + 1;
+            }
+            else
+            {
+                AssetNameCounts.Add(assetName, 1);
+            }
+        }
+
+        private static void ValidateStateNameArray(string assetType, string assetName, string[] states, int defaultValue, Object context, AudioBankValidationReport report)
+        {
+            if (states == null || states.Length == 0)
+            {
+                report.Add(AudioBankValidationSeverity.Error, $"{assetType} '{assetName}' has no states.", context);
+                return;
+            }
+
+            if (defaultValue < 0 || defaultValue >= states.Length)
+            {
+                report.Add(AudioBankValidationSeverity.Error, $"{assetType} '{assetName}' default state index is out of range.", context);
+            }
+
+            StateNameCounts.Clear();
+            for (int i = 0; i < states.Length; i++)
+            {
+                string state = states[i];
+                if (string.IsNullOrEmpty(state))
+                {
+                    report.Add(AudioBankValidationSeverity.Error, $"{assetType} '{assetName}' has an empty state at index {i}.", context);
+                    continue;
+                }
+
+                if (StateNameCounts.TryGetValue(state, out int stateCount))
+                {
+                    StateNameCounts[state] = stateCount + 1;
+                }
+                else
+                {
+                    StateNameCounts.Add(state, 1);
+                }
+            }
+
+            for (int i = 0; i < states.Length; i++)
+            {
+                string state = states[i];
+                if (string.IsNullOrEmpty(state)) continue;
+
+                if (StateNameCounts.TryGetValue(state, out int count) && count > 1)
+                {
+                    report.Add(AudioBankValidationSeverity.Error, $"{assetType} '{assetName}' has duplicate state '{state}'.", context);
+                }
+            }
+
+            StateNameCounts.Clear();
+        }
+
         private static void DetectCycles(AudioNode node, AudioBankValidationReport report)
         {
             if (node == null) return;
@@ -1113,6 +1590,187 @@ namespace CycloneGames.Audio.Editor
             }
 
             StackNodes.Remove(node);
+        }
+    }
+
+    [CustomEditor(typeof(AudioActionEvent))]
+    public sealed class AudioActionEventEditor : UnityEditor.Editor
+    {
+        private SerializedProperty actionsProp;
+
+        private void OnEnable()
+        {
+            actionsProp = serializedObject.FindProperty("actions");
+        }
+
+        public override void OnInspectorGUI()
+        {
+            serializedObject.Update();
+
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+            if (GUILayout.Button("Add Action", EditorStyles.toolbarButton))
+            {
+                int index = actionsProp.arraySize;
+                actionsProp.InsertArrayElementAtIndex(index);
+                SerializedProperty action = actionsProp.GetArrayElementAtIndex(index);
+                ResetAction(action);
+                action.isExpanded = true;
+            }
+            using (new EditorGUI.DisabledScope(!Application.isPlaying))
+            {
+                if (GUILayout.Button("Execute", EditorStyles.toolbarButton))
+                {
+                    ((AudioActionEvent)target).Execute();
+                }
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.LabelField(actionsProp.arraySize + " actions", EditorStyles.miniLabel, GUILayout.Width(72f));
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space(4f);
+
+            if (actionsProp.arraySize == 0)
+            {
+                EditorGUILayout.HelpBox("Add actions to build a reusable audio event command list.", MessageType.Info);
+            }
+
+            for (int i = 0; i < actionsProp.arraySize; i++)
+            {
+                DrawAction(i);
+            }
+
+            serializedObject.ApplyModifiedProperties();
+        }
+
+        private void DrawAction(int index)
+        {
+            SerializedProperty action = actionsProp.GetArrayElementAtIndex(index);
+            SerializedProperty typeProp = action.FindPropertyRelative("actionType");
+            AudioActionType actionType = (AudioActionType)typeProp.enumValueIndex;
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.BeginHorizontal();
+            action.isExpanded = EditorGUILayout.Foldout(action.isExpanded, index + ". " + actionType, true);
+            if (GUILayout.Button("Up", EditorStyles.miniButtonLeft, GUILayout.Width(34f)) && index > 0)
+            {
+                actionsProp.MoveArrayElement(index, index - 1);
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.EndVertical();
+                return;
+            }
+            if (GUILayout.Button("Down", EditorStyles.miniButtonMid, GUILayout.Width(48f)) && index < actionsProp.arraySize - 1)
+            {
+                actionsProp.MoveArrayElement(index, index + 1);
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.EndVertical();
+                return;
+            }
+            if (GUILayout.Button("Delete", EditorStyles.miniButtonRight, GUILayout.Width(54f)))
+            {
+                actionsProp.DeleteArrayElementAtIndex(index);
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.EndVertical();
+                return;
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (action.isExpanded)
+            {
+                EditorGUI.indentLevel++;
+                EditorGUILayout.PropertyField(typeProp, new GUIContent("Action"));
+                EditorGUILayout.PropertyField(action.FindPropertyRelative("delaySeconds"), new GUIContent("Delay"));
+                DrawActionFields(action, actionType);
+                EditorGUI.indentLevel--;
+            }
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private static void ResetAction(SerializedProperty action)
+        {
+            action.FindPropertyRelative("actionType").enumValueIndex = (int)AudioActionType.PlayEvent;
+            action.FindPropertyRelative("delaySeconds").floatValue = 0f;
+            action.FindPropertyRelative("audioEvent").objectReferenceValue = null;
+            action.FindPropertyRelative("eventName").stringValue = string.Empty;
+            action.FindPropertyRelative("group").intValue = 0;
+            action.FindPropertyRelative("useExplicitPosition").boolValue = false;
+            action.FindPropertyRelative("position").vector3Value = Vector3.zero;
+            action.FindPropertyRelative("parameter").objectReferenceValue = null;
+            action.FindPropertyRelative("parameterName").stringValue = string.Empty;
+            action.FindPropertyRelative("parameterValue").floatValue = 0f;
+            action.FindPropertyRelative("stateGroup").objectReferenceValue = null;
+            action.FindPropertyRelative("stateValue").intValue = 0;
+            action.FindPropertyRelative("stateGroupName").stringValue = string.Empty;
+            action.FindPropertyRelative("stateName").stringValue = string.Empty;
+            action.FindPropertyRelative("mixerParameterName").stringValue = string.Empty;
+            action.FindPropertyRelative("mixerParameterValue").floatValue = 0f;
+            action.FindPropertyRelative("snapshot").objectReferenceValue = null;
+            action.FindPropertyRelative("snapshotTransitionTime").floatValue = 0.1f;
+        }
+
+        private static void DrawActionFields(SerializedProperty action, AudioActionType actionType)
+        {
+            switch (actionType)
+            {
+                case AudioActionType.PlayEvent:
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("audioEvent"), new GUIContent("Event"));
+                    SerializedProperty usePosition = action.FindPropertyRelative("useExplicitPosition");
+                    EditorGUILayout.PropertyField(usePosition, new GUIContent("Use Position"));
+                    if (usePosition.boolValue)
+                    {
+                        EditorGUILayout.PropertyField(action.FindPropertyRelative("position"), new GUIContent("Position"));
+                    }
+                    break;
+                case AudioActionType.StopEvent:
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("audioEvent"), new GUIContent("Event"));
+                    break;
+                case AudioActionType.StopEventByName:
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("eventName"), new GUIContent("Event Name"));
+                    break;
+                case AudioActionType.StopGroup:
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("group"), new GUIContent("Group"));
+                    break;
+                case AudioActionType.SetParameter:
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("parameter"), new GUIContent("Parameter"));
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("parameterValue"), new GUIContent("Value"));
+                    break;
+                case AudioActionType.SetParameterByName:
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("parameterName"), new GUIContent("Parameter Name"));
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("parameterValue"), new GUIContent("Value"));
+                    break;
+                case AudioActionType.SetState:
+                    SerializedProperty stateGroupProp = action.FindPropertyRelative("stateGroup");
+                    SerializedProperty stateValueProp = action.FindPropertyRelative("stateValue");
+                    EditorGUILayout.PropertyField(stateGroupProp, new GUIContent("State Group"));
+                    DrawStateValueField(stateGroupProp.objectReferenceValue as AudioStateGroup, stateValueProp);
+                    break;
+                case AudioActionType.SetStateByName:
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("stateGroupName"), new GUIContent("State Group Name"));
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("stateName"), new GUIContent("State Name"));
+                    break;
+                case AudioActionType.SetMixerParameter:
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("mixerParameterName"), new GUIContent("Mixer Parameter"));
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("mixerParameterValue"), new GUIContent("Value"));
+                    break;
+                case AudioActionType.TransitionSnapshot:
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("snapshot"), new GUIContent("Snapshot"));
+                    EditorGUILayout.PropertyField(action.FindPropertyRelative("snapshotTransitionTime"), new GUIContent("Transition Time"));
+                    break;
+            }
+        }
+
+        private static void DrawStateValueField(AudioStateGroup stateGroup, SerializedProperty stateValueProp)
+        {
+            string[] stateNames = stateGroup != null ? stateGroup.StateNames : null;
+            if (stateNames != null && stateNames.Length > 0)
+            {
+                int value = Mathf.Clamp(stateValueProp.intValue, 0, stateNames.Length - 1);
+                stateValueProp.intValue = EditorGUILayout.Popup("State", value, stateNames);
+            }
+            else
+            {
+                EditorGUILayout.PropertyField(stateValueProp, new GUIContent("State"));
+            }
         }
     }
 }

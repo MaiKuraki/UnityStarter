@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using UnityEngine;
@@ -29,6 +29,12 @@ namespace CycloneGames.Audio.Runtime
         [SerializeField]
         private List<AudioSwitch> switches = new List<AudioSwitch>();
 
+        [SerializeField]
+        private List<AudioStateGroup> stateGroups = new List<AudioStateGroup>();
+
+        [SerializeField]
+        private List<AudioStateMixProfile> stateMixProfiles = new List<AudioStateMixProfile>();
+
         /// <summary>
         /// The public accessor for the events in the bank
         /// </summary>
@@ -39,6 +45,8 @@ namespace CycloneGames.Audio.Runtime
 
         public IReadOnlyList<AudioParameter> Parameters => this.parameters;
         public IReadOnlyList<AudioSwitch> Switches => this.switches;
+        public IReadOnlyList<AudioStateGroup> StateGroups => this.stateGroups;
+        public IReadOnlyList<AudioStateMixProfile> StateMixProfiles => this.stateMixProfiles;
 
         private void OnEnable()
         {
@@ -57,6 +65,16 @@ namespace CycloneGames.Audio.Runtime
                 this.switches = new List<AudioSwitch>();
             }
 
+            if (this.stateGroups == null)
+            {
+                this.stateGroups = new List<AudioStateGroup>();
+            }
+
+            if (this.stateMixProfiles == null)
+            {
+                this.stateMixProfiles = new List<AudioStateMixProfile>();
+            }
+
             for (int i = 0; i < this.parameters.Count; i++)
             {
                 this.parameters[i]?.ResetParameter();
@@ -65,6 +83,11 @@ namespace CycloneGames.Audio.Runtime
             for (int i = 0; i < this.switches.Count; i++)
             {
                 this.switches[i]?.ResetSwitch();
+            }
+
+            for (int i = 0; i < this.stateGroups.Count; i++)
+            {
+                this.stateGroups[i]?.ResetStateGroup();
             }
         }
 
@@ -90,6 +113,16 @@ namespace CycloneGames.Audio.Runtime
         public List<AudioSwitch> EditorSwitches
         {
             get { return this.switches; }
+        }
+
+        public List<AudioStateGroup> EditorStateGroups
+        {
+            get { return this.stateGroups; }
+        }
+
+        public List<AudioStateMixProfile> EditorStateMixProfiles
+        {
+            get { return this.stateMixProfiles; }
         }
 
         /// <summary>
@@ -169,6 +202,47 @@ namespace CycloneGames.Audio.Runtime
             this.switches.Remove(switchToDelete);
             AssetDatabase.RemoveObjectFromAsset(switchToDelete);
             ScriptableObject.DestroyImmediate(switchToDelete, true);
+            EditorUtility.SetDirty(this);
+            AssetDatabase.SaveAssets();
+        }
+
+        public AudioStateGroup AddStateGroup()
+        {
+            AudioStateGroup newStateGroup = ScriptableObject.CreateInstance<AudioStateGroup>();
+            newStateGroup.name = "New Audio State Group";
+            newStateGroup.InitializeStateGroup();
+            AssetDatabase.AddObjectToAsset(newStateGroup, this);
+            this.stateGroups.Add(newStateGroup);
+            EditorUtility.SetDirty(this);
+            AssetDatabase.SaveAssets();
+            return newStateGroup;
+        }
+
+        public void DeleteStateGroup(AudioStateGroup stateGroupToDelete)
+        {
+            this.stateGroups.Remove(stateGroupToDelete);
+            AssetDatabase.RemoveObjectFromAsset(stateGroupToDelete);
+            ScriptableObject.DestroyImmediate(stateGroupToDelete, true);
+            EditorUtility.SetDirty(this);
+            AssetDatabase.SaveAssets();
+        }
+
+        public AudioStateMixProfile AddStateMixProfile()
+        {
+            AudioStateMixProfile newProfile = ScriptableObject.CreateInstance<AudioStateMixProfile>();
+            newProfile.name = "New Audio State Mix Profile";
+            AssetDatabase.AddObjectToAsset(newProfile, this);
+            this.stateMixProfiles.Add(newProfile);
+            EditorUtility.SetDirty(this);
+            AssetDatabase.SaveAssets();
+            return newProfile;
+        }
+
+        public void DeleteStateMixProfile(AudioStateMixProfile profileToDelete)
+        {
+            this.stateMixProfiles.Remove(profileToDelete);
+            AssetDatabase.RemoveObjectFromAsset(profileToDelete);
+            ScriptableObject.DestroyImmediate(profileToDelete, true);
             EditorUtility.SetDirty(this);
             AssetDatabase.SaveAssets();
         }
