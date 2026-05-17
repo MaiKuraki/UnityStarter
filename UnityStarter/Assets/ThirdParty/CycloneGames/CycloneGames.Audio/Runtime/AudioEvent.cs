@@ -1,14 +1,220 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using UnityEngine;
+using System;
 using System.Collections.Generic;
+using Cysharp.Threading.Tasks;
+using UnityEngine.Audio;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
 
 namespace CycloneGames.Audio.Runtime
 {
+    public enum AudioActionType
+    {
+        PlayEvent = 0,
+        StopEvent = 1,
+        StopEventByName = 2,
+        StopGroup = 3,
+        SetParameter = 4,
+        SetParameterByName = 5,
+        SetState = 6,
+        SetStateByName = 7,
+        SetMixerParameter = 8,
+        TransitionSnapshot = 9,
+        PauseAll = 10,
+        ResumeAll = 11
+    }
+
+    [Serializable]
+    public sealed class AudioEventAction
+    {
+        [SerializeField]
+        private AudioActionType actionType;
+        [SerializeField]
+        [Min(0f)]
+        private float delaySeconds;
+        [SerializeField]
+        private AudioEvent audioEvent;
+        [SerializeField]
+        private string eventName = string.Empty;
+        [SerializeField]
+        private int group;
+        [SerializeField]
+        private bool useExplicitPosition;
+        [SerializeField]
+        private Vector3 position;
+        [SerializeField]
+        private AudioParameter parameter;
+        [SerializeField]
+        private string parameterName = string.Empty;
+        [SerializeField]
+        private float parameterValue;
+        [SerializeField]
+        private AudioStateGroup stateGroup;
+        [SerializeField]
+        private int stateValue;
+        [SerializeField]
+        private string stateGroupName = string.Empty;
+        [SerializeField]
+        private string stateName = string.Empty;
+        [SerializeField]
+        private string mixerParameterName = string.Empty;
+        [SerializeField]
+        private float mixerParameterValue;
+        [SerializeField]
+        private AudioMixerSnapshot snapshot;
+        [SerializeField]
+        [Min(0f)]
+        private float snapshotTransitionTime = 0.1f;
+
+        public AudioActionType ActionType => actionType;
+        public float DelaySeconds => delaySeconds;
+        public AudioEvent AudioEvent => audioEvent;
+        public string EventName => eventName;
+        public int Group => group;
+        public AudioParameter Parameter => parameter;
+        public string ParameterName => parameterName;
+        public AudioStateGroup StateGroup => stateGroup;
+        public string StateGroupName => stateGroupName;
+        public string StateName => stateName;
+        public string MixerParameterName => mixerParameterName;
+        public AudioMixerSnapshot Snapshot => snapshot;
+
+        public void Execute(GameObject emitterObject)
+        {
+            if (delaySeconds > 0f)
+            {
+                ExecuteDelayedAsync(this, emitterObject, default, false).Forget();
+                return;
+            }
+
+            ExecuteImmediate(emitterObject, default, false);
+        }
+
+        public void Execute(Vector3 actionPosition)
+        {
+            if (delaySeconds > 0f)
+            {
+                ExecuteDelayedAsync(this, null, actionPosition, true).Forget();
+                return;
+            }
+
+            ExecuteImmediate(null, actionPosition, true);
+        }
+
+        private static async UniTaskVoid ExecuteDelayedAsync(AudioEventAction action, GameObject emitterObject, Vector3 actionPosition, bool hasActionPosition)
+        {
+            if (action == null) return;
+
+            int delayMs = Mathf.Max(0, Mathf.RoundToInt(action.delaySeconds * 1000f));
+            if (delayMs > 0)
+            {
+                await UniTask.Delay(delayMs);
+            }
+
+            action.ExecuteImmediate(emitterObject, actionPosition, hasActionPosition);
+        }
+
+        private void ExecuteImmediate(GameObject emitterObject, Vector3 actionPosition, bool hasActionPosition)
+        {
+            switch (actionType)
+            {
+                case AudioActionType.PlayEvent:
+                    ExecutePlay(emitterObject, actionPosition, hasActionPosition);
+                    break;
+                case AudioActionType.StopEvent:
+                    if (audioEvent != null) AudioManager.StopAll(audioEvent);
+                    break;
+                case AudioActionType.StopEventByName:
+                    AudioManager.StopAll(eventName);
+                    break;
+                case AudioActionType.StopGroup:
+                    AudioManager.StopAll(group);
+                    break;
+                case AudioActionType.SetParameter:
+                    if (parameter != null) AudioManager.SetParameterValue(parameter, parameterValue);
+                    break;
+                case AudioActionType.SetParameterByName:
+                    AudioManager.SetParameterValue(parameterName, parameterValue);
+                    break;
+                case AudioActionType.SetState:
+                    if (stateGroup != null) AudioManager.SetState(stateGroup, stateValue);
+                    break;
+                case AudioActionType.SetStateByName:
+                    AudioManager.SetState(stateGroupName, stateName);
+                    break;
+                case AudioActionType.SetMixerParameter:
+                    AudioManager.SetMixerParameter(mixerParameterName, mixerParameterValue);
+                    break;
+                case AudioActionType.TransitionSnapshot:
+                    if (snapshot != null) snapshot.TransitionTo(Mathf.Max(0f, snapshotTransitionTime));
+                    break;
+                case AudioActionType.PauseAll:
+                    AudioManager.PauseAll();
+                    break;
+                case AudioActionType.ResumeAll:
+                    AudioManager.ResumeAll();
+                    break;
+            }
+        }
+
+        private void ExecutePlay(GameObject emitterObject, Vector3 actionPosition, bool hasActionPosition)
+        {
+            if (audioEvent == null) return;
+
+            if (useExplicitPosition)
+            {
+                AudioManager.PlayEvent(audioEvent, position);
+                return;
+            }
+
+            if (hasActionPosition)
+            {
+                AudioManager.PlayEvent(audioEvent, actionPosition);
+                return;
+            }
+
+            AudioManager.PlayEvent(audioEvent, emitterObject);
+        }
+    }
+
+    [CreateAssetMenu(menuName = "CycloneGames/Audio/Audio Action Event")]
+    public sealed class AudioActionEvent : ScriptableObject
+    {
+        [SerializeField]
+        private AudioEventAction[] actions = Array.Empty<AudioEventAction>();
+
+        public int ActionCount => actions != null ? actions.Length : 0;
+
+        public AudioEventAction GetAction(int index)
+        {
+            return actions != null && (uint)index < (uint)actions.Length ? actions[index] : null;
+        }
+
+        public void Execute(GameObject emitterObject = null)
+        {
+            if (actions == null) return;
+
+            for (int i = 0; i < actions.Length; i++)
+            {
+                actions[i]?.Execute(emitterObject);
+            }
+        }
+
+        public void Execute(Vector3 position)
+        {
+            if (actions == null) return;
+
+            for (int i = 0; i < actions.Length; i++)
+            {
+                actions[i]?.Execute(position);
+            }
+        }
+    }
+
     public enum AudioEventCategory
     {
         CriticalUI = 0,
@@ -38,6 +244,117 @@ namespace CycloneGames.Audio.Runtime
             AllowVoiceSteal = allowVoiceSteal;
             AllowDistanceBasedSteal = allowDistanceBasedSteal;
             ProtectScheduledPlayback = protectScheduledPlayback;
+        }
+    }
+
+    [Serializable]
+    public struct AudioDuckingRule
+    {
+        public bool enabled;
+        public AudioEventCategory triggerCategory;
+        [Min(1)]
+        public int minActiveEvents;
+        public string targetMixerParameter;
+        public float normalValueDb;
+        public float duckedValueDb;
+        [Min(0f)]
+        public float attackTime;
+        [Min(0f)]
+        public float releaseTime;
+
+        public static AudioDuckingRule CreateDefaultVoiceDucksMusic()
+        {
+            return new AudioDuckingRule
+            {
+                enabled = true,
+                triggerCategory = AudioEventCategory.Voice,
+                minActiveEvents = 1,
+                targetMixerParameter = "MusicVolume",
+                normalValueDb = 0f,
+                duckedValueDb = -8f,
+                attackTime = 0.08f,
+                releaseTime = 0.35f
+            };
+        }
+    }
+
+    [CreateAssetMenu(menuName = "CycloneGames/Audio/Audio Ducking Profile")]
+    public sealed class AudioDuckingProfile : ScriptableObject
+    {
+        [SerializeField]
+        private AudioDuckingRule[] rules = new AudioDuckingRule[] { AudioDuckingRule.CreateDefaultVoiceDucksMusic() };
+
+        public int RuleCount => rules != null ? rules.Length : 0;
+
+        public AudioDuckingRule GetRule(int index)
+        {
+            return rules != null && (uint)index < (uint)rules.Length ? rules[index] : default;
+        }
+
+        private static AudioDuckingProfile cachedConfig;
+        private static bool hasSearchedForConfig;
+
+#if UNITY_EDITOR
+        [UnityEditor.InitializeOnLoadMethod]
+        private static void ResetCacheOnDomainReload()
+        {
+            ClearCache();
+        }
+#endif
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetCacheOnPlayModeEnter()
+        {
+            ClearCache();
+        }
+
+        public static AudioDuckingProfile FindConfig()
+        {
+            if (hasSearchedForConfig && cachedConfig != null) return cachedConfig;
+
+            if (hasSearchedForConfig && cachedConfig == null)
+                hasSearchedForConfig = false;
+
+            hasSearchedForConfig = true;
+
+            cachedConfig = Resources.Load<AudioDuckingProfile>("AudioDuckingProfile");
+            if (cachedConfig != null) return cachedConfig;
+
+            cachedConfig = Resources.Load<AudioDuckingProfile>("Audio Ducking Profile");
+            if (cachedConfig != null) return cachedConfig;
+
+            AudioDuckingProfile[] allConfigs = Resources.LoadAll<AudioDuckingProfile>("");
+            if (allConfigs != null && allConfigs.Length > 0)
+            {
+                cachedConfig = allConfigs[0];
+                if (allConfigs.Length > 1)
+                    Debug.LogWarning($"AudioDuckingProfile: Found {allConfigs.Length} configs in Resources. Using first.");
+                return cachedConfig;
+            }
+
+#if UNITY_EDITOR
+            string[] guids = UnityEditor.AssetDatabase.FindAssets("t:AudioDuckingProfile");
+            if (guids.Length > 0)
+            {
+                if (guids.Length > 1)
+                    Debug.LogWarning($"AudioDuckingProfile: Found {guids.Length} configs in project. Only one should exist. Using first found.");
+                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
+                cachedConfig = UnityEditor.AssetDatabase.LoadAssetAtPath<AudioDuckingProfile>(path);
+            }
+#endif
+            return cachedConfig;
+        }
+
+        public static void SetConfig(AudioDuckingProfile config)
+        {
+            cachedConfig = config;
+            hasSearchedForConfig = true;
+        }
+
+        public static void ClearCache()
+        {
+            cachedConfig = null;
+            hasSearchedForConfig = false;
         }
     }
 

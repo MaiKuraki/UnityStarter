@@ -10,6 +10,68 @@ using UnityEditor;
 
 namespace CycloneGames.Audio.Runtime
 {
+    [CreateAssetMenu(fileName = "AudioAttenuationProfile", menuName = "CycloneGames/Audio/Audio Attenuation Profile")]
+    public sealed class AudioAttenuationProfile : ScriptableObject
+    {
+        [SerializeField, Range(0f, 1f)]
+        private float spatialBlend = 1f;
+        [SerializeField]
+        private bool hrtf;
+        [SerializeField]
+        private float minDistance = 1f;
+        [SerializeField]
+        private float maxDistance = 10f;
+        [SerializeField]
+        private AnimationCurve attenuationCurve = new AnimationCurve();
+        [SerializeField]
+        private float dopplerLevel = 1f;
+        [SerializeField, Range(0f, 1.1f)]
+        private float reverbZoneMix = 1f;
+        [SerializeField, Range(0f, 360f)]
+        private float spread;
+        [SerializeField]
+        private bool useSpreadCurve;
+        [SerializeField]
+        private AnimationCurve spreadCurve = AnimationCurve.Linear(0f, 0.5f, 1f, 0f);
+        [SerializeField]
+        private bool useDistanceLowPass;
+        [SerializeField]
+        private AnimationCurve distanceLowPassCurve = new AnimationCurve(
+            new Keyframe(0f, 22000f), new Keyframe(1f, 800f));
+        [SerializeField]
+        private bool useConeAttenuation;
+        [SerializeField, Range(0f, 360f)]
+        private float coneInnerAngle = 60f;
+        [SerializeField, Range(0f, 360f)]
+        private float coneOuterAngle = 120f;
+        [SerializeField, Range(0f, 1f)]
+        private float coneOuterVolume = 0.25f;
+
+        public float SpatialBlend => spatialBlend;
+        public bool HRTF => hrtf;
+        public float MinDistance => minDistance;
+        public float MaxDistance => maxDistance;
+        public AnimationCurve AttenuationCurve => attenuationCurve;
+        public float DopplerLevel => dopplerLevel;
+        public float ReverbZoneMix => reverbZoneMix;
+        public float Spread => spread;
+        public bool UseSpreadCurve => useSpreadCurve;
+        public AnimationCurve SpreadCurve => spreadCurve;
+        public bool UseDistanceLowPass => useDistanceLowPass;
+        public AnimationCurve DistanceLowPassCurve => distanceLowPassCurve;
+        public bool UseConeAttenuation => useConeAttenuation;
+        public float ConeInnerAngle => coneInnerAngle;
+        public float ConeOuterAngle => coneOuterAngle;
+        public float ConeOuterVolume => coneOuterVolume;
+
+        private void OnValidate()
+        {
+            minDistance = Mathf.Max(0.01f, minDistance);
+            maxDistance = Mathf.Max(minDistance, maxDistance);
+            coneOuterAngle = Mathf.Max(coneInnerAngle, coneOuterAngle);
+        }
+    }
+
     /// <summary>
     /// The final node in an audio event
     /// </summary>
@@ -45,6 +107,8 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         [SerializeField]
         public bool loop = false;
+        [SerializeField]
+        private AudioAttenuationProfile attenuationProfile;
         /// <summary>
         /// Amount of spatialization applied to the AudioSource
         /// </summary>
@@ -133,6 +197,24 @@ namespace CycloneGames.Audio.Runtime
         [SerializeField, Range(0f, 1f)]
         public float coneOuterVolume = 0.25f;
 
+        public AudioAttenuationProfile AttenuationProfile => attenuationProfile;
+        public float EffectiveSpatialBlend => attenuationProfile != null ? attenuationProfile.SpatialBlend : spatialBlend;
+        public bool EffectiveHRTF => attenuationProfile != null ? attenuationProfile.HRTF : HRTF;
+        public float EffectiveMinDistance => attenuationProfile != null ? attenuationProfile.MinDistance : MinDistance;
+        public float EffectiveMaxDistance => attenuationProfile != null ? attenuationProfile.MaxDistance : MaxDistance;
+        public AnimationCurve EffectiveAttenuationCurve => attenuationProfile != null ? attenuationProfile.AttenuationCurve : attenuationCurve;
+        public float EffectiveDopplerLevel => attenuationProfile != null ? attenuationProfile.DopplerLevel : dopplerLevel;
+        public float EffectiveReverbZoneMix => attenuationProfile != null ? attenuationProfile.ReverbZoneMix : ReverbZoneMix;
+        public float EffectiveSpread => attenuationProfile != null ? attenuationProfile.Spread : Spread;
+        public bool EffectiveUseSpreadCurve => attenuationProfile != null ? attenuationProfile.UseSpreadCurve : useSpreadCurve;
+        public AnimationCurve EffectiveSpreadCurve => attenuationProfile != null ? attenuationProfile.SpreadCurve : spreadCurve;
+        public bool EffectiveUseDistanceLowPass => attenuationProfile != null ? attenuationProfile.UseDistanceLowPass : useDistanceLowPass;
+        public AnimationCurve EffectiveDistanceLowPassCurve => attenuationProfile != null ? attenuationProfile.DistanceLowPassCurve : distanceLowPassCurve;
+        public bool EffectiveUseConeAttenuation => attenuationProfile != null ? attenuationProfile.UseConeAttenuation : useConeAttenuation;
+        public float EffectiveConeInnerAngle => attenuationProfile != null ? attenuationProfile.ConeInnerAngle : coneInnerAngle;
+        public float EffectiveConeOuterAngle => attenuationProfile != null ? attenuationProfile.ConeOuterAngle : coneOuterAngle;
+        public float EffectiveConeOuterVolume => attenuationProfile != null ? attenuationProfile.ConeOuterVolume : coneOuterVolume;
+
         /// <summary>
         /// Apply all of the properties to the ActiveEvent and start processing the rest of the event's nodes
         /// </summary>
@@ -165,16 +247,18 @@ namespace CycloneGames.Audio.Runtime
                 AudioSource eventSource = es.source;
                 eventSource.outputAudioMixerGroup = this.mixerGroup;
                 eventSource.loop = this.loop;
-                eventSource.spatialBlend = this.spatialBlend;
-                if (this.spatialBlend > 0)
+                float effectiveSpatialBlend = EffectiveSpatialBlend;
+                eventSource.spatialBlend = effectiveSpatialBlend;
+                if (effectiveSpatialBlend > 0)
                 {
-                    eventSource.spatialize = this.HRTF;
-                    eventSource.minDistance = this.MinDistance;
-                    eventSource.maxDistance = this.MaxDistance;
-                    if (this.attenuationCurve != null && this.attenuationCurve.length > 0)
+                    AnimationCurve effectiveAttenuationCurve = EffectiveAttenuationCurve;
+                    eventSource.spatialize = EffectiveHRTF;
+                    eventSource.minDistance = EffectiveMinDistance;
+                    eventSource.maxDistance = EffectiveMaxDistance;
+                    if (effectiveAttenuationCurve != null && effectiveAttenuationCurve.length > 0)
                     {
                         eventSource.rolloffMode = AudioRolloffMode.Custom;
-                        eventSource.SetCustomCurve(AudioSourceCurveType.CustomRolloff, this.attenuationCurve);
+                        eventSource.SetCustomCurve(AudioSourceCurveType.CustomRolloff, effectiveAttenuationCurve);
                     }
                     else
                     {
@@ -182,13 +266,14 @@ namespace CycloneGames.Audio.Runtime
                         string eventName = activeEvent.rootEvent != null ? activeEvent.rootEvent.name : activeEvent.name;
                         Debug.LogWarning($"[AudioOutput] Node '{this.name}' in event '{eventName}' has Spatial Blend > 0 but an empty Attenuation curve. Falling back to Logarithmic rolloff. Fix it in the Audio Graph.");
                     }
-                    eventSource.dopplerLevel = this.dopplerLevel;
-                    eventSource.reverbZoneMix = this.ReverbZoneMix;
-                    if (this.ReverbZoneMix == 0) eventSource.bypassReverbZones = true;
-                    eventSource.spread = this.Spread;
+                    float effectiveReverbZoneMix = EffectiveReverbZoneMix;
+                    eventSource.dopplerLevel = EffectiveDopplerLevel;
+                    eventSource.reverbZoneMix = effectiveReverbZoneMix;
+                    if (effectiveReverbZoneMix == 0) eventSource.bypassReverbZones = true;
+                    eventSource.spread = EffectiveSpread;
 
                     // Attach AudioLowPassFilter for distance-based air absorption or occlusion
-                    if (this.useDistanceLowPass || AudioManager.IsOcclusionEnabled)
+                    if (EffectiveUseDistanceLowPass || AudioManager.IsOcclusionEnabled)
                     {
                         var lpf = eventSource.GetComponent<AudioLowPassFilter>();
                         if (lpf == null) lpf = eventSource.gameObject.AddComponent<AudioLowPassFilter>();
@@ -230,19 +315,21 @@ namespace CycloneGames.Audio.Runtime
         {
             float R(int n) => n * (RowH + RowGap);
 
-            // Always-visible: MixerGroup + Volume + Pitch + Loop + SpatialBlend
-            float h = TitleBarH + R(5);
+            // Always-visible: MixerGroup + Volume + Pitch + Loop + AttenuationProfile + SpatialBlend
+            float h = TitleBarH + R(6);
 
             // 3D section (shown but disabled when spatialBlend == 0)
             // HRTF + MinDist + MaxDist + Attenuation + Doppler + ReverbZoneMix + Spread
-            h += R(7);
+            bool usesProfile = this.attenuationProfile != null;
+            if (!usesProfile)
+                h += R(7);
 
             // Warning HelpBox when spatialBlend > 0 and attenuation curve is missing
-            if (this.spatialBlend > 0f && (this.attenuationCurve == null || this.attenuationCurve.length == 0))
+            if (EffectiveSpatialBlend > 0f && (EffectiveAttenuationCurve == null || EffectiveAttenuationCurve.length == 0))
                 h += HelpBoxH + RowGap;
 
             // Advanced 3D block is only rendered when spatialBlend > 0.
-            if (this.spatialBlend > 0f)
+            if (!usesProfile && this.spatialBlend > 0f)
             {
                 h += SectionGap + R(1); // "Advanced 3D" header
                 h += R(1);              // useSpreadCurve toggle
@@ -276,26 +363,35 @@ namespace CycloneGames.Audio.Runtime
             EditorGUILayout.MinMaxSlider("Volume", ref this.MinVolume, ref this.MaxVolume, Volume_Min, Volume_Max);
             EditorGUILayout.MinMaxSlider("Pitch",  ref this.MinPitch,  ref this.MaxPitch,  Pitch_Min,  Pitch_Max);
             this.loop         = EditorGUILayout.Toggle("Loop",          this.loop);
-            this.spatialBlend = EditorGUILayout.Slider("Spatial Blend", this.spatialBlend, 0f, 1f);
+            this.attenuationProfile = EditorGUILayout.ObjectField("Attenuation", this.attenuationProfile, typeof(AudioAttenuationProfile), false) as AudioAttenuationProfile;
 
             // ---- 3D section (disabled when 2D) ----
-            using (new EditorGUI.DisabledScope(this.spatialBlend == 0f))
+            bool usesProfile = this.attenuationProfile != null;
+            using (new EditorGUI.DisabledScope(usesProfile))
             {
-                this.HRTF         = EditorGUILayout.Toggle("HRTF",          this.HRTF);
-                this.MinDistance  = Mathf.Max(0.01f, EditorGUILayout.FloatField("Min Distance", this.MinDistance));
-                this.MaxDistance  = Mathf.Max(this.MinDistance, EditorGUILayout.FloatField("Max Distance", this.MaxDistance));
-                this.attenuationCurve = EditorGUILayout.CurveField("Attenuation", this.attenuationCurve);
-                this.dopplerLevel = EditorGUILayout.FloatField("Doppler Level", this.dopplerLevel);
-                this.ReverbZoneMix = EditorGUILayout.Slider("Reverb Zone Mix", this.ReverbZoneMix, 0f, 1.1f);
-                this.Spread       = EditorGUILayout.Slider("Spread",          this.Spread,          0f, 360f);
+                this.spatialBlend = EditorGUILayout.Slider("Spatial Blend", this.spatialBlend, 0f, 1f);
+            }
+
+            if (!usesProfile)
+            {
+                using (new EditorGUI.DisabledScope(this.spatialBlend == 0f))
+                {
+                    this.HRTF         = EditorGUILayout.Toggle("HRTF",          this.HRTF);
+                    this.MinDistance  = Mathf.Max(0.01f, EditorGUILayout.FloatField("Min Distance", this.MinDistance));
+                    this.MaxDistance  = Mathf.Max(this.MinDistance, EditorGUILayout.FloatField("Max Distance", this.MaxDistance));
+                    this.attenuationCurve = EditorGUILayout.CurveField("Attenuation", this.attenuationCurve);
+                    this.dopplerLevel = EditorGUILayout.FloatField("Doppler Level", this.dopplerLevel);
+                    this.ReverbZoneMix = EditorGUILayout.Slider("Reverb Zone Mix", this.ReverbZoneMix, 0f, 1.1f);
+                    this.Spread       = EditorGUILayout.Slider("Spread",          this.Spread,          0f, 360f);
+                }
             }
 
             // ---- Configuration warning ----
-            if (this.spatialBlend > 0f && (this.attenuationCurve == null || this.attenuationCurve.length == 0))
+            if (EffectiveSpatialBlend > 0f && (EffectiveAttenuationCurve == null || EffectiveAttenuationCurve.length == 0))
                 EditorGUILayout.HelpBox("Attenuation curve is empty; runtime will fall back to Logarithmic rolloff.", MessageType.Warning);
 
             // ---- Advanced 3D sub-section (only when spatial) ----
-            if (this.spatialBlend > 0f)
+            if (!usesProfile && this.spatialBlend > 0f)
             {
                 EditorGUILayout.Space(4f);
                 EditorGUILayout.LabelField("Advanced 3D", EditorStyles.boldLabel);
