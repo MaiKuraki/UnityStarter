@@ -49,7 +49,7 @@ namespace CycloneGames.Audio.Runtime
             }
 
             int count = connectedNodes.Length;
-            int historyCount = avoidRepeat ? Mathf.Min(Mathf.Max(avoidRepeatHistory, 1), count - 1) : 0;
+            int historyCount = avoidRepeat ? AudioRandomSelectionUtility.ClampAvoidRepeatHistory(avoidRepeatHistory, count) : 0;
             int nodeNum = weights != null && weights.Length == count
                 ? WeightedRandom(count, historyCount)
                 : UniformRandom(count, historyCount);
@@ -60,12 +60,13 @@ namespace CycloneGames.Audio.Runtime
 
         private int WeightedRandom(int count, int historyCount)
         {
-            float totalWeight = 0f;
-            for (int i = 0; i < count; i++)
-            {
-                if (historyCount > 0 && IsInRecentHistory(i, historyCount)) continue;
-                totalWeight += Mathf.Max(0f, weights[i]);
-            }
+            float totalWeight = AudioRandomSelectionUtility.CalculateEligibleWeight(
+                weights,
+                count,
+                historyCount,
+                recentSelectionHistory,
+                recentSelectionWriteIndex,
+                recentSelectionCount);
 
             if (totalWeight <= 0f)
             {
@@ -73,20 +74,16 @@ namespace CycloneGames.Audio.Runtime
             }
 
             float roll = Random.Range(0f, totalWeight);
-            float cumulative = 0f;
-            int lastEligible = -1;
-            for (int i = 0; i < count; i++)
-            {
-                if (historyCount > 0 && IsInRecentHistory(i, historyCount)) continue;
-                lastEligible = i;
-                cumulative += Mathf.Max(0f, weights[i]);
-                if (roll < cumulative)
-                {
-                    return i;
-                }
-            }
+            int selectedIndex = AudioRandomSelectionUtility.SelectWeighted(
+                weights,
+                count,
+                historyCount,
+                recentSelectionHistory,
+                recentSelectionWriteIndex,
+                recentSelectionCount,
+                roll);
 
-            return lastEligible >= 0 ? lastEligible : Random.Range(0, count);
+            return selectedIndex >= 0 ? selectedIndex : Random.Range(0, count);
         }
 
         private int UniformRandom(int count, int historyCount)
@@ -94,39 +91,25 @@ namespace CycloneGames.Audio.Runtime
             if (historyCount <= 0 || count <= 1)
                 return Random.Range(0, count);
 
-            int eligibleCount = 0;
-            for (int i = 0; i < count; i++)
-            {
-                if (!IsInRecentHistory(i, historyCount))
-                    eligibleCount++;
-            }
+            int eligibleCount = AudioRandomSelectionUtility.CountEligible(
+                count,
+                historyCount,
+                recentSelectionHistory,
+                recentSelectionWriteIndex,
+                recentSelectionCount);
 
             if (eligibleCount <= 0)
                 return Random.Range(0, count);
 
             int selectedOrdinal = Random.Range(0, eligibleCount);
-            for (int i = 0; i < count; i++)
-            {
-                if (IsInRecentHistory(i, historyCount)) continue;
-                if (selectedOrdinal == 0) return i;
-                selectedOrdinal--;
-            }
-
-            return count - 1;
-        }
-
-        private bool IsInRecentHistory(int index, int historyCount)
-        {
-            int count = Mathf.Min(Mathf.Min(historyCount, recentSelectionCount), recentSelectionHistory.Length);
-            for (int i = 0; i < count; i++)
-            {
-                int historyIndex = recentSelectionWriteIndex - 1 - i;
-                if (historyIndex < 0) historyIndex += recentSelectionHistory.Length;
-                if (recentSelectionHistory[historyIndex] == index)
-                    return true;
-            }
-
-            return false;
+            return AudioRandomSelectionUtility.SelectUniform(
+                count,
+                historyCount,
+                recentSelectionHistory,
+                recentSelectionWriteIndex,
+                recentSelectionCount,
+                selectedOrdinal,
+                count - 1);
         }
 
         private void AddRecentSelection(int index)
@@ -285,5 +268,204 @@ namespace CycloneGames.Audio.Runtime
         }
 
 #endif
+    }
+
+    internal static class AudioRandomSelectionUtility
+    {
+        internal static int ClampAvoidRepeatHistory(int requestedHistoryCount, int nodeCount)
+        {
+            if (nodeCount <= 1)
+            {
+                return 0;
+            }
+
+            return Mathf.Min(Mathf.Max(requestedHistoryCount, 1), nodeCount - 1);
+        }
+
+        internal static int CountEligible(
+            int nodeCount,
+            int historyCount,
+            int[] recentHistory,
+            int recentWriteIndex,
+            int recentCount)
+        {
+            if (nodeCount <= 0)
+            {
+                return 0;
+            }
+
+            if (historyCount <= 0)
+            {
+                return nodeCount;
+            }
+
+            int eligibleCount = 0;
+            for (int i = 0; i < nodeCount; i++)
+            {
+                if (!IsInRecentHistory(i, historyCount, recentHistory, recentWriteIndex, recentCount))
+                {
+                    eligibleCount++;
+                }
+            }
+
+            return eligibleCount;
+        }
+
+        internal static float CalculateEligibleWeight(
+            float[] weights,
+            int nodeCount,
+            int historyCount,
+            int[] recentHistory,
+            int recentWriteIndex,
+            int recentCount)
+        {
+            if (weights == null || nodeCount <= 0)
+            {
+                return 0f;
+            }
+
+            int count = Mathf.Min(nodeCount, weights.Length);
+            float totalWeight = 0f;
+            for (int i = 0; i < count; i++)
+            {
+                if (historyCount > 0 && IsInRecentHistory(i, historyCount, recentHistory, recentWriteIndex, recentCount))
+                {
+                    continue;
+                }
+
+                totalWeight += Mathf.Max(0f, weights[i]);
+            }
+
+            return totalWeight;
+        }
+
+        internal static int SelectUniform(
+            int nodeCount,
+            int historyCount,
+            int[] recentHistory,
+            int recentWriteIndex,
+            int recentCount,
+            int selectedOrdinal,
+            int fallbackIndex)
+        {
+            if (nodeCount <= 0)
+            {
+                return -1;
+            }
+
+            if (historyCount <= 0 || nodeCount <= 1)
+            {
+                return ClampIndex(fallbackIndex, nodeCount);
+            }
+
+            int ordinal = selectedOrdinal;
+            for (int i = 0; i < nodeCount; i++)
+            {
+                if (IsInRecentHistory(i, historyCount, recentHistory, recentWriteIndex, recentCount))
+                {
+                    continue;
+                }
+
+                if (ordinal == 0)
+                {
+                    return i;
+                }
+
+                ordinal--;
+            }
+
+            return ClampIndex(fallbackIndex, nodeCount);
+        }
+
+        internal static int SelectWeighted(
+            float[] weights,
+            int nodeCount,
+            int historyCount,
+            int[] recentHistory,
+            int recentWriteIndex,
+            int recentCount,
+            float roll)
+        {
+            if (weights == null || nodeCount <= 0)
+            {
+                return -1;
+            }
+
+            int count = Mathf.Min(nodeCount, weights.Length);
+            float cumulative = 0f;
+            int lastEligible = -1;
+            for (int i = 0; i < count; i++)
+            {
+                if (historyCount > 0 && IsInRecentHistory(i, historyCount, recentHistory, recentWriteIndex, recentCount))
+                {
+                    continue;
+                }
+
+                float weight = Mathf.Max(0f, weights[i]);
+                if (weight <= 0f)
+                {
+                    continue;
+                }
+
+                lastEligible = i;
+                cumulative += weight;
+                if (roll < cumulative)
+                {
+                    return i;
+                }
+            }
+
+            return lastEligible;
+        }
+
+        internal static bool IsInRecentHistory(
+            int index,
+            int historyCount,
+            int[] recentHistory,
+            int recentWriteIndex,
+            int recentCount)
+        {
+            if (historyCount <= 0 || recentHistory == null || recentHistory.Length == 0 || recentCount <= 0)
+            {
+                return false;
+            }
+
+            int count = Mathf.Min(Mathf.Min(historyCount, recentCount), recentHistory.Length);
+            for (int i = 0; i < count; i++)
+            {
+                int historyIndex = recentWriteIndex - 1 - i;
+                if (historyIndex < 0)
+                {
+                    historyIndex += recentHistory.Length;
+                }
+
+                if (recentHistory[historyIndex] == index)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static int ClampIndex(int index, int count)
+        {
+            if (count <= 0)
+            {
+                return -1;
+            }
+
+            if (index < 0)
+            {
+                return 0;
+            }
+
+            if (index >= count)
+            {
+                return count - 1;
+            }
+
+            return index;
+        }
     }
 }
