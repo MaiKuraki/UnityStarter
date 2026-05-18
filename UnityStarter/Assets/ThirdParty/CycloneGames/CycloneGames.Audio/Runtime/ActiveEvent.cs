@@ -9,6 +9,7 @@ using UnityEditor;
 #endif
 
 [assembly: System.Runtime.CompilerServices.InternalsVisibleTo("CycloneGames.Audio.Editor")]
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("CycloneGames.Audio.Tests.Editor")]
 
 namespace CycloneGames.Audio.Runtime
 {
