@@ -145,10 +145,10 @@ namespace CycloneGames.Audio.Runtime
         private const float TitleBarH   = 18f;  // Unity GUI.Window internal title bar
         private const float RowH        = 19f;
         private const float RowGap      =  2f;
-        private const float BottomPad   =  8f;
+        private const float BottomPad   =  2f;
         private const float NameFieldMinW = 108f;
         private const float WeightFieldW = 42f;
-        private const float ProbFieldW   = 54f;
+        private const float ProbFieldW   = 46f;
 
         [SerializeField]
         private bool autoSortByNodeY = true;
@@ -212,6 +212,7 @@ namespace CycloneGames.Audio.Runtime
         {
             AutoSortConnectionsIfNeeded();
             int connCount = (input != null && input.ConnectedNodes != null) ? input.ConnectedNodes.Length : 0;
+            this.nodeRect.width = NodeWidth;
             this.nodeRect.height = CalcHeight(connCount);
             this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
             DrawInput();
