@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.AssetManagement.Tests.Editor",
+    "rootNamespace": "CycloneGames.AssetManagement.Tests.Editor",
+    "references": [
+        "CycloneGames.AssetManagement.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

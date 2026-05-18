@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.Audio.Tests.Editor",
+    "rootNamespace": "CycloneGames.Audio.Tests.Editor",
+    "references": [
+        "CycloneGames.Audio.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
