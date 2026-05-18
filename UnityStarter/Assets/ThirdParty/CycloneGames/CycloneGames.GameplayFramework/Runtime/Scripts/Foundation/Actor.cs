@@ -83,7 +83,12 @@ namespace CycloneGames.GameplayFramework.Runtime
         public bool IsHidden() => bHidden;
         public virtual void SetActorHiddenInGame(bool bNewHidden)
         {
-            if (bHidden == bNewHidden) return;
+            ApplyActorHiddenInGame(bNewHidden, false);
+        }
+
+        private void ApplyActorHiddenInGame(bool bNewHidden, bool forceRendererSync)
+        {
+            if (bHidden == bNewHidden && !forceRendererSync) return;
             bHidden = bNewHidden;
             s_rendererBuffer.Clear();
             GetComponentsInChildren(true, s_rendererBuffer);
@@ -325,9 +330,6 @@ namespace CycloneGames.GameplayFramework.Runtime
             bCanBeDamaged = state.CanBeDamaged;
             actorName = state.ActorName;
 
-            bool oldHidden = bHidden;
-            bHidden = state.Hidden;
-
             tags?.Clear();
             if (state.Tags != null && state.Tags.Length > 0)
             {
@@ -338,10 +340,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
             }
 
-            if (state.Hidden != oldHidden)
-            {
-                SetActorHiddenInGame(state.Hidden);
-            }
+            ApplyActorHiddenInGame(state.Hidden, true);
 
             if (state.RemainingLifeSpan > 0.001f && hasBegunPlay)
             {
