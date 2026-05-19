@@ -26,17 +26,16 @@ namespace CycloneGames.GameplayTags.Core
 
       /// <summary>
       /// Serialize all explicit tags in a container to a byte array.
-      /// Compact: 3 + 2*N bytes (version + marker + count + indices).
+      /// Compact: 4 + 2*N bytes (version + marker + count + indices).
       /// </summary>
       public static byte[] SerializeFull<T>(in T container) where T : IGameplayTagContainer
       {
-         int count = container.ExplicitTagCount;
-         byte[] buffer = new byte[3 + count * 2]; // version(1) + marker(1) + count(2 as ushort) - 1 byte overlap = 3 + 2*N
+         byte[] buffer = new byte[GetFullSerializedSize(container)];
          int offset = 0;
 
          buffer[offset++] = VersionByte;
          buffer[offset++] = FullMarker;
-         WriteUInt16(buffer, ref offset, (ushort)count);
+         WriteUInt16(buffer, ref offset, (ushort)container.ExplicitTagCount);
 
          foreach (GameplayTag tag in container.GetExplicitTags())
          {
