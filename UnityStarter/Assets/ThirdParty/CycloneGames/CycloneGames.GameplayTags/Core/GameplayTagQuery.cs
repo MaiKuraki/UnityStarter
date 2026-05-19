@@ -225,7 +225,8 @@ namespace CycloneGames.GameplayTags.Core
                     case GameplayTagQueryOpcode.EvalNoExpr:
                     {
                         int childCount = m_TokenStream[i++];
-                        stack[stackCount++] = EvaluateExpression(opcode, stack, ref stackCount, childCount);
+                        bool result = EvaluateExpression(opcode, stack, ref stackCount, childCount);
+                        stack[stackCount++] = result;
                         break;
                     }
 

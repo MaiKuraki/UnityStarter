@@ -4,6 +4,10 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
+#if UNITY_INCLUDE_TESTS
+[assembly: InternalsVisibleTo("CycloneGames.GameplayTags.Tests.Editor")]
+#endif
+
 namespace CycloneGames.GameplayTags.Core
 {
     /// <summary>
@@ -69,6 +73,24 @@ namespace CycloneGames.GameplayTags.Core
         public static event Action OnGameplayTagTreeChanged;
 
         // --- Public API ---
+
+#if UNITY_INCLUDE_TESTS
+        internal static void ResetForTests()
+        {
+            lock (s_InitLock)
+            {
+                s_TagDefinitionsByName = new Dictionary<string, GameplayTagDefinition>(StringComparer.Ordinal);
+                s_TagsDefinitionsList = new List<GameplayTagDefinition>();
+                s_PendingDynamicRegistrations = new List<PendingRegistration>();
+                Volatile.Write(ref s_Snapshot, null);
+                s_IsInitialized = false;
+                Volatile.Write(ref s_HasBeenReloaded, false);
+                Volatile.Write(ref s_DeferTreeChangeBroadcastCount, 0);
+                Volatile.Write(ref s_DeferredTreeChangeNeeded, false);
+                OnGameplayTagTreeChanged = null;
+            }
+        }
+#endif
 
         public static ReadOnlySpan<GameplayTag> GetAllTags()
         {
