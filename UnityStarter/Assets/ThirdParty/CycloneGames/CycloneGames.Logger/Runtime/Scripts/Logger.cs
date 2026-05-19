@@ -48,7 +48,7 @@ namespace CycloneGames.Logger
         private readonly HashSet<string> _blackList = new(StringComparer.OrdinalIgnoreCase);
         private readonly object _filterLock = new(); // Protects filter mode and lists.
 
-        private CLogger()
+        internal CLogger()
         {
             try
             {
@@ -258,7 +258,7 @@ namespace CycloneGames.Logger
         public static void LogFatal(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
             => Instance.EnqueueMessage(LogLevel.Fatal, messageBuilder, category, filePath, lineNumber, memberName);
 
-        private void EnqueueMessage(LogLevel level, string originalMessage, string category, string filePath, int lineNumber, string memberName)
+        internal void EnqueueMessage(LogLevel level, string originalMessage, string category, string filePath, int lineNumber, string memberName)
         {
             if (!ShouldLog(level, category)) return;
 
@@ -272,7 +272,7 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EnqueueMessage(LogLevel level, Action<StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
+        internal void EnqueueMessage(LogLevel level, Action<StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
             if (!ShouldLog(level, category)) return;
 
@@ -317,7 +317,7 @@ namespace CycloneGames.Logger
             => Instance.EnqueueMessage(LogLevel.Fatal, state, messageBuilder, category, filePath, lineNumber, memberName);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void EnqueueMessage<T>(LogLevel level, T state, Action<T, StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
+        internal void EnqueueMessage<T>(LogLevel level, T state, Action<T, StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
             if (!ShouldLog(level, category)) return;
 
