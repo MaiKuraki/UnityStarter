@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.UIFramework.Tests.Editor",
+    "rootNamespace": "CycloneGames.UIFramework.Tests.Editor",
+    "references": [
+        "CycloneGames.UIFramework.Runtime",
+        "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.Factory.Runtime",
+        "CycloneGames.Service.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
