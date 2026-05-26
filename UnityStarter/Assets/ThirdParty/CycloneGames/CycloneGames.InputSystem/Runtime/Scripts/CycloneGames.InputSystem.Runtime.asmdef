@@ -5,7 +5,6 @@
         "Unity.InputSystem",
         "UniTask",
         "R3.Unity",
-        "ReactiveInputSystem",
         "VYaml.Core",
         "Unio",
         "CycloneGames.Utility.Runtime",

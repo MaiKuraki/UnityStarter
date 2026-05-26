@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using System;
 using System.Collections.Generic;
+using CycloneGames.Logger;
 using R3;
 
 namespace CycloneGames.InputSystem.Runtime
@@ -169,9 +170,9 @@ namespace CycloneGames.InputSystem.Runtime
         /// When true:
         /// - MenuNavigatorVertical automatically subscribes to Button.OnClickAsObservable() for all buttons
         /// - Button clicks (mouse, keyboard, gamepad) are handled automatically via OnConfirm callback
-        /// - ⚠️ CRITICAL WARNING: Do NOT manually subscribe to Button.OnClickAsObservable() in your UI code when this is true
-        /// - ⚠️ CRITICAL WARNING: Do NOT use Unity's Button.onClick.AddListener() or Inspector-assigned onClick events when this is true
-        /// - ⚠️ Doing so will cause duplicate event handling, duplicate callback invocations, and potential logic errors
+        /// - Do NOT manually subscribe to Button.OnClickAsObservable() in your UI code when this is true
+        /// - Do NOT use Unity's Button.onClick.AddListener() or Inspector-assigned onClick events when this is true
+        /// - Doing so will cause duplicate event handling, duplicate callback invocations, and potential logic errors
         /// - Recommended for simple menus where you want automatic click handling
         /// 
         /// When false (default):
@@ -342,8 +343,9 @@ namespace CycloneGames.InputSystem.Runtime
                                 {
                                     item.OnUnfocused.Invoke(item.CachedTransform);
                                 }
-                                catch
+                                catch (Exception e)
                                 {
+                                    LogException(e);
                                 }
                             }
                         }
@@ -361,8 +363,9 @@ namespace CycloneGames.InputSystem.Runtime
                     UpdateFocusIndicator();
                 }
             }
-            catch
+            catch (Exception e)
             {
+                LogException(e);
                 _isInitialized = false;
             }
 
@@ -383,23 +386,17 @@ namespace CycloneGames.InputSystem.Runtime
                 return;
             }
 
-            try
+            if (absY > NAVIGATION_THRESHOLD)
             {
-                if (absY > NAVIGATION_THRESHOLD)
-                {
-                    MoveSelection(direction.y < 0 ? 1 : -1);
-                }
-                else
-                {
-                    float absX = direction.x >= 0 ? direction.x : -direction.x;
-                    if (absX > NAVIGATION_THRESHOLD)
-                    {
-                        TriggerContextualNavigation(direction.x > 0);
-                    }
-                }
+                MoveSelection(direction.y < 0 ? 1 : -1);
             }
-            catch
+            else
             {
+                float absX = direction.x >= 0 ? direction.x : -direction.x;
+                if (absX > NAVIGATION_THRESHOLD)
+                {
+                    TriggerContextualNavigation(direction.x > 0);
+                }
             }
         }
 
@@ -422,8 +419,9 @@ namespace CycloneGames.InputSystem.Runtime
                 {
                     item.OnConfirm.Invoke();
                 }
-                catch
+                catch (Exception e)
                 {
+                    LogException(e);
                 }
             }
         }
@@ -522,8 +520,9 @@ namespace CycloneGames.InputSystem.Runtime
                 {
                     action.Invoke();
                 }
-                catch
+                catch (Exception e)
                 {
+                    LogException(e);
                 }
             }
         }
@@ -574,8 +573,9 @@ namespace CycloneGames.InputSystem.Runtime
                 {
                     item.CachedSliderConfig.OnValueChanged.Invoke(item.Slider.value);
                 }
-                catch
+                catch (Exception e)
                 {
+                    LogException(e);
                 }
             }
         }
@@ -584,22 +584,15 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (!_isInitialized) return;
             if (!IsValidIndex(index)) return;
-            try
+            // The first pointer action after gamepad input only clears the confirmation gate.
+            if (ShouldBlockTouchConfirmation())
             {
-                // Touch confirmation gate: first touch after gamepad→pointer does NOTHING (no focus change, no confirm)
-                if (ShouldBlockTouchConfirmation())
-                {
-                    ResetTouchConfirmationGate();
-                    return;
-                }
+                ResetTouchConfirmationGate();
+                return;
+            }
 
-                // Normal behavior: focus and confirm
-                SetFocus(index);
-                ConfirmSelection();
-            }
-            catch
-            {
-            }
+            SetFocus(index);
+            ConfirmSelection();
         }
 
         private void SetupDeviceKindSubscription()
@@ -672,8 +665,9 @@ namespace CycloneGames.InputSystem.Runtime
                     {
                         previousItem.OnUnfocused.Invoke(previousItem.CachedTransform);
                     }
-                    catch
+                    catch (Exception e)
                     {
+                        LogException(e);
                     }
                 }
             }
@@ -693,8 +687,9 @@ namespace CycloneGames.InputSystem.Runtime
                 {
                     item.OnFocused.Invoke(item.CachedTransform);
                 }
-                catch
+                catch (Exception e)
                 {
+                    LogException(e);
                 }
             }
             UpdateFocusIndicator();
@@ -745,8 +740,9 @@ namespace CycloneGames.InputSystem.Runtime
                     }
                 }
             }
-            catch
+            catch (Exception e)
             {
+                LogException(e);
             }
         }
 
@@ -820,8 +816,9 @@ namespace CycloneGames.InputSystem.Runtime
                         }
                     }
                 }
-                catch
+                catch (Exception e)
                 {
+                    LogException(e);
                 }
             }
 
@@ -841,6 +838,11 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 Cleanup();
             }
+        }
+
+        private static void LogException(Exception exception)
+        {
+            CLogger.LogError($"[MenuNavigatorVertical] Callback failed: {exception.Message}");
         }
     }
 }

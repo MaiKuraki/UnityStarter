@@ -1,9 +1,7 @@
 using CycloneGames.Logger;
 using R3;
-using ReactiveInputSystem;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -44,7 +42,14 @@ namespace CycloneGames.InputSystem.Runtime
         // Context-aware device kind observable - only emits when the specified context is active
         public Observable<InputDeviceKind> GetActiveDeviceKindObservableForContext(InputContext context)
         {
-            return ActiveDeviceKind.Where(_ => _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context));
+            return Observable.Create<InputDeviceKind>(observer =>
+                ActiveDeviceKind.Subscribe(value =>
+                {
+                    if (_contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context))
+                    {
+                        observer.OnNext(value);
+                    }
+                }));
         }
 
         // Player Info
@@ -121,7 +126,14 @@ namespace CycloneGames.InputSystem.Runtime
 
         private async UniTaskVoid ScheduleDevicePairingAsync(InputDevice device)
         {
-            await UniTask.Yield(PlayerLoopTiming.Update);
+            if (!Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread)
+            {
+                await UniTask.SwitchToMainThread(PlayerLoopTiming.Update);
+            }
+            else
+            {
+                await UniTask.Yield(PlayerLoopTiming.Update);
+            }
 
             // Check if User is still valid after async delay (may have been removed/disposed)
             if (User == null || !User.valid) return;
@@ -142,7 +154,7 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (User == null || !User.valid) return false;
 
-            if (User.pairedDevices.Contains(device)) return false;
+            if (IsDevicePairedToUser(User, device)) return false;
 
             string deviceLayout = device.layout;
             bool isRequired = false;
@@ -164,13 +176,28 @@ namespace CycloneGames.InputSystem.Runtime
                 // Guard: Check if User is still valid before comparing IDs
                 if (User == null || !User.valid) return false;
 
-                if (allUsers[i].id != User.id && allUsers[i].pairedDevices.Contains(device))
+                if (allUsers[i].id != User.id && IsDevicePairedToUser(allUsers[i], device))
                 {
                     return false;
                 }
             }
 
             return true;
+        }
+
+        private static bool IsDevicePairedToUser(InputUser user, InputDevice device)
+        {
+            var pairedDevices = user.pairedDevices;
+            int deviceCount = pairedDevices.Count;
+            for (int i = 0; i < deviceCount; i++)
+            {
+                if (ReferenceEquals(pairedDevices[i], device))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         public bool RemoveBindingFromContext(InputContext context, Observable<Unit> source)
@@ -608,6 +635,68 @@ namespace CycloneGames.InputSystem.Runtime
             }
         }
 
+        private static bool LooksLikeVector2Binding(List<string> deviceBindings)
+        {
+            if (deviceBindings == null)
+            {
+                return false;
+            }
+
+            int count = deviceBindings.Count;
+            for (int i = 0; i < count; i++)
+            {
+                string binding = deviceBindings[i];
+                if (binding.Contains("2DVector") ||
+                    (binding.Contains("leftStick") && !binding.Contains("leftStick/")) ||
+                    (binding.Contains("rightStick") && !binding.Contains("rightStick/")) ||
+                    (binding.Contains("dpad") && !binding.Contains("dpad/")) ||
+                    binding.EndsWith("/delta", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool LooksLikeFloatBinding(List<string> deviceBindings)
+        {
+            if (deviceBindings == null)
+            {
+                return false;
+            }
+
+            int count = deviceBindings.Count;
+            for (int i = 0; i < count; i++)
+            {
+                if (deviceBindings[i].Contains("Trigger"))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool HasDeltaBinding(List<string> deviceBindings)
+        {
+            if (deviceBindings == null)
+            {
+                return false;
+            }
+
+            int count = deviceBindings.Count;
+            for (int i = 0; i < count; i++)
+            {
+                if (deviceBindings[i].Contains("/delta", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private InputActionAsset BuildAssetFromConfig(PlayerSlotConfig config)
         {
             using (InputPerformanceProfiler.BeginScope("BuildAssetFromConfig"))
@@ -647,7 +736,7 @@ namespace CycloneGames.InputSystem.Runtime
                     _actionIdToName[actionId] = combinedId;
 
                     var subject = new Subject<Unit>();
-                    joinAction.PerformedAsObservable(token).Select(_ => Unit.Default).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                    joinAction.PerformedAsObservable(token).Subscribe(_ => subject.OnNext(Unit.Default)).AddTo(_actionWiringSubscriptions);
                     var joinKey = new InputActionKey(joinMapName, joinAction.name);
                     _buttonSubjects[joinKey] = subject;
                     _actionNameToKey[joinAction.name] = joinKey;
@@ -662,13 +751,8 @@ namespace CycloneGames.InputSystem.Runtime
                         var inferredType = bindingConfig.Type;
                         if (inferredType == ActionValueType.Button)
                         {
-                            bool looksVector2 = bindingConfig.DeviceBindings.Any(b =>
-                                b.Contains("2DVector") || 
-                                (b.Contains("leftStick") && !b.Contains("leftStick/")) || 
-                                (b.Contains("rightStick") && !b.Contains("rightStick/")) || 
-                                (b.Contains("dpad") && !b.Contains("dpad/")) || 
-                                b.EndsWith("/delta"));
-                            bool looksFloat = !looksVector2 && bindingConfig.DeviceBindings.Any(b => b.Contains("Trigger"));
+                            bool looksVector2 = LooksLikeVector2Binding(bindingConfig.DeviceBindings);
+                            bool looksFloat = !looksVector2 && LooksLikeFloatBinding(bindingConfig.DeviceBindings);
                             if (looksVector2) inferredType = ActionValueType.Vector2;
                             else if (looksFloat) inferredType = ActionValueType.Float;
                         }
@@ -719,8 +803,7 @@ namespace CycloneGames.InputSystem.Runtime
                             if (updateMode == InputUpdateMode.EventDriven)
                             {
                                 // Auto-detect: if bindings contain "/delta", use polling
-                                bool hasDeltaInput = bindingConfig.DeviceBindings.Any(b =>
-                                    b.Contains("/delta", StringComparison.OrdinalIgnoreCase));
+                                bool hasDeltaInput = HasDeltaBinding(bindingConfig.DeviceBindings);
                                 if (hasDeltaInput) updateMode = InputUpdateMode.Polling;
                             }
 
@@ -779,8 +862,7 @@ namespace CycloneGames.InputSystem.Runtime
                                     .AddTo(_actionWiringSubscriptions);
 
                                 action.CanceledAsObservable(token)
-                                    .Select(_ => Vector2.zero)
-                                    .Subscribe(subject.AsObserver())
+                                    .Subscribe(_ => subject.OnNext(Vector2.zero))
                                     .AddTo(_actionWiringSubscriptions);
                             }
 
@@ -796,7 +878,7 @@ namespace CycloneGames.InputSystem.Runtime
                         else if (inferredType == ActionValueType.Float)
                         {
                             var subject = new Subject<float>();
-                            action.PerformedAsObservable(token).Select(ctx => ctx.ReadValue<float>()).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                            action.PerformedAsObservable(token).Subscribe(ctx => subject.OnNext(ctx.ReadValue<float>())).AddTo(_actionWiringSubscriptions);
                             action.PerformedAsObservable(token).Subscribe(ctx =>
                             {
                                 if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
@@ -804,7 +886,7 @@ namespace CycloneGames.InputSystem.Runtime
                                     UpdateActiveDeviceKind(TryGetControlDevice(ctx));
                                 }
                             }).AddTo(_actionWiringSubscriptions);
-                            action.CanceledAsObservable(token).Select(_ => 0f).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                            action.CanceledAsObservable(token).Subscribe(_ => subject.OnNext(0f)).AddTo(_actionWiringSubscriptions);
                             _scalarSubjects[key] = subject;
 
                             // Optional long-press for Float using threshold if configured
@@ -817,7 +899,7 @@ namespace CycloneGames.InputSystem.Runtime
                         else
                         {
                             var subject = new Subject<Unit>();
-                            action.PerformedAsObservable(token).Select(_ => Unit.Default).Subscribe(subject.AsObserver()).AddTo(_actionWiringSubscriptions);
+                            action.PerformedAsObservable(token).Subscribe(_ => subject.OnNext(Unit.Default)).AddTo(_actionWiringSubscriptions);
                             action.PerformedAsObservable(token).Subscribe(ctx =>
                             {
                                 if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
@@ -828,8 +910,8 @@ namespace CycloneGames.InputSystem.Runtime
                             _buttonSubjects[key] = subject;
 
                             var pressState = new BehaviorSubject<bool>(false);
-                            action.StartedAsObservable(token).Select(_ => true).Subscribe(pressState.AsObserver()).AddTo(_actionWiringSubscriptions);
-                            action.CanceledAsObservable(token).Select(_ => false).Subscribe(pressState.AsObserver()).AddTo(_actionWiringSubscriptions);
+                            action.StartedAsObservable(token).Subscribe(_ => pressState.OnNext(true)).AddTo(_actionWiringSubscriptions);
+                            action.CanceledAsObservable(token).Subscribe(_ => pressState.OnNext(false)).AddTo(_actionWiringSubscriptions);
                             _pressStateSubjects[key] = pressState;
 
                             int longPressMs = bindingConfig.LongPressMs;
@@ -892,8 +974,11 @@ namespace CycloneGames.InputSystem.Runtime
                     InputDevice activeDevice = null;
                     double latestTime = 0;
 
-                    foreach (var device in User.pairedDevices)
+                    var pairedDevices = User.pairedDevices;
+                    int pairedDeviceCount = pairedDevices.Count;
+                    for (int i = 0; i < pairedDeviceCount; i++)
                     {
+                        var device = pairedDevices[i];
                         if (device == null) continue;
 
                         double deviceTime = device.lastUpdateTime;
@@ -970,8 +1055,11 @@ namespace CycloneGames.InputSystem.Runtime
 
             if (device is Touchscreen touchscreen)
             {
-                foreach (var touch in touchscreen.touches)
+                var touches = touchscreen.touches;
+                int touchCount = touches.Count;
+                for (int i = 0; i < touchCount; i++)
                 {
+                    var touch = touches[i];
                     if (touch.press.isPressed || touch.press.wasPressedThisFrame)
                     {
                         return true;
@@ -1023,7 +1111,10 @@ namespace CycloneGames.InputSystem.Runtime
                             longPressSubject.OnNext(Unit.Default);
                         }
                     }
-                    catch (OperationCanceledException) { }
+                    catch (OperationCanceledException)
+                    {
+                        // Cancellation is the normal teardown path for player-owned polling tasks.
+                    }
                 });
             }).AddTo(_actionWiringSubscriptions);
 
@@ -1064,7 +1155,10 @@ namespace CycloneGames.InputSystem.Runtime
                             progressSubject.OnNext(-1f);
                         }
                     }
-                    catch (OperationCanceledException) { }
+                    catch (OperationCanceledException)
+                    {
+                        // Cancellation is the normal teardown path for player-owned polling tasks.
+                    }
                 });
             }).AddTo(_actionWiringSubscriptions);
 
@@ -1103,7 +1197,10 @@ namespace CycloneGames.InputSystem.Runtime
                                 longPressSubject.OnNext(Unit.Default);
                             }
                         }
-                        catch (OperationCanceledException) { }
+                        catch (OperationCanceledException)
+                        {
+                            // Cancellation is the normal teardown path for player-owned polling tasks.
+                        }
                     });
                 }
                 else if (activateTime >= 0f && v < clampedThreshold)
@@ -1220,55 +1317,48 @@ namespace CycloneGames.InputSystem.Runtime
                 float pressTime1 = -1f;
                 float pressTime2 = -1f;
                 bool chordEmitted = false;
-                var gate = new object();
 
                 var d1 = press1.Subscribe(pressed =>
                 {
-                    lock (gate)
+                    if (pressed)
                     {
-                        if (pressed)
+                        pressTime1 = Time.realtimeSinceStartup;
+                        if (pressTime2 >= 0f && !chordEmitted)
                         {
-                            pressTime1 = Time.realtimeSinceStartup;
-                            if (pressTime2 >= 0f && !chordEmitted)
+                            float elapsed = pressTime1 - pressTime2;
+                            if (elapsed >= 0f && elapsed <= thresholdSec)
                             {
-                                float elapsed = pressTime1 - pressTime2;
-                                if (elapsed >= 0f && elapsed <= thresholdSec)
-                                {
-                                    chordEmitted = true;
-                                    observer.OnNext(Unit.Default);
-                                }
+                                chordEmitted = true;
+                                observer.OnNext(Unit.Default);
                             }
                         }
-                        else
-                        {
-                            pressTime1 = -1f;
-                            chordEmitted = false;
-                        }
+                    }
+                    else
+                    {
+                        pressTime1 = -1f;
+                        chordEmitted = false;
                     }
                 });
 
                 var d2 = press2.Subscribe(pressed =>
                 {
-                    lock (gate)
+                    if (pressed)
                     {
-                        if (pressed)
+                        pressTime2 = Time.realtimeSinceStartup;
+                        if (pressTime1 >= 0f && !chordEmitted)
                         {
-                            pressTime2 = Time.realtimeSinceStartup;
-                            if (pressTime1 >= 0f && !chordEmitted)
+                            float elapsed = pressTime2 - pressTime1;
+                            if (elapsed >= 0f && elapsed <= thresholdSec)
                             {
-                                float elapsed = pressTime2 - pressTime1;
-                                if (elapsed >= 0f && elapsed <= thresholdSec)
-                                {
-                                    chordEmitted = true;
-                                    observer.OnNext(Unit.Default);
-                                }
+                                chordEmitted = true;
+                                observer.OnNext(Unit.Default);
                             }
                         }
-                        else
-                        {
-                            pressTime2 = -1f;
-                            chordEmitted = false;
-                        }
+                    }
+                    else
+                    {
+                        pressTime2 = -1f;
+                        chordEmitted = false;
                     }
                 });
 

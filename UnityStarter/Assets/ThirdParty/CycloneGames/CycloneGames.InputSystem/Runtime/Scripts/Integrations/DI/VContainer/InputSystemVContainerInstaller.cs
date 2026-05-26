@@ -137,7 +137,9 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
     public interface IInputPlayerResolver
     {
         IInputPlayer GetInputPlayer(int playerId);
+        UniTask<IInputPlayer> GetInputPlayerAsync(int playerId, int timeoutInSeconds = 5);
         bool TryGetInputPlayer(int playerId, out IInputPlayer inputPlayer);
+        UniTask<IInputPlayer> TryGetInputPlayerAsync(int playerId, int timeoutInSeconds = 5);
     }
 
     internal class InputSystemInitializer : IInputSystemInitializer
@@ -430,7 +432,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                     }
                     else
                     {
-                        if (!uwr.error.ToLower().Contains("not found"))
+                        if (uwr.error == null || uwr.error.IndexOf("not found", StringComparison.OrdinalIgnoreCase) < 0)
                         {
                             CycloneGames.Logger.CLogger.LogWarning($"[InputSystemInitializer] Failed to load from '{uri}': {uwr.error}");
                         }
@@ -464,6 +466,17 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             return inputPlayer;
         }
 
+        public async UniTask<IInputPlayer> GetInputPlayerAsync(int playerId, int timeoutInSeconds = 5)
+        {
+            var inputPlayer = await TryGetInputPlayerAsync(playerId, timeoutInSeconds);
+            if (inputPlayer == null)
+            {
+                throw new InvalidOperationException($"Failed to get player input for player {playerId}. Ensure InputManager is initialized and player slot exists.");
+            }
+
+            return inputPlayer;
+        }
+
         public bool TryGetInputPlayer(int playerId, out IInputPlayer inputPlayer)
         {
             inputPlayer = null;
@@ -479,8 +492,24 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 return true;
             }
 
+            if (!Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread)
+            {
+                CycloneGames.Logger.CLogger.LogError("[InputPlayerResolver] Synchronous player auto-join must be called on Unity main thread. Use GetInputPlayerAsync or TryGetInputPlayerAsync.");
+                return false;
+            }
+
             inputPlayer = _inputManager.JoinSinglePlayer(playerId);
             return inputPlayer != null;
+        }
+
+        public async UniTask<IInputPlayer> TryGetInputPlayerAsync(int playerId, int timeoutInSeconds = 5)
+        {
+            if (_inputManager == null)
+            {
+                return null;
+            }
+
+            return await _inputManager.GetOrJoinInputPlayerAsync(playerId, timeoutInSeconds);
         }
     }
 }
