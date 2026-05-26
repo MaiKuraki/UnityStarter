@@ -3,6 +3,7 @@ using CycloneGames.InputSystem.Runtime.Generated;
 using CycloneGames.Utility.Runtime;
 using Cysharp.Threading.Tasks;
 using R3;
+using System.Threading;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -33,7 +34,12 @@ namespace CycloneGames.InputSystem.Sample
 
         private static bool isInitialized = false;
 
-        private async void Start()
+        private void Start()
+        {
+            StartAsync(this.GetCancellationTokenOnDestroy()).Forget();
+        }
+
+        private async UniTaskVoid StartAsync(CancellationToken cancellationToken)
         {
             if (isInitialized)
             {
@@ -46,18 +52,19 @@ namespace CycloneGames.InputSystem.Sample
             string defaultConfigUri = FilePathUtility.GetUnityWebRequestUri(_defaultConfigName, UnityPathSource.StreamingAssets);
             string userConfigUri = FilePathUtility.GetUnityWebRequestUri(_userConfigName, UnityPathSource.PersistentData);
             await InputSystemLoader.InitializeAsync(defaultConfigUri, userConfigUri);
+            await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
 
             InputManager.Instance.OnPlayerInputReady += HandlePlayerInputReady;
 
             switch (startupMode)
             {
                 case StartupMode.AutoJoinLockedSinglePlayer:
-                    InputManager.Instance.JoinSinglePlayer(0);
+                    await InputManager.Instance.JoinSinglePlayerAsync(0);
                     break;
 
                 case StartupMode.AutoJoinSharedKeyboard:
-                    InputManager.Instance.JoinPlayerOnSharedDevice(0);
-                    InputManager.Instance.JoinPlayerOnSharedDevice(1);
+                    await InputManager.Instance.JoinPlayerOnSharedDeviceAsync(0);
+                    await InputManager.Instance.JoinPlayerOnSharedDeviceAsync(1);
                     break;
 
                 case StartupMode.LobbyWithDeviceLocking:
@@ -69,8 +76,8 @@ namespace CycloneGames.InputSystem.Sample
                     break;
 
                 case StartupMode.AsymmetricalKeyboardMouse:
-                    if (Keyboard.current != null) InputManager.Instance.JoinPlayerAndLockDevice(0, Keyboard.current);
-                    if (Mouse.current != null) InputManager.Instance.JoinPlayerAndLockDevice(1, Mouse.current);
+                    if (Keyboard.current != null) await InputManager.Instance.JoinPlayerAndLockDeviceAsync(0, Keyboard.current);
+                    if (Mouse.current != null) await InputManager.Instance.JoinPlayerAndLockDeviceAsync(1, Mouse.current);
                     break;
             }
         }

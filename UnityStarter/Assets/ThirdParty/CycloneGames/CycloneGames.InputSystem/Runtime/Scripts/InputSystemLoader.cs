@@ -1,7 +1,7 @@
 using System;
 using System.IO;
-using System.Threading.Tasks;
 using CycloneGames.Logger;
+using Cysharp.Threading.Tasks;
 using UnityEngine.Networking;
 using VYaml.Serialization;
 
@@ -17,7 +17,7 @@ namespace CycloneGames.InputSystem.Runtime
         /// <summary>
         /// Loads config from userConfigUri, falls back to defaultConfigUri if not found.
         /// </summary>
-        public static async Task InitializeAsync(string defaultConfigUri, string userConfigUri)
+        public static async UniTask InitializeAsync(string defaultConfigUri, string userConfigUri)
         {
             string yamlContent = null;
             string defaultYamlContent = null;
@@ -135,7 +135,7 @@ namespace CycloneGames.InputSystem.Runtime
         /// <param name="defaultConfigUri">URI to default config (e.g., StreamingAssets)</param>
         /// <param name="userConfigUri">URI to user config (e.g., PersistentData)</param>
         /// <returns>True if reset was successful</returns>
-        public static async Task<bool> ResetToDefaultAsync(string defaultConfigUri, string userConfigUri)
+        public static async UniTask<bool> ResetToDefaultAsync(string defaultConfigUri, string userConfigUri)
         {
             if (string.IsNullOrEmpty(defaultConfigUri))
             {
@@ -253,7 +253,7 @@ namespace CycloneGames.InputSystem.Runtime
             TryDeleteUserConfigFile(userConfigUri);
         }
 
-        private static async Task<(bool, string)> LoadConfigFromUriAsync(string uri)
+        private static async UniTask<(bool, string)> LoadConfigFromUriAsync(string uri)
         {
             using (UnityWebRequest uwr = UnityWebRequest.Get(uri))
             {
@@ -262,7 +262,7 @@ namespace CycloneGames.InputSystem.Runtime
                     var asyncOperation = uwr.SendWebRequest();
                     while (!asyncOperation.isDone)
                     {
-                        await Task.Yield();
+                        await UniTask.Yield();
                     }
 
                     if (uwr.result == UnityWebRequest.Result.Success)
@@ -271,7 +271,7 @@ namespace CycloneGames.InputSystem.Runtime
                     }
                     else
                     {
-                        if (!uwr.error.ToLower().Contains("not found"))
+                        if (uwr.error == null || uwr.error.IndexOf("not found", StringComparison.OrdinalIgnoreCase) < 0)
                         {
                             CLogger.LogWarning($"{DEBUG_FLAG} Failed to load from '{uri}': {uwr.error}");
                         }
