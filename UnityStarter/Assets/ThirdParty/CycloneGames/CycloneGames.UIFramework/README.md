@@ -208,7 +208,7 @@ Drives **two** windows simultaneously. When registered on `IUIService`, all `Nav
 ## Dependencies
 
 - `com.cysharp.unitask`
-- `com.cyclone-games.assetmanagement`
+- `com.cyclone-games.asset-management`
 - `com.cyclone-games.factory`
 - `com.cyclone-games.logger`
 - `com.cyclone-games.service`
