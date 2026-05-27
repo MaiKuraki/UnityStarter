@@ -1520,6 +1520,6 @@ Create a `HasDuration` effect with a `Period` and a negative `Add` modifier on H
 | ----------------------------------- | --------------------------- |
 | `com.cysharp.unitask`               | Async operations            |
 | `com.cyclone-games.gameplay-tags`   | GameplayTag system          |
-| `com.cyclone-games.assetmanagement` | Asset loading               |
+| `com.cyclone-games.asset-management` | Asset loading               |
 | `com.cyclone-games.logger`          | Debug logging               |
 | `com.cyclone-games.factory`         | Object creation and pooling |

@@ -1520,6 +1520,6 @@ GASDebugOverlay.SetPriority(bossASC, 50);
 | ----------------------------------- | ---------------- |
 | `com.cysharp.unitask`               | 异步操作         |
 | `com.cyclone-games.gameplay-tags`   | GameplayTag 系统 |
-| `com.cyclone-games.assetmanagement` | 资源加载         |
+| `com.cyclone-games.asset-management` | 资源加载         |
 | `com.cyclone-games.logger`          | 调试日志         |
 | `com.cyclone-games.factory`         | 对象创建与池化   |
