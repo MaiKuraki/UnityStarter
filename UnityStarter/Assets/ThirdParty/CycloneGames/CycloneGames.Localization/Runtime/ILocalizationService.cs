@@ -55,5 +55,6 @@ namespace CycloneGames.Localization.Runtime
         void UnregisterStringTable(string tableId, LocaleId localeId);
         void RegisterAssetTable(AssetTable table);
         void UnregisterAssetTable(string tableId, LocaleId localeId);
+        void RegisterCatalog(LocalizationCatalog catalog);
     }
 }

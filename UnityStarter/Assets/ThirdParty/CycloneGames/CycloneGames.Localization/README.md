@@ -2,7 +2,7 @@
 
 <div align="left">English | <a href="./README.SCH.md">简体中文</a></div>
 
-**Localization framework** for Unity designed for commercial-grade projects. Provides a complete string & asset localization pipeline with BCP 47 locale identifiers, automatic fallback chains, CLDR plural rules for 25+ languages, per-locale layout snapshots (via UIFramework integration), and a zero-GC runtime core — all fully driven by ScriptableObject configuration with no code generation required.
+**Localization framework** for Unity designed for commercial-grade projects. Provides a complete string and asset localization pipeline with BCP 47 locale identifiers, automatic fallback chains, CLDR plural rules for 25+ languages, per-locale layout snapshots via the optional UIFramework integration, and precompiled runtime lookup data driven by ScriptableObject configuration.
 
 ## Features
 
@@ -10,7 +10,7 @@
 
 | Feature                       | Detail                                                                                                              |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| **Interned LocaleId**         | `readonly struct` backed by `string.Intern()` — O(1) equality via `ReferenceEquals`, zero per-comparison allocation |
+| **LocaleId Value Type**       | `readonly struct` backed by a BCP 47 code string; ordinal equality with no per-comparison allocation                |
 | **BCP 47 Support**            | Standard locale codes: `en`, `zh-CN`, `ja-JP`, `pt-BR`, etc.                                                        |
 | **Locale ScriptableObject**   | Display name, native name, and fallback chain per locale — designers configure in Inspector                         |
 | **Automatic Fallback Chain**  | BFS traversal with deduplication: `zh-CN → zh → en` resolved once and cached                                        |
@@ -20,10 +20,10 @@
 
 | Feature                       | Detail                                                                                                    |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
-| **ScriptableObject Tables**   | One `StringTable` asset per locale per table ID — drop into Resources or Addressables                     |
+| **ScriptableObject Tables**   | One `StringTable` asset per locale per table ID; load and register through the project bootstrap pipeline |
 | **Compiled Runtime Lookup**   | Serialized lists are compiled into `CompiledStringTable` on registration or warmup; lookups use `StringComparer.Ordinal` |
 | **Fallback Chain Resolution** | If a key is missing in `zh-CN`, automatically checks `zh`, then `en`, etc.                                |
-| **Hot Reload**                | Dictionary is rebuilt on `OnEnable` — edit in Play mode and see changes immediately                       |
+| **Warmup Support**            | Tables can be compiled during loading so UI refresh paths only perform dictionary lookups                 |
 | **Parameterized Text**        | `GetFormattedString("ui", "damage", weaponName, amount)` → `"Deals {0} {1} damage"`                       |
 
 ### 🔢 Plural Rules (CLDR)
@@ -34,7 +34,7 @@
 | **6 Categories**       | `Zero`, `One`, `Two`, `Few`, `Many`, `Other` — each language uses its required subset                                                          |
 | **Suffix Convention**  | Base key `"item_count"` → entries `"item_count.one"`, `"item_count.other"`, etc.                                                               |
 | **Automatic Fallback** | Resolved category → `.other` fallback → missing key warning                                                                                    |
-| **Zero Allocation**    | Pure static methods with integer math — no string concat at resolve time                                                                       |
+| **Static Resolver**    | Pure static methods with integer math; resolved keys use the existing compiled table lookup path                                                 |
 
 ### 🎨 Asset Tables
 
@@ -111,47 +111,29 @@
 
 ```mermaid
 graph TD
-    subgraph Configuration
-        LS[LocalizationSettings<br/><i>ScriptableObject</i>]
-        LOC[Locale<br/><i>ScriptableObject</i>]
-    end
-
-    subgraph Core Assembly
-        LID[LocaleId<br/><i>readonly struct, interned</i>]
-        FCB[LocaleFallbackChainBuilder<br/><i>pure C# fallback builder</i>]
-        PR[PluralRules<br/><i>CLDR resolver, static</i>]
-        PSL[PseudoLocalizer<br/><i>static, zero-alloc</i>]
-    end
-
-    subgraph Runtime Assembly
-        FC[FallbackChain<br/><i>BFS traversal, cached</i>]
-        SEL[ILocaleSelector<br/><i>priority chain</i>]
-    end
-
-    subgraph Tables
-        ST[StringTable<br/><i>ScriptableObject</i>]
-        CST[CompiledStringTable<br/><i>runtime lookup</i>]
-        AT[AssetTable<br/><i>ScriptableObject</i>]
-        CAT[CompiledAssetTable<br/><i>runtime lookup</i>]
-        META[StringTableMetadata<br/><i>translator context</i>]
-    end
-
-    subgraph Service Layer
-        ILS[ILocalizationService<br/><i>public API</i>]
-        LSV[LocalizationService<br/><i>implementation</i>]
-    end
-
-    subgraph Components
-        LTT[LocalizeTMPText]
-        LI[LocalizeImage]
-        YLS[YarnLocaleSync]
-    end
-
+    LS[LocalizationSettings]
+    LOC[Locale]
+    LID[LocaleId]
+    FCB[LocaleFallbackChainBuilder]
+    PR[PluralRules]
+    PSL[PseudoLocalizer]
+    FC[FallbackChain]
+    SEL[ILocaleSelector]
+    ST[StringTable]
+    CST[CompiledStringTable]
+    AT[AssetTable]
+    CAT[CompiledAssetTable]
+    META[StringTableMetadata]
+    ILS[ILocalizationService]
+    LSV[LocalizationService]
+    LTT[LocalizeTMPText]
+    LI[LocalizeImage]
+    YLS[YarnLocaleSync]
     LS --> LOC
     LOC --> LID
     LOC --> FCB
     FC --> FCB
-    LSV -.implements.-> ILS
+    LSV --> ILS
     ILS --> ST
     ST --> CST
     ILS --> AT
@@ -190,9 +172,27 @@ CycloneGames.Localization/
 
 `Core` has no Unity engine references and can be reused by tools, tests, server code, or future non-Unity adapters. Runtime ScriptableObjects are authoring assets; `LocalizationService` registers compiled runtime table data for lookup.
 
+### Runtime Data Packages
+
+`LocalizationCatalog` is the generated runtime data package used to register localized string and asset tables in one operation. It stores a schema version, catalog version, content hash, string table entries, and asset table entries.
+
+Catalogs provide a generated runtime payload for bootstrapping, build validation, hot update manifests, encrypted delivery, and binary decoding. The runtime service consumes the catalog data contract and does not depend on a specific storage backend.
+
+Supported registration paths:
+
+1. Register individual `StringTable` and `AssetTable` assets during project bootstrap.
+2. Build and register a `LocalizationCatalog`.
+3. Decode external data into `LocalizationCatalog`, `CompiledStringTable`, or `CompiledAssetTable` in a separate integration assembly.
+
+Optional DataTable, binary, MessagePack, or encryption support should be implemented in integration assemblies. Those integrations should depend on `CycloneGames.Localization.Runtime`; the base runtime assembly should not depend on DataTable or a fixed asset loading backend.
+
+Projects that need asynchronous catalog loading can implement `ILocalizationCatalogProvider`. Provider implementations may load from `CycloneGames.AssetManagement`, encrypted files, a remote manifest, test memory data, or any project-specific source. After the provider returns a catalog, register it with `ILocalizationService.RegisterCatalog`.
+
 ---
 
 ## Getting Started
+
+The basic integration path uses `Locale`, `LocalizationSettings`, and `StringTable` assets. Initialize `LocalizationService`, load the required tables, and register them with `RegisterStringTable`. `LocalizationCatalog` is not required for this path.
 
 ### 1. Create Locale Assets
 
@@ -239,7 +239,7 @@ Localization/
 │   └── Items_zh-CN.asset  (tableId: "items", locale: "zh-CN")
 ```
 
-Use the **String Table Editor Window** (Tools → CycloneGames → Localization → String Table Editor) for visual editing, or import from CSV.
+Use the **String Table Editor Window** (Tools → CycloneGames → Localization → Tables → String Table Editor) for visual editing, or import from CSV.
 
 ### 4. Initialize the Service
 
@@ -272,7 +272,7 @@ await service.InitializeAsync(settings.ToOptions());
 ### 5. Register String Tables
 
 ```csharp
-// Load and register tables (e.g. from Addressables or Resources)
+// Load and register tables through the project's bootstrap or asset package flow.
 service.RegisterStringTable(uiTableEn);
 service.RegisterStringTable(uiTableZhCN);
 ```
@@ -290,7 +290,30 @@ service.RegisterAssetTable(flagsZhCN);
 
 ### 7. Validate Project Data
 
-Use **Tools > CycloneGames > Localization > Validation** before handoff or release. The validation window scans string tables, asset tables, and locale fallback chains for empty IDs, invalid locales, duplicate keys, self fallback, and fallback cycles.
+Use **Tools > CycloneGames > Localization > Validation > Validate Project** before handoff or release. The validation tool scans string tables, asset tables, metadata, and locale fallback chains for empty IDs, invalid locales, duplicate keys, missing plural `.other` entries, self fallback, and fallback cycles.
+
+### 8. Runtime Catalog Workflow
+
+Use a `LocalizationCatalog` when the project requires a generated localization payload for release builds, CI validation, hot update delivery, encrypted files, or binary decoding. For direct asset registration, skip this section and register `StringTable` or `AssetTable` assets during loading or scene bootstrap.
+
+Create a `LocalizationCatalogBuildSettings` asset for team and CI workflows:
+
+**Create > CycloneGames > Localization > Catalog Build Settings**
+
+Configure the output folder, output file name, catalog version, and validation options in the Inspector. The output folder is a folder asset reference, so the setting can be committed to version control and reused across machines without modifying package source code.
+
+Use **Tools > CycloneGames > Localization > Catalog > Build From Settings** to build from the first settings asset found in the project. The builder runs validation first, preserves entry order, and writes a deterministic `SHA256` content hash for version checks, hot updates, and future delta package workflows.
+
+Use **Tools > CycloneGames > Localization > Catalog > Build Once...** only for one-off manual builds where the output path should be selected interactively.
+
+```csharp
+// Load the catalog through CycloneGames.AssetManagement or another project-specific package flow.
+service.RegisterCatalog(localizationCatalog);
+```
+
+`LocalizationCatalog` is backend-neutral. The generated asset can be included in the initial build, delivered by a hot-update package, or produced by a project-specific decoder before registration.
+
+The `LocalizationCatalog` Inspector is a read-only generated-data view. It shows schema version, catalog version, `ContentHash`, string table count, asset table count, and entry totals, and provides build actions that reuse `LocalizationCatalogBuildSettings`. Edit source tables and build settings instead of editing generated catalog fields directly.
 
 ---
 
@@ -576,7 +599,7 @@ Setup:
 
 ### Multi-Language String Table Editor
 
-**Tools → CycloneGames → Localization → String Table Editor**
+**Tools → CycloneGames → Localization → Tables → String Table Editor**
 
 Edits all locale variants of a string table side-by-side in a single window.
 
@@ -593,7 +616,7 @@ Edits all locale variants of a string table side-by-side in a single window.
 
 ### Multi-Language Asset Table Editor
 
-**Tools → CycloneGames → Localization → Asset Table Editor**
+**Tools → CycloneGames → Localization → Tables → Asset Table Editor**
 
 Same architecture as the String Table Editor, adapted for asset tables.
 
@@ -704,14 +727,21 @@ The following table shows which `PluralCategory` values each language group uses
 | `UnregisterStringTable(string, LocaleId)`                   | Remove a string table                                                   |
 | `RegisterAssetTable(AssetTable)`                            | Register an asset table                                                 |
 | `UnregisterAssetTable(string, LocaleId)`                    | Remove an asset table                                                   |
+| `RegisterCatalog(LocalizationCatalog)`                      | Register compiled catalog data from generated or packaged localization data |
 | `RegisterMetadata(StringTableMetadata)`                     | Register metadata for `GetMaxLength` queries                            |
 | `UnregisterMetadata(string)`                                | Remove metadata by table ID                                             |
+
+### `ILocalizationCatalogProvider`
+
+| Member                                         | Description                                           |
+| ---------------------------------------------- | ----------------------------------------------------- |
+| `LoadCatalogAsync(CancellationToken)`          | Asynchronously loads a catalog from a project-defined source |
 
 ### `LocaleId`
 
 | Member     | Description                                 |
 | ---------- | ------------------------------------------- |
-| `Code`     | The interned BCP 47 string (e.g. `"zh-CN"`) |
+| `Code`     | The BCP 47 string (e.g. `"zh-CN"`)          |
 | `IsValid`  | `true` if `Code` is not null                |
 | `Language` | Language-only portion: `"zh-CN"` → `"zh"`   |
 | `Invalid`  | Static readonly default (null code)         |
@@ -835,10 +865,10 @@ The following table shows which `PluralCategory` values each language group uses
 
 ### Performance Notes
 
-- **Zero GC after warmup**: Dictionary lookups use `StringComparer.Ordinal`; `LocaleId` equality is `ReferenceEquals` on interned strings
+- **Low/zero GC after warmup**: Compiled table lookups use `StringComparer.Ordinal`; `LocaleId` equality uses ordinal string comparison without temporary allocations
 - **Event-driven refresh**: Components only update when `OnLocaleChanged` fires — zero per-frame overhead
 - **Fallback chain cached**: BFS traversal runs once per locale and is cached for all subsequent lookups
-- **Plural rules zero-alloc**: Static methods with pure integer math — no string concatenation at resolve time
+- **Plural rules**: Static category resolution uses pure integer math. Plural string lookup may build suffixed keys and should not be called from high-frequency per-frame paths without caching.
 - **Pseudo-localizer zero-alloc**: `stackalloc` for strings ≤ 512 chars; inline pass-through when `None`
 - **Locale selector cached**: `CommandLineLocaleSelector` and `SystemLocaleSelector` cache results after first call
 - **Missing key dedup**: HashSet prevents repeated Console warnings for the same key

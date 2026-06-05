@@ -19,6 +19,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         /// <summary>Runtime key used by the asset management system (e.g., asset path or address).</summary>
         public string Location => m_Location;
+        public string Guid => m_GUID;
 
         /// <summary>Whether this reference points to a valid location.</summary>
         public bool IsValid => !string.IsNullOrEmpty(m_Location);
@@ -54,6 +55,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         /// <summary>Runtime key used by the asset management system.</summary>
         public string Location => m_Location;
+        public string Guid => m_GUID;
 
         /// <summary>Whether this reference points to a valid location.</summary>
         public bool IsValid => !string.IsNullOrEmpty(m_Location);

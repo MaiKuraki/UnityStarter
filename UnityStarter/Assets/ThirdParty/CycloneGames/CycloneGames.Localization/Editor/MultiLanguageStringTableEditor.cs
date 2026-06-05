@@ -12,7 +12,7 @@ namespace CycloneGames.Localization.Editor
 {
     public sealed class MultiLanguageStringTableEditor : EditorWindow
     {
-        [MenuItem("Tools/CycloneGames/Localization/String Table Editor")]
+        [MenuItem("Tools/CycloneGames/Localization/Tables/String Table Editor")]
         public static void Open()
         {
             var w = GetWindow<MultiLanguageStringTableEditor>("String Table Editor");
