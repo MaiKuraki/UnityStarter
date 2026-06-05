@@ -330,15 +330,7 @@ namespace CycloneGames.Localization.Runtime
             if (table == null) return;
             if (string.IsNullOrEmpty(table.TableId) || !table.LocaleId.IsValid) return;
 
-            var compiledTable = table.Compile();
-
-            if (!_stringTables.TryGetValue(table.TableId, out var localeMap))
-            {
-                localeMap = new Dictionary<string, CompiledStringTable>(4, StringComparer.Ordinal);
-                _stringTables[table.TableId] = localeMap;
-            }
-
-            localeMap[compiledTable.LocaleId.Code] = compiledTable;
+            RegisterCompiledStringTable(table.Compile());
         }
 
         public void UnregisterStringTable(string tableId, LocaleId localeId)
@@ -354,7 +346,69 @@ namespace CycloneGames.Localization.Runtime
             if (table == null) return;
             if (string.IsNullOrEmpty(table.TableId) || !table.LocaleId.IsValid) return;
 
-            var compiledTable = table.Compile();
+            RegisterCompiledAssetTable(table.Compile());
+        }
+
+        public void RegisterCatalog(LocalizationCatalog catalog)
+        {
+            if (catalog == null) return;
+            if (catalog.SchemaVersion != LocalizationCatalog.CurrentSchemaVersion) return;
+
+            var stringTables = catalog.StringTables;
+            for (int i = 0; i < stringTables.Count; i++)
+            {
+                var table = stringTables[i];
+                if (table == null || string.IsNullOrEmpty(table.TableId) || !table.LocaleId.IsValid) continue;
+
+                var entries = table.Entries;
+                var lookup = new Dictionary<string, string>(entries.Count, StringComparer.Ordinal);
+                for (int entryIndex = 0; entryIndex < entries.Count; entryIndex++)
+                {
+                    var entry = entries[entryIndex];
+                    if (string.IsNullOrEmpty(entry.Key)) continue;
+                    lookup[entry.Key] = entry.Value;
+                }
+
+                RegisterCompiledStringTable(new CompiledStringTable(table.TableId, table.LocaleId, lookup));
+            }
+
+            var assetTables = catalog.AssetTables;
+            for (int i = 0; i < assetTables.Count; i++)
+            {
+                var table = assetTables[i];
+                if (table == null || string.IsNullOrEmpty(table.TableId) || !table.LocaleId.IsValid) continue;
+
+                var entries = table.Entries;
+                var lookup = new Dictionary<string, AssetRef>(entries.Count, StringComparer.Ordinal);
+                for (int entryIndex = 0; entryIndex < entries.Count; entryIndex++)
+                {
+                    var entry = entries[entryIndex];
+                    if (string.IsNullOrEmpty(entry.Key)) continue;
+                    lookup[entry.Key] = entry.Asset;
+                }
+
+                RegisterCompiledAssetTable(new CompiledAssetTable(table.TableId, table.LocaleId, lookup));
+            }
+        }
+
+        private void RegisterCompiledStringTable(CompiledStringTable table)
+        {
+            if (table == null) return;
+            if (string.IsNullOrEmpty(table.TableId) || !table.LocaleId.IsValid) return;
+
+            if (!_stringTables.TryGetValue(table.TableId, out var localeMap))
+            {
+                localeMap = new Dictionary<string, CompiledStringTable>(4, StringComparer.Ordinal);
+                _stringTables[table.TableId] = localeMap;
+            }
+
+            localeMap[table.LocaleId.Code] = table;
+        }
+
+        private void RegisterCompiledAssetTable(CompiledAssetTable table)
+        {
+            if (table == null) return;
+            if (string.IsNullOrEmpty(table.TableId) || !table.LocaleId.IsValid) return;
 
             if (!_assetTables.TryGetValue(table.TableId, out var localeMap))
             {
@@ -362,7 +416,7 @@ namespace CycloneGames.Localization.Runtime
                 _assetTables[table.TableId] = localeMap;
             }
 
-            localeMap[compiledTable.LocaleId.Code] = compiledTable;
+            localeMap[table.LocaleId.Code] = table;
         }
 
         public void UnregisterAssetTable(string tableId, LocaleId localeId)

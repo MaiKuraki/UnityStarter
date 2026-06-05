@@ -1,4 +1,7 @@
+using System.Collections.Generic;
+using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
+using CycloneGames.Localization.Editor;
 using CycloneGames.Localization.Runtime;
 using NUnit.Framework;
 using UnityEditor;
@@ -83,6 +86,116 @@ namespace CycloneGames.Localization.Tests.Editor
             Assert.That(service.GetPluralString("ui", "items", 3), Is.EqualTo("3 items"));
         }
 
+        [Test]
+        public void StringTableCompileUsesLastDuplicateKey()
+        {
+            var table = CreateStringTable(
+                "ui",
+                "en",
+                Entry("title", "Old"),
+                Entry("title", "New"));
+
+            var compiled = table.Compile();
+
+            Assert.That(compiled.TryGetValue("title", out var value), Is.True);
+            Assert.That(value, Is.EqualTo("New"));
+            Assert.That(table.Compile(), Is.SameAs(compiled));
+        }
+
+        [Test]
+        public void AssetTableCompileUsesLastDuplicateKey()
+        {
+            var table = CreateAssetTable(
+                "icons",
+                "en",
+                AssetEntry("flag", "Assets/Old.png"),
+                AssetEntry("flag", "Assets/New.png"));
+
+            var compiled = table.Compile();
+
+            Assert.That(compiled.TryGetValue("flag", out var value), Is.True);
+            Assert.That(value.Location, Is.EqualTo("Assets/New.png"));
+            Assert.That(table.Compile(), Is.SameAs(compiled));
+        }
+
+        [Test]
+        public void ServiceResolvesAssetThroughFallbackChain()
+        {
+            var service = new LocalizationService();
+            var en = CreateLocale("en");
+            var zh = CreateLocale("zh-CN", en);
+
+            service.RegisterAssetTable(CreateAssetTable("icons", "en", AssetEntry("flag", "Assets/Flag_en.png")));
+            service.RegisterAssetTable(CreateAssetTable("icons", "zh-CN", AssetEntry("confirm", "Assets/Confirm_zh.png")));
+            service.InitializeAsync(new LocalizationOptions(zh, new[] { zh, en }, false)).GetAwaiter().GetResult();
+
+            Assert.That(service.ResolveAsset("icons", "flag").Location, Is.EqualTo("Assets/Flag_en.png"));
+            Assert.That(service.ResolveAsset("icons", "confirm").Location, Is.EqualTo("Assets/Confirm_zh.png"));
+        }
+
+        [Test]
+        public void ServiceRegistersCatalogTables()
+        {
+            var service = new LocalizationService();
+            var en = CreateLocale("en");
+            var zh = CreateLocale("zh-CN", en);
+            var catalog = ScriptableObject.CreateInstance<LocalizationCatalog>();
+
+            catalog.SetData(
+                "1.0.0",
+                "test",
+                new List<CatalogStringTable>
+                {
+                    new CatalogStringTable("ui", "en", new List<CatalogStringEntry>
+                    {
+                        new CatalogStringEntry("title", "Start"),
+                    }),
+                    new CatalogStringTable("ui", "zh-CN", new List<CatalogStringEntry>
+                    {
+                        new CatalogStringEntry("subtitle", "Ni Hao"),
+                    }),
+                },
+                new List<CatalogAssetTable>
+                {
+                    new CatalogAssetTable("icons", "en", new List<CatalogAssetEntry>
+                    {
+                        new CatalogAssetEntry("flag", new AssetRef("Assets/Flag_en.png", "flag-guid")),
+                    }),
+                });
+
+            service.RegisterCatalog(catalog);
+            service.InitializeAsync(new LocalizationOptions(zh, new[] { zh, en }, false)).GetAwaiter().GetResult();
+
+            Assert.That(service.GetString("ui", "title"), Is.EqualTo("Start"));
+            Assert.That(service.GetString("ui", "subtitle"), Is.EqualTo("Ni Hao"));
+            Assert.That(service.ResolveAsset("icons", "flag").Guid, Is.EqualTo("flag-guid"));
+        }
+
+        [Test]
+        public void CatalogContentHashIsDeterministic()
+        {
+            var stringTables = new List<CatalogStringTable>
+            {
+                new CatalogStringTable("ui", "en", new List<CatalogStringEntry>
+                {
+                    new CatalogStringEntry("title", "Start"),
+                    new CatalogStringEntry("subtitle", "Continue"),
+                }),
+            };
+            var assetTables = new List<CatalogAssetTable>
+            {
+                new CatalogAssetTable("icons", "en", new List<CatalogAssetEntry>
+                {
+                    new CatalogAssetEntry("flag", new AssetRef("Assets/Flag.png", "flag-guid")),
+                }),
+            };
+
+            string first = LocalizationCatalogBuilder.ComputeContentHash(stringTables, assetTables);
+            string second = LocalizationCatalogBuilder.ComputeContentHash(stringTables, assetTables);
+
+            Assert.That(first, Is.EqualTo(second));
+        }
+
         private static TestStringEntry Entry(string key, string value)
         {
             return new TestStringEntry(key, value);
@@ -131,6 +244,34 @@ namespace CycloneGames.Localization.Tests.Editor
             return table;
         }
 
+        private static TestAssetEntry AssetEntry(string key, string location)
+        {
+            return new TestAssetEntry(key, location);
+        }
+
+        private static AssetTable CreateAssetTable(string tableId, string localeCode, params TestAssetEntry[] entries)
+        {
+            var table = ScriptableObject.CreateInstance<AssetTable>();
+            var serialized = new SerializedObject(table);
+
+            serialized.FindProperty("tableId").stringValue = tableId;
+            serialized.FindProperty("localeCode").stringValue = localeCode;
+
+            var entriesProperty = serialized.FindProperty("entries");
+            entriesProperty.arraySize = entries != null ? entries.Length : 0;
+
+            for (int i = 0; i < entriesProperty.arraySize; i++)
+            {
+                var entryProperty = entriesProperty.GetArrayElementAtIndex(i);
+                entryProperty.FindPropertyRelative("Key").stringValue = entries[i].Key;
+                var assetProperty = entryProperty.FindPropertyRelative("Asset");
+                assetProperty.FindPropertyRelative("m_Location").stringValue = entries[i].Location;
+            }
+
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            return table;
+        }
+
         private readonly struct TestStringEntry
         {
             public readonly string Key;
@@ -140,6 +281,18 @@ namespace CycloneGames.Localization.Tests.Editor
             {
                 Key = key;
                 Value = value;
+            }
+        }
+
+        private readonly struct TestAssetEntry
+        {
+            public readonly string Key;
+            public readonly string Location;
+
+            public TestAssetEntry(string key, string location)
+            {
+                Key = key;
+                Location = location;
             }
         }
     }
