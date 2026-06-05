@@ -31,7 +31,7 @@ namespace CycloneGames.Localization.Editor
         private static readonly Dictionary<string, CachedKeys> s_StringKeyCache = new(8);
         private static readonly Dictionary<string, CachedKeys> s_AssetKeyCache = new(8);
 
-        // Cached GUIContent for disabled state — allocated once
+        // Cached GUIContent for disabled state ?allocated once
         private static readonly GUIContent[] s_SelectTableFirst =
             { new GUIContent("Select a table first") };
 
@@ -50,7 +50,7 @@ namespace CycloneGames.Localization.Editor
             s_Version++;
         }
 
-        // ── Table Popup ─────────────────────────────────────────
+        //  Table Popup 
         public static void DrawTablePopup(Rect rect, SerializedProperty tableIdProp,
             GUIContent label, TableType type)
         {
@@ -88,7 +88,7 @@ namespace CycloneGames.Localization.Editor
             }
         }
 
-        // ── Key Popups ──────────────────────────────────────────
+        //  Key Popups 
         public static void DrawStringKeyPopup(Rect rect, SerializedProperty entryKeyProp,
             GUIContent label, string tableId)
         {
@@ -140,7 +140,7 @@ namespace CycloneGames.Localization.Editor
             }
         }
 
-        // ── Lazy Build with Version Check ───────────────────────
+        //  Lazy Build with Version Check 
         private static void EnsureStringTableIds()
         {
             if (s_StringTableIds != null && s_StringTableVersion == s_Version) return;
@@ -189,7 +189,7 @@ namespace CycloneGames.Localization.Editor
             return cached;
         }
 
-        // ── Discovery (only runs on cache miss) ─────────────────
+        //  Discovery (only runs on cache miss) 
         private static string[] FindTableIds<T>() where T : ScriptableObject
         {
             string[] guids = AssetDatabase.FindAssets($"t:{typeof(T).Name}");
@@ -202,7 +202,7 @@ namespace CycloneGames.Localization.Editor
                 var table = AssetDatabase.LoadAssetAtPath<T>(path);
                 if (table == null) continue;
 
-                // Read tableId via SerializedObject — avoids depending on public property name
+                // Read tableId via SerializedObject ?avoids depending on public property name
                 var so = new SerializedObject(table);
                 string id = so.FindProperty("tableId").stringValue;
                 if (!string.IsNullOrEmpty(id))
@@ -246,7 +246,7 @@ namespace CycloneGames.Localization.Editor
             return result;
         }
 
-        // ── GUIContent Builders (cached alongside data) ─────────
+        //  GUIContent Builders (cached alongside data) 
         private static GUIContent[] BuildTableContents(string[] tableIds)
         {
             var contents = new GUIContent[tableIds.Length + 1];

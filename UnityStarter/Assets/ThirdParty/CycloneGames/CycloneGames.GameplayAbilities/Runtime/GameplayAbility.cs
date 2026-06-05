@@ -395,6 +395,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public virtual void CancelAbility()
         {
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.AbilityCancelled, AbilitySystemComponent, this, decision: GASTraceDecision.Rejected, abilitySpecHandle: Spec?.Handle ?? 0, predictionKey: CurrentActivationInfo.PredictionKey, level: Spec?.Level ?? 0);
+            }
             GASLog.Debug(sb => sb.Append("Ability '").Append(Name).Append("' was cancelled."));
             EndAbility();
         }
@@ -495,23 +499,80 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public virtual bool CanActivate(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec)
         {
-            if (isEnding) return false;
-            if (spec.Owner.HasAnyMatchingGameplayTags(ActivationBlockedTagsSnapshot)) return false;
-            if (!spec.Owner.HasAllMatchingGameplayTags(ActivationRequiredTagsSnapshot)) return false;
+            if (isEnding)
+            {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.IsEnding, abilitySpecHandle: spec.Handle);
+                }
+                return false;
+            }
+
+            if (spec.Owner.HasAnyMatchingGameplayTags(ActivationBlockedTagsSnapshot))
+            {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.ActivationBlockedTags, abilitySpecHandle: spec.Handle);
+                }
+                return false;
+            }
+
+            if (!spec.Owner.HasAllMatchingGameplayTags(ActivationRequiredTagsSnapshot))
+            {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.ActivationRequiredTags, abilitySpecHandle: spec.Handle);
+                }
+                return false;
+            }
 
             // UE5: Source tag requirements --check tags on the source (owner)
-            if (!spec.Owner.HasAllMatchingGameplayTags(SourceRequiredTagsSnapshot)) return false;
-            if (spec.Owner.HasAnyMatchingGameplayTags(SourceBlockedTagsSnapshot)) return false;
+            if (!spec.Owner.HasAllMatchingGameplayTags(SourceRequiredTagsSnapshot))
+            {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.SourceRequiredTags, abilitySpecHandle: spec.Handle);
+                }
+                return false;
+            }
+
+            if (spec.Owner.HasAnyMatchingGameplayTags(SourceBlockedTagsSnapshot))
+            {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.SourceBlockedTags, abilitySpecHandle: spec.Handle);
+                }
+                return false;
+            }
 
             // UE5: Check if any active ability is blocking us via BlockAbilitiesWithTag
             if (AbilityTags != null && !AbilityTags.IsEmpty && spec.Owner.AreAbilitiesBlockedByTag(AbilityTags))
             {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.BlockedByActiveAbility, abilitySpecHandle: spec.Handle);
+                }
                 GASLog.Debug(sb => sb.Append("Ability '").Append(Name).Append("' blocked by another active ability's BlockAbilitiesWithTag."));
                 return false;
             }
 
-            if (!CheckCooldown(spec.Owner)) return false;
-            if (!CheckCost(spec.Owner)) return false;
+            if (!CheckCooldown(spec.Owner))
+            {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.Cooldown, abilitySpecHandle: spec.Handle);
+                }
+                return false;
+            }
+
+            if (!CheckCost(spec.Owner))
+            {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.Cost, abilitySpecHandle: spec.Handle);
+                }
+                return false;
+            }
 
             return true;
         }

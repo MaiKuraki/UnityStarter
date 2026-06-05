@@ -21,7 +21,7 @@
 | Feature                       | Detail                                                                                                    |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
 | **ScriptableObject Tables**   | One `StringTable` asset per locale per table ID — drop into Resources or Addressables                     |
-| **Lazy Dictionary Baking**    | Entries are stored as serialized lists; dictionary is built on first access with `StringComparer.Ordinal` |
+| **Compiled Runtime Lookup**   | Serialized lists are compiled into `CompiledStringTable` on registration or warmup; lookups use `StringComparer.Ordinal` |
 | **Fallback Chain Resolution** | If a key is missing in `zh-CN`, automatically checks `zh`, then `en`, etc.                                |
 | **Hot Reload**                | Dictionary is rebuilt on `OnEnable` — edit in Play mode and see changes immediately                       |
 | **Parameterized Text**        | `GetFormattedString("ui", "damage", weaponName, amount)` → `"Deals {0} {1} damage"`                       |
@@ -43,6 +43,7 @@
 | **Per-Locale Asset Variants** | Map a logical key to different sprites, audio clips, or fonts per locale          |
 | **Fallback Chain Resolution** | Same BFS fallback as string tables — `ja-JP → ja → en`                            |
 | **AssetRef Integration**      | Resolves to `AssetRef<T>` compatible with `CycloneGames.AssetManagement` pipeline |
+| **Compiled Runtime Lookup**   | `AssetTable` authoring data is compiled into `CompiledAssetTable` before lookup   |
 | **Type-Safe**                 | `LocalizedAsset<Sprite>`, `LocalizedAsset<AudioClip>`, etc.                       |
 
 ### 🧩 Components
@@ -104,6 +105,7 @@
 | **Property Drawers**                   | Dropdown table & key selectors for `LocalizedString` and `LocalizedAsset<T>`                                                                     |
 | **Locale Inspector**                   | Custom editor showing BCP 47 code, display name, native name, fallback chain                                                                     |
 | **Version-Cached Discovery**           | `LocalizedFieldHelper` with `AssetPostprocessor` — table/key lists update on import, zero per-frame cost                                         |
+| **Validation Window**                  | Project-level scan for empty IDs, invalid locales, duplicate keys, and fallback cycles                                                           |
 
 ## Core Architecture
 
@@ -114,17 +116,23 @@ graph TD
         LOC[Locale<br/><i>ScriptableObject</i>]
     end
 
-    subgraph Runtime Core
+    subgraph Core Assembly
         LID[LocaleId<br/><i>readonly struct, interned</i>]
-        FC[FallbackChain<br/><i>BFS traversal, cached</i>]
+        FCB[LocaleFallbackChainBuilder<br/><i>pure C# fallback builder</i>]
         PR[PluralRules<br/><i>CLDR resolver, static</i>]
         PSL[PseudoLocalizer<br/><i>static, zero-alloc</i>]
+    end
+
+    subgraph Runtime Assembly
+        FC[FallbackChain<br/><i>BFS traversal, cached</i>]
         SEL[ILocaleSelector<br/><i>priority chain</i>]
     end
 
     subgraph Tables
         ST[StringTable<br/><i>ScriptableObject</i>]
+        CST[CompiledStringTable<br/><i>runtime lookup</i>]
         AT[AssetTable<br/><i>ScriptableObject</i>]
+        CAT[CompiledAssetTable<br/><i>runtime lookup</i>]
         META[StringTableMetadata<br/><i>translator context</i>]
     end
 
@@ -141,10 +149,13 @@ graph TD
 
     LS --> LOC
     LOC --> LID
-    LOC --> FC
+    LOC --> FCB
+    FC --> FCB
     LSV -.implements.-> ILS
     ILS --> ST
+    ST --> CST
     ILS --> AT
+    AT --> CAT
     ILS --> FC
     ILS --> PR
     ILS --> PSL
@@ -164,6 +175,20 @@ graph TD
 | **TextMeshPro**                  | `LocalizeTMPText` component                                                  |
 | **Unity UI**                     | `LocalizeImage` component                                                    |
 | **Yarn Spinner** _(optional)_    | `YarnLocaleSync` — compiled only when Yarn Spinner is present                |
+
+---
+
+## Module Layout
+
+```
+CycloneGames.Localization/
+  Core/        Pure C# locale IDs, plural rules, pseudo-localization, fallback helpers
+  Runtime/     Unity runtime service, settings, tables, components, and integrations
+  Editor/      Inspectors, drawers, multi-language table editors, validation tools
+  Tests/       EditMode tests for core and editor-facing behavior
+```
+
+`Core` has no Unity engine references and can be reused by tools, tests, server code, or future non-Unity adapters. Runtime ScriptableObjects are authoring assets; `LocalizationService` registers compiled runtime table data for lookup.
 
 ---
 
@@ -251,6 +276,21 @@ await service.InitializeAsync(settings.ToOptions());
 service.RegisterStringTable(uiTableEn);
 service.RegisterStringTable(uiTableZhCN);
 ```
+
+`RegisterStringTable` compiles each `StringTable` into `CompiledStringTable`. Register tables during loading or scene bootstrap, not from per-frame UI refresh code.
+
+### 6. Register Asset Tables
+
+```csharp
+service.RegisterAssetTable(flagsEn);
+service.RegisterAssetTable(flagsZhCN);
+```
+
+`RegisterAssetTable` compiles each `AssetTable` into `CompiledAssetTable`. The runtime lookup path resolves the active locale fallback chain and returns an `AssetRef` without rebuilding table dictionaries.
+
+### 7. Validate Project Data
+
+Use **Tools > CycloneGames > Localization > Validation** before handoff or release. The validation window scans string tables, asset tables, and locale fallback chains for empty IDs, invalid locales, duplicate keys, self fallback, and fallback cycles.
 
 ---
 
@@ -678,20 +718,23 @@ The following table shows which `PluralCategory` values each language group uses
 
 ### `StringTable`
 
-| Member                            | Description                                                |
-| --------------------------------- | ---------------------------------------------------------- |
-| `TableId`                         | Identifier shared across all locale variants of this table |
-| `LocaleId`                        | The locale this table provides translations for            |
-| `Count`                           | Number of entries                                          |
-| `TryGetValue(string, out string)` | O(1) dictionary lookup with `StringComparer.Ordinal`       |
+| Member                            | Description                                                        |
+| --------------------------------- | ------------------------------------------------------------------ |
+| `TableId`                         | Identifier shared across all locale variants of this table         |
+| `LocaleId`                        | The locale this table provides translations for                    |
+| `Count`                           | Number of serialized authoring entries                             |
+| `Compile()`                       | Builds or returns cached `CompiledStringTable` runtime lookup data |
+| `TryGetValue(string, out string)` | O(1) lookup through compiled runtime data                          |
 
 ### `AssetTable`
 
-| Member                                     | Description                         |
-| ------------------------------------------ | ----------------------------------- |
-| `TableId`                                  | Identifier for this asset table     |
-| `Count`                                    | Number of entries                   |
-| `TryGetEntry(string, out AssetTableEntry)` | O(1) lookup for asset table entries |
+| Member                              | Description                                                       |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `TableId`                           | Identifier for this asset table                                   |
+| `LocaleId`                          | The locale this table provides asset variants for                 |
+| `Count`                             | Number of serialized authoring entries                            |
+| `Compile()`                         | Builds or returns cached `CompiledAssetTable` runtime lookup data |
+| `TryGetValue(string, out AssetRef)` | O(1) lookup through compiled runtime data                         |
 
 ### `PluralRules`
 

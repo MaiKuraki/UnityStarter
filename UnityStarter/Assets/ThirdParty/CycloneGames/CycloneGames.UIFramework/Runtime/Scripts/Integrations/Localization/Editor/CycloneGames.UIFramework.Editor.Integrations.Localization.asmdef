@@ -4,7 +4,9 @@
     "references": [
         "CycloneGames.UIFramework.Runtime",
         "CycloneGames.UIFramework.Runtime.Integrations.Localization",
+        "CycloneGames.Localization.Core",
         "CycloneGames.Localization.Runtime",
+        "CycloneGames.Localization.Components",
         "Unity.TextMeshPro"
     ],
     "includePlatforms": [
@@ -18,6 +20,12 @@
     "defineConstraints": [
         "CYCLONE_LOCALIZATION"
     ],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.localization",
+            "expression": "1.0.0",
+            "define": "CYCLONE_LOCALIZATION"
+        }
+    ],
     "noEngineReferences": false
 }

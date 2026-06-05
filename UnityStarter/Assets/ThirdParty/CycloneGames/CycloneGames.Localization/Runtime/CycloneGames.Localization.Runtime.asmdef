@@ -2,14 +2,13 @@
     "name": "CycloneGames.Localization.Runtime",
     "rootNamespace": "",
     "references": [
+        "CycloneGames.Localization.Core",
         "UniTask",
-        "CycloneGames.AssetManagement.Runtime",
-        "CycloneGames.Logger",
-        "Unity.TextMeshPro"
+        "CycloneGames.AssetManagement.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
-    "allowUnsafeCode": true,
+    "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
