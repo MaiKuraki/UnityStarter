@@ -2610,7 +2610,20 @@ public class GameController
 
 ## 本地化集成（可选）
 
-CycloneGames.UIFramework 提供与 [CycloneGames.Localization](../CycloneGames.Localization/README.SCH.md) 的**可选集成**。当检测到 `CycloneGames.Localization` 包时，脚本定义符号 `CYCLONE_LOCALIZATION` 会自动添加 — 无需手动设置。如果该包不存在，所有本地化代码将被编译器剔除，零开销。
+CycloneGames.UIFramework 提供面向 [CycloneGames.Localization](../CycloneGames.Localization/README.SCH.md) 的独立集成程序集。该集成使用 `CYCLONE_LOCALIZATION` 脚本宏作为编译开关。当 Localization 以 UPM 包 `com.cyclone-games.localization` 安装时，asmdef `versionDefines` 会自动生成该宏。当两个模块都直接复制到 `Assets/` 下时，Unity 无法自动检测这种可选依赖，因此需要手动添加该宏。
+
+### 程序集设置
+
+该集成拆分为两个 asmdef：
+
+| 程序集 | 用途 |
+| ------ | ---- |
+| `CycloneGames.UIFramework.Runtime.Integrations.Localization` | Runtime 桥接，将 `ILocalizationService.OnLocaleChanged` 分发到活跃 `UIWindow` 层级 |
+| `CycloneGames.UIFramework.Editor.Integrations.Localization` | Editor 工具，用于 `UILocaleLayout` 预览、捕获和布局追踪 |
+
+这些程序集会直接引用 `CycloneGames.Localization.Core`、`CycloneGames.Localization.Runtime` 和 `CycloneGames.Localization.Components`，但只有存在 `CYCLONE_LOCALIZATION` 时才会参与编译。
+
+使用 UPM 时，安装 `com.cyclone-games.localization` 后 Unity 会通过 `versionDefines` 启用该集成。直接放在 `Assets/` 下使用时，需要在对应构建目标的 **Player Settings > Scripting Define Symbols** 中添加 `CYCLONE_LOCALIZATION`。删除 Localization 源码包前请先移除该宏，或同时移除/排除 `Runtime/Scripts/Integrations/Localization` 目录。
 
 ### 架构
 
@@ -2677,6 +2690,8 @@ graph TD
 4. 使用 **Preview** 在不影响已保存预制体的情况下对比各语言布局。
 
 #### 步骤 4：在启动时注册绑定器
+
+`LocalizationWindowBinder` 应在 UI composition 阶段注册一次。它不拥有 localization service，只监听语言变更并把事件转发给活跃窗口。
 
 ```csharp
 // VContainer 示例

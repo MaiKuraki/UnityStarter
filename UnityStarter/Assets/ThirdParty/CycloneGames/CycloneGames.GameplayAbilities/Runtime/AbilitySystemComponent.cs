@@ -1266,10 +1266,38 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public bool TryActivateAbility(GameplayAbilitySpec spec)
         {
             AssertRuntimeThread();
-            if (spec == null || spec.IsActive) return false;
+            if (spec == null)
+            {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.MissingSpec);
+                }
+                return false;
+            }
+
+            if (spec.IsActive)
+            {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, this, spec.GetPrimaryInstance(), decision: GASTraceDecision.Blocked, reason: GASTraceReason.AlreadyActive, abilitySpecHandle: spec.Handle);
+                }
+                return false;
+            }
 
             var ability = spec.GetPrimaryInstance();
-            if (ability == null) return false;
+            if (ability == null)
+            {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.MissingAbility, abilitySpecHandle: spec.Handle);
+                }
+                return false;
+            }
+
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.AbilityActivateAttempt, this, ability, abilitySpecHandle: spec.Handle);
+            }
 
             if (!ability.CanActivate(cachedActorInfo, spec))
             {
@@ -1315,6 +1343,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             else
             {
                 // Server rejects activation
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.PredictionRejected, this, spec.GetPrimaryInstance(), decision: GASTraceDecision.Rejected, reason: GASTraceReason.ServerRejected, abilitySpecHandle: spec.Handle, predictionKey: activationInfo.PredictionKey);
+                }
                 GASServices.NetworkBridge.ServerRejectActivation(this, spec.Handle, activationInfo.PredictionKey);
             }
         }
@@ -1948,6 +1980,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             var predictionKey = GASPredictionKey.NewKey(coreState.Entity, inputSequence);
             RegisterPredictionWindow(spec, predictionKey, parentPredictionKey);
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.PredictionOpened, this, spec?.GetPrimaryInstance(), decision: GASTraceDecision.Success, abilitySpecHandle: spec?.Handle ?? 0, predictionKey: predictionKey, level: spec?.Level ?? 0);
+            }
             return predictionKey;
         }
 
@@ -2094,6 +2130,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 var window = predictionWindows[i];
                 if (window.Status == GASPredictionWindowStatus.Open && window.TimeoutFrame > 0 && currentFrame >= window.TimeoutFrame)
                 {
+                    if (GASTrace.Enabled)
+                    {
+                        var spec = FindSpecByHandle(window.AbilitySpecHandle);
+                        GASTrace.Record(GASTraceEventType.PredictionTimedOut, this, spec?.GetPrimaryInstance(), decision: GASTraceDecision.TimedOut, reason: GASTraceReason.PredictionTimeout, abilitySpecHandle: window.AbilitySpecHandle, predictionKey: window.PredictionKey, level: spec?.Level ?? 0);
+                    }
                     ClosePredictionWindow(window.PredictionKey, GASPredictionWindowStatus.TimedOut, rollback: true, closeDependents: true);
                 }
             }
@@ -2531,6 +2572,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             AssertRuntimeThread();
             var spec = FindSpecByHandle(specHandle);
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.TargetDataAccepted, this, spec?.GetPrimaryInstance(), decision: GASTraceDecision.Success, abilitySpecHandle: specHandle, predictionKey: predictionKey, level: spec?.Level ?? 0);
+            }
             spec?.GetPrimaryInstance()?.AcceptTasksForPredictionKey(predictionKey);
             GameplayCueManager.Default.AcceptPredictedCues(this, predictionKey);
         }
@@ -2539,6 +2584,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             AssertRuntimeThread();
             var spec = FindSpecByHandle(specHandle);
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.TargetDataRejected, this, spec?.GetPrimaryInstance(), decision: GASTraceDecision.Rejected, reason: GASTraceReason.TargetDataValidation, abilitySpecHandle: specHandle, predictionKey: predictionKey, level: spec?.Level ?? 0);
+            }
             spec?.GetPrimaryInstance()?.CancelTasksForPredictionKey(predictionKey);
             GameplayCueManager.Default.RemovePredictedCues(this, predictionKey).Forget();
         }
@@ -2908,6 +2957,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             ability.SetCurrentActivationInfo(activationInfo);
             ability.ActivateAbility(cachedActorInfo, spec, activationInfo);
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.AbilityActivated, this, ability, decision: GASTraceDecision.Success, abilitySpecHandle: spec.Handle, predictionKey: activationInfo.PredictionKey, level: spec.Level);
+            }
 
             OnAbilityActivated?.Invoke(ability);
 
@@ -2924,6 +2977,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             AcceptCorePrediction(predictionKey);
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.PredictionConfirmed, this, spec?.GetPrimaryInstance(), decision: GASTraceDecision.Success, abilitySpecHandle: spec?.Handle ?? 0, predictionKey: predictionKey);
+            }
             RemovePendingPredictedEffects(predictionKey);
             GameplayCueManager.Default.AcceptPredictedCues(this, predictionKey);
             spec?.GetPrimaryInstance()?.AcceptTasksForPredictionKey(predictionKey);
@@ -2940,6 +2997,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 RejectCorePrediction(predictionKey);
             }
 
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.PredictionRejected, this, spec?.GetPrimaryInstance(), decision: closedPredictionWindow ? GASTraceDecision.RolledBack : GASTraceDecision.Rejected, reason: GASTraceReason.ServerRejected, abilitySpecHandle: spec?.Handle ?? 0, predictionKey: predictionKey);
+            }
+
             // P0+ Use zero-GC StringBuilder overload for Warning (avoids string interpolation alloc in Release)
             GASLog.Warning(sb => sb.Append("Client prediction failed for ability '").Append(spec?.Ability?.Name ?? "<missing-spec>")
                 .Append("' with key ").Append(predictionKey.Key).Append(closedPredictionWindow ? ". Rolling back." : ". Ignoring stale rejection."));
@@ -2947,6 +3009,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         internal void NotifyAbilityCommitted(GameplayAbility ability)
         {
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.AbilityCommitted, this, ability, decision: GASTraceDecision.Success, abilitySpecHandle: ability?.Spec?.Handle ?? 0, predictionKey: ability?.CurrentActivationInfo.PredictionKey ?? default, level: ability?.Spec?.Level ?? 0);
+            }
             OnAbilityCommitted?.Invoke(ability);
         }
 
@@ -3007,6 +3073,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 ability.InternalOnEndAbility();
 
                 OnAbilityEndedEvent?.Invoke(ability);
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.AbilityEnded, this, ability, decision: GASTraceDecision.Success, abilitySpecHandle: ability.Spec.Handle, level: ability.Spec.Level);
+                }
 
                 if (ability.InstancingPolicy == EGameplayAbilityInstancingPolicy.InstancedPerExecution)
                 {
@@ -3025,6 +3095,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             AssertRuntimeThread();
             spec.SetTarget(this);
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.EffectApplyAttempt, this, effect: spec.Def, source: spec.Source, level: spec.Level);
+            }
 
             // If we are in a prediction scope, tag the spec's context
             if (currentPredictionKey.IsValid)
@@ -3034,6 +3108,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (!CanApplyEffect(spec))
             {
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.EffectApplyBlocked, this, effect: spec.Def, decision: GASTraceDecision.Blocked, reason: GASTraceReason.ApplicationBlockedTags, source: spec.Source, level: spec.Level);
+                }
                 spec.ReturnToPool();
                 return;
             }
@@ -3046,6 +3124,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 core.ApplyGameplayEffectSpecToSelf(in coreEffectSpec);
                 ExecuteInstantEffect(spec);
                 DispatchGameplayCues(spec, EGameplayCueEvent.Executed);
+                if (GASTrace.Enabled)
+                {
+                    GASTrace.Record(GASTraceEventType.EffectExecuted, this, effect: spec.Def, decision: GASTraceDecision.Success, source: spec.Source, predictionKey: spec.Context.PredictionKey, level: spec.Level);
+                }
                 spec.ReturnToPool();
                 return;
             }
@@ -3093,6 +3175,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             GASLog.Info(sb => sb.Append(OwnerActor).Append(" Apply GameplayEffect '").Append(spec.Def.Name).Append("' to self."));
             OnEffectApplied(newActiveEffect);
+            if (GASTrace.Enabled)
+            {
+                GASTrace.Record(GASTraceEventType.EffectApplied, this, effect: spec.Def, decision: GASTraceDecision.Success, source: spec.Source, predictionKey: spec.Context.PredictionKey, level: spec.Level, stackCount: newActiveEffect.StackCount, networkId: newActiveEffect.NetworkId);
+            }
             MarkActiveEffectsDirty();
 
             if (spec.Def.Period <= 0)

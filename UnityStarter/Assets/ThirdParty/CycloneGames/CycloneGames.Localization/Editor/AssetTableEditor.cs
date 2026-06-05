@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using CycloneGames.Localization.Core;
 using CycloneGames.Localization.Runtime;
 using UnityEditor;
 using UnityEngine;
@@ -18,41 +19,41 @@ namespace CycloneGames.Localization.Editor
             w.minSize = new Vector2(600, 300);
         }
 
-        // ── Discovery ───────────────────────────────────────────
+        //  Discovery 
         private string[] _tableIds = Array.Empty<string>();
         private GUIContent[] _tableIdContents = Array.Empty<GUIContent>();
         private int _selectedTableIdx = -1;
         private bool _discoveryDirty = true;
 
-        // ── Columns ─────────────────────────────────────────────
+        //  Columns 
         private readonly List<LocaleColumn> _columns = new();
         private readonly List<string> _allKeys = new();
         private readonly HashSet<string> _allKeysSet = new(StringComparer.Ordinal);
         private bool _keysDirty = true;
         private int _missingCount;
 
-        // ── Duplicates ──────────────────────────────────────────
+        //  Duplicates 
         private readonly HashSet<string> _duplicateKeys = new(StringComparer.Ordinal);
         private int _duplicateCount;
         private bool _showDupesOnly;
 
-        // ── Metadata ────────────────────────────────────────────
+        //  Metadata 
         private StringTableMetadata _metadata;
         private SerializedObject _metadataSO;
         private SerializedProperty _metaEntriesProp;
         private readonly HashSet<string> _expandedKeys = new(StringComparer.Ordinal);
 
-        // ── Create locale ───────────────────────────────────────
+        //  Create locale 
         private string _newLocaleCode = string.Empty;
 
-        // ── UI state ────────────────────────────────────────────
+        //  UI state 
         private Vector2 _scrollPos;
         private string _searchFilter = string.Empty;
 
-        // ── Filtered keys (cached per frame) ────────────────────
+        //  Filtered keys (cached per frame) 
         private readonly List<int> _visibleKeyIndices = new();
 
-        // ── Layout constants ────────────────────────────────────
+        //  Layout constants 
         private const float FoldBtnW   = 18f;
         private const float KeyColW    = 180f;
         private const float ValColW    = 180f;
@@ -65,7 +66,7 @@ namespace CycloneGames.Localization.Editor
         private float FrozenW => FoldBtnW + KeyColW + DelBtnW + 4f;
         private float ScrollableW => _columns.Count * ValColW;
 
-        // ── Colors ──────────────────────────────────────────────
+        //  Colors 
         private static readonly Color MissingColor   = new(1f, 0.6f, 0.2f, 0.25f);
         private static readonly Color DuplicateColor = new(0.85f, 0.2f, 0.25f, 0.35f);
         private static readonly Color AltRowColor    = new(1f, 1f, 1f, 0.025f);
@@ -73,7 +74,7 @@ namespace CycloneGames.Localization.Editor
         private static readonly Color HeaderBg       = new(0.20f, 0.20f, 0.20f, 1f);
         private static readonly Color EditorBg       = new(0.22f, 0.22f, 0.22f, 1f);
 
-        // ── Styles (lazy) ───────────────────────────────────────
+        //  Styles (lazy) 
         private static GUIStyle s_Header, s_MissBtn, s_FoldBtn, s_MetaLbl;
 
         private static GUIStyle Header => s_Header ??= new GUIStyle(EditorStyles.boldLabel)
@@ -115,9 +116,9 @@ namespace CycloneGames.Localization.Editor
             public HashSet<string> DuplicateKeysInColumn;
         }
 
-        // ═════════════════════════════════════════════════════════
+        // ?
         // Lifecycle
-        // ═════════════════════════════════════════════════════════
+        // ?
         private void OnEnable() => _discoveryDirty = true;
         private void OnFocus() => _discoveryDirty = true;
 
@@ -132,7 +133,7 @@ namespace CycloneGames.Localization.Editor
                 EditorGUILayout.Space(8);
                 EditorGUILayout.HelpBox(
                     "Select a Table ID above, or create your first AssetTable:\n" +
-                    "Right-click in Project → Create → CycloneGames → Localization → Asset Table",
+                    "Right-click in Project > Create > CycloneGames > Localization > Asset Table",
                     MessageType.Info);
                 return;
             }
@@ -148,9 +149,9 @@ namespace CycloneGames.Localization.Editor
             ApplyAllSerialized();
         }
 
-        // ═════════════════════════════════════════════════════════
+        // ?
         // Discovery
-        // ═════════════════════════════════════════════════════════
+        // ?
         private void DiscoverTables()
         {
             _discoveryDirty = false;
@@ -223,9 +224,9 @@ namespace CycloneGames.Localization.Editor
             }
         }
 
-        // ═════════════════════════════════════════════════════════
+        // ?
         // Key management
-        // ═════════════════════════════════════════════════════════
+        // ?
         private void RebuildKeys()
         {
             _keysDirty = false;
@@ -246,9 +247,9 @@ namespace CycloneGames.Localization.Editor
                         _missingCount++;
         }
 
-        // ═════════════════════════════════════════════════════════
-        // Drawing — top bars
-        // ═════════════════════════════════════════════════════════
+        // ?
+        // Drawing ?top bars
+        // ?
         private void DrawTableSelector()
         {
             EditorGUILayout.Space(4);
@@ -274,7 +275,7 @@ namespace CycloneGames.Localization.Editor
             if (_selectedTableIdx >= 0 && _columns.Count > 0)
             {
                 if (_metadata != null)
-                { if (GUILayout.Button("Metadata ✓", EditorStyles.miniButton)) { EditorGUIUtility.PingObject(_metadata); Selection.activeObject = _metadata; } }
+                { if (GUILayout.Button("Metadata", EditorStyles.miniButton)) { EditorGUIUtility.PingObject(_metadata); Selection.activeObject = _metadata; } }
                 else
                 { if (GUILayout.Button("+ Metadata", EditorStyles.miniButton)) CreateMetadataAsset(); }
             }
@@ -288,7 +289,7 @@ namespace CycloneGames.Localization.Editor
         private void DrawDuplicateBar()
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
-            EditorGUILayout.LabelField($"⚠ {_duplicateCount} duplicate key(s) — rename or remove.", EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.LabelField($"{_duplicateCount} duplicate key(s): rename or remove.", EditorStyles.wordWrappedMiniLabel);
             GUILayout.FlexibleSpace();
             _showDupesOnly = GUILayout.Toggle(_showDupesOnly, "Filter", EditorStyles.miniButton);
             if (GUILayout.Button("Purge Dupes", EditorStyles.miniButton)) PurgeDuplicateKeys();
@@ -309,17 +310,17 @@ namespace CycloneGames.Localization.Editor
         {
             EditorGUILayout.Space(2);
             var sb = new StringBuilder(128);
-            sb.Append($"Keys: {_allKeys.Count}  ×  {_columns.Count} locales");
-            if (_duplicateCount > 0) sb.Append($"  |  ⚠ {_duplicateCount} dupe(s)");
-            if (_missingCount > 0)   sb.Append($"  |  ⚠ {_missingCount} missing");
-            if (_duplicateCount == 0 && _missingCount == 0) sb.Append("  |  ✓ All good");
+            sb.Append($"Keys: {_allKeys.Count}    {_columns.Count} locales");
+            if (_duplicateCount > 0) sb.Append($"  |  {_duplicateCount} dupe(s)");
+            if (_missingCount > 0)   sb.Append($"  |  {_missingCount} missing");
+            if (_duplicateCount == 0 && _missingCount == 0) sb.Append("  |  All good");
             if (_metadata != null) sb.Append($"  |  Metadata: {_metadata.name}");
             EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
         }
 
-        // ═════════════════════════════════════════════════════════
-        // Drawing — table area (pinned key + scrollable locales)
-        // ═════════════════════════════════════════════════════════
+        // ?
+        // Drawing ?table area (pinned key + scrollable locales)
+        // ?
         private void DrawTableArea()
         {
             _visibleKeyIndices.Clear();
@@ -348,7 +349,7 @@ namespace CycloneGames.Localization.Editor
             float rightW  = Mathf.Max(0f, tableRect.width - frozenW);
             float viewH   = tableRect.height - HeaderH - SepH;
 
-            // ── Header row ──
+            //  Header row 
             Rect frozenHdrR = new(tableRect.x, tableRect.y, frozenW, HeaderH);
             EditorGUI.DrawRect(frozenHdrR, HeaderBg);
             GUI.Label(new Rect(tableRect.x + FoldBtnW, tableRect.y, KeyColW, HeaderH), "Key", Header);
@@ -372,7 +373,7 @@ namespace CycloneGames.Localization.Editor
 
             EditorGUI.DrawRect(new Rect(tableRect.x, tableRect.y + HeaderH, tableRect.width, SepH), SepColor);
 
-            // ── Body (single scroll view, frozen columns offset by scrollPos.x) ──
+            //  Body (single scroll view, frozen columns offset by scrollPos.x) 
             Rect bodyRect = new(tableRect.x, tableRect.y + HeaderH + SepH, tableRect.width, viewH);
             Rect bodyContentRect = new(0, 0, frozenW + Mathf.Max(scrollW, rightW), contentH);
 
@@ -392,7 +393,7 @@ namespace CycloneGames.Localization.Editor
                 if (v % 2 == 1)
                     EditorGUI.DrawRect(new Rect(0, y, bodyContentRect.width, RowH), AltRowColor);
 
-                // ── Scrollable asset columns (drawn FIRST) ──
+                //  Scrollable asset columns (drawn FIRST) 
                 for (int c = 0; c < _columns.Count; c++)
                 {
                     Rect cellR = new(frozenW + c * ValColW, y, ValColW, RowH);
@@ -409,12 +410,12 @@ namespace CycloneGames.Localization.Editor
                     }
                 }
 
-                // ── Frozen columns (drawn SECOND with solid bg to cover scrolled content) ──
+                //  Frozen columns (drawn SECOND with solid bg to cover scrolled content) 
                 EditorGUI.DrawRect(new Rect(fx, y, frozenW, RowH), EditorBg);
                 if (v % 2 == 1) EditorGUI.DrawRect(new Rect(fx, y, frozenW, RowH), AltRowColor);
                 EditorGUI.DrawRect(new Rect(fx + frozenW - 1f, y, 1f, RowH), SepColor);
 
-                if (GUI.Button(new Rect(fx, y, FoldBtnW, RowH), isExpanded ? "▼" : "▶", FoldBtn))
+                if (GUI.Button(new Rect(fx, y, FoldBtnW, RowH), isExpanded ? "-" : "+", FoldBtn))
                 { if (isExpanded) _expandedKeys.Remove(key); else _expandedKeys.Add(key); }
 
                 Rect keyR = new(fx + FoldBtnW, y, KeyColW, RowH);
@@ -424,7 +425,7 @@ namespace CycloneGames.Localization.Editor
                 if (EditorGUI.EndChangeCheck() && nk != key && !string.IsNullOrEmpty(nk))
                     RenameKeyInAllColumns(key, nk);
 
-                if (GUI.Button(new Rect(fx + FoldBtnW + KeyColW + 2f, y, DelBtnW, RowH), "✕"))
+                if (GUI.Button(new Rect(fx + FoldBtnW + KeyColW + 2f, y, DelBtnW, RowH), "X"))
                     deleteKey = key;
 
                 y += RowH;
@@ -519,9 +520,9 @@ namespace CycloneGames.Localization.Editor
             return key.IndexOf(_searchFilter, StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        // ═════════════════════════════════════════════════════════
+        // ?
         // Metadata helpers
-        // ═════════════════════════════════════════════════════════
+        // ?
         private int FindMetaEntryIndex(string key)
         {
             if (_metaEntriesProp == null) return -1;
@@ -583,9 +584,9 @@ namespace CycloneGames.Localization.Editor
             RefreshMetadata(tableId);
         }
 
-        // ═════════════════════════════════════════════════════════
+        // ?
         // Create locale
-        // ═════════════════════════════════════════════════════════
+        // ?
         private void CreateNewLocaleTable(string localeCode)
         {
             for (int c = 0; c < _columns.Count; c++)
@@ -617,9 +618,9 @@ namespace CycloneGames.Localization.Editor
             _discoveryDirty = true;
         }
 
-        // ═════════════════════════════════════════════════════════
+        // ?
         // Mutations
-        // ═════════════════════════════════════════════════════════
+        // ?
         private void PurgeDuplicateKeys()
         {
             if (_duplicateCount == 0) return;
@@ -716,9 +717,9 @@ namespace CycloneGames.Localization.Editor
             _columns[colIdx] = col;
         }
 
-        // ═════════════════════════════════════════════════════════
+        // ?
         // Helpers
-        // ═════════════════════════════════════════════════════════
+        // ?
         private void UpdateAllSerialized()
         {
             for (int c = 0; c < _columns.Count; c++) _columns[c].Serialized.Update();
