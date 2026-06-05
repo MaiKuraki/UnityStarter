@@ -2,7 +2,7 @@
 
 <div align="left"><a href="./README.md">English</a> | 简体中文</div>
 
-面向商业级项目设计的 Unity **本地化框架**。提供完整的字符串与资产本地化管线，支持 BCP 47 语言标识符、自动回退链、覆盖 25+ 种语言的 CLDR 复数规则、逐语言布局快照（通过 UIFramework 集成），以及零 GC 运行时核心 — 完全由 ScriptableObject 驱动配置，无需代码生成。
+面向商业级项目设计的 Unity **本地化框架**。提供完整的字符串与资产本地化管线，支持 BCP 47 语言标识符、自动回退链、覆盖 25+ 种语言的 CLDR 复数规则、通过可选 UIFramework 集成提供逐语言布局快照，并使用由 ScriptableObject 配置生成的运行时编译查找数据。
 
 ## 功能特性
 
@@ -10,7 +10,7 @@
 
 | 功能                        | 详情                                                                                             |
 | --------------------------- | ------------------------------------------------------------------------------------------------ |
-| **内部化 LocaleId**         | `readonly struct` 使用 `string.Intern()` — 通过 `ReferenceEquals` 实现 O(1) 等值比较，零比较分配 |
+| **LocaleId 值类型**         | `readonly struct`，由 BCP 47 code 字符串表示；使用 ordinal 等值比较，比较过程不产生临时分配 |
 | **BCP 47 支持**             | 标准语言代码：`en`、`zh-CN`、`ja-JP`、`pt-BR` 等                                                 |
 | **Locale ScriptableObject** | 每种语言配置显示名称、母语名称和回退链 — 设计师在 Inspector 中配置                               |
 | **自动回退链**              | BFS 遍历加去重：`zh-CN → zh → en` 仅解析一次并缓存                                               |
@@ -20,10 +20,10 @@
 
 | 功能                    | 详情                                                                             |
 | ----------------------- | -------------------------------------------------------------------------------- |
-| **ScriptableObject 表** | 每个表 ID 每种语言对应一个 `StringTable` 资产 — 放入 Resources 或 Addressables   |
+| **ScriptableObject 表** | 每个表 ID 每种语言对应一个 `StringTable` 资产；通过项目启动流程加载并注册 |
 | **编译后运行时查找**    | 序列化列表在注册或预热时编译为 `CompiledStringTable`；查找使用 `StringComparer.Ordinal` |
 | **回退链解析**          | 如果 `zh-CN` 中缺少某个 Key，自动检查 `zh`，然后 `en`，依此类推                  |
-| **热重载**              | `OnEnable` 时重建字典 — 在 Play 模式下编辑即可立即看到变化                       |
+| **预热支持**            | 可在加载阶段编译表数据，使 UI 刷新路径只执行字典查找                              |
 | **参数化文本**          | `GetFormattedString("ui", "damage", weaponName, amount)` → `"造成 {0} {1} 伤害"` |
 
 ### 🔢 复数规则（CLDR）
@@ -34,7 +34,7 @@
 | **6 个类别**   | `Zero`、`One`、`Two`、`Few`、`Many`、`Other` — 每种语言使用其所需的子集                                                                      |
 | **后缀约定**   | 基础 Key `"item_count"` → 条目 `"item_count.one"`、`"item_count.other"` 等                                                                   |
 | **自动回退**   | 解析的类别 → `.other` 回退 → 缺失 Key 警告                                                                                                   |
-| **零内存分配** | 纯静态方法 + 整数运算 — 解析时无字符串拼接                                                                                                   |
+| **静态解析器** | 纯静态方法 + 整数运算；解析后的 Key 使用已有的编译表查找路径                                                                                  |
 
 ### 🎨 资产表
 
@@ -77,7 +77,7 @@
 | 功能                          | 详情                                                                        |
 | ----------------------------- | --------------------------------------------------------------------------- |
 | **优先级排序选择器**          | `ILocaleSelector` 接口 — 第一个返回非 null 的匹配胜出                       |
-| **CommandLineLocaleSelector** | `--locale zh-CN` — 最高优先级，首次调用后缓存；适合 QA 测试                 |
+| **CommandLineLocaleSelector** | `--locale zh-CN` — 最高优先级，首次调用后缓存；用于 QA 测试                 |
 | **PlayerPrefsLocaleSelector** | 读写 `PlayerPrefs` 键 `"CycloneGames.Locale"` — 玩家语言设置持久化          |
 | **SystemLocaleSelector**      | `CultureInfo.CurrentUICulture`（BCP 47）+ `Application.systemLanguage` 回退 |
 | **自定义选择器**              | 实现 `ILocaleSelector` 添加项目特定来源（服务器配置、Steam API 等）         |
@@ -111,47 +111,29 @@
 
 ```mermaid
 graph TD
-    subgraph 配置
-        LS[LocalizationSettings<br/><i>ScriptableObject</i>]
-        LOC[Locale<br/><i>ScriptableObject</i>]
-    end
-
-    subgraph Core 程序集
-        LID[LocaleId<br/><i>readonly struct, 内部化</i>]
-        FCB[LocaleFallbackChainBuilder<br/><i>纯 C# fallback 构建器</i>]
-        PR[PluralRules<br/><i>CLDR 解析器, 静态</i>]
-        PSL[PseudoLocalizer<br/><i>静态, 零分配</i>]
-    end
-
-    subgraph Runtime 程序集
-        FC[FallbackChain<br/><i>BFS 遍历, 缓存</i>]
-        SEL[ILocaleSelector<br/><i>优先级链</i>]
-    end
-
-    subgraph 表
-        ST[StringTable<br/><i>ScriptableObject</i>]
-        CST[CompiledStringTable<br/><i>运行时查找</i>]
-        AT[AssetTable<br/><i>ScriptableObject</i>]
-        CAT[CompiledAssetTable<br/><i>运行时查找</i>]
-        META[StringTableMetadata<br/><i>译者上下文</i>]
-    end
-
-    subgraph 服务层
-        ILS[ILocalizationService<br/><i>公共 API</i>]
-        LSV[LocalizationService<br/><i>实现</i>]
-    end
-
-    subgraph 组件
-        LTT[LocalizeTMPText]
-        LI[LocalizeImage]
-        YLS[YarnLocaleSync]
-    end
-
+    LS[LocalizationSettings]
+    LOC[Locale]
+    LID[LocaleId]
+    FCB[LocaleFallbackChainBuilder]
+    PR[PluralRules]
+    PSL[PseudoLocalizer]
+    FC[FallbackChain]
+    SEL[ILocaleSelector]
+    ST[StringTable]
+    CST[CompiledStringTable]
+    AT[AssetTable]
+    CAT[CompiledAssetTable]
+    META[StringTableMetadata]
+    ILS[ILocalizationService]
+    LSV[LocalizationService]
+    LTT[LocalizeTMPText]
+    LI[LocalizeImage]
+    YLS[YarnLocaleSync]
     LS --> LOC
     LOC --> LID
     LOC --> FCB
     FC --> FCB
-    LSV -.实现.-> ILS
+    LSV --> ILS
     ILS --> ST
     ST --> CST
     ILS --> AT
@@ -190,9 +172,27 @@ CycloneGames.Localization/
 
 `Core` 不引用 Unity Engine，可复用于工具、测试、服务器代码或未来非 Unity 适配层。Runtime 中的 ScriptableObject 是编辑数据；`LocalizationService` 注册时会使用编译后的运行时表数据进行查找。
 
+### 运行时数据包
+
+`LocalizationCatalog` 是生成后的运行时数据包，用于一次性注册本地化字符串表和资产表。它包含 schema 版本、catalog 版本、内容 hash、字符串表条目和资产表条目。
+
+Catalog 提供生成后的运行时数据包，可用于启动载荷、构建验证、热更新清单、加密交付和二进制解码。运行时服务只依赖 catalog 数据契约，不依赖固定存储后端。
+
+支持的注册路径：
+
+1. 在项目启动流程中分别注册 `StringTable` 和 `AssetTable` 资产。
+2. 构建并注册 `LocalizationCatalog`。
+3. 在独立集成程序集中将外部数据解码为 `LocalizationCatalog`、`CompiledStringTable` 或 `CompiledAssetTable`。
+
+可选的 DataTable、二进制、MessagePack 或加密支持应放在 integration 程序集中实现。这些集成程序集依赖 `CycloneGames.Localization.Runtime`；基础 Runtime 程序集不应依赖 DataTable 或固定资源加载后端。
+
+需要异步加载 catalog 的项目可以实现 `ILocalizationCatalogProvider`。Provider 实现可以从 `CycloneGames.AssetManagement`、加密文件、远端清单、测试内存数据或任意项目自定义来源加载 catalog。Provider 返回 catalog 后，通过 `ILocalizationService.RegisterCatalog` 注册。
+
 ---
 
 ## 快速上手
+
+基础接入流程使用 `Locale`、`LocalizationSettings` 和 `StringTable` 资产。初始化 `LocalizationService`，加载所需表，并通过 `RegisterStringTable` 注册。该流程不要求创建 `LocalizationCatalog`。
 
 ### 1. 创建 Locale 资产
 
@@ -239,7 +239,7 @@ Localization/
 │   └── Items_zh-CN.asset  (tableId: "items", locale: "zh-CN")
 ```
 
-使用**字符串表编辑器窗口**（Tools → CycloneGames → Localization → String Table Editor）进行可视化编辑，或从 CSV 导入。
+使用**字符串表编辑器窗口**（Tools → CycloneGames → Localization → Tables → String Table Editor）进行可视化编辑，或从 CSV 导入。
 
 ### 4. 初始化服务
 
@@ -272,7 +272,7 @@ await service.InitializeAsync(settings.ToOptions());
 ### 5. 注册字符串表
 
 ```csharp
-// 加载并注册表（例如从 Addressables 或 Resources）
+// 通过项目启动流程或资产包流程加载并注册表。
 service.RegisterStringTable(uiTableEn);
 service.RegisterStringTable(uiTableZhCN);
 ```
@@ -290,7 +290,30 @@ service.RegisterAssetTable(flagsZhCN);
 
 ### 7. 验证项目数据
 
-发布或交付翻译前，打开 **Tools > CycloneGames > Localization > Validation**。验证窗口会扫描字符串表、资产表和语言 fallback 链中的空 ID、非法语言、重复 Key、自 fallback 和 fallback 环。
+发布或交付翻译前，打开 **Tools > CycloneGames > Localization > Validation > Validate Project**。验证工具会扫描字符串表、资产表、元数据和语言 fallback 链中的空 ID、非法语言、重复 Key、缺失的 plural `.other`、自 fallback 和 fallback 环。
+
+### 8. 运行时 Catalog 流程
+
+当项目需要面向发布构建、CI 验证、热更新交付、加密文件或二进制解码的生成数据包时，使用 `LocalizationCatalog`。直接资产注册流程可跳过本节，在加载阶段或场景启动阶段注册 `StringTable` 或 `AssetTable` 资产。
+
+为团队协作和 CI 流程创建 `LocalizationCatalogBuildSettings` 资产：
+
+**Create > CycloneGames > Localization > Catalog Build Settings**
+
+在 Inspector 中配置输出文件夹、输出文件名、catalog 版本和验证选项。输出文件夹是文件夹资产引用，因此该设置可以提交到版本控制，并在不同机器上复用，无需修改包源码。
+
+使用 **Tools > CycloneGames > Localization > Catalog > Build From Settings** 从项目中找到的第一个 settings 资产构建 catalog。构建器会先执行验证，保留条目顺序，并写入确定性的 `SHA256` 内容 hash，便于版本检查、热更新和未来差量包流程。
+
+仅在需要一次性手动选择输出路径时，使用 **Tools > CycloneGames > Localization > Catalog > Build Once...**。
+
+```csharp
+// 通过 CycloneGames.AssetManagement 或项目自己的包流程加载 Catalog。
+service.RegisterCatalog(localizationCatalog);
+```
+
+`LocalizationCatalog` 与具体后端无关。生成后的资产可以放入首包、通过热更新包交付，或由项目自定义解码器生成后再注册。
+
+`LocalizationCatalog` Inspector 是只读的生成数据视图。它会展示 schema 版本、catalog 版本、`ContentHash`、字符串表数量、资产表数量和条目总数，并提供复用 `LocalizationCatalogBuildSettings` 的构建操作。请修改源表和构建设置，不要直接编辑生成后的 catalog 字段。
 
 ---
 
@@ -576,7 +599,7 @@ yarnSync.Bind(localizationService);
 
 ### 多语言字符串表编辑器
 
-**Tools → CycloneGames → Localization → String Table Editor**
+**Tools → CycloneGames → Localization → Tables → String Table Editor**
 
 在单个窗口中并排编辑字符串表的所有语言变体。
 
@@ -593,7 +616,7 @@ yarnSync.Bind(localizationService);
 
 ### 多语言资产表编辑器
 
-**Tools → CycloneGames → Localization → Asset Table Editor**
+**Tools → CycloneGames → Localization → Tables → Asset Table Editor**
 
 与字符串表编辑器相同的架构，适配资产表。
 
@@ -704,14 +727,21 @@ LocalizationService.LogMissingKeys = false; // 抑制警告
 | `UnregisterStringTable(string, LocaleId)`                   | 移除字符串表                                            |
 | `RegisterAssetTable(AssetTable)`                            | 注册资产表                                              |
 | `UnregisterAssetTable(string, LocaleId)`                    | 移除资产表                                              |
+| `RegisterCatalog(LocalizationCatalog)`                      | 注册由生成器或包系统提供的编译 Catalog 数据              |
 | `RegisterMetadata(StringTableMetadata)`                     | 注册元数据用于 `GetMaxLength` 查询                      |
 | `UnregisterMetadata(string)`                                | 按表 ID 移除元数据                                      |
+
+### `ILocalizationCatalogProvider`
+
+| 成员                                           | 描述                                  |
+| ---------------------------------------------- | ------------------------------------- |
+| `LoadCatalogAsync(CancellationToken)`          | 从项目定义的数据来源异步加载 catalog |
 
 ### `LocaleId`
 
 | 成员       | 描述                                   |
 | ---------- | -------------------------------------- |
-| `Code`     | 内部化的 BCP 47 字符串（如 `"zh-CN"`） |
+| `Code`     | BCP 47 字符串（如 `"zh-CN"`） |
 | `IsValid`  | 当 `Code` 非 null 时为 `true`          |
 | `Language` | 仅语言部分：`"zh-CN"` → `"zh"`         |
 | `Invalid`  | 静态只读默认值（null code）            |
@@ -835,10 +865,10 @@ LocalizationService.LogMissingKeys = false; // 抑制警告
 
 ### 性能说明
 
-- **预热后零 GC**：字典查找使用 `StringComparer.Ordinal`；`LocaleId` 等值比较通过内部化字符串的 `ReferenceEquals` 实现
+- **预热后 low/zero GC**：编译表查找使用 `StringComparer.Ordinal`；`LocaleId` 等值比较使用 ordinal 字符串比较，不产生临时分配
 - **事件驱动刷新**：组件仅在 `OnLocaleChanged` 触发时更新 — 零逐帧开销
 - **回退链缓存**：BFS 遍历每种语言仅执行一次并缓存，供后续所有查找使用
-- **复数规则零分配**：纯整数运算的静态方法 — 解析时无字符串拼接
+- **复数规则**：复数类别解析使用纯静态整数运算。复数字符串查找可能构建带后缀的 Key，不应在未缓存的高频逐帧路径中调用。
 - **伪本地化零分配**：字符串 ≤ 512 字符时使用 `stackalloc`；`None` 时内联直接返回
 - **语言选择器缓存**：`CommandLineLocaleSelector` 和 `SystemLocaleSelector` 首次调用后缓存结果
 - **缺失 Key 去重**：HashSet 防止同一 Key 重复输出控制台警告

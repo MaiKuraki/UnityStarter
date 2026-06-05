@@ -12,7 +12,7 @@ namespace CycloneGames.Localization.Editor
 {
     public sealed class AssetTableEditor : EditorWindow
     {
-        [MenuItem("Tools/CycloneGames/Localization/Asset Table Editor")]
+        [MenuItem("Tools/CycloneGames/Localization/Tables/Asset Table Editor")]
         public static void Open()
         {
             var w = GetWindow<AssetTableEditor>("Asset Table Editor");

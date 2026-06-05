@@ -4,6 +4,7 @@
     "references": [
         "CycloneGames.Localization.Core",
         "CycloneGames.Localization.Runtime",
+        "CycloneGames.Localization.Editor",
         "CycloneGames.AssetManagement.Runtime",
         "UniTask"
     ],
