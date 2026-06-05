@@ -1,11 +1,10 @@
 {
-    "name": "CycloneGames.UIFramework.Runtime.Integrations.Localization",
+    "name": "CycloneGames.Localization.Runtime.Integrations.YarnSpinner",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.UIFramework.Runtime",
         "CycloneGames.Localization.Core",
         "CycloneGames.Localization.Runtime",
-        "Unity.TextMeshPro"
+        "YarnSpinner.Unity"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -14,13 +13,13 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [
-        "CYCLONE_LOCALIZATION"
+        "YARNSPINNER_PRESENT"
     ],
     "versionDefines": [
         {
-            "name": "com.cyclone-games.localization",
-            "expression": "1.0.0",
-            "define": "CYCLONE_LOCALIZATION"
+            "name": "dev.yarnspinner.unity",
+            "expression": "",
+            "define": "YARNSPINNER_PRESENT"
         }
     ],
     "noEngineReferences": false

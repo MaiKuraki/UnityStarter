@@ -21,7 +21,7 @@
 | 功能                    | 详情                                                                             |
 | ----------------------- | -------------------------------------------------------------------------------- |
 | **ScriptableObject 表** | 每个表 ID 每种语言对应一个 `StringTable` 资产 — 放入 Resources 或 Addressables   |
-| **延迟字典构建**        | 条目以序列化列表存储；首次访问时以 `StringComparer.Ordinal` 构建字典             |
+| **编译后运行时查找**    | 序列化列表在注册或预热时编译为 `CompiledStringTable`；查找使用 `StringComparer.Ordinal` |
 | **回退链解析**          | 如果 `zh-CN` 中缺少某个 Key，自动检查 `zh`，然后 `en`，依此类推                  |
 | **热重载**              | `OnEnable` 时重建字典 — 在 Play 模式下编辑即可立即看到变化                       |
 | **参数化文本**          | `GetFormattedString("ui", "damage", weaponName, amount)` → `"造成 {0} {1} 伤害"` |
@@ -43,6 +43,7 @@
 | **逐语言资产变体** | 将逻辑 Key 映射到不同语言的精灵图、音频剪辑或字体              |
 | **回退链解析**     | 与字符串表相同的 BFS 回退 — `ja-JP → ja → en`                  |
 | **AssetRef 集成**  | 解析为兼容 `CycloneGames.AssetManagement` 管线的 `AssetRef<T>` |
+| **编译后运行时查找** | `AssetTable` 编辑数据会先编译为 `CompiledAssetTable`，再进入运行时查找路径 |
 | **类型安全**       | `LocalizedAsset<Sprite>`、`LocalizedAsset<AudioClip>` 等       |
 
 ### 🧩 组件
@@ -104,6 +105,7 @@
 | **Property Drawer**      | `LocalizedString` 和 `LocalizedAsset<T>` 的下拉表和 Key 选择器                               |
 | **Locale Inspector**     | 自定义编辑器，展示 BCP 47 代码、显示名称、母语名称和回退链                                   |
 | **版本缓存发现**         | `LocalizedFieldHelper` 配合 `AssetPostprocessor` — 表/Key 列表仅在资产导入时更新，零逐帧开销 |
+| **验证窗口**             | 项目级扫描空 ID、非法语言、重复 Key 和 fallback 环                                           |
 
 ## 核心架构
 
@@ -114,17 +116,23 @@ graph TD
         LOC[Locale<br/><i>ScriptableObject</i>]
     end
 
-    subgraph 运行时核心
+    subgraph Core 程序集
         LID[LocaleId<br/><i>readonly struct, 内部化</i>]
-        FC[FallbackChain<br/><i>BFS 遍历, 缓存</i>]
+        FCB[LocaleFallbackChainBuilder<br/><i>纯 C# fallback 构建器</i>]
         PR[PluralRules<br/><i>CLDR 解析器, 静态</i>]
         PSL[PseudoLocalizer<br/><i>静态, 零分配</i>]
+    end
+
+    subgraph Runtime 程序集
+        FC[FallbackChain<br/><i>BFS 遍历, 缓存</i>]
         SEL[ILocaleSelector<br/><i>优先级链</i>]
     end
 
     subgraph 表
         ST[StringTable<br/><i>ScriptableObject</i>]
+        CST[CompiledStringTable<br/><i>运行时查找</i>]
         AT[AssetTable<br/><i>ScriptableObject</i>]
+        CAT[CompiledAssetTable<br/><i>运行时查找</i>]
         META[StringTableMetadata<br/><i>译者上下文</i>]
     end
 
@@ -141,10 +149,13 @@ graph TD
 
     LS --> LOC
     LOC --> LID
-    LOC --> FC
+    LOC --> FCB
+    FC --> FCB
     LSV -.实现.-> ILS
     ILS --> ST
+    ST --> CST
     ILS --> AT
+    AT --> CAT
     ILS --> FC
     ILS --> PR
     ILS --> PSL
@@ -164,6 +175,20 @@ graph TD
 | **TextMeshPro**                  | `LocalizeTMPText` 组件                                            |
 | **Unity UI**                     | `LocalizeImage` 组件                                              |
 | **Yarn Spinner** _（可选）_      | `YarnLocaleSync` — 仅在 Yarn Spinner 存在时编译                   |
+
+---
+
+## 模块结构
+
+```
+CycloneGames.Localization/
+  Core/        纯 C# LocaleId、复数规则、伪本地化、fallback helper
+  Runtime/     Unity 运行时服务、设置、表、组件和集成
+  Editor/      Inspector、Drawer、多语言表编辑器和验证工具
+  Tests/       Core 与 Editor 相关行为的 EditMode 测试
+```
+
+`Core` 不引用 Unity Engine，可复用于工具、测试、服务器代码或未来非 Unity 适配层。Runtime 中的 ScriptableObject 是编辑数据；`LocalizationService` 注册时会使用编译后的运行时表数据进行查找。
 
 ---
 
@@ -251,6 +276,21 @@ await service.InitializeAsync(settings.ToOptions());
 service.RegisterStringTable(uiTableEn);
 service.RegisterStringTable(uiTableZhCN);
 ```
+
+`RegisterStringTable` 会将每个 `StringTable` 编译为 `CompiledStringTable`。请在加载流程或场景启动阶段注册表，不要在逐帧 UI 刷新中注册。
+
+### 6. 注册资产表
+
+```csharp
+service.RegisterAssetTable(flagsEn);
+service.RegisterAssetTable(flagsZhCN);
+```
+
+`RegisterAssetTable` 会将每个 `AssetTable` 编译为 `CompiledAssetTable`。运行时查找会解析当前语言 fallback 链并返回 `AssetRef`，不会在查找时重建表字典。
+
+### 7. 验证项目数据
+
+发布或交付翻译前，打开 **Tools > CycloneGames > Localization > Validation**。验证窗口会扫描字符串表、资产表和语言 fallback 链中的空 ID、非法语言、重复 Key、自 fallback 和 fallback 环。
 
 ---
 
@@ -678,20 +718,23 @@ LocalizationService.LogMissingKeys = false; // 抑制警告
 
 ### `StringTable`
 
-| 成员                              | 描述                                           |
-| --------------------------------- | ---------------------------------------------- |
-| `TableId`                         | 此表所有语言变体共享的标识符                   |
-| `LocaleId`                        | 此表提供翻译的语言                             |
-| `Count`                           | 条目数                                         |
-| `TryGetValue(string, out string)` | 使用 `StringComparer.Ordinal` 的 O(1) 字典查找 |
+| 成员                              | 描述                                                  |
+| --------------------------------- | ----------------------------------------------------- |
+| `TableId`                         | 此表所有语言变体共享的标识符                          |
+| `LocaleId`                        | 此表提供翻译的语言                                    |
+| `Count`                           | 序列化编辑条目数                                      |
+| `Compile()`                       | 构建或返回缓存的 `CompiledStringTable` 运行时查找数据 |
+| `TryGetValue(string, out string)` | 通过编译后的运行时数据进行 O(1) 查找                  |
 
 ### `AssetTable`
 
-| 成员                                       | 描述                |
-| ------------------------------------------ | ------------------- |
-| `TableId`                                  | 此资产表的标识符    |
-| `Count`                                    | 条目数              |
-| `TryGetEntry(string, out AssetTableEntry)` | O(1) 资产表条目查找 |
+| 成员                               | 描述                                                 |
+| ---------------------------------- | ---------------------------------------------------- |
+| `TableId`                          | 此资产表的标识符                                     |
+| `LocaleId`                         | 此表提供资产变体的语言                               |
+| `Count`                            | 序列化编辑条目数                                     |
+| `Compile()`                        | 构建或返回缓存的 `CompiledAssetTable` 运行时查找数据 |
+| `TryGetValue(string, out AssetRef)` | 通过编译后的运行时数据进行 O(1) 查找                 |
 
 ### `PluralRules`
 

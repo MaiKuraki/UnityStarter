@@ -1,10 +1,11 @@
 {
-    "name": "CycloneGames.Localization.Editor",
-    "rootNamespace": "",
+    "name": "CycloneGames.Localization.Tests.Editor",
+    "rootNamespace": "CycloneGames.Localization.Tests.Editor",
     "references": [
         "CycloneGames.Localization.Core",
         "CycloneGames.Localization.Runtime",
-        "CycloneGames.AssetManagement.Runtime"
+        "CycloneGames.AssetManagement.Runtime",
+        "UniTask"
     ],
     "includePlatforms": [
         "Editor"
@@ -13,8 +14,11 @@
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
+    "autoReferenced": false,
     "defineConstraints": [],
     "versionDefines": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
     "noEngineReferences": false
 }

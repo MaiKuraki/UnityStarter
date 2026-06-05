@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CycloneGames.Localization.Core;
 using CycloneGames.Localization.Runtime;
 using UnityEngine;
 
@@ -17,10 +18,16 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
     public sealed class LocalizationWindowBinder : IUIWindowBinder, IDisposable
     {
         private readonly ILocalizationService _service;
-        private readonly List<UIWindow> _activeWindows = new(16);
+        private readonly List<WindowResponderBinding> _activeWindows = new(16);
 
-        // Reusable buffer for GetComponentsInChildren – single-threaded only.
+        // Reusable discovery buffer. Locale changes use the per-window cached responder arrays.
         private static readonly List<ILocaleResponder> SharedResponderCache = new(32);
+
+        private sealed class WindowResponderBinding
+        {
+            public UIWindow Window;
+            public ILocaleResponder[] Responders;
+        }
 
         public LocalizationWindowBinder(ILocalizationService service)
         {
@@ -28,51 +35,80 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
             _service.OnLocaleChanged += OnLocaleChanged;
         }
 
-        // ── IUIWindowBinder ─────────────────────────────────────
+        // IUIWindowBinder
         public void OnWindowCreated(UIWindow window)
         {
-            _activeWindows.Add(window);
-            NotifyResponders(window, _service.CurrentLocale);
+            if (window == null) return;
+
+            for (int i = 0; i < _activeWindows.Count; i++)
+            {
+                if (_activeWindows[i].Window == window)
+                    return;
+            }
+
+            var binding = new WindowResponderBinding
+            {
+                Window = window,
+                Responders = BuildResponderCache(window)
+            };
+            _activeWindows.Add(binding);
+            NotifyResponders(binding.Responders, _service.CurrentLocale);
         }
 
         public void OnWindowDestroying(UIWindow window)
         {
-            _activeWindows.Remove(window);
+            for (int i = _activeWindows.Count - 1; i >= 0; i--)
+            {
+                if (_activeWindows[i].Window == window)
+                {
+                    _activeWindows.RemoveAt(i);
+                    return;
+                }
+            }
         }
 
         public void OnWindowStateChanged(UIWindow window, WindowStateCallbackType state) { }
 
-        // ── Locale change propagation ───────────────────────────
+        // Locale change propagation
         private void OnLocaleChanged(LocaleId newLocale)
         {
             for (int i = _activeWindows.Count - 1; i >= 0; i--)
             {
                 if (i >= _activeWindows.Count) continue;
-                var window = _activeWindows[i];
-                if (window == null)
+                var binding = _activeWindows[i];
+                if (binding.Window == null)
                 {
                     _activeWindows.RemoveAt(i);
                     continue;
                 }
 
-                NotifyResponders(window, newLocale);
+                NotifyResponders(binding.Responders, newLocale);
             }
         }
 
-        private static void NotifyResponders(UIWindow window, LocaleId locale)
+        private static ILocaleResponder[] BuildResponderCache(UIWindow window)
         {
             window.GetComponentsInChildren(true, SharedResponderCache);
-            for (int i = 0; i < SharedResponderCache.Count; i++)
-                SharedResponderCache[i].OnLocaleChanged(locale);
+            var responders = SharedResponderCache.Count > 0
+                ? SharedResponderCache.ToArray()
+                : Array.Empty<ILocaleResponder>();
             SharedResponderCache.Clear();
+            return responders;
         }
 
-        // ── Cleanup ─────────────────────────────────────────────
+        private static void NotifyResponders(ILocaleResponder[] responders, LocaleId locale)
+        {
+            for (int i = 0; i < responders.Length; i++)
+                responders[i].OnLocaleChanged(locale);
+        }
+
+        // Cleanup
         public void Dispose()
         {
             if (_service != null)
                 _service.OnLocaleChanged -= OnLocaleChanged;
             _activeWindows.Clear();
+            SharedResponderCache.Clear();
         }
     }
 }

@@ -2613,7 +2613,20 @@ We chose the **Binder-Driven** approach specifically for the Unity engine enviro
 
 ## Localization Integration (Optional)
 
-CycloneGames.UIFramework provides **optional** integration with [CycloneGames.Localization](../CycloneGames.Localization/README.md). When the `CycloneGames.Localization` package is detected, the scripting define `CYCLONE_LOCALIZATION` is emitted automatically — no manual setup required. If the package is absent, all localization code is compiled away with zero overhead.
+CycloneGames.UIFramework provides a dedicated integration assembly for [CycloneGames.Localization](../CycloneGames.Localization/README.md). The integration is guarded by the `CYCLONE_LOCALIZATION` scripting define. When Localization is installed as the UPM package `com.cyclone-games.localization`, asmdef `versionDefines` emits the define automatically. When both modules are copied directly under `Assets/`, Unity cannot auto-detect that optional dependency, so the define must be added manually.
+
+### Assembly Setup
+
+The integration is split into two asmdefs:
+
+| Assembly | Purpose |
+| -------- | ------- |
+| `CycloneGames.UIFramework.Runtime.Integrations.Localization` | Runtime bridge from `ILocalizationService.OnLocaleChanged` to active `UIWindow` hierarchies |
+| `CycloneGames.UIFramework.Editor.Integrations.Localization` | Editor tooling for `UILocaleLayout` preview, capture, and layout tracking |
+
+These assemblies reference `CycloneGames.Localization.Core`, `CycloneGames.Localization.Runtime`, and `CycloneGames.Localization.Components` directly, but they are only compiled when `CYCLONE_LOCALIZATION` is present.
+
+For UPM usage, install `com.cyclone-games.localization` and Unity will enable the integration through `versionDefines`. For direct `Assets/` usage, add `CYCLONE_LOCALIZATION` to **Player Settings > Scripting Define Symbols** for the build targets that need UI localization. Remove the define before deleting the Localization source package, or remove/exclude the `Runtime/Scripts/Integrations/Localization` folder together with it.
 
 ### Architecture
 
@@ -2680,6 +2693,8 @@ Add the `UILocaleLayout` component to the root of your UI prefab (same level as 
 4. Use **Preview** to compare locales side-by-side without affecting the saved prefab.
 
 #### Step 4: Register the Binder at Startup
+
+`LocalizationWindowBinder` should be registered once during UI composition. It does not own the localization service; it only listens to locale changes and forwards them to active windows.
 
 ```csharp
 // VContainer example
