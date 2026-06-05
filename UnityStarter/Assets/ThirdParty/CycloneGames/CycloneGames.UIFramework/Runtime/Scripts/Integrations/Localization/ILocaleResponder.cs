@@ -1,3 +1,4 @@
+using CycloneGames.Localization.Core;
 using CycloneGames.Localization.Runtime;
 
 namespace CycloneGames.UIFramework.Runtime.Integrations.Localization

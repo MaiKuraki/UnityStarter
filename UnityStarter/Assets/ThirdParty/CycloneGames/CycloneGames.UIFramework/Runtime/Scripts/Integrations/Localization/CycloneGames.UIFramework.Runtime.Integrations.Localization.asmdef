@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.UIFramework.Runtime",
+        "CycloneGames.Localization.Core",
         "CycloneGames.Localization.Runtime",
         "Unity.TextMeshPro"
     ],
@@ -15,6 +16,12 @@
     "defineConstraints": [
         "CYCLONE_LOCALIZATION"
     ],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.localization",
+            "expression": "1.0.0",
+            "define": "CYCLONE_LOCALIZATION"
+        }
+    ],
     "noEngineReferences": false
 }
