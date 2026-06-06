@@ -55,6 +55,14 @@ namespace CycloneGames.InputSystem.Runtime
 
         // Context Management - Object Based
         void PushContext(InputContext context);
+
+        /// <summary>
+        /// Temporarily captures active input with the specified context.
+        /// Normal contexts may still be pushed and removed while the capture is active.
+        /// Dispose the returned scope to restore the next captured context or the normal stack top.
+        /// </summary>
+        IDisposable CaptureContext(InputContext context);
+
         bool RemoveContext(InputContext context);
         void PopContext();
         void RefreshActiveContext();
@@ -65,7 +73,18 @@ namespace CycloneGames.InputSystem.Runtime
         bool RemoveBindingFromContext(InputContext context, Observable<float> source);
         bool RemoveBindingFromContext(InputContext context, Observable<bool> source);
 
+        /// <summary>
+        /// Disables all input until <see cref="UnblockInput"/> has been called the same number of times.
+        /// Contexts can still be pushed and removed while input is blocked.
+        /// </summary>
         void BlockInput();
+
+        /// <summary>
+        /// Creates a scoped input block. Dispose the returned scope to release it.
+        /// This is the preferred API for loading screens and async flows.
+        /// </summary>
+        IDisposable BlockInputScope();
+
         void UnblockInput();
 
         /// <summary>
