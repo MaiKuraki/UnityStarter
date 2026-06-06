@@ -45,7 +45,7 @@ namespace CycloneGames.InputSystem.Runtime
             return Observable.Create<InputDeviceKind>(observer =>
                 ActiveDeviceKind.Subscribe(value =>
                 {
-                    if (_contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context))
+                    if (ReferenceEquals(GetActiveContext(), context))
                     {
                         observer.OnNext(value);
                     }
@@ -61,6 +61,8 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly ReactiveProperty<InputDeviceKind> _activeDeviceKind = new(InputDeviceKind.Unknown);
         private readonly Stack<InputContext> _contextStack = new();
         private readonly HashSet<InputContext> _contextSet = new(); // O(1) membership test for PushContext dedup
+        private readonly Stack<InputContext> _captureStack = new();
+        private readonly HashSet<InputContext> _captureSet = new(); // O(1) membership test for CaptureContext dedup
         private readonly List<InputContext> _tempContextList = new(); // Pooled list for stack operations (Zero-GC)
 
         // Event Subjects (Keyed by zero-garbage struct InputActionKey)
@@ -84,6 +86,7 @@ namespace CycloneGames.InputSystem.Runtime
         private readonly InputActionAsset _inputActionAsset;
         private readonly PlayerSlotConfig _config; // Stored for runtime rebinding/reset
         private bool _isInputBlocked;
+        private int _inputBlockDepth;
         private bool _isDisposed;
 
         public InputPlayer(int playerId, InputUser user, PlayerSlotConfig config, InputDevice initialDevice = null)
@@ -205,7 +208,7 @@ namespace CycloneGames.InputSystem.Runtime
             if (context == null || source == null) return false;
 
             bool removed = context.RemoveBinding(source);
-            if (removed && _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context))
+            if (removed && ReferenceEquals(GetActiveContext(), context))
             {
                 DeactivateTopContext();
                 ActivateTopContext();
@@ -218,7 +221,7 @@ namespace CycloneGames.InputSystem.Runtime
             if (context == null || source == null) return false;
 
             bool removed = context.RemoveBinding(source);
-            if (removed && _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context))
+            if (removed && ReferenceEquals(GetActiveContext(), context))
             {
                 DeactivateTopContext();
                 ActivateTopContext();
@@ -231,7 +234,7 @@ namespace CycloneGames.InputSystem.Runtime
             if (context == null || source == null) return false;
 
             bool removed = context.RemoveBinding(source);
-            if (removed && _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context))
+            if (removed && ReferenceEquals(GetActiveContext(), context))
             {
                 DeactivateTopContext();
                 ActivateTopContext();
@@ -244,7 +247,7 @@ namespace CycloneGames.InputSystem.Runtime
             if (context == null || source == null) return false;
 
             bool removed = context.RemoveBinding(source);
-            if (removed && _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context))
+            if (removed && ReferenceEquals(GetActiveContext(), context))
             {
                 DeactivateTopContext();
                 ActivateTopContext();
@@ -263,32 +266,15 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (context == null) return false;
 
-            bool wasActive = _contextStack.Count > 0 && ReferenceEquals(_contextStack.Peek(), context);
+            bool wasActive = ReferenceEquals(GetActiveContext(), context);
 
             if (wasActive)
             {
                 DeactivateTopContext();
             }
 
-            _tempContextList.Clear();
-            bool found = false;
-
-            while (_contextStack.Count > 0)
-            {
-                var ctx = _contextStack.Pop();
-                if (ReferenceEquals(ctx, context))
-                {
-                    found = true;
-                    break;
-                }
-                _tempContextList.Add(ctx);
-            }
-
-            for (int i = _tempContextList.Count - 1; i >= 0; i--)
-            {
-                _contextStack.Push(_tempContextList[i]);
-            }
-            _tempContextList.Clear();
+            bool found = RemoveContextFromStack(_contextStack, _contextSet, context);
+            found |= RemoveContextFromStack(_captureStack, _captureSet, context);
 
             if (wasActive)
             {
@@ -317,29 +303,41 @@ namespace CycloneGames.InputSystem.Runtime
 
             if (_contextSet.Contains(context))
             {
-                _tempContextList.Clear();
-
-                while (_contextStack.Count > 0)
-                {
-                    var ctx = _contextStack.Pop();
-                    if (!ReferenceEquals(ctx, context))
-                    {
-                        _tempContextList.Add(ctx);
-                    }
-                }
-
-                for (int i = _tempContextList.Count - 1; i >= 0; i--)
-                {
-                    _contextStack.Push(_tempContextList[i]);
-                }
-                _tempContextList.Clear();
+                RemoveContextFromStack(_contextStack, _contextSet, context);
             }
 
-            DeactivateTopContext();
+            bool shouldRefreshActive = _captureStack.Count == 0;
+            if (shouldRefreshActive) DeactivateTopContext();
             _contextStack.Push(context);
             _contextSet.Add(context);
             context.AddOwner(this);
+            if (shouldRefreshActive) ActivateTopContext();
+        }
+
+        /// <summary>
+        /// Captures input with a high-priority context until the returned scope is disposed.
+        /// <para>
+        /// Normal contexts can still be pushed, removed, and disposed while a capture is active.
+        /// The top capture context remains active until released, then input resumes from the next
+        /// capture context or the normal context stack top.
+        /// </para>
+        /// </summary>
+        public IDisposable CaptureContext(InputContext context)
+        {
+            if (context == null) return new InputContextCapture(null, null);
+
+            if (_captureSet.Contains(context))
+            {
+                RemoveContextFromStack(_captureStack, _captureSet, context);
+            }
+
+            DeactivateTopContext();
+            _captureStack.Push(context);
+            _captureSet.Add(context);
+            context.AddOwner(this);
             ActivateTopContext();
+
+            return new InputContextCapture(this, context);
         }
 
         /// <summary>
@@ -354,23 +352,27 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (_contextStack.Count == 0) return;
             var ctx = _contextStack.Peek();
-            DeactivateTopContext();
+            bool shouldRefreshActive = _captureStack.Count == 0;
+            if (shouldRefreshActive) DeactivateTopContext();
             _contextStack.Pop();
             _contextSet.Remove(ctx);
-            ctx.RemoveOwner(this);
-            ActivateTopContext();
+            if (!_captureSet.Contains(ctx))
+            {
+                ctx.RemoveOwner(this);
+            }
+            if (shouldRefreshActive) ActivateTopContext();
         }
 
         public void RefreshActiveContext()
         {
-            if (_contextStack.Count == 0) return;
+            if (GetActiveContext() == null) return;
             DeactivateTopContext();
             ActivateTopContext();
         }
 
         public Observable<Vector2> GetVector2Observable(string actionName)
         {
-            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            var mapName = GetActiveContext()?.ActionMapName;
             if (mapName != null)
             {
                 var key = new InputActionKey(mapName, actionName);
@@ -386,7 +388,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         public Observable<Unit> GetButtonObservable(string actionName)
         {
-            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            var mapName = GetActiveContext()?.ActionMapName;
             if (mapName != null)
             {
                 var key = new InputActionKey(mapName, actionName);
@@ -402,7 +404,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         public Observable<Unit> GetLongPressObservable(string actionName)
         {
-            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            var mapName = GetActiveContext()?.ActionMapName;
             if (mapName != null)
             {
                 var key = new InputActionKey(mapName, actionName);
@@ -418,7 +420,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         public Observable<float> GetScalarObservable(string actionName)
         {
-            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            var mapName = GetActiveContext()?.ActionMapName;
             if (mapName != null)
             {
                 var key = new InputActionKey(mapName, actionName);
@@ -434,7 +436,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         public Observable<bool> GetPressStateObservable(string actionName)
         {
-            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            var mapName = GetActiveContext()?.ActionMapName;
             if (mapName != null)
             {
                 var key = new InputActionKey(mapName, actionName);
@@ -468,7 +470,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         public Observable<float> GetLongPressProgressObservable(string actionName)
         {
-            var mapName = _contextStack.Count > 0 ? _contextStack.Peek().ActionMapName : null;
+            var mapName = GetActiveContext()?.ActionMapName;
             if (mapName != null)
             {
                 var key = new InputActionKey(mapName, actionName);
@@ -518,18 +520,36 @@ namespace CycloneGames.InputSystem.Runtime
 
         public void BlockInput()
         {
-            if (_isInputBlocked) return;
-            _isInputBlocked = true;
-            _inputActionAsset.Disable();
+            _inputBlockDepth++;
+            if (_inputBlockDepth == 1)
+            {
+                _isInputBlocked = true;
+                _inputActionAsset.Disable();
+            }
+        }
+
+        public IDisposable BlockInputScope()
+        {
+            BlockInput();
+            return new InputBlockScope(this);
         }
 
         public void UnblockInput()
         {
-            if (!_isInputBlocked) return;
-            _isInputBlocked = false;
-            if (_contextStack.Count > 0)
+            if (_inputBlockDepth <= 0)
             {
-                _inputActionAsset.FindActionMap(_contextStack.Peek().ActionMapName)?.Enable();
+                _inputBlockDepth = 0;
+                return;
+            }
+
+            _inputBlockDepth--;
+            if (_inputBlockDepth > 0) return;
+
+            _isInputBlocked = false;
+            var activeContext = GetActiveContext();
+            if (activeContext != null)
+            {
+                _inputActionAsset.FindActionMap(activeContext.ActionMapName)?.Enable();
             }
         }
 
@@ -551,6 +571,16 @@ namespace CycloneGames.InputSystem.Runtime
             }
 
             // Clean up context stack ownership to prevent stale references
+            while (_captureStack.Count > 0)
+            {
+                var ctx = _captureStack.Pop();
+                if (!_contextSet.Contains(ctx))
+                {
+                    ctx.RemoveOwner(this);
+                }
+            }
+            _captureSet.Clear();
+
             while (_contextStack.Count > 0)
             {
                 var ctx = _contextStack.Pop();
@@ -588,7 +618,8 @@ namespace CycloneGames.InputSystem.Runtime
             _subscriptions?.Dispose();
             _subscriptions = new CompositeDisposable();
 
-            if (_contextStack.Count == 0)
+            var topContext = GetActiveContext();
+            if (topContext == null)
             {
                 _inputActionAsset.Disable();
                 _activeContextName.Value = null;
@@ -596,7 +627,6 @@ namespace CycloneGames.InputSystem.Runtime
                 return;
             }
 
-            var topContext = _contextStack.Peek();
             _inputActionAsset.Disable();
 
             if (!_isInputBlocked)
@@ -632,6 +662,107 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 _subscriptions.Dispose();
                 _subscriptions = null;
+            }
+        }
+
+        private InputContext GetActiveContext()
+        {
+            return _captureStack.Count > 0
+                ? _captureStack.Peek()
+                : _contextStack.Count > 0
+                    ? _contextStack.Peek()
+                    : null;
+        }
+
+        private bool RemoveContextFromStack(Stack<InputContext> stack, HashSet<InputContext> set, InputContext context)
+        {
+            _tempContextList.Clear();
+            bool found = false;
+
+            while (stack.Count > 0)
+            {
+                var ctx = stack.Pop();
+                if (ReferenceEquals(ctx, context))
+                {
+                    found = true;
+                    break;
+                }
+
+                _tempContextList.Add(ctx);
+            }
+
+            for (int i = _tempContextList.Count - 1; i >= 0; i--)
+            {
+                stack.Push(_tempContextList[i]);
+            }
+
+            _tempContextList.Clear();
+
+            if (found)
+            {
+                set.Remove(context);
+            }
+
+            return found;
+        }
+
+        private void ReleaseCapturedContext(InputContext context)
+        {
+            if (context == null) return;
+
+            bool wasActive = ReferenceEquals(GetActiveContext(), context);
+            if (wasActive)
+            {
+                DeactivateTopContext();
+            }
+
+            bool removed = RemoveContextFromStack(_captureStack, _captureSet, context);
+            if (removed && !_contextSet.Contains(context))
+            {
+                context.RemoveOwner(this);
+            }
+
+            if (wasActive)
+            {
+                ActivateTopContext();
+            }
+        }
+
+        private sealed class InputContextCapture : IDisposable
+        {
+            private InputPlayer _owner;
+            private InputContext _context;
+
+            public InputContextCapture(InputPlayer owner, InputContext context)
+            {
+                _owner = owner;
+                _context = context;
+            }
+
+            public void Dispose()
+            {
+                var owner = _owner;
+                var context = _context;
+                _owner = null;
+                _context = null;
+                owner?.ReleaseCapturedContext(context);
+            }
+        }
+
+        private sealed class InputBlockScope : IDisposable
+        {
+            private InputPlayer _owner;
+
+            public InputBlockScope(InputPlayer owner)
+            {
+                _owner = owner;
+            }
+
+            public void Dispose()
+            {
+                var owner = _owner;
+                _owner = null;
+                owner?.UnblockInput();
             }
         }
 
@@ -830,7 +961,7 @@ namespace CycloneGames.InputSystem.Runtime
                                         // Threshold 0.25 (sqrMagnitude) = 0.5 magnitude, filters out tiny noise
                                         if (v.sqrMagnitude > 0.25f && device != null)
                                         {
-                                            if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctxConfig.ActionMap)
+                                            if (GetActiveContext()?.ActionMapName == ctxConfig.ActionMap)
                                             {
                                                 UpdateActiveDeviceKind(device);
                                             }
@@ -868,7 +999,7 @@ namespace CycloneGames.InputSystem.Runtime
 
                             action.PerformedAsObservable(token).Subscribe(ctx =>
                             {
-                                if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
+                                if (GetActiveContext()?.ActionMapName == ctx.action.actionMap.name)
                                 {
                                     UpdateActiveDeviceKind(TryGetControlDevice(ctx));
                                 }
@@ -881,7 +1012,7 @@ namespace CycloneGames.InputSystem.Runtime
                             action.PerformedAsObservable(token).Subscribe(ctx => subject.OnNext(ctx.ReadValue<float>())).AddTo(_actionWiringSubscriptions);
                             action.PerformedAsObservable(token).Subscribe(ctx =>
                             {
-                                if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
+                                if (GetActiveContext()?.ActionMapName == ctx.action.actionMap.name)
                                 {
                                     UpdateActiveDeviceKind(TryGetControlDevice(ctx));
                                 }
@@ -902,7 +1033,7 @@ namespace CycloneGames.InputSystem.Runtime
                             action.PerformedAsObservable(token).Subscribe(_ => subject.OnNext(Unit.Default)).AddTo(_actionWiringSubscriptions);
                             action.PerformedAsObservable(token).Subscribe(ctx =>
                             {
-                                if (_contextStack.Count > 0 && _contextStack.Peek().ActionMapName == ctx.action.actionMap.name)
+                                if (GetActiveContext()?.ActionMapName == ctx.action.actionMap.name)
                                 {
                                     UpdateActiveDeviceKind(TryGetControlDevice(ctx));
                                 }
@@ -961,14 +1092,14 @@ namespace CycloneGames.InputSystem.Runtime
                 {
                     if (User == null || !User.valid) return;
 
-                    // Only update ActiveDeviceKind when there's an active Context (top of stack)
-                    if (_contextStack.Count == 0)
+                    // Only update ActiveDeviceKind when there is an active context or capture.
+                    var topContext = GetActiveContext();
+                    if (topContext == null)
                     {
                         // CLogger.LogInfo($"{DEBUG_FLAG} [P{PlayerId}] No active context, skipping ActiveDeviceKind update");
                         return;
                     }
 
-                    var topContext = _contextStack.Peek();
                     // CLogger.LogInfo($"{DEBUG_FLAG} [P{PlayerId}] Active context: {topContext.Name} ({topContext.GetType().Name})");
 
                     InputDevice activeDevice = null;
