@@ -133,6 +133,7 @@ public class SimplePlayer : MonoBehaviour
 2. **栈管理**：`PushContext(ctx)` 将对象推入栈，栈顶的 Context 为活动状态
 3. **自动置顶**：若 `PushContext` 一个已在栈中的 Context 对象，它会自动移至栈顶（聚焦行为）
 4. **精确移除**：`RemoveContext(ctx)` 只移除指定对象实例，不会误删同名 Context
+5. **输入捕获**：`CaptureContext(ctx)` 会临时让指定 Context 覆盖普通栈顶，适合 Loading、全屏视频、模态弹窗等需要遮住下层但仍可输入的界面
 
 **Push / Pop / AddTo 生命周期：**
 
@@ -240,6 +241,38 @@ public class PauseMenu : MonoBehaviour
     // PauseMenu 销毁时，Gameplay Context 自动恢复
 }
 ```
+
+### 4.1.1 作用域输入捕获（Scoped Input Capture）
+
+`CaptureContext(ctx)` 用于临时接管当前输入焦点，但不会阻止普通 Context 栈继续变化。它适合全屏加载界面、开场视频、确认弹窗、暂停菜单等场景：上层 UI 需要继续接收输入，下层 Gameplay、HUD、PlayerController 仍然可以异步初始化并注册自己的输入。
+
+捕获期间的行为：
+
+| 操作 | 行为 |
+|------|------|
+| `CaptureContext(ctx)` | 将 `ctx` 激活到普通栈之上，并返回一个 `IDisposable` 作用域 |
+| `PushContext(gameplayCtx)` | 仍然更新普通栈，但不会抢走当前输入焦点 |
+| `RemoveContext(ctx)` / `ctx.Dispose()` | 从普通栈和捕获栈中同时移除该 Context |
+| 释放捕获作用域 | 恢复到下一个捕获 Context；若没有捕获，则恢复普通栈顶 |
+
+```csharp
+var loadingContext = new InputContext("UIActions", "Loading")
+    .AddBinding(input.GetButtonObservable("UIActions", "Cancel"), new ActionCommand(CancelLoading));
+
+loadingContext.AddTo(this);
+using (input.CaptureContext(loadingContext))
+{
+    await LoadWorldAsync();
+
+    // 下层内容可以安全 PushContext，Loading UI 仍然保持活动输入。
+    input.PushContext(gameplayContext);
+    input.PushContext(playerControllerContext);
+}
+
+// 捕获释放后，输入恢复到真实的普通栈顶。
+```
+
+捕获也支持嵌套。例如 Loading 界面上再弹出确认框时，可以 Capture 确认框 Context；确认框关闭后，输入会回到 Loading Context。
 
 ### 4.2 InputPlayer 与 IInputPlayer
 
@@ -509,7 +542,61 @@ inputService.BlockInput();    // 阻塞所有输入
 inputService.UnblockInput();  // 恢复输入（恢复当前活动上下文的 ActionMap）
 ```
 
-### 5.6 设备图标自动切换
+`BlockInput` / `UnblockInput` 支持嵌套计数：只有所有阻塞都释放后，输入才会恢复。异步加载流程建议使用作用域写法：
+
+```csharp
+using (input.BlockInputScope())
+{
+    await LoadWorldAsync();
+
+    // 下层 Gameplay 可以继续 PushContext，但不会触发任何输入响应。
+    input.PushContext(gameplayContext);
+    input.PushContext(playerControllerContext);
+}
+
+// 输入恢复到当前捕获 Context，若没有捕获，则恢复普通栈顶。
+```
+
+如果 Loading、视频、模态 UI 自己仍然需要响应按钮输入，请优先使用 `CaptureContext`，而不是 `BlockInput`。`BlockInput` 会禁用整个 `InputActionAsset`，而 `CaptureContext` 只是在输入优先级上临时覆盖普通栈顶。
+
+### 5.6 Loading / 模态输入模式
+
+当上层界面需要遮住全屏，但下层还会异步创建大量对象并注册输入时，使用作用域捕获：
+
+```csharp
+private IDisposable _loadingInputCapture;
+private InputContext _loadingContext;
+
+private async UniTask ShowLoadingAndEnterGameplayAsync()
+{
+    _loadingContext = new InputContext("UIActions", "Loading")
+        .AddBinding(_input.GetButtonObservable("UIActions", "Skip"), new ActionCommand(TrySkip));
+
+    _loadingContext.AddTo(this);
+    _loadingInputCapture = _input.CaptureContext(_loadingContext);
+
+    await InitializeGameplayAsync(); // PlayerController / HUD 可以在这里 PushContext。
+
+    _loadingInputCapture.Dispose();
+    _loadingInputCapture = null;
+}
+```
+
+长流程建议使用 `try/finally`，确保加载失败或取消时也能释放捕获：
+
+```csharp
+IDisposable capture = _input.CaptureContext(_loadingContext);
+try
+{
+    await InitializeGameplayAsync();
+}
+finally
+{
+    capture.Dispose();
+}
+```
+
+### 5.7 设备图标自动切换
 
 `InputDeviceIconSet` 是 ScriptableObject 资产，映射 `InputDeviceKind` 到对应的 UI 精灵。
 
@@ -535,7 +622,7 @@ Sprite icon2 = _iconSet.GetIcon(InputDeviceKind.KeyboardMouse); // 键鼠图标
 // 运行时自动根据输入端切换图标（无需额外代码）
 ```
 
-### 5.7 鼠标按键轮询
+### 5.8 鼠标按键轮询
 
 在热路径中可直接轮询鼠标按钮状态，无需通过 Observable 订阅：
 
@@ -1241,11 +1328,13 @@ public class PlayerController
 | `GetPressStateObservable` | `(string/int) → Observable<bool>` | 按下状态流 |
 | `GetChordObservable` | `(string×2/int×2, float) → Observable<Unit>` | 复合键检测流 |
 | `PushContext(ctx)` | `void` | 推入栈顶（已存在则移至栈顶） |
+| `CaptureContext(ctx)` | `IDisposable` | 临时捕获输入到普通栈之上；释放返回的作用域后恢复 |
 | `RemoveContext(ctx)` | `bool` | 按对象引用精确移除 |
 | `PopContext()` | `void` | ⚠️ 不建议与 AddTo 混用 |
 | `RefreshActiveContext()` | `void` | 刷新当前上下文绑定 |
 | `RemoveBindingFromContext(ctx, obs)` | `bool` | 移除指定绑定 |
 | `BlockInput()` / `UnblockInput()` | `void` | 阻塞 / 恢复输入 |
+| `BlockInputScope()` | `IDisposable` | 作用域输入阻塞，适合 `using` / 异步加载流程 |
 | `IsLeftMouseButtonPressed` | `bool` | 鼠标左键轮询 |
 | `IsRightMouseButtonPressed` | `bool` | 鼠标右键轮询 |
 | `IsMiddleMouseButtonPressed` | `bool` | 鼠标中键轮询 |

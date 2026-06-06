@@ -12,11 +12,9 @@ namespace CycloneGames.UIFramework.Editor
     [CustomEditor(typeof(UIWindowConfiguration))]
     public sealed class UIWindowConfigurationEditor : UnityEditor.Editor
     {
-        // ── Duplicate detection ────────────────────────────────────────────────────────────
         private static string[] allConfigGuids;
         private static bool hasCheckedForDuplicates;
 
-        // ── Colors ────────────────────────────────────────────────────────────────────────
         private static readonly Color headerColor        = new Color(0.3f, 0.5f,  0.8f);
         private static readonly Color prefabRefColor     = new Color(0.4f, 0.7f,  0.4f);   // green  direct / built-in
         private static readonly Color assetRefColor      = new Color(0.35f, 0.55f, 0.85f); // blue   AssetManagement
@@ -28,7 +26,6 @@ namespace CycloneGames.UIFramework.Editor
         private static readonly Color sceneBoundOffColor = new Color(0.45f, 0.45f, 0.45f); // grey       (persistent)
         private const float SourceFieldLabelWidth = 72f;
 
-        // ── Serialized properties ─────────────────────────────────────────────────────────
         private SerializedProperty sourceProp;
         private SerializedProperty windowPrefabProp;
         private SerializedProperty prefabAssetRefProp;   // compound struct
@@ -38,22 +35,17 @@ namespace CycloneGames.UIFramework.Editor
         private SerializedProperty isSceneBoundProp;
         private SerializedProperty subCanvasPolicyProp;
 
-        // ── Foldout states ────────────────────────────────────────────────────────────────
         private bool showPrefabSource        = true;
         private bool showLayerSettings       = true;
         private bool showSceneBindingSection = true;
 
-        // ── Cached GUIStyles (avoid per-frame allocation) ─────────────────────────────────
         private GUIStyle _titleStyle;
         private GUIStyle _subtitleStyle;
         private GUIStyle _statusBoxStyle;
-        private GUIStyle _foldoutLabelStyle;
         private GUIStyle _tagLabelStyle;
         private bool _stylesInitialized;
         private string _migrationStatusMessage;
         private MessageType _migrationStatusType;
-
-        // ── Lifecycle ─────────────────────────────────────────────────────────────────────
 
         private void OnEnable()
         {
@@ -92,12 +84,6 @@ namespace CycloneGames.UIFramework.Editor
                 alignment = TextAnchor.MiddleCenter
             };
 
-            _foldoutLabelStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                normal    = { textColor = Color.white },
-                alignment = TextAnchor.MiddleLeft
-            };
-
             _tagLabelStyle = new GUIStyle(EditorStyles.miniLabel)
             {
                 fontStyle = FontStyle.Bold,
@@ -105,8 +91,6 @@ namespace CycloneGames.UIFramework.Editor
                 normal    = { textColor = Color.white }
             };
         }
-
-        // ── Main draw ─────────────────────────────────────────────────────────────────────
 
         public override void OnInspectorGUI()
         {
@@ -121,19 +105,19 @@ namespace CycloneGames.UIFramework.Editor
             DrawValidationSummary(config);
             EditorGUILayout.Space(5);
 
-            showLayerSettings = DrawFoldoutHeader("Layer & Priority", showLayerSettings, headerColor);
+            showLayerSettings = InspectorUiUtility.DrawFoldoutHeader("Layer & Priority", showLayerSettings, headerColor);
             if (showLayerSettings) DrawLayerSection(config);
 
             EditorGUILayout.Space(3);
 
             Color sceneBindingColor = config.IsSceneBound ? sceneBoundOnColor : sceneBoundOffColor;
-            showSceneBindingSection = DrawFoldoutHeader("Scene Binding", showSceneBindingSection, sceneBindingColor);
+            showSceneBindingSection = InspectorUiUtility.DrawFoldoutHeader("Scene Binding", showSceneBindingSection, sceneBindingColor);
             if (showSceneBindingSection) DrawSceneBindingSection(config);
 
             EditorGUILayout.Space(3);
 
             Color sourceFoldoutColor = GetSourceColor(config.Source);
-            showPrefabSource = DrawFoldoutHeader("Prefab Source", showPrefabSource, sourceFoldoutColor);
+            showPrefabSource = InspectorUiUtility.DrawFoldoutHeader("Prefab Source", showPrefabSource, sourceFoldoutColor);
             if (showPrefabSource) DrawPrefabSourceSection(config);
 
             EditorGUILayout.Space(10);
@@ -141,8 +125,6 @@ namespace CycloneGames.UIFramework.Editor
 
             serializedObject.ApplyModifiedProperties();
         }
-
-        // ── Title ─────────────────────────────────────────────────────────────────────────
 
         private void DrawTitle(UIWindowConfiguration config)
         {
@@ -153,8 +135,6 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.EndHorizontal();
             EditorGUILayout.LabelField(config.name, _subtitleStyle);
         }
-
-        // ── Validation summary ────────────────────────────────────────────────────────────
 
         private void DrawValidationSummary(UIWindowConfiguration config)
         {
@@ -194,8 +174,6 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.EndVertical();
         }
 
-        // ── Scene Binding section ─────────────────────────────────────────────────────────
-
         /// <summary>
         /// Draws the Scene Binding toggle that controls <see cref="UIWindowConfiguration.IsSceneBound"/>.
         /// When enabled the window is automatically closed by UIManager whenever the active scene changes.
@@ -205,7 +183,6 @@ namespace CycloneGames.UIFramework.Editor
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            // ── Status badge ─────────────────────────────────────────────────
             if (config.IsSceneBound)
                 DrawStatusBox("[Scene Bound]  Auto-closes on scene change", sceneBoundOnColor);
             else
@@ -213,22 +190,21 @@ namespace CycloneGames.UIFramework.Editor
 
             EditorGUILayout.Space(4);
 
-            // ── Toggle row ───────────────────────────────────────────────────
             var label = new GUIContent(
                 "Is Scene Bound",
                 "When ENABLED:\n" +
-                "  • UIManager records the scene handle at the moment OpenUI() is called.\n" +
-                "  • Whenever the active scene changes, UIManager automatically closes\n" +
+                "  - UIManager records the scene handle at the moment OpenUI() is called.\n" +
+                "  - Whenever the active scene changes, UIManager automatically closes\n" +
                 "    all windows whose bound scene handle no longer matches.\n" +
-                "  • Safe against rapid repeated scene switches and mid-open transitions:\n" +
+                "  - Safe against rapid repeated scene switches and mid-open transitions:\n" +
                 "    the bound scene is frozen at request-time, so even if the scene\n" +
                 "    changes before the prefab finishes loading, the window will be\n" +
                 "    closed once it opens.\n\n" +
                 "When DISABLED (Persistent):\n" +
-                "  • The window is never auto-closed by scene changes.\n" +
-                "  • Use for global UI that must survive scene transitions\n" +
+                "  - The window is never auto-closed by scene changes.\n" +
+                "  - Use for global UI that must survive scene transitions\n" +
                 "    (main menu, global HUD, loading screen, etc.).\n" +
-                "  • You are responsible for explicitly calling CloseUI().");
+                "  - You are responsible for explicitly calling CloseUI().");
 
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField(label, GUILayout.Width(120));
@@ -237,13 +213,12 @@ namespace CycloneGames.UIFramework.Editor
 
             EditorGUILayout.Space(4);
 
-            // ── Contextual help text ─────────────────────────────────────────
             if (config.IsSceneBound)
             {
                 EditorGUILayout.HelpBox(
-                    "SCENE BOUND — This window will be closed automatically when the active scene changes.\n\n" +
-                    "✔ In-game HUD, score screen, level-specific popups\n" +
-                    "✔ Any UI that should NOT survive a scene load\n\n" +
+                    "SCENE BOUND - This window will be closed automatically when the active scene changes.\n\n" +
+                    "OK: In-game HUD, score screen, level-specific popups\n" +
+                    "OK: Any UI that should NOT survive a scene load\n\n" +
                     "Note: you can still override per-call via\n" +
                     "OpenUI(name, ..., isSceneBoundOverride: false).",
                     MessageType.Info);
@@ -251,17 +226,15 @@ namespace CycloneGames.UIFramework.Editor
             else
             {
                 EditorGUILayout.HelpBox(
-                    "PERSISTENT — This window survives scene transitions.\n\n" +
-                    "✔ Main menu, loading screen, global persistent HUD\n" +
-                    "✔ Overlay UI managed by the root scene\n\n" +
+                    "PERSISTENT - This window survives scene transitions.\n\n" +
+                    "OK: Main menu, loading screen, global persistent HUD\n" +
+                    "OK: Overlay UI managed by the root scene\n\n" +
                     "Remember to call CloseUI() explicitly when no longer needed.",
                     MessageType.None);
             }
 
             EditorGUILayout.EndVertical();
         }
-
-        // ── Layer section ─────────────────────────────────────────────────────────────────
 
         private void DrawLayerSection(UIWindowConfiguration config)
         {
@@ -373,13 +346,10 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.EndHorizontal();
         }
 
-        // ── Prefab source section ─────────────────────────────────────────────────────────
-
         private void DrawPrefabSourceSection(UIWindowConfiguration config)
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            // ── Three-way mode selector ──────────────────────────────────────
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("Source Mode", GUILayout.Width(90));
 
@@ -424,7 +394,6 @@ namespace CycloneGames.UIFramework.Editor
 
             EditorGUILayout.Space(5);
 
-            // ── Mode-specific field ──────────────────────────────────────────
             switch (currentSource)
             {
                 case UIWindowConfiguration.PrefabSource.PrefabReference:
@@ -440,7 +409,6 @@ namespace CycloneGames.UIFramework.Editor
 
             EditorGUILayout.EndVertical();
 
-            // ── Help text ────────────────────────────────────────────────────
             string helpText = currentSource switch
             {
                 UIWindowConfiguration.PrefabSource.PrefabReference =>
@@ -457,8 +425,6 @@ namespace CycloneGames.UIFramework.Editor
             };
             EditorGUILayout.HelpBox(helpText, MessageType.Info);
         }
-
-        // ── PrefabReference field ─────────────────────────────────────────────────────────
 
         private void DrawPrefabReferenceField(UIWindowConfiguration config)
         {
@@ -478,8 +444,6 @@ namespace CycloneGames.UIFramework.Editor
                     EditorGUILayout.LabelField($"[OK] UIWindow: {config.WindowPrefab.name}", EditorStyles.miniLabel);
             }
         }
-
-        // ── AssetReference field ──────────────────────────────────────────────────────────
 
         private void DrawAssetRefField(UIWindowConfiguration config)
         {
@@ -519,8 +483,6 @@ namespace CycloneGames.UIFramework.Editor
             }
         }
 
-        // ── PathLocation field ────────────────────────────────────────────────────────────
-
         private void DrawPathLocationField(UIWindowConfiguration config)
         {
             DrawSourceTag("PATH", locationColor);
@@ -545,8 +507,6 @@ namespace CycloneGames.UIFramework.Editor
             }
         }
 
-        // ── Source tag badge ──────────────────────────────────────────────────────────────
-
         private void DrawSourceTag(string label, Color color)
         {
             Rect rect = EditorGUILayout.GetControlRect(false, 14f);
@@ -558,8 +518,6 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUI.LabelField(rect, label, _tagLabelStyle);
             EditorGUILayout.Space(2);
         }
-
-        // ── Quick actions ─────────────────────────────────────────────────────────────────
 
         private void DrawQuickActions(UIWindowConfiguration config)
         {
@@ -586,8 +544,6 @@ namespace CycloneGames.UIFramework.Editor
 
             EditorGUILayout.EndHorizontal();
         }
-
-        // ── Helpers ───────────────────────────────────────────────────────────────────────
 
         private Color GetSourceColor(UIWindowConfiguration.PrefabSource source) => source switch
         {
@@ -769,8 +725,6 @@ namespace CycloneGames.UIFramework.Editor
             return ">>>>> Maximum Priority (System)";
         }
 
-        // ── Duplicate detection ────────────────────────────────────────────────────────────
-
         private void CheckForDuplicates()
         {
             if (!hasCheckedForDuplicates || Event.current.type == EventType.Layout)
@@ -779,36 +733,6 @@ namespace CycloneGames.UIFramework.Editor
                 hasCheckedForDuplicates = true;
             }
         }
-
-        // ── Foldout header ─────────────────────────────────────────────────────────────────
-
-        private bool DrawFoldoutHeader(string title, bool foldout, Color color)
-        {
-            EditorGUILayout.Space(2);
-            Rect rect = EditorGUILayout.GetControlRect(false, 22);
-
-            Color bgColor = foldout
-                ? color
-                : new Color(color.r * 0.7f, color.g * 0.7f, color.b * 0.7f);
-            EditorGUI.DrawRect(rect, bgColor);
-            EditorGUI.DrawRect(new Rect(rect.x, rect.y,       rect.width, 1f), Color.black * 0.2f);
-            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1, rect.width, 1f), Color.black * 0.2f);
-
-            Rect labelRect = new Rect(rect.x + 20, rect.y, rect.width - 20, rect.height);
-            EditorGUI.LabelField(labelRect, title, _foldoutLabelStyle);
-
-            Rect arrowRect = new Rect(rect.x + 5, rect.y, 15, rect.height);
-            EditorGUI.LabelField(arrowRect, foldout ? "v" : ">", _foldoutLabelStyle);
-
-            if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
-            {
-                foldout = !foldout;
-                Event.current.Use();
-            }
-            return foldout;
-        }
-
-        // ── Validation ────────────────────────────────────────────────────────────────────
 
         private void ValidateAssetRef(UIWindowConfiguration config)
         {

@@ -15,7 +15,6 @@ namespace CycloneGames.UIFramework.Editor
     public class UIRootEditor : UnityEditor.Editor
     {
         // Colors
-        private static readonly Color headerColor = new Color(0.4f, 0.5f, 0.7f);
         private static readonly Color coreRefsColor = new Color(0.5f, 0.6f, 0.4f);
         private static readonly Color layerListColor = new Color(0.5f, 0.5f, 0.7f);
         private static readonly Color validationColor = new Color(0.6f, 0.5f, 0.5f);
@@ -47,7 +46,6 @@ namespace CycloneGames.UIFramework.Editor
         // Cached GUIStyles to avoid per-frame allocations
         private GUIStyle _titleStyle;
         private GUIStyle _subtitleStyle;
-        private GUIStyle _foldoutLabelStyle;
         private GUIStyle _runtimeStyle;
         private GUIStyle _orderStyle;
         private GUIStyle _whiteNameStyle;
@@ -74,12 +72,6 @@ namespace CycloneGames.UIFramework.Editor
             };
 
             _subtitleStyle = new GUIStyle(EditorStyles.centeredGreyMiniLabel) { fontSize = 10 };
-
-            _foldoutLabelStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                normal = { textColor = Color.white },
-                alignment = TextAnchor.MiddleLeft
-            };
 
             _runtimeStyle = new GUIStyle(EditorStyles.boldLabel)
             {
@@ -110,7 +102,7 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.Space(5);
 
             // Core References Section
-            showCoreRefs = DrawFoldoutHeader("Core References", showCoreRefs, coreRefsColor);
+            showCoreRefs = InspectorUiUtility.DrawFoldoutHeader("Core References", showCoreRefs, coreRefsColor);
             if (showCoreRefs)
             {
                 DrawCoreReferencesSection(uiRoot);
@@ -121,7 +113,7 @@ namespace CycloneGames.UIFramework.Editor
             // Layer List Section
             int layerCount = layerListProp.arraySize;
             string layerListTitle = $"UI Layers ({layerCount})";
-            showLayerList = DrawFoldoutHeader(layerListTitle, showLayerList, layerListColor);
+            showLayerList = InspectorUiUtility.DrawFoldoutHeader(layerListTitle, showLayerList, layerListColor);
             if (showLayerList)
             {
                 DrawLayerListSection(uiRoot);
@@ -133,7 +125,7 @@ namespace CycloneGames.UIFramework.Editor
             string validationTitle = validationRun 
                 ? $"Validation ({GetValidationSummary()})" 
                 : "Validation";
-            showValidation = DrawFoldoutHeader(validationTitle, showValidation, validationColor);
+            showValidation = InspectorUiUtility.DrawFoldoutHeader(validationTitle, showValidation, validationColor);
             if (showValidation)
             {
                 DrawValidationSection(uiRoot);
@@ -384,10 +376,7 @@ namespace CycloneGames.UIFramework.Editor
 
         private void DrawStatusIndicator(bool isOk)
         {
-            Color oldColor = GUI.color;
-            GUI.color = isOk ? successColor : errorColor;
-            EditorGUILayout.LabelField(isOk ? "[OK]" : "[!]", GUILayout.Width(30));
-            GUI.color = oldColor;
+            InspectorUiUtility.DrawStatusBadge(isOk ? "OK" : "Missing", isOk ? successColor : errorColor, 54f);
         }
 
         private void DrawLayerListSection(UIRoot uiRoot)
@@ -752,42 +741,6 @@ namespace CycloneGames.UIFramework.Editor
             Repaint();
         }
 
-        #region Utility Methods
-
-        private bool DrawFoldoutHeader(string title, bool foldout, Color color)
-        {
-            EditorGUILayout.Space(2);
-
-            Rect rect = EditorGUILayout.GetControlRect(false, 22);
-
-            // Background
-            Color bgColor = foldout ? color : new Color(color.r * 0.7f, color.g * 0.7f, color.b * 0.7f);
-            EditorGUI.DrawRect(rect, bgColor);
-
-            // Border
-            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1), Color.black * 0.2f);
-            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1, rect.width, 1), Color.black * 0.2f);
-
-            // Label - use cached style
-            Rect labelRect = new Rect(rect.x + 20, rect.y, rect.width - 20, rect.height);
-            EditorGUI.LabelField(labelRect, title, _foldoutLabelStyle);
-
-            // Arrow
-            string arrow = foldout ? "v" : ">";
-            Rect arrowRect = new Rect(rect.x + 5, rect.y, 15, rect.height);
-            EditorGUI.LabelField(arrowRect, arrow, _foldoutLabelStyle);
-
-            // Click handling
-            if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
-            {
-                foldout = !foldout;
-                Event.current.Use();
-            }
-
-            return foldout;
-        }
-
-        #endregion
     }
 }
 #endif

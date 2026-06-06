@@ -12,9 +12,12 @@ namespace CycloneGames.UIFramework.Editor
     public class UILayerEditor : UnityEditor.Editor
     {
         private const string InvalidWindowName = "InvalidWindowName";
+        private const float WindowRowHeight = 20f;
+        private const float WindowControlHeight = 18f;
+        private const float WindowStatusBadgeWidth = 72f;
+        private const float WindowSelectButtonWidth = 50f;
 
         // Colors
-        private static readonly Color headerColor = new Color(0.3f, 0.6f, 0.8f);
         private static readonly Color statsColor = new Color(0.4f, 0.5f, 0.7f);
         private static readonly Color windowListColor = new Color(0.5f, 0.6f, 0.5f);
         private static readonly Color successColor = new Color(0.3f, 0.7f, 0.4f);
@@ -32,14 +35,9 @@ namespace CycloneGames.UIFramework.Editor
         private GUIStyle _titleStyle;
         private GUIStyle _subtitleStyle;
         private GUIStyle _valueStyle;
-        private GUIStyle _foldoutLabelStyle;
         private GUIStyle _whiteNameStyle;
         private GUIStyle _errorNameStyle;
         private GUIStyle _priorityStyle;
-        private GUIStyle _statusStyleSuccess;
-        private GUIStyle _statusStyleWarning;
-        private GUIStyle _statusStyleError;
-        private GUIStyle _statusStyleGray;
         private bool _stylesInitialized;
 
         private void InitializeStyles()
@@ -61,12 +59,6 @@ namespace CycloneGames.UIFramework.Editor
                 fontSize = 13
             };
 
-            _foldoutLabelStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                normal = { textColor = Color.white },
-                alignment = TextAnchor.MiddleLeft
-            };
-
             _whiteNameStyle = new GUIStyle(EditorStyles.label) { normal = { textColor = Color.white } };
             _errorNameStyle = new GUIStyle(EditorStyles.label) { normal = { textColor = errorColor } };
 
@@ -75,26 +67,6 @@ namespace CycloneGames.UIFramework.Editor
                 alignment = TextAnchor.MiddleCenter
             };
 
-            _statusStyleSuccess = new GUIStyle(EditorStyles.miniLabel)
-            {
-                normal = { textColor = successColor },
-                alignment = TextAnchor.MiddleLeft
-            };
-            _statusStyleWarning = new GUIStyle(EditorStyles.miniLabel)
-            {
-                normal = { textColor = warningColor },
-                alignment = TextAnchor.MiddleLeft
-            };
-            _statusStyleError = new GUIStyle(EditorStyles.miniLabel)
-            {
-                normal = { textColor = errorColor },
-                alignment = TextAnchor.MiddleLeft
-            };
-            _statusStyleGray = new GUIStyle(EditorStyles.miniLabel)
-            {
-                normal = { textColor = Color.gray },
-                alignment = TextAnchor.MiddleLeft
-            };
         }
 
         public override void OnInspectorGUI()
@@ -121,7 +93,7 @@ namespace CycloneGames.UIFramework.Editor
             }
 
             // Stats Section
-            showStats = DrawFoldoutHeader("Layer Statistics", showStats, statsColor);
+            showStats = InspectorUiUtility.DrawFoldoutHeader("Layer Statistics", showStats, statsColor);
             if (showStats)
             {
                 DrawStatsSection(uiLayer);
@@ -132,7 +104,7 @@ namespace CycloneGames.UIFramework.Editor
             // Window List Section
             int windowCount = uiLayer.WindowCount;
             string windowListTitle = $"Active Windows ({windowCount})";
-            showWindowList = DrawFoldoutHeader(windowListTitle, showWindowList, windowListColor);
+            showWindowList = InspectorUiUtility.DrawFoldoutHeader(windowListTitle, showWindowList, windowListColor);
             if (showWindowList)
             {
                 DrawWindowListSection(uiLayer);
@@ -178,8 +150,8 @@ namespace CycloneGames.UIFramework.Editor
             
             // Status
             Color statusColor = isMatch ? successColor : errorColor;
-            string statusText = isMatch ? "✓ Synced" : "✗ Mismatch";
-            DrawStatBox("Status", statusText, statusColor);
+            string statusText = isMatch ? "Synced" : "Mismatch";
+            DrawStatusStatBox("Status", statusText, statusColor);
 
             EditorGUILayout.EndHorizontal();
 
@@ -188,10 +160,10 @@ namespace CycloneGames.UIFramework.Editor
             {
                 EditorGUILayout.Space(5);
                 EditorGUILayout.HelpBox(
-                    "Child count ≠ Window count. Possible causes:\n" +
-                    "• Non-UIWindow GameObjects in hierarchy\n" +
-                    "• UIWindows not registered in UILayer\n" +
-                    "• Windows destroyed but not unregistered",
+                    "Child count does not match Window count. Possible causes:\n" +
+                    "- Non-UIWindow GameObjects in hierarchy\n" +
+                    "- UIWindows not registered in UILayer\n" +
+                    "- Windows destroyed but not unregistered",
                     MessageType.Warning);
             }
 
@@ -211,6 +183,18 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.EndVertical();
         }
 
+        private static void DrawStatusStatBox(string label, string value, Color valueColor)
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.MinWidth(80));
+
+            EditorGUILayout.LabelField(label, EditorStyles.centeredGreyMiniLabel);
+
+            Rect badgeRect = GUILayoutUtility.GetRect(80f, 18f, GUILayout.Height(18f));
+            InspectorUiUtility.DrawStatusBadge(badgeRect, value, valueColor);
+
+            EditorGUILayout.EndVertical();
+        }
+
         private void DrawWindowListSection(UILayer uiLayer)
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -227,7 +211,7 @@ namespace CycloneGames.UIFramework.Editor
             EditorGUILayout.LabelField("#", EditorStyles.miniLabel, GUILayout.Width(25));
             EditorGUILayout.LabelField("Window Name", EditorStyles.miniLabel, GUILayout.MinWidth(120));
             EditorGUILayout.LabelField("Priority", EditorStyles.miniLabel, GUILayout.Width(55));
-            EditorGUILayout.LabelField("Status", EditorStyles.miniLabel, GUILayout.Width(70));
+            EditorGUILayout.LabelField("Status", EditorStyles.miniLabel, GUILayout.Width(WindowStatusBadgeWidth));
             EditorGUILayout.LabelField("Action", EditorStyles.miniLabel, GUILayout.Width(50));
             EditorGUILayout.EndHorizontal();
 
@@ -261,7 +245,7 @@ namespace CycloneGames.UIFramework.Editor
             bool isActive = isValid && window.gameObject.activeInHierarchy;
 
             // Alternating row background
-            Rect rowRect = EditorGUILayout.BeginHorizontal(GUILayout.Height(20));
+            Rect rowRect = EditorGUILayout.BeginHorizontal(GUILayout.Height(WindowRowHeight));
             if (index % 2 == 0)
             {
                 EditorGUI.DrawRect(rowRect, new Color(0.5f, 0.5f, 0.5f, 0.1f));
@@ -280,41 +264,50 @@ namespace CycloneGames.UIFramework.Editor
             _priorityStyle.normal.textColor = priorityColor;
             EditorGUILayout.LabelField(priorityText, _priorityStyle, GUILayout.Width(55));
 
-            // Status - use cached styles
-            string statusIcon;
-            GUIStyle statusStyle;
+            string statusLabel;
+            Color statusColor;
             if (!isValid)
             {
-                statusIcon = "[X] Null";
-                statusStyle = _statusStyleError;
+                statusLabel = "Null";
+                statusColor = errorColor;
             }
             else if (!isChild)
             {
-                statusIcon = "[!] Orphan";
-                statusStyle = _statusStyleWarning;
+                statusLabel = "Orphan";
+                statusColor = warningColor;
             }
             else if (!isActive)
             {
-                statusIcon = "[-] Hidden";
-                statusStyle = _statusStyleGray;
+                statusLabel = "Hidden";
+                statusColor = Color.gray;
             }
             else
             {
-                statusIcon = "[O] Active";
-                statusStyle = _statusStyleSuccess;
+                statusLabel = "Active";
+                statusColor = successColor;
             }
 
-            EditorGUILayout.LabelField(statusIcon, statusStyle, GUILayout.Width(70));
+            Rect statusRect = GUILayoutUtility.GetRect(
+                WindowStatusBadgeWidth,
+                WindowControlHeight,
+                GUILayout.Width(WindowStatusBadgeWidth),
+                GUILayout.Height(WindowControlHeight));
+            InspectorUiUtility.DrawStatusBadge(statusRect, statusLabel, statusColor);
 
-            // Select button with tooltip
-            GUI.enabled = isValid;
             var selectContent = new GUIContent("Select", "Click to select and ping this window in Hierarchy");
-            if (GUILayout.Button(selectContent, EditorStyles.miniButton, GUILayout.Width(50)))
+            Rect selectRect = GUILayoutUtility.GetRect(
+                WindowSelectButtonWidth,
+                WindowControlHeight,
+                GUILayout.Width(WindowSelectButtonWidth),
+                GUILayout.Height(WindowControlHeight));
+            using (new EditorGUI.DisabledScope(!isValid))
             {
-                EditorGUIUtility.PingObject(window.gameObject);
-                Selection.activeGameObject = window.gameObject;
+                if (GUI.Button(selectRect, selectContent, EditorStyles.miniButton))
+                {
+                    EditorGUIUtility.PingObject(window.gameObject);
+                    Selection.activeGameObject = window.gameObject;
+                }
             }
-            GUI.enabled = true;
 
             EditorGUILayout.EndHorizontal();
         }
@@ -327,42 +320,6 @@ namespace CycloneGames.UIFramework.Editor
             return new Color(0.9f, 0.5f, 0.3f);
         }
 
-        #region Utility Methods
-
-        private bool DrawFoldoutHeader(string title, bool foldout, Color color)
-        {
-            EditorGUILayout.Space(2);
-
-            Rect rect = EditorGUILayout.GetControlRect(false, 22);
-
-            // Background
-            Color bgColor = foldout ? color : new Color(color.r * 0.7f, color.g * 0.7f, color.b * 0.7f);
-            EditorGUI.DrawRect(rect, bgColor);
-
-            // Border
-            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1), Color.black * 0.2f);
-            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1, rect.width, 1), Color.black * 0.2f);
-
-            // Label - use cached style
-            Rect labelRect = new Rect(rect.x + 20, rect.y, rect.width - 20, rect.height);
-            EditorGUI.LabelField(labelRect, title, _foldoutLabelStyle);
-
-            // Arrow
-            string arrow = foldout ? "v" : ">";
-            Rect arrowRect = new Rect(rect.x + 5, rect.y, 15, rect.height);
-            EditorGUI.LabelField(arrowRect, arrow, _foldoutLabelStyle);
-
-            // Click handling
-            if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
-            {
-                foldout = !foldout;
-                Event.current.Use();
-            }
-
-            return foldout;
-        }
-
-        #endregion
     }
 }
 #endif
