@@ -90,6 +90,7 @@ A **Context** is a named collection of input bindings. The **Context Stack** is 
 | Action | Behavior |
 |--------|----------|
 | `PushContext(ctx)` | Deactivates the current top, pushes `ctx` to top, then activates it |
+| `CaptureContext(ctx)` | Temporarily activates `ctx` above the normal stack until the returned scope is disposed |
 | `RemoveContext(ctx)` | Removes `ctx` by object reference from anywhere in the stack |
 | `PopContext()` | Removes the top element (avoid when using `AddTo`) |
 | `AddTo(component)` | Binds lifecycle to a `MonoBehaviour` — auto-removes on destroy |
@@ -114,6 +115,38 @@ input.PushContext(ctxB);  // Stack: [HUD, PauseMenu]. HUD paused, PauseMenu acti
 ```
 
 Multiple contexts can safely share the same ActionMap name. Each context's bindings are independent — only the top context's bindings subscribe.
+
+### 4.1.1 Scoped Input Capture
+
+`CaptureContext(ctx)` temporarily makes a context the active input owner without blocking normal stack updates. It is designed for full-screen loading screens, movies, modal dialogs, and other overlays that must keep receiving input while gameplay systems continue to initialize underneath.
+
+During a capture:
+
+| Operation | Behavior |
+|----------|----------|
+| `CaptureContext(ctx)` | Activates `ctx` above the normal context stack and returns an `IDisposable` scope |
+| `PushContext(gameplayCtx)` | Still updates the normal stack, but does not steal active input while a capture exists |
+| `RemoveContext(ctx)` / `ctx.Dispose()` | Removes the context from both the normal stack and the capture stack |
+| Disposing the capture scope | Restores the next captured context, or the normal stack top if no captures remain |
+
+```csharp
+var loadingContext = new InputContext("UIActions", "Loading")
+    .AddBinding(input.GetButtonObservable("UIActions", "Cancel"), new ActionCommand(CancelLoading));
+
+loadingContext.AddTo(this);
+using (input.CaptureContext(loadingContext))
+{
+    await LoadWorldAsync();
+
+    // These can safely push contexts while the loading UI stays active.
+    input.PushContext(gameplayContext);
+    input.PushContext(playerControllerContext);
+}
+
+// Loading capture is released. The active input returns to the real stack top.
+```
+
+Captures are stack-based and nest naturally. If a loading screen opens a confirmation dialog, capture the dialog context; disposing it returns input to the loading context.
 
 ### 4.2 InputPlayer & IInputPlayer
 
@@ -286,9 +319,49 @@ input.BlockInput();    // Disables the entire InputActionAsset
 input.UnblockInput();  // Re-enables the active context's ActionMap
 ```
 
-Useful for loading screens, transitions, or pausing all input globally.
+`BlockInput` / `UnblockInput` are nest-safe: input is restored only after every block has been released. Prefer the scoped form for async flows:
 
-### 5.6 Device Icon Switching
+```csharp
+using (input.BlockInputScope())
+{
+    await LoadWorldAsync();
+
+    // Gameplay systems may still push contexts here, but no input is emitted.
+    input.PushContext(gameplayContext);
+    input.PushContext(playerControllerContext);
+}
+
+// Input resumes from the current capture context or normal stack top.
+```
+
+Useful for transitions or hard pauses where no layer should receive input. Prefer `CaptureContext` for loading screens or modal overlays that still need their own buttons while gameplay content loads underneath.
+
+### 5.6 Loading / Modal Input Pattern
+
+Use scoped capture when an overlay must stay interactive while lower layers register their own input contexts.
+
+```csharp
+private IDisposable _loadingInputCapture;
+private InputContext _loadingContext;
+
+private async UniTask ShowLoadingAndEnterGameplayAsync()
+{
+    _loadingContext = new InputContext("UIActions", "Loading")
+        .AddBinding(_input.GetButtonObservable("UIActions", "Skip"), new ActionCommand(TrySkip));
+
+    _loadingContext.AddTo(this);
+    _loadingInputCapture = _input.CaptureContext(_loadingContext);
+
+    await InitializeGameplayAsync(); // PlayerController/HUD may PushContext here.
+
+    _loadingInputCapture.Dispose();
+    _loadingInputCapture = null;
+}
+```
+
+Use `try/finally` for long-running tasks so capture is released even when the loading operation fails or is cancelled.
+
+### 5.7 Device Icon Switching
 
 `InputDeviceIconSet` is a `ScriptableObject` that maps `InputDeviceKind` to sprites. `InputDeviceIconSwitcher` is a `MonoBehaviour` that auto-updates a `UI.Image` when the active device changes.
 
@@ -301,7 +374,7 @@ Useful for loading screens, transitions, or pausing all input globally.
 
 The switcher subscribes to player 0's `ActiveDeviceKind` and updates on change. No code required.
 
-### 5.7 Mouse Button Polling
+### 5.8 Mouse Button Polling
 
 Three polling properties for direct mouse button state, safe to call even when no mouse is present:
 
@@ -935,6 +1008,7 @@ public class PlayerController
 | Method | Description |
 |--------|-------------|
 | `PushContext(InputContext)` | Push to stack (auto-focus if already present) |
+| `CaptureContext(InputContext)` | Temporarily capture active input above the normal stack; dispose the returned scope to release |
 | `RemoveContext(InputContext)` | Remove by object reference from anywhere |
 | `PopContext()` | Remove top (avoid with `AddTo`) |
 | `RefreshActiveContext()` | Re-subscribe all bindings for active context |
@@ -944,6 +1018,7 @@ public class PlayerController
 | Method | Description |
 |--------|-------------|
 | `BlockInput()` / `UnblockInput()` | Temporarily disable/re-enable all input |
+| `BlockInputScope()` | Scoped, nest-safe input block for `using` / async loading flows |
 | `RebindAction(map, action, old, new)` | Override a binding at runtime |
 | `ResetActionBinding(map, action)` | Reset single action to default |
 | `ResetAllActionBindings()` | Reset all actions to defaults |
