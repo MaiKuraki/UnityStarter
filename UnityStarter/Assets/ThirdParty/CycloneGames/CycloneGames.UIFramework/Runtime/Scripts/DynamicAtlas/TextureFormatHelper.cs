@@ -73,12 +73,16 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 case TextureFormat.BC7:
                     return 4;
 
+                // Unity 6000 deprecates PVRTC TextureFormat enum values. Keep legacy block alignment for Unity 2022,
+                // while avoiding obsolete API references in Unity 6000+ builds.
+#if !UNITY_6000_0_OR_NEWER
                 // PVRTC formats (power of 2 requirement, we treat as 4 for simplicity)
                 case TextureFormat.PVRTC_RGB2:
                 case TextureFormat.PVRTC_RGBA2:
                 case TextureFormat.PVRTC_RGB4:
                 case TextureFormat.PVRTC_RGBA4:
                     return 4;
+#endif
 
                 // Uncompressed formats - no block alignment needed
                 case TextureFormat.RGBA32:
