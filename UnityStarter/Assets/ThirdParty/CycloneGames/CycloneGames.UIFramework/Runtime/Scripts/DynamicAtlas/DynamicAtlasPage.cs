@@ -37,6 +37,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private long _usedPixelArea;
         public long UsedPixelArea => _usedPixelArea;
 
+        private long _allocatedPixelArea;
+        public long AllocatedPixelArea => _allocatedPixelArea;
+
         /// <summary>
         /// Returns a value between 0 and 1, where 1 means completely empty/fragmented and 0 means optimally packed.
         /// </summary>
@@ -173,6 +176,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             uvRect = default;
             allocatedSize = default;
 
+            if (source == null) return false;
             if (IsFull) return false;
 
             int sourceWidth = source.width;
@@ -234,6 +238,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 uvRect.height = sourceHeight * invHeight;
 
                 allocatedSize = new Vector2Int(allocWidth, allocHeight);
+                System.Threading.Interlocked.Add(ref _allocatedPixelArea, (long)allocWidth * allocHeight);
 
                 return true;
             }
@@ -252,6 +257,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         public bool TryInsertFromRegion(Texture2D sourceTexture, Rect sourceRect, out Rect uvRect)
         {
             uvRect = default;
+            if (sourceTexture == null) return false;
             if (IsFull) return false;
 
             int sourceWidth = Mathf.RoundToInt(sourceRect.width);
@@ -310,6 +316,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                 uvRect.y = yPos * invHeight;
                 uvRect.width = sourceWidth * invWidth;
                 uvRect.height = sourceHeight * invHeight;
+                System.Threading.Interlocked.Add(ref _allocatedPixelArea, (long)allocWidth * allocHeight);
 
                 return true;
             }
@@ -359,25 +366,25 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         private bool CopyPixelsFromRegionViaRT(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
         {
-            // Create a temporary RT of the exact region size
             RenderTexture rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
-
-            // Blit using scale and offset to extract just the region
-            Vector2 scale = new Vector2((float)w / source.width, (float)h / source.height);
-            Vector2 offset = new Vector2((float)srcX / source.width, (float)srcY / source.height);
-            Graphics.Blit(source, rt, scale, offset);
-
             RenderTexture previous = RenderTexture.active;
-            RenderTexture.active = rt;
 
-            // Read directly into our Texture2D (CPU side)
-            Texture.ReadPixels(new Rect(0, 0, w, h), dstX, dstY);
-            _needsApply = true;
+            try
+            {
+                Vector2 scale = new Vector2((float)w / source.width, (float)h / source.height);
+                Vector2 offset = new Vector2((float)srcX / source.width, (float)srcY / source.height);
+                Graphics.Blit(source, rt, scale, offset);
 
-            RenderTexture.active = previous;
-            RenderTexture.ReleaseTemporary(rt);
-
-            return true;
+                RenderTexture.active = rt;
+                Texture.ReadPixels(new Rect(0, 0, w, h), dstX, dstY);
+                _needsApply = true;
+                return true;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(rt);
+            }
         }
 
         /// <summary>
@@ -606,19 +613,21 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private bool CopyPixelsViaRT(Texture2D source, int x, int y, int w, int h)
         {
             RenderTexture rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
-            Graphics.Blit(source, rt);
-
             RenderTexture previous = RenderTexture.active;
-            RenderTexture.active = rt;
 
-            // Read directly into our Texture2D (CPU side)
-            Texture.ReadPixels(new Rect(0, 0, w, h), x, y);
-            _needsApply = true;
-
-            RenderTexture.active = previous;
-            RenderTexture.ReleaseTemporary(rt);
-
-            return true;
+            try
+            {
+                Graphics.Blit(source, rt);
+                RenderTexture.active = rt;
+                Texture.ReadPixels(new Rect(0, 0, w, h), x, y);
+                _needsApply = true;
+                return true;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(rt);
+            }
         }
 
         public void IncrementActiveCount(int width, int height)
@@ -647,8 +656,20 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             if (Texture != null)
             {
-                UnityEngine.Object.Destroy(Texture);
+                DestroyUnityObject(Texture);
                 Texture = null;
+            }
+        }
+
+        private static void DestroyUnityObject(UnityEngine.Object target)
+        {
+            if (Application.isPlaying)
+            {
+                UnityEngine.Object.Destroy(target);
+            }
+            else
+            {
+                UnityEngine.Object.DestroyImmediate(target);
             }
         }
     }

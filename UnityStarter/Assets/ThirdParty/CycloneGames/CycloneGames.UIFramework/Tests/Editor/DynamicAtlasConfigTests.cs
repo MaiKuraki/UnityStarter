@@ -50,5 +50,99 @@ namespace CycloneGames.UIFramework.Tests.Editor
             Assert.IsTrue(TextureFormatHelper.RequiresBlockAlignment(TextureFormat.ASTC_4x4));
             Assert.IsFalse(TextureFormatHelper.RequiresBlockAlignment(TextureFormat.RGBA32));
         }
+
+        [Test]
+        public void DynamicAtlasPage_TryInsert_TracksUsageAndAllocatedArea()
+        {
+            Texture2D source = CreateReadableTexture(8, 8, Color.red);
+            var page = new DynamicAtlasPage(32, TextureFormat.RGBA32, padding: 2, enablePlatformOptimizations: true, enableBleed: false);
+
+            try
+            {
+                Assert.IsTrue(page.TryInsert(source, out Rect uvRect, out Vector2Int allocatedSize));
+
+                Assert.AreEqual(new Vector2Int(8, 8), allocatedSize);
+                Assert.AreEqual(8f / 32f, uvRect.width);
+                Assert.AreEqual(8f / 32f, uvRect.height);
+                Assert.AreEqual(64L, page.AllocatedPixelArea);
+
+                page.IncrementActiveCount(8, 8);
+
+                Assert.AreEqual(1, page.ActiveSpriteCount);
+                Assert.AreEqual(64L, page.UsedPixelArea);
+                Assert.Less(page.FragmentationRatio, 1f);
+            }
+            finally
+            {
+                page.Dispose();
+                Object.DestroyImmediate(source);
+            }
+        }
+
+        [Test]
+        public void DynamicAtlasService_GetSpriteFromRegion_ReusesCacheAndReleasesPage()
+        {
+            Texture2D source = CreateReadableTexture(16, 16, Color.green);
+            var service = new DynamicAtlasService(new DynamicAtlasConfig
+            {
+                pageSize = 64,
+                padding = 2,
+                targetFormat = TextureFormat.RGBA32,
+                enableBleed = false,
+                enablePlatformOptimizations = true,
+                allowCpuReadPixelsFallback = true,
+                allowCpuBleedFallback = false
+            });
+
+            try
+            {
+                Rect sourceRect = new Rect(0, 0, 16, 16);
+                Sprite first = service.GetSpriteFromRegion(source, sourceRect, "test/sprite");
+                Sprite second = service.GetSpriteFromRegion(source, sourceRect, "test/sprite");
+
+                Assert.IsNotNull(first);
+                Assert.AreSame(first, second);
+
+                DynamicAtlasService.AtlasMetrics loadedMetrics = service.GetMetrics();
+                Assert.AreEqual(1, loadedMetrics.PageCount);
+                Assert.AreEqual(1, loadedMetrics.CachedItemCount);
+                Assert.AreEqual(1, loadedMetrics.ActiveSpriteCount);
+                Assert.AreEqual(256L, loadedMetrics.UsedPixelArea);
+                Assert.AreEqual(256L, loadedMetrics.AllocatedPixelArea);
+
+                service.ReleaseSprite("test/sprite");
+                DynamicAtlasService.AtlasMetrics retainedMetrics = service.GetMetrics();
+                Assert.AreEqual(1, retainedMetrics.PageCount);
+                Assert.AreEqual(1, retainedMetrics.CachedItemCount);
+                Assert.AreEqual(1, retainedMetrics.ActiveSpriteCount);
+
+                service.ReleaseSprite("test/sprite");
+                DynamicAtlasService.AtlasMetrics releasedMetrics = service.GetMetrics();
+                Assert.AreEqual(0, releasedMetrics.PageCount);
+                Assert.AreEqual(0, releasedMetrics.CachedItemCount);
+                Assert.AreEqual(0, releasedMetrics.ActiveSpriteCount);
+            }
+            finally
+            {
+                service.Dispose();
+                Object.DestroyImmediate(source);
+            }
+        }
+
+        private static Texture2D CreateReadableTexture(int width, int height, Color color)
+        {
+            var texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            var pixels = new Color32[width * height];
+            Color32 pixel = color;
+
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixels[i] = pixel;
+            }
+
+            texture.SetPixels32(pixels);
+            texture.Apply(false);
+            return texture;
+        }
     }
 }
