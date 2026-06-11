@@ -195,6 +195,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             uvRect = default;
 
+            if (sourceTexture == null) return false;
             if (IsFull) return false;
 
             // Validate format match
@@ -338,8 +339,20 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         {
             if (Texture != null)
             {
-                UnityEngine.Object.Destroy(Texture);
+                DestroyUnityObject(Texture);
                 Texture = null;
+            }
+        }
+
+        private static void DestroyUnityObject(UnityEngine.Object target)
+        {
+            if (Application.isPlaying)
+            {
+                UnityEngine.Object.Destroy(target);
+            }
+            else
+            {
+                UnityEngine.Object.DestroyImmediate(target);
             }
         }
     }

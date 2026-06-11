@@ -18,6 +18,36 @@ namespace CycloneGames.UIFramework.DynamicAtlas
     /// </summary>
     public class DynamicAtlasService : IDynamicAtlas
     {
+        public readonly struct AtlasMetrics
+        {
+            public readonly int PageCount;
+            public readonly int CachedItemCount;
+            public readonly int ActiveSpriteCount;
+            public readonly long UsedPixelArea;
+            public readonly long AllocatedPixelArea;
+            public readonly long TotalPixelArea;
+            public readonly float UsedAreaRatio;
+            public readonly float AllocatedAreaRatio;
+
+            public AtlasMetrics(
+                int pageCount,
+                int cachedItemCount,
+                int activeSpriteCount,
+                long usedPixelArea,
+                long allocatedPixelArea,
+                long totalPixelArea)
+            {
+                PageCount = pageCount;
+                CachedItemCount = cachedItemCount;
+                ActiveSpriteCount = activeSpriteCount;
+                UsedPixelArea = usedPixelArea;
+                AllocatedPixelArea = allocatedPixelArea;
+                TotalPixelArea = totalPixelArea;
+                UsedAreaRatio = totalPixelArea > 0 ? (float)usedPixelArea / totalPixelArea : 0f;
+                AllocatedAreaRatio = totalPixelArea > 0 ? (float)allocatedPixelArea / totalPixelArea : 0f;
+            }
+        }
+
         private class AtlasItem
         {
             public Sprite Sprite;
@@ -165,6 +195,35 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             if (_blockSize > 1)
             {
                 _pageSize = TextureFormatHelper.AlignToBlockSize(_pageSize, _blockSize);
+            }
+        }
+
+        public AtlasMetrics GetMetrics()
+        {
+            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetMetrics))) return default;
+
+            _lock.EnterReadLock();
+            try
+            {
+                int activeSpriteCount = 0;
+                long usedPixelArea = 0;
+                long allocatedPixelArea = 0;
+                long totalPixelArea = 0;
+
+                for (int i = 0; i < _pages.Count; i++)
+                {
+                    DynamicAtlasPage page = _pages[i];
+                    activeSpriteCount += page.ActiveSpriteCount;
+                    usedPixelArea += page.UsedPixelArea;
+                    allocatedPixelArea += page.AllocatedPixelArea;
+                    totalPixelArea += (long)page.Width * page.Height;
+                }
+
+                return new AtlasMetrics(_pages.Count, _itemCache.Count, activeSpriteCount, usedPixelArea, allocatedPixelArea, totalPixelArea);
+            }
+            finally
+            {
+                _lock.ExitReadLock();
             }
         }
 
@@ -414,19 +473,24 @@ namespace CycloneGames.UIFramework.DynamicAtlas
         private Texture2D ScaleTextureGPU(Texture2D source, int targetWidth, int targetHeight)
         {
             RenderTexture rt = RenderTexture.GetTemporary(targetWidth, targetHeight, 0, RenderTextureFormat.ARGB32);
-            Graphics.Blit(source, rt);
-
             RenderTexture previous = RenderTexture.active;
-            RenderTexture.active = rt;
 
-            var scaled = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
-            scaled.ReadPixels(new Rect(0, 0, targetWidth, targetHeight), 0, 0);
-            scaled.Apply(false);
+            try
+            {
+                Graphics.Blit(source, rt);
+                RenderTexture.active = rt;
 
-            RenderTexture.active = previous;
-            RenderTexture.ReleaseTemporary(rt);
+                var scaled = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
+                scaled.ReadPixels(new Rect(0, 0, targetWidth, targetHeight), 0, 0);
+                scaled.Apply(false);
 
-            return scaled;
+                return scaled;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                RenderTexture.ReleaseTemporary(rt);
+            }
         }
 
         public void ReleaseSprite(string path)
@@ -462,16 +526,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
                             if (item.Page != null && item.Sprite != null)
                             {
-                                // Cache dimensions before destroying the Sprite
+                                DynamicAtlasPage page = item.Page;
                                 int sw = Mathf.RoundToInt(item.Sprite.rect.width);
                                 int sh = Mathf.RoundToInt(item.Sprite.rect.height);
-                                item.Page.DecrementActiveCount(sw, sh);
-                                TryReleasePage(item.Page);
-                            }
+                                page.DecrementActiveCount(sw, sh);
 
-                            if (item.Sprite != null)
-                            {
-                                UnityEngine.Object.Destroy(item.Sprite);
+                                DestroyUnityObject(item.Sprite);
+                                item.Sprite = null;
+
+                                TryReleasePage(page);
                             }
 
                             ReleaseItemToPool(item);
@@ -801,6 +864,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             item.Page = null;
             item.Path = null;
             item.RefCount = 0;
+            item.Pivot = Vector2.zero;
+            item.Border = Vector4.zero;
 
             if (_poolCount >= MaxPoolSize) return;
 
@@ -910,7 +975,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                             update.Item.Page = newPage;
                             newPage.IncrementActiveCount(update.Width, update.Height);
                             OnSpriteRepacked?.Invoke(update.Item.Path, update.NewSprite);
-                            UnityEngine.Object.Destroy(update.OldSprite);
+                            DestroyUnityObject(update.OldSprite);
                         }
                         newPage.ApplyIfNeeded();
 
@@ -925,7 +990,7 @@ namespace CycloneGames.UIFramework.DynamicAtlas
                         {
                             if (stagedUpdates[i].NewSprite != null)
                             {
-                                UnityEngine.Object.Destroy(stagedUpdates[i].NewSprite);
+                                DestroyUnityObject(stagedUpdates[i].NewSprite);
                             }
                         }
                         newPage.Dispose();
@@ -947,6 +1012,15 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             _lock.EnterWriteLock();
             try
             {
+                foreach (var kvp in _itemCache)
+                {
+                    if (kvp.Value.Sprite != null)
+                    {
+                        DestroyUnityObject(kvp.Value.Sprite);
+                        kvp.Value.Sprite = null;
+                    }
+                }
+
                 int pageCount = _pages.Count;
                 for (int i = 0; i < pageCount; i++)
                 {
@@ -976,6 +1050,20 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(Dispose))) return;
             Reset();
             _lock?.Dispose();
+        }
+
+        private static void DestroyUnityObject(UnityEngine.Object target)
+        {
+            if (target == null) return;
+
+            if (Application.isPlaying)
+            {
+                UnityEngine.Object.Destroy(target);
+            }
+            else
+            {
+                UnityEngine.Object.DestroyImmediate(target);
+            }
         }
 
         private readonly struct PendingDefragUpdate
