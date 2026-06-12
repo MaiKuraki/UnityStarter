@@ -26,6 +26,11 @@ namespace CycloneGames.Logger
 
         [Header("Processing")]
         public ProcessingMode processing = ProcessingMode.AutoDetect;
+        public int maxQueuedMessages = LoggerProcessingOptions.DefaultMaxQueuedMessages;
+        public int unityConsoleMaxQueuedMessages = LoggerProcessingOptions.DefaultUnityConsoleMaxQueuedMessages;
+        public int shutdownDrainTimeoutMs = LoggerProcessingOptions.DefaultShutdownDrainTimeoutMs;
+        public LogQueueOverflowPolicy overflowPolicy = LogQueueOverflowPolicy.DropNewest;
+        public LogLevel guaranteedLevel = LogLevel.Error;
 
         [Header("Registration")] public bool registerUnityLogger = true;
         [Header("Registration")] public bool registerFileLogger = false;
