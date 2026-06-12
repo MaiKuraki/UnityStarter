@@ -697,6 +697,7 @@ namespace Build.Pipeline.Editor
         /// <summary>
         /// Entry point for CI/CD. Parses command line arguments to configure the build.
         /// Usage: -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget <Target> -output <Path> [-clean] [-fast] [-debug] [-buildHybridCLR] [-buildYooAsset] [-buildAddressables] [-version <Version>] [-outputBasePath <Path>]
+        /// Logger overrides are handled by CycloneGames.Logger's build processor, e.g. [-loggerMode Off|Unity|File|UnityAndFile] [-loggerLevel Warning] [-loggerFileName Player.log].
         /// </summary>
         public static void PerformBuild_CI()
         {

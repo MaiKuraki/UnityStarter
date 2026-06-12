@@ -168,6 +168,22 @@ StringBuilder Pool:
 2. Move to `Assets/Resources/CycloneGames.Logger/LoggerSettings.asset`
 3. Configure: processing mode, loggers, log level, etc.
 
+Without this asset, the built-in bootstrap registers UnityLogger in both Editor and Player builds. It does not disable logging based on `DEVELOPMENT_BUILD`.
+
+For CI builds, pass command-line overrides to Unity batchmode / `BuildScript.PerformBuild_CI`:
+
+```text
+-loggerMode File -loggerLevel Warning -loggerFileName Player.log
+-loggerMode UnityAndFile -loggerLevel Info
+-loggerMode Off
+```
+
+You can also provide a profile asset:
+
+```text
+-loggerSettings Assets/Config/LoggerSettings.Release.asset
+```
+
 ### Option 2: Custom Bootstrap
 
 ```csharp
