@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "Unio",
+        "CycloneGames.Logger",
         "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.UIFramework.Runtime"
     ],
