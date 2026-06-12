@@ -16,4 +16,10 @@ namespace CycloneGames.Logger
         /// <param name="maxItems">Maximum items to process in this call.</param>
         void Pump(int maxItems);
     }
+
+    internal interface ILogProcessorDiagnostics
+    {
+        bool IsStopped { get; }
+        LogProcessingStatistics GetStatistics();
+    }
 }

@@ -41,6 +41,7 @@ namespace CycloneGames.Logger
         public string FilePath { get; private set; }
         public int LineNumber { get; private set; }
         public string MemberName { get; private set; }
+        internal bool EditorUnityConsoleLogged { get; set; }
 
         // Internal parameterless constructor for object pool creation.
         internal LogMessage() { }
@@ -58,6 +59,7 @@ namespace CycloneGames.Logger
             FilePath = filePath;
             LineNumber = lineNumber;
             MemberName = memberName;
+            EditorUnityConsoleLogged = false;
         }
 
         /// <summary>
@@ -76,6 +78,7 @@ namespace CycloneGames.Logger
             Category = null;
             FilePath = null;
             MemberName = null;
+            EditorUnityConsoleLogged = false;
         }
     }
 }

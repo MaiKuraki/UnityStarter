@@ -20,6 +20,7 @@ namespace CycloneGames.Logger
         private readonly string _logFilePath;
         private readonly FileLoggerOptions _options;
         private readonly char[] _buffer = new char[4096];
+        private static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
 
         private int _writesSinceFlush;
         private long _lastFlushTimestamp;
@@ -32,7 +33,7 @@ namespace CycloneGames.Logger
         {
             if (string.IsNullOrEmpty(logFilePath)) throw new ArgumentNullException(nameof(logFilePath));
             _logFilePath = logFilePath;
-            _options = options ?? FileLoggerOptions.Default;
+            _options = FileLoggerOptions.CreateValidated(options);
             _flushIntervalTicks = (long)(_options.FlushIntervalMs * 0.001 * Stopwatch.Frequency);
 
             try
@@ -58,7 +59,7 @@ namespace CycloneGames.Logger
         private void InitializeWriter()
         {
             var fileStream = new FileStream(_logFilePath, FileMode.Append, FileAccess.Write, FileShare.Read, bufferSize: 8192, useAsync: false);
-            _writer = new StreamWriter(fileStream, Encoding.UTF8) { AutoFlush = false };
+            _writer = new StreamWriter(fileStream, Utf8NoBom) { AutoFlush = false };
         }
 
         public void Log(LogMessage logMessage)
@@ -214,19 +215,12 @@ namespace CycloneGames.Logger
                 _writer.Flush();
                 _writer.Dispose();
             }
-            catch { }
-
-            var timestamp = DateTime.Now.ToString(_options.ArchiveTimestampFormat);
-            string archivePath = Path.Combine(current.DirectoryName!, Path.GetFileNameWithoutExtension(current.Name) + "_" + timestamp + current.Extension);
-
-            try
+            catch
             {
-                File.Move(_logFilePath, archivePath);
+                // Rotation can still continue; InitializeWriter below restores the active sink.
             }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[ERROR] FileLogger: Rotation rename failed. {ex.Message}");
-            }
+
+            TryMoveCurrentFileToArchive(current);
 
             InitializeWriter();
             _lastFlushTimestamp = Stopwatch.GetTimestamp();
@@ -242,7 +236,11 @@ namespace CycloneGames.Logger
                     Array.Sort(archives, (a, b) => b.LastWriteTimeUtc.CompareTo(a.LastWriteTimeUtc));
                     for (int i = _options.MaxArchiveFiles; i < archives.Length; i++)
                     {
-                        try { archives[i].Delete(); } catch { }
+                        try { archives[i].Delete(); }
+                        catch
+                        {
+                            // Best-effort cleanup must not break the active log file.
+                        }
                     }
                 }
             }
@@ -250,6 +248,45 @@ namespace CycloneGames.Logger
             {
                 Console.Error.WriteLine($"[WARNING] FileLogger: Archive cleanup failed. {ex.Message}");
             }
+        }
+
+        private bool TryMoveCurrentFileToArchive(FileInfo current)
+        {
+            string directoryName = current.DirectoryName;
+            if (string.IsNullOrEmpty(directoryName))
+            {
+                Console.Error.WriteLine("[ERROR] FileLogger: Rotation failed because the log file has no directory.");
+                return false;
+            }
+
+            const int MaxArchiveNameAttempts = 128;
+            string baseName = Path.GetFileNameWithoutExtension(current.Name);
+            string extension = current.Extension;
+            string timestamp = DateTime.Now.ToString(_options.ArchiveTimestampFormat);
+
+            for (int attempt = 0; attempt < MaxArchiveNameAttempts; attempt++)
+            {
+                string suffix = attempt == 0 ? string.Empty : "_" + attempt;
+                string archivePath = Path.Combine(directoryName, baseName + "_" + timestamp + suffix + extension);
+                if (File.Exists(archivePath)) continue;
+
+                try
+                {
+                    File.Move(_logFilePath, archivePath);
+                    return true;
+                }
+                catch (IOException) when (File.Exists(archivePath))
+                {
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[ERROR] FileLogger: Rotation rename failed. {ex.Message}");
+                    return false;
+                }
+            }
+
+            Console.Error.WriteLine("[ERROR] FileLogger: Rotation rename failed because no archive name was available.");
+            return false;
         }
 
         public void Dispose()
