@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Text;
 using NUnit.Framework;
 
@@ -13,8 +14,8 @@ namespace CycloneGames.Logger.Tests.Editor
         [SetUp]
         public void SetUp()
         {
-            CLogger.ConfigureSingleThreadedProcessing();
-            _logger = new CLogger();
+            CLogger.Shutdown();
+            _logger = CLoggerFactory.CreateSingleThreaded();
             _recordingLogger = new RecordingLogger();
             _logger.AddLogger(_recordingLogger);
         }
@@ -23,6 +24,8 @@ namespace CycloneGames.Logger.Tests.Editor
         public void TearDown()
         {
             _logger?.Dispose();
+            _logger = null;
+            CLogger.Shutdown();
             CLogger.ConfigureThreadedProcessing();
         }
 
@@ -66,6 +69,18 @@ namespace CycloneGames.Logger.Tests.Editor
 
             Assert.AreEqual(1, _recordingLogger.Count);
             Assert.AreEqual("Gameplay", _recordingLogger[0].Category);
+        }
+
+        [Test]
+        public void WhiteListFilter_DropsEmptyCategory()
+        {
+            _logger.SetLogFilter(LogFilter.LogWhiteList);
+            _logger.AddToWhiteList("Gameplay");
+
+            _logger.EnqueueMessage(LogLevel.Info, "ignored", null, "CLoggerTests.cs", 35, nameof(WhiteListFilter_DropsEmptyCategory));
+            _logger.Pump(16);
+
+            Assert.AreEqual(0, _recordingLogger.Count);
         }
 
         [Test]
@@ -151,6 +166,156 @@ namespace CycloneGames.Logger.Tests.Editor
 
             Assert.AreEqual(1, first.Count);
             Assert.AreEqual(0, second.Count);
+        }
+
+        [Test]
+        public void ProcessingQueue_DropsNewestWhenQueueIsFull()
+        {
+            using var logger = CLoggerFactory.CreateSingleThreaded(new LoggerProcessingOptions
+            {
+                MaxQueuedMessages = 2,
+                OverflowPolicy = LogQueueOverflowPolicy.DropNewest
+            });
+            var recording = new RecordingLogger();
+            logger.AddLogger(recording);
+
+            logger.EnqueueMessage(LogLevel.Info, "first", "Queue", "CLoggerTests.cs", 90, nameof(ProcessingQueue_DropsNewestWhenQueueIsFull));
+            logger.EnqueueMessage(LogLevel.Info, "second", "Queue", "CLoggerTests.cs", 91, nameof(ProcessingQueue_DropsNewestWhenQueueIsFull));
+            logger.EnqueueMessage(LogLevel.Info, "third", "Queue", "CLoggerTests.cs", 92, nameof(ProcessingQueue_DropsNewestWhenQueueIsFull));
+            logger.Pump(16);
+
+            Assert.AreEqual(2, recording.Count);
+            Assert.AreEqual("first", recording[0].Message);
+            Assert.AreEqual("second", recording[1].Message);
+            Assert.AreEqual(1, logger.GetProcessingStatistics().DroppedMessageCount);
+        }
+
+        [Test]
+        public void ProcessingQueue_GuaranteedLevelDisplacesOldestMessage()
+        {
+            using var logger = CLoggerFactory.CreateSingleThreaded(new LoggerProcessingOptions
+            {
+                MaxQueuedMessages = 2,
+                OverflowPolicy = LogQueueOverflowPolicy.DropNewest,
+                GuaranteedLevel = LogLevel.Error
+            });
+            var recording = new RecordingLogger();
+            logger.AddLogger(recording);
+
+            logger.EnqueueMessage(LogLevel.Info, "first", "Queue", "CLoggerTests.cs", 100, nameof(ProcessingQueue_GuaranteedLevelDisplacesOldestMessage));
+            logger.EnqueueMessage(LogLevel.Info, "second", "Queue", "CLoggerTests.cs", 101, nameof(ProcessingQueue_GuaranteedLevelDisplacesOldestMessage));
+            logger.EnqueueMessage(LogLevel.Error, "error", "Queue", "CLoggerTests.cs", 102, nameof(ProcessingQueue_GuaranteedLevelDisplacesOldestMessage));
+            logger.Pump(16);
+
+            Assert.AreEqual(2, recording.Count);
+            Assert.AreEqual("second", recording[0].Message);
+            Assert.AreEqual("error", recording[1].Message);
+            Assert.AreEqual(1, logger.GetProcessingStatistics().DroppedMessageCount);
+        }
+
+        [Test]
+        public void Factory_CanCreateLoggerForDiInterface()
+        {
+            ICLogger logger = CLoggerFactory.CreateSingleThreaded();
+            try
+            {
+                var recording = new RecordingLogger();
+                logger.AddLogger(recording);
+                logger.Log(LogLevel.Info, "di", "Factory");
+                logger.Pump(16);
+
+                Assert.AreEqual(1, recording.Count);
+                Assert.AreEqual("di", recording[0].Message);
+            }
+            finally
+            {
+                logger.Dispose();
+            }
+        }
+
+        [Test]
+        public void Shutdown_AllowsGlobalInstanceRecreation()
+        {
+            CLogger.Shutdown();
+            CLogger.ConfigureSingleThreadedProcessing();
+            var first = CLogger.Instance;
+
+            CLogger.Shutdown();
+            CLogger.ConfigureSingleThreadedProcessing();
+
+            var second = CLogger.Instance;
+            Assert.AreNotSame(first, second);
+
+            CLogger.Shutdown();
+        }
+
+        [Test]
+        public void SuppressedGlobalStaticLogging_DoesNotCreateGlobalInstance()
+        {
+            CLogger.Shutdown();
+            CLogger.ConfigureGlobalStaticLoggingSuppressed(true);
+            bool invoked = false;
+
+            CLogger.LogInfo(1, (state, sb) =>
+            {
+                invoked = true;
+                sb.Append(state);
+            }, "Suppressed");
+
+            Assert.IsFalse(invoked);
+            Assert.IsFalse(CLogger.TryGetInstance(out _));
+            CLogger.ConfigureGlobalStaticLoggingSuppressed(false);
+        }
+
+        [Test]
+        public void ExplicitGlobalInstance_DisablesSuppressedStaticLogging()
+        {
+            CLogger.Shutdown();
+            CLogger.ConfigureSingleThreadedProcessing();
+            CLogger.ConfigureGlobalStaticLoggingSuppressed(true);
+
+            var global = CLogger.Instance;
+            var recording = new RecordingLogger();
+            global.AddLogger(recording);
+
+            CLogger.LogInfo(7, static (state, sb) => sb.Append(state), "Suppressed");
+            global.Pump(16);
+
+            Assert.AreEqual(1, recording.Count);
+            Assert.AreEqual("7", recording[0].Message);
+            CLogger.Shutdown();
+        }
+
+        [Test]
+        public void UnityLoggerFormatMessage_UsesHrefPathAndLineForConsoleNavigation()
+        {
+            var message = LogMessagePool.Get();
+            string sourcePath = Path.Combine(UnityEngine.Application.dataPath, "Game", "Foo.cs");
+            string expectedFullPath = sourcePath.Replace('\\', '/');
+            try
+            {
+                message.Initialize(
+                    DateTime.Now,
+                    LogLevel.Info,
+                    "hello",
+                    null,
+                    "Gameplay",
+                    sourcePath,
+                    42,
+                    nameof(UnityLoggerFormatMessage_UsesHrefPathAndLineForConsoleNavigation));
+
+                string formatted = UnityLogger.FormatMessage(message);
+
+                StringAssert.Contains("[Gameplay] hello", formatted);
+                StringAssert.Contains("href=\"Assets/Game/Foo.cs:42\"", formatted);
+                StringAssert.Contains("(at Assets/Game/Foo.cs:42)", formatted);
+                Assert.IsTrue(LoggerEditorLinkRegistry.TryGetFullPath("Assets/Game/Foo.cs", 42, out var fullPath));
+                Assert.AreEqual(expectedFullPath, fullPath);
+            }
+            finally
+            {
+                LogMessagePool.Return(message);
+            }
         }
 
         private sealed class RecordingLogger : ILogger

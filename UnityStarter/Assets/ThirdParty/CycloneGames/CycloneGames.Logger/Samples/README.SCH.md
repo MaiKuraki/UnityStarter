@@ -168,6 +168,22 @@ StringBuilder Pool:
 2. 移动到：`Assets/Resources/CycloneGames.Logger/LoggerSettings.asset`
 3. 配置：处理模式、Logger、日志级别等
 
+没有这个资源时，内置 bootstrap 会在 Editor 和 Player build 中默认注册 UnityLogger。它不会根据 `DEVELOPMENT_BUILD` 自动关闭日志。
+
+CI 构建可以在 Unity batchmode / `BuildScript.PerformBuild_CI` 后追加命令行覆盖：
+
+```text
+-loggerMode File -loggerLevel Warning -loggerFileName Player.log
+-loggerMode UnityAndFile -loggerLevel Info
+-loggerMode Off
+```
+
+也可以指定一份配置资源作为构建 profile：
+
+```text
+-loggerSettings Assets/Config/LoggerSettings.Release.asset
+```
+
 ### 方式2：自定义Bootstrap
 
 ```csharp

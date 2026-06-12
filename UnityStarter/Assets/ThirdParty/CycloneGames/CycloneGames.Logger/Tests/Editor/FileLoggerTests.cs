@@ -8,12 +8,15 @@ namespace CycloneGames.Logger.Tests.Editor
     public sealed class FileLoggerTests
     {
         private string _tempDirectory;
+        private string _sourceFilePath;
 
         [SetUp]
         public void SetUp()
         {
             _tempDirectory = Path.Combine(Path.GetTempPath(), "CycloneGames.Logger.Tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_tempDirectory);
+            _sourceFilePath = Path.Combine(_tempDirectory, "FileLoggerTests.cs");
+            File.WriteAllText(_sourceFilePath, string.Empty);
         }
 
         [TearDown]
@@ -38,17 +41,7 @@ namespace CycloneGames.Logger.Tests.Editor
 
             using (var logger = new FileLogger(logPath, options))
             {
-                LogMessage message = LogMessagePool.Get();
-                message.Initialize(
-                    new DateTime(2026, 5, 20, 1, 2, 3, 4),
-                    LogLevel.Error,
-                    "disk failure",
-                    null,
-                    "Storage",
-                    "C:\\Project\\FileLoggerTests.cs",
-                    25,
-                    nameof(Log_ErrorMessage_FlushesImmediately));
-
+                LogMessage message = CreateMessage(LogLevel.Error, "disk failure", "Storage", 25);
                 logger.Log(message);
                 LogMessagePool.Return(message);
 
@@ -95,6 +88,69 @@ namespace CycloneGames.Logger.Tests.Editor
             Assert.That(content, Does.Contain("[Builder] value=99"));
         }
 
+        [Test]
+        public void Constructor_InvalidOptions_FailsFast()
+        {
+            string logPath = Path.Combine(_tempDirectory, "invalid.log");
+            var options = new FileLoggerOptions
+            {
+                MaintenanceMode = FileMaintenanceMode.None,
+                FlushBatchSize = 0
+            };
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => new FileLogger(logPath, options));
+        }
+
+        [Test]
+        public void Log_NewFile_DoesNotWriteUtf8Bom()
+        {
+            string logPath = Path.Combine(_tempDirectory, "encoding.log");
+            var options = new FileLoggerOptions
+            {
+                MaintenanceMode = FileMaintenanceMode.None,
+                FlushBatchSize = 1,
+                FlushIntervalMs = 60000
+            };
+
+            using (var logger = new FileLogger(logPath, options))
+            {
+                LogMessage message = CreateMessage(LogLevel.Info, "utf8", "Encoding", 12);
+                logger.Log(message);
+                LogMessagePool.Return(message);
+            }
+
+            byte[] bytes = File.ReadAllBytes(logPath);
+            Assert.Greater(bytes.Length, 3);
+            Assert.IsFalse(bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF);
+        }
+
+        [Test]
+        public void Constructor_RotationUsesUniqueArchiveNameWhenTimestampCollides()
+        {
+            string logPath = Path.Combine(_tempDirectory, "rotate.log");
+            string existingArchivePath = Path.Combine(_tempDirectory, "rotate_fixed.log");
+            string expectedArchivePath = Path.Combine(_tempDirectory, "rotate_fixed_1.log");
+
+            File.WriteAllText(logPath, new string('a', 128));
+            File.WriteAllText(existingArchivePath, "existing");
+
+            var options = new FileLoggerOptions
+            {
+                MaintenanceMode = FileMaintenanceMode.Rotate,
+                MaxFileBytes = 1,
+                MaxArchiveFiles = 8,
+                ArchiveTimestampFormat = "'fixed'",
+                FlushBatchSize = 1
+            };
+
+            using (new FileLogger(logPath, options))
+            {
+            }
+
+            Assert.IsTrue(File.Exists(existingArchivePath));
+            Assert.IsTrue(File.Exists(expectedArchivePath));
+        }
+
         private static string ReadAllTextShared(string path)
         {
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
@@ -102,6 +158,21 @@ namespace CycloneGames.Logger.Tests.Editor
             {
                 return reader.ReadToEnd();
             }
+        }
+
+        private LogMessage CreateMessage(LogLevel level, string messageText, string category, int lineNumber)
+        {
+            LogMessage message = LogMessagePool.Get();
+            message.Initialize(
+                new DateTime(2026, 5, 20, 1, 2, 3, 4),
+                level,
+                messageText,
+                null,
+                category,
+                _sourceFilePath,
+                lineNumber,
+                nameof(CreateMessage));
+            return message;
         }
     }
 }

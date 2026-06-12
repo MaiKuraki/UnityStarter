@@ -14,37 +14,60 @@ namespace CycloneGames.Logger
         {
             // 1) Load optional project settings (do not rename the asset or folder)
             var settings = Resources.Load<LoggerSettings>(LoggerSettings.SettingsResourcePath);
+            LoggerProcessingOptions processingOptions = null;
+            if (settings)
+            {
+                processingOptions = new LoggerProcessingOptions
+                {
+                    MaxQueuedMessages = settings.maxQueuedMessages,
+                    UnityConsoleMaxQueuedMessages = settings.unityConsoleMaxQueuedMessages,
+                    ShutdownDrainTimeoutMs = settings.shutdownDrainTimeoutMs,
+                    OverflowPolicy = settings.overflowPolicy,
+                    GuaranteedLevel = settings.guaranteedLevel
+                };
+            }
 
             // 2) Configure processing strategy
             var mode = settings ? settings.processing : LoggerSettings.ProcessingMode.AutoDetect;
+            bool useUnity = !settings || settings.registerUnityLogger;
+            bool useFile = settings ? settings.registerFileLogger : false;
+            bool canRegisterFileLogger = useFile && Application.platform != RuntimePlatform.WebGLPlayer;
+            bool hasDefaultLoggers = useUnity || canRegisterFileLogger;
+            bool shouldForceThreadForFileLogger = canRegisterFileLogger
+                && mode == LoggerSettings.ProcessingMode.ForceSingleThread;
+
             switch (mode)
             {
                 case LoggerSettings.ProcessingMode.ForceThreaded:
-                    CLogger.ConfigureThreadedProcessing();
+                    CLogger.ConfigureThreadedProcessing(processingOptions);
                     break;
                 case LoggerSettings.ProcessingMode.ForceSingleThread:
-                    CLogger.ConfigureSingleThreadedProcessing();
+                    if (shouldForceThreadForFileLogger)
+                    {
+                        System.Console.Error.WriteLine("[WARNING] LoggerBootstrap: FileLogger requires threaded processing outside WebGL; ForceSingleThread was ignored.");
+                        CLogger.ConfigureThreadedProcessing(processingOptions);
+                    }
+                    else
+                    {
+                        CLogger.ConfigureSingleThreadedProcessing(processingOptions);
+                    }
                     break;
                 default:
                     // Auto-detect: WebGL -> single-threaded; others -> threaded
                     if (Application.platform == RuntimePlatform.WebGLPlayer)
-                        CLogger.ConfigureSingleThreadedProcessing();
+                        CLogger.ConfigureSingleThreadedProcessing(processingOptions);
                     else
-                        CLogger.ConfigureThreadedProcessing();
+                        CLogger.ConfigureThreadedProcessing(processingOptions);
                     break;
             }
 
             // 3) Register default loggers
-            // Default: register UnityLogger unless explicitly disabled via settings
-            bool useUnity = settings ? settings.registerUnityLogger : true;
-            bool useFile = settings ? settings.registerFileLogger : false;
-
             if (useUnity)
             {
                 CLogger.Instance.AddLoggerUnique(new UnityLogger());
             }
 
-            if (useFile && Application.platform != RuntimePlatform.WebGLPlayer)
+            if (canRegisterFileLogger)
             {
                 string path;
                 if (settings)
@@ -65,13 +88,14 @@ namespace CycloneGames.Logger
 
             // 4) Defaults
             // Do not force defaults unless settings exist; this allows projects to configure via code before first use.
-            if (settings)
+            if (settings && hasDefaultLoggers)
             {
                 CLogger.Instance.SetLogLevel(settings.defaultLevel);
                 CLogger.Instance.SetLogFilter(settings.defaultFilter);
             }
 
-            LoggerUpdater.EnsureInstance();
+            // UnityLogger creates LoggerUpdater on demand; file logging is drained by the threaded processor.
+            CLogger.ConfigureGlobalStaticLoggingSuppressed(!hasDefaultLoggers);
         }
     }
 }
