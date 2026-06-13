@@ -1,7 +1,12 @@
 using System;
 using System.IO;
+using System.Text;
+using System.Threading;
 using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
+using Unio;
+using Unity.Collections;
+using UnityEngine;
 using UnityEngine.Networking;
 using VYaml.Serialization;
 
@@ -17,7 +22,24 @@ namespace CycloneGames.InputSystem.Runtime
         /// <summary>
         /// Loads config from userConfigUri, falls back to defaultConfigUri if not found.
         /// </summary>
-        public static async UniTask InitializeAsync(string defaultConfigUri, string userConfigUri)
+        public static UniTask InitializeAsync(string defaultConfigUri, string userConfigUri)
+        {
+            return InitializeAsync(defaultConfigUri, userConfigUri, default);
+        }
+
+        /// <summary>
+        /// Loads config from userConfigUri, falls back to defaultConfigUri if not found.
+        /// </summary>
+        public static UniTask InitializeAsync(string defaultConfigUri, string userConfigUri, CancellationToken cancellationToken)
+        {
+            return InitializeInternalAsync(defaultConfigUri, userConfigUri, cancellationToken, false);
+        }
+
+        private static async UniTask InitializeInternalAsync(
+            string defaultConfigUri,
+            string userConfigUri,
+            CancellationToken cancellationToken,
+            bool forceReinitialize)
         {
             string yamlContent = null;
             string defaultYamlContent = null;
@@ -27,7 +49,7 @@ namespace CycloneGames.InputSystem.Runtime
             // Always load default config first for fallback
             if (!string.IsNullOrEmpty(defaultConfigUri))
             {
-                (bool success, string content) = await LoadConfigFromUriAsync(defaultConfigUri);
+                (bool success, string content) = await InputConfigurationFileLoader.LoadTextFromUriAsync(defaultConfigUri, DEBUG_FLAG, cancellationToken);
                 if (success)
                 {
                     defaultYamlContent = content;
@@ -38,7 +60,7 @@ namespace CycloneGames.InputSystem.Runtime
             // Try loading user config
             if (!string.IsNullOrEmpty(userConfigUri))
             {
-                (bool success, string content) = await LoadConfigFromUriAsync(userConfigUri);
+                (bool success, string content) = await InputConfigurationFileLoader.LoadTextFromUriAsync(userConfigUri, DEBUG_FLAG, cancellationToken);
                 if (success && !string.IsNullOrEmpty(content))
                 {
                     // Validate user config before use
@@ -54,7 +76,7 @@ namespace CycloneGames.InputSystem.Runtime
                         userConfigCorrupted = true;
                         
                         // Delete corrupted user config file
-                        TryDeleteCorruptedUserConfig(userConfigUri);
+                        await InputConfigurationFileLoader.DeleteTextAtUriAsync(userConfigUri, DEBUG_FLAG, cancellationToken);
                     }
                 }
             }
@@ -72,12 +94,19 @@ namespace CycloneGames.InputSystem.Runtime
 
             if (!string.IsNullOrEmpty(yamlContent))
             {
-                InputManager.Instance.Initialize(yamlContent, userConfigUri);
-                
+                if (forceReinitialize)
+                {
+                    InputManager.Instance.Reinitialize(yamlContent, userConfigUri);
+                }
+                else
+                {
+                    InputManager.Instance.Initialize(yamlContent, userConfigUri);
+                }
+                 
                 // Save user config if: not loaded from user config OR user config was corrupted
                 if (!loadedFromUserConfig || userConfigCorrupted)
                 {
-                    await InputManager.Instance.SaveUserConfigurationAsync();
+                    await InputManager.Instance.SaveUserConfigurationAsync(cancellationToken);
                     CLogger.LogInfo($"{DEBUG_FLAG} Saved fresh user config.");
                 }
             }
@@ -135,7 +164,20 @@ namespace CycloneGames.InputSystem.Runtime
         /// <param name="defaultConfigUri">URI to default config (e.g., StreamingAssets)</param>
         /// <param name="userConfigUri">URI to user config (e.g., PersistentData)</param>
         /// <returns>True if reset was successful</returns>
-        public static async UniTask<bool> ResetToDefaultAsync(string defaultConfigUri, string userConfigUri)
+        public static UniTask<bool> ResetToDefaultAsync(string defaultConfigUri, string userConfigUri)
+        {
+            return ResetToDefaultAsync(defaultConfigUri, userConfigUri, default);
+        }
+
+        /// <summary>
+        /// Resets user configuration to default. Deletes user config file and reinitializes with default config.
+        /// Cross-platform compatible: Windows, macOS, Linux, Android, iOS, WebGL.
+        /// </summary>
+        /// <param name="defaultConfigUri">URI to default config (e.g., StreamingAssets)</param>
+        /// <param name="userConfigUri">URI to user config (e.g., PersistentData)</param>
+        /// <param name="cancellationToken">Cancellation token for file and UnityWebRequest loading.</param>
+        /// <returns>True if reset was successful</returns>
+        public static async UniTask<bool> ResetToDefaultAsync(string defaultConfigUri, string userConfigUri, CancellationToken cancellationToken)
         {
             if (string.IsNullOrEmpty(defaultConfigUri))
             {
@@ -143,13 +185,13 @@ namespace CycloneGames.InputSystem.Runtime
                 return false;
             }
 
-            bool deleteSuccess = TryDeleteUserConfigFile(userConfigUri);
+            bool deleteSuccess = await InputConfigurationFileLoader.DeleteTextAtUriAsync(userConfigUri, DEBUG_FLAG, cancellationToken);
             if (!deleteSuccess)
             {
                 CLogger.LogWarning($"{DEBUG_FLAG} Failed to delete user config, but will continue with reset.");
             }
 
-            await InitializeAsync(defaultConfigUri, userConfigUri);
+            await InitializeInternalAsync(defaultConfigUri, userConfigUri, cancellationToken, true);
             
             CLogger.LogInfo($"{DEBUG_FLAG} Reset to default configuration completed.");
             return true;
@@ -162,128 +204,328 @@ namespace CycloneGames.InputSystem.Runtime
         /// <returns>True if deletion was successful or file didn't exist</returns>
         public static bool TryDeleteUserConfigFile(string userConfigUri)
         {
-            if (string.IsNullOrEmpty(userConfigUri))
+            return InputConfigurationFileLoader.TryDeleteTextAtUri(userConfigUri, DEBUG_FLAG);
+        }
+    }
+
+    /// <summary>
+    /// Centralized text configuration storage for local files, WebGL player storage, and UnityWebRequest-only locations.
+    /// </summary>
+    public static class InputConfigurationFileLoader
+    {
+        public static async UniTask<(bool Success, string Content)> LoadTextFromUriAsync(
+            string uri,
+            string logPrefix,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrEmpty(uri))
             {
-                return true; // Nothing to delete
+                return (false, null);
             }
 
-            try
-            {
 #if UNITY_WEBGL && !UNITY_EDITOR
-                // WebGL: Use PlayerPrefs-based storage or IndexedDB
-                // Since we can't directly delete files in WebGL, we mark it for recreation
-                string key = GetPlayerPrefsKeyFromUri(userConfigUri);
-                if (UnityEngine.PlayerPrefs.HasKey(key))
-                {
-                    UnityEngine.PlayerPrefs.DeleteKey(key);
-                    UnityEngine.PlayerPrefs.Save();
-                    CLogger.LogInfo($"{DEBUG_FLAG} Deleted user config from PlayerPrefs: {key}");
-                }
-                return true;
-#else
-                // All other platforms: Standard file deletion
-                string filePath = GetFilePathFromUri(userConfigUri);
-                if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
-                {
-                    File.Delete(filePath);
-                    CLogger.LogInfo($"{DEBUG_FLAG} Deleted user config file: {filePath}");
-                }
-                return true;
-#endif
-            }
-            catch (Exception e)
+            string playerPrefsKey = GetPlayerPrefsKeyFromUri(uri);
+            await SwitchToUnityMainThreadAsync(cancellationToken);
+            if (PlayerPrefs.HasKey(playerPrefsKey))
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} Failed to delete user config: {e.Message}");
+                return (true, PlayerPrefs.GetString(playerPrefsKey));
+            }
+
+            if (LooksLikeLocalFileUri(uri))
+            {
+                return (false, null);
+            }
+#endif
+
+            if (TryGetLocalFilePath(uri, out string filePath))
+            {
+                return await LoadTextFromLocalFileAsync(filePath, logPrefix, cancellationToken);
+            }
+
+            return await LoadTextFromUnityWebRequestAsync(uri, logPrefix, cancellationToken);
+        }
+
+        public static async UniTask<bool> SaveTextToUriAsync(
+            string uri,
+            string content,
+            string logPrefix,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrEmpty(uri))
+            {
                 return false;
             }
-        }
 
-        /// <summary>
-        /// Extracts file path from URI. Handles different URI formats for cross-platform compatibility.
-        /// </summary>
-        private static string GetFilePathFromUri(string uri)
-        {
-            if (string.IsNullOrEmpty(uri)) return null;
+            content ??= string.Empty;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            await SwitchToUnityMainThreadAsync(cancellationToken);
+            string playerPrefsKey = GetPlayerPrefsKeyFromUri(uri);
+            PlayerPrefs.SetString(playerPrefsKey, content);
+            PlayerPrefs.Save();
+            CLogger.LogInfo($"{logPrefix} Saved text config to PlayerPrefs: {playerPrefsKey}");
+            return true;
+#else
+            if (!TryGetLocalFilePath(uri, out string filePath))
+            {
+                CLogger.LogWarning($"{logPrefix} Cannot save config because URI is not a local writable file: {uri}");
+                return false;
+            }
+
+            byte[] bytes = Encoding.UTF8.GetBytes(content);
+            using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Persistent);
 
             try
             {
-                // Handle file:// URIs
-                if (uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+                string directory = Path.GetDirectoryName(filePath);
+                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                 {
-                    return new Uri(uri).LocalPath;
-                }
-                
-                // Handle direct paths (Android, iOS, etc.)
-                if (uri.StartsWith("/") || (uri.Length > 1 && uri[1] == ':'))
-                {
-                    return uri;
+                    Directory.CreateDirectory(directory);
                 }
 
-                // Try parsing as URI
-                if (Uri.TryCreate(uri, UriKind.Absolute, out Uri parsedUri))
-                {
-                    return parsedUri.LocalPath;
-                }
-
-                return uri;
+                await NativeFile.WriteAllBytesAsync(filePath, nativeBytes);
+                CLogger.LogInfo($"{logPrefix} Saved text config to: {filePath}");
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception e)
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} Failed to parse URI '{uri}': {e.Message}");
-                return null;
+                CLogger.LogError($"{logPrefix} Failed to save config to '{filePath}': {e.Message}");
+                return false;
             }
+#endif
+        }
+
+        public static UniTask<bool> DeleteTextAtUriAsync(
+            string uri,
+            string logPrefix,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrEmpty(uri))
+            {
+                return UniTask.FromResult(true);
+            }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return DeleteTextAtUriWebGLAsync(uri, logPrefix, cancellationToken);
+#else
+            return UniTask.FromResult(TryDeleteTextAtUri(uri, logPrefix));
+#endif
         }
 
 #if UNITY_WEBGL && !UNITY_EDITOR
-        /// <summary>
-        /// Generates a deterministic PlayerPrefs key from URI for WebGL storage.
-        /// Uses FNV-1a instead of string.GetHashCode() which is non-deterministic across IL2CPP runs.
-        /// </summary>
-        private static string GetPlayerPrefsKeyFromUri(string uri)
+        private static async UniTask<bool> DeleteTextAtUriWebGLAsync(
+            string uri,
+            string logPrefix,
+            CancellationToken cancellationToken)
         {
-            return $"InputConfig_{InputHashUtility.GetDeterministicHashCode(uri):X8}";
+            await SwitchToUnityMainThreadAsync(cancellationToken);
+            string playerPrefsKey = GetPlayerPrefsKeyFromUri(uri);
+            if (PlayerPrefs.HasKey(playerPrefsKey))
+            {
+                PlayerPrefs.DeleteKey(playerPrefsKey);
+                PlayerPrefs.Save();
+                CLogger.LogInfo($"{logPrefix} Deleted text config from PlayerPrefs: {playerPrefsKey}");
+            }
+
+            return true;
         }
 #endif
 
-        /// <summary>
-        /// Attempts to delete a corrupted user config file.
-        /// </summary>
-        private static void TryDeleteCorruptedUserConfig(string userConfigUri)
+        public static bool TryDeleteTextAtUri(string uri, string logPrefix)
         {
-            TryDeleteUserConfigFile(userConfigUri);
+            if (string.IsNullOrEmpty(uri))
+            {
+                return true;
+            }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            if (!Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread)
+            {
+                CLogger.LogWarning($"{logPrefix} Cannot delete WebGL PlayerPrefs config from a non-main thread. Use DeleteTextAtUriAsync instead.");
+                return false;
+            }
+
+            string playerPrefsKey = GetPlayerPrefsKeyFromUri(uri);
+            if (PlayerPrefs.HasKey(playerPrefsKey))
+            {
+                PlayerPrefs.DeleteKey(playerPrefsKey);
+                PlayerPrefs.Save();
+                CLogger.LogInfo($"{logPrefix} Deleted text config from PlayerPrefs: {playerPrefsKey}");
+            }
+
+            return true;
+#else
+            try
+            {
+                if (!TryGetLocalFilePath(uri, out string filePath))
+                {
+                    return false;
+                }
+
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                    CLogger.LogInfo($"{logPrefix} Deleted text config file: {filePath}");
+                }
+
+                return true;
+            }
+            catch (Exception e)
+            {
+                CLogger.LogWarning($"{logPrefix} Failed to delete config '{uri}': {e.Message}");
+                return false;
+            }
+#endif
         }
 
-        private static async UniTask<(bool, string)> LoadConfigFromUriAsync(string uri)
+        public static bool TryGetLocalFilePath(string uri, out string filePath)
         {
-            using (UnityWebRequest uwr = UnityWebRequest.Get(uri))
+            filePath = null;
+
+            if (string.IsNullOrEmpty(uri) ||
+                uri.StartsWith("jar:file://", StringComparison.OrdinalIgnoreCase) ||
+                uri.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+                uri.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
             {
-                try
+                return false;
+            }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return false;
+#else
+            try
+            {
+                if (uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+                {
+                    var parsedUri = new Uri(uri);
+                    if (!parsedUri.IsFile)
+                    {
+                        return false;
+                    }
+
+                    filePath = parsedUri.LocalPath;
+                    return !string.IsNullOrEmpty(filePath);
+                }
+
+                if (Path.IsPathRooted(uri))
+                {
+                    filePath = uri;
+                    return true;
+                }
+
+                if (Uri.TryCreate(uri, UriKind.Absolute, out Uri absoluteUri) && absoluteUri.IsFile)
+                {
+                    filePath = absoluteUri.LocalPath;
+                    return !string.IsNullOrEmpty(filePath);
+                }
+            }
+            catch (Exception e)
+            {
+                CLogger.LogWarning($"[InputConfigurationFileLoader] Failed to parse URI '{uri}': {e.Message}");
+            }
+
+            return false;
+#endif
+        }
+
+        private static async UniTask<(bool Success, string Content)> LoadTextFromLocalFileAsync(
+            string filePath,
+            string logPrefix,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                if (!File.Exists(filePath))
+                {
+                    return (false, null);
+                }
+
+                using var nativeBytes = await NativeFile.ReadAllBytesAsync(filePath, SynchronizationStrategy.BlockOnThreadPool);
+                cancellationToken.ThrowIfCancellationRequested();
+                byte[] bytes = nativeBytes.ToArray();
+                return (true, Encoding.UTF8.GetString(bytes));
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception e)
+            {
+                CLogger.LogWarning($"{logPrefix} Failed to load local config from '{filePath}': {e.Message}");
+                return (false, null);
+            }
+        }
+
+        private static async UniTask<(bool Success, string Content)> LoadTextFromUnityWebRequestAsync(
+            string uri,
+            string logPrefix,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                await SwitchToUnityMainThreadAsync(cancellationToken);
+
+                using (UnityWebRequest uwr = UnityWebRequest.Get(uri))
                 {
                     var asyncOperation = uwr.SendWebRequest();
                     while (!asyncOperation.isDone)
                     {
-                        await UniTask.Yield();
+                        await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
                     }
 
                     if (uwr.result == UnityWebRequest.Result.Success)
                     {
                         return (true, uwr.downloadHandler.text);
                     }
-                    else
+
+                    if (!IsNotFoundError(uwr.error))
                     {
-                        if (uwr.error == null || uwr.error.IndexOf("not found", StringComparison.OrdinalIgnoreCase) < 0)
-                        {
-                            CLogger.LogWarning($"{DEBUG_FLAG} Failed to load from '{uri}': {uwr.error}");
-                        }
-                        return (false, null);
+                        CLogger.LogWarning($"{logPrefix} Failed to load from '{uri}': {uwr.error}");
                     }
-                }
-                catch (System.Exception e)
-                {
-                    CLogger.LogError($"{DEBUG_FLAG} Exception loading from '{uri}': {e.Message}");
+
                     return (false, null);
                 }
             }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception e)
+            {
+                CLogger.LogError($"{logPrefix} Exception loading from '{uri}': {e.Message}");
+                return (false, null);
+            }
         }
+
+        private static async UniTask SwitchToUnityMainThreadAsync(CancellationToken cancellationToken)
+        {
+            if (!Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread)
+            {
+                await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
+            }
+        }
+
+        private static bool IsNotFoundError(string error)
+        {
+            return error != null &&
+                   (error.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    error.IndexOf("404", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+        private static string GetPlayerPrefsKeyFromUri(string uri)
+        {
+            return $"InputConfig_{InputHashUtility.GetDeterministicHashCode(uri):X8}";
+        }
+
+        private static bool LooksLikeLocalFileUri(string uri)
+        {
+            return uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase) || Path.IsPathRooted(uri);
+        }
+#endif
     }
 }

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Text;
 using System.Threading;
 using CycloneGames.Logger;
@@ -8,8 +7,6 @@ using Cysharp.Threading.Tasks;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Users;
 using VYaml.Serialization;
-using Unio;
-using Unity.Collections;
 using UnityEngine;
 using R3;
 
@@ -69,6 +66,7 @@ namespace CycloneGames.InputSystem.Runtime
                     string normalizedContent = NormalizeLineEndings(yamlContent);
                     _configuration = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(normalizedContent));
                     _userConfigUri = userConfigUri;
+                    _isDisposed = false;
                     _isInitialized = true;
                     CLogger.LogInfo($"{DEBUG_FLAG} Initialized successfully.");
                 }
@@ -93,6 +91,7 @@ namespace CycloneGames.InputSystem.Runtime
                     string normalizedContent = NormalizeLineEndings(yamlContent);
                     _configuration = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(normalizedContent));
                     _userConfigUri = userConfigUri;
+                    _isDisposed = false;
                     _isInitialized = true;
                     CLogger.LogInfo($"{DEBUG_FLAG} Reinitialized successfully.");
                     OnConfigurationReloaded?.Invoke();
@@ -114,7 +113,15 @@ namespace CycloneGames.InputSystem.Runtime
         /// <summary>
         /// Hot-reloads configuration at runtime. Existing players keep current config; new players use reloaded config.
         /// </summary>
-        public async UniTask<bool> ReloadConfigurationAsync()
+        public UniTask<bool> ReloadConfigurationAsync()
+        {
+            return ReloadConfigurationAsync(default);
+        }
+
+        /// <summary>
+        /// Hot-reloads configuration at runtime. Existing players keep current config; new players use reloaded config.
+        /// </summary>
+        public async UniTask<bool> ReloadConfigurationAsync(CancellationToken cancellationToken)
         {
             if (!_isInitialized || string.IsNullOrEmpty(_userConfigUri))
             {
@@ -126,22 +133,25 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 try
                 {
-                    string filePath = new Uri(_userConfigUri).LocalPath;
-                    if (!File.Exists(filePath))
+                    (bool success, string yamlContent) = await InputConfigurationFileLoader.LoadTextFromUriAsync(_userConfigUri, DEBUG_FLAG, cancellationToken);
+                    if (!success || string.IsNullOrEmpty(yamlContent))
                     {
-                        CLogger.LogError($"{DEBUG_FLAG} Configuration file not found: {filePath}");
+                        CLogger.LogError($"{DEBUG_FLAG} Configuration file not found or empty: {_userConfigUri}");
                         return false;
                     }
 
-                    using var nativeBytes = await NativeFile.ReadAllBytesAsync(filePath, SynchronizationStrategy.BlockOnThreadPool);
-                    byte[] yamlBytes = nativeBytes.ToArray();
-                    string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
+                    string normalizedContent = NormalizeLineEndings(yamlContent);
+                    byte[] yamlBytes = Encoding.UTF8.GetBytes(normalizedContent);
                     var newConfig = YamlSerializer.Deserialize<InputConfiguration>(yamlBytes);
 
                     _configuration = newConfig;
                     CLogger.LogInfo($"{DEBUG_FLAG} Configuration reloaded successfully.");
                     OnConfigurationReloaded?.Invoke();
                     return true;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch (Exception e)
                 {
@@ -205,43 +215,32 @@ namespace CycloneGames.InputSystem.Runtime
             }
         }
 
-        public async UniTask SaveUserConfigurationAsync()
+        public UniTask SaveUserConfigurationAsync()
+        {
+            return SaveUserConfigurationAsync(default);
+        }
+
+        public async UniTask SaveUserConfigurationAsync(CancellationToken cancellationToken)
         {
             if (!_isInitialized || string.IsNullOrEmpty(_userConfigUri)) return;
 
-            NativeArray<byte> nativeBytes = default;
             try
             {
                 byte[] yamlBytes = YamlSerializer.Serialize(_configuration).ToArray();
 
                 // Normalize line endings to Unix-style (LF) for cross-platform compatibility
                 // This ensures configs saved on Windows work correctly on Linux/SteamDeck/macOS
-                string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
-                yamlContent = yamlContent.Replace("\r\n", "\n").Replace("\r", "\n");
-                yamlBytes = System.Text.Encoding.UTF8.GetBytes(yamlContent);
-
-                string filePath = new Uri(_userConfigUri).LocalPath;
-
-                string directory = System.IO.Path.GetDirectoryName(filePath);
-                if (!string.IsNullOrEmpty(directory) && !System.IO.Directory.Exists(directory))
-                {
-                    System.IO.Directory.CreateDirectory(directory);
-                }
-
-                nativeBytes = new NativeArray<byte>(yamlBytes, Allocator.Persistent);
-                await NativeFile.WriteAllBytesAsync(filePath, nativeBytes);
-                CLogger.LogInfo($"{DEBUG_FLAG} User configuration saved to: {filePath}");
+                string yamlContent = Encoding.UTF8.GetString(yamlBytes);
+                yamlContent = NormalizeLineEndings(yamlContent);
+                await InputConfigurationFileLoader.SaveTextToUriAsync(_userConfigUri, yamlContent, DEBUG_FLAG, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception e)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to save user configuration: {e.Message}");
-            }
-            finally
-            {
-                if (nativeBytes.IsCreated)
-                {
-                    nativeBytes.Dispose();
-                }
             }
         }
 
