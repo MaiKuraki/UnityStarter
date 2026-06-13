@@ -1,11 +1,10 @@
 using System;
+using System.Buffers;
 using System.IO;
 using System.Text;
 using System.Threading;
 using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
-using Unio;
-using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Networking;
 using VYaml.Serialization;
@@ -272,9 +271,6 @@ namespace CycloneGames.InputSystem.Runtime
                 return false;
             }
 
-            byte[] bytes = Encoding.UTF8.GetBytes(content);
-            using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Persistent);
-
             try
             {
                 string directory = Path.GetDirectoryName(filePath);
@@ -283,7 +279,7 @@ namespace CycloneGames.InputSystem.Runtime
                     Directory.CreateDirectory(directory);
                 }
 
-                await NativeFile.WriteAllBytesAsync(filePath, nativeBytes);
+                await WriteAllTextToLocalFileAsync(filePath, content, cancellationToken);
                 CLogger.LogInfo($"{logPrefix} Saved text config to: {filePath}");
                 return true;
             }
@@ -444,10 +440,8 @@ namespace CycloneGames.InputSystem.Runtime
                     return (false, null);
                 }
 
-                using var nativeBytes = await NativeFile.ReadAllBytesAsync(filePath, SynchronizationStrategy.BlockOnThreadPool);
-                cancellationToken.ThrowIfCancellationRequested();
-                byte[] bytes = nativeBytes.ToArray();
-                return (true, Encoding.UTF8.GetString(bytes));
+                string content = await ReadAllTextFromLocalFileAsync(filePath, cancellationToken);
+                return (true, content);
             }
             catch (OperationCanceledException)
             {
@@ -457,6 +451,71 @@ namespace CycloneGames.InputSystem.Runtime
             {
                 CLogger.LogWarning($"{logPrefix} Failed to load local config from '{filePath}': {e.Message}");
                 return (false, null);
+            }
+        }
+
+        private static async UniTask<string> ReadAllTextFromLocalFileAsync(
+            string filePath,
+            CancellationToken cancellationToken)
+        {
+            using (var stream = new FileStream(
+                       filePath,
+                       FileMode.Open,
+                       FileAccess.Read,
+                       FileShare.Read,
+                       4096,
+                       FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                long length = stream.Length;
+                if (length == 0L)
+                {
+                    return string.Empty;
+                }
+
+                if (length > int.MaxValue)
+                {
+                    throw new IOException($"Input config file is too large: {length} bytes.");
+                }
+
+                byte[] rentedBuffer = ArrayPool<byte>.Shared.Rent((int)length);
+                try
+                {
+                    int totalRead = 0;
+                    while (totalRead < length)
+                    {
+                        int read = await stream.ReadAsync(rentedBuffer, totalRead, (int)length - totalRead, cancellationToken);
+                        if (read == 0)
+                        {
+                            break;
+                        }
+
+                        totalRead += read;
+                    }
+
+                    return Encoding.UTF8.GetString(rentedBuffer, 0, totalRead);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rentedBuffer);
+                }
+            }
+        }
+
+        private static async UniTask WriteAllTextToLocalFileAsync(
+            string filePath,
+            string content,
+            CancellationToken cancellationToken)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(content);
+            using (var stream = new FileStream(
+                       filePath,
+                       FileMode.Create,
+                       FileAccess.Write,
+                       FileShare.None,
+                       4096,
+                       FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
             }
         }
 

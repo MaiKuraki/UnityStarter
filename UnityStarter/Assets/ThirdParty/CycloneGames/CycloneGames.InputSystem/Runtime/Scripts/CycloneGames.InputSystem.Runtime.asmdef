@@ -6,7 +6,6 @@
         "UniTask",
         "R3.Unity",
         "VYaml.Core",
-        "Unio",
         "CycloneGames.Utility.Runtime",
         "CycloneGames.Logger"
     ],
