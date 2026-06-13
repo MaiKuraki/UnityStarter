@@ -14,7 +14,7 @@ namespace CycloneGames.DataTable.Unity.Editor
     /// </summary>
     public class DataTableLubanRunRequest
     {
-        public DataTableSettings Settings { get; set; }
+        public DataTableLubanSettings Settings { get; set; }
         public string ProjectRoot { get; set; }
         public string ProjectDirectory { get; set; }
         public string ScriptName { get; set; }
@@ -74,20 +74,20 @@ namespace CycloneGames.DataTable.Unity.Editor
         private const string MenuPath = "Tools/CycloneGames/DataTable/Run Luban Build";
 
         /// <summary>
-        /// Override for the Luban project directory. Kept for CI compatibility with older callers.
+        /// Optional CI/editor-script override for the Luban project directory.
         /// </summary>
-        public static string ProjectDirOverride { get; set; }
+        public static string LubanProjectDirOverride { get; set; }
 
         /// <summary>
-        /// Override for the Luban script name. Kept for CI compatibility with older callers.
+        /// Optional CI/editor-script override for the Luban script name.
         /// </summary>
-        public static string ScriptNameOverride { get; set; }
+        public static string LubanScriptNameOverride { get; set; }
 
-        public static string EffectiveProjectDir =>
-            ProjectDirOverride ?? DataTableSettings.GetOrCreate().GetDataTableProjectDir();
+        public static string EffectiveLubanProjectDir =>
+            LubanProjectDirOverride ?? DataTableLubanSettings.GetOrCreate().GetLubanProjectDir();
 
-        public static string EffectiveScriptName =>
-            ScriptNameOverride ?? DataTableSettings.GetOrCreate().GetScriptName();
+        public static string EffectiveLubanScriptName =>
+            LubanScriptNameOverride ?? DataTableLubanSettings.GetOrCreate().GetLubanScriptName();
 
         [MenuItem(MenuPath)]
         public static void Run()
@@ -97,26 +97,26 @@ namespace CycloneGames.DataTable.Unity.Editor
         }
 
         /// <summary>
-        /// Run the default DataTableSettings and return a structured result.
+        /// Run the default DataTableLubanSettings and return a structured result.
         /// </summary>
         public static DataTableLubanRunResult RunWithResult()
         {
-            return RunWithResult(DataTableSettings.GetOrCreate());
+            return RunWithResult(DataTableLubanSettings.GetOrCreate());
         }
 
         /// <summary>
         /// Run a derived settings type without requiring package modification.
         /// </summary>
         public static DataTableLubanRunResult RunWithResult<TSettings>()
-            where TSettings : DataTableSettings
+            where TSettings : DataTableLubanSettings
         {
-            return RunWithResult(DataTableSettings.GetOrCreate<TSettings>());
+            return RunWithResult(DataTableLubanSettings.GetOrCreate<TSettings>());
         }
 
         /// <summary>
         /// Run a settings instance. Derived settings can override CreateLubanRunRequest.
         /// </summary>
-        public static DataTableLubanRunResult RunWithResult(DataTableSettings settings)
+        public static DataTableLubanRunResult RunWithResult(DataTableLubanSettings settings)
         {
             if (settings == null) throw new ArgumentNullException(nameof(settings));
             return RunWithResult(settings.CreateLubanRunRequest());
@@ -150,15 +150,22 @@ namespace CycloneGames.DataTable.Unity.Editor
         /// <summary>
         /// Build a request from settings. Custom projects can call this and then modify selected fields.
         /// </summary>
-        public static DataTableLubanRunRequest CreateRequest(DataTableSettings settings)
+        public static DataTableLubanRunRequest CreateRequest(DataTableLubanSettings settings)
         {
             if (settings == null) throw new ArgumentNullException(nameof(settings));
 
             var projectRoot = settings.GetProjectRoot();
-            var projectDir = ProjectDirOverride ?? settings.GetDataTableProjectDir();
-            var scriptName = ScriptNameOverride ?? settings.GetScriptName();
-            var scriptExtension = settings.GetScriptExtension();
-            var workingDirectory = Path.GetFullPath(Path.Combine(projectRoot, projectDir));
+            var projectDir = LubanProjectDirOverride ?? settings.GetLubanProjectDir() ?? string.Empty;
+            var scriptName = LubanScriptNameOverride ?? settings.GetLubanScriptName() ?? string.Empty;
+            var scriptExtension = settings.GetLubanScriptExtension() ?? string.Empty;
+            var workingDirectory = string.IsNullOrWhiteSpace(projectRoot)
+                ? string.Empty
+                : Path.GetFullPath(string.IsNullOrWhiteSpace(projectDir)
+                    ? projectRoot
+                    : Path.Combine(projectRoot, projectDir));
+            var scriptPath = string.IsNullOrWhiteSpace(workingDirectory) || string.IsNullOrWhiteSpace(scriptName)
+                ? string.Empty
+                : Path.Combine(workingDirectory, scriptName + scriptExtension);
 
             return new DataTableLubanRunRequest
             {
@@ -167,12 +174,12 @@ namespace CycloneGames.DataTable.Unity.Editor
                 ProjectDirectory = projectDir,
                 ScriptName = scriptName,
                 ScriptExtension = scriptExtension,
-                ScriptArguments = settings.GetScriptArguments(),
+                ScriptArguments = settings.GetLubanScriptArguments(),
                 WorkingDirectory = workingDirectory,
-                ScriptPath = Path.Combine(workingDirectory, scriptName + scriptExtension),
+                ScriptPath = scriptPath,
                 ConfigAssetPath = AssetDatabase.GetAssetPath(settings),
-                TimeoutMilliseconds = settings.GetTimeoutMilliseconds(),
-                AutoRefreshAssets = settings.ShouldRefreshAssets()
+                TimeoutMilliseconds = settings.GetLubanTimeoutMilliseconds(),
+                AutoRefreshAssets = settings.ShouldRefreshAssetsAfterLubanBuild()
             };
         }
 
