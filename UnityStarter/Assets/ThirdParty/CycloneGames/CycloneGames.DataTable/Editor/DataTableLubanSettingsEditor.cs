@@ -366,7 +366,10 @@ namespace CycloneGames.DataTable.Unity.Editor
             var result = DataTableLubanRunner.RunWithResult((DataTableLubanSettings)target);
             if (!result.Success)
             {
-                EditorUtility.DisplayDialog("Luban Build Failed", result.ErrorMessage, "OK");
+                EditorUtility.DisplayDialog(
+                    "Luban Build Failed",
+                    DataTableLubanRunner.BuildFailureDialogMessage(result),
+                    "OK");
             }
 
             RefreshValidationCache();
