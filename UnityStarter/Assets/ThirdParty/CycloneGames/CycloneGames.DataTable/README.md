@@ -110,16 +110,18 @@ flowchart LR
     Core["Core<br/>noEngineReferences: true<br/>zero Unity API"] --> UnityRt["Unity.Runtime<br/>+ UniTask"]
     UnityRt --> LubanInt["Integrations.Luban"]
     UnityRt --> MsgPackInt["Integrations.MessagePack"]
+    UnityRt --> AssetMgmtInt["Integrations.AssetManagement"]
     UnityRt --> Editor["Unity.Editor"]
 ```
 
 | Assembly | Layer | Dependencies | Purpose |
 | --- | --- | --- | --- |
-| `CycloneGames.DataTable.Core` | Core | *none* | `IDataRow`, `IDataTable<T>`, `DataTable<T>`, `DataTableRegistry`, `DataTableLogger` |
+| `CycloneGames.DataTable.Core` | Core | *none* | `IDataRow`, `IDataTable<T>`, `DataTableRegistry`, bytes providers, table-set scopes, `DataTableManifest` |
 | `CycloneGames.DataTable.Unity.Runtime` | Unity Adapter | Core | `DataTableUnityBootstrap` |
 | `CycloneGames.DataTable.Unity.Editor` | Editor | Unity.Runtime | `DataTableLubanRunner` (Luban build menu) |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | Integration | Core + Unity.Runtime | `LubanConfigProvider` |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | Integration | Core + Unity.Runtime + MessagePack | `MessagePackConfigProvider` |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | Integration | Core + Unity.Runtime + AssetManagement | Optional bytes loaders guarded by `CYCLONE_ASSET_MANAGEMENT` |
 
 **Key principle**: `Core` has zero Unity references (`noEngineReferences: true`). The Unity adapter assemblies inject platform specifics via `DataTableLogger` delegates at startup. This is the same pattern used by `CycloneGames.GameplayTags`.
 
@@ -136,15 +138,17 @@ This module is part of the CycloneGames framework. It lives under `Assets/ThirdP
 | *none* | — | Core has zero external dependencies. Unity.Runtime only needs Unity. |
 | `Luban` | Optional | For Excel → code workflow. [luban](https://github.com/focus-creative-games/luban) |
 | `MessagePack-CSharp` | Optional | For MessagePack binary backend. Install via NuGet or UPM. |
+| `CycloneGames.AssetManagement` | Optional | For unified TextAsset/raw-file loading. The integration assembly compiles only when the package is installed. |
 
 ### Optional Assemblies
 
-Delete the folders you don't need:
+Optional integration assemblies are guarded by asmdef `versionDefines` and `defineConstraints`. If an optional package is absent, Unity skips the matching integration assembly. You can still delete folders you never use:
 
 - `Unity.Runtime/Integrations/Luban/` — remove if not using Luban
 - `Unity.Runtime/Integrations/MessagePack/` — remove if not using MessagePack
+- `Unity.Runtime/Integrations/AssetManagement/` — remove if not using CycloneGames.AssetManagement
 
-The module compiles and works fine without either integration.
+The module compiles and works fine without any optional integration.
 
 ---
 
@@ -617,7 +621,48 @@ Your adapter only needs to produce rows implementing `IDataRow` and call `DataTa
 
 ### Integration with CycloneGames.AssetManagement
 
-If your project uses `CycloneGames.AssetManagement`, the DataTable module integrates seamlessly — **no adapter code needed**. DataTable accepts raw `byte[]`; AssetManagement provides `ReadBytes()` on any raw file or TextAsset handle. The two modules are designed to compose directly.
+If your project uses `CycloneGames.AssetManagement`, use `AssetManagementDataTableBytesLoader` to load table `.bytes` as `TextAsset`, or `AssetManagementDataTableRawFileBytesLoader` for providers that support raw binary files. Both expose loaded data through `IDataTableBytesProvider`. `DataTableAssetLoadContext` carries the AssetManagement bucket/tag/owner metadata, and `DataTableManifest` can validate table names, byte length, and SHA-256 before any backend consumes the bytes.
+
+Runtime manifest validation intentionally keeps a tiny SHA-256 helper inside `CycloneGames.DataTable.Core` instead of depending on `CycloneGames.Utility.Runtime`, because the current Utility runtime assembly carries Unity, Burst, Logger, and Mathematics dependencies. Build and editor tooling can still use `CycloneGames.Utility.Runtime.FileUtility` or `XxHash64` to generate or compare manifest values before they are passed into DataTable.
+
+```csharp
+using CycloneGames.DataTable;
+using CycloneGames.DataTable.Unity.Integrations.AssetManagement;
+using CycloneGames.DataTable.Unity.Integrations.Luban;
+
+var resolver = new DataTableLocationResolver("Assets/Game/DataTable/Binary");
+var loadContext = new DataTableAssetLoadContext(
+    "DataTable.Global",
+    "GameConfig.Global",
+    "GameConfigService");
+var manifest = new DataTableManifest(
+    DataTableManifest.DEFAULT_SCHEMA_VERSION,
+    new[]
+    {
+        new DataTableManifestEntry("item_tbitem"),
+        new DataTableManifestEntry("skill_tbskill"),
+    },
+    requireKnownTables: true);
+var loader = new AssetManagementDataTableBytesLoader(
+    package,
+    loadContext,
+    resolver,
+    manifest: manifest);
+
+await loader.LoadAsync(new[] { "item_tbitem", "skill_tbskill" }, cancellationToken);
+
+var tables = LubanDataTableSetFactory.Create(
+    loader,
+    byteBufLoader => new Tables(byteBufLoader));
+
+// For eager formats such as Luban, the TextAsset handles and raw bytes can be
+// released immediately after Tables construction.
+loader.Dispose();
+```
+
+Use `AssetManagementDataTableRawFileBytesLoader` with the same constructor shape when your provider supports `IAssetPackage.LoadRawFileAsync`.
+
+For production patch pipelines, generate `expectedByteLength` and `sha256Hex` from the same build step that emits the `.bytes` files.
 
 #### YooAsset / Raw File (recommended for production)
 
@@ -700,7 +745,7 @@ private async UniTask LoadTable<TRow>(IAssetPackage package, string fileName)
 }
 ```
 
-No intermediate layer, no hidden loading, no coupling. DataTable receives bytes; AssetManagement supplies bytes.
+The shared loader only owns asset loading and bytes lifetime. Format parsing still belongs to Luban, MessagePack, or your project-specific factory.
 
 ---
 
