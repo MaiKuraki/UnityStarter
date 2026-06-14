@@ -26,6 +26,12 @@ namespace CycloneGames.DataTable.Unity.Editor
         public int TimeoutMilliseconds { get; set; }
         public bool AutoRefreshAssets { get; set; }
         public bool LogOutputToUnity { get; set; } = true;
+
+        /// <summary>
+        /// Whether to stream Luban output into the Unity Console line by line.
+        /// Disabled by default to avoid noisy generation logs.
+        /// </summary>
+        public bool StreamOutputToUnity { get; set; }
     }
 
     /// <summary>
@@ -72,6 +78,9 @@ namespace CycloneGames.DataTable.Unity.Editor
     public static class DataTableLubanRunner
     {
         private const string MenuPath = "Tools/CycloneGames/DataTable/Run Luban Build";
+        private const string LubanLogPrefix = "[Luban]";
+        private const string DataTableLogPrefix = "[DataTable]";
+        private const int MAX_UNITY_LOG_CHARACTERS = 60000;
 
         /// <summary>
         /// Optional CI/editor-script override for the Luban project directory.
@@ -92,8 +101,7 @@ namespace CycloneGames.DataTable.Unity.Editor
         [MenuItem(MenuPath)]
         public static void Run()
         {
-            var result = RunWithResult();
-            LogResult(result);
+            RunWithResult();
         }
 
         /// <summary>
@@ -132,7 +140,7 @@ namespace CycloneGames.DataTable.Unity.Editor
             var validationError = ValidateRequest(request);
             if (!string.IsNullOrEmpty(validationError))
             {
-                return new DataTableLubanRunResult(
+                var validationResult = new DataTableLubanRunResult(
                     false,
                     false,
                     -1,
@@ -142,9 +150,21 @@ namespace CycloneGames.DataTable.Unity.Editor
                     string.Empty,
                     0,
                     validationError);
+                if (request.LogOutputToUnity)
+                {
+                    LogResult(validationResult, true);
+                }
+
+                return validationResult;
             }
 
-            return RunProcess(request);
+            var result = RunProcess(request);
+            if (request.LogOutputToUnity)
+            {
+                LogResult(result, !request.StreamOutputToUnity);
+            }
+
+            return result;
         }
 
         /// <summary>
@@ -301,7 +321,7 @@ namespace CycloneGames.DataTable.Unity.Editor
                 ? quotedScriptPath
                 : quotedScriptPath + " " + request.ScriptArguments;
 
-            return new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = isWindows ? "cmd.exe" : "/bin/bash",
                 Arguments = isWindows ? "/c " + arguments : arguments,
@@ -311,6 +331,9 @@ namespace CycloneGames.DataTable.Unity.Editor
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+
+            startInfo.EnvironmentVariables["CYCLONE_DATATABLE_NO_PAUSE"] = "1";
+            return startInfo;
         }
 
         private static bool WaitForExit(Process process)
@@ -331,33 +354,159 @@ namespace CycloneGames.DataTable.Unity.Editor
             }
 
             buffer.AppendLine(line);
-            if (!request.LogOutputToUnity)
+            if (!request.LogOutputToUnity || !request.StreamOutputToUnity)
             {
                 return;
             }
 
-            if (isError)
+            var message = FormatProcessLogLine(line);
+            var logType = ResolveProcessLogType(line, isError);
+            switch (logType)
             {
-                Debug.LogError("[Luban] " + line);
-            }
-            else
-            {
-                Debug.Log("[Luban] " + line);
+                case LogType.Error:
+                    Debug.LogError(message);
+                    break;
+                case LogType.Warning:
+                    Debug.LogWarning(message);
+                    break;
+                default:
+                    Debug.Log(message);
+                    break;
             }
         }
 
-        private static void LogResult(DataTableLubanRunResult result)
+        private static string FormatProcessLogLine(string line)
         {
+            if (line.StartsWith(LubanLogPrefix, StringComparison.Ordinal) ||
+                line.StartsWith(DataTableLogPrefix, StringComparison.Ordinal))
+            {
+                return line;
+            }
+
+            return LubanLogPrefix + " " + line;
+        }
+
+        private static LogType ResolveProcessLogType(string line, bool isError)
+        {
+            if (isError ||
+                line.StartsWith("[ERROR]", StringComparison.Ordinal) ||
+                line.IndexOf("|ERROR|", StringComparison.Ordinal) >= 0 ||
+                line.IndexOf("Build FAILED", StringComparison.Ordinal) >= 0)
+            {
+                return LogType.Error;
+            }
+
+            if (line.StartsWith("[WARN]", StringComparison.Ordinal) ||
+                line.IndexOf("|WARN|", StringComparison.Ordinal) >= 0)
+            {
+                return LogType.Warning;
+            }
+
+            return LogType.Log;
+        }
+
+        private static void LogResult(DataTableLubanRunResult result, bool includeProcessOutput)
+        {
+            var message = BuildResultLogMessage(result, includeProcessOutput);
+            var logType = ResolveResultLogType(result);
+            switch (logType)
+            {
+                case LogType.Error:
+                    Debug.LogError(message);
+                    break;
+                case LogType.Warning:
+                    Debug.LogWarning(message);
+                    break;
+                default:
+                    Debug.Log(message);
+                    break;
+            }
+        }
+
+        private static string BuildResultLogMessage(DataTableLubanRunResult result, bool includeProcessOutput)
+        {
+            var builder = new StringBuilder(4096);
             if (result.Success)
             {
-                Debug.Log(
-                    $"[DataTable] Luban build completed in {result.DurationMilliseconds} ms.\n" +
-                    $"  Script: {result.ScriptPath}\n" +
-                    $"  Working dir: {result.WorkingDirectory}");
+                builder.AppendLine($"[DataTable] Luban build completed in {result.DurationMilliseconds} ms.");
+            }
+            else if (!string.IsNullOrEmpty(result.ErrorMessage))
+            {
+                builder.AppendLine(result.ErrorMessage);
+            }
+            else
+            {
+                builder.AppendLine("[DataTable] Luban build failed.");
+            }
+
+            builder.AppendLine($"  Exit code  : {result.ExitCode}");
+            builder.AppendLine($"  Timed out  : {result.TimedOut}");
+            builder.AppendLine($"  Script     : {result.ScriptPath}");
+            builder.AppendLine($"  Working dir: {result.WorkingDirectory}");
+
+            if (includeProcessOutput)
+            {
+                AppendOutputSection(builder, "Output", result.StandardOutput);
+                AppendOutputSection(builder, "Error", result.StandardError);
+            }
+
+            return TrimUnityLogMessage(builder.ToString().TrimEnd());
+        }
+
+        private static void AppendOutputSection(StringBuilder builder, string title, string content)
+        {
+            if (string.IsNullOrWhiteSpace(content))
+            {
                 return;
             }
 
-            Debug.LogError(result.ErrorMessage);
+            builder.AppendLine();
+            builder.AppendLine("---- " + title + " ----");
+            builder.Append(content.TrimEnd());
+            builder.AppendLine();
+        }
+
+        private static LogType ResolveResultLogType(DataTableLubanRunResult result)
+        {
+            if (!result.Success)
+            {
+                return LogType.Error;
+            }
+
+            if (!string.IsNullOrWhiteSpace(result.StandardError) ||
+                ContainsWarning(result.StandardOutput) ||
+                ContainsWarning(result.StandardError))
+            {
+                return LogType.Warning;
+            }
+
+            return LogType.Log;
+        }
+
+        private static bool ContainsWarning(string value)
+        {
+            return !string.IsNullOrEmpty(value) &&
+                   (value.StartsWith("[WARN]", StringComparison.Ordinal) ||
+                    value.IndexOf("|WARN|", StringComparison.Ordinal) >= 0 ||
+                    value.IndexOf("warning", StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private static string TrimUnityLogMessage(string message)
+        {
+            if (string.IsNullOrEmpty(message) || message.Length <= MAX_UNITY_LOG_CHARACTERS)
+            {
+                return message;
+            }
+
+            const string marker = "\n\n---- Unity log truncated; full process output is available from DataTableLubanRunResult. ----\n\n";
+            var headLength = MAX_UNITY_LOG_CHARACTERS / 2;
+            var tailLength = MAX_UNITY_LOG_CHARACTERS - headLength - marker.Length;
+            if (tailLength <= 0)
+            {
+                return message.Substring(0, MAX_UNITY_LOG_CHARACTERS);
+            }
+
+            return message.Substring(0, headLength) + marker + message.Substring(message.Length - tailLength);
         }
 
         private static void TryKill(Process process)
