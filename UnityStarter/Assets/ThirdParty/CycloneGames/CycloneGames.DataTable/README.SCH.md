@@ -108,16 +108,18 @@ flowchart LR
     Core["Core<br/>noEngineReferences: true<br/>零 Unity API"] --> UnityRt["Unity.Runtime"]
     UnityRt --> LubanInt["Integrations.Luban"]
     UnityRt --> MsgPackInt["Integrations.MessagePack"]
+    UnityRt --> AssetMgmtInt["Integrations.AssetManagement"]
     UnityRt --> Editor["Unity.Editor"]
 ```
 
 | 程序集 | 层级 | 依赖 | 职责 |
 | --- | --- | --- | --- |
-| `CycloneGames.DataTable.Core` | 核心 | *无* | `IDataRow`、`IDataTable<T>`、`DataTable<T>`、`DataTableRegistry`、`DataTableLogger` |
+| `CycloneGames.DataTable.Core` | 核心 | *无* | `IDataRow`、`IDataTable<T>`、`DataTable<T>`、`DataTableRegistry`、`DataTableLogger`、`DataTableManifest` |
 | `CycloneGames.DataTable.Unity.Runtime` | Unity 适配 | Core | `DataTableUnityBootstrap` |
 | `CycloneGames.DataTable.Unity.Editor` | 编辑器 | Unity.Runtime | `DataTableLubanRunner`（Luban 构建菜单） |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | 集成 | Core + Unity.Runtime | `LubanConfigProvider` |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | 集成 | Core + Unity.Runtime + MessagePack | `MessagePackConfigProvider` |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | 集成 | Core + Unity.Runtime + AssetManagement | 由 `CYCLONE_ASSET_MANAGEMENT` 守卫的可选 bytes loader |
 
 **核心原则**：`Core` 零引擎引用（`noEngineReferences: true`）。Unity 适配程序集在启动时通过 `DataTableLogger` 委托注入平台日志实现。模块不包含任何加载逻辑——加载完全由开发者选择最适合自己项目的方案。
 
@@ -134,13 +136,15 @@ flowchart LR
 | *无* | — | Core 零外部依赖。Unity.Runtime 仅依赖 Unity。 |
 | `Luban` | 可选 | Excel → 代码工作流。[luban](https://github.com/focus-creative-games/luban) |
 | `MessagePack-CSharp` | 可选 | MessagePack 二进制后端，通过 NuGet 或 UPM 安装 |
+| `CycloneGames.AssetManagement` | 可选 | 用于统一加载 TextAsset 或 raw file。只有安装该包时，对应集成程序集才会编译。 |
 
 ### 可选程序集
 
-如不需要，直接删除对应目录即可：
+可选集成程序集通过 asmdef 的 `versionDefines` 和 `defineConstraints` 守卫。缺少对应可选包时，Unity 会跳过匹配的集成程序集；如果确定永远不用，也可以删除对应目录：
 
 - `Unity.Runtime/Integrations/Luban/` — 不使用 Luban 则删除
 - `Unity.Runtime/Integrations/MessagePack/` — 不使用 MessagePack 则删除
+- `Unity.Runtime/Integrations/AssetManagement/` — 不使用 CycloneGames.AssetManagement 则删除
 
 模块在不包含任何集成程序集时仍可正常编译和运行。
 
@@ -612,7 +616,45 @@ var items = DataTableRegistry.Get<DataTable<ItemRow>>();
 
 ### 与 CycloneGames.AssetManagement 集成
 
-如果你的项目使用了 `CycloneGames.AssetManagement`，DataTable 模块可以无缝对接——**不需要任何适配代码**。DataTable 接收原始 `byte[]`；AssetManagement 通过 `IRawFileHandle.ReadBytes()` 或 `TextAsset.bytes` 提供字节数据。两个模块天然组合。
+如果你的项目使用了 `CycloneGames.AssetManagement`，可以通过 `AssetManagementDataTableBytesLoader` 把表 `.bytes` 作为 `TextAsset` 加载；若 Provider 支持原始二进制文件，也可以使用 `AssetManagementDataTableRawFileBytesLoader`。两者都会以 `IDataTableBytesProvider` 的形式暴露给 Luban、MessagePack 或自定义格式适配层。`DataTableAssetLoadContext` 用于携带 AssetManagement 的 bucket、tag 和 owner 元数据，`DataTableManifest` 可在格式解析前校验表名、字节长度和 SHA-256。
+
+运行时 manifest 校验会在 `CycloneGames.DataTable.Core` 内保留一个很小的 SHA-256 helper，而不是直接依赖 `CycloneGames.Utility.Runtime`，因为当前 Utility runtime assembly 会带入 Unity、Burst、Logger 和 Mathematics 等依赖。构建期和 Editor 工具仍然可以使用 `CycloneGames.Utility.Runtime.FileUtility` 或 `XxHash64` 生成、比较 manifest 值，再传给 DataTable。
+
+```csharp
+using CycloneGames.DataTable;
+using CycloneGames.DataTable.Unity.Integrations.AssetManagement;
+using CycloneGames.DataTable.Unity.Integrations.Luban;
+
+var resolver = new DataTableLocationResolver("Assets/Game/DataTable/Binary");
+var loadContext = new DataTableAssetLoadContext(
+    "DataTable.Global",
+    "GameConfig.Global",
+    "GameConfigService");
+var manifest = new DataTableManifest(
+    DataTableManifest.DEFAULT_SCHEMA_VERSION,
+    new[]
+    {
+        new DataTableManifestEntry("item_tbitem"),
+        new DataTableManifestEntry("skill_tbskill"),
+    },
+    requireKnownTables: true);
+var loader = new AssetManagementDataTableBytesLoader(
+    package,
+    loadContext,
+    resolver,
+    manifest: manifest);
+
+await loader.LoadAsync(new[] { "item_tbitem", "skill_tbskill" }, cancellationToken);
+
+var tables = LubanDataTableSetFactory.Create(
+    loader,
+    byteBufLoader => new Tables(byteBufLoader));
+
+// Luban 这类立即解析格式在 Tables 构造完成后即可释放 TextAsset handle 和原始 bytes。
+loader.Dispose();
+```
+
+当 Provider 支持 `IAssetPackage.LoadRawFileAsync` 时，可用同样的构造参数切换到 `AssetManagementDataTableRawFileBytesLoader`。正式热更新管线中建议由生成 `.bytes` 的同一步构建流程写出 `expectedByteLength` 和 `sha256Hex`。
 
 #### YooAsset / Raw File（生产环境推荐）
 
@@ -695,7 +737,7 @@ private async UniTask LoadTable<TRow>(IAssetPackage package, string fileName)
 }
 ```
 
-没有中间层，没有隐藏加载，没有耦合。DataTable 收 bytes；AssetManagement 供 bytes。
+通用 loader 只负责资产加载和 bytes 生命周期，具体格式解析仍由 Luban、MessagePack 或项目自定义 factory 负责。
 
 ---
 

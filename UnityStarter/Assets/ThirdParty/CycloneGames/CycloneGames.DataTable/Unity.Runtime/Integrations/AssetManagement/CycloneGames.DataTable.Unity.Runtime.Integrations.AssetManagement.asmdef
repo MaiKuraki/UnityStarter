@@ -1,0 +1,27 @@
+{
+    "name": "CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.DataTable.Core",
+        "CycloneGames.DataTable.Unity.Runtime",
+        "CycloneGames.AssetManagement.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONE_ASSET_MANAGEMENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.asset-management",
+            "expression": "",
+            "define": "CYCLONE_ASSET_MANAGEMENT"
+        }
+    ],
+    "noEngineReferences": false
+}
