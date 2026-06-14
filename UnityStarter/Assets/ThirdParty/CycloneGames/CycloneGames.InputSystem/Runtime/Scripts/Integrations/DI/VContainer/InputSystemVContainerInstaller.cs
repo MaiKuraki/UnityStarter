@@ -5,8 +5,6 @@ using VContainer.Unity;
 using CycloneGames.Utility.Runtime;
 using CycloneGames.AssetManagement.Runtime;
 using Cysharp.Threading.Tasks;
-using Unio;
-using Unity.Collections;
 
 namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 {
@@ -182,7 +180,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             else if (!string.IsNullOrEmpty(_defaultConfigFileName))
             {
                 var defaultUri = FilePathUtility.GetUnityWebRequestUri(_defaultConfigFileName, UnityPathSource.StreamingAssets);
-                (bool defaultSuccess, string defaultContent) = await LoadConfigFromUriAsync(defaultUri);
+                (bool defaultSuccess, string defaultContent) = await InputConfigurationFileLoader.LoadTextFromUriAsync(defaultUri, "[InputSystemInitializer]");
                 if (defaultSuccess && !string.IsNullOrEmpty(defaultContent))
                 {
                     defaultYamlContent = defaultContent;
@@ -191,7 +189,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             }
 
             // Try loading user config from PersistentData
-            (bool success, string content) = await LoadConfigFromUriAsync(userConfigUri);
+            (bool success, string content) = await InputConfigurationFileLoader.LoadTextFromUriAsync(userConfigUri, "[InputSystemInitializer]");
             if (success && !string.IsNullOrEmpty(content))
             {
                 // Validate user config before use
@@ -207,7 +205,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                     userConfigCorrupted = true;
                     
                     // Delete corrupted user config file
-                    TryDeleteCorruptedUserConfig(userConfigUri);
+                    await InputConfigurationFileLoader.DeleteTextAtUriAsync(userConfigUri, "[InputSystemInitializer]");
                 }
             }
 
@@ -269,26 +267,6 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             if (string.IsNullOrEmpty(content)) return content;
             // Replace CRLF with LF, then any remaining CR with LF
             return content.Replace("\r\n", "\n").Replace("\r", "\n");
-        }
-
-        /// <summary>
-        /// Attempts to delete a corrupted user config file.
-        /// </summary>
-        private static void TryDeleteCorruptedUserConfig(string userConfigUri)
-        {
-            try
-            {
-                string filePath = new System.Uri(userConfigUri).LocalPath;
-                if (System.IO.File.Exists(filePath))
-                {
-                    System.IO.File.Delete(filePath);
-                    CycloneGames.Logger.CLogger.LogInfo($"[InputSystemInitializer] Deleted corrupted user config file: {filePath}");
-                }
-            }
-            catch (System.Exception e)
-            {
-                CycloneGames.Logger.CLogger.LogWarning($"[InputSystemInitializer] Failed to delete corrupted user config: {e.Message}");
-            }
         }
 
         public async UniTask ReinitializeFromPackageAsync(object package, string configLocation, bool saveToUserConfig = true)
@@ -354,22 +332,15 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 try
                 {
                     // Save to file if requested
+                    bool saved = false;
                     if (saveToUserConfig)
                     {
-                        byte[] yamlBytes = System.Text.Encoding.UTF8.GetBytes(yamlContent);
-                        string filePath = new Uri(userConfigUri).LocalPath;
-                        string directory = System.IO.Path.GetDirectoryName(filePath);
-                        if (!string.IsNullOrEmpty(directory) && !System.IO.Directory.Exists(directory))
-                        {
-                            System.IO.Directory.CreateDirectory(directory);
-                        }
-                        using var nativeBytes = new Unity.Collections.NativeArray<byte>(yamlBytes, Unity.Collections.Allocator.Temp);
-                        await Unio.NativeFile.WriteAllBytesAsync(filePath, nativeBytes);
+                        saved = await InputConfigurationFileLoader.SaveTextToUriAsync(userConfigUri, yamlContent, "[InputSystemInitializer]");
                     }
 
                     // Reinitialize with new configuration
                     inputManager.Reinitialize(yamlContent, userConfigUri);
-                    CycloneGames.Logger.CLogger.LogInfo($"[InputSystemInitializer] Configuration updated successfully. Saved: {saveToUserConfig}");
+                    CycloneGames.Logger.CLogger.LogInfo($"[InputSystemInitializer] Configuration updated successfully. Saved: {saved}");
                 }
                 catch (System.Exception e)
                 {
@@ -414,38 +385,6 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             }
         }
 
-        private static async UniTask<(bool, string)> LoadConfigFromUriAsync(string uri)
-        {
-            using (UnityEngine.Networking.UnityWebRequest uwr = UnityEngine.Networking.UnityWebRequest.Get(uri))
-            {
-                try
-                {
-                    var asyncOperation = uwr.SendWebRequest();
-                    while (!asyncOperation.isDone)
-                    {
-                        await UniTask.Yield();
-                    }
-
-                    if (uwr.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
-                    {
-                        return (true, uwr.downloadHandler.text);
-                    }
-                    else
-                    {
-                        if (uwr.error == null || uwr.error.IndexOf("not found", StringComparison.OrdinalIgnoreCase) < 0)
-                        {
-                            CycloneGames.Logger.CLogger.LogWarning($"[InputSystemInitializer] Failed to load from '{uri}': {uwr.error}");
-                        }
-                        return (false, null);
-                    }
-                }
-                catch (System.Exception e)
-                {
-                    CycloneGames.Logger.CLogger.LogError($"[InputSystemInitializer] Exception loading from '{uri}': {e.Message}");
-                    return (false, null);
-                }
-            }
-        }
     }
 
     internal class InputPlayerResolver : IInputPlayerResolver
