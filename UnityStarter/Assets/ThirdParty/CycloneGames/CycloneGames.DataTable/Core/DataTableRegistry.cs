@@ -10,6 +10,8 @@ namespace CycloneGames.DataTable
     /// </summary>
     public static class DataTableRegistry
     {
+        private static readonly object SyncRoot = new object();
+
         // Volatile read ensures visibility across threads without locking.
         private static Dictionary<Type, object> _tables = new Dictionary<Type, object>();
         private static int _initialized;
@@ -34,8 +36,14 @@ namespace CycloneGames.DataTable
                     nameof(table));
             }
 
-            lock (_tables)
+            lock (SyncRoot)
             {
+                if (IsInitialized)
+                {
+                    throw new InvalidOperationException(
+                        "DataTableRegistry is initialized. Call Reset before registering a new table set.");
+                }
+
                 _tables[tableType] = table;
             }
         }
@@ -46,7 +54,7 @@ namespace CycloneGames.DataTable
             // Fast path: read the cached dictionary reference without lock.
             // Dictionary<TKey,TValue> reads are thread-safe when no writes are concurrent.
             // Since all writes happen at startup (before MarkInitialized), this is safe.
-            var tables = _tables;
+            var tables = Volatile.Read(ref _tables);
             tables.TryGetValue(typeof(TTable), out var obj);
             return (TTable)obj;
         }
@@ -54,7 +62,7 @@ namespace CycloneGames.DataTable
         /// <summary>Try-get without throwing.</summary>
         public static bool TryGet<TTable>(out TTable table) where TTable : class
         {
-            var tables = _tables;
+            var tables = Volatile.Read(ref _tables);
             if (tables.TryGetValue(typeof(TTable), out var obj))
             {
                 table = (TTable)obj;
@@ -67,18 +75,24 @@ namespace CycloneGames.DataTable
         /// <summary>Mark initialization complete. After this, no more Register calls.</summary>
         public static void MarkInitialized()
         {
-            // Publish the dictionary for lock-free reads.
-            Thread.MemoryBarrier();
-            Volatile.Write(ref _initialized, 1);
-            DataTableLogger.LogInfo($"DataTableRegistry initialized ({_tables.Count} tables).");
+            int count;
+            lock (SyncRoot)
+            {
+                // Publish the dictionary for lock-free reads.
+                Thread.MemoryBarrier();
+                Volatile.Write(ref _initialized, 1);
+                count = _tables.Count;
+            }
+
+            DataTableLogger.LogInfo($"DataTableRegistry initialized ({count} tables).");
         }
 
         /// <summary>Reset all state (test teardown / hot-reload).</summary>
         public static void Reset()
         {
-            lock (_tables)
+            lock (SyncRoot)
             {
-                _tables.Clear();
+                Volatile.Write(ref _tables, new Dictionary<Type, object>());
                 Volatile.Write(ref _initialized, 0);
             }
         }

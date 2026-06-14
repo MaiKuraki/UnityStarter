@@ -7,19 +7,26 @@ using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 using CycloneGames.GameplayFramework.Runtime;
 
+#if UNITY_6000_0_OR_NEWER
+using ActorTagTreeView = UnityEditor.IMGUI.Controls.TreeView<int>;
+using ActorTagTreeViewItem = UnityEditor.IMGUI.Controls.TreeViewItem<int>;
+using ActorTagTreeViewState = UnityEditor.IMGUI.Controls.TreeViewState<int>;
+#else
+using ActorTagTreeView = UnityEditor.IMGUI.Controls.TreeView;
+using ActorTagTreeViewItem = UnityEditor.IMGUI.Controls.TreeViewItem;
+using ActorTagTreeViewState = UnityEditor.IMGUI.Controls.TreeViewState;
+#endif
+
 namespace CycloneGames.GameplayFramework.Runtime.Editor
 {
     /// <summary>
     /// Custom PropertyDrawer for [ActorTag(typeof(ConstantsClass))].
-    /// Displays a dropdown button that opens a searchable popup window with all tags
-    /// defined as public const string fields in the specified constants class.
     /// </summary>
     [CustomPropertyDrawer(typeof(ActorTagAttribute))]
     public class ActorTagPropertyDrawer : PropertyDrawer
     {
         /// <summary>
         /// Caches the reflected constant data per type to avoid repeated reflection.
-        /// Automatically cleared on domain reload (script compilation).
         /// </summary>
         private static readonly Dictionary<Type, CachedConstantData> s_constantsCache = new();
 
@@ -54,8 +61,6 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             }
 
             var attrib = attribute as ActorTagAttribute;
-
-            // If no constants type specified, draw as a normal string field
             if (attrib?.ConstantsType == null)
             {
                 EditorGUI.PropertyField(position, property, label);
@@ -75,7 +80,6 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             bool hasValue = !string.IsNullOrEmpty(currentValue);
             bool isValid = hasValue && data.ValueToDisplayMap.ContainsKey(currentValue);
 
-            // Determine button text
             if (!hasValue)
                 s_TempContent.text = "(None)";
             else if (!isValid)
@@ -85,7 +89,6 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             s_TempContent.tooltip = isValid ? currentValue : null;
 
-            // Clear button when a tag is selected
             Rect clearRect = default;
             if (hasValue)
             {
@@ -93,17 +96,13 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 position.width -= 20;
             }
 
-            // Prefix label
             position = EditorGUI.PrefixLabel(position, label);
-
-            // Draw the dropdown button
             if (EditorGUI.DropdownButton(position, s_TempContent, FocusType.Keyboard))
             {
                 var picker = new ActorTagPickerPopup(data, property, position.width);
                 PopupWindow.Show(position, picker);
             }
 
-            // Draw clear (×) button
             if (hasValue)
             {
                 Color prev = GUI.color;
@@ -134,9 +133,6 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             return data;
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Searchable Popup Window (inspired by GameplayTagPropertyDrawer)
-        // ─────────────────────────────────────────────────────────────────────
         private class ActorTagPickerPopup : PopupWindowContent
         {
             private readonly ActorTagPickerTreeView m_TreeView;
@@ -148,7 +144,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 m_SearchField = new SearchField();
                 m_Width = Mathf.Max(width, 220f);
                 m_TreeView = new ActorTagPickerTreeView(
-                    new TreeViewState(), data,
+                    new ActorTagTreeViewState(), data,
                     selectedValue =>
                     {
                         property.stringValue = selectedValue ?? "";
@@ -162,7 +158,6 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 const float rowHeight = 20f;
                 float rows = m_TreeView.VisibleRowCount;
                 float treeHeight = rows * rowHeight;
-                // Search bar (20) + padding (8) + tree content, capped at 300
                 float totalHeight = 28f + Mathf.Min(treeHeight, 272f);
                 return new Vector2(m_Width, totalHeight);
             }
@@ -184,19 +179,16 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             }
         }
 
-        // ─────────────────────────────────────────────────────────────────────
-        // Flat TreeView for tag picking (scrollable, searchable)
-        // ─────────────────────────────────────────────────────────────────────
-        private class ActorTagPickerTreeView : TreeView
+        private class ActorTagPickerTreeView : ActorTagTreeView
         {
             private readonly CachedConstantData m_Data;
             private readonly Action<string> m_OnSelected;
-            private readonly Dictionary<int, int> m_IdToIndex = new(); // id -> index in data (-1 = None)
+            private readonly Dictionary<int, int> m_IdToIndex = new();
             public Action closeRequested;
 
             public int VisibleRowCount => GetRows()?.Count ?? (m_Data.Values.Length + 1);
 
-            public ActorTagPickerTreeView(TreeViewState state, CachedConstantData data,
+            public ActorTagPickerTreeView(ActorTagTreeViewState state, CachedConstantData data,
                 Action<string> onSelected) : base(state)
             {
                 m_Data = data;
@@ -205,22 +197,21 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 Reload();
             }
 
-            protected override TreeViewItem BuildRoot()
+            protected override ActorTagTreeViewItem BuildRoot()
             {
-                var root = new TreeViewItem { id = 0, depth = -1, displayName = "Root" };
-                var items = new List<TreeViewItem>();
+                var root = new ActorTagTreeViewItem { id = 0, depth = -1, displayName = "Root" };
+                var items = new List<ActorTagTreeViewItem>();
                 m_IdToIndex.Clear();
 
-                // (None) option
                 int noneId = 1;
-                items.Add(new TreeViewItem { id = noneId, depth = 0, displayName = "(None)" });
+                items.Add(new ActorTagTreeViewItem { id = noneId, depth = 0, displayName = "(None)" });
                 m_IdToIndex[noneId] = -1;
 
                 for (int i = 0; i < m_Data.DisplayNames.Length; i++)
                 {
                     int itemId = i + 2;
-                    string display = $"{m_Data.DisplayNames[i]}    \u2192 \"{m_Data.Values[i]}\"";
-                    items.Add(new TreeViewItem { id = itemId, depth = 0, displayName = display });
+                    string display = $"{m_Data.DisplayNames[i]}    -> \"{m_Data.Values[i]}\"";
+                    items.Add(new ActorTagTreeViewItem { id = itemId, depth = 0, displayName = display });
                     m_IdToIndex[itemId] = i;
                 }
 
@@ -228,11 +219,11 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 return root;
             }
 
-            protected override bool DoesItemMatchSearch(TreeViewItem item, string search)
+            protected override bool DoesItemMatchSearch(ActorTagTreeViewItem item, string search)
             {
                 if (!m_IdToIndex.TryGetValue(item.id, out int index))
                     return false;
-                if (index < 0) // (None)
+                if (index < 0)
                     return "none".Contains(search, StringComparison.OrdinalIgnoreCase);
 
                 return m_Data.DisplayNames[index].IndexOf(search, StringComparison.OrdinalIgnoreCase) >= 0
