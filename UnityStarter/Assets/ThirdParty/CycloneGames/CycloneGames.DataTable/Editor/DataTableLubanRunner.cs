@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
 using Debug = UnityEngine.Debug;
@@ -80,7 +82,14 @@ namespace CycloneGames.DataTable.Unity.Editor
         private const string MenuPath = "Tools/CycloneGames/DataTable/Run Luban Build";
         private const string LubanLogPrefix = "[Luban]";
         private const string DataTableLogPrefix = "[DataTable]";
+        private const string NamespaceCaseConflictMarker = "\u547D\u540D\u7A7A\u95F4\u5C0F\u5199\u91CD\u590D";
+        private const string NamespaceCaseConflictMojibakeMarker = "\u935B\u85C9\u6095\u7ECC\u6D2A\u68FF\u704F\u5FD3\u5553";
+        private const string WindowsPlatformMojibakeMarker = "\u9366\u2573\u0069\u006E\u9A9E\u51B2\u5F74";
         private const int MAX_UNITY_LOG_CHARACTERS = 60000;
+
+        private static readonly Regex LubanTypeRegex = new Regex(
+            "type:'([^']+)'",
+            RegexOptions.CultureInvariant);
 
         /// <summary>
         /// Optional CI/editor-script override for the Luban project directory.
@@ -238,6 +247,28 @@ namespace CycloneGames.DataTable.Unity.Editor
             return null;
         }
 
+        public static string BuildFailureDialogMessage(DataTableLubanRunResult result)
+        {
+            if (result.Success)
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder(512);
+            builder.AppendLine(string.IsNullOrEmpty(result.ErrorMessage)
+                ? "[DataTable] Luban build failed."
+                : result.ErrorMessage);
+
+            var diagnostics = BuildDiagnosticsMessage(result);
+            if (!string.IsNullOrWhiteSpace(diagnostics))
+            {
+                builder.AppendLine();
+                builder.Append(diagnostics.TrimEnd());
+            }
+
+            return builder.ToString().TrimEnd();
+        }
+
         private static DataTableLubanRunResult RunProcess(DataTableLubanRunRequest request)
         {
             var output = new StringBuilder(4096);
@@ -329,6 +360,8 @@ namespace CycloneGames.DataTable.Unity.Editor
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
                 CreateNoWindow = true
             };
 
@@ -444,6 +477,8 @@ namespace CycloneGames.DataTable.Unity.Editor
             builder.AppendLine($"  Script     : {result.ScriptPath}");
             builder.AppendLine($"  Working dir: {result.WorkingDirectory}");
 
+            AppendDiagnosticsSection(builder, result);
+
             if (includeProcessOutput)
             {
                 AppendOutputSection(builder, "Output", result.StandardOutput);
@@ -451,6 +486,129 @@ namespace CycloneGames.DataTable.Unity.Editor
             }
 
             return TrimUnityLogMessage(builder.ToString().TrimEnd());
+        }
+
+        private static void AppendDiagnosticsSection(StringBuilder builder, DataTableLubanRunResult result)
+        {
+            var diagnostics = BuildDiagnosticsMessage(result);
+            if (string.IsNullOrWhiteSpace(diagnostics))
+            {
+                return;
+            }
+
+            builder.AppendLine();
+            builder.AppendLine("---- Diagnostics ----");
+            builder.Append(diagnostics.TrimEnd());
+            builder.AppendLine();
+        }
+
+        private static string BuildDiagnosticsMessage(DataTableLubanRunResult result)
+        {
+            var processText = CombineProcessText(result);
+            if (string.IsNullOrWhiteSpace(processText))
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder(768);
+            if (ContainsNamespaceCaseConflict(processText))
+            {
+                AppendNamespaceCaseConflictDiagnostic(builder, processText);
+            }
+
+            if (LooksLikeMojibake(processText))
+            {
+                AppendEncodingDiagnostic(builder);
+            }
+
+            return builder.ToString();
+        }
+
+        private static string CombineProcessText(DataTableLubanRunResult result)
+        {
+            var builder = new StringBuilder();
+            AppendIfNotEmpty(builder, result.ErrorMessage);
+            AppendIfNotEmpty(builder, result.StandardOutput);
+            AppendIfNotEmpty(builder, result.StandardError);
+            return builder.ToString();
+        }
+
+        private static void AppendIfNotEmpty(StringBuilder builder, string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            if (builder.Length > 0)
+            {
+                builder.AppendLine();
+            }
+
+            builder.Append(value);
+        }
+
+        private static bool ContainsNamespaceCaseConflict(string processText)
+        {
+            return processText.IndexOf(NamespaceCaseConflictMarker, StringComparison.Ordinal) >= 0 ||
+                   processText.IndexOf(NamespaceCaseConflictMojibakeMarker, StringComparison.Ordinal) >= 0;
+        }
+
+        private static bool LooksLikeMojibake(string processText)
+        {
+            return processText.IndexOf(NamespaceCaseConflictMojibakeMarker, StringComparison.Ordinal) >= 0 ||
+                   processText.IndexOf(WindowsPlatformMojibakeMarker, StringComparison.Ordinal) >= 0;
+        }
+
+        private static void AppendNamespaceCaseConflictDiagnostic(StringBuilder builder, string processText)
+        {
+            builder.AppendLine("[DataTable] Luban namespace case conflict detected.");
+            builder.AppendLine("Reason: Luban maps type, table, bean, and enum namespaces to generated code folders. Windows file systems are case-insensitive, so `Test` and `test` resolve to the same folder and generated code can overwrite itself. Luban stops the build to avoid that.");
+
+            var typeNames = ExtractLubanTypeNames(processText);
+            if (typeNames.Count > 0)
+            {
+                builder.AppendLine("Conflicting types:");
+                for (int i = 0; i < typeNames.Count; i++)
+                {
+                    builder.AppendLine("  - " + typeNames[i]);
+                }
+            }
+
+            builder.AppendLine("Suggested fixes:");
+            builder.AppendLine("  1. Check `DataTable/Datas/__tables__.xlsx`, `__beans__.xlsx`, `__enums__.xlsx`, and business table field types.");
+            builder.AppendLine("  2. Keep namespace casing consistent; this project usually uses lower-case module names, for example `test.TbTestData` and `test.ETestQuality`.");
+            builder.AppendLine("  3. Delete the old generated code folder before running Luban again, so stale differently-cased `.cs` files do not keep breaking compilation.");
+        }
+
+        private static List<string> ExtractLubanTypeNames(string processText)
+        {
+            var matches = LubanTypeRegex.Matches(processText);
+            var typeNames = new List<string>(matches.Count);
+            var seenTypeNames = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < matches.Count; i++)
+            {
+                var typeName = matches[i].Groups[1].Value;
+                if (string.IsNullOrEmpty(typeName) || !seenTypeNames.Add(typeName))
+                {
+                    continue;
+                }
+
+                typeNames.Add(typeName);
+            }
+
+            return typeNames;
+        }
+
+        private static void AppendEncodingDiagnostic(StringBuilder builder)
+        {
+            if (builder.Length > 0)
+            {
+                builder.AppendLine();
+            }
+
+            builder.AppendLine("[DataTable] Process output looks like an encoding mismatch.");
+            builder.AppendLine("The runner now decodes Luban stdout/stderr as UTF-8. If text is still garbled, make sure the `.bat` file does not force a non-UTF-8 code page, or add `chcp 65001 > nul` near the top of the script.");
         }
 
         private static void AppendOutputSection(StringBuilder builder, string title, string content)
