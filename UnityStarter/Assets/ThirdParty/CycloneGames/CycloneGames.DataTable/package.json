@@ -2,11 +2,19 @@
   "name": "com.cyclone-games.data-table",
   "version": "1.0.0",
   "displayName": "CycloneGames.DataTable",
-  "description": "Designer-facing data table pipeline. Excel / Luban / MessagePack backends with zero-GC runtime query.",
+  "description": "Designer-facing data table pipeline with optional Luban, MessagePack, and CycloneGames.AssetManagement integrations.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {},
-  "keywords": ["CycloneGames", "DataTable", "Luban", "Config"],
+  "keywords": [
+    "CycloneGames",
+    "DataTable",
+    "Config",
+    "Excel",
+    "Luban",
+    "MessagePack",
+    "AssetManagement"
+  ],
   "author": { "name": "CycloneGames", "email": "", "url": "" },
   "samples": []
 }
