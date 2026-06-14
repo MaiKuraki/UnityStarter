@@ -38,17 +38,31 @@ namespace CycloneGames.DataTable
         }
 
         /// <summary>
-        /// Build from a List. The list's internal array is NOT copied (ToArray avoided).
+        /// Build from a List. Copies once into an array so later List mutation cannot affect the table.
         /// </summary>
-        public DataTable(List<T> rows) : this(rows?.ToArray() ?? throw new ArgumentNullException(nameof(rows))) { }
+        public DataTable(List<T> rows) : this(rows == null
+            ? throw new ArgumentNullException(nameof(rows))
+            : rows.Count == 0
+                ? Array.Empty<T>()
+                : rows.ToArray()) { }
 
         /// <summary>
-        /// Build from an IEnumerable. Uses a pooled List internally to minimize allocation.
-        /// Prefer the array or List overloads when the source is already materialized.
+        /// Build from an IEnumerable. Prefer the array or List overloads when the source is already materialized.
         /// </summary>
         public static DataTable<T> FromEnumerable(IEnumerable<T> rows)
         {
             if (rows == null) throw new ArgumentNullException(nameof(rows));
+
+            if (rows is T[] array)
+            {
+                return new DataTable<T>(array);
+            }
+
+            if (rows is List<T> list)
+            {
+                return new DataTable<T>(list);
+            }
+
             return new DataTable<T>(new List<T>(rows).ToArray());
         }
 

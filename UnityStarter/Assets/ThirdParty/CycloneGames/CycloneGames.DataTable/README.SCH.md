@@ -251,12 +251,12 @@ public class MonsterRow : IDataRow
 写一个小型编辑器脚本或控制台工具来转换数据：
 
 ```csharp
-var monsters = new List<MonsterRow>
+var monsters = new MonsterRow[]
 {
     new MonsterRow { Id = 1, Name = "史莱姆", Hp = 50,  Attack = 10, MoveSpeed = 1.2f },
     new MonsterRow { Id = 2, Name = "哥布林", Hp = 120, Attack = 25, MoveSpeed = 2.5f },
 };
-var bytes = MessagePackSerializer.Serialize(monsters);
+var bytes = MessagePackSerializer.Serialize<MonsterRow[]>(monsters);
 File.WriteAllBytes("Assets/StreamingAssets/monster.bytes", bytes);
 ```
 
@@ -349,13 +349,13 @@ public void InitializeConfigs()
 
 **自定义 Luban 项目路径：**
 
-创建构建配置资产（**Assets → Create → CycloneGames → DataTable → Settings**）并在 Inspector 中编辑字段。首次使用时，系统会自动在 `Assets/Editor/DataTableSettings.asset` 创建默认配置。
+创建构建配置资产（**Assets → Create → CycloneGames → DataTable → Luban Settings**）并在 Inspector 中编辑 Luban 字段。配置资产可以放在 `Assets/` 下任意位置；默认工具会按类型发现它。首次使用时，系统会自动在 `Assets/Editor/DataTable/` 下创建默认配置。
 
 编程覆写（例如 CI 流水线）：
 
 ```csharp
-DataTableLubanRunner.ProjectDirOverride = "MyConfigs/GameData";
-DataTableLubanRunner.ScriptNameOverride = "my_build_script";
+DataTableLubanRunner.LubanProjectDirOverride = "MyConfigs/GameData";
+DataTableLubanRunner.LubanScriptNameOverride = "my_build_script";
 // 设为 null 恢复为 SO 配置
 ```
 
@@ -433,7 +433,7 @@ public DataTable(T[] rows);
 // 从 List 构建——内部 .ToArray() 复制一次。
 public DataTable(List<T> rows);
 
-// 从 IEnumerable 构建——内部使用池化 List。
+// 从 IEnumerable 构建——来源不是数组或 List 时会物化一次。
 public static DataTable<T> FromEnumerable(IEnumerable<T> rows);
 ```
 
@@ -711,45 +711,48 @@ private async UniTask LoadTable<TRow>(IAssetPackage package, string fileName)
 
 #### 配置
 
-构建设置存储在一个 **`DataTableSettings`** ScriptableObject 中。首次访问时，如果不存在配置资产，系统会自动在 `Assets/Editor/DataTableSettings.asset` 创建默认配置。
+构建设置存储在一个可见的 **`DataTableLubanSettings`** ScriptableObject 中。配置资产可以放在 `Assets/` 下任意位置；默认工具按类型发现它，不写入隐藏的编辑器偏好。首次访问时，如果不存在配置资产，系统会自动在 `Assets/Editor/DataTable/` 下创建默认配置。
 
-**手动创建配置：** Assets → Create → CycloneGames → DataTable → Settings
+**手动创建配置：** Assets → Create → CycloneGames → DataTable → Luban Settings
 
 **配置字段：**
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| `DataTableProjectDir` | `../DataTable` | Luban 项目路径，相对于仓库根目录 |
-| `ScriptName` | `gen_code_bin_to_project_lazyload` | 脚本名称（不含扩展名，自动追加 `.bat`/`.sh`） |
-| `AutoRefreshAssets` | `true` | 构建成功后是否自动调用 `AssetDatabase.Refresh()`。注意：这并不会自动触发 Luban 构建本身——你仍然需要手动运行菜单命令或调用 `DataTableLubanRunner.Run()`。 |
+| `LubanProjectDir` | `../DataTable` | Luban 项目路径，相对于仓库根目录 |
+| `LubanScriptName` | `gen_code_bin_to_project_lazyload` | 脚本名称（不含扩展名，自动追加 `.bat`/`.sh`） |
+| `LubanScriptArguments` | 空 | 追加在脚本路径后的可选命令行参数 |
+| `LubanTimeoutSeconds` | `0` | 外部进程最大等待秒数。小于等于 0 表示不限制 |
+| `RefreshAssetsAfterLubanBuild` | `true` | 构建成功后是否自动调用 `AssetDatabase.Refresh()`。注意：这并不会自动触发 Luban 构建本身——你仍然需要手动运行菜单命令或调用 `DataTableLubanRunner.Run()`。 |
 
 配置资产有**自定义 Inspector**，会显示：
 - 配置目录和构建脚本解析后的绝对路径
 - 实时校验：目录和脚本是否真实存在于磁盘上
-- 快捷操作按钮：打开目录或运行构建
+- 重复配置警告、已发现的 `.bat`/`.sh` 脚本，以及打开目录或运行构建的快捷操作
 
 **解析后的脚本路径：**
 
 ```text
-{repoRoot}/{DataTableProjectDir}/{ScriptName}.bat   // Windows
-{repoRoot}/{DataTableProjectDir}/{ScriptName}.sh    // macOS / Linux
+{repoRoot}/{LubanProjectDir}/{LubanScriptName}.bat   // Windows
+{repoRoot}/{LubanProjectDir}/{LubanScriptName}.sh    // macOS / Linux
 ```
 
 **编程覆写**（用于 CI 流水线或编辑器脚本）：
 
 ```csharp
 // 以下覆写 SO 中的值。设为 null 恢复为 SO 配置。
-DataTableLubanRunner.ProjectDirOverride = "MyConfigs";
-DataTableLubanRunner.ScriptNameOverride = "build_all";
+DataTableLubanRunner.LubanProjectDirOverride = "MyConfigs";
+DataTableLubanRunner.LubanScriptNameOverride = "build_all";
 ```
 
 **安全保障：**
-- 确保项目中有且仅有一个配置资产——重复时触发警告并列出所有路径
-- 首次查找后缓存配置；调用 `DataTableSettings.InvalidateCache()` 强制重新扫描
+- 默认工具使用 `AssetDatabase.FindAssets("t:DataTableLubanSettings")` 发现配置；不使用 `EditorPrefs` 或隐藏活动配置
+- 项目中应只保留一个配置资产；重复配置会触发警告并列出所有路径
+- 查找后缓存配置；调用 `DataTableLubanSettings.InvalidateCache()` 强制重新扫描
 - 如果配置资产被删除或损坏，自动重建默认配置
-- 脚本路径缺失时输出详细错误，包含当前配置资产路径
+- 脚本路径缺失时输出详细错误，包含发现到的配置资产路径
 
-构建过程捕获 stdout/stderr 并输出到 Unity Console。成功（`exit code 0`）后自动调用 `AssetDatabase.Refresh()`（除非 `AutoRefreshAssets` 关闭）。
+构建过程捕获 stdout/stderr 并输出到 Unity Console。成功（`exit code 0`）后自动调用 `AssetDatabase.Refresh()`（除非 `RefreshAssetsAfterLubanBuild` 关闭）。
 
 ### 配置校验（计划中）
 
@@ -930,8 +933,8 @@ var bytes = ta.bytes;
 **修复：** 以下方案任选其一：
 
 1. 在配置的路径（默认 `../DataTable/`，相对于仓库根目录）下搭建 Luban 项目
-2. 在 Inspector 中编辑 `DataTableSettings` 资产，指向你的 Luban 项目位置
-   （若无配置资产：Assets → Create → CycloneGames → DataTable → Settings）
+2. 在 Inspector 中编辑 `DataTableLubanSettings` 资产，指向你的 Luban 项目位置
+   （若无配置资产：Assets → Create → CycloneGames → DataTable → Luban Settings）
 3. 如果不使用 Luban，忽略该菜单项即可——模块在没有 Luban 时也能正常工作
 
 ### "Duplicate Id X in DataTable\<T\>"
@@ -948,11 +951,12 @@ var bytes = ta.bytes;
 
 ### MessagePack 反序列化失败
 
-**原因：** 行类型缺少 `[MessagePackObject]` 或 `[Key(n)]` 注解，或者 `.bytes` 文件内容不是 `List<TRow>` 格式。
+**原因：** 行类型缺少 `[MessagePackObject]` 或 `[Key(n)]` 注解，或者 `.bytes` 文件内容与调用的 API 期望格式不一致。
 
 **修复：**
 1. 注解行类型：`[MessagePackObject] public class MyRow : IDataRow`
 2. 注解所有属性：`[Key(0)] public int Id { get; set; }`
-3. 确保序列化格式匹配——使用 `MessagePackSerializer.Serialize<List<TRow>>(rows)`
+3. 调用 `Build<TRow>()` 时，使用 `MessagePackSerializer.Serialize<TRow[]>(rows)` 序列化 `TRow[]`
+4. 旧的 `List<TRow>` payload 使用 `MessagePackConfigProvider.BuildList<TRow>()`
 
 ---

@@ -253,12 +253,12 @@ public class MonsterRow : IDataRow
 Write a small editor script or console tool to convert your data:
 
 ```csharp
-var monsters = new List<MonsterRow>
+var monsters = new MonsterRow[]
 {
     new MonsterRow { Id = 1, Name = "Slime",   Hp = 50,  Attack = 10, MoveSpeed = 1.2f },
     new MonsterRow { Id = 2, Name = "Goblin",  Hp = 120, Attack = 25, MoveSpeed = 2.5f },
 };
-var bytes = MessagePackSerializer.Serialize(monsters);
+var bytes = MessagePackSerializer.Serialize<MonsterRow[]>(monsters);
 File.WriteAllBytes("Assets/StreamingAssets/monster.bytes", bytes);
 ```
 
@@ -350,13 +350,13 @@ public void InitializeConfigs()
 
 **Customizing the Luban project path:**
 
-Create a build config asset (**Assets → Create → CycloneGames → DataTable → Settings**) and edit the fields in the Inspector. On first use, a default config is auto-created at `Assets/Editor/DataTableSettings.asset`.
+Create a build config asset (**Assets → Create → CycloneGames → DataTable → Luban Settings**) and edit the Luban fields in the Inspector. The asset can live anywhere under `Assets/`; default tooling discovers it by type. On first use, a default config is auto-created under `Assets/Editor/DataTable/`.
 
 For programmatic overrides (e.g., CI pipelines):
 
 ```csharp
-DataTableLubanRunner.ProjectDirOverride = "MyConfigs/GameData";
-DataTableLubanRunner.ScriptNameOverride = "my_build_script";
+DataTableLubanRunner.LubanProjectDirOverride = "MyConfigs/GameData";
+DataTableLubanRunner.LubanScriptNameOverride = "my_build_script";
 // Set to null to restore SO-driven behavior
 ```
 
@@ -434,7 +434,7 @@ public DataTable(T[] rows);
 // From List — internal .ToArray() copies once.
 public DataTable(List<T> rows);
 
-// From IEnumerable — uses pooled List internally.
+// From IEnumerable — materializes once when the source is not already an array or List.
 public static DataTable<T> FromEnumerable(IEnumerable<T> rows);
 ```
 
@@ -716,45 +716,48 @@ Runs the Luban code-generation script and refreshes the AssetDatabase.
 
 #### Configuration
 
-Build settings are stored in a **`DataTableSettings`** ScriptableObject. On first access, if no config asset exists, a default one is created at `Assets/Editor/DataTableSettings.asset`.
+Build settings are stored in a visible **`DataTableLubanSettings`** ScriptableObject. The asset can live anywhere under `Assets/`, and default tooling discovers it by type instead of storing hidden editor preferences. On first access, if no config asset exists, a default one is created under `Assets/Editor/DataTable/`.
 
-**Creating a config manually:** Assets → Create → CycloneGames → DataTable → Settings
+**Creating a config manually:** Assets → Create → CycloneGames → DataTable → Luban Settings
 
 **Config fields:**
 
 | Field | Default | Description |
 | --- | --- | --- |
-| `DataTableProjectDir` | `../DataTable` | Path to Luban project, relative to repo root |
-| `ScriptName` | `gen_code_bin_to_project_lazyload` | Script name without extension (`.bat`/`.sh` appended automatically) |
-| `AutoRefreshAssets` | `true` | Whether to call `AssetDatabase.Refresh()` after a successful build. Does NOT trigger the build itself — you must still run the menu command or call `DataTableLubanRunner.Run()`. |
+| `LubanProjectDir` | `../DataTable` | Path to Luban project, relative to repo root |
+| `LubanScriptName` | `gen_code_bin_to_project_lazyload` | Script name without extension (`.bat`/`.sh` appended automatically) |
+| `LubanScriptArguments` | empty | Optional command-line arguments appended after the script path |
+| `LubanTimeoutSeconds` | `0` | Maximum wait time. Zero or negative means no timeout |
+| `RefreshAssetsAfterLubanBuild` | `true` | Whether to call `AssetDatabase.Refresh()` after a successful build. Does NOT trigger the build itself — you must still run the menu command or call `DataTableLubanRunner.Run()`. |
 
 The config asset has a **custom Inspector** that shows:
 - Resolved absolute paths for the config directory and build script
 - Live validation: whether the directory and script actually exist on disk
-- Quick-action buttons to open directories or run the build
+- Duplicate settings warnings, discovered `.bat`/`.sh` scripts, and quick-action buttons to open directories or run the build
 
 **Resolved script path:**
 
 ```text
-{repoRoot}/{DataTableProjectDir}/{ScriptName}.bat   // Windows
-{repoRoot}/{DataTableProjectDir}/{ScriptName}.sh    // macOS / Linux
+{repoRoot}/{LubanProjectDir}/{LubanScriptName}.bat   // Windows
+{repoRoot}/{LubanProjectDir}/{LubanScriptName}.sh    // macOS / Linux
 ```
 
 **Programmatic overrides** (for CI pipelines or editor scripts):
 
 ```csharp
 // These override the SO values. Set to null to restore SO-driven behavior.
-DataTableLubanRunner.ProjectDirOverride = "MyConfigs";
-DataTableLubanRunner.ScriptNameOverride = "build_all";
+DataTableLubanRunner.LubanProjectDirOverride = "MyConfigs";
+DataTableLubanRunner.LubanScriptNameOverride = "build_all";
 ```
 
 **Safety guarantees:**
-- Exactly one config asset is enforced — duplicates trigger a warning with all paths listed
-- Config is cached after first lookup; call `DataTableSettings.InvalidateCache()` to force re-scan
+- Default tooling uses `AssetDatabase.FindAssets("t:DataTableLubanSettings")`; no `EditorPrefs` or hidden active setting is used
+- Keep exactly one settings asset in the project; duplicates trigger a warning with all paths listed
+- Config is cached after lookup; call `DataTableLubanSettings.InvalidateCache()` to force re-scan
 - If the config asset is deleted or corrupted, a fresh default is auto-created
-- Missing script path logs a detailed error referencing the active config asset path
+- Missing script path logs a detailed error referencing the discovered config asset path
 
-The build process captures stdout/stderr and logs them to the Unity Console. On success (`exit code 0`), `AssetDatabase.Refresh()` is called automatically (unless `AutoRefreshAssets` is disabled).
+The build process captures stdout/stderr and logs them to the Unity Console. On success (`exit code 0`), `AssetDatabase.Refresh()` is called automatically (unless `RefreshAssetsAfterLubanBuild` is disabled).
 
 ### Data Validation (Planned)
 
@@ -934,8 +937,8 @@ Once you have the bytes, pass them to `MessagePackConfigProvider.Build<T>(bytes,
 **Fix:** Either:
 
 1. Set up a Luban project at the configured path (default: `../DataTable/` relative to repo root)
-2. Edit the `DataTableSettings` asset in the Inspector to point to your Luban project
-   (Assets → Create → CycloneGames → DataTable → Settings if none exists)
+2. Edit the `DataTableLubanSettings` asset in the Inspector to point to your Luban project
+   (Assets → Create → CycloneGames → DataTable → Luban Settings if none exists)
 3. If you don't use Luban, ignore the menu item — the module works fine without it
 
 ### "Duplicate Id X in DataTable\<T\>"
@@ -952,11 +955,12 @@ Once you have the bytes, pass them to `MessagePackConfigProvider.Build<T>(bytes,
 
 ### MessagePack deserialization fails
 
-**Cause:** Row type is missing `[MessagePackObject]` or `[Key(n)]` attributes, or the `.bytes` file doesn't contain `List<TRow>`.
+**Cause:** Row type is missing `[MessagePackObject]` or `[Key(n)]` attributes, or the `.bytes` file doesn't contain the payload shape expected by the API you called.
 
 **Fix:**
 1. Annotate your row: `[MessagePackObject] public class MyRow : IDataRow`
 2. Annotate all properties: `[Key(0)] public int Id { get; set; }`
-3. Ensure the serialized format matches — use `MessagePackSerializer.Serialize<List<TRow>>(rows)`
+3. For `Build<TRow>()`, serialize `TRow[]` with `MessagePackSerializer.Serialize<TRow[]>(rows)`
+4. For legacy `List<TRow>` payloads, call `MessagePackConfigProvider.BuildList<TRow>()`
 
 ---

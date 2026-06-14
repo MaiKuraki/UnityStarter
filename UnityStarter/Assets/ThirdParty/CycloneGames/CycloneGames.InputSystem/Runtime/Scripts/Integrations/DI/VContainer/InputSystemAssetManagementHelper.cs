@@ -149,30 +149,6 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             };
         }
 
-        private static async UniTask<(bool, string)> LoadConfigFromUriAsync(string uri)
-        {
-            using (UnityEngine.Networking.UnityWebRequest uwr = UnityEngine.Networking.UnityWebRequest.Get(uri))
-            {
-                try
-                {
-                    var asyncOperation = uwr.SendWebRequest();
-                    while (!asyncOperation.isDone)
-                    {
-                        await UniTask.Yield();
-                    }
-
-                    if (uwr.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
-                    {
-                        return (true, uwr.downloadHandler.text);
-                    }
-                    return (false, null);
-                }
-                catch
-                {
-                    return (false, null);
-                }
-            }
-        }
     }
 }
 #endif
