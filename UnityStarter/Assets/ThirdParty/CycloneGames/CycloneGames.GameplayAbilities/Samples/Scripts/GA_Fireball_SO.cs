@@ -114,7 +114,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
-    [CreateAssetMenu(fileName = "GA_Fireball", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Fireball")]
+    [CreateAssetMenu(fileName = "GA_Fireball", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Fireball")]
     public class GA_Fireball_SO : GameplayAbilitySO
     {
         public GameplayEffectSO FireballDamageEffect;

@@ -11,7 +11,7 @@ namespace CycloneGames.GameplayAbilities.Samples
     /// - Abilities granted temporarily by effects
     /// - High damage finisher ability
     /// </summary>
-    [CreateAssetMenu(menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Execute (Granted)")]
+    [CreateAssetMenu(menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Execute (Granted)")]
     public class GA_Execute_SO : GameplayAbilitySO
     {
         [Header("Execute Configuration")]

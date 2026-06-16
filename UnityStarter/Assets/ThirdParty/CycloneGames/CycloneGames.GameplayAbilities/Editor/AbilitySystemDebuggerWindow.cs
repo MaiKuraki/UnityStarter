@@ -9,6 +9,16 @@ using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayAbilities.Editor
 {
+    internal static class GameplayAbilitiesEditorMenuPaths
+    {
+        public const string Root = "Tools/CycloneGames/GameplayAbilities";
+        public const string Debugger = Root + "/Debugger";
+        public const string DebuggerMultiTarget = Root + "/Debugger (Multi-Target)";
+        public const string Trace = Root + "/Trace";
+        public const string OverlayConfig = Root + "/Overlay/Select Or Create Config";
+        public const string OverlayToggle = Root + "/Overlay/Toggle In Play Mode";
+    }
+
     /// <summary>
     /// Enhanced runtime debugger window for inspecting AbilitySystemComponent state.
     /// Shows active effects, attributes, abilities, tags, and pool statistics in real-time.
@@ -166,14 +176,14 @@ namespace CycloneGames.GameplayAbilities.Editor
 
         #endregion
 
-        [MenuItem("Tools/CycloneGames/GameplayAbilities/GAS Debugger")]
+        [MenuItem(GameplayAbilitiesEditorMenuPaths.Debugger)]
         public static void ShowWindow()
         {
             var window = GetWindow<AbilitySystemDebuggerWindow>("GAS Debugger");
             window.minSize = new Vector2(600, 400);
         }
 
-        [MenuItem("Tools/CycloneGames/GameplayAbilities/GAS Debugger (Multi-Target)")]
+        [MenuItem(GameplayAbilitiesEditorMenuPaths.DebuggerMultiTarget)]
         public static void ShowWindowComparison()
         {
             var window = GetWindow<AbilitySystemDebuggerWindow>("GAS Debugger - Comparison");
@@ -181,7 +191,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             window.viewMode = 1;
         }
 
-        [MenuItem("Tools/CycloneGames/GameplayAbilities/GAS Overlay (Play Mode)")]
+        [MenuItem(GameplayAbilitiesEditorMenuPaths.OverlayToggle)]
         public static void ToggleOverlay()
         {
             if (!EditorApplication.isPlaying)
@@ -192,10 +202,10 @@ namespace CycloneGames.GameplayAbilities.Editor
             Runtime.GASDebugOverlay.Toggle();
         }
 
-        [MenuItem("Tools/CycloneGames/GameplayAbilities/GAS Overlay (Play Mode)", true)]
+        [MenuItem(GameplayAbilitiesEditorMenuPaths.OverlayToggle, true)]
         private static bool ValidateToggleOverlay()
         {
-            Menu.SetChecked("Tools/CycloneGames/GameplayAbilities/GAS Overlay (Play Mode)",
+            Menu.SetChecked(GameplayAbilitiesEditorMenuPaths.OverlayToggle,
                 EditorApplication.isPlaying && Runtime.GASDebugOverlay.IsActive);
             return true;
         }

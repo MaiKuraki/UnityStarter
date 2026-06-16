@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.Networking.Adapter.Nakama",
+    "rootNamespace": "CycloneGames.Networking.Adapter.Nakama",
+    "references": [
+        "NakamaRuntime",
+        "CycloneGames.Networking.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "NAKAMA"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.heroiclabs.nakama-unity",
+            "expression": "",
+            "define": "NAKAMA"
+        }
+    ],
+    "noEngineReferences": false
+}

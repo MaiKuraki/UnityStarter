@@ -2,6 +2,7 @@ using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using CycloneGames.Networking;
+using CycloneGames.Networking.Buffers;
 using CycloneGames.Networking.Serialization;
 
 namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
@@ -163,6 +164,132 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             Assert.That(network.LastAttributeData.Attributes[0].CurrentValueRaw, Is.EqualTo(150L));
         }
 
+        [Test]
+        public void GASNetworkSerializer_AttributeUpdate_UsesCountAsWireBoundary()
+        {
+            var serializer = new GASNetworkSerializer(new ThrowingSerializer());
+            var source = new AttributeUpdateData
+            {
+                TargetNetworkId = 9u,
+                IsFullSync = true,
+                AttributeCount = 1,
+                Attributes = new[]
+                {
+                    new AttributeEntry { AttributeId = 7, BaseValueRaw = 100L, CurrentValueRaw = 80L },
+                    new AttributeEntry { AttributeId = 99, BaseValueRaw = 999L, CurrentValueRaw = 999L }
+                }
+            };
+
+            byte[] buffer = new byte[256];
+            serializer.Serialize(source, buffer, 0, out int written);
+            var decoded = serializer.Deserialize<AttributeUpdateData>(new ReadOnlySpan<byte>(buffer, 0, written));
+
+            Assert.That(decoded.TargetNetworkId, Is.EqualTo(9u));
+            Assert.That(decoded.IsFullSync, Is.True);
+            Assert.That(decoded.AttributeCount, Is.EqualTo(1));
+            Assert.That(decoded.Attributes.Length, Is.EqualTo(1));
+            Assert.That(decoded.Attributes[0].AttributeId, Is.EqualTo(7));
+        }
+
+        [Test]
+        public void GASNetworkSerializer_RejectsCountsAboveConfiguredLimit()
+        {
+            var serializer = new GASNetworkSerializer(
+                new ThrowingSerializer(),
+                new GASNetworkSerializerOptions { MaxAttributes = 1 });
+            var source = new AttributeUpdateData
+            {
+                TargetNetworkId = 9u,
+                AttributeCount = 2,
+                Attributes = new[]
+                {
+                    new AttributeEntry { AttributeId = 1 },
+                    new AttributeEntry { AttributeId = 2 }
+                }
+            };
+
+            Assert.Throws<InvalidOperationException>(() =>
+                serializer.Serialize(source, new byte[256], 0, out _));
+        }
+
+        [Test]
+        public void GASNetworkSerializerOptions_Default_ReturnsIsolatedInstances()
+        {
+            var first = GASNetworkSerializerOptions.Default;
+            first.MaxAttributes = 1;
+
+            var second = GASNetworkSerializerOptions.Default;
+
+            Assert.That(second.MaxAttributes, Is.EqualTo(512));
+        }
+
+        [Test]
+        public void NetworkedAbilityBridge_InstallsConfiguredSerializerOptions()
+        {
+            var options = GASNetworkSerializerOptions.CreateConservative();
+            options.MaxAttributes = 3;
+            var network = new ConfigurableNetworkManager(new ThrowingSerializer());
+
+            _ = new NetworkedAbilityBridge(network, options);
+            options.MaxAttributes = 99;
+
+            var serializer = network.Serializer as GASNetworkSerializer;
+            Assert.That(serializer, Is.Not.Null);
+            Assert.That(serializer.Options.MaxAttributes, Is.EqualTo(3));
+        }
+
+        [Test]
+        public void GASNetworkSerializer_Deserialize_RejectsNegativeCounts()
+        {
+            var serializer = new GASNetworkSerializer(new ThrowingSerializer());
+
+            using var writer = NetworkBufferPool.Get();
+            writer.WriteUInt(9u);
+            writer.WriteByte(1);
+            writer.WriteInt(-1);
+            ArraySegment<byte> payload = writer.ToArraySegment();
+
+            Assert.Throws<InvalidOperationException>(() =>
+                serializer.Deserialize<AttributeUpdateData>(
+                    new ReadOnlySpan<byte>(payload.Array, payload.Offset, payload.Count)));
+        }
+
+        [Test]
+        public void GASNetworkSerializer_Deserialize_RejectsTruncatedPayload()
+        {
+            var serializer = new GASNetworkSerializer(new ThrowingSerializer());
+
+            using var writer = NetworkBufferPool.Get();
+            writer.WriteUInt(9u);
+            writer.WriteByte(1);
+            writer.WriteInt(1);
+            writer.WriteInt(7);
+            ArraySegment<byte> payload = writer.ToArraySegment();
+
+            Assert.Throws<InvalidOperationException>(() =>
+                serializer.Deserialize<AttributeUpdateData>(
+                    new ReadOnlySpan<byte>(payload.Array, payload.Offset, payload.Count)));
+        }
+
+        [Test]
+        public void NetworkedAbilityBridge_FullStateRequest_UsesConnectionScopedState()
+        {
+            var network = new FullStateCapturingNetworkManager();
+            var bridge = new NetworkedAbilityBridge(network, installSerializer: false, serializerOptions: null);
+            var asc = new ScopedFullStateASC(44u, ownerConnectionId: 10);
+            var observer = new TestConnection(20);
+
+            bridge.RegisterASC(asc.NetworkId, asc.OwnerConnectionId, asc);
+            bridge.FullStateRequestAuthorizer = (_, _) => true;
+            bridge.RegisterHandlers();
+
+            network.DeliverFullStateRequest(observer, new FullStateRequest { TargetNetworkId = asc.NetworkId });
+
+            Assert.That(network.LastFullState.TargetNetworkId, Is.EqualTo(44u));
+            Assert.That(network.LastFullState.AttributeCount, Is.EqualTo(1));
+            Assert.That(network.LastFullState.Attributes[0].AttributeId, Is.EqualTo(20));
+        }
+
         private sealed class CapturingNetworkManager : INetworkManager
         {
             public AttributeUpdateData LastAttributeData;
@@ -184,6 +311,142 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             public void BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
             public void Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
             public void DisconnectClient(INetConnection connection) { }
+        }
+
+        private sealed class ThrowingSerializer : INetSerializer
+        {
+            public void Serialize<T>(in T value, byte[] buffer, int offset, out int writtenBytes) where T : struct
+            {
+                throw new InvalidOperationException("Fallback serializer should not be used by this test.");
+            }
+
+            public void Serialize<T>(in T value, INetWriter writer) where T : struct
+            {
+                throw new InvalidOperationException("Fallback serializer should not be used by this test.");
+            }
+
+            public T Deserialize<T>(ReadOnlySpan<byte> data) where T : struct
+            {
+                throw new InvalidOperationException("Fallback serializer should not be used by this test.");
+            }
+
+            public T Deserialize<T>(INetReader reader) where T : struct
+            {
+                throw new InvalidOperationException("Fallback serializer should not be used by this test.");
+            }
+        }
+
+        private sealed class ConfigurableNetworkManager : INetworkManager, INetworkSerializerConfigurable
+        {
+            public ConfigurableNetworkManager(INetSerializer serializer)
+            {
+                Serializer = serializer;
+            }
+
+            public INetTransport Transport => null;
+            public INetSerializer Serializer { get; private set; }
+
+            public void SetSerializer(INetSerializer serializer)
+            {
+                Serializer = serializer;
+            }
+
+            public void RegisterHandler<T>(ushort msgId, Action<INetConnection, T> handler) where T : struct { }
+            public void UnregisterHandler(ushort msgId) { }
+            public void SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public void SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public void BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public void Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public void DisconnectClient(INetConnection connection) { }
+        }
+
+        private sealed class FullStateCapturingNetworkManager : INetworkManager
+        {
+            private Action<INetConnection, FullStateRequest> _fullStateHandler;
+
+            public GASFullStateData LastFullState;
+            public INetTransport Transport => null;
+            public INetSerializer Serializer => null;
+
+            public void RegisterHandler<T>(ushort msgId, Action<INetConnection, T> handler) where T : struct
+            {
+                if (msgId == NetworkedAbilityBridge.MsgFullStateRequest && typeof(T) == typeof(FullStateRequest))
+                    _fullStateHandler = (conn, message) => handler(conn, (T)(object)message);
+            }
+
+            public void UnregisterHandler(ushort msgId) { }
+            public void SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+
+            public void SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                if (msgId == NetworkedAbilityBridge.MsgFullState && message is GASFullStateData data)
+                    LastFullState = data;
+            }
+
+            public void BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public void Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public void DisconnectClient(INetConnection connection) { }
+
+            public void DeliverFullStateRequest(INetConnection sender, FullStateRequest request)
+            {
+                _fullStateHandler?.Invoke(sender, request);
+            }
+        }
+
+        private sealed class ScopedFullStateASC : INetworkedASC, INetworkedASCConnectionScopedFullState
+        {
+            public ScopedFullStateASC(uint networkId, int ownerConnectionId)
+            {
+                NetworkId = networkId;
+                OwnerConnectionId = ownerConnectionId;
+            }
+
+            public uint NetworkId { get; }
+            public int OwnerConnectionId { get; }
+
+            public GASFullStateData CaptureFullState()
+            {
+                return BuildFullState(OwnerConnectionId);
+            }
+
+            public GASFullStateData CaptureFullStateForConnection(INetConnection client)
+            {
+                return BuildFullState(client.ConnectionId);
+            }
+
+            private GASFullStateData BuildFullState(int attributeId)
+            {
+                return new GASFullStateData
+                {
+                    TargetNetworkId = NetworkId,
+                    AttributeCount = 1,
+                    Attributes = new[]
+                    {
+                        new AttributeEntry
+                        {
+                            AttributeId = attributeId,
+                            BaseValueRaw = 1L,
+                            CurrentValueRaw = 2L
+                        }
+                    }
+                };
+            }
+
+            public void OnServerConfirmActivation(int abilityIndex, int predictionKey) { }
+            public void OnServerConfirmActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence) { }
+            public void OnServerRejectActivation(int abilityIndex, int predictionKey) { }
+            public void OnServerRejectActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence) { }
+            public void OnAbilityEnded(int abilityIndex) { }
+            public void OnAbilityCancelled(int abilityIndex) { }
+            public void OnAbilityMulticast(AbilityMulticastData data) { }
+            public void OnReplicatedEffectApplied(EffectReplicationData data) { }
+            public void OnReplicatedEffectRemoved(int effectInstanceId) { }
+            public void OnReplicatedStackChanged(int effectInstanceId, int newStackCount) { }
+            public void OnReplicatedEffectUpdated(EffectUpdateData data) { }
+            public void OnReplicatedAttributeUpdate(AttributeUpdateData data) { }
+            public void OnReplicatedTagUpdate(TagUpdateData data) { }
+            public void OnFullState(GASFullStateData data) { }
+            public bool OnStateSyncMetadata(GASStateSyncMetadata metadata) => true;
         }
 
         private sealed class TestConnection : INetConnection

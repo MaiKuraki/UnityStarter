@@ -7,25 +7,39 @@ using UnityEngine;
 using Mirage;
 using CycloneGames.Networking.Serialization;
 using CycloneGames.Networking.Buffers;
+using CycloneGames.Networking.Security;
 using CycloneGames.Networking.Services;
 using CycloneGames.Logger;
 
 namespace CycloneGames.Networking.Adapter.Mirage
 {
-    public struct CycloneRawMessage
+    /// <summary>
+    /// Carries one complete Cyclone wire frame through Mirage.
+    /// The frame contains the Cyclone header followed by the serialized gameplay payload.
+    /// </summary>
+    public struct CycloneWireFrameMessage
     {
-        public ushort MsgId;
-        public ArraySegment<byte> Payload;
+        public ArraySegment<byte> Frame;
     }
 
     [DisallowMultipleComponent]
-    public sealed class MirageNetAdapter : MonoBehaviour, INetTransport, INetworkManager
+    public sealed class MirageNetAdapter : MonoBehaviour, INetTransport, INetworkManager, INetworkSerializerConfigurable, INetworkMessageSecurityConfigurable, INetworkRuntimeContextProvider, INetworkLifecycleProvider, INetworkFeatureProvider
     {
+        private const string MissingServerError = "Mirage NetworkServer reference is not available.";
+        private const string MissingClientError = "Mirage NetworkClient reference is not available.";
+
         public static MirageNetAdapter Instance { get; private set; }
 
         [Header("Config")]
         [SerializeField] private bool _singleton = true;
         [SerializeField] private bool _useRecommendedSerializer = true;
+        [SerializeField] private bool _enableMessageValidation = true;
+        [SerializeField] private int _maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize;
+        [SerializeField] private bool _enableRateLimiter = true;
+        [SerializeField] private int _maxMessagesPerSecond = 120;
+        [SerializeField] private int _burstMessages = 40;
+        [SerializeField] private bool _requireAuthenticatedMessages = false;
+        [SerializeField] private bool _requireEncryptedTransport = false;
 
         [Header("Mirage References")]
         [SerializeField] private NetworkServer _server;
@@ -36,6 +50,7 @@ namespace CycloneGames.Networking.Adapter.Mirage
         public bool IsRunning => IsServer || IsClient;
         public bool Available => true;
         public bool IsEncrypted => false;
+        public NetworkBackendFeatures Features => NetworkBackendFeatures.RealtimeTransport | NetworkBackendFeatures.Relay;
 
         public int GetChannelId(NetworkChannel channel)
         {
@@ -50,6 +65,59 @@ namespace CycloneGames.Networking.Adapter.Mirage
         }
 
         public int GetMaxPacketSize(int channelId) => 65535;
+
+        private NetworkChannel GetNetworkChannel(int channelId)
+        {
+            if (channelId == (int)Channel.Unreliable)
+                return NetworkChannel.Unreliable;
+
+            return NetworkChannel.Reliable;
+        }
+
+        private int BuildFrame(ushort msgId, NetworkChannel channel, in ArraySegment<byte> payload, byte[] buffer)
+        {
+            if (payload.Array == null)
+                throw new ArgumentException("Payload must reference a valid array.", nameof(payload));
+            if (payload.Offset < 0 || payload.Count < 0 || payload.Offset > payload.Array.Length || payload.Count > payload.Array.Length - payload.Offset)
+                throw new ArgumentOutOfRangeException(nameof(payload));
+
+            int frameLength = NetworkFrameCodec.GetFrameLength(payload.Count);
+            if (frameLength > buffer.Length)
+                throw new InvalidOperationException($"Frame size exceeds send buffer capacity: {frameLength}");
+
+            Buffer.BlockCopy(payload.Array, payload.Offset, buffer, NetworkWireProtocol.HeaderLength, payload.Count);
+            WriteFrameHeader(msgId, channel, buffer, payload.Count);
+            return frameLength;
+        }
+
+        private int WriteFrameHeader(ushort msgId, NetworkChannel channel, byte[] buffer, int payloadLength)
+        {
+            int frameLength = NetworkFrameCodec.GetFrameLength(payloadLength);
+            if (frameLength > buffer.Length)
+                throw new InvalidOperationException($"Frame size exceeds send buffer capacity: {frameLength}");
+
+            uint sequence = unchecked((uint)Interlocked.Increment(ref _sendSequence));
+            if (sequence == 0u)
+                sequence = unchecked((uint)Interlocked.Increment(ref _sendSequence));
+
+            var payload = new ReadOnlySpan<byte>(buffer, NetworkWireProtocol.HeaderLength, payloadLength);
+            var flags = GetMessageFlags(channel);
+            uint checksum = NetworkFrameCodec.ComputeChecksum(msgId, channel, flags, sequence, payload);
+            var header = new NetworkEnvelopeHeader(msgId, channel, payloadLength, sequence, checksum, flags);
+            NetworkFrameCodec.WriteHeader(buffer, 0, header);
+            return frameLength;
+        }
+
+        private static NetworkMessageFlags GetMessageFlags(NetworkChannel channel)
+        {
+            return channel switch
+            {
+                NetworkChannel.Reliable => NetworkMessageFlags.Reliable | NetworkMessageFlags.Ordered,
+                NetworkChannel.ReliableUnordered => NetworkMessageFlags.Reliable,
+                NetworkChannel.UnreliableSequenced => NetworkMessageFlags.Ordered,
+                _ => NetworkMessageFlags.None
+            };
+        }
 
         // Statistics
         private long _bytesSent;
@@ -71,8 +139,23 @@ namespace CycloneGames.Networking.Adapter.Mirage
                 connCount);
         }
 
+        public NetworkLifecycleSnapshot GetLifecycleSnapshot()
+        {
+            return new NetworkLifecycleSnapshot(
+                GetCurrentLifecycleState(),
+                Features,
+                _lastError,
+                _lastErrorMessage,
+                Available,
+                IsRunning,
+                IsServer,
+                IsClient,
+                IsEncrypted);
+        }
+
         public INetTransport Transport => this;
         public INetSerializer Serializer { get; private set; }
+        public INetworkRuntimeContext RuntimeContext { get; private set; }
 
         public event Action<INetConnection> OnClientConnected;
         public event Action<INetConnection> OnClientDisconnected;
@@ -86,8 +169,19 @@ namespace CycloneGames.Networking.Adapter.Mirage
             new Dictionary<ushort, Action<INetConnection, ArraySegment<byte>>>();
 
         private readonly Dictionary<INetworkPlayer, ulong> _playerIds = new Dictionary<INetworkPlayer, ulong>();
+        private readonly Dictionary<INetworkPlayer, int> _connectionIds = new Dictionary<INetworkPlayer, int>();
         private readonly Dictionary<INetworkPlayer, MirageConnectionData> _connectionData =
             new Dictionary<INetworkPlayer, MirageConnectionData>();
+        private int _nextConnectionId = 1;
+        private int _sendSequence;
+        private MessageValidator _messageValidator;
+        private RateLimiter _rateLimiter;
+        private MessageSecurityPolicyRegistry _messagePolicies;
+        private NetworkReplayGuard _replayGuard;
+        private NetworkLifecycleState _lifecycleState = NetworkLifecycleState.Stopped;
+        private TransportError _lastError;
+        private string _lastErrorMessage = string.Empty;
+        private bool _isDestroyed;
 
         [ThreadStatic] private static byte[] _threadLocalSendBuffer;
         private static byte[] GetThreadBuffer() => _threadLocalSendBuffer ??= new byte[65535];
@@ -121,6 +215,21 @@ namespace CycloneGames.Networking.Adapter.Mirage
                 ? SerializerFactory.GetRecommended()
                 : SerializerFactory.GetDefault();
 
+            _messageValidator = new MessageValidator(Math.Max(1, _maxPayloadSize), 0);
+            _rateLimiter = new RateLimiter(
+                Math.Max(1, _maxMessagesPerSecond),
+                Math.Max(1, _maxPayloadSize) * Math.Max(1, _maxMessagesPerSecond),
+                Math.Max(0, _burstMessages));
+            _messagePolicies = new MessageSecurityPolicyRegistry(CreateDefaultSecurityPolicy());
+            _replayGuard = new NetworkReplayGuard();
+            RuntimeContext = new NetworkRuntimeContext(
+                    NetworkRuntimeIds.Mirage,
+                    "Mirage",
+                    this,
+                    Features)
+                .AddService<INetworkMessageSecurityConfigurable>(this)
+                .Build();
+
             // Auto-find if not assigned
             if (_server == null) _server = GetComponent<NetworkServer>();
             if (_client == null) _client = GetComponent<NetworkClient>();
@@ -135,19 +244,27 @@ namespace CycloneGames.Networking.Adapter.Mirage
 
             _server.Authenticated.AddListener(player =>
             {
+                _lifecycleState = NetworkLifecycle.GetTransportState(this);
                 var data = new MirageConnectionData();
                 _connectionData[player] = data;
-                OnClientConnected?.Invoke(new MirageNetConnection(player, data));
+                OnClientConnected?.Invoke(new MirageNetConnection(player, GetConnectionId(player), data));
             });
 
             _server.Disconnected.AddListener(player =>
             {
                 _playerIds.Remove(player);
+                if (_connectionIds.TryGetValue(player, out int connectionId))
+                {
+                    _rateLimiter?.RemoveConnection(connectionId);
+                    _replayGuard?.RemoveConnection(connectionId);
+                }
+                _connectionIds.Remove(player);
                 _connectionData.Remove(player);
-                OnClientDisconnected?.Invoke(new MirageNetConnection(player, default));
+                _lifecycleState = NetworkLifecycle.GetTransportState(this);
+                OnClientDisconnected?.Invoke(new MirageNetConnection(player, 0, default));
             });
 
-            _server.MessageHandler.RegisterHandler<CycloneRawMessage>((player, msg) =>
+            _server.MessageHandler.RegisterHandler<CycloneWireFrameMessage>((player, msg) =>
             {
                 HandleDataReceived(player, msg);
             }, allowUnauthenticated: false);
@@ -159,15 +276,17 @@ namespace CycloneGames.Networking.Adapter.Mirage
 
             _client.Connected.AddListener(player =>
             {
+                _lifecycleState = NetworkLifecycle.GetTransportState(this);
                 OnConnectedToServer?.Invoke();
             });
 
             _client.Disconnected.AddListener(reason =>
             {
+                _lifecycleState = NetworkLifecycle.GetTransportState(this);
                 OnDisconnectedFromServer?.Invoke();
             });
 
-            _client.MessageHandler.RegisterHandler<CycloneRawMessage>((player, msg) =>
+            _client.MessageHandler.RegisterHandler<CycloneWireFrameMessage>((player, msg) =>
             {
                 OnClientDataReceived(msg);
             }, allowUnauthenticated: false);
@@ -175,8 +294,14 @@ namespace CycloneGames.Networking.Adapter.Mirage
 
         private void OnDestroy()
         {
+            _isDestroyed = true;
+            _lifecycleState = NetworkLifecycleState.Disposed;
+
             if (NetServices.IsAvailable && (object)NetServices.Instance == this)
                 NetServices.Unregister(this);
+
+            RuntimeContext?.Dispose();
+            RuntimeContext = null;
 
             if (Instance == this) Instance = null;
         }
@@ -188,7 +313,24 @@ namespace CycloneGames.Networking.Adapter.Mirage
             _threadLocalSendBuffer = null;
         }
 
-        public void SetSerializer(INetSerializer serializer) => Serializer = serializer;
+        public void SetSerializer(INetSerializer serializer) => Serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
+
+        public MessageSecurityPolicy DefaultMessageSecurityPolicy => EnsureMessagePolicies().DefaultPolicy;
+
+        public void SetDefaultMessageSecurityPolicy(MessageSecurityPolicy policy)
+        {
+            EnsureMessagePolicies().SetDefaultPolicy(policy);
+        }
+
+        public void SetMessageSecurityPolicy(ushort messageId, MessageSecurityPolicy policy)
+        {
+            EnsureMessagePolicies().SetPolicy(messageId, policy);
+        }
+
+        public void ClearMessageSecurityPolicy(ushort messageId)
+        {
+            EnsureMessagePolicies().ClearPolicy(messageId);
+        }
 
         internal ulong GetPlayerId(INetworkPlayer player)
         {
@@ -205,23 +347,57 @@ namespace CycloneGames.Networking.Adapter.Mirage
             return _connectionData.TryGetValue(player, out var data) ? data : default;
         }
 
+        internal int GetConnectionId(INetworkPlayer player)
+        {
+            if (player == null)
+                return 0;
+
+            if (_connectionIds.TryGetValue(player, out int connectionId))
+                return connectionId;
+
+            connectionId = _nextConnectionId++;
+            if (connectionId <= 0)
+            {
+                _nextConnectionId = 1;
+                connectionId = _nextConnectionId++;
+            }
+            _connectionIds[player] = connectionId;
+            return connectionId;
+        }
+
         // INetTransport
         public void StartServer()
         {
-            if (_server != null)
-                _server.StartServer();
+            if (_server == null)
+            {
+                RaiseError(null, TransportError.Unexpected, MissingServerError);
+                return;
+            }
+
+            _lifecycleState = NetworkLifecycleState.StartingServer;
+            _server.StartServer();
+            _lifecycleState = NetworkLifecycle.GetTransportState(this);
         }
 
         public void StartClient(string address)
         {
-            if (_client != null)
-                _client.Connect(address);
+            if (_client == null)
+            {
+                RaiseError(null, TransportError.Unexpected, MissingClientError);
+                return;
+            }
+
+            _lifecycleState = NetworkLifecycleState.StartingClient;
+            _client.Connect(address ?? string.Empty);
+            _lifecycleState = NetworkLifecycle.GetTransportState(this);
         }
 
         public void Stop()
         {
+            _lifecycleState = NetworkLifecycleState.Stopping;
             _server?.Stop();
             _client?.Disconnect();
+            _lifecycleState = NetworkLifecycle.GetTransportState(this);
         }
 
         public void Disconnect(INetConnection connection)
@@ -232,12 +408,16 @@ namespace CycloneGames.Networking.Adapter.Mirage
 
         public void Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
         {
-            Interlocked.Add(ref _bytesSent, payload.Count);
+            byte[] buffer = GetThreadBuffer();
+            NetworkChannel channel = GetNetworkChannel(channelId);
+            int frameLength = BuildFrame(NetworkConstants.SystemMsgIdMin, channel, payload, buffer);
+
+            Interlocked.Add(ref _bytesSent, frameLength);
             Interlocked.Increment(ref _packetsSent);
 
             if (connection is MirageNetConnection mc && mc.Player != null)
             {
-                mc.Player.Send(payload, (Channel)channelId);
+                mc.Player.Send(new ArraySegment<byte>(buffer, 0, frameLength), (Channel)channelId);
             }
         }
 
@@ -282,12 +462,13 @@ namespace CycloneGames.Networking.Adapter.Mirage
             byte[] buffer = GetThreadBuffer();
             try
             {
-                Serializer.Serialize(message, buffer, 0, out int written);
-                Interlocked.Add(ref _bytesSent, written);
+                Serializer.Serialize(message, buffer, NetworkWireProtocol.HeaderLength, out int written);
+                int frameLength = WriteFrameHeader(msgId, channel, buffer, written);
+                Interlocked.Add(ref _bytesSent, frameLength);
                 Interlocked.Increment(ref _packetsSent);
 
-                var rawMsg = new CycloneRawMessage { MsgId = msgId, Payload = new ArraySegment<byte>(buffer, 0, written) };
-                _client.Send(rawMsg, (Channel)GetChannelId(channel));
+                var wireFrame = new CycloneWireFrameMessage { Frame = new ArraySegment<byte>(buffer, 0, frameLength) };
+                _client.Send(wireFrame, (Channel)GetChannelId(channel));
             }
             catch (Exception e)
             {
@@ -302,12 +483,13 @@ namespace CycloneGames.Networking.Adapter.Mirage
             byte[] buffer = GetThreadBuffer();
             try
             {
-                Serializer.Serialize(message, buffer, 0, out int written);
-                Interlocked.Add(ref _bytesSent, written);
+                Serializer.Serialize(message, buffer, NetworkWireProtocol.HeaderLength, out int written);
+                int frameLength = WriteFrameHeader(msgId, channel, buffer, written);
+                Interlocked.Add(ref _bytesSent, frameLength);
                 Interlocked.Increment(ref _packetsSent);
 
-                var rawMsg = new CycloneRawMessage { MsgId = msgId, Payload = new ArraySegment<byte>(buffer, 0, written) };
-                mc.Player.Send(rawMsg, (Channel)GetChannelId(channel));
+                var wireFrame = new CycloneWireFrameMessage { Frame = new ArraySegment<byte>(buffer, 0, frameLength) };
+                mc.Player.Send(wireFrame, (Channel)GetChannelId(channel));
             }
             catch (Exception e)
             {
@@ -322,12 +504,13 @@ namespace CycloneGames.Networking.Adapter.Mirage
             byte[] buffer = GetThreadBuffer();
             try
             {
-                Serializer.Serialize(message, buffer, 0, out int written);
-                Interlocked.Add(ref _bytesSent, written);
+                Serializer.Serialize(message, buffer, NetworkWireProtocol.HeaderLength, out int written);
+                int frameLength = WriteFrameHeader(msgId, channel, buffer, written);
+                Interlocked.Add(ref _bytesSent, frameLength);
                 Interlocked.Increment(ref _packetsSent);
 
-                var rawMsg = new CycloneRawMessage { MsgId = msgId, Payload = new ArraySegment<byte>(buffer, 0, written) };
-                _server.SendToAll(rawMsg, false, (Channel)GetChannelId(channel));
+                var wireFrame = new CycloneWireFrameMessage { Frame = new ArraySegment<byte>(buffer, 0, frameLength) };
+                _server.SendToAll(wireFrame, false, (Channel)GetChannelId(channel));
             }
             catch (Exception e)
             {
@@ -342,25 +525,126 @@ namespace CycloneGames.Networking.Adapter.Mirage
         }
 
         // Data Handlers
-        private void HandleDataReceived(INetworkPlayer player, CycloneRawMessage msg)
+        private void HandleDataReceived(INetworkPlayer player, CycloneWireFrameMessage msg)
         {
-            var connection = new MirageNetConnection(player, GetConnectionData(player));
-            OnDataReceived?.Invoke(connection, msg.Payload, 0);
+            var connection = new MirageNetConnection(player, GetConnectionId(player), GetConnectionData(player));
+            if (!TryValidateIncoming(connection, msg.Frame, NetworkMessageDirection.ClientToServer, out NetworkEnvelopeHeader header, out ArraySegment<byte> payload))
+                return;
 
-            if (_handlers.TryGetValue(msg.MsgId, out var handler))
-                handler(connection, msg.Payload);
+            OnDataReceived?.Invoke(connection, payload, GetChannelId(header.Channel));
+
+            if (_handlers.TryGetValue(header.MessageId, out var handler))
+                handler(connection, payload);
         }
 
-        private void OnClientDataReceived(CycloneRawMessage msg)
+        private void OnClientDataReceived(CycloneWireFrameMessage msg)
         {
             if (_client.Player == null)
                 return;
 
-            var connection = new MirageNetConnection(_client.Player, default);
-            OnDataReceived?.Invoke(connection, msg.Payload, 0);
+            var connection = new MirageNetConnection(_client.Player, GetConnectionId(_client.Player), default);
+            if (!TryValidateIncoming(connection, msg.Frame, NetworkMessageDirection.ServerToClient, out NetworkEnvelopeHeader header, out ArraySegment<byte> payload))
+                return;
 
-            if (_handlers.TryGetValue(msg.MsgId, out var handler))
-                handler(connection, msg.Payload);
+            OnDataReceived?.Invoke(connection, payload, GetChannelId(header.Channel));
+
+            if (_handlers.TryGetValue(header.MessageId, out var handler))
+                handler(connection, payload);
+        }
+
+        private bool TryValidateIncoming(
+            INetConnection connection,
+            ArraySegment<byte> frame,
+            NetworkMessageDirection direction,
+            out NetworkEnvelopeHeader header,
+            out ArraySegment<byte> payload)
+        {
+            header = default;
+            payload = default;
+
+            NetworkFrameResult frameResult = NetworkFrameCodec.TryReadPayload(frame, out header, out payload);
+            if (frameResult != NetworkFrameResult.Valid)
+                return false;
+
+            if (payload.Array == null)
+                return false;
+
+            if (_enableMessageValidation)
+            {
+                ValidationResult result = _messageValidator.Validate(header.MessageId, header.PayloadLength);
+                if (result != ValidationResult.Valid)
+                    return false;
+            }
+
+            ReadOnlySpan<byte> payloadSpan = new ReadOnlySpan<byte>(payload.Array, payload.Offset, payload.Count);
+            if (NetworkFrameCodec.ValidateChecksum(header, payloadSpan) != NetworkFrameResult.Valid)
+                return false;
+
+            NetworkMessageEnvelope envelope = header.ToEnvelope(direction);
+            MessageSecurityResult securityResult = EnsureMessagePolicies().Validate(
+                envelope,
+                connection,
+                IsEncrypted,
+                _replayGuard);
+            if (securityResult != MessageSecurityResult.Valid)
+                return false;
+
+            if (_enableRateLimiter && connection != null && _rateLimiter != null)
+            {
+                if (!_rateLimiter.TryConsume(connection.ConnectionId, frame.Count, Time.unscaledTime))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private MessageSecurityPolicy CreateDefaultSecurityPolicy()
+        {
+            return new MessageSecurityPolicy(
+                NetworkMessageDirectionMask.Any,
+                Math.Max(1, _maxPayloadSize),
+                _requireAuthenticatedMessages,
+                _requireEncryptedTransport,
+                enableReplayProtection: false);
+        }
+
+        private MessageSecurityPolicyRegistry EnsureMessagePolicies()
+        {
+            if (_messagePolicies != null)
+                return _messagePolicies;
+
+            _messagePolicies = new MessageSecurityPolicyRegistry(CreateDefaultSecurityPolicy());
+            _replayGuard ??= new NetworkReplayGuard();
+            return _messagePolicies;
+        }
+
+        private NetworkLifecycleState GetCurrentLifecycleState()
+        {
+            if (_isDestroyed)
+                return NetworkLifecycleState.Disposed;
+
+            NetworkLifecycleState inferred = NetworkLifecycle.GetTransportState(this);
+            if (inferred != NetworkLifecycleState.Stopped)
+                return inferred;
+
+            if (_lifecycleState == NetworkLifecycleState.StartingServer
+                || _lifecycleState == NetworkLifecycleState.StartingClient
+                || _lifecycleState == NetworkLifecycleState.Stopping
+                || _lifecycleState == NetworkLifecycleState.Faulted)
+            {
+                return _lifecycleState;
+            }
+
+            return inferred;
+        }
+
+        private void RaiseError(INetConnection connection, TransportError error, string message)
+        {
+            _lastError = error;
+            _lastErrorMessage = message ?? string.Empty;
+            if (!IsRunning)
+                _lifecycleState = NetworkLifecycleState.Faulted;
+            OnError?.Invoke(connection, error, _lastErrorMessage);
         }
     }
 
@@ -384,10 +668,10 @@ namespace CycloneGames.Networking.Adapter.Mirage
             set => MirageNetAdapter.Instance?.SetPlayerId(Player, value);
         }
 
-        internal MirageNetConnection(INetworkPlayer player, MirageNetAdapter.MirageConnectionData data)
+        internal MirageNetConnection(INetworkPlayer player, int connectionId, MirageNetAdapter.MirageConnectionData data)
         {
             Player = player;
-            ConnectionId = player?.GetHashCode() ?? 0;
+            ConnectionId = connectionId;
             RemoteAddress = player?.Connection?.EndPoint?.ToString() ?? "unknown";
             IsConnected = player?.IsConnected ?? false;
             IsAuthenticated = player?.IsAuthenticated ?? false;

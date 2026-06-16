@@ -7,7 +7,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// A concrete, creatable ScriptableObject definition for a GameplayEffect.
     /// Use this to create new Gameplay Effect assets in the editor via 'Assets/Create/...'.
     /// </summary>
-    [CreateAssetMenu(fileName = "GE_", menuName = "CycloneGames/GameplayAbilitySystem/GameplayEffect Definition")]
+    [CreateAssetMenu(fileName = "GE_", menuName = GameplayAbilitiesAssetMenuPaths.GameplayEffectDefinition)]
     public class ConcreteGameplayEffectSO : GameplayEffectSO
     {
         /// <summary>

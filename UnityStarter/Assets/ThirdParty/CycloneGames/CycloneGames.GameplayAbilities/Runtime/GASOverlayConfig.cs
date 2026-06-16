@@ -4,13 +4,20 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
+    internal static class GameplayAbilitiesAssetMenuPaths
+    {
+        public const string Root = "CycloneGames/GameplayAbilities";
+        public const string GameplayEffectDefinition = Root + "/Definitions/Gameplay Effect";
+        public const string OverlayConfig = Root + "/Diagnostics/GAS Overlay Config";
+    }
+
     /// <summary>
     /// Configuration asset for the GAS Debug Overlay.
     /// Stores tag-color mapping rules and visual settings.
-    /// Create via Assets menu: Create > CycloneGames > GAS Overlay Config.
+    /// Create via Assets menu: Create > CycloneGames > GameplayAbilities > Diagnostics > GAS Overlay Config.
     /// Place in a Resources folder to enable auto-loading at runtime.
     /// </summary>
-    [CreateAssetMenu(fileName = "GASOverlayConfig", menuName = "CycloneGames/GameplayAbilitySystem/GAS Overlay Config", order = 200)]
+    [CreateAssetMenu(fileName = "GASOverlayConfig", menuName = GameplayAbilitiesAssetMenuPaths.OverlayConfig, order = 200)]
     public class GASOverlayConfig : ScriptableObject
     {
         private const string ResourcePath = "GASOverlayConfig";

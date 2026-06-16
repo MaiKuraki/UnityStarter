@@ -13,7 +13,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         public float DefenseGain;
     }
 
-    [CreateAssetMenu(fileName = "LevelUpData", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Level Up Data")]
+    [CreateAssetMenu(fileName = "LevelUpData", menuName = "CycloneGames/GameplayAbilities/Samples/Level Up Data")]
     public class LevelUpDataSO : ScriptableObject
     {
         public List<LevelData> Levels;
