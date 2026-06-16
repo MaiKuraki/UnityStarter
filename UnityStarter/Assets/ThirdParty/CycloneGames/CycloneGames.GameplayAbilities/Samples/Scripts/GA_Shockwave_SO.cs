@@ -91,7 +91,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
-    [CreateAssetMenu(fileName = "GA_Shockwave", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Shockwave")]
+    [CreateAssetMenu(fileName = "GA_Shockwave", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Shockwave")]
     public class GA_Shockwave_SO : GameplayAbilitySO
     {
         // NEW: Configurable properties for the shockwave.

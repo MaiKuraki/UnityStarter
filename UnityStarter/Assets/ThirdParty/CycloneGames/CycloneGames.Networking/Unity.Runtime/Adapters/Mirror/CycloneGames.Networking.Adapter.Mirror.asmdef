@@ -11,8 +11,16 @@
     "allowUnsafeCode": true,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "MIRROR"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.mirror-networking.mirror",
+            "expression": "",
+            "define": "MIRROR"
+        }
+    ],
     "noEngineReferences": false
 }

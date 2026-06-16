@@ -51,7 +51,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (adapter == null) throw new ArgumentNullException(nameof(adapter));
             if (client == null) throw new ArgumentNullException(nameof(client));
 
-            bridge.ServerSendFullState(client, adapter.CaptureFullState());
+            bridge.ServerSendFullState(client, adapter.CaptureFullStateForConnection(client));
         }
 
         public static void SendGameplayAbilitiesFullState(
@@ -63,13 +63,12 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (adapter == null) throw new ArgumentNullException(nameof(adapter));
             if (clients == null) throw new ArgumentNullException(nameof(clients));
 
-            var data = adapter.CaptureFullState();
             for (int i = 0; i < clients.Count; i++)
             {
                 var client = clients[i];
                 if (client != null)
                 {
-                    bridge.ServerSendFullState(client, data);
+                    bridge.ServerSendFullState(client, adapter.CaptureFullStateForConnection(client));
                 }
             }
         }

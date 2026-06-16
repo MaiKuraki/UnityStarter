@@ -12,7 +12,7 @@ namespace CycloneGames.GameplayAbilities.Samples
     /// - Stack limit configuration
     /// - Duration refresh on stack application
     /// </summary>
-    [CreateAssetMenu(menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Armor Stack")]
+    [CreateAssetMenu(menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Armor Stack")]
     public class GA_ArmorStack_SO : GameplayAbilitySO
     {
         [Header("Stacking Configuration")]

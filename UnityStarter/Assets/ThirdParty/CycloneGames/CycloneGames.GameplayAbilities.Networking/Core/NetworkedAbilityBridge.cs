@@ -37,12 +37,14 @@ namespace CycloneGames.GameplayAbilities.Networking
         public const ushort MsgStateSyncMetadata = 242;
 
         private readonly INetworkManager _networkManager;
+        private readonly GASNetworkSerializerOptions _serializerOptions;
         private readonly Dictionary<int, INetworkedASC> _ascByConnectionId =
             new Dictionary<int, INetworkedASC>(32);
         private readonly Dictionary<uint, INetworkedASC> _ascByNetworkId =
             new Dictionary<uint, INetworkedASC>(64);
 
         public INetworkManager NetworkManager => _networkManager;
+        public GASNetworkSerializerOptions SerializerOptions => _serializerOptions.Clone();
 
         /// <summary>
         /// Optional server-side authorization callback for full-state requests.
@@ -61,8 +63,35 @@ namespace CycloneGames.GameplayAbilities.Networking
         public event Action<uint, GASStateSyncMetadata> OnStateSyncMetadataReceived;
 
         public NetworkedAbilityBridge(INetworkManager networkManager)
+            : this(networkManager, null, true)
+        {
+        }
+
+        public NetworkedAbilityBridge(
+            INetworkManager networkManager,
+            GASNetworkSerializerOptions serializerOptions,
+            bool installSerializer = true)
         {
             _networkManager = networkManager ?? throw new ArgumentNullException(nameof(networkManager));
+            _serializerOptions = (serializerOptions ?? GASNetworkSerializerOptions.Default).Clone();
+            _serializerOptions.Validate();
+
+            if (installSerializer)
+                TryInstallSerializer(networkManager, _serializerOptions);
+        }
+
+        public static bool TryInstallSerializer(
+            INetworkManager networkManager,
+            GASNetworkSerializerOptions serializerOptions = null)
+        {
+            if (networkManager == null)
+                throw new ArgumentNullException(nameof(networkManager));
+
+            if (networkManager is not INetworkSerializerConfigurable configurable || networkManager.Serializer == null)
+                return false;
+
+            configurable.SetSerializer(GASNetworkSerializer.Wrap(networkManager.Serializer, serializerOptions));
+            return true;
         }
 
         /// <summary>
@@ -481,7 +510,9 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (!isAuthorized)
                 return;
 
-            var data = asc.CaptureFullState();
+            var data = asc is INetworkedASCConnectionScopedFullState scopedFullState
+                ? scopedFullState.CaptureFullStateForConnection(sender)
+                : asc.CaptureFullState();
             ServerSendFullState(sender, data);
         }
     }

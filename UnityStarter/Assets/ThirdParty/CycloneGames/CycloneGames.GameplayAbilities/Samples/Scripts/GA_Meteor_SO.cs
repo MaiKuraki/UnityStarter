@@ -66,7 +66,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
-    [CreateAssetMenu(fileName = "GA_Meteor", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Meteor")]
+    [CreateAssetMenu(fileName = "GA_Meteor", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Meteor")]
     public class GA_Meteor_SO : GameplayAbilitySO
     {
         public GameObject GroundSelectorPrefab;

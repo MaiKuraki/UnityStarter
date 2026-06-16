@@ -1,5 +1,3 @@
-#if GAMEPLAY_FRAMEWORK_PRESENT && NETWORKING_PRESENT
-
 using CycloneGames.Networking.Serialization;
 
 namespace CycloneGames.GameplayFramework.Runtime.Integrations.Networking
@@ -21,6 +19,9 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Networking
     /// </remarks>
     public static class ActorMigrationNetworkingExtensions
     {
+        private const int MaxUtf8StringBytes = ushort.MaxValue;
+        private const int MaxTagCount = ushort.MaxValue;
+
         public static void WriteMigrationState(this INetWriter writer, in ActorMigrationState state)
         {
             writer.WriteFloat(state.Position.x);
@@ -44,6 +45,9 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Networking
             writer.WriteByte((byte)(state.HasBegunPlay ? 1 : 0));
 
             int tagCount = state.Tags?.Length ?? 0;
+            if (tagCount > MaxTagCount)
+                throw new System.InvalidOperationException("Actor migration tag count exceeds the wire format limit.");
+
             writer.WriteUShort((ushort)tagCount);
             for (int i = 0; i < tagCount; i++)
             {
@@ -125,12 +129,17 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Networking
                 int maxBytes = charCount * 3;
                 System.Span<byte> stackBuf = stackalloc byte[maxBytes];
                 int actualBytes = System.Text.Encoding.UTF8.GetBytes(value, stackBuf);
+                if (actualBytes > MaxUtf8StringBytes)
+                    throw new System.InvalidOperationException("Actor migration string exceeds the wire format limit.");
                 writer.WriteUShort((ushort)actualBytes);
                 writer.WriteBytes(stackBuf.Slice(0, actualBytes));
             }
             else
             {
                 int byteCount = System.Text.Encoding.UTF8.GetByteCount(value);
+                if (byteCount > MaxUtf8StringBytes)
+                    throw new System.InvalidOperationException("Actor migration string exceeds the wire format limit.");
+
                 writer.WriteUShort((ushort)byteCount);
                 byte[] rented = System.Buffers.ArrayPool<byte>.Shared.Rent(byteCount);
                 try
@@ -173,5 +182,3 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Networking
         }
     }
 }
-
-#endif

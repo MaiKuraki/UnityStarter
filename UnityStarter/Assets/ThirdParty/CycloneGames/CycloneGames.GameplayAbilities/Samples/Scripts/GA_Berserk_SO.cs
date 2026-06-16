@@ -12,7 +12,7 @@ namespace CycloneGames.GameplayAbilities.Samples
     /// - Temporary ability granting
     /// - Effect-linked ability lifetime
     /// </summary>
-    [CreateAssetMenu(menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Berserk (Grants Execute)")]
+    [CreateAssetMenu(menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Berserk (Grants Execute)")]
     public class GA_Berserk_SO : GameplayAbilitySO
     {
         [Header("Berserk Configuration")]

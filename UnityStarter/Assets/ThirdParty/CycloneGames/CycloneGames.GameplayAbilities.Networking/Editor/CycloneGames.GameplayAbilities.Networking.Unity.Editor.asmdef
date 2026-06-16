@@ -3,7 +3,8 @@
     "rootNamespace": "CycloneGames.GameplayAbilities.Networking",
     "references": [
         "CycloneGames.GameplayAbilities.Networking.Core",
-        "CycloneGames.GameplayAbilities.Networking.Unity.Runtime"
+        "CycloneGames.GameplayAbilities.Networking.Unity.Runtime",
+        "CycloneGames.Networking.Core"
     ],
     "includePlatforms": [
         "Editor"

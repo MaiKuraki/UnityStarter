@@ -11,10 +11,7 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [
-        "GAMEPLAY_FRAMEWORK_PRESENT",
-        "NETWORKING_PRESENT"
-    ],
+    "defineConstraints": [],
     "versionDefines": [
         {
             "name": "com.cyclone-games.gameplay-framework",
