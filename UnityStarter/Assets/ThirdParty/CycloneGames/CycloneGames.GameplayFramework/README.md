@@ -62,6 +62,7 @@ The package is intended for projects that need a reusable gameplay architecture 
       - [Step 4 — Connect your animation system](#step-4--connect-your-animation-system)
     - [Optional Animancer Integration](#optional-animancer-integration)
     - [Camera Blend Curves](#camera-blend-curves)
+  - [Optional Networking Integration](#optional-networking-integration)
   - [Quick Start](#quick-start)
     - [Prerequisites](#prerequisites)
     - [Minimal Setup](#minimal-setup)
@@ -1594,6 +1595,45 @@ If your project uses `com.kybernetik.animancer`, enable the integration assembly
 Use these with `CameraBlendState.Start(..., ICameraBlendCurve curve)` when different transitions need different visual pacing.
 
 ---
+
+## Optional Networking Integration
+
+The base `CycloneGames.GameplayFramework.Runtime` assembly does not require `CycloneGames.Networking`. Networking support is isolated in `Runtime/Scripts/Integrations/Networking` and compiled by `CycloneGames.GameplayFramework.Runtime.Integrations.Networking`.
+
+Use this integration only in projects that include `CycloneGames.Networking`.
+
+### NetworkGameSessionAdapter
+
+`NetworkGameSessionAdapter` extends `GameSession` and bridges session rules to Cyclone networking. It stores an `INetworkManager`, binds `PlayerController` instances to `INetConnection`, checks authenticated connections during login approval, and disconnects players through `INetworkManager.DisconnectClient`.
+
+```csharp
+using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.GameplayFramework.Runtime.Integrations.Networking;
+using CycloneGames.Networking;
+
+public sealed class MyNetworkSessionInstaller
+{
+    public void Configure(NetworkGameSessionAdapter session, INetworkManager networkManager)
+    {
+        session.SetNetworkManager(networkManager);
+    }
+
+    public void BindPlayer(NetworkGameSessionAdapter session, PlayerController controller, INetConnection connection)
+    {
+        session.BindConnection(controller, connection);
+    }
+}
+```
+
+### Authority and Replication
+
+`GameplayNetworkAuthorityRole` describes whether an actor is `ServerAuthority`, `AutonomousProxy`, `SimulatedProxy`, or `None`. `ServerAuthoritativeGameplayAuthorityResolver` covers standard server-authoritative projects.
+
+`GameplayReplicationPolicy` describes visibility, channel, distance, tick interval, priority, layer mask, owner inclusion, and authentication requirements. Common presets include `OwnerReliable`, `TeamReliable`, `AlwaysRelevantReliable`, and `AreaUnreliable(distance)`.
+
+`NetworkedGameplayActor` is the boundary data for an `Actor`: network id, owner connection, owner player id, team id, interest layer, relevance flag, and interest position. `GameplayNetworkObserverRegistry` and `GameplayNetworkObserverResolver` build observer sets for area, team, owner-only, and always-relevant replication.
+
+This integration is also useful when feeding observer lists into `CycloneGames.GameplayAbilities.Networking`, while keeping ability replication itself in the GAS networking package.
 
 ## Quick Start
 

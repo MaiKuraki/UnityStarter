@@ -1,5 +1,3 @@
-#if GAMEPLAY_FRAMEWORK_PRESENT && NETWORKING_PRESENT
-
 using System;
 using System.Collections.Generic;
 using CycloneGames.Networking;
@@ -219,5 +217,3 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.Networking
         }
     }
 }
-
-#endif

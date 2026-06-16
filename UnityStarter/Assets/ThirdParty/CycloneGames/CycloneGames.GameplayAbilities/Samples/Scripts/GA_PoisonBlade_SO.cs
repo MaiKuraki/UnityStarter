@@ -68,7 +68,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
-    [CreateAssetMenu(fileName = "GA_PoisonBlade", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/PoisonBlade")]
+    [CreateAssetMenu(fileName = "GA_PoisonBlade", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/PoisonBlade")]
     public class GA_PoisonBlade_SO : GameplayAbilitySO
     {
         [Tooltip("The initial, one-time damage applied on hit.")]

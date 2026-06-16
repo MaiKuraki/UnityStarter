@@ -66,7 +66,8 @@ A **production-grade networking abstraction layer** for Unity supporting state s
     - [Synchronization](#synchronization)
     - [Deterministic](#deterministic)
     - [Interest Management](#interest-management)
-    - [GAS Integration (📦 Separate Package: `CycloneGames.Networking.GAS`)](#gas-integration--separate-package-cyclonegamesnetworkinggas)
+    - [GAS Integration (`CycloneGames.GameplayAbilities.Networking`)](#gas-integration-cyclonegamesgameplayabilitiesnetworking)
+  - [Current Adapter and Protocol Notes](#current-adapter-and-protocol-notes)
   - [Directory Structure](#directory-structure)
   - [License](#license)
 
@@ -96,7 +97,7 @@ flowchart TB
         Scene["SceneManager</br>Scene Loading"]
     end
 
-    subgraph Bridge["🔗 GAS Bridge (CycloneGames.Networking.GAS separate package)"]
+    subgraph Bridge["🔗 GAS Bridge (CycloneGames.GameplayAbilities.Networking separate package)"]
         AbilityBridge["NetworkedAbilityBridge"]
         AttrSync["AttributeSyncManager"]
         GasAdapter["GameplayAbilitiesNetworkedASCAdapter\nExtensions"]
@@ -901,20 +902,19 @@ simulator.Enabled = true;
 
 ### 18. Gameplay Abilities Integration
 
-**Path**: 📦 **Separate Package** — `CycloneGames.Networking.GAS` (sibling directory)  
-**Asmdef**: `CycloneGames.Networking.GAS`  
-**Reference**: `CycloneGames.Networking.Runtime`  
-**Namespace**: `CycloneGames.Networking.GAS`
+**Path**: 📦 **Separate Package** — `CycloneGames.GameplayAbilities.Networking` (sibling directory)  
+**Asmdef**: `CycloneGames.GameplayAbilities.Networking.Core` / `CycloneGames.GameplayAbilities.Networking.Unity.Runtime`  
+**Reference**: `CycloneGames.Networking.Core`  
+**Namespace**: `CycloneGames.GameplayAbilities.Networking`
 
 > **Package structure**: This module is split into two layers.
 >
-> - `CycloneGames.Networking.GAS` — Protocol layer only: message IDs, `IAbilityNetAdapter` interface, `NetworkedAbilityBridge`, `AttributeSyncManager`. Has no dependency on any specific GAS implementation.
-> - `CycloneGames.Networking.GAS.Integrations.GameplayAbilities` — Mainline GAS integration for `CycloneGames.GameplayAbilities`: ASC adapter, refined effect delta replication, full-state snapshot wiring, and security helpers.
-> - `CycloneGames.Networking.GAS.Integrations.GameplayAbilities` — Concrete wiring to `CycloneGames.GameplayAbilities`. Include this when using `CycloneGames.GameplayAbilities`; omit it for custom GAS implementations.
+> - `CycloneGames.GameplayAbilities.Networking.Core` — Protocol and bridge layer: message IDs, `IAbilityNetAdapter`, `NetworkedAbilityBridge`, serializers, state checksums, and security policies.
+> - `CycloneGames.GameplayAbilities.Networking.Unity.Runtime` — Mainline GAS integration for `CycloneGames.GameplayAbilities`: ASC adapter, refined effect delta replication, full-state snapshot wiring, and security helpers.
 
 Deep integration with `CycloneGames.GameplayAbilities` for networked abilities, effects, and attributes.
 
-> ⚠️ **Breaking Change**: GAS classes have been moved from core package to a separate package. Add a reference to `CycloneGames.Networking.GAS` in your asmdef.
+> Current package note: GAS networking lives in `CycloneGames.GameplayAbilities.Networking`. Add the Core assembly for pure protocol usage and the Unity.Runtime assembly when wiring `AbilitySystemComponent`.
 
 ```mermaid
 flowchart TB
@@ -947,8 +947,8 @@ flowchart TB
 ```
 
 ```csharp
-using CycloneGames.Networking.GAS; // 📦 Required: GAS protocol package
-using CycloneGames.Networking.GAS.Integrations.GameplayAbilities; // 📦 Mainline GameplayAbilities integration
+using CycloneGames.GameplayAbilities.Networking; // 📦 Required: GAS protocol package
+using CycloneGames.GameplayAbilities.Networking.Unity.Runtime; // 📦 Mainline GameplayAbilities integration
 
 var bridge = new NetworkedAbilityBridge(networkManager);
 var adapter = bridge.RegisterGameplayAbilitiesASC(myAsc, networkId, ownerConnectionId, idRegistry);
@@ -1359,7 +1359,7 @@ public class TeamVisionController : MonoBehaviour
 | `BurstGridInterestManager`           | Open world MMO (5k+ entities, DOD) |
 | `BurstTeamVisibilityInterestManager` | MOBA, RTS (5k+ entities, DOD)      |
 
-### GAS Integration (📦 Separate Package: `CycloneGames.Networking.GAS`)
+### GAS Integration (`CycloneGames.GameplayAbilities.Networking`)
 
 - `NetworkedAbilityBridge`: transport-agnostic GAS protocol bridge.
 - `AttributeSyncManager`: generic attribute dirty tracking and sync.
@@ -1367,6 +1367,68 @@ public class TeamVisionController : MonoBehaviour
 - `GasBridgeGameplayAbilitiesExtensions`: one-line ASC registration, delta replication, and full-state send.
 
 ---
+
+## Current Adapter and Protocol Notes
+
+This section reflects the current Cyclone networking layer and should be treated as the practical entry point for new projects.
+
+### Runtime Context
+
+Use `INetworkRuntimeContext` to describe the active backend. Built-in runtime ids are readable ASCII codes stored in `NetworkRuntimeId`:
+
+```csharp
+NetworkRuntimeIds.Mirror  // "Mirror"
+NetworkRuntimeIds.Mirage  // "Mirage"
+NetworkRuntimeIds.Nakama  // "Nakama"
+```
+
+Custom backends should use `NetworkRuntimeId.FromAsciiCode("MyNet")` with at most 8 printable ASCII characters. Runtime capabilities are declared through `NetworkBackendFeatures`, such as `RealtimeTransport`, `AuthSession`, `Matchmaker`, `BackendRpc`, `Presence`, `Relay`, and `AuthoritativeServer`.
+
+### Wire Frame
+
+Cyclone adapters use a stable wire frame when they need a backend-neutral message envelope. A frame is the fixed Cyclone header followed by the serialized payload. The current header is 22 bytes:
+
+| Offset | Size | Field | Description |
+| ---: | ---: | --- | --- |
+| 0 | 2 | Magic | ASCII bytes `C` and `N`, read as little-endian `ushort`. |
+| 2 | 1 | Version | Current protocol version. |
+| 3 | 1 | HeaderLength | Header byte count. |
+| 4 | 2 | Flags | `NetworkMessageFlags`. |
+| 6 | 2 | MessageId | Cyclone typed message id. |
+| 8 | 1 | Channel | `NetworkChannel` value. |
+| 9 | 1 | Reserved | Reserved for future header data. |
+| 10 | 4 | Sequence | Message or frame sequence. |
+| 14 | 4 | PayloadLength | Serialized payload length in bytes. |
+| 18 | 4 | Checksum | FNV-1a checksum over routing metadata and payload. |
+
+`NetworkFrameCodec` reads, writes, and validates frames without heap allocation. The checksum is non-cryptographic: it catches accidental corruption and mismatched parsing, but it is not a replacement for TLS, DTLS, HMAC, signatures, or backend authentication.
+
+Mirror and Mirage adapters use `CycloneWireFrameMessage`. Its `Frame` field contains the full Cyclone frame, including header and payload. Use `NetworkFrameCodec.TryReadPayload` when only the payload is needed.
+
+### Protocol Version
+
+`NetworkWireProtocol.CurrentVersion` is currently `1`. This is the first stable Cyclone wire-frame contract, not a legacy compatibility branch. Because this project has not shipped a previous protocol, there is no `LegacyRaw` or old raw-message path in the current design.
+
+### Backend Compatibility
+
+Mirror and Mirage are realtime transport adapters for Unity-hosted networking. Nakama is available through `Unity.Runtime/Adapters/Nakama` as a client-side socket adapter and backend service facade.
+
+`NakamaNetAdapter` implements `INetTransport`, `INetworkManager`, `INetworkRuntimeContextProvider`, `INetworkSessionService`, `INetworkMatchStateService`, `INetworkMatchmakerService`, `INetworkBackendRpcService`, and `INetworkPresenceService`. It sends Cyclone wire frames through Nakama match state with a configurable op code, and receives remote match state back through the same `NetworkFrameCodec` validation path.
+
+Important Nakama usage notes:
+
+- `StartClient(matchId)` connects the socket and optionally joins a relayed match.
+- `StartServer()` is intentionally unsupported. Authoritative logic should live in Nakama server modules or a dedicated server adapter.
+- `SendToServer`, `BroadcastToClients`, and `Broadcast` map to Nakama match state sends.
+- Targeted `SendToClient` works when the target connection is a `NakamaNetConnection` backed by an `IUserPresence`.
+- The adapter exposes Nakama session, match state, matchmaker, RPC, and presence through Cyclone service interfaces, so gameplay code does not need to depend on Nakama SDK types.
+- The adapter assembly is optional and compiles only when `com.heroiclabs.nakama-unity` is installed.
+
+Best HTTP is suitable for HTTP, REST, RPC, and download flows; do not use it as the default realtime gameplay transport unless the game intentionally uses a request/response model.
+
+### Editor Diagnostics
+
+Create a preset from `Create > CycloneGames > Networking > Bootstrap Preset` and open the checker from `Tools > CycloneGames > Networking > Bootstrap Diagnostics`. The diagnostics check missing transports, missing or duplicated managers, runtime context wiring, optional SDK packages, and requested backend features.
 
 ## Directory Structure
 
@@ -1392,21 +1454,21 @@ Runtime/Scripts/
 ├── Diagnostics/          # Profiler, network condition simulator
 ├── Authentication/       # Authentication interface
 ├── Platform/             # Platform-specific configuration
-├── Adapters/             # Mirror/Mirage adapters
+├── Adapters/             # Mirror/Mirage/Nakama adapters
 └── Stubs/                # No-op implementations (testing)
 
 DOD/Runtime/                      # Data-Oriented Design variants (Burst/Jobs)
 ├── BurstGridInterestManager.cs   # Sort-based spatial hash, NativeList + IntroSort
 └── BurstTeamVisibilityInterestManager.cs  # Flat NativeList detection sources
 
-📦 CycloneGames.Networking.GAS/    # GAS Integration (separate package)
+📦 CycloneGames.GameplayAbilities.Networking/    # GAS Integration (separate package)
 └── Runtime/Scripts/
     ├── IAbilityNetAdapter.cs
     ├── NoopAbilityNetAdapter.cs
     ├── NetworkedAbilityBridge.cs
     └── AttributeSyncManager.cs
 
-📦 CycloneGames.Networking.GAS.Integrations.GameplayAbilities/
+📦 CycloneGames.GameplayAbilities.Networking.Unity.Runtime/
 └── Runtime/Scripts/
     ├── GameplayAbilitiesNetworkedASCAdapter.cs
     ├── GasBridgeGameplayAbilitiesExtensions.cs

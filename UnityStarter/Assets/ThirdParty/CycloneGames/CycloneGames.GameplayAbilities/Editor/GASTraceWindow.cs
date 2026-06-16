@@ -117,7 +117,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             public string Prediction;
         }
 
-        [MenuItem("Tools/CycloneGames/GameplayAbilities/GAS Trace")]
+        [MenuItem(GameplayAbilitiesEditorMenuPaths.Trace)]
         public static void ShowWindow()
         {
             var window = GetWindow<GASTraceWindow>("GAS Trace");

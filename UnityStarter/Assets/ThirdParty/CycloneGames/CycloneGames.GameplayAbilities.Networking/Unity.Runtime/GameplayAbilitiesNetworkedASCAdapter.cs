@@ -93,7 +93,7 @@ namespace CycloneGames.GameplayAbilities.Networking
     /// <summary>
     /// Bridge adapter that connects AbilitySystemComponent to NetworkedAbilityBridge callbacks.
     /// </summary>
-    public sealed class GameplayAbilitiesNetworkedASCAdapter : INetworkedASC, IDisposable
+    public sealed class GameplayAbilitiesNetworkedASCAdapter : INetworkedASC, INetworkedASCConnectionScopedFullState, IDisposable
     {
         private readonly AbilitySystemComponent _asc;
         private readonly IGASNetIdRegistry _idRegistry;
@@ -161,8 +161,10 @@ namespace CycloneGames.GameplayAbilities.Networking
         private EffectReplicationData[] _checksumEffectsBuffer = Array.Empty<EffectReplicationData>();
         private GrantedAbilityEntry[] _checksumGrantedAbilitiesBuffer = Array.Empty<GrantedAbilityEntry>();
         private AttributeEntry[] _checksumAttributeEntriesBuffer = Array.Empty<AttributeEntry>();
+        private AttributeEntry[] _observerAttributeEntriesBuffer = Array.Empty<AttributeEntry>();
         private int[] _checksumTagHashesBuffer = Array.Empty<int>();
         private SetByCallerEntry[][] _currentEffectSetByCallerEntries = Array.Empty<SetByCallerEntry[]>();
+        private readonly HashSet<int> _publicAttributeIds = new HashSet<int>();
 
         private readonly HashSet<int> _targetTagHashSetScratch =
             new HashSet<int>();
@@ -212,6 +214,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         public Func<int, bool> TryRemoveReplicatedEffect { get; set; }
         public Func<int, int, bool> TryApplyReplicatedStackChange { get; set; }
         public Func<EffectUpdateData, bool> TryApplyReplicatedEffectUpdate { get; set; }
+        public Func<int, bool> AttributeObserverReplicationFilter { get; set; }
 
         public GameplayAbilitiesNetworkedASCAdapter(
             AbilitySystemComponent asc,
@@ -288,6 +291,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             EnsureArrayCapacity(ref _checksumEffectsBuffer, activeEffectCapacity);
             EnsureArrayCapacity(ref _checksumGrantedAbilitiesBuffer, abilityCapacity);
             EnsureArrayCapacity(ref _checksumAttributeEntriesBuffer, attributeCapacity);
+            EnsureArrayCapacity(ref _observerAttributeEntriesBuffer, attributeCapacity);
             EnsureArrayCapacity(ref _checksumTagHashesBuffer, tagDeltaCapacity);
             EnsureSetByCallerScratchCapacity(maxSetByCallerPerEffect);
 
@@ -308,6 +312,16 @@ namespace CycloneGames.GameplayAbilities.Networking
                 tagDeltaCapacity,
                 tagDeltaCapacity,
                 maxSetByCallerPerEffect);
+        }
+
+        public void RegisterPublicReplicatedAttribute(int attributeId)
+        {
+            _publicAttributeIds.Add(attributeId);
+        }
+
+        public void UnregisterPublicReplicatedAttribute(int attributeId)
+        {
+            _publicAttributeIds.Remove(attributeId);
         }
 
         public void OnServerConfirmActivation(int abilityIndex, int predictionKey)
@@ -564,6 +578,34 @@ namespace CycloneGames.GameplayAbilities.Networking
                 TagCount = tagCount,
                 TagHashes = _fullStateTagHashesBuffer
             };
+        }
+
+        public GASFullStateData CaptureFullStateForConnection(INetConnection client)
+        {
+            var data = CaptureFullState();
+            if (client == null || client.ConnectionId == OwnerConnectionId)
+                return data;
+
+            var filteredAttributes = BuildObserverAttributeUpdate(new AttributeUpdateData
+            {
+                TargetNetworkId = data.TargetNetworkId,
+                IsFullSync = true,
+                AttributeCount = data.AttributeCount,
+                Attributes = data.Attributes
+            });
+
+            data.AttributeCount = filteredAttributes.AttributeCount;
+            data.Attributes = filteredAttributes.Attributes;
+            data.StateChecksum = ComputeNetworkStateChecksum(
+                data.Abilities,
+                data.AbilityCount,
+                data.Effects,
+                data.EffectCount,
+                data.Attributes,
+                data.AttributeCount,
+                data.TagHashes,
+                data.TagCount);
+            return data;
         }
 
         public void OnFullState(GASFullStateData data)
@@ -862,7 +904,7 @@ namespace CycloneGames.GameplayAbilities.Networking
 
             if (delta.AttributeUpdate.AttributeCount > 0)
             {
-                bridge.ServerBroadcastAttributes(observers, NetworkId, delta.AttributeUpdate);
+                SendAttributeUpdateToObservers(bridge, observers, delta.AttributeUpdate);
             }
 
             if (delta.TagUpdate.AddedCount > 0 || delta.TagUpdate.RemovedCount > 0)
@@ -884,6 +926,37 @@ namespace CycloneGames.GameplayAbilities.Networking
             }
 
             return delta;
+        }
+
+        private void SendAttributeUpdateToObservers(
+            NetworkedAbilityBridge bridge,
+            IReadOnlyList<INetConnection> observers,
+            AttributeUpdateData data)
+        {
+            AttributeUpdateData observerData = default;
+            bool observerDataBuilt = false;
+
+            for (int i = 0; i < observers.Count; i++)
+            {
+                var observer = observers[i];
+                if (observer == null)
+                    continue;
+
+                if (observer.ConnectionId == OwnerConnectionId)
+                {
+                    bridge.ServerSyncAttributes(observer, NetworkId, data);
+                    continue;
+                }
+
+                if (!observerDataBuilt)
+                {
+                    observerData = BuildObserverAttributeUpdate(data);
+                    observerDataBuilt = true;
+                }
+
+                if (observerData.AttributeCount > 0)
+                    bridge.ServerSyncAttributes(observer, NetworkId, observerData);
+            }
         }
 
         public void Dispose()
@@ -1238,6 +1311,41 @@ namespace CycloneGames.GameplayAbilities.Networking
                 AttributeCount = attributeCount,
                 Attributes = attributes
             };
+        }
+
+        private AttributeUpdateData BuildObserverAttributeUpdate(AttributeUpdateData source)
+        {
+            int sourceCount = source.Attributes != null
+                ? Math.Min(source.AttributeCount, source.Attributes.Length)
+                : 0;
+
+            EnsureArrayCapacity(ref _observerAttributeEntriesBuffer, sourceCount);
+            int count = 0;
+
+            for (int i = 0; i < sourceCount; i++)
+            {
+                var entry = source.Attributes[i];
+                if (!ShouldReplicateAttributeToObserver(entry.AttributeId))
+                    continue;
+
+                _observerAttributeEntriesBuffer[count++] = entry;
+            }
+
+            return new AttributeUpdateData
+            {
+                TargetNetworkId = source.TargetNetworkId,
+                IsFullSync = source.IsFullSync,
+                AttributeCount = count,
+                Attributes = _observerAttributeEntriesBuffer
+            };
+        }
+
+        private bool ShouldReplicateAttributeToObserver(int attributeId)
+        {
+            if (AttributeObserverReplicationFilter != null)
+                return AttributeObserverReplicationFilter(attributeId);
+
+            return _publicAttributeIds.Contains(attributeId);
         }
 
         private int FillDirtyAttributeEntriesFromAsc(ref AttributeEntry[] entries)

@@ -12,7 +12,7 @@ namespace CycloneGames.GameplayAbilities.Samples
     /// - Conditional effect activation
     /// - Effects that pause/resume based on state
     /// </summary>
-    [CreateAssetMenu(menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Shield of Light (Conditional)")]
+    [CreateAssetMenu(menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Shield of Light (Conditional)")]
     public class GA_ShieldOfLight_SO : GameplayAbilitySO
     {
         [Header("Shield Configuration")]

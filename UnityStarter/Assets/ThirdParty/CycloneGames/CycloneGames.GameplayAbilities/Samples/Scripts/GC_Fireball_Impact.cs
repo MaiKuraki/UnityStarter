@@ -4,7 +4,7 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
-    [CreateAssetMenu(fileName = "GC_Fireball_Impact", menuName = "CycloneGames/GameplayAbilitySystem/Samples/GameplayCues/Fireball Impact")]
+    [CreateAssetMenu(fileName = "GC_Fireball_Impact", menuName = "CycloneGames/GameplayAbilities/Samples/GameplayCues/Fireball Impact")]
     public class GC_Fireball_Impact : GameplayCueSO
     {
         [Header("Impact VFX")]

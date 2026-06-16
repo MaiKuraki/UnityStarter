@@ -28,18 +28,25 @@ namespace CycloneGames.Networking.Transports
     /// channel negotiation.
     /// </para>
     /// </remarks>
-    public sealed class LocalLoopTransport : IPollableTransport, IDisposable
+    public sealed class LocalLoopTransport : IPollableTransport, INetworkLifecycleProvider, INetworkFeatureProvider, IDisposable
     {
+        private const string InvalidPayloadSegmentError = "Invalid payload segment.";
+        private const string PayloadTooLargeError = "Payload exceeds the channel packet size limit.";
+        private const string ChannelNotReadyError = "Local loop channel is not ready. Ensure both server and client have started.";
         private const string DefaultChannelName = "default";
 
         private LocalLoopChannel _channel;
+        private string _channelName;
         private LocalLoopConnection _localConnection;
         private bool _isServer;
         private bool _isRunning;
         private volatile bool _disposed;
+        private TransportError _lastError;
+        private string _lastErrorMessage = string.Empty;
 
         // Server-side: track whether OnClientConnected has been fired for the current session.
         private bool _clientConnectedFired;
+        private bool _connectedToServerFired;
 
         #region INetTransport properties
 
@@ -48,6 +55,7 @@ namespace CycloneGames.Networking.Transports
         public bool IsRunning => _isRunning;
         public bool IsEncrypted => false;
         public bool Available => true;
+        public NetworkBackendFeatures Features => NetworkBackendFeatures.RealtimeTransport;
 
         #endregion
 
@@ -71,10 +79,28 @@ namespace CycloneGames.Networking.Transports
             return new NetworkStatistics(
                 bytesSent: _localConnection?.BytesSent ?? 0,
                 bytesReceived: _localConnection?.BytesReceived ?? 0,
-                packetsSent: 0,
-                packetsReceived: 0,
+                packetsSent: _localConnection?.PacketsSent ?? 0,
+                packetsReceived: _localConnection?.PacketsReceived ?? 0,
                 connectionCount: _isRunning ? 1 : 0,
                 averageRttMs: 0f);
+        }
+
+        public NetworkLifecycleSnapshot GetLifecycleSnapshot()
+        {
+            NetworkLifecycleState state = _disposed
+                ? NetworkLifecycleState.Disposed
+                : NetworkLifecycle.GetTransportState(this);
+
+            return new NetworkLifecycleSnapshot(
+                state,
+                Features,
+                _lastError,
+                _lastErrorMessage,
+                Available,
+                IsRunning,
+                IsServer,
+                IsClient,
+                IsEncrypted);
         }
 
         #endregion
@@ -87,11 +113,13 @@ namespace CycloneGames.Networking.Transports
             if (_isRunning) return;
 
             _channel = LocalLoopRegistry.GetOrCreateChannel(DefaultChannelName);
+            _channelName = DefaultChannelName;
             _channel.RegisterServer();
             _localConnection = new LocalLoopConnection(1, "loopback:server");
             _isServer = true;
             _isRunning = true;
             _clientConnectedFired = false;
+            _connectedToServerFired = false;
         }
 
         public void StartClient(string address)
@@ -101,12 +129,13 @@ namespace CycloneGames.Networking.Transports
 
             string channelName = string.IsNullOrEmpty(address) ? DefaultChannelName : address;
             _channel = LocalLoopRegistry.GetOrCreateChannel(channelName);
+            _channelName = channelName;
             _channel.RegisterClient();
             _localConnection = new LocalLoopConnection(0, "loopback:client");
             _isServer = false;
             _isRunning = true;
-
-            OnConnectedToServer?.Invoke();
+            _clientConnectedFired = false;
+            _connectedToServerFired = false;
         }
 
         public void Stop()
@@ -123,14 +152,20 @@ namespace CycloneGames.Networking.Transports
             }
             else
             {
-                OnDisconnectedFromServer?.Invoke();
+                if (_connectedToServerFired)
+                {
+                    OnDisconnectedFromServer?.Invoke();
+                }
                 _channel.UnregisterClient();
             }
 
+            LocalLoopRegistry.ReleaseChannel(_channelName, _channel);
             _channel = null;
+            _channelName = null;
             _localConnection = null;
             _isRunning = false;
             _clientConnectedFired = false;
+            _connectedToServerFired = false;
         }
 
         public void Disconnect(INetConnection connection)
@@ -149,11 +184,21 @@ namespace CycloneGames.Networking.Transports
             int length = payload.Count;
             if (length == 0) return;
 
+            if (payload.Array == null || payload.Offset < 0 || payload.Offset + length > payload.Array.Length)
+            {
+                RaiseError(connection, TransportError.InvalidSend, InvalidPayloadSegmentError);
+                return;
+            }
+
+            if (length > GetMaxPacketSize(channelId))
+            {
+                RaiseError(connection, TransportError.InvalidSend, PayloadTooLargeError);
+                return;
+            }
+
             if (!_channel.IsReady)
             {
-                OnError?.Invoke(connection,
-                    TransportError.InvalidSend,
-                    "Local loop channel is not ready—ensure both server and client have started.");
+                RaiseError(connection, TransportError.InvalidSend, ChannelNotReadyError);
                 return;
             }
 
@@ -167,6 +212,9 @@ namespace CycloneGames.Networking.Transports
 
         public void Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
         {
+            if (connections == null)
+                throw new ArgumentNullException(nameof(connections));
+
             if (!_isRunning || connections.Count == 0) return;
 
             // In local loop, there is only ever one peer connection.
@@ -181,11 +229,31 @@ namespace CycloneGames.Networking.Transports
         {
             if (!_isRunning || _channel == null) return;
 
-            // Server detects client connection when channel becomes fully established.
-            if (_isServer && !_clientConnectedFired && _channel.IsReady)
+            if (_isServer)
             {
-                _clientConnectedFired = true;
-                OnClientConnected?.Invoke(_localConnection);
+                if (!_clientConnectedFired && _channel.IsReady)
+                {
+                    _clientConnectedFired = true;
+                    OnClientConnected?.Invoke(_localConnection);
+                }
+                else if (_clientConnectedFired && !_channel.IsReady)
+                {
+                    _clientConnectedFired = false;
+                    OnClientDisconnected?.Invoke(_localConnection);
+                }
+            }
+            else
+            {
+                if (!_connectedToServerFired && _channel.IsReady)
+                {
+                    _connectedToServerFired = true;
+                    OnConnectedToServer?.Invoke();
+                }
+                else if (_connectedToServerFired && !_channel.IsReady)
+                {
+                    _connectedToServerFired = false;
+                    OnDisconnectedFromServer?.Invoke();
+                }
             }
 
             while (_channel.TryDequeue(_isServer, out LocalLoopMessage msg))
@@ -225,6 +293,13 @@ namespace CycloneGames.Networking.Transports
                 throw new ObjectDisposedException(nameof(LocalLoopTransport));
         }
 
+        private void RaiseError(INetConnection connection, TransportError error, string message)
+        {
+            _lastError = error;
+            _lastErrorMessage = message ?? string.Empty;
+            OnError?.Invoke(connection, error, _lastErrorMessage);
+        }
+
         #endregion
 
         #region Buffer management
@@ -248,6 +323,8 @@ namespace CycloneGames.Networking.Transports
 
         private long _bytesSent;
         private long _bytesReceived;
+        private int _packetsSent;
+        private int _packetsReceived;
 
         public LocalLoopConnection(int connectionId, string remoteAddress)
         {
@@ -264,16 +341,20 @@ namespace CycloneGames.Networking.Transports
         public double Jitter => 0;
         public long BytesSent => Interlocked.Read(ref _bytesSent);
         public long BytesReceived => Interlocked.Read(ref _bytesReceived);
+        public int PacketsSent => Volatile.Read(ref _packetsSent);
+        public int PacketsReceived => Volatile.Read(ref _packetsReceived);
         public ulong PlayerId { get; set; }
 
         internal void RecordSend(int byteCount)
         {
             Interlocked.Add(ref _bytesSent, byteCount);
+            Interlocked.Increment(ref _packetsSent);
         }
 
         internal void RecordReceive(int byteCount)
         {
             Interlocked.Add(ref _bytesReceived, byteCount);
+            Interlocked.Increment(ref _packetsReceived);
         }
 
         public bool Equals(INetConnection other)
@@ -319,6 +400,7 @@ namespace CycloneGames.Networking.Transports
         private volatile int _clientRegistered;
 
         public bool IsReady => _serverRegistered == 1 && _clientRegistered == 1;
+        public bool HasRegistrations => _serverRegistered != 0 || _clientRegistered != 0;
 
         internal void RegisterServer() => Interlocked.Exchange(ref _serverRegistered, 1);
         internal void UnregisterServer() => Interlocked.Exchange(ref _serverRegistered, 0);
@@ -371,6 +453,17 @@ namespace CycloneGames.Networking.Transports
         internal static bool TryRemoveChannel(string name)
         {
             return s_channels.TryRemove(name, out _);
+        }
+
+        internal static void ReleaseChannel(string name, LocalLoopChannel channel)
+        {
+            if (string.IsNullOrEmpty(name) || channel == null || channel.HasRegistrations)
+                return;
+
+            if (s_channels.TryGetValue(name, out LocalLoopChannel current) && ReferenceEquals(current, channel))
+            {
+                s_channels.TryRemove(name, out _);
+            }
         }
     }
 }

@@ -30,16 +30,32 @@ namespace CycloneGames.Networking.StateSync
         /// <summary>
         /// Mark a variable as dirty by its index.
         /// </summary>
-        public void MarkDirty(int index) => _dirtyFlags.SetDirty(index);
+        public void MarkDirty(int index)
+        {
+            ValidateIndex(index);
+            _dirtyFlags.SetDirty(index);
+        }
 
-        public bool IsAnyDirty() => _dirtyFlags.IsAnyDirty();
+        public bool IsAnyDirty()
+        {
+            if (_dirtyFlags.IsAnyDirty())
+                return true;
+
+            for (int i = 0; i < _variables.Count; i++)
+            {
+                if (_variables[i].IsDirty)
+                    return true;
+            }
+
+            return false;
+        }
 
         /// <summary>
         /// Write only dirty variables to the writer. Format: [dirtyMask:long][var0_data][var3_data]...
         /// </summary>
         public void WriteDirty(INetWriter writer)
         {
-            long mask = 0;
+            long mask = _dirtyFlags.ClearAndGet();
             for (int i = 0; i < _variables.Count; i++)
             {
                 if (_variables[i].IsDirty)
@@ -56,8 +72,6 @@ namespace CycloneGames.Networking.StateSync
                     _variables[i].ClearDirty();
                 }
             }
-
-            _dirtyFlags.Clear();
         }
 
         /// <summary>
@@ -97,6 +111,12 @@ namespace CycloneGames.Networking.StateSync
             _dirtyFlags.Clear();
             for (int i = 0; i < _variables.Count; i++)
                 _variables[i].ClearDirty();
+        }
+
+        private void ValidateIndex(int index)
+        {
+            if ((uint)index >= (uint)_variables.Count)
+                throw new ArgumentOutOfRangeException(nameof(index));
         }
     }
 }
