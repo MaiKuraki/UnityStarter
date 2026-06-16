@@ -120,7 +120,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
-    [CreateAssetMenu(fileName = "GA_SlamAttack", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Slam Attack")]
+    [CreateAssetMenu(fileName = "GA_SlamAttack", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Slam Attack")]
     public class GA_SlamAttack_SO : GameplayAbilitySO
     {
         public GameplayEffectSO DamageEffect;

@@ -120,7 +120,7 @@ namespace CycloneGames.GameplayAbilities.Sample
     }
 
 
-    [CreateAssetMenu(fileName = "GA_ChainLightning", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/ChainLightning")]
+    [CreateAssetMenu(fileName = "GA_ChainLightning", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/ChainLightning")]
     public class GA_ChainLightning_SO : GameplayAbilitySO
     {
         public GameplayEffectSO LightningDamageEffect;

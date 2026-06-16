@@ -3,6 +3,8 @@
     "rootNamespace": "CycloneGames.GameplayFramework.Tests.Editor",
     "references": [
         "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayFramework.Runtime.Integrations.Networking",
+        "CycloneGames.Networking.Core",
         "UniTask",
         "Unity.Mathematics"
     ],

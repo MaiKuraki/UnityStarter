@@ -8,7 +8,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// <summary>
     /// Runtime IMGUI debug overlay for all AbilitySystemComponents in the scene.
     /// Config: place a <see cref="GASOverlayConfig"/> asset in a Resources folder.
-    /// Toggle: <see cref="Toggle"/> or menu Tools/CycloneGames/GameplayAbilities/GAS Overlay.
+    /// Toggle: <see cref="Toggle"/> or menu Tools/CycloneGames/GameplayAbilities/Overlay/Toggle In Play Mode.
     /// </summary>
     public class GASDebugOverlay : MonoBehaviour
     {

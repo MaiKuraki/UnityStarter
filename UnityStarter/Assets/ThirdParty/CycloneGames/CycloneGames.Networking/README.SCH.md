@@ -71,7 +71,8 @@
     - [同步](#同步)
     - [帧同步](#帧同步)
     - [兴趣管理](#兴趣管理)
-    - [GAS 集成（📦 独立包：`CycloneGames.Networking.GAS`）](#gas-集成-独立包cyclonegamesnetworkinggas)
+    - [GAS 集成（`CycloneGames.GameplayAbilities.Networking`）](#gas-集成cyclonegamesgameplayabilitiesnetworking)
+  - [当前适配器与协议说明](#当前适配器与协议说明)
   - [目录结构](#目录结构)
   - [许可证](#许可证)
 
@@ -101,7 +102,7 @@ flowchart TB
         Scene["SceneManager</br>场景管理"]
     end
 
-    subgraph Bridge["🔗 GAS 桥接 (独立包 CycloneGames.Networking.GAS)"]
+    subgraph Bridge["🔗 GAS 桥接 (独立包 CycloneGames.GameplayAbilities.Networking)"]
         AbilityBridge["NetworkedAbilityBridge"]
         AttrSync["AttributeSyncManager"]
         GasAdapter["GameplayAbilitiesNetworkedASCAdapter\nExtensions"]
@@ -1028,20 +1029,19 @@ simulator.Enabled = true;
 
 ### 18. Gameplay Abilities 集成 (GAS)
 
-**路径**: 📦 **独立包** — `CycloneGames.Networking.GAS`（与核心包平级目录）  
-**Asmdef**: `CycloneGames.Networking.GAS`  
-**引用**: `CycloneGames.Networking.Runtime`  
-**命名空间**: `CycloneGames.Networking.GAS`
+**路径**: 📦 **独立包** — `CycloneGames.GameplayAbilities.Networking`（与核心包平级目录）  
+**Asmdef**: `CycloneGames.GameplayAbilities.Networking.Core` / `CycloneGames.GameplayAbilities.Networking.Unity.Runtime`  
+**引用**: `CycloneGames.Networking.Core`  
+**命名空间**: `CycloneGames.GameplayAbilities.Networking`
 
 > **包结构说明**：本模块分为两层。
 >
-> - `CycloneGames.Networking.GAS` — 纯协议层：消息 ID、`IAbilityNetAdapter` 接口、`NetworkedAbilityBridge`、`AttributeSyncManager`。不依赖任何具体 GAS 实现。
-> - `CycloneGames.Networking.GAS.Integrations.GameplayAbilities` — `CycloneGames.GameplayAbilities` 的主线集成层：ASC 适配器、细粒度 effect delta 复制、full-state 快照接线与安全辅助。
-> - `CycloneGames.Networking.GAS.Integrations.GameplayAbilities` — 与 `CycloneGames.GameplayAbilities` 的具体胶水层。使用 `CycloneGames.GameplayAbilities` 时引入此包；自定义 GAS 实现时可忽略。
+> - `CycloneGames.GameplayAbilities.Networking.Core` — 协议与 bridge 层：消息 ID、`IAbilityNetAdapter`、`NetworkedAbilityBridge`、序列化器、状态 checksum 和安全策略。
+> - `CycloneGames.GameplayAbilities.Networking.Unity.Runtime` — `CycloneGames.GameplayAbilities` 的主线集成层：ASC 适配器、细粒度 effect delta 复制、full-state 快照接线与安全辅助。
 
 与 `CycloneGames.GameplayAbilities` 模块的深度集成，支持技能激活、效果复制、属性同步。
 
-> ⚠️ **Breaking Change**: GAS 相关类已从核心包移至独立包。请在 asmdef 中添加对 `CycloneGames.Networking.GAS` 的引用。
+> 当前包说明：GAS networking 位于 `CycloneGames.GameplayAbilities.Networking`。纯协议用法引用 Core 程序集；接入 `AbilitySystemComponent` 时引用 Unity.Runtime 程序集。
 
 ```mermaid
 flowchart TB
@@ -1074,8 +1074,8 @@ flowchart TB
 ```
 
 ```csharp
-using CycloneGames.Networking.GAS; // 📦 需引用 GAS 协议包
-using CycloneGames.Networking.GAS.Integrations.GameplayAbilities; // 📦 GameplayAbilities 主线集成包
+using CycloneGames.GameplayAbilities.Networking; // 📦 需引用 GAS 协议包
+using CycloneGames.GameplayAbilities.Networking.Unity.Runtime; // 📦 GameplayAbilities 主线集成包
 
 // 创建桥接
 var bridge = new NetworkedAbilityBridge(networkManager);
@@ -1593,7 +1593,7 @@ public class TeamVisionController : MonoBehaviour
 | `BurstGridInterestManager`           | 开放世界 MMO（5k+ 实体，DOD） |
 | `BurstTeamVisibilityInterestManager` | MOBA、RTS（5k+ 实体，DOD）    |
 
-### GAS 集成（📦 独立包：`CycloneGames.Networking.GAS`）
+### GAS 集成（`CycloneGames.GameplayAbilities.Networking`）
 
 - `NetworkedAbilityBridge`：与具体传输层无关的 GAS 协议桥。
 - `AttributeSyncManager`：通用属性脏追踪与同步。
@@ -1601,6 +1601,68 @@ public class TeamVisionController : MonoBehaviour
 - `GasBridgeGameplayAbilitiesExtensions`：一行完成 ASC 注册、delta 复制与 full-state 下发。
 
 ---
+
+## 当前适配器与协议说明
+
+本节对应当前 Cyclone networking 层，建议新项目优先阅读这里，再回到前面的模块教程逐项深入。
+
+### Runtime Context
+
+使用 `INetworkRuntimeContext` 描述当前启用的后端。内置 runtime id 是可读 ASCII code，并存储在 `NetworkRuntimeId` 中：
+
+```csharp
+NetworkRuntimeIds.Mirror  // "Mirror"
+NetworkRuntimeIds.Mirage  // "Mirage"
+NetworkRuntimeIds.Nakama  // "Nakama"
+```
+
+自定义后端应使用 `NetworkRuntimeId.FromAsciiCode("MyNet")`，长度最多 8 个可打印 ASCII 字符。后端能力通过 `NetworkBackendFeatures` 声明，例如 `RealtimeTransport`、`AuthSession`、`Matchmaker`、`BackendRpc`、`Presence`、`Relay` 和 `AuthoritativeServer`。
+
+### Wire Frame
+
+当 adapter 需要与底层 SDK 无关的消息信封时，Cyclone 使用稳定 wire frame。一个 frame 是固定 Cyclone header 加序列化 payload。当前 header 为 22 bytes：
+
+| Offset | Size | 字段 | 说明 |
+| ---: | ---: | --- | --- |
+| 0 | 2 | Magic | ASCII bytes `C` 和 `N`，按 little-endian `ushort` 读取。 |
+| 2 | 1 | Version | 当前协议版本。 |
+| 3 | 1 | HeaderLength | Header 字节数。 |
+| 4 | 2 | Flags | `NetworkMessageFlags`。 |
+| 6 | 2 | MessageId | Cyclone 类型化消息 id。 |
+| 8 | 1 | Channel | `NetworkChannel` 值。 |
+| 9 | 1 | Reserved | 保留字段。 |
+| 10 | 4 | Sequence | 消息或 frame 序号。 |
+| 14 | 4 | PayloadLength | 序列化 payload 字节长度。 |
+| 18 | 4 | Checksum | 对路由元数据和 payload 计算的 FNV-1a checksum。 |
+
+`NetworkFrameCodec` 可以无堆分配地读取、写入和校验 frame。checksum 不是密码学完整性校验：它用于发现意外损坏和解析不匹配，不能替代 TLS、DTLS、HMAC、签名或后端认证。
+
+Mirror 和 Mirage adapter 使用 `CycloneWireFrameMessage`。它的 `Frame` 字段包含完整 Cyclone frame，包括 header 和 payload。如果只需要 payload，使用 `NetworkFrameCodec.TryReadPayload`。
+
+### 协议版本
+
+`NetworkWireProtocol.CurrentVersion` 当前为 `1`。这是第一版稳定 Cyclone wire-frame 契约，不是 legacy 兼容分支。因为项目还没有发布旧协议，当前设计中没有 `LegacyRaw` 或旧 raw-message 路径。
+
+### 后端兼容
+
+Mirror 和 Mirage 是 Unity-hosted networking 的实时传输 adapter。Nakama 现在通过 `Unity.Runtime/Adapters/Nakama` 提供 client-side socket adapter 和 backend service facade。
+
+`NakamaNetAdapter` 实现 `INetTransport`、`INetworkManager`、`INetworkRuntimeContextProvider`、`INetworkSessionService`、`INetworkMatchStateService`、`INetworkMatchmakerService`、`INetworkBackendRpcService` 和 `INetworkPresenceService`。它会把 Cyclone wire frame 通过 Nakama match state 发送出去，并用可配置 op code 区分 Cyclone gameplay frame；接收侧仍走 `NetworkFrameCodec` 校验路径。
+
+重要使用说明：
+
+- `StartClient(matchId)` 会连接 socket，并可按配置加入 relayed match。
+- `StartServer()` 有意不支持。权威逻辑应放在 Nakama server module 或 dedicated server adapter 中。
+- `SendToServer`、`BroadcastToClients` 和 `Broadcast` 会映射为 Nakama match state 发送。
+- 当目标连接是由 `IUserPresence` 支撑的 `NakamaNetConnection` 时，`SendToClient` 可以定向发送。
+- Adapter 通过 Cyclone service interfaces 暴露 Nakama session、match state、matchmaker、RPC 和 presence，因此 Gameplay 代码不需要依赖 Nakama SDK 类型。
+- Adapter 程序集是可选程序集，仅在安装 `com.heroiclabs.nakama-unity` 时编译。
+
+Best HTTP 适合 HTTP、REST、RPC 和 download；除非游戏明确采用 request/response 网络模型，否则不应作为默认实时 Gameplay 传输。
+
+### Editor 诊断
+
+通过 `Create > CycloneGames > Networking > Bootstrap Preset` 创建 preset，通过 `Tools > CycloneGames > Networking > Bootstrap Diagnostics` 打开检查器。诊断会检查缺少 transport、缺少或重复 manager、runtime context 接线、可选 SDK 包和所需后端能力。
 
 ## 目录结构
 
@@ -1626,21 +1688,21 @@ Runtime/Scripts/
 ├── Diagnostics/          # 性能分析、网络模拟
 ├── Authentication/       # 身份验证
 ├── Platform/             # 平台特定配置
-├── Adapters/             # Mirror/Mirage 适配器
+├── Adapters/             # Mirror/Mirage/Nakama 适配器
 └── Stubs/                # 空实现（测试用）
 
 DOD/Runtime/                      # 面向数据设计变体（Burst/Jobs 加速）
 ├── BurstGridInterestManager.cs   # 排序式空间哈希，NativeList + IntroSort
 └── BurstTeamVisibilityInterestManager.cs  # 扁平 NativeList 检测源
 
-📦 CycloneGames.Networking.GAS/    # GAS 集成（独立包）
+📦 CycloneGames.GameplayAbilities.Networking/    # GAS 集成（独立包）
 └── Runtime/Scripts/
     ├── IAbilityNetAdapter.cs
     ├── NoopAbilityNetAdapter.cs
     ├── NetworkedAbilityBridge.cs
     └── AttributeSyncManager.cs
 
-📦 CycloneGames.Networking.GAS.Integrations.GameplayAbilities/
+📦 CycloneGames.GameplayAbilities.Networking.Unity.Runtime/
 └── Runtime/Scripts/
     ├── GameplayAbilitiesNetworkedASCAdapter.cs
     ├── GasBridgeGameplayAbilitiesExtensions.cs

@@ -1,5 +1,7 @@
 namespace CycloneGames.GameplayAbilities.Networking
 {
+    using CycloneGames.Networking;
+
     public interface INetworkedASC
     {
         uint NetworkId { get; }
@@ -24,5 +26,10 @@ namespace CycloneGames.GameplayAbilities.Networking
         GASFullStateData CaptureFullState();
         void OnFullState(GASFullStateData data);
         bool OnStateSyncMetadata(GASStateSyncMetadata metadata);
+    }
+
+    public interface INetworkedASCConnectionScopedFullState
+    {
+        GASFullStateData CaptureFullStateForConnection(INetConnection client);
     }
 }

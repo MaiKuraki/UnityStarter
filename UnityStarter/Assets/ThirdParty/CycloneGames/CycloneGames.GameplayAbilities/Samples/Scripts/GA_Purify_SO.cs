@@ -126,7 +126,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
     }
 
-    [CreateAssetMenu(fileName = "GA_Purify", menuName = "CycloneGames/GameplayAbilitySystem/Samples/Ability/Purify")]
+    [CreateAssetMenu(fileName = "GA_Purify", menuName = "CycloneGames/GameplayAbilities/Samples/Ability/Purify")]
     public class GA_Purify_SO : GameplayAbilitySO
     {
         [Tooltip("The radius of the purify effect in meters.")]

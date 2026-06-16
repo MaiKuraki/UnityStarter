@@ -1,0 +1,143 @@
+using UnityEditor;
+using UnityEngine;
+using Handles = UnityEditor.Handles;
+
+namespace CycloneGames.GameplayAbilities.Networking.Editor.Diagnostics
+{
+    internal static class InspectorUiUtility
+    {
+        private const float HeaderHorizontalPadding = 4f;
+        private const float HeaderArrowWidth = 13f;
+
+        private static GUIStyle foldoutLabelStyle;
+        private static GUIStyle summaryLabelStyle;
+        private static GUIStyle summaryValueStyle;
+        private static readonly Vector3[] FoldoutTrianglePoints = new Vector3[3];
+
+        public static bool DrawFoldoutHeader(string title, bool foldout, Color color)
+        {
+            EnsureStyles();
+
+            Rect rect = EditorGUILayout.GetControlRect(false, 22f);
+            Color backgroundColor = foldout ? color : new Color(color.r * 0.7f, color.g * 0.7f, color.b * 0.7f);
+            EditorGUI.DrawRect(rect, backgroundColor);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1f), Color.black * 0.2f);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), Color.black * 0.2f);
+
+            Rect arrowRect = new Rect(
+                rect.x + HeaderHorizontalPadding,
+                rect.y + 2f,
+                HeaderArrowWidth,
+                rect.height - 4f);
+
+            Rect labelRect = new Rect(
+                arrowRect.xMax + 1f,
+                rect.y,
+                rect.width - (arrowRect.xMax - rect.x) - HeaderHorizontalPadding - 1f,
+                rect.height);
+
+            DrawFoldoutTriangle(arrowRect, foldout);
+            EditorGUI.LabelField(labelRect, title, foldoutLabelStyle);
+
+            if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
+            {
+                foldout = !foldout;
+                Event.current.Use();
+            }
+
+            return foldout;
+        }
+
+        public static void DrawSectionHeader(string title, string subtitle, Color titleColor)
+        {
+            Color previousColor = GUI.color;
+            GUI.color = titleColor;
+            EditorGUILayout.LabelField(title, EditorStyles.boldLabel);
+            GUI.color = previousColor;
+
+            if (!string.IsNullOrEmpty(subtitle))
+                EditorGUILayout.HelpBox(subtitle, MessageType.None);
+        }
+
+        public static void DrawSummaryRow(string label, int value, Color color)
+        {
+            EnsureStyles();
+
+            Rect rect = EditorGUILayout.GetControlRect(false, 18f);
+            Rect markerRect = new Rect(rect.x, rect.y + 4f, 10f, 10f);
+            Rect labelRect = new Rect(markerRect.xMax + 6f, rect.y, rect.width - 56f, rect.height);
+            Rect valueRect = new Rect(rect.xMax - 42f, rect.y, 42f, rect.height);
+
+            EditorGUI.DrawRect(markerRect, color);
+            EditorGUI.LabelField(labelRect, label, summaryLabelStyle);
+            EditorGUI.LabelField(valueRect, value.ToString(), summaryValueStyle);
+        }
+
+        public static void DrawIssue(GASNetworkDiagnosticIssue issue)
+        {
+            if (issue == null)
+                return;
+
+            MessageType type = issue.Severity switch
+            {
+                GASNetworkDiagnosticSeverity.Error => MessageType.Error,
+                GASNetworkDiagnosticSeverity.Warning => MessageType.Warning,
+                _ => MessageType.Info
+            };
+
+            EditorGUILayout.HelpBox(issue.DisplayText, type);
+            if (issue.Context != null)
+            {
+                EditorGUILayout.ObjectField("Context", issue.Context, typeof(UnityEngine.Object), true);
+            }
+        }
+
+        private static void EnsureStyles()
+        {
+            if (foldoutLabelStyle != null)
+                return;
+
+            foldoutLabelStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                normal = { textColor = Color.white },
+                fontStyle = FontStyle.Bold,
+                alignment = TextAnchor.MiddleLeft
+            };
+
+            summaryLabelStyle = new GUIStyle(EditorStyles.label)
+            {
+                alignment = TextAnchor.MiddleLeft
+            };
+
+            summaryValueStyle = new GUIStyle(EditorStyles.miniBoldLabel)
+            {
+                alignment = TextAnchor.MiddleRight
+            };
+        }
+
+        private static void DrawFoldoutTriangle(Rect rect, bool expanded)
+        {
+            Vector2 center = rect.center;
+
+            if (expanded)
+            {
+                FoldoutTrianglePoints[0] = new Vector3(center.x - 4f, center.y - 2f);
+                FoldoutTrianglePoints[1] = new Vector3(center.x + 4f, center.y - 2f);
+                FoldoutTrianglePoints[2] = new Vector3(center.x, center.y + 3f);
+            }
+            else
+            {
+                FoldoutTrianglePoints[0] = new Vector3(center.x - 2f, center.y - 4f);
+                FoldoutTrianglePoints[1] = new Vector3(center.x - 2f, center.y + 4f);
+                FoldoutTrianglePoints[2] = new Vector3(center.x + 3f, center.y);
+            }
+
+            Handles.BeginGUI();
+            Color previousColor = Handles.color;
+            Handles.color = new Color(0.90f, 0.90f, 0.90f, 0.95f);
+            Handles.DrawAAConvexPolygon(FoldoutTrianglePoints);
+            Handles.color = previousColor;
+            Handles.EndGUI();
+        }
+    }
+}

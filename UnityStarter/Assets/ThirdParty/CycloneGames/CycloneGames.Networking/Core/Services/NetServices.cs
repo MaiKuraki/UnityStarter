@@ -34,12 +34,21 @@ namespace CycloneGames.Networking.Services
         /// </summary>
         public static bool IsAvailable => _instance != null;
 
+        public static bool TryGet(out INetworkManager manager)
+        {
+            manager = _instance;
+            return manager != null;
+        }
+
         /// <summary>
         /// Registers the network manager implementation.
         /// Usually called by the Adapter's Awake method.
         /// </summary>
         public static void Register(INetworkManager manager)
         {
+            if (manager == null)
+                throw new ArgumentNullException(nameof(manager));
+
             Interlocked.Exchange(ref _instance, manager);
         }
 
@@ -49,7 +58,15 @@ namespace CycloneGames.Networking.Services
         /// </summary>
         public static void Unregister(INetworkManager manager)
         {
+            if (manager == null)
+                return;
+
             Interlocked.CompareExchange(ref _instance, null, manager);
+        }
+
+        public static void Reset()
+        {
+            Interlocked.Exchange(ref _instance, null);
         }
     }
 }

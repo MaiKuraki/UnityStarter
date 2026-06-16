@@ -14,7 +14,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             EditorGUILayout.HelpBox(
                 "GAS Debug Overlay Configuration\n" +
                 "Place this asset in a Resources folder (named 'GASOverlayConfig') for auto-loading.\n" +
-                "Toggle overlay in Play Mode: Tools > CycloneGames > GAS Overlay",
+                "Toggle overlay in Play Mode: Tools > CycloneGames > GameplayAbilities > Overlay > Toggle In Play Mode",
                 MessageType.Info);
 
             EditorGUILayout.Space(4);
@@ -33,7 +33,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             serializedObject.ApplyModifiedProperties();
         }
 
-        [MenuItem("Tools/CycloneGames/GameplayAbilities/GAS Overlay Config")]
+        [MenuItem(GameplayAbilitiesEditorMenuPaths.OverlayConfig)]
         public static void SelectOrCreateConfig()
         {
             // Try find existing asset in Resources
