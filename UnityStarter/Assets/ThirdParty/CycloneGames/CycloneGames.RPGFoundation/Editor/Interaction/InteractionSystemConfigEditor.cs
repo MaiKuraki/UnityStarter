@@ -1,17 +1,12 @@
 using UnityEditor;
 using UnityEngine;
+using CycloneGames.RPGFoundation.Runtime.Interaction;
 
 namespace CycloneGames.RPGFoundation.Editor.Interaction
 {
-    [CustomEditor(typeof(Runtime.Interaction.InteractionSystemConfig))]
+    [CustomEditor(typeof(InteractionSystemConfig))]
     public sealed class InteractionSystemConfigEditor : UnityEditor.Editor
     {
-        private static readonly GUIContent s_spatialLabel = new("Spatial Grid");
-        private static readonly GUIContent s_detectionLabel = new("Detection Defaults");
-        private static readonly GUIContent s_lodLabel = new("LOD Defaults");
-        private static readonly GUIContent s_perfLabel = new("Performance");
-        private static readonly GUIContent s_applyLabel = new("Apply to All Detectors in Scene");
-
         private SerializedProperty _cellSize;
         private SerializedProperty _is2DMode;
         private SerializedProperty _maxInteractables;
@@ -26,6 +21,11 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private SerializedProperty _sleepEnterMs;
         private SerializedProperty _maxLosChecksPerFrame;
         private SerializedProperty _useLosSpatialCache;
+
+        private static bool s_spatialFoldout = true;
+        private static bool s_detectionFoldout = true;
+        private static bool s_lodFoldout = true;
+        private static bool s_perfFoldout = true;
 
         private void OnEnable()
         {
@@ -49,47 +49,150 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         {
             serializedObject.Update();
 
-            EditorGUILayout.LabelField(s_spatialLabel, EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_cellSize);
-            EditorGUILayout.PropertyField(_is2DMode);
-            EditorGUILayout.Space();
-
-            EditorGUILayout.LabelField(s_detectionLabel, EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_maxInteractables);
-            EditorGUILayout.PropertyField(_positionUpdateThreshold);
-            EditorGUILayout.Space();
-
-            EditorGUILayout.LabelField(s_lodLabel, EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_nearDistance);
-            EditorGUILayout.PropertyField(_farDistance);
-            EditorGUILayout.PropertyField(_disableDistance);
-            EditorGUILayout.PropertyField(_nearIntervalMs);
-            EditorGUILayout.PropertyField(_farIntervalMs);
-            EditorGUILayout.PropertyField(_veryFarIntervalMs);
-            EditorGUILayout.PropertyField(_sleepIntervalMs);
-            EditorGUILayout.PropertyField(_sleepEnterMs);
-            EditorGUILayout.Space();
-
-            EditorGUILayout.LabelField(s_perfLabel, EditorStyles.boldLabel);
-            EditorGUILayout.PropertyField(_maxLosChecksPerFrame);
-            EditorGUILayout.PropertyField(_useLosSpatialCache);
-            EditorGUILayout.Space();
-
-            if (GUILayout.Button(s_applyLabel))
-            {
-                var config = (Runtime.Interaction.InteractionSystemConfig)target;
-                var detectors = FindObjectsByType<Runtime.Interaction.InteractionDetector>(FindObjectsSortMode.None);
-                foreach (var d in detectors)
-                {
-                    var so = new SerializedObject(d);
-                    so.FindProperty("maxLosChecksPerFrame").intValue = config.MaxLosChecksPerFrame;
-                    so.FindProperty("useLosSpatialCache").boolValue = config.UseLosSpatialCache;
-                    so.ApplyModifiedProperties();
-                }
-                Debug.Log($"[InteractionSystemConfig] Applied to {detectors.Length} detector(s) in scene.");
-            }
+            DrawSpatialSettings();
+            DrawDetectionSettings();
+            DrawLodSettings();
+            DrawPerformanceSettings();
+            DrawApplyTools();
 
             serializedObject.ApplyModifiedProperties();
+        }
+
+        private void DrawSpatialSettings()
+        {
+            s_spatialFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Spatial Grid",
+                s_spatialFoldout,
+                InteractionInspectorUiUtility.ColorCore);
+            if (!s_spatialFoldout)
+                return;
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.PropertyField(_cellSize);
+                EditorGUILayout.PropertyField(_is2DMode);
+                InteractionInspectorUiUtility.DrawHelpBox(
+                    "These settings are consumed by InteractionSystem. Runtime systems already initialized in play mode need an explicit reinitialize path if you change these values live.",
+                    MessageType.None);
+            }
+        }
+
+        private void DrawDetectionSettings()
+        {
+            s_detectionFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Detection Defaults",
+                s_detectionFoldout,
+                InteractionInspectorUiUtility.ColorBehavior);
+            if (!s_detectionFoldout)
+                return;
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.PropertyField(_maxInteractables);
+                EditorGUILayout.PropertyField(_positionUpdateThreshold);
+            }
+        }
+
+        private void DrawLodSettings()
+        {
+            s_lodFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "LOD Defaults",
+                s_lodFoldout,
+                InteractionInspectorUiUtility.ColorRuntime);
+            if (!s_lodFoldout)
+                return;
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.PropertyField(_nearDistance);
+                EditorGUILayout.PropertyField(_farDistance);
+                EditorGUILayout.PropertyField(_disableDistance);
+                EditorGUILayout.PropertyField(_nearIntervalMs);
+                EditorGUILayout.PropertyField(_farIntervalMs);
+                EditorGUILayout.PropertyField(_veryFarIntervalMs);
+                EditorGUILayout.PropertyField(_sleepIntervalMs);
+                EditorGUILayout.PropertyField(_sleepEnterMs);
+            }
+        }
+
+        private void DrawPerformanceSettings()
+        {
+            s_perfFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Performance",
+                s_perfFoldout,
+                InteractionInspectorUiUtility.ColorDebug);
+            if (!s_perfFoldout)
+                return;
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.PropertyField(_maxLosChecksPerFrame);
+                EditorGUILayout.PropertyField(_useLosSpatialCache);
+            }
+        }
+
+        private void DrawApplyTools()
+        {
+            EditorGUILayout.Space(4f);
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                InteractionInspectorUiUtility.DrawHelpBox(
+                    "Applies matching defaults to all InteractionDetector components in the open scene. This records Undo for each changed detector.",
+                    MessageType.None);
+
+                if (GUILayout.Button("Apply To All Detectors In Scene"))
+                    ApplyToAllDetectors();
+            }
+        }
+
+        private void ApplyToAllDetectors()
+        {
+            var config = (InteractionSystemConfig)target;
+            var detectors = FindObjectsByType<InteractionDetector>(FindObjectsSortMode.None);
+
+            for (int i = 0; i < detectors.Length; i++)
+            {
+                InteractionDetector detector = detectors[i];
+                Undo.RecordObject(detector, "Apply Interaction System Config");
+
+                var so = new SerializedObject(detector);
+                SetInt(so, "maxInteractables", config.MaxInteractables);
+                SetFloat(so, "nearDistance", config.NearDistance);
+                SetFloat(so, "farDistance", config.FarDistance);
+                SetFloat(so, "disableDistance", config.DisableDistance);
+                SetFloat(so, "nearIntervalMs", config.NearIntervalMs);
+                SetFloat(so, "farIntervalMs", config.FarIntervalMs);
+                SetFloat(so, "veryFarIntervalMs", config.VeryFarIntervalMs);
+                SetFloat(so, "sleepIntervalMs", config.SleepIntervalMs);
+                SetFloat(so, "sleepEnterMs", config.SleepEnterMs);
+                SetInt(so, "maxLosChecksPerFrame", config.MaxLosChecksPerFrame);
+                SetBool(so, "useLosSpatialCache", config.UseLosSpatialCache);
+                so.ApplyModifiedProperties();
+                EditorUtility.SetDirty(detector);
+            }
+
+            Debug.Log("[InteractionSystemConfig] Applied to " + detectors.Length + " detector(s) in scene.");
+        }
+
+        private static void SetInt(SerializedObject so, string propertyName, int value)
+        {
+            SerializedProperty property = so.FindProperty(propertyName);
+            if (property != null)
+                property.intValue = value;
+        }
+
+        private static void SetFloat(SerializedObject so, string propertyName, float value)
+        {
+            SerializedProperty property = so.FindProperty(propertyName);
+            if (property != null)
+                property.floatValue = value;
+        }
+
+        private static void SetBool(SerializedObject so, string propertyName, bool value)
+        {
+            SerializedProperty property = so.FindProperty(propertyName);
+            if (property != null)
+                property.boolValue = value;
         }
     }
 }
