@@ -15,7 +15,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
         /// <summary>
         /// All valid candidates from the last detection scan, sorted by score (highest first).
-        /// Zero-GC: the returned list is an internal buffer — do NOT cache the reference.
+        /// Zero-GC: the returned list is an internal buffer - do NOT cache the reference.
         /// Updated each detection cycle. Use for PUBG-style loot lists or target cycling.
         /// </summary>
         IReadOnlyList<InteractionCandidate> NearbyInteractables { get; }

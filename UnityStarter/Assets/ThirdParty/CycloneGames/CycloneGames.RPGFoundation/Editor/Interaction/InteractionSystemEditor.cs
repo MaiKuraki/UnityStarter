@@ -1,5 +1,5 @@
-using UnityEngine;
 using UnityEditor;
+using UnityEngine;
 using CycloneGames.RPGFoundation.Runtime.Interaction;
 
 namespace CycloneGames.RPGFoundation.Editor.Interaction
@@ -9,6 +9,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
     {
         private SerializedProperty _is2DMode;
         private SerializedProperty _cellSize;
+
+        private static bool s_gridFoldout = true;
+        private static bool s_runtimeFoldout = true;
 
         private void OnEnable()
         {
@@ -21,56 +24,67 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             serializedObject.Update();
 
             EditorGUILayout.LabelField("Interaction System", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(
-                "Central hub for the interaction module.\n" +
-                "Manages spatial hash grid and routes interaction commands via VitalRouter.",
+            InteractionInspectorUiUtility.DrawHelpBox(
+                "Central hub for spatial registration, distance monitoring, and VitalRouter command routing.",
                 MessageType.None);
 
-            EditorGUILayout.Space(8);
+            DrawGridSettings();
+            DrawRuntimeStatus();
+
+            serializedObject.ApplyModifiedProperties();
+        }
+
+        private void DrawGridSettings()
+        {
+            s_gridFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Spatial Grid",
+                s_gridFoldout,
+                InteractionInspectorUiUtility.ColorCore);
+            if (!s_gridFoldout)
+                return;
 
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUILayout.LabelField("Spatial Grid", EditorStyles.boldLabel);
-                EditorGUILayout.PropertyField(_is2DMode, new GUIContent("2D Mode", "Use X/Y plane for spatial hashing (2D games)"));
-                EditorGUILayout.PropertyField(_cellSize, new GUIContent("Cell Size", "Spatial hash cell size in world units. Larger = fewer cells, smaller = finer queries."));
+                EditorGUILayout.PropertyField(_is2DMode, new GUIContent("2D Mode"));
+                EditorGUILayout.PropertyField(_cellSize, new GUIContent("Cell Size"));
 
                 if (_cellSize.floatValue <= 0f)
-                {
-                    EditorGUILayout.HelpBox("Cell size must be > 0.", MessageType.Error);
-                }
+                    InteractionInspectorUiUtility.DrawHelpBox("Cell size must be greater than zero.", MessageType.Error);
                 else if (_cellSize.floatValue < 2f)
-                {
-                    EditorGUILayout.HelpBox("Small cell sizes increase memory usage. Recommended: 5-20 for most games.", MessageType.Warning);
-                }
+                    InteractionInspectorUiUtility.DrawHelpBox("Small cell sizes increase occupied cell count and dictionary pressure.", MessageType.Warning);
             }
+        }
 
-            if (Application.isPlaying)
+        private void DrawRuntimeStatus()
+        {
+            if (!Application.isPlaying)
+                return;
+
+            s_runtimeFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Runtime Status",
+                s_runtimeFoldout,
+                InteractionInspectorUiUtility.ColorRuntime);
+            if (!s_runtimeFoldout)
+                return;
+
+            InteractionSystem system = (InteractionSystem)target;
+            SpatialHashGrid grid = system.SpatialGrid;
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUILayout.Space(8);
-                var system = (InteractionSystem)target;
-                var grid = system.SpatialGrid;
-
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                if (grid != null)
                 {
-                    EditorGUILayout.LabelField("Runtime Status", EditorStyles.boldLabel);
-
-                    if (grid != null)
-                    {
-                        EditorGUILayout.LabelField($"Registered Interactables: {grid.ItemCount}");
-                        EditorGUILayout.LabelField($"Occupied Cells: {grid.CellCount}");
-                        EditorGUILayout.LabelField($"Slot Capacity: {grid.SlotCapacity}");
-                        EditorGUILayout.LabelField($"Mode: {(system.Is2DMode ? "2D (X/Y)" : "3D (X/Z)")}");
-                    }
-                    else
-                    {
-                        EditorGUILayout.LabelField("Grid: Not initialized");
-                    }
+                    EditorGUILayout.LabelField("Registered Interactables", grid.ItemCount.ToString());
+                    EditorGUILayout.LabelField("Occupied Cells", grid.CellCount.ToString());
+                    EditorGUILayout.LabelField("Slot Capacity", grid.SlotCapacity.ToString());
+                    EditorGUILayout.LabelField("Mode", system.Is2DMode ? "2D (X/Y)" : "3D (X/Z)");
                 }
-
-                Repaint();
+                else
+                {
+                    EditorGUILayout.LabelField("Grid", "Not initialized");
+                }
             }
 
-            serializedObject.ApplyModifiedProperties();
+            Repaint();
         }
     }
 }

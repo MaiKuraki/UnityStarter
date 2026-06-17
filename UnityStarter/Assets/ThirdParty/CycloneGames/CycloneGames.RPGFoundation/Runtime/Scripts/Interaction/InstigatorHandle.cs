@@ -4,7 +4,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 {
     /// <summary>
     /// Abstract base class identifying who initiated an interaction.
-    /// Uses an abstract class (not interface) to guarantee zero boxing at the compile level —
+    /// Uses an abstract class (not interface) to guarantee zero boxing at the compile level -
     /// only reference types can inherit from a class, eliminating any accidental struct boxing.
     /// <para/>
     /// Built-in implementation: <see cref="GameObjectInstigator"/> for MonoBehaviour-based games.

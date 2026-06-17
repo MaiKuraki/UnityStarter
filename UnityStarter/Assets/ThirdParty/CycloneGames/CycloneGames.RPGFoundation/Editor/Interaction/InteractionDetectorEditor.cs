@@ -1,10 +1,10 @@
-using UnityEngine;
 using UnityEditor;
+using UnityEngine;
 using CycloneGames.RPGFoundation.Runtime.Interaction;
 
 namespace CycloneGames.RPGFoundation.Editor.Interaction
 {
-    [CustomEditor(typeof(InteractionDetector))]
+    [CustomEditor(typeof(InteractionDetector), true)]
     public class InteractionDetectorEditor : UnityEditor.Editor
     {
         private InteractionDetector _target;
@@ -16,13 +16,10 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private SerializedProperty _detectionOffset;
         private SerializedProperty _maxInteractables;
         private SerializedProperty _channelMask;
-
         private SerializedProperty _distanceWeight;
         private SerializedProperty _angleWeight;
         private SerializedProperty _priorityWeight;
-
         private SerializedProperty _maxNearbyCandidates;
-
         private SerializedProperty _nearDistance;
         private SerializedProperty _farDistance;
         private SerializedProperty _disableDistance;
@@ -31,38 +28,59 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private SerializedProperty _veryFarIntervalMs;
         private SerializedProperty _sleepIntervalMs;
         private SerializedProperty _sleepEnterMs;
-
         private SerializedProperty _maxLosChecksPerFrame;
         private SerializedProperty _useLosSpatialCache;
-
         private SerializedProperty _detectionOrigin;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         private SerializedProperty _showDebugGUI;
 #endif
 
-        private static bool _detectionFoldout = true;
-        private static bool _scoringFoldout = true;
-        private static bool _losFoldout = true;
-        private static bool _lodFoldout = true;
-        private static bool _nearbyFoldout = true;
-        private static bool _debugFoldout = true;
+        private static bool s_runtimeFoldout = true;
+        private static bool s_detectionFoldout = true;
+        private static bool s_scoringFoldout = true;
+        private static bool s_losFoldout = true;
+        private static bool s_lodFoldout = true;
+        private static bool s_nearbyFoldout = true;
+        private static bool s_debugFoldout;
 
         private static readonly Color ColorDetectionRange = new(0.2f, 0.8f, 0.4f, 0.6f);
         private static readonly Color ColorNearRange = new(0.4f, 0.9f, 0.4f, 0.4f);
         private static readonly Color ColorFarRange = new(0.9f, 0.7f, 0.3f, 0.3f);
-        private static readonly Color ColorVeryFarRange = new(0.9f, 0.4f, 0.3f, 0.2f);
         private static readonly Color ColorCurrentTarget = new(0f, 1f, 0.5f, 1f);
-        private static readonly Color ColorCandidate = new(1f, 0.8f, 0.2f, 0.8f);
+        private static readonly Color ColorIdle = new(0.5f, 0.5f, 0.5f, 1f);
 
-        // LOD status colors — cached to avoid per-frame Color allocation
-        private static readonly Color ColorLODActive = new(0.3f, 0.9f, 0.4f);
-        private static readonly Color ColorLODSleeping = new(0.6f, 0.6f, 0.9f);
-
-        // Cached reflection — avoid per-frame GetField allocations
         private static System.Reflection.FieldInfo s_detectionOriginField;
         private static System.Reflection.FieldInfo s_detectionOffsetField;
         private static System.Reflection.FieldInfo s_detectionRadiusField;
+
+        private static readonly string[] ExcludedProperties =
+        {
+            "m_Script",
+            "detectionMode",
+            "detectionRadius",
+            "interactableLayer",
+            "obstructionLayer",
+            "detectionOffset",
+            "maxInteractables",
+            "channelMask",
+            "distanceWeight",
+            "angleWeight",
+            "priorityWeight",
+            "maxNearbyCandidates",
+            "nearDistance",
+            "farDistance",
+            "disableDistance",
+            "nearIntervalMs",
+            "farIntervalMs",
+            "veryFarIntervalMs",
+            "sleepIntervalMs",
+            "sleepEnterMs",
+            "maxLosChecksPerFrame",
+            "useLosSpatialCache",
+            "detectionOrigin",
+            "showDebugGUI"
+        };
 
         private static void EnsureReflectionCached()
         {
@@ -85,13 +103,10 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             _detectionOffset = serializedObject.FindProperty("detectionOffset");
             _maxInteractables = serializedObject.FindProperty("maxInteractables");
             _channelMask = serializedObject.FindProperty("channelMask");
-
             _distanceWeight = serializedObject.FindProperty("distanceWeight");
             _angleWeight = serializedObject.FindProperty("angleWeight");
             _priorityWeight = serializedObject.FindProperty("priorityWeight");
-
             _maxNearbyCandidates = serializedObject.FindProperty("maxNearbyCandidates");
-
             _nearDistance = serializedObject.FindProperty("nearDistance");
             _farDistance = serializedObject.FindProperty("farDistance");
             _disableDistance = serializedObject.FindProperty("disableDistance");
@@ -100,22 +115,20 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             _veryFarIntervalMs = serializedObject.FindProperty("veryFarIntervalMs");
             _sleepIntervalMs = serializedObject.FindProperty("sleepIntervalMs");
             _sleepEnterMs = serializedObject.FindProperty("sleepEnterMs");
-
             _maxLosChecksPerFrame = serializedObject.FindProperty("maxLosChecksPerFrame");
             _useLosSpatialCache = serializedObject.FindProperty("useLosSpatialCache");
-
             _detectionOrigin = serializedObject.FindProperty("detectionOrigin");
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             _showDebugGUI = serializedObject.FindProperty("showDebugGUI");
 #endif
 
-            SceneView.duringSceneGui += OnSceneGUI;
+            SceneView.duringSceneGui += HandleSceneGUI;
         }
 
         private void OnDisable()
         {
-            SceneView.duringSceneGui -= OnSceneGUI;
+            SceneView.duringSceneGui -= HandleSceneGUI;
         }
 
         public override void OnInspectorGUI()
@@ -124,15 +137,17 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
             DrawHeader();
             DrawRuntimeStatus();
-
-            EditorGUILayout.Space(8);
-
             DrawDetectionSettings();
             DrawScoringSettings();
             DrawLosSettings();
-            DrawLODSettings();
+            DrawLodSettings();
             DrawNearbySettings();
             DrawDebugSettings();
+
+            InteractionInspectorUiUtility.DrawDerivedProperties(
+                serializedObject,
+                target.GetType().Name + " Settings",
+                ExcludedProperties);
 
             serializedObject.ApplyModifiedProperties();
 
@@ -143,291 +158,213 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private new void DrawHeader()
         {
             EditorGUILayout.LabelField("Interaction Detector", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(
-                "Detects nearby Interactable objects using Physics3D, Physics2D, or SpatialHash.\n" +
-                "Attach to player character or camera.",
+            InteractionInspectorUiUtility.DrawHelpBox(
+                "Scans nearby interactables, scores candidates, tracks the active target, and exposes candidate data for UI.",
                 MessageType.None);
         }
 
         private void DrawRuntimeStatus()
         {
-            if (!Application.isPlaying) return;
+            if (!Application.isPlaying)
+                return;
 
-            EditorGUILayout.Space(4);
+            s_runtimeFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Runtime Status",
+                s_runtimeFoldout,
+                InteractionInspectorUiUtility.ColorRuntime);
+            if (!s_runtimeFoldout)
+                return;
+
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUILayout.LabelField("Runtime Status", EditorStyles.boldLabel);
-
                 IInteractable current = _target.CurrentInteractable.CurrentValue;
-                string targetName = current != null ? ((MonoBehaviour)current).name : "None";
+                string targetName = current is MonoBehaviour targetBehaviour ? targetBehaviour.name : "None";
 
                 EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField("Current Target:", GUILayout.Width(100));
-                GUI.color = current != null ? ColorCurrentTarget : Color.gray;
-                EditorGUILayout.LabelField(targetName, EditorStyles.boldLabel);
-                GUI.color = Color.white;
+                EditorGUILayout.LabelField("Current Target", GUILayout.Width(110f));
+                Rect badgeRect = EditorGUILayout.GetControlRect(false, 18f, GUILayout.Width(160f));
+                InteractionInspectorUiUtility.DrawStatusBadge(
+                    badgeRect,
+                    targetName,
+                    current != null ? ColorCurrentTarget : ColorIdle);
                 EditorGUILayout.EndHorizontal();
 
                 if (current != null)
                 {
-                    EditorGUILayout.LabelField($"  Prompt: {current.InteractionPrompt}");
-                    EditorGUILayout.LabelField($"  State: {current.CurrentState}");
-                    EditorGUILayout.LabelField($"  Priority: {current.Priority}");
-                    EditorGUILayout.LabelField($"  Channel: {current.Channel}");
+                    EditorGUILayout.LabelField("Prompt", current.InteractionPrompt);
+                    EditorGUILayout.LabelField("State", current.CurrentState.ToString());
+                    EditorGUILayout.LabelField("Priority", current.Priority.ToString());
+                    EditorGUILayout.LabelField("Channel", current.Channel.ToString());
                 }
 
-                // Nearby candidates count
                 var nearby = _target.NearbyInteractables;
                 if (nearby.Count > 0)
                 {
-                    EditorGUILayout.Space(4);
-                    EditorGUILayout.LabelField($"Nearby Candidates: {nearby.Count}", EditorStyles.boldLabel);
+                    EditorGUILayout.Space(4f);
+                    EditorGUILayout.LabelField("Nearby Candidates: " + nearby.Count, EditorStyles.boldLabel);
                     int displayMax = Mathf.Min(nearby.Count, 8);
                     for (int i = 0; i < displayMax; i++)
                     {
-                        var c = nearby[i];
-                        string name = c.Interactable is MonoBehaviour mb ? mb.name : "?";
-                        bool isCurrent = c.Interactable == current;
-                        string marker = isCurrent ? "▶ " : "  ";
+                        var candidate = nearby[i];
+                        string name = candidate.Interactable is MonoBehaviour mb ? mb.name : "Unknown";
+                        bool isCurrent = candidate.Interactable == current;
                         GUI.color = isCurrent ? ColorCurrentTarget : Color.white;
-                        EditorGUILayout.LabelField($"{marker}{name}  (Score: {c.Score:F1}, Dist²: {c.DistanceSqr:F1})");
+                        EditorGUILayout.LabelField(name + "  Score: " + candidate.Score.ToString("F1") + "  DistSqr: " + candidate.DistanceSqr.ToString("F1"));
                         GUI.color = Color.white;
                     }
-                    if (nearby.Count > 8)
-                        EditorGUILayout.LabelField($"  ... +{nearby.Count - 8} more");
                 }
 
-                EditorGUILayout.Space(4);
-                EditorGUILayout.BeginHorizontal();
                 GUI.enabled = current != null && current.IsInteractable;
-                if (GUILayout.Button("🎮 Trigger Interact", GUILayout.Height(24)))
-                {
+                if (GUILayout.Button("Trigger Interact"))
                     _target.TryInteract();
-                }
                 GUI.enabled = true;
-                EditorGUILayout.EndHorizontal();
             }
         }
 
         private void DrawDetectionSettings()
         {
-            _detectionFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_detectionFoldout, "Detection");
-            if (_detectionFoldout)
+            s_detectionFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Detection",
+                s_detectionFoldout,
+                InteractionInspectorUiUtility.ColorCore);
+            if (!s_detectionFoldout)
+                return;
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUI.indentLevel++;
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                EditorGUILayout.PropertyField(_detectionMode, new GUIContent("Mode"));
+                DetectionMode mode = (DetectionMode)_detectionMode.enumValueIndex;
+                if (mode == DetectionMode.SpatialHash)
                 {
-                    EditorGUILayout.PropertyField(_detectionMode, new GUIContent("Mode", "Physics3D, Physics2D, or SpatialHash"));
-
-                    var mode = (DetectionMode)_detectionMode.enumValueIndex;
-                    if (mode == DetectionMode.SpatialHash)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "SpatialHash mode uses the InteractionSystem's spatial grid.\n" +
-                            "Best for scenes with thousands of interactables.\n" +
-                            "LayerMask / MaxCandidates are not used in this mode.",
-                            MessageType.Info);
-                    }
-
-                    EditorGUILayout.Space(4);
-
-                    EditorGUILayout.PropertyField(_detectionOrigin, new GUIContent("Origin", "Transform to use as detection center"));
-                    EditorGUILayout.PropertyField(_detectionRadius, new GUIContent("Radius", "Maximum detection range"));
-                    EditorGUILayout.PropertyField(_detectionOffset, new GUIContent("Offset", "Local offset from origin"));
-
-                    EditorGUILayout.Space(4);
-
-                    EditorGUILayout.PropertyField(_channelMask, new GUIContent("Channel Mask", "Only detect interactables on these channels"));
-
-                    if (mode != DetectionMode.SpatialHash)
-                    {
-                        EditorGUILayout.PropertyField(_interactableLayer, new GUIContent("Interactable Layer", "LayerMask for interactable objects"));
-                        EditorGUILayout.PropertyField(_obstructionLayer, new GUIContent("Obstruction Layer", "LayerMask for line-of-sight blocking"));
-                        EditorGUILayout.PropertyField(_maxInteractables, new GUIContent("Max Candidates", "Buffer size for physics queries"));
-                    }
+                    InteractionInspectorUiUtility.DrawHelpBox(
+                        "SpatialHash uses InteractionSystem.SpatialGrid and does not require colliders. Moving interactables must call NotifyPositionChanged when their registered position changes enough.",
+                        MessageType.Info);
                 }
-                EditorGUI.indentLevel--;
+
+                EditorGUILayout.PropertyField(_detectionOrigin, new GUIContent("Origin"));
+                EditorGUILayout.PropertyField(_detectionRadius, new GUIContent("Radius"));
+                EditorGUILayout.PropertyField(_detectionOffset, new GUIContent("Offset"));
+                EditorGUILayout.PropertyField(_channelMask, new GUIContent("Channel Mask"));
+
+                if (mode != DetectionMode.SpatialHash)
+                {
+                    EditorGUILayout.PropertyField(_interactableLayer, new GUIContent("Interactable Layer"));
+                    EditorGUILayout.PropertyField(_obstructionLayer, new GUIContent("Obstruction Layer"));
+                    EditorGUILayout.PropertyField(_maxInteractables, new GUIContent("Max Candidates"));
+                }
             }
-            EditorGUILayout.EndFoldoutHeaderGroup();
         }
 
         private void DrawScoringSettings()
         {
-            _scoringFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_scoringFoldout, "⚖️ Scoring Weights");
-            if (_scoringFoldout)
-            {
-                EditorGUI.indentLevel++;
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-                {
-                    EditorGUILayout.HelpBox(
-                        $"Score = Priority×{_priorityWeight.floatValue:F0} + Angle×AngleWeight - Distance×DistanceWeight\n" +
-                        "Higher score = more likely to be selected",
-                        MessageType.None);
+            s_scoringFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Scoring",
+                s_scoringFoldout,
+                InteractionInspectorUiUtility.ColorBehavior);
+            if (!s_scoringFoldout)
+                return;
 
-                    EditorGUILayout.PropertyField(_priorityWeight, new GUIContent("Priority Weight", "Multiplier for Priority in scoring. Higher = Priority dominates."));
-                    EditorGUILayout.PropertyField(_distanceWeight, new GUIContent("Distance Weight", "Penalty for farther objects"));
-                    EditorGUILayout.PropertyField(_angleWeight, new GUIContent("Angle Weight", "Bonus for objects in front"));
-                }
-                EditorGUI.indentLevel--;
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                InteractionInspectorUiUtility.DrawHelpBox(
+                    "Score = Priority * PriorityWeight + FacingDot * AngleWeight - NormalizedDistance * DistanceWeight. Higher scores are selected first.",
+                    MessageType.None);
+                EditorGUILayout.PropertyField(_priorityWeight, new GUIContent("Priority Weight"));
+                EditorGUILayout.PropertyField(_distanceWeight, new GUIContent("Distance Weight"));
+                EditorGUILayout.PropertyField(_angleWeight, new GUIContent("Angle Weight"));
             }
-            EditorGUILayout.EndFoldoutHeaderGroup();
         }
 
         private void DrawLosSettings()
         {
-            _losFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_losFoldout, "👁 Line of Sight");
-            if (_losFoldout)
-            {
-                EditorGUI.indentLevel++;
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-                {
-                    EditorGUILayout.HelpBox(
-                        "Limits per-frame raycast count to avoid physics bottlenecks\n" +
-                        "when many interactables overlap in the detection area.\n" +
-                        "Spatial cache reuses LOS results for stationary objects.",
-                        MessageType.None);
+            s_losFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Line Of Sight",
+                s_losFoldout,
+                InteractionInspectorUiUtility.ColorBehavior);
+            if (!s_losFoldout)
+                return;
 
-                    EditorGUILayout.PropertyField(_maxLosChecksPerFrame,
-                        new GUIContent("Max Raycasts/Frame", "Maximum LOS checks per detection cycle. 0 = unlimited."));
-                    EditorGUILayout.PropertyField(_useLosSpatialCache,
-                        new GUIContent("Cache Stationary Results", "Reuse LOS results for objects that haven't moved (0.5s TTL)."));
-                }
-                EditorGUI.indentLevel--;
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                InteractionInspectorUiUtility.DrawHelpBox(
+                    "LOS checks use non-alloc raycasts. Limiting raycasts per detection cycle protects physics-heavy scenes; stationary result caching reduces repeated checks.",
+                    MessageType.None);
+                EditorGUILayout.PropertyField(_maxLosChecksPerFrame, new GUIContent("Max Raycasts Per Cycle"));
+                EditorGUILayout.PropertyField(_useLosSpatialCache, new GUIContent("Cache Stationary Results"));
             }
-            EditorGUILayout.EndFoldoutHeaderGroup();
         }
 
-        private void DrawLODSettings()
+        private void DrawLodSettings()
         {
-            _lodFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_lodFoldout, "📊 LOD & Sleep Mode");
-            if (_lodFoldout)
+            s_lodFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "LOD And Sleep",
+                s_lodFoldout,
+                InteractionInspectorUiUtility.ColorRuntime);
+            if (!s_lodFoldout)
+                return;
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUI.indentLevel++;
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-                {
-                    EditorGUILayout.HelpBox(
-                        "Time-based detection intervals ensure consistent behavior\n" +
-                        "across all frame rates (30/60/120 FPS).",
-                        MessageType.None);
+                EditorGUILayout.LabelField("Distance Thresholds", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(_nearDistance, new GUIContent("Near"));
+                EditorGUILayout.PropertyField(_farDistance, new GUIContent("Far"));
+                EditorGUILayout.PropertyField(_disableDistance, new GUIContent("Disable"));
 
-                    EditorGUILayout.Space(4);
-                    EditorGUILayout.LabelField("Distance Thresholds (meters)", EditorStyles.boldLabel);
-
-                    EditorGUILayout.PropertyField(_nearDistance, new GUIContent("Near", "Full update rate within this distance"));
-                    EditorGUILayout.PropertyField(_farDistance, new GUIContent("Far", "Reduced update rate within this distance"));
-                    EditorGUILayout.PropertyField(_disableDistance, new GUIContent("Disable", "Beyond this distance, target is defocused"));
-
-                    EditorGUILayout.Space(8);
-                    EditorGUILayout.LabelField("Update Intervals (milliseconds)", EditorStyles.boldLabel);
-
-                    // Near Interval
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField($"Near (< {_nearDistance.floatValue:F0}m)", GUILayout.Width(140));
-                    EditorGUILayout.PropertyField(_nearIntervalMs, GUIContent.none);
-                    EditorGUILayout.EndHorizontal();
-
-                    // Far Interval
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField($"Far (< {_farDistance.floatValue:F0}m)", GUILayout.Width(140));
-                    EditorGUILayout.PropertyField(_farIntervalMs, GUIContent.none);
-                    EditorGUILayout.EndHorizontal();
-
-                    // Very Far Interval
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField($"Very Far (< {_disableDistance.floatValue:F0}m)", GUILayout.Width(140));
-                    EditorGUILayout.PropertyField(_veryFarIntervalMs, GUIContent.none);
-                    EditorGUILayout.EndHorizontal();
-
-                    EditorGUILayout.Space(8);
-                    EditorGUILayout.LabelField("Sleep Mode", EditorStyles.boldLabel);
-                    EditorGUILayout.HelpBox(
-                        "When no interactable is found, detector enters sleep mode\n" +
-                        "to reduce CPU usage. Wakes up automatically when target appears.",
-                        MessageType.None);
-
-                    // Sleep Interval
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField("Sleep Interval", GUILayout.Width(140));
-                    EditorGUILayout.PropertyField(_sleepIntervalMs, GUIContent.none);
-                    EditorGUILayout.EndHorizontal();
-
-                    // Sleep Enter Time
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField("Sleep Enter Time", GUILayout.Width(140));
-                    EditorGUILayout.PropertyField(_sleepEnterMs, GUIContent.none);
-                    EditorGUILayout.EndHorizontal();
-
-                    // Calculate and show detection rate info
-                    EditorGUILayout.Space(4);
-                    float nearHz = _nearIntervalMs.floatValue > 0 ? 1000f / _nearIntervalMs.floatValue : 0;
-                    float sleepHz = _sleepIntervalMs.floatValue > 0 ? 1000f / _sleepIntervalMs.floatValue : 0;
-                    EditorGUILayout.HelpBox(
-                        $"Near: {nearHz:F0} checks/sec | Sleep: {sleepHz:F1} checks/sec",
-                        MessageType.None);
-
-                    // Runtime LOD status
-                    if (Application.isPlaying)
-                    {
-                        IInteractable currentTarget = _target.CurrentInteractable.CurrentValue;
-                        bool hastarget = currentTarget != null;
-
-                        EditorGUILayout.Space(4);
-                        EditorGUILayout.BeginHorizontal();
-                        EditorGUILayout.LabelField("Status:", GUILayout.Width(60));
-                        GUI.color = hastarget ? ColorLODActive : ColorLODSleeping;
-                        EditorGUILayout.LabelField(hastarget ? "👁 Active" : "💤 No Target", EditorStyles.boldLabel);
-                        GUI.color = Color.white;
-                        EditorGUILayout.EndHorizontal();
-                    }
-                }
-                EditorGUI.indentLevel--;
+                EditorGUILayout.Space(4f);
+                EditorGUILayout.LabelField("Intervals In Milliseconds", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(_nearIntervalMs, new GUIContent("Near Interval"));
+                EditorGUILayout.PropertyField(_farIntervalMs, new GUIContent("Far Interval"));
+                EditorGUILayout.PropertyField(_veryFarIntervalMs, new GUIContent("Very Far Interval"));
+                EditorGUILayout.PropertyField(_sleepIntervalMs, new GUIContent("Sleep Interval"));
+                EditorGUILayout.PropertyField(_sleepEnterMs, new GUIContent("Sleep Enter Time"));
             }
-            EditorGUILayout.EndFoldoutHeaderGroup();
         }
 
         private void DrawNearbySettings()
         {
-            _nearbyFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_nearbyFoldout, "📋 Nearby List");
-            if (_nearbyFoldout)
+            s_nearbyFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Nearby List",
+                s_nearbyFoldout,
+                InteractionInspectorUiUtility.ColorCore);
+            if (!s_nearbyFoldout)
+                return;
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUI.indentLevel++;
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-                {
-                    EditorGUILayout.PropertyField(_maxNearbyCandidates, new GUIContent("Max Candidates", "Maximum number of candidates to track in the nearby list"));
-                }
-                EditorGUI.indentLevel--;
+                EditorGUILayout.PropertyField(_maxNearbyCandidates, new GUIContent("Max Nearby Candidates"));
+                InteractionInspectorUiUtility.DrawHelpBox(
+                    "This list is a detector-owned buffer sorted by score. UI should read it during the change event or current frame and should not store the reference long-term.",
+                    MessageType.None);
             }
-            EditorGUILayout.EndFoldoutHeaderGroup();
         }
 
         private void DrawDebugSettings()
         {
-            _debugFoldout = EditorGUILayout.BeginFoldoutHeaderGroup(_debugFoldout, "🐛 Debug");
-            if (_debugFoldout)
+            s_debugFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Debug",
+                s_debugFoldout,
+                InteractionInspectorUiUtility.ColorDebug);
+            if (!s_debugFoldout)
+                return;
+
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUI.indentLevel++;
-                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
-                {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                    EditorGUILayout.PropertyField(_showDebugGUI, new GUIContent("Show Runtime GUI", "Display debug overlay in game view"));
+                EditorGUILayout.PropertyField(_showDebugGUI, new GUIContent("Show Runtime GUI"));
 #endif
-                    DetectorGizmoSettings.ShowDetectionRange = EditorGUILayout.Toggle("Show Detection Range", DetectorGizmoSettings.ShowDetectionRange);
-                    DetectorGizmoSettings.ShowLODRanges = EditorGUILayout.Toggle("Show LOD Ranges", DetectorGizmoSettings.ShowLODRanges);
-                    DetectorGizmoSettings.ShowCandidateLines = EditorGUILayout.Toggle("Show Candidate Lines", DetectorGizmoSettings.ShowCandidateLines);
-                    DetectorGizmoSettings.ShowForwardCone = EditorGUILayout.Toggle("Show Forward Cone", DetectorGizmoSettings.ShowForwardCone);
-                }
-                EditorGUI.indentLevel--;
+                DetectorGizmoSettings.ShowDetectionRange = EditorGUILayout.Toggle("Show Detection Range", DetectorGizmoSettings.ShowDetectionRange);
+                DetectorGizmoSettings.ShowLODRanges = EditorGUILayout.Toggle("Show LOD Ranges", DetectorGizmoSettings.ShowLODRanges);
+                DetectorGizmoSettings.ShowCandidateLines = EditorGUILayout.Toggle("Show Candidate Lines", DetectorGizmoSettings.ShowCandidateLines);
+                DetectorGizmoSettings.ShowForwardCone = EditorGUILayout.Toggle("Show Forward Cone", DetectorGizmoSettings.ShowForwardCone);
             }
-            EditorGUILayout.EndFoldoutHeaderGroup();
         }
 
-        private void OnSceneGUI(SceneView sceneView)
+        private void HandleSceneGUI(SceneView sceneView)
         {
             if (_target == null) return;
 
-            EnsureReflectionCached();
-            Transform origin = _target.GetComponent<Transform>();
-            if (s_detectionOriginField?.GetValue(_target) is Transform customOrigin && customOrigin != null)
+            Transform origin = _target.transform;
+            if (_detectionOrigin.objectReferenceValue is Transform customOrigin && customOrigin != null)
                 origin = customOrigin;
 
             Vector3 offset = _detectionOffset.vector3Value;
@@ -500,7 +437,6 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             float radius = s_detectionRadiusField != null ? (float)s_detectionRadiusField.GetValue(detector) : 3f;
 
             Vector3 center = origin.position + origin.TransformDirection(offset);
-
             bool isSelected = (gizmoType & GizmoType.Selected) != 0;
             Color color = ColorDetectionRange;
             color.a = isSelected ? 0.6f : 0.2f;

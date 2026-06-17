@@ -4,6 +4,8 @@
 
 高性能、零 GC、响应式的 Unity 交互系统。支持 **3D**、**2D** 和 **空间哈希** 三种检测模式，可轻松扩展至数千个可交互对象。基于 **R3**（响应式扩展）、**VitalRouter**（命令路由）和 **UniTask**（异步操作）构建。
 
+> **生产说明:** 检测热路径在预热后按零 GC 或低 GC 设计。可取消的异步交互执行仍会为每次活动交互创建一个 `CancellationTokenSource`, 因此应把交互执行视为低 GC 控制路径, 而不是逐帧零 GC 扫描路径。
+
 ---
 
 ## 目录
@@ -96,7 +98,7 @@
 | **全局事件**         | `OnAnyInteractionStarted` / `OnAnyInteractionCompleted` 用于统计分析。                                        |
 | **空间哈希网格**     | O(1) 空间分区，DOD SoA 布局 — 万级对象零 GC。                                                                 |
 | **双态模式**         | 开关式交互（开/关、开门/关门）通过 `TwoStateInteractionBase` 实现。                                           |
-| **特效池**           | 零分配的 VFX 生成，自动回收入池。                                                                             |
+| **特效池**           | 池创建和预热后低 GC 的 VFX 生成，自动回收入池。                                                               |
 | **本地化就绪**       | `InteractionPromptData` 支持多语言提示文本。                                                                  |
 | **编辑器工具**       | 自定义 Inspector、场景调试器、场景总览、验证窗口、Gizmos。                                                    |
 | **跨平台**           | Windows、macOS、Linux、Android、iOS、WebGL、主机。无 `unsafe` 代码。                                          |
@@ -535,6 +537,7 @@ event Action<IInteractable, InstigatorHandle, bool> OnAnyInteractionCompleted;
 - 触发 `OnStateChanged`、`OnProgressChanged`、`OnInteractionCancelled` 事件。
 - `CancellationTokenSource` 在所有代码路径中正确释放（提前返回、成功、异常）。
 - `RegisterWithSystem()` / `UnregisterFromSystem()` 为 `protected virtual`，可在子类中重写。
+- `SetInteractionSystem(IInteractionSystem system, bool registerImmediately = true)` 支持 DI 和自定义 composition root, 不必依赖场景单例查找。
 
 ### InteractionDetector
 
@@ -1014,9 +1017,12 @@ protected override async UniTask OnDoInteractAsync(CancellationToken ct)
 
 ### 特效池系统
 
-零分配的 VFX 生成，支持自动回收入池：
+池创建和预热完成后, VFX 生成路径为低 GC, 并支持自动回收入池：
 
 ```csharp
+// 在加载阶段或场景启动阶段预热
+EffectPoolSystem.Prewarm(sparksPrefab, 32);
+
 // 生成特效，2 秒后自动回收
 EffectPoolSystem.Spawn(sparksPrefab, position, rotation, 2f);
 
@@ -1029,9 +1035,9 @@ EffectPoolSystem.Spawn(smokePrefab, position, rotation);
 系统特性：
 
 - 首次生成时自动初始化（懒加载）。
-- 使用 `ConcurrentDictionary` 实现线程安全的池查找。
-- 池以预制体 `InstanceID` 为键 — 每个唯一预制体一个池。
-- 如预制体无 `PooledEffect` 组件，回退到 `Instantiate()`。
+- 使用主线程 `Dictionary<int, ObjectPool<...>>`; Unity 对象创建和池访问必须留在 Unity 主线程。
+- 池以预制体 `InstanceID` 为键, 每个唯一预制体一个池。
+- 如预制体无 `PooledEffect` 组件，回退到 `Instantiate()`。该 fallback 不是零 GC, 不应放在热路径。
 - 持有场景卸载时自动释放。
 
 ### VitalRouter 集成
@@ -1113,11 +1119,12 @@ detector.CurrentInteractable.Subscribe(target =>
 
 ### 零 GC 设计
 
-本模块在运行时（预热后）实现零垃圾回收：
+检测与空间查询热路径在预热后按零 GC 或低 GC 设计：
 
 | 技术                        | 应用位置                                             |
 | --------------------------- | ---------------------------------------------------- |
 | 预分配数组                  | 碰撞体缓冲区、排序缓冲区、空间网格槽数组             |
+| 调用方持有查询缓冲          | `SpatialHashGrid.QueryRadiusNonAlloc()` 避免共享结果列表 |
 | `Array.Empty<T>()`          | 空条件/动作列表（共享静态实例）                      |
 | 结构体候选项                | `InteractionCandidate` 为 `readonly struct`          |
 | 结构体命令                  | `InteractionCommand` 为 `readonly struct`            |
@@ -1133,8 +1140,9 @@ detector.CurrentInteractable.Subscribe(target =>
 
 **预热分配**（一次性，非每帧）：
 
-- `EffectPoolSystem` 在首次生成时为每个唯一特效预制体创建一个池。
+- `EffectPoolSystem` 在首次生成时为每个唯一特效预制体创建一个池。使用 `Prewarm()` 可将对象创建移动到加载阶段。
 - `InteractionDetector` 组件缓存在发现新碰撞体时创建一份 `Dictionary` 快照。
+- 可取消的交互执行会在活动交互生命周期内创建并释放一个 `CancellationTokenSource`。
 
 ### 空间哈希网格（DOD）
 
@@ -1154,6 +1162,7 @@ detector.CurrentInteractable.Subscribe(target =>
 
 - O(1) 插入、移除、位置更新。
 - O(k) 查询，k = 被查询单元格中的对象数（通常很少）。
+- `QueryRadiusNonAlloc()` 写入调用方持有的 `List<IInteractable>`, 并接受 `maxResults` 与 `allowBufferGrowth` 以避免热路径意外扩容。
 - 通过 `ReaderWriterLockSlim` 实现线程安全（读并行、写独占）。
 - 初始容量分配后零 GC。使用 `Array.Resize` 扩容（均摊）。
 - 同时支持 3D（X/Z）和 2D（X/Y）哈希。
@@ -1167,7 +1176,7 @@ detector.CurrentInteractable.Subscribe(target =>
 | `Interactable._isInteractingFlag`      | `Interlocked.CompareExchange` — 原子无锁 |
 | `SpatialHashGrid`                      | `ReaderWriterLockSlim` — 读并行、写独占  |
 | `InteractionDetector.s_componentCache` | 写时复制模式 — 读取方看到一致快照        |
-| `EffectPoolSystem.s_pools`             | `ConcurrentDictionary` — 无锁线程安全    |
+| `EffectPoolSystem.s_pools`             | 主线程 `Dictionary`; Unity 对象池不是 worker thread safe |
 | `InteractionSystem.Instance`           | 仅主线程访问（Unity 主线程）             |
 
 > **注意：** 交互系统为 Unity 的单线程主循环设计。线程安全机制主要防护 async/协程交错和潜在的 Job System 读取，而非真正的多线程并发。
@@ -1264,7 +1273,7 @@ detector.CurrentInteractable.Subscribe(target =>
 | `IInteractionDetector`    | `CurrentInteractable`, `NearbyInteractables`, `DetectionMode`, `ChannelMask`, `TryInteract()`, `TryInteractAll()`, `CycleTarget()`, `SetDetectionEnabled()`                                                                                                                                      |
 | `IInteractionRequirement` | `IsMet(IInteractable, InstigatorHandle)`, `FailureReason`                                                                                                                                                                                                                                        |
 | `ITwoStateInteraction`    | `IsActivated`, `ActivateState()`, `DeactivateState()`, `ToggleState()`                                                                                                                                                                                                                           |
-| `IEffectPoolSystem`       | `Initialize()`, `Spawn()`                                                                                                                                                                                                                                                                        |
+| `IEffectPoolSystem`       | `Initialize()`, `Prewarm()`, `Spawn()`                                                                                                                                                                                                                                                           |
 
 ### 类
 

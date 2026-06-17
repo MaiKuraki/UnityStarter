@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.RPGFoundation.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Tests.Editor",
+    "references": [
+        "CycloneGames.RPGFoundation.Runtime",
+        "CycloneGames.Factory.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

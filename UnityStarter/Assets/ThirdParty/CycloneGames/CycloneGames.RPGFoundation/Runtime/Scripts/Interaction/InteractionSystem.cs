@@ -60,8 +60,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             if (_initialized) return;
 
             this.is2DMode = is2DMode;
-            this.cellSize = cellSize;
-            _spatialGrid = new SpatialHashGrid(cellSize);
+            this.cellSize = cellSize > 0f ? cellSize : 10f;
+            _spatialGrid = new SpatialHashGrid(this.cellSize);
             EffectPoolSystem.Initialize();
             _initialized = true;
         }
@@ -82,16 +82,19 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
         public void Register(IInteractable interactable)
         {
+            if (interactable == null) return;
             _spatialGrid?.Insert(interactable, is2DMode);
         }
 
         public void Unregister(IInteractable interactable)
         {
+            if (interactable == null) return;
             _spatialGrid?.Remove(interactable);
         }
 
         public void UpdatePosition(IInteractable interactable)
         {
+            if (interactable == null) return;
             _spatialGrid?.UpdatePosition(interactable, is2DMode);
         }
 
@@ -114,7 +117,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             {
                 if (_distanceMonitors[i].Target == target)
                 {
-                    _distanceMonitors.RemoveAt(i);
+                    RemoveDistanceMonitorAtSwapBack(i);
                     return;
                 }
             }
@@ -127,21 +130,29 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 var entry = _distanceMonitors[i];
                 if (entry.Target == null || entry.Instigator == null || !entry.Target.IsInteracting)
                 {
-                    _distanceMonitors.RemoveAt(i);
+                    RemoveDistanceMonitorAtSwapBack(i);
                     continue;
                 }
                 if (!entry.Instigator.TryGetPosition(out Vector3 pos)) continue;
                 if ((entry.Target.Position - pos).sqrMagnitude > entry.MaxRangeSqr)
                 {
                     entry.Target.ForceEndInteraction(InteractionCancelReason.OutOfRange);
-                    _distanceMonitors.RemoveAt(i);
+                    RemoveDistanceMonitorAtSwapBack(i);
                 }
             }
         }
 
+        private void RemoveDistanceMonitorAtSwapBack(int index)
+        {
+            int lastIndex = _distanceMonitors.Count - 1;
+            if (index < lastIndex)
+                _distanceMonitors[index] = _distanceMonitors[lastIndex];
+            _distanceMonitors.RemoveAt(lastIndex);
+        }
+
         public async UniTask On(InteractionCommand command)
         {
-            if (command.Target == null || !command.Target.IsInteractable) return;
+            if (command.Target == null || !command.Target.CanInteract(command.Instigator)) return;
             OnAnyInteractionStarted?.Invoke(command.Target, command.Instigator);
             bool success = await command.Target.TryInteractAsync(command.Instigator, command.ActionId, destroyCancellationToken);
             OnAnyInteractionCompleted?.Invoke(command.Target, command.Instigator, success);
@@ -154,7 +165,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
         public async UniTask ProcessInteractionAsync(IInteractable target, InstigatorHandle instigator)
         {
-            if (target == null || !target.IsInteractable) return;
+            if (target == null || !target.CanInteract(instigator)) return;
             OnAnyInteractionStarted?.Invoke(target, instigator);
             bool success = await target.TryInteractAsync(instigator, null, destroyCancellationToken);
             OnAnyInteractionCompleted?.Invoke(target, instigator, success);
