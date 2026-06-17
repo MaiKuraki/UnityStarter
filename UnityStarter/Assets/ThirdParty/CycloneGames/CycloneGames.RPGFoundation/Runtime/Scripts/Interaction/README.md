@@ -4,6 +4,8 @@
 
 A high-performance, zero-GC, reactive interaction system for Unity. Supports **3D**, **2D**, and **Spatial Hash** detection modes, designed to scale to thousands of interactable objects. Built on **R3** (Reactive Extensions), **VitalRouter** (command routing), and **UniTask** (async operations).
 
+> **Production note:** Detection hot paths are designed for zero or low GC after warm-up. Cancellable async interaction execution still allocates a `CancellationTokenSource` per active interaction, so treat interaction execution as a low-GC control path, not as a per-frame zero-GC scan path.
+
 ---
 
 ## Table of Contents
@@ -96,7 +98,7 @@ A high-performance, zero-GC, reactive interaction system for Unity. Supports **3
 | **Global Events**           | `OnAnyInteractionStarted` / `OnAnyInteractionCompleted` for analytics.                                                                                   |
 | **Spatial Hash Grid**       | O(1) spatial partitioning with DOD SoA layout — 10k+ objects, zero GC.                                                                                   |
 | **Two-State Pattern**       | Toggle interaction (open/close, on/off) via `TwoStateInteractionBase`.                                                                                   |
-| **Effect Pool**             | Zero-allocation VFX spawning with auto return-to-pool.                                                                                                   |
+| **Effect Pool**             | Low-GC VFX spawning with auto return-to-pool after pool creation and prewarm.                                                                             |
 | **Localization Ready**      | `InteractionPromptData` for multi-language prompt text.                                                                                                  |
 | **Editor Tooling**          | Custom Inspectors, Scene Debugger, Scene Overview, Validator Window, Gizmos.                                                                             |
 | **Cross-Platform**          | Windows, macOS, Linux, Android, iOS, WebGL, Consoles. No `unsafe` code.                                                                                  |
@@ -535,6 +537,7 @@ Attach to any world object. Implements `IInteractable`. Base class for all inter
 - Fires `OnStateChanged`, `OnProgressChanged`, `OnInteractionCancelled` events.
 - `CancellationTokenSource` is properly disposed in all code paths (early return, success, exception).
 - `RegisterWithSystem()` / `UnregisterFromSystem()` are `protected virtual` for subclass override.
+- `SetInteractionSystem(IInteractionSystem system, bool registerImmediately = true)` supports DI and custom composition roots without relying on scene singleton lookup.
 
 ### InteractionDetector
 
@@ -1014,9 +1017,12 @@ protected override async UniTask OnDoInteractAsync(CancellationToken ct)
 
 ### Effect Pool System
 
-Zero-allocation VFX spawning with automatic return-to-pool:
+Low-GC VFX spawning with automatic return-to-pool after the pool is created and prewarmed:
 
 ```csharp
+// Prewarm during loading or scene bootstrap
+EffectPoolSystem.Prewarm(sparksPrefab, 32);
+
 // Spawn with auto-return after 2 seconds
 EffectPoolSystem.Spawn(sparksPrefab, position, rotation, 2f);
 
@@ -1029,9 +1035,9 @@ EffectPoolSystem.Spawn(smokePrefab, position, rotation);
 The system:
 
 - Initializes automatically on first spawn (lazy init).
-- Uses `ConcurrentDictionary` for thread-safe pool lookup.
-- Pools are keyed by prefab `InstanceID` — one pool per unique prefab.
-- Falls back to `Instantiate()` if the prefab has no `PooledEffect` component.
+- Uses a main-thread `Dictionary<int, ObjectPool<...>>`; Unity object creation and pool access must stay on the Unity main thread.
+- Pools are keyed by prefab `InstanceID`, one pool per unique prefab.
+- Falls back to `Instantiate()` if the prefab has no `PooledEffect` component. This fallback is not zero-GC and should not be used on hot paths.
 - Auto-disposes when the owner scene is unloaded.
 
 ### VitalRouter Integration
@@ -1113,11 +1119,12 @@ detector.CurrentInteractable.Subscribe(target =>
 
 ### Zero-GC Design
 
-The module is designed for zero garbage collection during runtime (after warm-up):
+The detector and spatial-query hot paths are designed for zero or low garbage collection after warm-up:
 
 | Technique                         | Where                                                              |
 | --------------------------------- | ------------------------------------------------------------------ |
 | Pre-allocated arrays              | Collider buffers, sort buffers, spatial grid slot arrays           |
+| Caller-owned query buffer         | `SpatialHashGrid.QueryRadiusNonAlloc()` avoids shared result lists |
 | `Array.Empty<T>()`                | Empty requirements/actions (shared static instance)                |
 | Struct candidates                 | `InteractionCandidate` is a `readonly struct`                      |
 | Struct commands                   | `InteractionCommand` is a `readonly struct`                        |
@@ -1133,8 +1140,9 @@ The module is designed for zero garbage collection during runtime (after warm-up
 
 **Warm-up allocations** (one-time, not per-frame):
 
-- `EffectPoolSystem` creates one pool per unique effect prefab on first spawn.
+- `EffectPoolSystem` creates one pool per unique effect prefab on first spawn. Use `Prewarm()` during loading to move object creation out of gameplay.
 - `InteractionDetector` component cache creates one `Dictionary` snapshot per new collider discovered.
+- Cancellable interaction execution creates and disposes a `CancellationTokenSource` for the active interaction lifetime.
 
 ### Spatial Hash Grid (DOD)
 
@@ -1154,6 +1162,7 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 
 - O(1) insert, remove, position update.
 - O(k) query where k = number of items in queried cells (typically small).
+- `QueryRadiusNonAlloc()` writes into a caller-owned `List<IInteractable>` and accepts `maxResults` plus `allowBufferGrowth` to prevent accidental `List` growth on hot paths.
 - Thread-safe via `ReaderWriterLockSlim` (read-parallel, write-exclusive).
 - Zero GC after initial capacity allocation. Grows with `Array.Resize` (amortized).
 - Supports both 3D (X/Z) and 2D (X/Y) hashing.
@@ -1167,7 +1176,7 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 | `Interactable._isInteractingFlag`      | `Interlocked.CompareExchange` — atomic lock-free        |
 | `SpatialHashGrid`                      | `ReaderWriterLockSlim` — read-parallel, write-exclusive |
 | `InteractionDetector.s_componentCache` | Copy-on-write pattern — reads see consistent snapshot   |
-| `EffectPoolSystem.s_pools`             | `ConcurrentDictionary` — lock-free thread-safe          |
+| `EffectPoolSystem.s_pools`             | Main-thread `Dictionary`; Unity object pooling is not worker-thread safe |
 | `InteractionSystem.Instance`           | Single-threaded access (Unity main thread only)         |
 
 > **Note:** The interaction system is designed for Unity's single-threaded main loop. Thread safety mechanisms protect against async/coroutine interleaving and potential Job System reads, not true multi-threading.
@@ -1264,7 +1273,7 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 | `IInteractionDetector`    | `CurrentInteractable`, `NearbyInteractables`, `DetectionMode`, `ChannelMask`, `TryInteract()`, `TryInteractAll()`, `CycleTarget()`, `SetDetectionEnabled()`                                                                                                                                      |
 | `IInteractionRequirement` | `IsMet(IInteractable, InstigatorHandle)`, `FailureReason`                                                                                                                                                                                                                                        |
 | `ITwoStateInteraction`    | `IsActivated`, `ActivateState()`, `DeactivateState()`, `ToggleState()`                                                                                                                                                                                                                           |
-| `IEffectPoolSystem`       | `Initialize()`, `Spawn()`                                                                                                                                                                                                                                                                        |
+| `IEffectPoolSystem`       | `Initialize()`, `Prewarm()`, `Spawn()`                                                                                                                                                                                                                                                           |
 
 ### Classes
 

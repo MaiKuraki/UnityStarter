@@ -1,5 +1,5 @@
-using UnityEngine;
 using UnityEditor;
+using UnityEngine;
 using CycloneGames.RPGFoundation.Runtime.Interaction;
 
 namespace CycloneGames.RPGFoundation.Editor.Interaction
@@ -11,18 +11,18 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private TwoStateInteractionBase _target;
         private SerializedProperty _startActivated;
 
+        private static bool s_stateFoldout = true;
+        private static bool s_runtimeFoldout = true;
+
         private static readonly Color ColorActivated = new(0.3f, 0.9f, 0.4f, 1f);
         private static readonly Color ColorDeactivated = new(0.6f, 0.6f, 0.6f, 1f);
 
-        // Cached GUIStyle for gizmo labels — avoid per-draw allocation
         private static GUIStyle s_gizmoLabelStyle;
 
-        // Base class fields to exclude from derived class section
         private static readonly string[] BaseClassFields =
         {
             "m_Script",
             "startActivated",
-            // Interactable base fields (for subclasses that also extend Interactable)
             "interactionPrompt",
             "isInteractable",
             "autoInteract",
@@ -37,6 +37,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             "actions",
             "holdDuration",
             "maxInteractionRange",
+            "positionUpdateThreshold",
             "onInteract",
             "onFocus",
             "onDefocus"
@@ -52,12 +53,17 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         {
             serializedObject.Update();
 
-            DrawHeader();
+            EditorGUILayout.LabelField("Two-State Interaction", EditorStyles.boldLabel);
+            InteractionInspectorUiUtility.DrawHelpBox(
+                "Binary state helper for doors, switches, platforms, show/hide objects, and other toggle-style interactions.",
+                MessageType.None);
+
             DrawStateControl();
-
-            EditorGUILayout.Space(8);
-
-            DrawDerivedClassFields();
+            DrawRuntimeControl();
+            InteractionInspectorUiUtility.DrawDerivedProperties(
+                serializedObject,
+                target.GetType().Name + " Settings",
+                BaseClassFields);
 
             serializedObject.ApplyModifiedProperties();
 
@@ -65,105 +71,73 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 Repaint();
         }
 
-        private new void DrawHeader()
-        {
-            EditorGUILayout.LabelField("🔀 Two-State Interaction", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox(
-                "Binary state object that can be activated or deactivated.\n" +
-                "Use for doors, switches, platforms, show/hide elements.",
-                MessageType.None);
-        }
-
         private void DrawStateControl()
         {
-            EditorGUILayout.Space(4);
+            s_stateFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "State",
+                s_stateFoldout,
+                InteractionInspectorUiUtility.ColorBehavior);
+            if (!s_stateFoldout)
+                return;
 
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUILayout.PropertyField(_startActivated, new GUIContent("Start Activated", "Initial state when scene loads"));
+                EditorGUILayout.PropertyField(_startActivated, new GUIContent("Start Activated"));
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("Initial State", GUILayout.Width(100f));
+                Rect badgeRect = EditorGUILayout.GetControlRect(false, 18f, GUILayout.Width(140f));
+                InteractionInspectorUiUtility.DrawStatusBadge(
+                    badgeRect,
+                    _startActivated.boolValue ? "Activated" : "Deactivated",
+                    _startActivated.boolValue ? ColorActivated : ColorDeactivated);
+                EditorGUILayout.EndHorizontal();
 
-                if (Application.isPlaying)
-                {
-                    EditorGUILayout.Space(4);
-
-                    bool isActivated = _target.IsActivated;
-                    Color stateColor = isActivated ? ColorActivated : ColorDeactivated;
-
-                    EditorGUILayout.BeginHorizontal();
-                    EditorGUILayout.LabelField("Current State:", GUILayout.Width(100));
-                    GUI.color = stateColor;
-                    EditorGUILayout.LabelField(isActivated ? "ACTIVATED" : "DEACTIVATED", EditorStyles.boldLabel);
-                    GUI.color = Color.white;
-                    EditorGUILayout.EndHorizontal();
-
-                    EditorGUILayout.Space(4);
-
-                    EditorGUILayout.BeginHorizontal();
-
-                    GUI.backgroundColor = ColorActivated;
-                    GUI.enabled = !isActivated;
-                    if (GUILayout.Button("▶ Activate", GUILayout.Height(24)))
-                    {
-                        _target.ActivateState();
-                    }
-
-                    GUI.backgroundColor = ColorDeactivated;
-                    GUI.enabled = isActivated;
-                    if (GUILayout.Button("■ Deactivate", GUILayout.Height(24)))
-                    {
-                        _target.DeactivateState();
-                    }
-
-                    GUI.backgroundColor = Color.white;
-                    GUI.enabled = true;
-
-                    if (GUILayout.Button("⟳ Toggle", GUILayout.Height(24)))
-                    {
-                        _target.ToggleState();
-                    }
-
-                    EditorGUILayout.EndHorizontal();
-                }
+                InteractionInspectorUiUtility.DrawHelpBox(
+                    "Start Activated is copied into runtime state during Awake. Changing it while playing does not rewrite the already-active state.",
+                    MessageType.None);
             }
         }
 
-        private void DrawDerivedClassFields()
+        private void DrawRuntimeControl()
         {
-            // Check if there are any derived class specific fields
-            SerializedProperty iterator = serializedObject.GetIterator();
-            bool hasDerivedFields = false;
+            if (!Application.isPlaying)
+                return;
 
-            if (iterator.NextVisible(true))
-            {
-                do
-                {
-                    if (System.Array.IndexOf(BaseClassFields, iterator.name) < 0)
-                    {
-                        hasDerivedFields = true;
-                        break;
-                    }
-                } while (iterator.NextVisible(false));
-            }
-
-            if (!hasDerivedFields) return;
-
-            // Draw derived class fields header
-            string typeName = target.GetType().Name;
-            EditorGUILayout.LabelField($"🔧 {typeName} Settings", EditorStyles.boldLabel);
+            s_runtimeFoldout = InteractionInspectorUiUtility.DrawFoldoutHeader(
+                "Runtime Control",
+                s_runtimeFoldout,
+                InteractionInspectorUiUtility.ColorRuntime);
+            if (!s_runtimeFoldout)
+                return;
 
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                iterator = serializedObject.GetIterator();
-                if (iterator.NextVisible(true))
+                bool isActivated = _target.IsActivated;
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField("Current State", GUILayout.Width(100f));
+                Rect badgeRect = EditorGUILayout.GetControlRect(false, 18f, GUILayout.Width(140f));
+                InteractionInspectorUiUtility.DrawStatusBadge(
+                    badgeRect,
+                    isActivated ? "Activated" : "Deactivated",
+                    isActivated ? ColorActivated : ColorDeactivated);
+                EditorGUILayout.EndHorizontal();
+
+                EditorGUILayout.BeginHorizontal();
+                using (new EditorGUI.DisabledScope(isActivated))
                 {
-                    do
-                    {
-                        if (System.Array.IndexOf(BaseClassFields, iterator.name) < 0)
-                        {
-                            EditorGUILayout.PropertyField(iterator, true);
-                        }
-                    } while (iterator.NextVisible(false));
+                    if (GUILayout.Button("Activate"))
+                        _target.ActivateState();
                 }
+
+                using (new EditorGUI.DisabledScope(!isActivated))
+                {
+                    if (GUILayout.Button("Deactivate"))
+                        _target.DeactivateState();
+                }
+
+                if (GUILayout.Button("Toggle"))
+                    _target.ToggleState();
+                EditorGUILayout.EndHorizontal();
             }
         }
 
@@ -190,9 +164,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                     alignment = TextAnchor.MiddleCenter
                 };
             }
+
             s_gizmoLabelStyle.normal.textColor = color;
-            string label = target.IsActivated ? "ON" : "OFF";
-            Handles.Label(pos + Vector3.up * 0.5f, label, s_gizmoLabelStyle);
+            Handles.Label(pos + Vector3.up * 0.5f, target.IsActivated ? "ON" : "OFF", s_gizmoLabelStyle);
         }
     }
 }

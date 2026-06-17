@@ -44,24 +44,39 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             if (prefab == null) return;
             if (!s_initialized) Initialize();
 
-            if (!prefab.TryGetComponent<PooledEffect>(out var template))
+            ObjectPool<PooledEffectSpawnData, PooledEffect> pool = GetOrCreatePool(prefab);
+            if (pool == null)
             {
                 UnityEngine.Object.Instantiate(prefab, position, rotation);
                 return;
             }
 
-            int key = prefab.GetInstanceID();
-
-            // GetOrAdd is atomic — no external lock needed
-            if (!s_pools.TryGetValue(key, out var pool))
-            {
-                var factory = new MonoPrefabFactory<PooledEffect>(s_spawner, template, s_root);
-                pool = new ObjectPool<PooledEffectSpawnData, PooledEffect>(factory: factory, initialCapacity: 8);
-                s_pools.Add(key, pool);
-            }
-
             var spawnData = new PooledEffectSpawnData(position, rotation, duration);
             pool.Spawn(spawnData);
+        }
+
+        public static void Prewarm(GameObject prefab, int count)
+        {
+            if (prefab == null || count <= 0) return;
+            if (!s_initialized) Initialize();
+
+            ObjectPool<PooledEffectSpawnData, PooledEffect> pool = GetOrCreatePool(prefab);
+            pool?.Prewarm(count);
+        }
+
+        private static ObjectPool<PooledEffectSpawnData, PooledEffect> GetOrCreatePool(GameObject prefab)
+        {
+            if (!prefab.TryGetComponent<PooledEffect>(out var template))
+                return null;
+
+            int key = prefab.GetInstanceID();
+            if (s_pools.TryGetValue(key, out var pool))
+                return pool;
+
+            var factory = new MonoPrefabFactory<PooledEffect>(s_spawner, template, s_root);
+            pool = new ObjectPool<PooledEffectSpawnData, PooledEffect>(factory: factory, initialCapacity: 8);
+            s_pools.Add(key, pool);
+            return pool;
         }
 
         public static void Dispose()

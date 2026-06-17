@@ -14,7 +14,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         {
             base.Awake();
             // Subclass or Inspector can assign a project-specific channel.
-            // No default override — the framework does not assume game semantics.
+            // No default override - the framework does not assume game semantics.
         }
 
         protected override async UniTask OnDoInteractAsync(CancellationToken ct)
