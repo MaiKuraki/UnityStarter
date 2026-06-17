@@ -1,24 +1,21 @@
-using UnityEngine;
+using System.Reflection;
 using UnityEditor;
+using UnityEngine;
 using CycloneGames.RPGFoundation.Runtime.Interaction;
+using Object = UnityEngine.Object;
 
 namespace CycloneGames.RPGFoundation.Editor.Interaction
 {
     /// <summary>
-    /// Scene view overlay for visualizing interaction system state in real-time.
-    /// Provides 0GC debug visualization with minimal editor overhead.
+    /// Scene view overlay for visualizing interaction system state.
     /// </summary>
     [InitializeOnLoad]
     public static class InteractionSceneDebugger
     {
-        private static bool s_enabled;
-        private static bool s_showLabels = true;
-        private static bool s_showConnections;
-        private static bool s_showStateColors = true;
-        private static float s_labelScale = 1f;
+        private const int WindowId = 54322;
+        private const double CacheRefreshInterval = 0.2d;
 
-        // Pre-allocated for 0GC
-        private static readonly GUIContent s_titleContent = new("Interaction Debug");
+        private static readonly GUIContent TitleContent = new("Interaction Debug");
         private static readonly Color ColorIdle = new(0.5f, 0.5f, 0.5f, 0.6f);
         private static readonly Color ColorStarting = new(1f, 0.8f, 0.2f, 0.8f);
         private static readonly Color ColorInProgress = new(0.2f, 0.8f, 1f, 0.8f);
@@ -28,18 +25,20 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private static readonly Color ColorCandidate = new(1f, 0.6f, 0.2f, 0.7f);
         private static readonly Color ColorConnection = new(0.8f, 0.8f, 0.2f, 0.4f);
 
+        private static bool s_enabled;
+        private static bool s_showLabels = true;
+        private static bool s_showConnections;
+        private static bool s_showStateColors = true;
+        private static float s_labelScale = 1f;
         private static GUIStyle s_labelStyle;
-        private static GUIStyle s_boxStyle;
-        private static Rect s_windowRect = new(10, 10, 200, 150);
+        private static Rect s_windowRect = new(10f, 10f, 210f, 154f);
 
-        // Cached scene queries — throttled to avoid per-frame FindObjectsByType
         private static Interactable[] s_cachedInteractables;
         private static InteractionDetector[] s_cachedDetectors;
         private static double s_lastCacheTime;
-        private const double CacheRefreshInterval = 0.2;
 
-        // Cached reflection — avoid per-frame GetField allocations
-        private static System.Reflection.FieldInfo s_radiusField;
+        private static FieldInfo s_radiusField;
+        private static FieldInfo s_is2DField;
 
         static InteractionSceneDebugger()
         {
@@ -70,7 +69,10 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private static void OnSceneGUI(SceneView sceneView)
         {
-            if (!s_enabled) return;
+            if (!s_enabled)
+            {
+                return;
+            }
 
             InitStyles();
 
@@ -78,46 +80,39 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             DrawControlPanel();
             Handles.EndGUI();
 
-            if (!Application.isPlaying)
+            if (Application.isPlaying)
             {
-                DrawEditModeVisualization();
+                DrawPlayModeVisualization();
             }
             else
             {
-                DrawPlayModeVisualization();
+                DrawEditModeVisualization();
             }
         }
 
         private static void InitStyles()
         {
-            if (s_labelStyle == null)
+            if (s_labelStyle != null)
             {
-                s_labelStyle = new GUIStyle(EditorStyles.boldLabel)
-                {
-                    alignment = TextAnchor.MiddleCenter,
-                    fontSize = Mathf.RoundToInt(10 * s_labelScale),
-                    normal = { textColor = Color.white }
-                };
+                return;
             }
 
-            if (s_boxStyle == null)
+            s_labelStyle = new GUIStyle(EditorStyles.boldLabel)
             {
-                s_boxStyle = new GUIStyle(GUI.skin.box)
-                {
-                    padding = new RectOffset(8, 8, 8, 8)
-                };
-            }
+                alignment = TextAnchor.MiddleCenter,
+                fontSize = Mathf.RoundToInt(10f * s_labelScale),
+                normal = { textColor = Color.white }
+            };
         }
 
         private static void DrawControlPanel()
         {
             s_windowRect = GUILayout.Window(
-                54322, // Unique ID
+                WindowId,
                 s_windowRect,
                 DrawControlPanelContent,
-                s_titleContent,
-                GUILayout.Width(200)
-            );
+                TitleContent,
+                GUILayout.Width(210f));
         }
 
         private static void DrawControlPanelContent(int windowId)
@@ -128,8 +123,8 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             s_showStateColors = GUILayout.Toggle(s_showStateColors, "State Colors");
             s_showConnections = GUILayout.Toggle(s_showConnections, "Show Connections");
 
-            GUILayout.Space(4);
-            GUILayout.Label("Label Scale:");
+            GUILayout.Space(4f);
+            GUILayout.Label("Label Scale");
             s_labelScale = GUILayout.HorizontalSlider(s_labelScale, 0.5f, 2f);
 
             if (EditorGUI.EndChangeCheck())
@@ -138,20 +133,12 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 EditorPrefs.SetBool("InteractionSceneDebugger_ShowConnections", s_showConnections);
                 EditorPrefs.SetBool("InteractionSceneDebugger_ShowStateColors", s_showStateColors);
                 EditorPrefs.SetFloat("InteractionSceneDebugger_LabelScale", s_labelScale);
-                s_labelStyle = null; // Force recreate with new scale
+                s_labelStyle = null;
             }
 
-            GUILayout.Space(4);
-            if (Application.isPlaying)
-            {
-                GUI.color = Color.green;
-                GUILayout.Label("▶ PLAY MODE", EditorStyles.centeredGreyMiniLabel);
-            }
-            else
-            {
-                GUI.color = Color.yellow;
-                GUILayout.Label("● EDIT MODE", EditorStyles.centeredGreyMiniLabel);
-            }
+            GUILayout.Space(4f);
+            GUI.color = Application.isPlaying ? Color.green : Color.yellow;
+            GUILayout.Label(Application.isPlaying ? "PLAY MODE" : "EDIT MODE", EditorStyles.centeredGreyMiniLabel);
             GUI.color = Color.white;
 
             GUI.DragWindow();
@@ -161,63 +148,58 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         {
             double now = EditorApplication.timeSinceStartup;
             if (s_cachedInteractables != null && now - s_lastCacheTime < CacheRefreshInterval)
+            {
                 return;
+            }
+
             s_lastCacheTime = now;
             s_cachedInteractables = Object.FindObjectsByType<Interactable>(FindObjectsSortMode.None);
             s_cachedDetectors = Object.FindObjectsByType<InteractionDetector>(FindObjectsSortMode.None);
         }
 
-        private static float GetDetectorRadius(InteractionDetector detector)
-        {
-            s_radiusField ??= typeof(InteractionDetector).GetField("detectionRadius",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            return s_radiusField != null ? (float)s_radiusField.GetValue(detector) : 3f;
-        }
-
         private static void DrawEditModeVisualization()
         {
             RefreshCacheIfNeeded();
-            var interactables = s_cachedInteractables;
-            var detectors = s_cachedDetectors;
+            Interactable[] interactables = s_cachedInteractables;
+            InteractionDetector[] detectors = s_cachedDetectors;
 
-            // Draw interactable zones
-            foreach (var interactable in interactables)
+            if (interactables != null)
             {
-                if (interactable == null) continue;
-
-                Vector3 pos = interactable.transform.position;
-                Collider col = interactable.GetComponent<Collider>();
-
-                Handles.color = ColorIdle;
-                if (col != null)
+                for (int i = 0; i < interactables.Length; i++)
                 {
-                    Handles.DrawWireDisc(pos, Vector3.up, col.bounds.extents.magnitude);
-                }
-                else
-                {
-                    Handles.DrawWireDisc(pos, Vector3.up, 0.5f);
-                }
+                    Interactable interactable = interactables[i];
+                    if (interactable == null)
+                    {
+                        continue;
+                    }
 
-                if (s_showLabels)
-                {
-                    Handles.Label(pos + Vector3.up * 1.5f, interactable.name, s_labelStyle);
+                    DrawInteractableShape(interactable, ColorIdle);
+
+                    if (s_showLabels)
+                    {
+                        Handles.Label(GetLabelPosition(interactable.transform.position, interactable), interactable.name, s_labelStyle);
+                    }
                 }
             }
 
-            // Draw detector ranges
-            foreach (var detector in detectors)
+            if (detectors == null)
             {
-                if (detector == null) continue;
+                return;
+            }
 
-                Vector3 pos = detector.transform.position;
-                float radius = GetDetectorRadius(detector);
+            for (int i = 0; i < detectors.Length; i++)
+            {
+                InteractionDetector detector = detectors[i];
+                if (detector == null)
+                {
+                    continue;
+                }
 
-                Handles.color = ColorDetector;
-                Handles.DrawWireDisc(pos, Vector3.up, radius);
+                DrawDetectorRadius(detector, GetDetectorRadius(detector));
 
                 if (s_showLabels)
                 {
-                    Handles.Label(pos + Vector3.up * 0.5f, "Detector", s_labelStyle);
+                    Handles.Label(detector.transform.position + Vector3.up * 0.5f, "Detector", s_labelStyle);
                 }
             }
         }
@@ -225,99 +207,194 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private static void DrawPlayModeVisualization()
         {
             RefreshCacheIfNeeded();
-            var interactables = s_cachedInteractables;
-            var detectors = s_cachedDetectors;
+            Interactable[] interactables = s_cachedInteractables;
+            InteractionDetector[] detectors = s_cachedDetectors;
 
-            // Draw interactables with state colors
-            foreach (var interactable in interactables)
+            if (interactables != null)
             {
-                if (interactable == null) continue;
-
-                Vector3 pos = interactable.transform.position;
-                Color stateColor = GetStateColor(interactable.CurrentState);
-
-                if (s_showStateColors)
+                for (int i = 0; i < interactables.Length; i++)
                 {
-                    // Draw state indicator
-                    Handles.color = stateColor;
-                    Handles.DrawSolidDisc(pos + Vector3.up * 0.1f, Vector3.up, 0.3f);
-                    Handles.DrawWireDisc(pos + Vector3.up * 0.1f, Vector3.up, 0.4f);
-
-                    // Pulsing effect for active states
-                    if (interactable.IsInteracting)
+                    Interactable interactable = interactables[i];
+                    if (interactable == null)
                     {
-                        float pulse = Mathf.Sin(Time.realtimeSinceStartup * 4f) * 0.5f + 0.5f;
-                        Color pulseColor = stateColor;
-                        pulseColor.a = pulse * 0.5f;
-                        Handles.color = pulseColor;
-                        Handles.DrawSolidDisc(pos + Vector3.up * 0.1f, Vector3.up, 0.6f);
+                        continue;
                     }
-                }
 
-                if (s_showLabels)
-                {
-                    string stateLabel = interactable.CurrentState.ToString();
-                    s_labelStyle.normal.textColor = stateColor;
-                    Handles.Label(pos + Vector3.up * 1.5f, $"{interactable.name}\n[{stateLabel}]", s_labelStyle);
-                    s_labelStyle.normal.textColor = Color.white;
+                    Color stateColor = GetStateColor(interactable.CurrentState);
+                    if (s_showStateColors)
+                    {
+                        DrawStateMarker(interactable, stateColor);
+                    }
+
+                    if (s_showLabels)
+                    {
+                        string stateLabel = interactable.CurrentState.ToString();
+                        s_labelStyle.normal.textColor = stateColor;
+                        Handles.Label(
+                            GetLabelPosition(interactable.transform.position, interactable),
+                            interactable.name + "\n[" + stateLabel + "]",
+                            s_labelStyle);
+                        s_labelStyle.normal.textColor = Color.white;
+                    }
                 }
             }
 
-            // Draw detector connections to candidates
-            foreach (var detector in detectors)
+            if (detectors != null)
             {
-                if (detector == null) continue;
+                DrawDetectorRuntimeState(detectors, interactables);
+            }
 
-                Vector3 detectorPos = detector.transform.position;
+            SceneView.RepaintAll();
+        }
+
+        private static void DrawDetectorRuntimeState(InteractionDetector[] detectors, Interactable[] interactables)
+        {
+            for (int i = 0; i < detectors.Length; i++)
+            {
+                InteractionDetector detector = detectors[i];
+                if (detector == null)
+                {
+                    continue;
+                }
+
+                Vector3 detectorPosition = detector.transform.position;
                 float radius = GetDetectorRadius(detector);
+                DrawDetectorRadius(detector, radius);
 
-                // Detection radius
-                Handles.color = ColorDetector;
-                Handles.DrawWireDisc(detectorPos, Vector3.up, radius);
-
-                // Current target connection — use public CurrentInteractable property
                 IInteractable currentTarget = detector.CurrentInteractable.CurrentValue;
-                if (currentTarget != null && currentTarget is MonoBehaviour mb)
+                if (currentTarget is MonoBehaviour targetBehaviour)
                 {
                     Handles.color = ColorCandidate;
-                    Handles.DrawLine(detectorPos, mb.transform.position);
-                    Handles.DrawSolidDisc(mb.transform.position + Vector3.up * 0.5f, Vector3.up, 0.15f);
+                    Handles.DrawLine(detectorPosition, targetBehaviour.transform.position);
+                    Handles.DrawSolidDisc(targetBehaviour.transform.position + Vector3.up * 0.5f, GetDetectorPlaneNormal(detector), 0.15f);
                 }
 
-                if (s_showConnections)
+                if (!s_showConnections || interactables == null)
                 {
-                    // Draw lines to all interactables in range
-                    foreach (var interactable in interactables)
-                    {
-                        if (interactable == null) continue;
+                    continue;
+                }
 
-                        float dist = Vector3.Distance(detectorPos, interactable.transform.position);
-                        if (dist <= radius)
-                        {
-                            Color lineColor = ColorConnection;
-                            lineColor.a = 1f - (dist / radius) * 0.7f;
-                            Handles.color = lineColor;
-                            Handles.DrawDottedLine(detectorPos, interactable.transform.position, 4f);
-                        }
+                for (int j = 0; j < interactables.Length; j++)
+                {
+                    Interactable interactable = interactables[j];
+                    if (interactable == null)
+                    {
+                        continue;
                     }
+
+                    float distance = Vector3.Distance(detectorPosition, interactable.transform.position);
+                    if (distance > radius)
+                    {
+                        continue;
+                    }
+
+                    Color lineColor = ColorConnection;
+                    lineColor.a = 1f - distance / radius * 0.7f;
+                    Handles.color = lineColor;
+                    Handles.DrawDottedLine(detectorPosition, interactable.transform.position, 4f);
                 }
             }
+        }
 
-            // Force repaint for animations
-            SceneView.RepaintAll();
+        private static void DrawInteractableShape(Interactable interactable, Color color)
+        {
+            Handles.color = color;
+
+            Collider2D collider2D = interactable.GetComponent<Collider2D>();
+            if (collider2D != null)
+            {
+                Bounds bounds = collider2D.bounds;
+                Handles.DrawWireCube(bounds.center, bounds.size);
+                return;
+            }
+
+            Collider collider3D = interactable.GetComponent<Collider>();
+            if (collider3D != null)
+            {
+                Bounds bounds = collider3D.bounds;
+                Handles.DrawWireCube(bounds.center, bounds.size);
+                return;
+            }
+
+            Vector3 normal = GetInteractionPlaneNormal(interactable);
+            Handles.DrawWireDisc(interactable.transform.position, normal, 0.5f);
+        }
+
+        private static void DrawStateMarker(Interactable interactable, Color stateColor)
+        {
+            Vector3 normal = GetInteractionPlaneNormal(interactable);
+            Vector3 position = interactable.transform.position + GetLabelUp(interactable) * 0.1f;
+
+            Handles.color = stateColor;
+            Handles.DrawSolidDisc(position, normal, 0.3f);
+            Handles.DrawWireDisc(position, normal, 0.4f);
+
+            if (!interactable.IsInteracting)
+            {
+                return;
+            }
+
+            float pulse = Mathf.Sin(Time.realtimeSinceStartup * 4f) * 0.5f + 0.5f;
+            Color pulseColor = stateColor;
+            pulseColor.a = pulse * 0.5f;
+            Handles.color = pulseColor;
+            Handles.DrawSolidDisc(position, normal, 0.6f);
+        }
+
+        private static void DrawDetectorRadius(InteractionDetector detector, float radius)
+        {
+            Handles.color = ColorDetector;
+            Handles.DrawWireDisc(detector.transform.position, GetDetectorPlaneNormal(detector), radius);
+        }
+
+        private static Vector3 GetLabelPosition(Vector3 position, Interactable interactable)
+        {
+            return position + GetLabelUp(interactable) * 1.5f;
+        }
+
+        private static Vector3 GetLabelUp(Interactable interactable)
+        {
+            return interactable.GetComponent<Collider2D>() != null ? Vector3.up : Vector3.up;
+        }
+
+        private static Vector3 GetInteractionPlaneNormal(Interactable interactable)
+        {
+            return interactable.GetComponent<Collider2D>() != null ? Vector3.forward : Vector3.up;
+        }
+
+        private static Vector3 GetDetectorPlaneNormal(InteractionDetector detector)
+        {
+            return GetDetectorIs2D(detector) ? Vector3.forward : Vector3.up;
+        }
+
+        private static float GetDetectorRadius(InteractionDetector detector)
+        {
+            s_radiusField ??= typeof(InteractionDetector).GetField(
+                "detectionRadius",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+
+            return s_radiusField != null ? (float)s_radiusField.GetValue(detector) : 3f;
+        }
+
+        private static bool GetDetectorIs2D(InteractionDetector detector)
+        {
+            s_is2DField ??= typeof(InteractionDetector).GetField(
+                "is2D",
+                BindingFlags.NonPublic | BindingFlags.Instance);
+
+            return s_is2DField != null && (bool)s_is2DField.GetValue(detector);
         }
 
         private static Color GetStateColor(InteractionStateType state)
         {
             return state switch
             {
-                InteractionStateType.Idle => ColorIdle,
                 InteractionStateType.Starting => ColorStarting,
                 InteractionStateType.InProgress => ColorInProgress,
                 InteractionStateType.Completing => ColorCompleting,
                 InteractionStateType.Completed => ColorCompleting,
                 InteractionStateType.Cancelled => ColorCancelled,
-                _ => Color.white
+                _ => ColorIdle
             };
         }
     }

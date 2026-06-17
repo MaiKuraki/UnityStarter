@@ -1,30 +1,56 @@
 using System.Collections.Generic;
-using UnityEngine;
 using UnityEditor;
+using UnityEngine;
 using CycloneGames.RPGFoundation.Runtime.Interaction;
+using Object = UnityEngine.Object;
 
 namespace CycloneGames.RPGFoundation.Editor.Interaction
 {
     /// <summary>
-    /// Validates Interact module setup and helps fix common configuration issues.
+    /// Validates interaction authoring setup and fixes common scene configuration issues.
     /// </summary>
-    public class InteractionValidatorWindow : EditorWindow
+    public sealed class InteractionValidatorWindow : EditorWindow
     {
+        private const string DetectorRadiusPropertyName = "detectionRadius";
+        private const string InteractableLayerPropertyName = "interactableLayer";
+        private const string CooldownPropertyName = "interactionCooldown";
+
+        private readonly List<ValidationIssue> _issues = new(32);
         private Vector2 _scrollPosition;
-        private List<ValidationIssue> _issues = new();
-        private bool _autoFix = true;
         private int _fixedCount;
         private bool _pendingRefresh;
 
-        private enum Severity { Info, Warning, Error }
-
-        private struct ValidationIssue
+        private enum Severity
         {
-            public Severity Severity;
-            public string Message;
-            public Object Target;
-            public System.Action FixAction;
-            public bool CanAutoFix;
+            Info,
+            Warning,
+            Error
+        }
+
+        private enum FixKind
+        {
+            None,
+            AddBestCollider,
+            SetCollider3DTrigger,
+            SetCollider2DTrigger,
+            SetDetectorRadius,
+            SetDetectorLayerAll
+        }
+
+        private readonly struct ValidationIssue
+        {
+            public readonly Severity Severity;
+            public readonly string Message;
+            public readonly Object Target;
+            public readonly FixKind FixKind;
+
+            public ValidationIssue(Severity severity, string message, Object target, FixKind fixKind = FixKind.None)
+            {
+                Severity = severity;
+                Message = message;
+                Target = target;
+                FixKind = fixKind;
+            }
         }
 
         [MenuItem("Tools/CycloneGames/Interaction/Interaction Validator", false)]
@@ -32,7 +58,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         {
             var window = GetWindow<InteractionValidatorWindow>();
             window.titleContent = new GUIContent("Interaction Validator", EditorGUIUtility.IconContent("console.infoicon").image);
-            window.minSize = new Vector2(450, 300);
+            window.minSize = new Vector2(520f, 340f);
             window.Show();
         }
 
@@ -55,25 +81,28 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             DrawFooter();
 
             if (_pendingRefresh)
+            {
                 RunValidation();
+            }
         }
 
         private void DrawToolbar()
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
 
-            if (GUILayout.Button("🔄 Refresh", EditorStyles.toolbarButton, GUILayout.Width(80)))
+            if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(80f)))
             {
                 RunValidation();
             }
 
             GUILayout.FlexibleSpace();
 
-            _autoFix = GUILayout.Toggle(_autoFix, "Auto-Fix", EditorStyles.toolbarButton, GUILayout.Width(80));
-
-            if (GUILayout.Button("Fix All", EditorStyles.toolbarButton, GUILayout.Width(60)))
+            using (new EditorGUI.DisabledScope(!HasFixableIssues()))
             {
-                FixAllIssues();
+                if (GUILayout.Button("Fix All", EditorStyles.toolbarButton, GUILayout.Width(70f)))
+                {
+                    FixAllIssues();
+                }
             }
 
             EditorGUILayout.EndHorizontal();
@@ -81,94 +110,91 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private void DrawSummary()
         {
-            int errors = 0, warnings = 0, infos = 0;
-            foreach (var issue in _issues)
+            int errors = 0;
+            int warnings = 0;
+            int infos = 0;
+
+            for (int i = 0; i < _issues.Count; i++)
             {
-                switch (issue.Severity)
+                switch (_issues[i].Severity)
                 {
-                    case Severity.Error: errors++; break;
-                    case Severity.Warning: warnings++; break;
-                    case Severity.Info: infos++; break;
+                    case Severity.Error:
+                        errors++;
+                        break;
+                    case Severity.Warning:
+                        warnings++;
+                        break;
+                    default:
+                        infos++;
+                        break;
                 }
             }
 
-            EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Validation Summary", EditorStyles.boldLabel);
 
             if (_issues.Count == 0)
             {
-                GUI.color = Color.green;
-                EditorGUILayout.LabelField("✅ All checks passed! No issues found.", EditorStyles.boldLabel);
-                GUI.color = Color.white;
+                EditorGUILayout.HelpBox("All checks passed. No interaction authoring issues were found.", MessageType.Info);
             }
             else
             {
-                if (errors > 0)
-                {
-                    GUI.color = new Color(1f, 0.4f, 0.4f);
-                    EditorGUILayout.LabelField($"❌ {errors} Error(s)", EditorStyles.boldLabel, GUILayout.Width(100));
-                }
-                if (warnings > 0)
-                {
-                    GUI.color = new Color(1f, 0.8f, 0.3f);
-                    EditorGUILayout.LabelField($"⚠️ {warnings} Warning(s)", EditorStyles.boldLabel, GUILayout.Width(120));
-                }
-                if (infos > 0)
-                {
-                    GUI.color = new Color(0.6f, 0.8f, 1f);
-                    EditorGUILayout.LabelField($"ℹ️ {infos} Info", EditorStyles.boldLabel, GUILayout.Width(80));
-                }
-                GUI.color = Color.white;
+                EditorGUILayout.BeginHorizontal();
+                DrawSummaryCount("Errors", errors, InteractionInspectorUiUtility.ColorWarning);
+                DrawSummaryCount("Warnings", warnings, new Color(1f, 0.75f, 0.25f));
+                DrawSummaryCount("Info", infos, InteractionInspectorUiUtility.ColorRuntime);
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndHorizontal();
+
+                InteractionInspectorUiUtility.DrawHelpBox(
+                    "Validator fixes only scene component setup. It does not change project layers, prefabs, or assets.",
+                    MessageType.Info);
             }
 
-            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.EndVertical();
+        }
+
+        private static void DrawSummaryCount(string label, int count, Color color)
+        {
+            Rect rect = GUILayoutUtility.GetRect(94f, 20f, GUILayout.Width(94f));
+            InteractionInspectorUiUtility.DrawStatusBadge(rect, label + ": " + count, count > 0 ? color : Color.gray);
         }
 
         private void DrawIssues()
         {
-            foreach (var issue in _issues)
+            if (_issues.Count == 0)
             {
-                DrawIssue(issue);
+                return;
+            }
+
+            for (int i = 0; i < _issues.Count; i++)
+            {
+                DrawIssue(_issues[i]);
             }
         }
 
         private void DrawIssue(ValidationIssue issue)
         {
-            Color bgColor = issue.Severity switch
-            {
-                Severity.Error => new Color(1f, 0.3f, 0.3f, 0.2f),
-                Severity.Warning => new Color(1f, 0.7f, 0.2f, 0.2f),
-                _ => new Color(0.5f, 0.7f, 1f, 0.2f)
-            };
-
-            GUI.backgroundColor = bgColor;
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            GUI.backgroundColor = Color.white;
 
             EditorGUILayout.BeginHorizontal();
-
-            string icon = issue.Severity switch
-            {
-                Severity.Error => "❌",
-                Severity.Warning => "⚠️",
-                _ => "ℹ️"
-            };
-            EditorGUILayout.LabelField(icon, GUILayout.Width(20));
+            EditorGUILayout.LabelField(GetSeverityLabel(issue.Severity), EditorStyles.boldLabel, GUILayout.Width(64f));
             EditorGUILayout.LabelField(issue.Message, EditorStyles.wordWrappedLabel);
 
             if (issue.Target != null)
             {
-                if (GUILayout.Button("Select", GUILayout.Width(50)))
+                if (GUILayout.Button("Select", GUILayout.Width(58f)))
                 {
                     Selection.activeObject = issue.Target;
                     EditorGUIUtility.PingObject(issue.Target);
                 }
             }
 
-            if (issue.CanAutoFix && issue.FixAction != null)
+            using (new EditorGUI.DisabledScope(issue.FixKind == FixKind.None))
             {
-                if (GUILayout.Button("Fix", GUILayout.Width(40)))
+                if (GUILayout.Button("Fix", GUILayout.Width(44f)))
                 {
-                    issue.FixAction.Invoke();
+                    ApplyFix(issue);
                     _pendingRefresh = true;
                 }
             }
@@ -178,7 +204,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             if (issue.Target != null)
             {
                 EditorGUI.indentLevel++;
-                EditorGUILayout.ObjectField("Object:", issue.Target, typeof(Object), true);
+                EditorGUILayout.ObjectField("Object", issue.Target, typeof(Object), true);
                 EditorGUI.indentLevel--;
             }
 
@@ -189,7 +215,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         {
             if (_fixedCount > 0)
             {
-                EditorGUILayout.HelpBox($"✅ Fixed {_fixedCount} issue(s) in this session.", MessageType.Info);
+                EditorGUILayout.HelpBox("Fixed " + _fixedCount + " issue(s) in this editor session.", MessageType.Info);
             }
         }
 
@@ -208,212 +234,164 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
 
         private void ValidateInteractables()
         {
-            var interactables = FindObjectsByType<Interactable>(FindObjectsSortMode.None);
+            Interactable[] interactables = FindObjectsByType<Interactable>(FindObjectsSortMode.None);
 
-            foreach (var interactable in interactables)
+            for (int i = 0; i < interactables.Length; i++)
             {
-                // Check for Collider (3D or 2D)
-                var collider3D = interactable.GetComponent<Collider>();
-                var collider2D = interactable.GetComponent<Collider2D>();
+                Interactable interactable = interactables[i];
+                if (interactable == null)
+                {
+                    continue;
+                }
+
+                Collider collider3D = interactable.GetComponent<Collider>();
+                Collider2D collider2D = interactable.GetComponent<Collider2D>();
                 if (collider3D == null && collider2D == null)
                 {
-                    _issues.Add(new ValidationIssue
-                    {
-                        Severity = Severity.Error,
-                        Message = $"Missing Collider on '{interactable.name}'. Interaction detection requires a Collider (3D or 2D).",
-                        Target = interactable,
-                        CanAutoFix = true,
-                        FixAction = () =>
-                        {
-                            Undo.AddComponent<SphereCollider>(interactable.gameObject);
-                            _fixedCount++;
-                        }
-                    });
+                    _issues.Add(new ValidationIssue(
+                        Severity.Error,
+                        "Missing Collider or Collider2D on '" + interactable.name + "'. Interaction detection requires one collider component.",
+                        interactable,
+                        FixKind.AddBestCollider));
                 }
                 else if (collider3D != null && !collider3D.isTrigger)
                 {
-                    _issues.Add(new ValidationIssue
-                    {
-                        Severity = Severity.Warning,
-                        Message = $"Collider on '{interactable.name}' is not a trigger. Consider setting isTrigger=true.",
-                        Target = interactable,
-                        CanAutoFix = true,
-                        FixAction = () =>
-                        {
-                            Undo.RecordObject(collider3D, "Set Trigger");
-                            collider3D.isTrigger = true;
-                            _fixedCount++;
-                        }
-                    });
+                    _issues.Add(new ValidationIssue(
+                        Severity.Warning,
+                        "Collider on '" + interactable.name + "' is not a trigger. Set isTrigger when this object should not block physics.",
+                        collider3D,
+                        FixKind.SetCollider3DTrigger));
                 }
                 else if (collider2D != null && !collider2D.isTrigger)
                 {
-                    _issues.Add(new ValidationIssue
-                    {
-                        Severity = Severity.Warning,
-                        Message = $"Collider2D on '{interactable.name}' is not a trigger. Consider setting isTrigger=true.",
-                        Target = interactable,
-                        CanAutoFix = true,
-                        FixAction = () =>
-                        {
-                            Undo.RecordObject(collider2D, "Set Trigger");
-                            collider2D.isTrigger = true;
-                            _fixedCount++;
-                        }
-                    });
+                    _issues.Add(new ValidationIssue(
+                        Severity.Warning,
+                        "Collider2D on '" + interactable.name + "' is not a trigger. Set isTrigger when this object should not block physics.",
+                        collider2D,
+                        FixKind.SetCollider2DTrigger));
                 }
 
-                // Check layer
                 int layer = interactable.gameObject.layer;
                 string layerName = LayerMask.LayerToName(layer);
                 if (layerName != "Interactable" && layerName != "Default")
                 {
-                    _issues.Add(new ValidationIssue
-                    {
-                        Severity = Severity.Info,
-                        Message = $"'{interactable.name}' is on layer '{layerName}'. Make sure InteractionDetector includes this layer in its mask.",
-                        Target = interactable,
-                        CanAutoFix = false
-                    });
+                    _issues.Add(new ValidationIssue(
+                        Severity.Info,
+                        "'" + interactable.name + "' is on layer '" + layerName + "'. Confirm detector masks include this layer.",
+                        interactable));
                 }
 
-                // Check for cooldown
-                var serializedObject = new SerializedObject(interactable);
-                var cooldownProp = serializedObject.FindProperty("interactionCooldown");
-                if (cooldownProp != null && cooldownProp.floatValue <= 0)
+                using var serializedObject = new SerializedObject(interactable);
+                SerializedProperty cooldownProperty = serializedObject.FindProperty(CooldownPropertyName);
+                if (cooldownProperty != null && cooldownProperty.floatValue <= 0f)
                 {
-                    _issues.Add(new ValidationIssue
-                    {
-                        Severity = Severity.Info,
-                        Message = $"'{interactable.name}' has no cooldown (0s). Multiple rapid interactions are possible.",
-                        Target = interactable,
-                        CanAutoFix = false
-                    });
+                    _issues.Add(new ValidationIssue(
+                        Severity.Info,
+                        "'" + interactable.name + "' has no cooldown. Rapid repeated interactions are allowed.",
+                        interactable));
                 }
             }
 
             if (interactables.Length == 0)
             {
-                _issues.Add(new ValidationIssue
-                {
-                    Severity = Severity.Info,
-                    Message = "No Interactable components found in scene.",
-                    Target = null,
-                    CanAutoFix = false
-                });
+                _issues.Add(new ValidationIssue(
+                    Severity.Info,
+                    "No Interactable components were found in the open scene.",
+                    null));
             }
         }
 
         private void ValidateDetectors()
         {
-            var detectors = FindObjectsByType<InteractionDetector>(FindObjectsSortMode.None);
+            InteractionDetector[] detectors = FindObjectsByType<InteractionDetector>(FindObjectsSortMode.None);
 
             if (detectors.Length == 0)
             {
-                _issues.Add(new ValidationIssue
-                {
-                    Severity = Severity.Warning,
-                    Message = "No InteractionDetector found in scene. Players won't be able to detect interactables.",
-                    Target = null,
-                    CanAutoFix = false
-                });
+                _issues.Add(new ValidationIssue(
+                    Severity.Warning,
+                    "No InteractionDetector was found in the open scene. Player-controlled interaction will not detect targets.",
+                    null));
                 return;
             }
 
-            foreach (var detector in detectors)
+            for (int i = 0; i < detectors.Length; i++)
             {
-                var serializedObject = new SerializedObject(detector);
-
-                var radiusProp = serializedObject.FindProperty("detectionRadius");
-                if (radiusProp != null && radiusProp.floatValue <= 0)
+                InteractionDetector detector = detectors[i];
+                if (detector == null)
                 {
-                    _issues.Add(new ValidationIssue
-                    {
-                        Severity = Severity.Error,
-                        Message = $"DetectionRadius on '{detector.name}' is <= 0. No objects will be detected.",
-                        Target = detector,
-                        CanAutoFix = true,
-                        FixAction = () =>
-                        {
-                            radiusProp.floatValue = 3f;
-                            serializedObject.ApplyModifiedProperties();
-                            _fixedCount++;
-                        }
-                    });
+                    continue;
                 }
 
-                var modeProp = serializedObject.FindProperty("detectionMode");
-                if (modeProp != null)
+                using var serializedObject = new SerializedObject(detector);
+                SerializedProperty radiusProperty = serializedObject.FindProperty(DetectorRadiusPropertyName);
+                if (radiusProperty != null && radiusProperty.floatValue <= 0f)
                 {
-                    var mode = (DetectionMode)modeProp.enumValueIndex;
-                    if (mode == DetectionMode.SpatialHash)
+                    _issues.Add(new ValidationIssue(
+                        Severity.Error,
+                        "DetectionRadius on '" + detector.name + "' is less than or equal to zero.",
+                        detector,
+                        FixKind.SetDetectorRadius));
+                }
+
+                SerializedProperty modeProperty = serializedObject.FindProperty("detectionMode");
+                if (modeProperty == null)
+                {
+                    continue;
+                }
+
+                DetectionMode mode = (DetectionMode)modeProperty.enumValueIndex;
+                if (mode == DetectionMode.SpatialHash)
+                {
+                    InteractionSystem system = FindAnyObjectByType<InteractionSystem>();
+                    if (system == null)
                     {
-                        var system = FindAnyObjectByType<InteractionSystem>();
-                        if (system == null)
-                        {
-                            _issues.Add(new ValidationIssue
-                            {
-                                Severity = Severity.Error,
-                                Message = $"Detector '{detector.name}' uses SpatialHash mode but no InteractionSystem found in scene.",
-                                Target = detector,
-                                CanAutoFix = false
-                            });
-                        }
+                        _issues.Add(new ValidationIssue(
+                            Severity.Error,
+                            "Detector '" + detector.name + "' uses SpatialHash mode but no InteractionSystem exists in the scene.",
+                            detector));
                     }
-                    else
+                }
+                else
+                {
+                    SerializedProperty layerMaskProperty = serializedObject.FindProperty(InteractableLayerPropertyName);
+                    if (layerMaskProperty != null && layerMaskProperty.intValue == 0)
                     {
-                        var layerMaskProp = serializedObject.FindProperty("interactableLayer");
-                        if (layerMaskProp != null && layerMaskProp.intValue == 0)
-                        {
-                            _issues.Add(new ValidationIssue
-                            {
-                                Severity = Severity.Error,
-                                Message = $"InteractableLayer on '{detector.name}' is empty (Nothing). No layers will be detected.",
-                                Target = detector,
-                                CanAutoFix = true,
-                                FixAction = () =>
-                                {
-                                    layerMaskProp.intValue = -1;
-                                    serializedObject.ApplyModifiedProperties();
-                                    _fixedCount++;
-                                }
-                            });
-                        }
+                        _issues.Add(new ValidationIssue(
+                            Severity.Error,
+                            "InteractableLayer on '" + detector.name + "' is empty. Nothing can be detected.",
+                            detector,
+                            FixKind.SetDetectorLayerAll));
                     }
                 }
             }
 
             if (detectors.Length > 1)
             {
-                _issues.Add(new ValidationIssue
-                {
-                    Severity = Severity.Info,
-                    Message = $"Multiple InteractionDetectors ({detectors.Length}) found. This is fine for split-screen or multiple player scenarios.",
-                    Target = detectors[0],
-                    CanAutoFix = false
-                });
+                _issues.Add(new ValidationIssue(
+                    Severity.Info,
+                    "Multiple InteractionDetectors were found. This is valid for local multiplayer, split-screen, or multi-agent tools.",
+                    detectors[0]));
             }
         }
 
         private void ValidateEffectPool()
         {
-            // EffectPoolSystem is static — only validate PooledEffect prefab references in scene
-            var pooledEffects = FindObjectsByType<PooledEffect>(FindObjectsSortMode.None);
-            foreach (var effect in pooledEffects)
+            PooledEffect[] pooledEffects = FindObjectsByType<PooledEffect>(FindObjectsSortMode.None);
+            for (int i = 0; i < pooledEffects.Length; i++)
             {
-                if (effect.gameObject.scene.isLoaded && !effect.gameObject.activeInHierarchy)
-                    continue; // Inactive is fine for pool
-
-                var ps = effect.GetComponent<ParticleSystem>();
-                if (ps == null)
+                PooledEffect effect = pooledEffects[i];
+                if (effect == null || effect.gameObject.scene.isLoaded && !effect.gameObject.activeInHierarchy)
                 {
-                    _issues.Add(new ValidationIssue
-                    {
-                        Severity = Severity.Info,
-                        Message = $"PooledEffect '{effect.name}' has no ParticleSystem. This is fine if you use a non-particle effect.",
-                        Target = effect,
-                        CanAutoFix = false
-                    });
+                    continue;
+                }
+
+                ParticleSystem particleSystem = effect.GetComponent<ParticleSystem>();
+                if (particleSystem == null)
+                {
+                    _issues.Add(new ValidationIssue(
+                        Severity.Info,
+                        "PooledEffect '" + effect.name + "' has no ParticleSystem. This is valid for non-particle effects.",
+                        effect));
                 }
             }
         }
@@ -423,49 +401,178 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             int interactableLayer = LayerMask.NameToLayer("Interactable");
             if (interactableLayer == -1)
             {
-                _issues.Add(new ValidationIssue
-                {
-                    Severity = Severity.Info,
-                    Message = "Layer 'Interactable' not found. Consider creating it for better organization and performance.",
-                    Target = null,
-                    CanAutoFix = false
-                });
+                _issues.Add(new ValidationIssue(
+                    Severity.Info,
+                    "Layer 'Interactable' was not found. Creating one can improve authoring clarity and detector mask setup.",
+                    null));
             }
         }
 
         private void ValidateTwoStateInteractions()
         {
-            var twoStates = FindObjectsByType<TwoStateInteractionBase>(FindObjectsSortMode.None);
-
-            foreach (var ts in twoStates)
+            TwoStateInteractionBase[] twoStates = FindObjectsByType<TwoStateInteractionBase>(FindObjectsSortMode.None);
+            for (int i = 0; i < twoStates.Length; i++)
             {
-                // Check for collider
-                var collider3D = ts.GetComponent<Collider>();
-                var collider2D = ts.GetComponent<Collider2D>();
+                TwoStateInteractionBase twoState = twoStates[i];
+                if (twoState == null)
+                {
+                    continue;
+                }
+
+                Collider collider3D = twoState.GetComponent<Collider>();
+                Collider2D collider2D = twoState.GetComponent<Collider2D>();
                 if (collider3D == null && collider2D == null)
                 {
-                    _issues.Add(new ValidationIssue
-                    {
-                        Severity = Severity.Warning,
-                        Message = $"TwoStateInteraction '{ts.name}' has no Collider. If it's used with InteractionDetector, a collider is required.",
-                        Target = ts,
-                        CanAutoFix = false
-                    });
+                    _issues.Add(new ValidationIssue(
+                        Severity.Warning,
+                        "TwoStateInteraction '" + twoState.name + "' has no Collider or Collider2D. Detector-based use requires one collider.",
+                        twoState));
                 }
             }
         }
 
-        private void FixAllIssues()
+        private bool HasFixableIssues()
         {
-            foreach (var issue in _issues)
+            for (int i = 0; i < _issues.Count; i++)
             {
-                if (issue.CanAutoFix && issue.FixAction != null)
+                if (_issues[i].FixKind != FixKind.None)
                 {
-                    issue.FixAction.Invoke();
+                    return true;
                 }
             }
 
-            RunValidation();
+            return false;
+        }
+
+        private void FixAllIssues()
+        {
+            int fixedBefore = _fixedCount;
+            for (int i = 0; i < _issues.Count; i++)
+            {
+                ApplyFix(_issues[i]);
+            }
+
+            if (_fixedCount != fixedBefore)
+            {
+                RunValidation();
+            }
+        }
+
+        private void ApplyFix(ValidationIssue issue)
+        {
+            if (issue.FixKind == FixKind.None || issue.Target == null)
+            {
+                return;
+            }
+
+            switch (issue.FixKind)
+            {
+                case FixKind.AddBestCollider:
+                    if (issue.Target is Component component)
+                    {
+                        AddBestCollider(component.gameObject);
+                    }
+                    break;
+                case FixKind.SetCollider3DTrigger:
+                    if (issue.Target is Collider collider3D)
+                    {
+                        Undo.RecordObject(collider3D, "Set Interaction Collider Trigger");
+                        collider3D.isTrigger = true;
+                        EditorUtility.SetDirty(collider3D);
+                        _fixedCount++;
+                    }
+                    break;
+                case FixKind.SetCollider2DTrigger:
+                    if (issue.Target is Collider2D collider2D)
+                    {
+                        Undo.RecordObject(collider2D, "Set Interaction Collider2D Trigger");
+                        collider2D.isTrigger = true;
+                        EditorUtility.SetDirty(collider2D);
+                        _fixedCount++;
+                    }
+                    break;
+                case FixKind.SetDetectorRadius:
+                    SetDetectorFloat(issue.Target, DetectorRadiusPropertyName, 3f);
+                    break;
+                case FixKind.SetDetectorLayerAll:
+                    SetDetectorInt(issue.Target, InteractableLayerPropertyName, -1);
+                    break;
+            }
+        }
+
+        private void AddBestCollider(GameObject gameObject)
+        {
+            if (gameObject == null)
+            {
+                return;
+            }
+
+            if (gameObject.GetComponent<Collider>() != null || gameObject.GetComponent<Collider2D>() != null)
+            {
+                return;
+            }
+
+            bool looksLike2D = gameObject.GetComponent<SpriteRenderer>() != null || gameObject.GetComponent<Rigidbody2D>() != null;
+            if (looksLike2D)
+            {
+                Undo.AddComponent<CircleCollider2D>(gameObject);
+            }
+            else
+            {
+                Undo.AddComponent<SphereCollider>(gameObject);
+            }
+
+            _fixedCount++;
+        }
+
+        private void SetDetectorFloat(Object target, string propertyName, float value)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            using var serializedObject = new SerializedObject(target);
+            SerializedProperty property = serializedObject.FindProperty(propertyName);
+            if (property == null)
+            {
+                return;
+            }
+
+            Undo.RecordObject(target, "Fix Interaction Detector");
+            property.floatValue = value;
+            serializedObject.ApplyModifiedProperties();
+            _fixedCount++;
+        }
+
+        private void SetDetectorInt(Object target, string propertyName, int value)
+        {
+            if (target == null)
+            {
+                return;
+            }
+
+            using var serializedObject = new SerializedObject(target);
+            SerializedProperty property = serializedObject.FindProperty(propertyName);
+            if (property == null)
+            {
+                return;
+            }
+
+            Undo.RecordObject(target, "Fix Interaction Detector");
+            property.intValue = value;
+            serializedObject.ApplyModifiedProperties();
+            _fixedCount++;
+        }
+
+        private static string GetSeverityLabel(Severity severity)
+        {
+            return severity switch
+            {
+                Severity.Error => "Error",
+                Severity.Warning => "Warning",
+                _ => "Info"
+            };
         }
     }
 }

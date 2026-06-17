@@ -12,6 +12,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         /// <summary>Pre-warm internal pools and prepare the system for spawning.</summary>
         void Initialize();
 
+        /// <summary>Pre-create pooled instances for a prefab before gameplay starts.</summary>
+        /// <param name="prefab">The effect prefab to prewarm.</param>
+        /// <param name="count">Number of inactive instances to prepare.</param>
+        void Prewarm(GameObject prefab, int count);
+
         /// <summary>Spawn a pooled effect at the given position and rotation with no automatic return timer.</summary>
         /// <param name="prefab">The effect prefab to spawn (must have a <see cref="PooledEffect"/> component).</param>
         /// <param name="position">World-space spawn position.</param>

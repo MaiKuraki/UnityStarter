@@ -46,6 +46,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private CancellationTokenSource _interactionCts;
         private int _isInteractingFlag;
         private IInteractionSystem _system;
+        private bool _isRegisteredWithSystem;
         private Vector3 _lastRegisteredPosition;
 
         // Cached position to avoid Transform access in hot paths
@@ -80,6 +81,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         public float MaxInteractionRange => maxInteractionRange;
         public bool IsBusy => IsInteracting;
         public float PositionUpdateThreshold => positionUpdateThreshold;
+        public float CooldownRemaining => interactionCooldown <= 0f
+            ? 0f
+            : Mathf.Max(0f, interactionCooldown - (Time.time - _lastInteractionTime));
 
         public Vector3 Position
         {
@@ -102,8 +106,23 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
         protected virtual void Awake()
         {
+            NormalizeSettings();
             _requirements = GetComponents<IInteractionRequirement>();
             if (_requirements.Length == 0) _requirements = s_emptyRequirements;
+        }
+
+        protected virtual void OnValidate()
+        {
+            NormalizeSettings();
+        }
+
+        private void NormalizeSettings()
+        {
+            interactionDistance = Mathf.Max(0.01f, interactionDistance);
+            interactionCooldown = Mathf.Max(0f, interactionCooldown);
+            positionUpdateThreshold = Mathf.Max(0f, positionUpdateThreshold);
+            holdDuration = Mathf.Max(0f, holdDuration);
+            maxInteractionRange = Mathf.Max(0f, maxInteractionRange);
         }
 
         protected virtual void OnEnable()
@@ -120,26 +139,46 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         {
             CancelInteraction(InteractionCancelReason.TargetDestroyed);
             _system?.UnregisterDistanceMonitor(this);
+            OnStateChanged = null;
             OnProgressChanged = null;
             OnInteractionCancelled = null;
         }
 
         protected virtual void RegisterWithSystem()
         {
-            if (_system != null) return;
-            _system = InteractionSystem.Instance;
-            if (_system == null) _system = FindAnyObjectByType<InteractionSystem>();
+            if (_isRegisteredWithSystem) return;
+            if (_system == null)
+            {
+                _system = InteractionSystem.Instance;
+                if (_system == null) _system = FindAnyObjectByType<InteractionSystem>();
+            }
+
             if (_system != null)
             {
                 _lastRegisteredPosition = Position;
                 _system.Register(this);
+                _isRegisteredWithSystem = true;
             }
         }
 
         protected virtual void UnregisterFromSystem()
         {
-            _system?.Unregister(this);
-            _system = null;
+            if (_isRegisteredWithSystem)
+            {
+                _system?.Unregister(this);
+                _isRegisteredWithSystem = false;
+            }
+        }
+
+        public void SetInteractionSystem(IInteractionSystem system, bool registerImmediately = true)
+        {
+            if (_system == system) return;
+
+            UnregisterFromSystem();
+            _system = system;
+
+            if (registerImmediately && isActiveAndEnabled)
+                RegisterWithSystem();
         }
 
         // Call from movement systems when position changes significantly
@@ -167,7 +206,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         public bool CanInteract(InstigatorHandle instigator)
         {
             if (!IsInteractable) return false;
-            var reqs = _requirements;
+            var reqs = _requirements ?? s_emptyRequirements;
             for (int i = 0; i < reqs.Length; i++)
             {
                 if (!reqs[i].IsMet(this, instigator)) return false;
@@ -212,8 +251,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         {
             if (!isInteractable) return false;
             if (!IsCooldownComplete()) return false;
+            if (!CanInteract(instigator)) return false;
 
-            // Atomic check-and-set to prevent concurrent interactions
             if (Interlocked.CompareExchange(ref _isInteractingFlag, 1, 0) != 0)
                 return false;
 
@@ -224,9 +263,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
             _interactionCts?.Cancel();
             _interactionCts?.Dispose();
-            _interactionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _interactionCts = cancellationToken.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                : new CancellationTokenSource();
+            CancellationTokenSource interactionCts = _interactionCts;
+            CancellationToken token = interactionCts.Token;
 
-            // Start distance monitoring if configured
             _system?.RegisterDistanceMonitor(this, instigator, maxInteractionRange);
 
             try
@@ -235,21 +277,20 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 {
                     _system?.UnregisterDistanceMonitor(this);
                     _currentInstigator = null;
-                    _interactionCts?.Dispose();
-                    _interactionCts = null;
                     Interlocked.Exchange(ref _isInteractingFlag, 0);
                     return false;
                 }
 
-                await OnStartInteractAsync(_interactionCts.Token);
-                if (_interactionCts.Token.IsCancellationRequested) return false;
+                await OnStartInteractAsync(token);
+                token.ThrowIfCancellationRequested();
 
                 TrySetState(InteractionStateType.InProgress);
-                await OnDoInteractAsync(_interactionCts.Token);
-                if (_interactionCts.Token.IsCancellationRequested) return false;
+                await OnDoInteractAsync(token);
+                token.ThrowIfCancellationRequested();
 
                 TrySetState(InteractionStateType.Completing);
-                await OnEndInteractAsync(_interactionCts.Token);
+                await OnEndInteractAsync(token);
+                token.ThrowIfCancellationRequested();
 
                 ReportProgress(1f);
                 TrySetState(InteractionStateType.Completed);
@@ -273,8 +314,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 _system?.UnregisterDistanceMonitor(this);
                 _pendingActionId = null;
                 _currentInstigator = null;
-                _interactionCts?.Dispose();
-                _interactionCts = null;
+                if (ReferenceEquals(_interactionCts, interactionCts))
+                {
+                    _interactionCts = null;
+                }
+                interactionCts.Dispose();
                 Interlocked.Exchange(ref _isInteractingFlag, 0);
             }
         }
@@ -335,9 +379,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private void CancelInteraction(InteractionCancelReason reason = InteractionCancelReason.Manual)
         {
             _lastCancelReason = reason;
-            _interactionCts?.Cancel();
-            _interactionCts?.Dispose();
-            _interactionCts = null;
+            CancellationTokenSource cts = _interactionCts;
+            if (cts != null && !cts.IsCancellationRequested)
+                cts.Cancel();
         }
 
 #if UNITY_EDITOR

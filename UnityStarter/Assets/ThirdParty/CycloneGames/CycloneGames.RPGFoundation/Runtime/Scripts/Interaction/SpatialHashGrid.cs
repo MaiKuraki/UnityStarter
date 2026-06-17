@@ -14,7 +14,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
     /// - Intrusive doubly-linked list per cell via _nextInCell/_prevInCell arrays (zero List allocations).
     /// - Slot recycling via free-list stack (zero GC on Insert/Remove after warm-up).
     ///
-    /// The public API is identical to the original OOP version — no caller changes required.
+    /// The public API is kept compatible with the original OOP version.
     /// </summary>
     public sealed class SpatialHashGrid : IDisposable
     {
@@ -23,29 +23,25 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private readonly float _cellSize;
         private readonly float _inverseCellSize;
 
-        // ─── SoA: parallel arrays indexed by slot ───
+        // SoA arrays are indexed by slot to keep query traversal cache-friendly.
         private int _slotCapacity;
-        private IInteractable[] _items;     // [slot] → interactable reference (for return to caller)
-        private float[] _posX;              // [slot] → cached world X
-        private float[] _posY;              // [slot] → cached world Y
-        private float[] _posZ;              // [slot] → cached world Z
-        private long[] _hashes;             // [slot] → cell hash
-        private int[] _nextInCell;          // [slot] → next slot in same cell chain (NullSlot = tail)
-        private int[] _prevInCell;          // [slot] → prev slot in same cell chain (NullSlot = head)
+        private IInteractable[] _items;
+        private float[] _posX;
+        private float[] _posY;
+        private float[] _posZ;
+        private long[] _hashes;
+        private int[] _nextInCell;
+        private int[] _prevInCell;
 
-        // ─── Index maps ───
-        private readonly Dictionary<IInteractable, int> _slotLookup;   // item → slot (O(1) reverse lookup)
-        private readonly Dictionary<long, int> _cellHeads;              // cell hash → first slot in chain
+        private readonly Dictionary<IInteractable, int> _slotLookup;
+        private readonly Dictionary<long, int> _cellHeads;
 
-        // ─── Slot recycling (zero-GC) ───
         private int _activeCount;
-        private int _slotHighWaterMark;  // next unused sequential slot index
+        private int _slotHighWaterMark;
         private readonly Stack<int> _freeSlots;
 
-        // ─── Query output ───
         private readonly List<IInteractable> _queryBuffer;
 
-        // ─── Thread safety ───
         private readonly ReaderWriterLockSlim _rwLock;
 
         /// <summary>Number of currently registered interactables.</summary>
@@ -79,8 +75,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             _activeCount = 0;
         }
 
-        // ──────────────────────── Hash functions ────────────────────────
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private long HashPosition(float x, float z)
         {
@@ -96,8 +90,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             int cy = (int)Math.Floor(y * _inverseCellSize);
             return ((long)cx << 32) | (uint)cy;
         }
-
-        // ──────────────────────── Slot management ────────────────────────
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private int AllocateSlot()
@@ -131,8 +123,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             _freeSlots.Push(slot);
         }
 
-        // ──────────────────────── Cell chain operations ────────────────────────
-
         /// <summary>Prepend a slot to the head of the cell chain. O(1).</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void LinkToCell(int slot, long cellHash)
@@ -162,7 +152,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             if (prev != NullSlot)
                 _nextInCell[prev] = next;
             else
-                // slot was the head — update or remove the cell
+                // The removed slot was the head, so the cell head must move or be removed.
                 if (next != NullSlot)
                     _cellHeads[cellHash] = next;
                 else
@@ -172,8 +162,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 _prevInCell[next] = prev;
         }
 
-        // ──────────────────────── Public API (unchanged) ────────────────────────
-
         public void Insert(IInteractable item, bool is2D = false)
         {
             Vector3 pos = item.Position;
@@ -182,7 +170,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             _rwLock.EnterWriteLock();
             try
             {
-                // Prevent double-insert
                 if (_slotLookup.ContainsKey(item)) return;
 
                 int slot = AllocateSlot();
@@ -231,7 +218,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             {
                 if (!_slotLookup.TryGetValue(item, out int slot)) return;
 
-                // Update cached position regardless of cell change
                 _posX[slot] = pos.x;
                 _posY[slot] = pos.y;
                 _posZ[slot] = pos.z;
@@ -239,7 +225,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 long oldHash = _hashes[slot];
                 if (oldHash == newHash) return;
 
-                // Cell changed — re-link
                 UnlinkFromCell(slot, oldHash);
                 _hashes[slot] = newHash;
                 LinkToCell(slot, newHash);
@@ -251,12 +236,30 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         }
 
         /// <summary>
-        /// Query all items within radius. Returns internal buffer — do NOT cache the reference.
-        /// Hot path uses cached SoA position arrays for cache-friendly iteration.
+        /// Query all items within radius. Returns an internal buffer; callers must not cache it.
         /// </summary>
         public List<IInteractable> QueryRadius(Vector3 center, float radius, bool is2D = false)
         {
-            _queryBuffer.Clear();
+            QueryRadiusNonAlloc(center, radius, _queryBuffer, is2D, int.MaxValue, true);
+            return _queryBuffer;
+        }
+
+        /// <summary>
+        /// Query all items within radius into a caller-owned buffer.
+        /// The caller controls buffer capacity and lifetime, which avoids shared mutable results.
+        /// </summary>
+        public int QueryRadiusNonAlloc(Vector3 center, float radius, List<IInteractable> results, bool is2D = false, int maxResults = int.MaxValue, bool allowBufferGrowth = true)
+        {
+            if (results == null)
+                throw new ArgumentNullException(nameof(results));
+
+            results.Clear();
+            int effectiveMaxResults = maxResults;
+            if (!allowBufferGrowth && effectiveMaxResults > results.Capacity)
+                effectiveMaxResults = results.Capacity;
+
+            if (effectiveMaxResults <= 0)
+                return 0;
 
             int cellRadius = (int)Math.Ceiling(radius * _inverseCellSize);
             float cx = center.x;
@@ -265,7 +268,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             int cellY = (int)Math.Floor(cy * _inverseCellSize);
             float radiusSqr = radius * radius;
 
-            // Local refs for SoA arrays — avoids repeated field access in tight loop
             float[] posX = _posX;
             float[] posY = _posY;
             float[] posZ = _posZ;
@@ -282,7 +284,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                         long hash = ((long)(cellX + dx) << 32) | (uint)(cellY + dy);
                         if (!_cellHeads.TryGetValue(hash, out int slot)) continue;
 
-                        // Walk the cell chain — position data is read from flat arrays
                         while (slot != NullSlot)
                         {
                             float dxPos = posX[slot] - cx;
@@ -292,7 +293,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                             float distSqr = dxPos * dxPos + dyPos * dyPos;
 
                             if (distSqr <= radiusSqr)
-                                _queryBuffer.Add(items[slot]);
+                            {
+                                results.Add(items[slot]);
+                                if (results.Count >= effectiveMaxResults)
+                                    return results.Count;
+                            }
 
                             slot = nextArr[slot];
                         }
@@ -304,7 +309,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 _rwLock.ExitReadLock();
             }
 
-            return _queryBuffer;
+            return results.Count;
         }
 
         public void Clear()

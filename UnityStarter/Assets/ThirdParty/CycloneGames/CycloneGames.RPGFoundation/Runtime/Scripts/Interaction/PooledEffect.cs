@@ -11,6 +11,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private float _timer;
         private bool _isPooled;
 
+        public float DefaultDuration => defaultDuration;
+        public float RemainingDuration => _timer > 0f ? _timer : 0f;
+        public bool IsPooled => _isPooled;
+
+        private void OnValidate()
+        {
+            if (defaultDuration < 0f)
+                defaultDuration = 0f;
+        }
+
         public void OnSpawned(PooledEffectSpawnData data, IDespawnableMemoryPool<PooledEffect> pool)
         {
             _pool = pool;
