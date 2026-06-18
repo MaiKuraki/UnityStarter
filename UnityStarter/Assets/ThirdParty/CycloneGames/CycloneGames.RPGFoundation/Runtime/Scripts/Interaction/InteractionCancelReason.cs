@@ -22,6 +22,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         TargetDestroyed = 4,
 
         /// <summary>The InteractionSystem was shut down or the scene was unloaded.</summary>
-        SystemShutdown = 5
+        SystemShutdown = 5,
+
+        /// <summary>The interaction failed because user code or an adapter threw an exception.</summary>
+        Faulted = 6,
+
+        /// <summary>The request was rejected by local or server-authoritative validation before execution.</summary>
+        Rejected = 7
     }
 }

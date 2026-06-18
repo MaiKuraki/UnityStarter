@@ -3,6 +3,7 @@ using CycloneGames.Factory.Runtime;
 
 namespace CycloneGames.RPGFoundation.Runtime.Interaction
 {
+    [DisallowMultipleComponent]
     public class PooledEffect : MonoBehaviour, IPoolable<PooledEffectSpawnData, PooledEffect>
     {
         [SerializeField] private float defaultDuration = 2f;

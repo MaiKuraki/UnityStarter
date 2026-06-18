@@ -22,6 +22,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         public abstract int Id { get; }
 
         /// <summary>
+        /// Stable cross-process ID for networking, replay, analytics, and save data.
+        /// Defaults to a local-only projection of <see cref="Id"/>; override for multiplayer.
+        /// </summary>
+        public virtual ulong StableId => unchecked((ulong)(uint)Id);
+
+        /// <summary>
         /// Try to resolve the world-space position of this instigator.
         /// Returns false for entityless / non-spatial instigators, which disables
         /// distance-based auto-cancellation.
@@ -32,10 +38,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             return false;
         }
 
-        public override int GetHashCode() => Id;
+        public override int GetHashCode() => StableId.GetHashCode();
 
-        public bool Equals(InstigatorHandle other) => other != null && Id == other.Id;
+        public bool Equals(InstigatorHandle other) => other != null && StableId == other.StableId;
 
-        public override bool Equals(object obj) => obj is InstigatorHandle other && Id == other.Id;
+        public override bool Equals(object obj) => obj is InstigatorHandle other && StableId == other.StableId;
     }
 }

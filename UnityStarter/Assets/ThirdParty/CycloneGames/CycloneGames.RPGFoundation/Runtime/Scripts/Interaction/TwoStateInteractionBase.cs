@@ -2,6 +2,7 @@ using UnityEngine;
 
 namespace CycloneGames.RPGFoundation.Runtime.Interaction
 {
+    [DisallowMultipleComponent]
     public class TwoStateInteractionBase : MonoBehaviour, ITwoStateInteraction
     {
         [SerializeField] private bool startActivated;

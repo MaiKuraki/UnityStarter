@@ -20,6 +20,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private SerializedProperty _angleWeight;
         private SerializedProperty _priorityWeight;
         private SerializedProperty _maxNearbyCandidates;
+        private SerializedProperty _autoInteractMinIntervalMs;
         private SerializedProperty _nearDistance;
         private SerializedProperty _farDistance;
         private SerializedProperty _disableDistance;
@@ -29,7 +30,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private SerializedProperty _sleepIntervalMs;
         private SerializedProperty _sleepEnterMs;
         private SerializedProperty _maxLosChecksPerFrame;
+        private SerializedProperty _blockWhenLosBudgetExceeded;
         private SerializedProperty _useLosSpatialCache;
+        private SerializedProperty _interactionSystem;
         private SerializedProperty _detectionOrigin;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -68,6 +71,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             "angleWeight",
             "priorityWeight",
             "maxNearbyCandidates",
+            "autoInteractMinIntervalMs",
             "nearDistance",
             "farDistance",
             "disableDistance",
@@ -77,7 +81,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             "sleepIntervalMs",
             "sleepEnterMs",
             "maxLosChecksPerFrame",
+            "blockWhenLosBudgetExceeded",
             "useLosSpatialCache",
+            "interactionSystem",
             "detectionOrigin",
             "showDebugGUI"
         };
@@ -107,6 +113,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             _angleWeight = serializedObject.FindProperty("angleWeight");
             _priorityWeight = serializedObject.FindProperty("priorityWeight");
             _maxNearbyCandidates = serializedObject.FindProperty("maxNearbyCandidates");
+            _autoInteractMinIntervalMs = serializedObject.FindProperty("autoInteractMinIntervalMs");
             _nearDistance = serializedObject.FindProperty("nearDistance");
             _farDistance = serializedObject.FindProperty("farDistance");
             _disableDistance = serializedObject.FindProperty("disableDistance");
@@ -116,7 +123,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             _sleepIntervalMs = serializedObject.FindProperty("sleepIntervalMs");
             _sleepEnterMs = serializedObject.FindProperty("sleepEnterMs");
             _maxLosChecksPerFrame = serializedObject.FindProperty("maxLosChecksPerFrame");
+            _blockWhenLosBudgetExceeded = serializedObject.FindProperty("blockWhenLosBudgetExceeded");
             _useLosSpatialCache = serializedObject.FindProperty("useLosSpatialCache");
+            _interactionSystem = serializedObject.FindProperty("interactionSystem");
             _detectionOrigin = serializedObject.FindProperty("detectionOrigin");
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -136,6 +145,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             serializedObject.Update();
 
             DrawHeader();
+            InteractionComponentRules.DrawIssuesFor(targets);
             DrawRuntimeStatus();
             DrawDetectionSettings();
             DrawScoringSettings();
@@ -241,6 +251,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                         MessageType.Info);
                 }
 
+                EditorGUILayout.PropertyField(_interactionSystem, new GUIContent("Interaction System"));
                 EditorGUILayout.PropertyField(_detectionOrigin, new GUIContent("Origin"));
                 EditorGUILayout.PropertyField(_detectionRadius, new GUIContent("Radius"));
                 EditorGUILayout.PropertyField(_detectionOffset, new GUIContent("Offset"));
@@ -290,6 +301,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                     "LOS checks use non-alloc raycasts. Limiting raycasts per detection cycle protects physics-heavy scenes; stationary result caching reduces repeated checks.",
                     MessageType.None);
                 EditorGUILayout.PropertyField(_maxLosChecksPerFrame, new GUIContent("Max Raycasts Per Cycle"));
+                EditorGUILayout.PropertyField(_blockWhenLosBudgetExceeded, new GUIContent("Block When Budget Exhausted"));
                 EditorGUILayout.PropertyField(_useLosSpatialCache, new GUIContent("Cache Stationary Results"));
             }
         }
@@ -332,6 +344,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 EditorGUILayout.PropertyField(_maxNearbyCandidates, new GUIContent("Max Nearby Candidates"));
+                EditorGUILayout.PropertyField(_autoInteractMinIntervalMs, new GUIContent("Auto Interact Min Interval"));
                 InteractionInspectorUiUtility.DrawHelpBox(
                     "This list is a detector-owned buffer sorted by score. UI should read it during the change event or current frame and should not store the reference long-term.",
                     MessageType.None);

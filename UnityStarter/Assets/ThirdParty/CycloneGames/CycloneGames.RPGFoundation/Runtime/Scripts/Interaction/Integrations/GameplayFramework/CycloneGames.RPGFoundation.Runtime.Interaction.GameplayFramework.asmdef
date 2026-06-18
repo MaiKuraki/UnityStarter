@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.RPGFoundation.Runtime.Interaction.GameplayFramework",
+    "rootNamespace": "CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.GameplayFramework",
+    "references": [
+        "CycloneGames.RPGFoundation.Runtime",
+        "CycloneGames.GameplayFramework.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

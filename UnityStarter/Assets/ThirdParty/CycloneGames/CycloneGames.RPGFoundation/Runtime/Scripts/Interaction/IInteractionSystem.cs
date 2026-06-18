@@ -16,6 +16,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         /// <summary>Whether the system is operating in 2D mode (X/Y hashing instead of X/Z).</summary>
         bool Is2DMode { get; }
 
+        /// <summary>
+        /// Local interaction world scope. Commands from detectors are ignored by systems with a different world ID.
+        /// Use unique values for split-screen, additive scenes, prediction worlds, or server-side simulations.
+        /// </summary>
+        int WorldId { get; }
+
         /// <summary>Initialize the system with default settings.</summary>
         void Initialize();
 
