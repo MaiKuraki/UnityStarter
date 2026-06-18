@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.RPGFoundation.Movement.Integrations.Animancer",
+    "rootNamespace": "CycloneGames.RPGFoundation.Movement.Integrations.Animancer",
+    "references": [
+        "CycloneGames.RPGFoundation.Movement.Core",
+        "CycloneGames.RPGFoundation.Movement.Runtime",
+        "Kybernetik.Animancer"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONE_RPGFOUNDATION_HAS_ANIMANCER"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.kybernetik.animancer",
+            "expression": "",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_ANIMANCER"
+        }
+    ],
+    "noEngineReferences": false
+}
