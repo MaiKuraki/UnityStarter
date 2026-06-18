@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.RPGFoundation.Movement.Integrations.AStar",
+    "rootNamespace": "CycloneGames.RPGFoundation.Movement.Integrations.AStar",
+    "references": [
+        "CycloneGames.RPGFoundation.Movement.Core",
+        "CycloneGames.RPGFoundation.Movement.Runtime",
+        "AstarPathfindingProject"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.arongranberg.astar",
+            "expression": "",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING"
+        }
+    ],
+    "noEngineReferences": false
+}

@@ -1,0 +1,33 @@
+{
+    "name": "CycloneGames.GameplayFramework.Networking.Tests.Editor",
+    "rootNamespace": "CycloneGames.GameplayFramework.Tests.Editor.Integrations.Networking",
+    "references": [
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayFramework.Runtime.Integrations.Networking",
+        "CycloneGames.Networking.Core",
+        "UniTask",
+        "Unity.Mathematics"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONE_GAMEPLAYFRAMEWORK_HAS_NETWORKING"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.networking",
+            "expression": "",
+            "define": "CYCLONE_GAMEPLAYFRAMEWORK_HAS_NETWORKING"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

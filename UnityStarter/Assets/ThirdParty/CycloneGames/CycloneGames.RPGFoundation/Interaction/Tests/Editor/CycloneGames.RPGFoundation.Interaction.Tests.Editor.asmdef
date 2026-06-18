@@ -1,10 +1,12 @@
 {
-    "name": "CycloneGames.GameplayFramework.Tests.Editor",
-    "rootNamespace": "CycloneGames.GameplayFramework.Tests.Editor",
+    "name": "CycloneGames.RPGFoundation.Interaction.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Tests.Editor",
     "references": [
-        "CycloneGames.GameplayFramework.Runtime",
-        "UniTask",
-        "Unity.Mathematics"
+        "CycloneGames.RPGFoundation.Interaction.Core",
+        "CycloneGames.RPGFoundation.Interaction.Runtime",
+        "CycloneGames.RPGFoundation.Interaction.Editor",
+        "CycloneGames.Factory.Runtime",
+        "UniTask"
     ],
     "includePlatforms": [
         "Editor"
