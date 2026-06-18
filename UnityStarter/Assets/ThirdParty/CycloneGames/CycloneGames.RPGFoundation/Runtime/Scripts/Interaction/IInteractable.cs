@@ -131,4 +131,20 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         /// <param name="reason">The reason for cancellation. Defaults to <see cref="InteractionCancelReason.Manual"/>.</param>
         void ForceEndInteraction(InteractionCancelReason reason = InteractionCancelReason.Manual);
     }
+
+    /// <summary>
+    /// Optional stable identity contract for production networking, save data, analytics, and replay.
+    /// Implementations should use an authoring-time or backend-provided ID, not Unity InstanceID.
+    /// </summary>
+    public interface IInteractionStableIdentity
+    {
+        /// <summary>Authoring-time stable ID. Empty means the object is local-only or not network-addressable.</summary>
+        string StableId { get; }
+
+        /// <summary>Deterministic 64-bit hash of <see cref="StableId"/> for compact packets and dictionaries.</summary>
+        ulong StableIdHash { get; }
+
+        /// <summary>True when a stable ID has been assigned and can be used outside the local Unity process.</summary>
+        bool HasStableId { get; }
+    }
 }

@@ -19,7 +19,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private SerializedProperty _veryFarIntervalMs;
         private SerializedProperty _sleepIntervalMs;
         private SerializedProperty _sleepEnterMs;
+        private SerializedProperty _autoInteractMinIntervalMs;
         private SerializedProperty _maxLosChecksPerFrame;
+        private SerializedProperty _blockWhenLosBudgetExceeded;
         private SerializedProperty _useLosSpatialCache;
 
         private static bool s_spatialFoldout = true;
@@ -41,7 +43,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             _veryFarIntervalMs = serializedObject.FindProperty("veryFarIntervalMs");
             _sleepIntervalMs = serializedObject.FindProperty("sleepIntervalMs");
             _sleepEnterMs = serializedObject.FindProperty("sleepEnterMs");
+            _autoInteractMinIntervalMs = serializedObject.FindProperty("autoInteractMinIntervalMs");
             _maxLosChecksPerFrame = serializedObject.FindProperty("maxLosChecksPerFrame");
+            _blockWhenLosBudgetExceeded = serializedObject.FindProperty("blockWhenLosBudgetExceeded");
             _useLosSpatialCache = serializedObject.FindProperty("useLosSpatialCache");
         }
 
@@ -127,7 +131,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 EditorGUILayout.PropertyField(_maxLosChecksPerFrame);
+                EditorGUILayout.PropertyField(_blockWhenLosBudgetExceeded);
                 EditorGUILayout.PropertyField(_useLosSpatialCache);
+                EditorGUILayout.PropertyField(_autoInteractMinIntervalMs);
             }
         }
 
@@ -165,7 +171,9 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 SetFloat(so, "veryFarIntervalMs", config.VeryFarIntervalMs);
                 SetFloat(so, "sleepIntervalMs", config.SleepIntervalMs);
                 SetFloat(so, "sleepEnterMs", config.SleepEnterMs);
+                SetFloat(so, "autoInteractMinIntervalMs", config.AutoInteractMinIntervalMs);
                 SetInt(so, "maxLosChecksPerFrame", config.MaxLosChecksPerFrame);
+                SetBool(so, "blockWhenLosBudgetExceeded", config.BlockWhenLosBudgetExceeded);
                 SetBool(so, "useLosSpatialCache", config.UseLosSpatialCache);
                 so.ApplyModifiedProperties();
                 EditorUtility.SetDirty(detector);

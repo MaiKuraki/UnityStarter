@@ -43,15 +43,16 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private readonly List<IInteractable> _queryBuffer;
 
         private readonly ReaderWriterLockSlim _rwLock;
+        private bool _disposed;
 
         /// <summary>Number of currently registered interactables.</summary>
-        public int ItemCount => _activeCount;
+        public int ItemCount => _disposed ? 0 : _activeCount;
 
         /// <summary>Number of occupied grid cells.</summary>
-        public int CellCount => _cellHeads.Count;
+        public int CellCount => _disposed ? 0 : _cellHeads.Count;
 
         /// <summary>Current slot array capacity.</summary>
-        public int SlotCapacity => _slotCapacity;
+        public int SlotCapacity => _disposed ? 0 : _slotCapacity;
 
         public SpatialHashGrid(float cellSize = 10f, int initialCapacity = 256)
         {
@@ -102,6 +103,14 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 GrowArrays(_slotCapacity * 2);
 
             return slot;
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(SpatialHashGrid));
+            }
         }
 
         private void GrowArrays(int newCapacity)
@@ -164,6 +173,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
         public void Insert(IInteractable item, bool is2D = false)
         {
+            ThrowIfDisposed();
             Vector3 pos = item.Position;
             long hash = is2D ? HashPosition2D(pos.x, pos.y) : HashPosition(pos.x, pos.z);
 
@@ -192,6 +202,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
         public void Remove(IInteractable item)
         {
+            ThrowIfDisposed();
             _rwLock.EnterWriteLock();
             try
             {
@@ -210,6 +221,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
         public void UpdatePosition(IInteractable item, bool is2D = false)
         {
+            ThrowIfDisposed();
             Vector3 pos = item.Position;
             long newHash = is2D ? HashPosition2D(pos.x, pos.y) : HashPosition(pos.x, pos.z);
 
@@ -240,6 +252,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         /// </summary>
         public List<IInteractable> QueryRadius(Vector3 center, float radius, bool is2D = false)
         {
+            ThrowIfDisposed();
             QueryRadiusNonAlloc(center, radius, _queryBuffer, is2D, int.MaxValue, true);
             return _queryBuffer;
         }
@@ -250,6 +263,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         /// </summary>
         public int QueryRadiusNonAlloc(Vector3 center, float radius, List<IInteractable> results, bool is2D = false, int maxResults = int.MaxValue, bool allowBufferGrowth = true)
         {
+            ThrowIfDisposed();
             if (results == null)
                 throw new ArgumentNullException(nameof(results));
 
@@ -268,15 +282,15 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             int cellY = (int)Math.Floor(cy * _inverseCellSize);
             float radiusSqr = radius * radius;
 
-            float[] posX = _posX;
-            float[] posY = _posY;
-            float[] posZ = _posZ;
-            int[] nextArr = _nextInCell;
-            IInteractable[] items = _items;
-
             _rwLock.EnterReadLock();
             try
             {
+                float[] posX = _posX;
+                float[] posY = _posY;
+                float[] posZ = _posZ;
+                int[] nextArr = _nextInCell;
+                IInteractable[] items = _items;
+
                 for (int dx = -cellRadius; dx <= cellRadius; dx++)
                 {
                     for (int dy = -cellRadius; dy <= cellRadius; dy++)
@@ -314,6 +328,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
         public void Clear()
         {
+            ThrowIfDisposed();
             _rwLock.EnterWriteLock();
             try
             {
@@ -332,9 +347,15 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
         public void Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             _rwLock.EnterWriteLock();
             try
             {
+                _disposed = true;
                 Array.Clear(_items, 0, _slotCapacity);
                 _cellHeads.Clear();
                 _slotLookup.Clear();
