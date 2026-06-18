@@ -1,0 +1,21 @@
+{
+    "name": "CycloneGames.RPGFoundation.Interaction.Runtime",
+    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Runtime",
+    "references": [
+        "UniTask",
+        "R3.Unity",
+        "VitalRouter.Unity",
+        "Unity.Mathematics",
+        "CycloneGames.Factory.Runtime",
+        "CycloneGames.RPGFoundation.Interaction.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -1,0 +1,80 @@
+using Unity.Mathematics;
+using UnityEngine;
+using CycloneGames.RPGFoundation.Movement.Core;
+
+namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
+{
+    /// <summary>
+    /// Context struct passed between 2D movement states. 
+    /// </summary>
+    public struct MovementContext2D
+    {
+        public Rigidbody2D Rigidbody;
+        public IAnimationController AnimationController;
+        public Transform Transform;
+        public MovementConfig2D Config;
+
+        public float2 InputDirection;
+        public float2 WorldUp;
+        public float DeltaTime;
+        public float FixedDeltaTime;
+
+        public bool IsGrounded;
+        public float GroundAngle;
+        public float2 GroundNormal;
+
+        public bool JumpPressed;
+        public bool SprintHeld;
+        public bool CrouchHeld;
+        public bool RollPressed;
+
+        public int JumpCount;
+
+        public float2 CurrentVelocity;
+        public float CurrentSpeed;
+        public float VerticalVelocity;
+
+        // Wall Jump state
+        public bool IsWallJumping;
+        public Vector2 WallJumpDirection;
+        public int LastWallSide;
+        public float LastWallJumpTime;
+
+        public IMovementAuthority MovementAuthority;
+
+        // Wall climb per-instance state (moved from WallClimbState2D for flyweight safety)
+        public int WallClimbSide;
+        public float WallClingTimer;
+        public bool IsWallSliding;
+
+        // BeltScroll depth recovery
+        public float PendingDepth;
+
+        // Facing direction (separate from movement direction, used by TopDown/BeltScroll)
+        public float2 LookDirection;
+
+        /// <summary>
+        /// Gets final value for an attribute after applying modifiers.
+        /// </summary>
+        public float GetAttributeValue(MovementAttribute attribute, float configValue)
+        {
+            return MovementAttributeHelper.GetFinalValue(attribute, configValue, MovementAuthority);
+        }
+
+        /// <summary>
+        /// Gets final speed for a movement state. Kept for backward compatibility.
+        /// </summary>
+        public float GetFinalSpeed(float baseSpeed, MovementStateType stateType)
+        {
+            MovementAttribute attr = stateType switch
+            {
+                MovementStateType.Walk => MovementAttribute.WalkSpeed,
+                MovementStateType.Run => MovementAttribute.RunSpeed,
+                MovementStateType.Sprint => MovementAttribute.SprintSpeed,
+                MovementStateType.Crouch => MovementAttribute.CrouchSpeed,
+                _ => MovementAttribute.RunSpeed
+            };
+            return GetAttributeValue(attr, baseSpeed);
+        }
+    }
+}

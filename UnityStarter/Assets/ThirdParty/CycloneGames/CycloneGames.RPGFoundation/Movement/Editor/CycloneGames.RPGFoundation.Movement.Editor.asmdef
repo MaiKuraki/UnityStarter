@@ -1,0 +1,35 @@
+{
+    "name": "CycloneGames.RPGFoundation.Movement.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Movement.Editor",
+    "references": [
+        "CycloneGames.RPGFoundation.Movement.Core",
+        "CycloneGames.RPGFoundation.Movement.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.ai.navigation",
+            "expression": "",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION"
+        },
+        {
+            "name": "com.arongranberg.astar",
+            "expression": "",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING"
+        },
+        {
+            "name": "com.projectdawn.navigation",
+            "expression": "",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION"
+        }
+    ],
+    "noEngineReferences": false
+}

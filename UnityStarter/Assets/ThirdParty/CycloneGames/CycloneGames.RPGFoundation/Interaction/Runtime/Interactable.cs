@@ -1,0 +1,521 @@
+using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using Cysharp.Threading.Tasks;
+using UnityEngine;
+using UnityEngine.Events;
+using CycloneGames.RPGFoundation.Interaction.Core;
+
+namespace CycloneGames.RPGFoundation.Interaction.Runtime
+{
+    [DisallowMultipleComponent]
+    public class Interactable : MonoBehaviour, IInteractable, IInteractionStableIdentity
+    {
+        [Tooltip("Stable authoring ID for networking, save data, analytics, and replay. Required for server-authoritative multiplayer.")]
+        [SerializeField] protected string stableId;
+
+        [SerializeField] protected string interactionPrompt = "Interact";
+        [SerializeField] protected bool isInteractable = true;
+        [SerializeField] protected bool autoInteract;
+        [SerializeField] protected int priority;
+        [SerializeField] protected float interactionDistance = 2f;
+        [SerializeField] protected Transform interactionPoint;
+
+        [SerializeField] protected InteractionChannel channel = InteractionChannel.Channel0;
+
+        [SerializeField] protected float interactionCooldown;
+
+        [Tooltip("Minimum distance the interactable must move before updating its spatial grid position.")]
+        [SerializeField] protected float positionUpdateThreshold = 1f;
+
+        [SerializeField] protected bool resetToIdleOnComplete = true;
+
+        [SerializeField] protected bool useLocalization;
+        [SerializeField] protected InteractionPromptData promptData;
+
+        [Tooltip("Available actions on this interactable. Leave empty for single default interaction.")]
+        [SerializeField] protected InteractionAction[] actions = Array.Empty<InteractionAction>();
+
+        [Tooltip("Duration in seconds the player must hold to complete the interaction. 0 = instant.")]
+        [SerializeField] protected float holdDuration;
+        [Tooltip("Maximum distance from the instigator during an active interaction. 0 = no limit.")]
+        [SerializeField] protected float maxInteractionRange;
+
+        [SerializeField] protected UnityEvent onInteract;
+        [SerializeField] protected UnityEvent onFocus;
+        [SerializeField] protected UnityEvent onDefocus;
+
+        private InteractionStateType _currentState = InteractionStateType.Idle;
+        private float _lastInteractionTime = float.NegativeInfinity;
+        private CancellationTokenSource _interactionCts;
+        private int _isInteractingFlag;
+        private IInteractionSystem _system;
+        private bool _isRegisteredWithSystem;
+        private Vector3 _lastRegisteredPosition;
+
+        // Cached position to avoid Transform access in hot paths
+        private Vector3 _cachedPosition;
+        private int _positionFrame = -1;
+
+        // Interaction progress (0~1) for timed/hold interactions
+        private float _interactionProgress;
+        private string _pendingActionId;
+        private InstigatorHandle _currentInstigator;
+        private InteractionCancelReason _lastCancelReason;
+
+        // Requirements stored as array for 0-GC iteration
+        private IInteractionRequirement[] _requirements;
+        private static readonly IInteractionRequirement[] s_emptyRequirements = Array.Empty<IInteractionRequirement>();
+        private static readonly InteractionAction[] s_emptyActions = Array.Empty<InteractionAction>();
+
+        public string InteractionPrompt => interactionPrompt;
+        public string StableId => stableId;
+        public ulong StableIdHash => InteractionStableId.Hash64(stableId);
+        public bool HasStableId => StableIdHash != InteractionStableId.None;
+        public InteractionPromptData? PromptData => useLocalization && promptData.IsValid ? promptData : null;
+        public bool IsInteractable => isInteractable && !IsInteracting && IsCooldownComplete();
+        public bool AutoInteract => autoInteract;
+        public bool IsInteracting => _isInteractingFlag == 1;
+        public int Priority => priority;
+        public float InteractionDistance => interactionDistance;
+        public InteractionStateType CurrentState => _currentState;
+        public InteractionChannel Channel => channel;
+        public float InteractionProgress => _interactionProgress;
+        public InteractionCancelReason LastCancelReason => _lastCancelReason;
+        public IReadOnlyList<InteractionAction> Actions => actions != null && actions.Length > 0 ? actions : s_emptyActions;
+        public IReadOnlyList<IInteractionRequirement> Requirements => _requirements ?? s_emptyRequirements;
+        public InstigatorHandle CurrentInstigator => _currentInstigator;
+        public float HoldDuration => holdDuration;
+        public float MaxInteractionRange => maxInteractionRange;
+        public bool IsBusy => IsInteracting;
+        public float PositionUpdateThreshold => positionUpdateThreshold;
+        public float CooldownRemaining => interactionCooldown <= 0f
+            ? 0f
+            : Mathf.Max(0f, interactionCooldown - (Time.time - _lastInteractionTime));
+
+        public Vector3 Position
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get
+            {
+                int frame = Time.frameCount;
+                if (_positionFrame != frame)
+                {
+                    _cachedPosition = interactionPoint != null ? interactionPoint.position : transform.position;
+                    _positionFrame = frame;
+                }
+                return _cachedPosition;
+            }
+        }
+
+        public event Action<IInteractable, InteractionStateType> OnStateChanged;
+        public event Action<IInteractable, float> OnProgressChanged;
+        public event Action<IInteractable, InteractionCancelReason> OnInteractionCancelled;
+
+        protected virtual void Awake()
+        {
+            NormalizeSettings();
+            _requirements = GetComponents<IInteractionRequirement>();
+            if (_requirements.Length == 0) _requirements = s_emptyRequirements;
+        }
+
+        protected virtual void OnValidate()
+        {
+            NormalizeSettings();
+        }
+
+        private void NormalizeSettings()
+        {
+            interactionDistance = Mathf.Max(0.01f, interactionDistance);
+            interactionCooldown = Mathf.Max(0f, interactionCooldown);
+            positionUpdateThreshold = Mathf.Max(0f, positionUpdateThreshold);
+            holdDuration = Mathf.Max(0f, holdDuration);
+            maxInteractionRange = Mathf.Max(0f, maxInteractionRange);
+        }
+
+        protected virtual void OnEnable()
+        {
+            RegisterWithSystem();
+        }
+
+        protected virtual void OnDisable()
+        {
+            UnregisterFromSystem();
+        }
+
+        protected virtual void OnDestroy()
+        {
+            CancelInteraction(InteractionCancelReason.TargetDestroyed);
+            _system?.UnregisterDistanceMonitor(this);
+            OnStateChanged = null;
+            OnProgressChanged = null;
+            OnInteractionCancelled = null;
+        }
+
+        protected virtual void RegisterWithSystem()
+        {
+            if (_isRegisteredWithSystem) return;
+            if (_system == null)
+            {
+                _system = InteractionSystem.Instance;
+                if (_system == null) _system = FindAnyObjectByType<InteractionSystem>();
+            }
+
+            if (_system != null)
+            {
+                _lastRegisteredPosition = Position;
+                _system.Register(this);
+                _isRegisteredWithSystem = true;
+            }
+        }
+
+        protected virtual void UnregisterFromSystem()
+        {
+            if (_isRegisteredWithSystem)
+            {
+                _system?.Unregister(this);
+                _isRegisteredWithSystem = false;
+            }
+        }
+
+        public void SetInteractionSystem(IInteractionSystem system, bool registerImmediately = true)
+        {
+            if (_system == system) return;
+
+            UnregisterFromSystem();
+            _system = system;
+
+            if (registerImmediately && isActiveAndEnabled)
+                RegisterWithSystem();
+        }
+
+        // Call from movement systems when position changes significantly
+        public void NotifyPositionChanged()
+        {
+            if (_system == null) return;
+            Vector3 pos = Position;
+            Vector3 diff = pos - _lastRegisteredPosition;
+            // Only update grid if moved more than configured threshold (avoid thrashing)
+            float thresholdSqr = positionUpdateThreshold * positionUpdateThreshold;
+            if (diff.x * diff.x + diff.y * diff.y + diff.z * diff.z > thresholdSqr)
+            {
+                _lastRegisteredPosition = pos;
+                _system.UpdatePosition(this);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool IsCooldownComplete()
+        {
+            if (interactionCooldown <= 0f) return true;
+            return Time.time - _lastInteractionTime >= interactionCooldown;
+        }
+
+        public bool CanInteract(InstigatorHandle instigator)
+        {
+            if (!IsInteractable) return false;
+            var reqs = _requirements ?? s_emptyRequirements;
+            for (int i = 0; i < reqs.Length; i++)
+            {
+                if (!reqs[i].IsMet(this, instigator)) return false;
+            }
+            return true;
+        }
+
+        protected bool TrySetState(InteractionStateType newState)
+        {
+            if (_currentState == newState) return false;
+
+            var currentHandler = InteractionStateHandlers.GetHandler(_currentState);
+            if (!currentHandler.CanTransitionTo(newState)) return false;
+
+            currentHandler.OnExit(this);
+            _currentState = newState;
+            InteractionStateHandlers.GetHandler(newState).OnEnter(this);
+            RaiseStateChanged();
+            return true;
+        }
+
+        protected void ForceSetState(InteractionStateType newState)
+        {
+            if (_currentState == newState) return;
+            InteractionStateHandlers.GetHandler(_currentState).OnExit(this);
+            _currentState = newState;
+            InteractionStateHandlers.GetHandler(newState).OnEnter(this);
+            RaiseStateChanged();
+        }
+
+        public async UniTask<bool> TryInteractAsync(CancellationToken cancellationToken = default)
+        {
+            return await TryInteractAsync(null, null, cancellationToken);
+        }
+
+        public async UniTask<bool> TryInteractAsync(string actionId, CancellationToken cancellationToken = default)
+        {
+            return await TryInteractAsync(null, actionId, cancellationToken);
+        }
+
+        public async UniTask<bool> TryInteractAsync(InstigatorHandle instigator, string actionId, CancellationToken cancellationToken = default)
+        {
+            if (!isInteractable) return false;
+            if (!IsCooldownComplete()) return false;
+            if (!CanInteract(instigator)) return false;
+            if (!CanExecuteAction(actionId)) return false;
+
+            if (Interlocked.CompareExchange(ref _isInteractingFlag, 1, 0) != 0)
+                return false;
+
+            _currentInstigator = instigator;
+            _pendingActionId = actionId;
+            _lastCancelReason = InteractionCancelReason.Manual;
+            ReportProgress(0f);
+
+            _interactionCts?.Cancel();
+            _interactionCts?.Dispose();
+            _interactionCts = cancellationToken.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+                : new CancellationTokenSource();
+            CancellationTokenSource interactionCts = _interactionCts;
+            CancellationToken token = interactionCts.Token;
+
+            _system?.RegisterDistanceMonitor(this, instigator, maxInteractionRange);
+
+            try
+            {
+                if (!TrySetState(InteractionStateType.Starting))
+                {
+                    _system?.UnregisterDistanceMonitor(this);
+                    _currentInstigator = null;
+                    Interlocked.Exchange(ref _isInteractingFlag, 0);
+                    return false;
+                }
+
+                await OnStartInteractAsync(token);
+                token.ThrowIfCancellationRequested();
+
+                TrySetState(InteractionStateType.InProgress);
+                await OnDoInteractAsync(token);
+                token.ThrowIfCancellationRequested();
+
+                TrySetState(InteractionStateType.Completing);
+                await OnEndInteractAsync(token);
+                token.ThrowIfCancellationRequested();
+
+                ReportProgress(1f);
+                TrySetState(InteractionStateType.Completed);
+                _lastInteractionTime = Time.time;
+
+                if (resetToIdleOnComplete)
+                    ForceSetState(InteractionStateType.Idle);
+
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                ReportProgress(0f);
+                ForceSetState(InteractionStateType.Cancelled);
+                RaiseInteractionCancelled(_lastCancelReason);
+                ForceSetState(InteractionStateType.Idle);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _lastCancelReason = InteractionCancelReason.Faulted;
+                ReportInteractionException(ex);
+                ReportProgress(0f);
+                ForceSetState(InteractionStateType.Cancelled);
+                RaiseInteractionCancelled(_lastCancelReason);
+                ForceSetState(InteractionStateType.Idle);
+                return false;
+            }
+            finally
+            {
+                _system?.UnregisterDistanceMonitor(this);
+                _pendingActionId = null;
+                _currentInstigator = null;
+                if (ReferenceEquals(_interactionCts, interactionCts))
+                {
+                    _interactionCts = null;
+                }
+                interactionCts.Dispose();
+                Interlocked.Exchange(ref _isInteractingFlag, 0);
+            }
+        }
+
+        /// <summary>
+        /// The action ID currently being executed. Null if using default interaction.
+        /// Subclasses can use this in OnDoInteractAsync to branch behavior per action.
+        /// </summary>
+        protected string PendingActionId => _pendingActionId;
+
+        protected virtual void ReportInteractionException(Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        public virtual bool CanExecuteAction(string actionId)
+        {
+            if (string.IsNullOrEmpty(actionId))
+            {
+                return true;
+            }
+
+            InteractionAction[] availableActions = actions ?? s_emptyActions;
+            for (int i = 0; i < availableActions.Length; i++)
+            {
+                InteractionAction action = availableActions[i];
+                if (string.Equals(action.ActionId, actionId, StringComparison.Ordinal))
+                {
+                    return action.IsEnabled;
+                }
+            }
+
+            return false;
+        }
+
+        public virtual InteractionTargetSnapshot CreateAuthoritySnapshot(int worldId)
+        {
+            Vector3 position = Position;
+            return new InteractionTargetSnapshot(
+                worldId,
+                StableIdHash,
+                new InteractionVector3(position.x, position.y, position.z),
+                interactionDistance,
+                IsInteractable,
+                allowDefaultAction: true,
+                BuildEnabledActionIdsForAuthority());
+        }
+
+        private string[] BuildEnabledActionIdsForAuthority()
+        {
+            InteractionAction[] availableActions = actions ?? s_emptyActions;
+            int count = 0;
+            for (int i = 0; i < availableActions.Length; i++)
+            {
+                if (availableActions[i].IsValid && availableActions[i].IsEnabled)
+                {
+                    count++;
+                }
+            }
+
+            if (count == 0)
+            {
+                return InteractionTargetSnapshot.EmptyActions;
+            }
+
+            string[] enabledActionIds = new string[count];
+            int index = 0;
+            for (int i = 0; i < availableActions.Length; i++)
+            {
+                if (availableActions[i].IsValid && availableActions[i].IsEnabled)
+                {
+                    enabledActionIds[index] = availableActions[i].ActionId;
+                    index++;
+                }
+            }
+
+            return enabledActionIds;
+        }
+
+        /// <summary>
+        /// Report interaction progress (0.0 ~ 1.0). Call this from OnDoInteractAsync
+        /// to update continuous progress for timed/hold interactions.
+        /// </summary>
+        protected void ReportProgress(float progress)
+        {
+            progress = Mathf.Clamp01(progress);
+            if (Mathf.Approximately(_interactionProgress, progress)) return;
+            _interactionProgress = progress;
+            RaiseProgressChanged(progress);
+        }
+
+        private void RaiseStateChanged()
+        {
+            try
+            {
+                OnStateChanged?.Invoke(this, _currentState);
+            }
+            catch (Exception ex)
+            {
+                ReportInteractionException(ex);
+            }
+        }
+
+        private void RaiseProgressChanged(float progress)
+        {
+            try
+            {
+                OnProgressChanged?.Invoke(this, progress);
+            }
+            catch (Exception ex)
+            {
+                ReportInteractionException(ex);
+            }
+        }
+
+        private void RaiseInteractionCancelled(InteractionCancelReason reason)
+        {
+            try
+            {
+                OnInteractionCancelled?.Invoke(this, reason);
+            }
+            catch (Exception ex)
+            {
+                ReportInteractionException(ex);
+            }
+        }
+
+        protected virtual UniTask OnStartInteractAsync(CancellationToken ct) => UniTask.CompletedTask;
+
+        /// <summary>
+        /// Awaits the hold duration timer, reporting progress from 0 to 1.
+        /// Call this in overridden <see cref="OnDoInteractAsync"/> to use the built-in hold behavior.
+        /// </summary>
+        protected async UniTask HoldTimerAsync(CancellationToken ct)
+        {
+            if (holdDuration <= 0f) return;
+            float elapsed = 0f;
+            while (elapsed < holdDuration)
+            {
+                ct.ThrowIfCancellationRequested();
+                elapsed += Time.deltaTime;
+                ReportProgress(Mathf.Clamp01(elapsed / holdDuration));
+                await UniTask.Yield(ct);
+            }
+        }
+
+        protected virtual async UniTask OnDoInteractAsync(CancellationToken ct)
+        {
+            await HoldTimerAsync(ct);
+            onInteract?.Invoke();
+        }
+
+        protected virtual UniTask OnEndInteractAsync(CancellationToken ct) => UniTask.CompletedTask;
+
+        public virtual void OnFocus() => onFocus?.Invoke();
+        public virtual void OnDefocus() => onDefocus?.Invoke();
+
+        public void ForceEndInteraction(InteractionCancelReason reason = InteractionCancelReason.Manual)
+        {
+            CancelInteraction(reason);
+        }
+
+        private void CancelInteraction(InteractionCancelReason reason = InteractionCancelReason.Manual)
+        {
+            _lastCancelReason = reason;
+            CancellationTokenSource cts = _interactionCts;
+            if (cts != null && !cts.IsCancellationRequested)
+                cts.Cancel();
+        }
+
+#if UNITY_EDITOR
+        protected virtual void OnDrawGizmosSelected()
+        {
+            Gizmos.color = Color.yellow;
+            Vector3 pos = interactionPoint != null ? interactionPoint.position : transform.position;
+            Gizmos.DrawWireSphere(pos, interactionDistance);
+        }
+#endif
+    }
+}

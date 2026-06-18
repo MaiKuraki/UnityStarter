@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework",
+    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework",
+    "references": [
+        "CycloneGames.RPGFoundation.Interaction.Core",
+        "CycloneGames.RPGFoundation.Interaction.Runtime",
+        "CycloneGames.GameplayFramework.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.gameplay-framework",
+            "expression": "",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK"
+        }
+    ],
+    "noEngineReferences": false
+}
