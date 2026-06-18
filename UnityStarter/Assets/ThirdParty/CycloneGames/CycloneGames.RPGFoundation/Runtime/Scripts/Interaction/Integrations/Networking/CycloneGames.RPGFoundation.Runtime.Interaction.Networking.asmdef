@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.RPGFoundation.Runtime.Interaction.Networking",
+    "rootNamespace": "CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.Networking",
+    "references": [
+        "CycloneGames.RPGFoundation.Runtime",
+        "CycloneGames.Networking.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

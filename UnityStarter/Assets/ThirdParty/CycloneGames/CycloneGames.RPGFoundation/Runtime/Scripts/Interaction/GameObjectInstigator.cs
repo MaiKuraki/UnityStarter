@@ -14,13 +14,18 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
     /// </summary>
     public sealed class GameObjectInstigator : InstigatorHandle
     {
+        private readonly ulong _stableId;
+
         public GameObject GameObject { get; }
 
-        public override int Id => GameObject.GetInstanceID();
+        public override int Id => GameObject != null ? GameObject.GetInstanceID() : 0;
 
-        public GameObjectInstigator(GameObject gameObject)
+        public override ulong StableId => _stableId != InteractionStableId.None ? _stableId : base.StableId;
+
+        public GameObjectInstigator(GameObject gameObject, ulong stableId = InteractionStableId.None)
         {
             GameObject = gameObject;
+            _stableId = stableId;
         }
 
         public override bool TryGetPosition(out Vector3 position)

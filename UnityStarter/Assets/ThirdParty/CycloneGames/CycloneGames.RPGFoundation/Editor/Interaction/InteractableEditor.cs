@@ -12,6 +12,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
     {
         private Interactable _target;
 
+        private SerializedProperty _stableId;
         private SerializedProperty _interactionPrompt;
         private SerializedProperty _isInteractable;
         private SerializedProperty _autoInteract;
@@ -51,6 +52,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private static readonly string[] ExcludedProperties =
         {
             "m_Script",
+            "stableId",
             "interactionPrompt",
             "isInteractable",
             "autoInteract",
@@ -75,6 +77,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         {
             _target = (Interactable)target;
 
+            _stableId = serializedObject.FindProperty("stableId");
             _interactionPrompt = serializedObject.FindProperty("interactionPrompt");
             _isInteractable = serializedObject.FindProperty("isInteractable");
             _autoInteract = serializedObject.FindProperty("autoInteract");
@@ -100,6 +103,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             serializedObject.Update();
 
             DrawHeader();
+            InteractionComponentRules.DrawIssuesFor(targets);
             DrawValidation();
             DrawRuntimeStatus();
             DrawCoreSettings();
@@ -279,6 +283,13 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 EditorGUILayout.PropertyField(_isInteractable, new GUIContent("Enabled"));
+                EditorGUILayout.PropertyField(_stableId, new GUIContent("Stable Id"));
+                if (string.IsNullOrWhiteSpace(_stableId.stringValue))
+                {
+                    InteractionInspectorUiUtility.DrawHelpBox(
+                        "Stable Id is required for server-authoritative multiplayer, save data, replay, and analytics. Leave empty only for local-only scene objects.",
+                        MessageType.Info);
+                }
                 EditorGUILayout.PropertyField(_autoInteract, new GUIContent("Auto Interact"));
                 EditorGUILayout.PropertyField(_priority, new GUIContent("Priority"));
                 EditorGUILayout.PropertyField(_channel, new GUIContent("Channel"));
@@ -916,6 +927,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 "Effect prefab component used by EffectPoolSystem. Attach this to prefabs that should avoid Instantiate fallback on spawn.",
                 MessageType.None);
 
+            InteractionComponentRules.DrawIssuesFor(targets);
             DrawLifetime();
             DrawValidation();
             DrawRuntimeStatus();

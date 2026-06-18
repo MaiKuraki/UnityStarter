@@ -16,6 +16,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         SpatialHash = 2
     }
 
+    [DisallowMultipleComponent]
     public class InteractionDetector : MonoBehaviour, IInteractionDetector
     {
         [Header("Detection")]
@@ -39,6 +40,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         [Tooltip("Maximum number of candidates to track in the nearby interactables list.")]
         [SerializeField] private int maxNearbyCandidates = 16;
 
+        [Header("Auto Interact")]
+        [Tooltip("Minimum time between automatic interaction attempts against the same target. Prevents instant interactions from being re-triggered every detection cycle.")]
+        [SerializeField] private float autoInteractMinIntervalMs = 250f;
+
         [Header("LOD Settings (Time-Based)")]
         [SerializeField] private float nearDistance = 5f;
         [SerializeField] private float farDistance = 15f;
@@ -58,10 +63,13 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         [Header("LOS Optimization")]
         [Tooltip("Maximum LOS raycasts per detection cycle. 0 = unlimited.")]
         [SerializeField] private int maxLosChecksPerFrame;
+        [Tooltip("If true, targets skipped because the LOS budget is exhausted are treated as blocked.")]
+        [SerializeField] private bool blockWhenLosBudgetExceeded = true;
         [Tooltip("Cache LOS results for stationary objects across frames.")]
         [SerializeField] private bool useLosSpatialCache = true;
 
         [Header("References")]
+        [SerializeField] private InteractionSystem interactionSystem;
         [SerializeField] private Transform detectionOrigin;
 
         private Collider[] _colliderBuffer3D;
@@ -96,9 +104,11 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         {
             public bool IsObstructed;
             public Vector3 CachedPosition;
+            public Vector3 CachedOrigin;
             public float CachedTime;
         }
         private Dictionary<int, LosCacheEntry> _losCache;
+        private Dictionary<int, float> _autoInteractTimes;
         private int _losCheckCount;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -127,6 +137,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             _raycastHits2D = new RaycastHit2D[16];
             _componentCache = new Dictionary<int, IInteractable>(maxInteractables);
             _losCache = new Dictionary<int, LosCacheEntry>(maxInteractables);
+            _autoInteractTimes = new Dictionary<int, float>(maxInteractables);
             _nearbyCandidates.Capacity = Mathf.Max(_nearbyCandidates.Capacity, maxNearbyCandidates);
             _nearbySortBuffer = new InteractionCandidate[maxInteractables];
             _spatialQueryBuffer.Capacity = Mathf.Max(_spatialQueryBuffer.Capacity, maxInteractables);
@@ -153,11 +164,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             sleepIntervalMs = Mathf.Max(nearIntervalMs, sleepIntervalMs);
             sleepEnterMs = Mathf.Max(0f, sleepEnterMs);
             maxLosChecksPerFrame = Mathf.Max(0, maxLosChecksPerFrame);
+            autoInteractMinIntervalMs = Mathf.Max(0f, autoInteractMinIntervalMs);
         }
 
         private void Start()
         {
-            _system = InteractionSystem.Instance;
+            _system = interactionSystem != null ? interactionSystem : InteractionSystem.Instance;
             if (_system == null) _system = FindAnyObjectByType<InteractionSystem>();
         }
 
@@ -182,6 +194,8 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             _componentCache = null;
             _losCache?.Clear();
             _losCache = null;
+            _autoInteractTimes?.Clear();
+            _autoInteractTimes = null;
             OnNearbyInteractablesChanged = null;
         }
 
@@ -274,9 +288,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
                 if (interactable.AutoInteract)
                 {
-                    float autoDistSqr = interactable.InteractionDistance * interactable.InteractionDistance;
-                    if (distSqr <= autoDistSqr)
-                        interactable.TryInteractAsync(_cachedInstigator, null).Forget();
+                    TryAutoInteract(interactable, distSqr);
                     continue;
                 }
 
@@ -313,8 +325,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             _debugSb.Clear();
 #endif
+            Vector3 originPos = detectionOrigin.position + detectionOrigin.TransformDirection(detectionOffset);
             int count = Physics.OverlapSphereNonAlloc(
-                detectionOrigin.position, detectionRadius, _colliderBuffer3D, interactableLayer);
+                originPos, detectionRadius, _colliderBuffer3D, interactableLayer);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             _debugSb.Append("[3D Scan] ").Append(count).AppendLine(" colliders");
@@ -323,7 +336,6 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             _nearbyCount = 0;
             EnsureSortBufferCapacity(count);
 
-            Vector3 originPos = detectionOrigin.position + detectionOrigin.TransformDirection(detectionOffset);
             Vector3 originFwd = detectionOrigin.forward;
             float radiusSqr = detectionRadius * detectionRadius;
 
@@ -343,9 +355,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
                 if (interactable.AutoInteract)
                 {
-                    float autoDistSqr = interactable.InteractionDistance * interactable.InteractionDistance;
-                    if (distSqr <= autoDistSqr)
-                        interactable.TryInteractAsync(_cachedInstigator, null).Forget();
+                    TryAutoInteract(interactable, distSqr);
                     continue;
                 }
 
@@ -413,9 +423,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
 
                 if (interactable.AutoInteract)
                 {
-                    float autoDistSqr = interactable.InteractionDistance * interactable.InteractionDistance;
-                    if (distSqr <= autoDistSqr)
-                        interactable.TryInteractAsync(_cachedInstigator, null).Forget();
+                    TryAutoInteract(interactable, distSqr);
                     continue;
                 }
 
@@ -539,7 +547,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private bool CheckLos3D(Vector3 origin, Vector3 dir, float dist, Transform targetTransform, IInteractable interactable)
         {
             if (maxLosChecksPerFrame > 0 && _losCheckCount >= maxLosChecksPerFrame)
-                return false;
+                return blockWhenLosBudgetExceeded;
 
             if (useLosSpatialCache && interactable is MonoBehaviour mb)
             {
@@ -547,6 +555,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 if (_losCache.TryGetValue(key, out var entry))
                 {
                     if ((entry.CachedPosition - interactable.Position).sqrMagnitude < 0.0001f
+                        && (entry.CachedOrigin - origin).sqrMagnitude < 0.0001f
                         && Time.time - entry.CachedTime < 0.5f)
                         return entry.IsObstructed;
                 }
@@ -558,7 +567,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             if (useLosSpatialCache && interactable is MonoBehaviour mb2)
             {
                 int key = mb2.GetInstanceID();
-                StoreLosCache(key, obstructed, interactable.Position);
+                StoreLosCache(key, obstructed, interactable.Position, origin);
             }
 
             return obstructed;
@@ -567,7 +576,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private bool CheckLos2D(Vector2 origin, Vector2 dir, float dist, Transform targetTransform, IInteractable interactable)
         {
             if (maxLosChecksPerFrame > 0 && _losCheckCount >= maxLosChecksPerFrame)
-                return false;
+                return blockWhenLosBudgetExceeded;
 
             if (useLosSpatialCache && interactable is MonoBehaviour mb)
             {
@@ -575,6 +584,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
                 if (_losCache.TryGetValue(key, out var entry))
                 {
                     if ((entry.CachedPosition - (Vector3)interactable.Position).sqrMagnitude < 0.0001f
+                        && (entry.CachedOrigin - (Vector3)origin).sqrMagnitude < 0.0001f
                         && Time.time - entry.CachedTime < 0.5f)
                         return entry.IsObstructed;
                 }
@@ -586,14 +596,14 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             if (useLosSpatialCache && interactable is MonoBehaviour mb2)
             {
                 int key = mb2.GetInstanceID();
-                StoreLosCache(key, obstructed, interactable.Position);
+                StoreLosCache(key, obstructed, interactable.Position, origin);
             }
 
             return obstructed;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private void StoreLosCache(int key, bool obstructed, Vector3 position)
+        private void StoreLosCache(int key, bool obstructed, Vector3 position, Vector3 origin)
         {
             if (!_losCache.ContainsKey(key) && _losCache.Count >= maxInteractables)
                 return;
@@ -602,8 +612,61 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             {
                 IsObstructed = obstructed,
                 CachedPosition = position,
+                CachedOrigin = origin,
                 CachedTime = Time.time
             };
+        }
+
+        private void TryAutoInteract(IInteractable interactable, float distSqr)
+        {
+            float autoDistSqr = interactable.InteractionDistance * interactable.InteractionDistance;
+            if (distSqr > autoDistSqr)
+            {
+                return;
+            }
+
+            int key = GetInteractableCacheKey(interactable);
+            if (key != 0 && autoInteractMinIntervalMs > 0f)
+            {
+                float currentTime = Time.time;
+                if (_autoInteractTimes.TryGetValue(key, out float lastTime)
+                    && currentTime - lastTime < autoInteractMinIntervalMs * 0.001f)
+                {
+                    return;
+                }
+
+                if (_autoInteractTimes.Count < maxInteractables || _autoInteractTimes.ContainsKey(key))
+                {
+                    _autoInteractTimes[key] = currentTime;
+                }
+            }
+
+            TryAutoInteractAsync(interactable).Forget();
+        }
+
+        private async UniTask TryAutoInteractAsync(IInteractable interactable)
+        {
+            try
+            {
+                await interactable.TryInteractAsync(_cachedInstigator, null, destroyCancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex, this);
+            }
+        }
+
+        private static int GetInteractableCacheKey(IInteractable interactable)
+        {
+            if (interactable is MonoBehaviour mb && mb != null)
+            {
+                return mb.GetInstanceID();
+            }
+
+            return interactable?.GetHashCode() ?? 0;
         }
 
         private static void QuickSortByScore(InteractionCandidate[] arr, int left, int right)
@@ -631,7 +694,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             if (_componentCache.TryGetValue(id, out IInteractable cached))
             {
                 if (cached is UnityEngine.Object obj && obj == null)
+                {
+                    _componentCache.Remove(id);
                     return null;
+                }
                 return cached;
             }
             IInteractable interactable = col.GetComponent<IInteractable>();
@@ -646,7 +712,10 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             if (_componentCache.TryGetValue(id, out IInteractable cached))
             {
                 if (cached is UnityEngine.Object obj && obj == null)
+                {
+                    _componentCache.Remove(id);
                     return null;
+                }
                 return cached;
             }
             IInteractable interactable = col.GetComponent<IInteractable>();
@@ -660,7 +729,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             IInteractable target = _currentInteractable.Value;
             if (!IsValidInteractable(target)) return;
             if (target.IsInteractable)
-                Router.Default.PublishAsync(new InteractionCommand(target, instigator: _cachedInstigator)).AsUniTask().Forget();
+                PublishInteractionCommandAsync(new InteractionCommand(target, instigator: _cachedInstigator, worldId: _system?.WorldId ?? 0)).Forget();
         }
 
         public void TryInteract(string actionId)
@@ -668,7 +737,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             IInteractable target = _currentInteractable.Value;
             if (!IsValidInteractable(target)) return;
             if (target.IsInteractable)
-                Router.Default.PublishAsync(new InteractionCommand(target, actionId, instigator: _cachedInstigator)).AsUniTask().Forget();
+                PublishInteractionCommandAsync(new InteractionCommand(target, actionId, _cachedInstigator, _system?.WorldId ?? 0)).Forget();
         }
 
         public void TryInteractAll()
@@ -677,7 +746,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             {
                 var interactable = _nearbyCandidates[i].Interactable;
                 if (IsValidInteractable(interactable) && interactable.IsInteractable)
-                    Router.Default.PublishAsync(new InteractionCommand(interactable, instigator: _cachedInstigator)).AsUniTask().Forget();
+                    PublishInteractionCommandAsync(new InteractionCommand(interactable, instigator: _cachedInstigator, worldId: _system?.WorldId ?? 0)).Forget();
             }
         }
 
@@ -687,7 +756,22 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             {
                 var interactable = _nearbyCandidates[i].Interactable;
                 if (IsValidInteractable(interactable) && interactable.IsInteractable)
-                    Router.Default.PublishAsync(new InteractionCommand(interactable, actionId, instigator: _cachedInstigator)).AsUniTask().Forget();
+                    PublishInteractionCommandAsync(new InteractionCommand(interactable, actionId, _cachedInstigator, _system?.WorldId ?? 0)).Forget();
+            }
+        }
+
+        private async UniTask PublishInteractionCommandAsync(InteractionCommand command)
+        {
+            try
+            {
+                await Router.Default.PublishAsync(command).AsUniTask();
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                Debug.LogException(ex, this);
             }
         }
 
@@ -767,7 +851,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private void DrawDebugWindow(int windowId)
         {
             IInteractable target = _currentInteractable.Value;
-            string targetName = target != null ? ((MonoBehaviour)target).name : "None";
+            string targetName = target is MonoBehaviour targetBehaviour ? targetBehaviour.name : target?.ToString() ?? "None";
             string targetPrompt = target?.InteractionPrompt ?? "-";
 
             GUILayout.BeginHorizontal();

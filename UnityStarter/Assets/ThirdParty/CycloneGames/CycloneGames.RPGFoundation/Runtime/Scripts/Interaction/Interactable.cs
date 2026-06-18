@@ -8,8 +8,12 @@ using UnityEngine.Events;
 
 namespace CycloneGames.RPGFoundation.Runtime.Interaction
 {
-    public class Interactable : MonoBehaviour, IInteractable
+    [DisallowMultipleComponent]
+    public class Interactable : MonoBehaviour, IInteractable, IInteractionStableIdentity
     {
+        [Tooltip("Stable authoring ID for networking, save data, analytics, and replay. Required for server-authoritative multiplayer.")]
+        [SerializeField] protected string stableId;
+
         [SerializeField] protected string interactionPrompt = "Interact";
         [SerializeField] protected bool isInteractable = true;
         [SerializeField] protected bool autoInteract;
@@ -65,6 +69,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         private static readonly InteractionAction[] s_emptyActions = Array.Empty<InteractionAction>();
 
         public string InteractionPrompt => interactionPrompt;
+        public string StableId => stableId;
+        public ulong StableIdHash => InteractionStableId.Hash64(stableId);
+        public bool HasStableId => StableIdHash != InteractionStableId.None;
         public InteractionPromptData? PromptData => useLocalization && promptData.IsValid ? promptData : null;
         public bool IsInteractable => isInteractable && !IsInteracting && IsCooldownComplete();
         public bool AutoInteract => autoInteract;
@@ -74,6 +81,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         public InteractionStateType CurrentState => _currentState;
         public InteractionChannel Channel => channel;
         public float InteractionProgress => _interactionProgress;
+        public InteractionCancelReason LastCancelReason => _lastCancelReason;
         public IReadOnlyList<InteractionAction> Actions => actions != null && actions.Length > 0 ? actions : s_emptyActions;
         public IReadOnlyList<IInteractionRequirement> Requirements => _requirements ?? s_emptyRequirements;
         public InstigatorHandle CurrentInstigator => _currentInstigator;
@@ -224,7 +232,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             currentHandler.OnExit(this);
             _currentState = newState;
             InteractionStateHandlers.GetHandler(newState).OnEnter(this);
-            OnStateChanged?.Invoke(this, _currentState);
+            RaiseStateChanged();
             return true;
         }
 
@@ -234,7 +242,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             InteractionStateHandlers.GetHandler(_currentState).OnExit(this);
             _currentState = newState;
             InteractionStateHandlers.GetHandler(newState).OnEnter(this);
-            OnStateChanged?.Invoke(this, _currentState);
+            RaiseStateChanged();
         }
 
         public async UniTask<bool> TryInteractAsync(CancellationToken cancellationToken = default)
@@ -252,6 +260,7 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             if (!isInteractable) return false;
             if (!IsCooldownComplete()) return false;
             if (!CanInteract(instigator)) return false;
+            if (!CanExecuteAction(actionId)) return false;
 
             if (Interlocked.CompareExchange(ref _isInteractingFlag, 1, 0) != 0)
                 return false;
@@ -305,7 +314,17 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             {
                 ReportProgress(0f);
                 ForceSetState(InteractionStateType.Cancelled);
-                OnInteractionCancelled?.Invoke(this, _lastCancelReason);
+                RaiseInteractionCancelled(_lastCancelReason);
+                ForceSetState(InteractionStateType.Idle);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                _lastCancelReason = InteractionCancelReason.Faulted;
+                ReportInteractionException(ex);
+                ReportProgress(0f);
+                ForceSetState(InteractionStateType.Cancelled);
+                RaiseInteractionCancelled(_lastCancelReason);
                 ForceSetState(InteractionStateType.Idle);
                 return false;
             }
@@ -329,6 +348,75 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         /// </summary>
         protected string PendingActionId => _pendingActionId;
 
+        protected virtual void ReportInteractionException(Exception exception)
+        {
+            Debug.LogException(exception, this);
+        }
+
+        public virtual bool CanExecuteAction(string actionId)
+        {
+            if (string.IsNullOrEmpty(actionId))
+            {
+                return true;
+            }
+
+            InteractionAction[] availableActions = actions ?? s_emptyActions;
+            for (int i = 0; i < availableActions.Length; i++)
+            {
+                InteractionAction action = availableActions[i];
+                if (string.Equals(action.ActionId, actionId, StringComparison.Ordinal))
+                {
+                    return action.IsEnabled;
+                }
+            }
+
+            return false;
+        }
+
+        public virtual InteractionTargetSnapshot CreateAuthoritySnapshot(int worldId)
+        {
+            Vector3 position = Position;
+            return new InteractionTargetSnapshot(
+                worldId,
+                StableIdHash,
+                new InteractionVector3(position.x, position.y, position.z),
+                interactionDistance,
+                IsInteractable,
+                allowDefaultAction: true,
+                BuildEnabledActionIdsForAuthority());
+        }
+
+        private string[] BuildEnabledActionIdsForAuthority()
+        {
+            InteractionAction[] availableActions = actions ?? s_emptyActions;
+            int count = 0;
+            for (int i = 0; i < availableActions.Length; i++)
+            {
+                if (availableActions[i].IsValid && availableActions[i].IsEnabled)
+                {
+                    count++;
+                }
+            }
+
+            if (count == 0)
+            {
+                return InteractionTargetSnapshot.EmptyActions;
+            }
+
+            string[] enabledActionIds = new string[count];
+            int index = 0;
+            for (int i = 0; i < availableActions.Length; i++)
+            {
+                if (availableActions[i].IsValid && availableActions[i].IsEnabled)
+                {
+                    enabledActionIds[index] = availableActions[i].ActionId;
+                    index++;
+                }
+            }
+
+            return enabledActionIds;
+        }
+
         /// <summary>
         /// Report interaction progress (0.0 ~ 1.0). Call this from OnDoInteractAsync
         /// to update continuous progress for timed/hold interactions.
@@ -338,7 +426,43 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
             progress = Mathf.Clamp01(progress);
             if (Mathf.Approximately(_interactionProgress, progress)) return;
             _interactionProgress = progress;
-            OnProgressChanged?.Invoke(this, progress);
+            RaiseProgressChanged(progress);
+        }
+
+        private void RaiseStateChanged()
+        {
+            try
+            {
+                OnStateChanged?.Invoke(this, _currentState);
+            }
+            catch (Exception ex)
+            {
+                ReportInteractionException(ex);
+            }
+        }
+
+        private void RaiseProgressChanged(float progress)
+        {
+            try
+            {
+                OnProgressChanged?.Invoke(this, progress);
+            }
+            catch (Exception ex)
+            {
+                ReportInteractionException(ex);
+            }
+        }
+
+        private void RaiseInteractionCancelled(InteractionCancelReason reason)
+        {
+            try
+            {
+                OnInteractionCancelled?.Invoke(this, reason);
+            }
+            catch (Exception ex)
+            {
+                ReportInteractionException(ex);
+            }
         }
 
         protected virtual UniTask OnStartInteractAsync(CancellationToken ct) => UniTask.CompletedTask;

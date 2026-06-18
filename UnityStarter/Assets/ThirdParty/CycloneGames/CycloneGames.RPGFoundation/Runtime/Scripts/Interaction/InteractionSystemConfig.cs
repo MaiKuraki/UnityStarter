@@ -24,8 +24,12 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         [SerializeField] private float sleepIntervalMs = 500f;
         [SerializeField] private float sleepEnterMs = 1000f;
 
+        [Header("Auto Interact")]
+        [SerializeField] private float autoInteractMinIntervalMs = 250f;
+
         [Header("Performance")]
         [SerializeField] private int maxLosChecksPerFrame = 32;
+        [SerializeField] private bool blockWhenLosBudgetExceeded = true;
         [SerializeField] private bool useLosSpatialCache = true;
 
         public float CellSize => cellSize;
@@ -40,7 +44,9 @@ namespace CycloneGames.RPGFoundation.Runtime.Interaction
         public float VeryFarIntervalMs => veryFarIntervalMs;
         public float SleepIntervalMs => sleepIntervalMs;
         public float SleepEnterMs => sleepEnterMs;
+        public float AutoInteractMinIntervalMs => autoInteractMinIntervalMs;
         public int MaxLosChecksPerFrame => maxLosChecksPerFrame;
+        public bool BlockWhenLosBudgetExceeded => blockWhenLosBudgetExceeded;
         public bool UseLosSpatialCache => useLosSpatialCache;
 
         private static InteractionSystemConfig s_default;

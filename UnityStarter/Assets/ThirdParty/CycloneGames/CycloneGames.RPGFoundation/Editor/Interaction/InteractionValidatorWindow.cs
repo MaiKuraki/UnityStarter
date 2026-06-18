@@ -14,8 +14,11 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         private const string DetectorRadiusPropertyName = "detectionRadius";
         private const string InteractableLayerPropertyName = "interactableLayer";
         private const string CooldownPropertyName = "interactionCooldown";
+        private const string StableIdPropertyName = "stableId";
 
         private readonly List<ValidationIssue> _issues = new(32);
+        private readonly List<InteractionComponentRuleIssue> _componentRuleIssues = new(16);
+        private readonly HashSet<GameObject> _validatedGameObjects = new();
         private Vector2 _scrollPosition;
         private int _fixedCount;
         private bool _pendingRefresh;
@@ -223,6 +226,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
         {
             _issues.Clear();
 
+            ValidateComponentRules();
             ValidateInteractables();
             ValidateDetectors();
             ValidateEffectPool();
@@ -232,9 +236,45 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
             Repaint();
         }
 
+        private void ValidateComponentRules()
+        {
+            _componentRuleIssues.Clear();
+            _validatedGameObjects.Clear();
+
+            MonoBehaviour[] behaviours = FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None);
+            for (int i = 0; i < behaviours.Length; i++)
+            {
+                MonoBehaviour behaviour = behaviours[i];
+                if (behaviour == null || behaviour.gameObject == null)
+                {
+                    continue;
+                }
+
+                GameObject gameObject = behaviour.gameObject;
+                if (!_validatedGameObjects.Add(gameObject))
+                {
+                    continue;
+                }
+
+                InteractionComponentRules.CollectIssues(gameObject, _componentRuleIssues);
+                for (int issueIndex = 0; issueIndex < _componentRuleIssues.Count; issueIndex++)
+                {
+                    InteractionComponentRuleIssue issue = _componentRuleIssues[issueIndex];
+                    _issues.Add(new ValidationIssue(
+                        ToValidationSeverity(issue.Severity),
+                        issue.Message,
+                        issue.Target != null ? issue.Target : gameObject));
+                }
+            }
+
+            _componentRuleIssues.Clear();
+            _validatedGameObjects.Clear();
+        }
+
         private void ValidateInteractables()
         {
             Interactable[] interactables = FindObjectsByType<Interactable>(FindObjectsSortMode.None);
+            var stableIds = new Dictionary<string, Interactable>(interactables.Length);
 
             for (int i = 0; i < interactables.Length; i++)
             {
@@ -282,6 +322,23 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 }
 
                 using var serializedObject = new SerializedObject(interactable);
+                SerializedProperty stableIdProperty = serializedObject.FindProperty(StableIdPropertyName);
+                if (stableIdProperty != null && !string.IsNullOrWhiteSpace(stableIdProperty.stringValue))
+                {
+                    string stableId = stableIdProperty.stringValue;
+                    if (stableIds.TryGetValue(stableId, out Interactable duplicate))
+                    {
+                        _issues.Add(new ValidationIssue(
+                            Severity.Error,
+                            "'" + interactable.name + "' and '" + duplicate.name + "' use the same Stable Id. Stable IDs must be unique for multiplayer, save data, replay, and analytics.",
+                            interactable));
+                    }
+                    else
+                    {
+                        stableIds.Add(stableId, interactable);
+                    }
+                }
+
                 SerializedProperty cooldownProperty = serializedObject.FindProperty(CooldownPropertyName);
                 if (cooldownProperty != null && cooldownProperty.floatValue <= 0f)
                 {
@@ -572,6 +629,16 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 Severity.Error => "Error",
                 Severity.Warning => "Warning",
                 _ => "Info"
+            };
+        }
+
+        private static Severity ToValidationSeverity(InteractionComponentRuleSeverity severity)
+        {
+            return severity switch
+            {
+                InteractionComponentRuleSeverity.Error => Severity.Error,
+                InteractionComponentRuleSeverity.Warning => Severity.Warning,
+                _ => Severity.Info
             };
         }
     }

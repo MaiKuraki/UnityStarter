@@ -13,6 +13,7 @@ A high-performance, zero-GC, reactive interaction system for Unity. Supports **3
 - [RPG Interaction Module](#rpg-interaction-module)
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
+  - [Production-Scale Architecture](#production-scale-architecture)
   - [Architecture](#architecture)
   - [Dependencies](#dependencies)
   - [Quick Start](#quick-start)
@@ -65,8 +66,8 @@ A high-performance, zero-GC, reactive interaction system for Unity. Supports **3
     - [Cross-Platform](#cross-platform)
   - [Editor Tools](#editor-tools)
   - [File Inventory](#file-inventory)
-    - [Runtime (23 files)](#runtime-23-files)
-    - [Editor (7 files)](#editor-7-files)
+    - [Runtime (54 files)](#runtime-54-files)
+    - [Editor (8 files)](#editor-8-files)
   - [API Reference](#api-reference)
     - [Interfaces](#interfaces)
     - [Classes](#classes)
@@ -82,7 +83,7 @@ A high-performance, zero-GC, reactive interaction system for Unity. Supports **3
 | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Multi-Mode Detection**    | Physics3D, Physics2D, and SpatialHash — supports any game type.                                                                                          |
 | **Reactive Architecture**   | R3 `ReactiveProperty` for event-driven UI binding.                                                                                                       |
-| **VitalRouter Integration** | Decoupled command routing for local and networked interactions.                                                                                          |
+| **VitalRouter Integration** | World-scoped command routing for local interactions and network adapter boundaries.                                                                       |
 | **LOD Detection**           | Adaptive frequency scaling: fast when close, slow when far, sleep when idle.                                                                             |
 | **Channel Filtering**       | 16 semantics-free flag channels (user defines meaning via game-layer aliases) for selective detection.                                                   |
 | **Requirement System**      | Pluggable `IInteractionRequirement` conditions (key, level, quest state).                                                                                |
@@ -91,6 +92,7 @@ A high-performance, zero-GC, reactive interaction system for Unity. Supports **3
 | **Interaction Progress**    | Continuous 0–1 progress for timed/hold interactions (progress bars).                                                                                     |
 | **Multi-Action Prompts**    | Single interactable exposes multiple actions ("E: Pick Up / F: Examine").                                                                                |
 | **Instigator System**       | `InstigatorHandle` abstract class — supports OOP (`GameObjectInstigator`), ECS, entityless, and networked games with compile-time zero-boxing guarantee. |
+| **Stable Identity**         | Optional `IInteractionStableIdentity` and stable request/result IDs for server-authoritative multiplayer, replay, save data, and analytics.               |
 | **Hold-to-Interact**        | Built-in `holdDuration` with automatic progress reporting.                                                                                               |
 | **Distance Auto-Cancel**    | Auto-cancels if the instigator walks beyond `maxInteractionRange`.                                                                                       |
 | **Cancel Reasons**          | Typed `InteractionCancelReason` enum for gameplay reactions.                                                                                             |
@@ -102,6 +104,62 @@ A high-performance, zero-GC, reactive interaction system for Unity. Supports **3
 | **Localization Ready**      | `InteractionPromptData` for multi-language prompt text.                                                                                                  |
 | **Editor Tooling**          | Custom Inspectors, Scene Debugger, Scene Overview, Validator Window, Gizmos.                                                                             |
 | **Cross-Platform**          | Windows, macOS, Linux, Android, iOS, WebGL, Consoles. No `unsafe` code.                                                                                  |
+
+---
+
+## Production-Scale Architecture
+
+This module is intended to be the local interaction kernel for a commercial project. At very large multiplayer scale, it should be used with a server-authoritative adapter rather than as a complete networking stack by itself.
+
+**Core responsibilities provided by this module:**
+
+- Local detection, scoring, focus, prompt data, hold progress, cancellation, and per-target interaction state.
+- Stable target identity via `IInteractionStableIdentity.StableId` and deterministic `StableIdHash`.
+- Stable instigator identity via `InstigatorHandle.StableId`; `GameObjectInstigator` remains local-only unless a stable ID is supplied.
+- World-scoped routing through `InteractionSystem.WorldId`, preventing duplicate `Router.Default` consumers when multiple interaction worlds are loaded.
+- Bounded `InteractionQueue` with duplicate request rejection for server-authoritative reservation/queue adapters.
+- Shared `InteractionRequestHistory` replay protection with a bounded capacity, used by both floating-point and deterministic authority services.
+- Unity-free `InteractionAuthorityService` for server-side request validation: world scope, stable IDs, tick drift, duplicate requests, replay-history pressure, per-instigator rate limits, action availability, target availability, range checks, and queue pressure.
+- `InteractionTargetSnapshot` and `InteractionVector3` for headless/server adapters that should not depend on `UnityEngine`.
+- `IInteractionPositionProvider` for pluggable position sources, so Networking, GameplayFramework, ECS, or a backend simulation can feed authority checks without sharing a concrete vector type.
+- Optional integration assemblies for `CycloneGames.Networking.Core`, `CycloneGames.GameplayFramework.Runtime`, and `CycloneGames.DeterministicMath.Core`, keeping Mirror/Mirage/backend choices outside the Interaction core.
+- `InteractionMetrics` / `InteractionMetricsSnapshot` for accepted, rejected, queued, dropped, completed, failed, and faulted interaction counters.
+- Fail-closed LOS budget behavior through `blockWhenLosBudgetExceeded`.
+
+**Responsibilities that must live in the game or networking adapter:**
+
+- Mapping `StableIdHash` to authoritative network entities, shards, scenes, or backend records.
+- Client prediction, reconciliation, rollback, lag compensation, and anti-cheat validation.
+- Server-side LOS, permission, cooldown, inventory, quest, combat, anti-cheat, and ownership validation using authoritative replicated state.
+- Transport-specific serialization for Mirror, Mirage, NGO, FishNet, custom UDP, or backend services.
+- Persistence of stable IDs and migration when authored scene objects are renamed, duplicated, or moved.
+
+For production multiplayer, the recommended flow is:
+
+1. Client detector selects a local candidate and sends `InteractionRequest` with `WorldId`, `TargetStableId`, `InstigatorStableId`, `ActionId`, and `Tick`.
+2. Server resolves stable IDs into authoritative entities and updates `InteractionTargetSnapshot` records.
+3. Server runs `InteractionAuthorityService.ValidateRequest()` or `TryQueueRequest()` with authoritative instigator position and server tick.
+4. Game-specific server code validates LOS, permissions, cooldowns, ownership, inventory, and anti-cheat rules.
+5. Server executes the authoritative interaction and broadcasts `InteractionResult`.
+6. Clients reconcile local focus/progress/UI against the server result.
+
+The built-in `INetworkInteractionSystem` is an adapter contract, and `InteractionAuthorityService` is a validation/reservation core. Neither is a full transport, prediction, rollback, or replication implementation.
+
+**Integration boundary:** `InteractionVector3` is intentionally a lowest-common-denominator value object, not a replacement for `CycloneGames.Networking.NetworkVector3`, `CycloneGames.DeterministicMath.FPVector3`, or `UnityEngine.Vector3`. Use `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.Networking` to convert between `InteractionVector3` and `NetworkVector3`, and use `InteractionNetworkProtocol`, `InteractionNetworkRequest`, `InteractionNetworkCancelRequest`, and `InteractionNetworkResult` as transport-friendly DTO/protocol building blocks. Use `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.GameplayFramework` to adapt `Actor` position and stable IDs into `InteractionTargetSnapshot` or `GameObjectInstigator`. For lockstep, rollback, replay, or bit-identical server simulation, use `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.DeterministicMath` and `InteractionDeterministicAuthorityService`; it validates range with `FPVector3` / `FPInt64` instead of converting the authoritative decision back to floats.
+
+**Deterministic authority source policy:** when Networking, GameplayFramework, and DeterministicMath are all enabled, the authoritative interaction position must come from the same fixed-point simulation state that drives movement. `InteractionVector3`, `NetworkVector3`, `UnityEngine.Vector3`, and `Actor.GetActorLocation()` are valid for presentation, local prediction, editor tooling, and non-deterministic server adapters; they are not the canonical source for lockstep, rollback, replay, or anti-cheat decisions.
+
+| Situation | Use | Do not use as authority |
+| --- | --- | --- |
+| Local single-player or non-deterministic server | `InteractionVector3`, `InteractionAuthorityService` | - |
+| Transport DTO for regular networking | `InteractionNetworkRequest` with `NetworkVector3` | `FPVector3` unless the transport supports raw fixed payloads |
+| Deterministic multiplayer, rollback, replay, or authoritative simulation | `InteractionDeterministicRequestPayload`, `InteractionDeterministicVector3Payload`, `InteractionDeterministicAuthorityService`, `FPVector3` | `NetworkVector3`, `InteractionVector3`, `Actor.GetActorLocation()` |
+| GameplayFramework actor in deterministic simulation | Explicit `IInteractionDeterministicPositionProvider` plus `GameplayFrameworkDeterministicInteractionExtensions` | Implicit conversion from `Actor.transform.position` |
+| UI, debug, analytics, or result display | `FPVector3.ToInteractionVector3()` as a presentation conversion | Feeding the converted float value back into authority |
+
+`InteractionDeterministicMathExtensions.ToFPVector3(InteractionVector3)` and `ToDeterministicTargetSnapshot(InteractionTargetSnapshot)` are kept only as migration, editor, diagnostics, or non-authoritative bridges and are marked obsolete to discourage using float data as a deterministic trust source.
+
+CycloneGames integrations in this repository are expressed through explicit asmdef references. Because these modules live under `Assets/ThirdParty/CycloneGames/` in this checkout, the Interaction integration assemblies should not rely on package-manager `versionDefines` such as `DETERMINISTIC_MATH_PRESENT`, `NETWORKING_PRESENT`, or `GAMEPLAY_FRAMEWORK_PRESENT` as their local availability switch. Use those symbols only for true UPM package adapters, and use the actual referenced assembly/API as the source of truth inside this repository.
 
 ---
 
@@ -154,6 +212,9 @@ sequenceDiagram
 | **VitalRouter**                  | Command routing and interceptor pipeline                        | Yes      |
 | **UniTask**                      | Async/await without allocation on Unity's main thread           | Yes      |
 | **CycloneGames.Factory.Runtime** | Object pooling (`ObjectPool`, `IPoolable`, `MonoPrefabFactory`) | Yes      |
+| **CycloneGames.Networking.Core** | Optional `NetworkVector3` and DTO bridge for transport adapters | Optional |
+| **CycloneGames.GameplayFramework.Runtime** | Optional `Actor` / world adapter bridge                | Optional |
+| **CycloneGames.DeterministicMath.Core** | Optional `FPVector3` / `FPInt64` authority bridge for lockstep, rollback, and replay | Optional |
 
 ---
 
@@ -165,6 +226,7 @@ Create an empty GameObject in the scene, add the `InteractionSystem` component.
 
 | Inspector Field | Type    | Default | Description                                                            |
 | --------------- | ------- | ------- | ---------------------------------------------------------------------- |
+| **World Id**    | `int`   | `0`     | Local interaction world scope. Use unique values for split-screen, additive scenes, prediction worlds, or server simulations. |
 | **Is 2D Mode**  | `bool`  | `false` | `true` for 2D games (X/Y hashing), `false` for 3D (X/Z).               |
 | **Cell Size**   | `float` | `10`    | Spatial hash cell size. Larger = fewer cells, smaller = finer queries. |
 
@@ -174,6 +236,7 @@ Add `Interactable` (or a subclass) to any world object.
 
 | Inspector Field           | Type                 | Default      | Description                                                         |
 | ------------------------- | -------------------- | ------------ | ------------------------------------------------------------------- |
+| **Stable Id**             | `string`             | `""`         | Stable authoring ID for multiplayer, save data, replay, and analytics. |
 | **Interaction Prompt**    | `string`             | `"Interact"` | UI text shown to the player.                                        |
 | **Is Interactable**       | `bool`               | `true`       | Whether this object accepts interactions.                           |
 | **Auto Interact**         | `bool`               | `false`      | Trigger automatically when detected (no input).                     |
@@ -186,6 +249,8 @@ Add `Interactable` (or a subclass) to any world object.
 | **Max Interaction Range** | `float`              | `0`          | Auto-cancel distance during interaction (0 = disabled).             |
 
 **Requirements:** Add a `Collider` (3D) or `Collider2D` (2D) set to **Is Trigger = true** on the same GameObject or a child. Set its layer to match the detector's **Interactable Layer** mask.
+
+**Authoring roles:** Keep one `IInteractable` implementation on each target GameObject. Do not add `Interactable` next to `PickableItem` or another `Interactable` subclass. Keep `InteractionSystem` on a scene/world root, `InteractionDetector` on instigator-side objects, and `PooledEffect` on effect prefabs or effect instances.
 
 ### Step 3 — Add an InteractionDetector
 
@@ -471,6 +536,7 @@ public sealed class GameObjectInstigator : InstigatorHandle
 {
     public GameObject GameObject { get; }
     public override int Id => GameObject.GetInstanceID();
+    public override ulong StableId { get; }
     public override bool TryGetPosition(out Vector3 position) { ... }
     public T GetComponent<T>() => GameObject.GetComponent<T>();
 }
@@ -490,6 +556,7 @@ Central hub. One per scene. Manages the spatial hash grid and routes interaction
 
 | Field      | Type    | Default | Description                           |
 | ---------- | ------- | ------- | ------------------------------------- |
+| World Id   | `int`   | `0`     | Local interaction world scope.        |
 | Is 2D Mode | `bool`  | `false` | 2D (X/Y) or 3D (X/Z) spatial hashing. |
 | Cell Size  | `float` | `10`    | Spatial hash cell size.               |
 
@@ -498,6 +565,7 @@ Central hub. One per scene. Manages the spatial hash grid and routes interaction
 ```csharp
 // Singleton
 static InteractionSystem Instance { get; }
+static bool TryGetWorld(int worldId, out InteractionSystem system);
 
 // Lifecycle
 void Initialize();
@@ -509,6 +577,7 @@ void Unregister(IInteractable interactable);
 void UpdatePosition(IInteractable interactable);
 SpatialHashGrid SpatialGrid { get; }
 bool Is2DMode { get; }
+int WorldId { get; }
 
 // Direct interaction (bypasses VitalRouter)
 UniTask ProcessInteractionAsync(IInteractable target);
@@ -526,6 +595,7 @@ Attach to any world object. Implements `IInteractable`. Base class for all inter
 **Key behaviors:**
 
 - Auto-registers with `InteractionSystem` spatial grid on `OnEnable`, unregisters on `OnDisable`.
+- Exposes optional stable identity for production multiplayer, save data, replay, and analytics.
 - Caches `Position` per frame to avoid repeated `Transform` access.
 - Uses `Interlocked.CompareExchange` for atomic concurrent-interaction prevention.
 - Evaluates `IInteractionRequirement` conditions via `CanInteract(InstigatorHandle instigator)`.
@@ -535,7 +605,8 @@ Attach to any world object. Implements `IInteractable`. Base class for all inter
 - Built-in `HoldTimerAsync` for hold-to-interact behavior.
 - Distance auto-cancellation via `maxInteractionRange` during active interactions.
 - Fires `OnStateChanged`, `OnProgressChanged`, `OnInteractionCancelled` events.
-- `CancellationTokenSource` is properly disposed in all code paths (early return, success, exception).
+- `CancellationTokenSource` is properly disposed in all code paths (early return, success, cancellation, and fault).
+- User-code exceptions are logged, reported as `InteractionCancelReason.Faulted`, and the state machine is restored to `Idle`.
 - `RegisterWithSystem()` / `UnregisterFromSystem()` are `protected virtual` for subclass override.
 - `SetInteractionSystem(IInteractionSystem system, bool registerImmediately = true)` supports DI and custom composition roots without relying on scene singleton lookup.
 
@@ -558,6 +629,7 @@ Attach to the player or camera. Scans, scores, and tracks the best interaction t
 | Angle Weight          | `float`              | `2`           | Scoring weight for facing angle.          |
 | Priority Weight       | `float`              | `100`         | Scoring weight for priority.              |
 | Max Nearby Candidates | `int`                | `16`          | Cap for the nearby list.                  |
+| Auto Interact Min Interval | `float`         | `250`         | Minimum milliseconds between automatic attempts against the same target. |
 
 **LOD Inspector Fields:**
 
@@ -571,6 +643,8 @@ Attach to the player or camera. Scans, scores, and tracks the best interaction t
 | Very Far Interval Ms | `float` | `300`   | Update interval beyond far (≈3Hz).         |
 | Sleep Interval Ms    | `float` | `500`   | Update interval in sleep mode (≈2Hz).      |
 | Sleep Enter Ms       | `float` | `1000`  | Time without target before entering sleep. |
+| Max LOS Checks Per Frame | `int` | `0` | Maximum LOS raycasts per detection cycle. `0` = unlimited. |
+| Block When LOS Budget Exhausted | `bool` | `true` | Treat skipped LOS checks as blocked instead of fail-open. |
 
 **Public API:**
 
@@ -594,8 +668,6 @@ void TryInteractAll(string actionId);
 void CycleTarget(int direction);   // +1 = next, -1 = previous
 void SetDetectionEnabled(bool enabled);
 
-// Performance
-static void ClearComponentCache();  // Call on scene transitions
 ```
 
 ---
@@ -833,12 +905,12 @@ If the instigator moves beyond `maxInteractionRange`, the interaction is cancell
 
 **How it works internally:**
 
-1. `StartDistanceMonitor()` is called when the interaction begins.
-2. Checks `InstigatorHandle.TryGetPosition(out Vector3)` — if it returns `false` (entityless instigator), the monitor is skipped.
-3. Runs `MonitorDistanceAsync()` as a fire-and-forget UniTaskVoid.
-4. Null-checks `_currentInstigator` each frame for use-after-destroy safety.
-5. Uses squared distance comparison (no `sqrt`) for performance.
-6. `StopDistanceMonitor()` disposes the inner `CancellationTokenSource` on interaction end.
+1. `Interactable.TryInteractAsync()` registers the active target with `InteractionSystem.RegisterDistanceMonitor()`.
+2. `InteractionSystem.LateUpdate()` checks all active distance monitors in one batched loop.
+3. `InstigatorHandle.TryGetPosition(out Vector3)` returns `false` for entityless instigators; those entries are skipped without error.
+4. Target and instigator references are null-checked each frame for use-after-destroy safety.
+5. Squared distance comparison is used (no `sqrt`) for performance.
+6. The target unregisters from the monitor in `finally`, covering success, cancellation, and fault paths.
 
 ### Cancellation Reasons
 
@@ -850,7 +922,8 @@ public enum InteractionCancelReason : byte
     Interrupted,     // External gameplay event (damage, stun)
     Timeout,         // Interaction time limit exceeded
     TargetDestroyed, // The interactable was destroyed
-    SystemShutdown   // Scene unloaded / InteractionSystem disposed
+    SystemShutdown,  // Scene unloaded / InteractionSystem disposed
+    Faulted          // User code or adapter threw an exception
 }
 ```
 
@@ -1141,7 +1214,7 @@ The detector and spatial-query hot paths are designed for zero or low garbage co
 **Warm-up allocations** (one-time, not per-frame):
 
 - `EffectPoolSystem` creates one pool per unique effect prefab on first spawn. Use `Prewarm()` during loading to move object creation out of gameplay.
-- `InteractionDetector` component cache creates one `Dictionary` snapshot per new collider discovered.
+- `InteractionDetector` allocates per-detector dictionaries for component cache, LOS cache, and auto-interact throttling in `Awake()`.
 - Cancellable interaction execution creates and disposes a `CancellationTokenSource` for the active interaction lifetime.
 
 ### Spatial Hash Grid (DOD)
@@ -1171,13 +1244,13 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 
 ### Thread Safety
 
-| Component                              | Mechanism                                               |
-| -------------------------------------- | ------------------------------------------------------- |
-| `Interactable._isInteractingFlag`      | `Interlocked.CompareExchange` — atomic lock-free        |
-| `SpatialHashGrid`                      | `ReaderWriterLockSlim` — read-parallel, write-exclusive |
-| `InteractionDetector.s_componentCache` | Copy-on-write pattern — reads see consistent snapshot   |
-| `EffectPoolSystem.s_pools`             | Main-thread `Dictionary`; Unity object pooling is not worker-thread safe |
-| `InteractionSystem.Instance`           | Single-threaded access (Unity main thread only)         |
+| Component                         | Mechanism                                               |
+| --------------------------------- | ------------------------------------------------------- |
+| `Interactable._isInteractingFlag` | `Interlocked.CompareExchange` — atomic lock-free        |
+| `SpatialHashGrid`                 | `ReaderWriterLockSlim` — read-parallel, write-exclusive |
+| `InteractionDetector` caches      | Per-detector dictionaries; main-thread only             |
+| `EffectPoolSystem.s_pools`        | Main-thread `Dictionary`; Unity object pooling is not worker-thread safe |
+| `InteractionSystem.WorldId`       | Main-thread world registry and command filtering        |
 
 > **Note:** The interaction system is designed for Unity's single-threaded main loop. Thread safety mechanisms protect against async/coroutine interleaving and potential Job System reads, not true multi-threading.
 
@@ -1185,11 +1258,11 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 
 | Concern            | Protection                                                                                                                                                                                                                               |
 | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Use-after-destroy  | `GameObjectInstigator.TryGetPosition` null-checks `GameObject` before accessing `.transform`. `MonitorDistanceAsync` null-checks `_currentInstigator` each frame. `IsValidInteractable` checks `UnityEngine.Object` for destroyed state. |
-| CTS disposal       | `_interactionCts` is disposed in all paths: early return from `TrySetState`, `finally` block (success + exception), and `CancelInteraction()`. `_distanceCheckCts` is disposed in `StopDistanceMonitor()`.                               |
+| Use-after-destroy  | `GameObjectInstigator.TryGetPosition` null-checks `GameObject` before accessing `.transform`. Centralized distance monitoring null-checks target and instigator each frame. `IsValidInteractable` checks `UnityEngine.Object` for destroyed state. |
+| CTS disposal       | `_interactionCts` is disposed in all paths: early return from `TrySetState`, success, cancellation, and faulted exception.                                                                                                               |
 | Double interaction | `Interlocked.CompareExchange` on `_isInteractingFlag` prevents concurrent interactions.                                                                                                                                                  |
-| Event cleanup      | `OnProgressChanged` and `OnInteractionCancelled` are nulled in `OnDestroy()`.                                                                                                                                                            |
-| Component cache    | Periodic cleanup removes entries referencing destroyed `UnityEngine.Object` instances.                                                                                                                                                   |
+| Event cleanup      | Runtime events are nulled in `OnDestroy()`, and event callback exceptions are caught so subscribers cannot permanently break the interaction state machine.                                                                               |
+| Component cache    | Destroyed `UnityEngine.Object` references are removed from per-detector caches on lookup.                                                                                                                                                |
 
 ### Cross-Platform
 
@@ -1211,7 +1284,7 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 | **InteractionDetector Inspector** | Select any Detector                | Real-time scoring breakdown, candidate list, LOD tier, component cache stats.                                               |
 | **InteractionSystem Inspector**   | Select the system                  | Grid stats, registered count, mode display.                                                                                 |
 | **TwoStateInteraction Inspector** | Select two-state object            | Toggle buttons, state preview.                                                                                              |
-| **Interaction Validator**         | `Window → Interaction → Validator` | Scans all interactables in the scene for common misconfiguration (missing colliders, wrong layers, disabled triggers).      |
+| **Interaction Validator**         | `Tools → CycloneGames → Interaction → Interaction Validator` | Scans interaction authoring issues, including role conflicts, duplicate target components, missing colliders, wrong layers, and disabled triggers. |
 | **Scene Overview**                | `Window → Interaction → Overview`  | Table of all interactables with channel, state, priority.                                                                   |
 | **Scene Debugger**                | `Window → Interaction → Debugger`  | Live detection visualization, candidate highlighting, score overlay.                                                        |
 | **Gizmos**                        | Scene View (selected objects)      | Yellow wireframe sphere for `interactionDistance`, green sphere for detector `detectionRadius`, red line to current target. |
@@ -1220,7 +1293,7 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 
 ## File Inventory
 
-### Runtime (23 files)
+### Runtime (54 files)
 
 | File                              | Purpose                                                           |
 | --------------------------------- | ----------------------------------------------------------------- |
@@ -1228,6 +1301,32 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 | `Interactable.cs`                 | Base MonoBehaviour implementation                                 |
 | `IInteractionSystem.cs`           | System management interface                                       |
 | `InteractionSystem.cs`            | Central hub with VitalRouter routing and spatial grid             |
+| `Core/InteractionAuthorityOptions.cs` | Authority validation configuration                            |
+| `Core/InteractionAuthorityService.cs` | Unity-free request validation, target registry, queue routing  |
+| `Core/IInteractionPositionProvider.cs` | Pluggable position source contract for authority validation |
+| `Core/InteractionMetrics.cs`      | Thread-safe counters and snapshots for production observability   |
+| `Core/InteractionRateLimiter.cs`  | Per-instigator tick-window rate limiter                           |
+| `Core/InteractionRequestHistory.cs` | Bounded replay/duplicate request history shared by authority services |
+| `Core/InteractionRequestHistoryResult.cs` | Replay-history accept/reject result enum                 |
+| `Core/InteractionTargetSnapshot.cs` | Unity-free target state for server/headless adapters             |
+| `Core/InteractionValidationFailure.cs` | Typed authority rejection reason enum                        |
+| `Core/InteractionValidationResult.cs` | Accepted/rejected validation result                            |
+| `Core/InteractionVector3.cs`      | Unity-free vector value for authority checks                      |
+| `Integrations/DeterministicMath/IInteractionDeterministicPositionProvider.cs` | Fixed-point position source contract |
+| `Integrations/DeterministicMath/InteractionDeterministicAuthorityService.cs` | Fixed-point authority validation using `FPVector3` / `FPInt64` |
+| `Integrations/DeterministicMath/InteractionDeterministicMathExtensions.cs` | Conversion helpers for `InteractionVector3` and `FPVector3` |
+| `Integrations/DeterministicMath/InteractionDeterministicVector3Payload.cs` | Raw fixed-point vector payload for networking, replay, save data, and backend protocols |
+| `Integrations/DeterministicMath/InteractionDeterministicRequest.cs` | Lockstep-friendly request with fixed-point instigator position |
+| `Integrations/DeterministicMath/InteractionDeterministicRequestPayload.cs` | Transport-friendly deterministic request with raw fixed-point instigator position |
+| `Integrations/DeterministicMath/InteractionDeterministicTargetSnapshot.cs` | Fixed-point target state for deterministic simulation |
+| `Integrations/DeterministicMath/GameplayFramework/GameplayFrameworkDeterministicInteractionExtensions.cs` | GameplayFramework bridge that requires an explicit deterministic position provider |
+| `Integrations/Networking/InteractionNetworkAuthorityBridge.cs` | Bridge from network DTOs into `InteractionAuthorityService` |
+| `Integrations/Networking/InteractionNetworkCancelRequest.cs` | Transport-friendly cancellation DTO |
+| `Integrations/Networking/InteractionNetworkProtocol.cs` | Stable message IDs, channels, protocol version, and payload limits |
+| `Integrations/Networking/InteractionNetworkRequest.cs` | Transport-friendly interaction request DTO using `NetworkVector3` |
+| `Integrations/Networking/InteractionNetworkResult.cs` | Transport-friendly interaction result DTO |
+| `Integrations/Networking/InteractionNetworkVectorExtensions.cs` | Conversion between `InteractionVector3` and `NetworkVector3` |
+| `Integrations/GameplayFramework/GameplayFrameworkInteractionExtensions.cs` | `Actor` to Interaction position/instigator/snapshot helpers |
 | `IInteractionDetector.cs`         | Detection and target tracking interface                           |
 | `InteractionDetector.cs`          | Full detection implementation (3D, 2D, SpatialHash, LOD, scoring) |
 | `InstigatorHandle.cs`             | Abstract instigator identity base class                           |
@@ -1248,10 +1347,11 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 | `SpatialHashGrid.cs`              | DOD spatial hash grid with SoA layout                             |
 | `Implementations/PickableItem.cs` | Built-in pickable item                                            |
 
-### Editor (7 files)
+### Editor (8 files)
 
 | File                            | Purpose                                      |
 | ------------------------------- | -------------------------------------------- |
+| `InteractionComponentRules.cs`  | Shared Inspector and Validator role checks   |
 | `InteractableEditor.cs`         | Custom inspector for Interactable            |
 | `InteractionDetectorEditor.cs`  | Custom inspector for InteractionDetector     |
 | `InteractionSystemEditor.cs`    | Custom inspector for InteractionSystem       |
@@ -1272,6 +1372,9 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 | `IInteractionSystem`      | `SpatialGrid`, `Register()`, `Unregister()`, `ProcessInteractionAsync()`, `OnAnyInteractionStarted`, `OnAnyInteractionCompleted`                                                                                                                                                                 |
 | `IInteractionDetector`    | `CurrentInteractable`, `NearbyInteractables`, `DetectionMode`, `ChannelMask`, `TryInteract()`, `TryInteractAll()`, `CycleTarget()`, `SetDetectionEnabled()`                                                                                                                                      |
 | `IInteractionRequirement` | `IsMet(IInteractable, InstigatorHandle)`, `FailureReason`                                                                                                                                                                                                                                        |
+| `IInteractionStableIdentity` | `StableId`, `StableIdHash`, `HasStableId`                                                                                                                                                                                                                                                     |
+| `IInteractionPositionProvider` | `TryGetInteractionPosition(out InteractionVector3)`                                                                                                                                                                                                                                      |
+| `IInteractionDeterministicPositionProvider` | `TryGetDeterministicInteractionPosition(out FPVector3)`                                                                                                                                                                                                                         |
 | `ITwoStateInteraction`    | `IsActivated`, `ActivateState()`, `DeactivateState()`, `ToggleState()`                                                                                                                                                                                                                           |
 | `IEffectPoolSystem`       | `Initialize()`, `Prewarm()`, `Spawn()`                                                                                                                                                                                                                                                           |
 
@@ -1283,7 +1386,11 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 | `GameObjectInstigator`    | Built-in: wraps `GameObject`, provides `GetComponent<T>()`.                                      |
 | `Interactable`            | Base MonoBehaviour implementing `IInteractable` with full lifecycle.                             |
 | `InteractionDetector`     | MonoBehaviour implementing `IInteractionDetector` with detection, scoring, LOD.                  |
-| `InteractionSystem`       | MonoBehaviour implementing `IInteractionSystem` with VitalRouter routing.                        |
+| `InteractionSystem`       | MonoBehaviour implementing `IInteractionSystem` with VitalRouter routing, authority snapshots, and metrics. |
+| `InteractionAuthorityService` | Unity-free server validation/reservation core for stable-id requests.                         |
+| `InteractionDeterministicAuthorityService` | Deterministic fixed-point validation/reservation core for lockstep and rollback.     |
+| `InteractionNetworkAuthorityBridge` | Optional Networking integration bridge from `InteractionNetworkRequest` to `InteractionAuthorityService`. |
+| `InteractionMetrics`      | Thread-safe counters for validation and execution observability.                                 |
 | `TwoStateInteractionBase` | MonoBehaviour implementing `ITwoStateInteraction`.                                               |
 | `PickableItem`            | Built-in `Interactable` subclass for pickup mechanics.                                           |
 | `PooledEffect`            | MonoBehaviour for pooled VFX with auto-return.                                                   |
@@ -1294,7 +1401,21 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 
 | Struct                  | Fields                                                                                                                      |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `InteractionCommand`    | `IInteractable Target`, `string ActionId`, `InstigatorHandle Instigator`                                                    |
+| `InteractionCommand`    | `IInteractable Target`, `string ActionId`, `InstigatorHandle Instigator`, `WorldId`, `TargetStableId`, `InstigatorStableId` |
+| `InteractionRequest`    | `RequestId`, `InstigatorId`, `TargetInstanceId`, `InstigatorStableId`, `TargetStableId`, `ActionId`, `Tick`, `WorldId`      |
+| `InteractionResult`     | `RequestId`, `InstigatorId`, `TargetInstanceId`, `InstigatorStableId`, `TargetStableId`, `Success`, `CancelReason`, `QueuePosition`, `WorldId` |
+| `InteractionTargetSnapshot` | `WorldId`, `TargetStableId`, `Position`, `InteractionRange`, `IsAvailable`, `AllowDefaultAction`, `EnabledActionIds`, `Version` |
+| `InteractionDeterministicTargetSnapshot` | `WorldId`, `TargetStableId`, `FPVector3 Position`, `FPInt64 InteractionRange`, availability/action fields |
+| `InteractionValidationResult` | `Request`, `Target`, `Failure`, `QueuePosition`, `IsAccepted`, `IsQueued`                                               |
+| `InteractionMetricsSnapshot` | `TotalRequests`, `AcceptedRequests`, `RejectedRequests`, `QueuedRequests`, execution counters, `LastRejection`         |
+| `InteractionVector3`    | `X`, `Y`, `Z`                                                                                                             |
+| `InteractionDeterministicRequest` | `RequestId`, `InstigatorStableId`, `TargetStableId`, `ActionId`, `Tick`, `WorldId`, `FPVector3 InstigatorPosition` |
+| `InteractionDeterministicRequestPayload` | `RequestId`, stable IDs, `ActionId`, `Tick`, `WorldId`, raw fixed-point `InstigatorPosition` payload |
+| `InteractionDeterministicVector3Payload` | `XRaw`, `YRaw`, `ZRaw` Q32.32 fixed-point raw values |
+| `InteractionNetworkRequest` | `RequestId`, `InstigatorStableId`, `TargetStableId`, `ActionId`, `Tick`, `WorldId`, `InstigatorPosition`              |
+| `InteractionNetworkCancelRequest` | `RequestId`, `InstigatorStableId`, `TargetStableId`, `CancelReason`, `Tick`, `WorldId`                           |
+| `InteractionNetworkResult` | `RequestId`, `InstigatorStableId`, `TargetStableId`, `Success`, `CancelReason`, `ValidationFailure`, `QueuePosition`, `WorldId` |
+| `InteractionNetworkProtocol` | `PROTOCOL_VERSION`, `REQUEST_MESSAGE_ID`, `RESULT_MESSAGE_ID`, `CANCEL_REQUEST_MESSAGE_ID`, channel and payload constants |
 | `InteractionAction`     | `string ActionId`, `string DisplayText`, `string InputHint`, `string LocalizationKey`, `int DisplayOrder`, `bool IsEnabled` |
 | `InteractionCandidate`  | `IInteractable Interactable`, `float Score`, `float DistanceSqr`                                                            |
 | `InteractionPromptData` | `string LocalizationTableName`, `string LocalizationKey`, `string FallbackText`                                             |
@@ -1307,7 +1428,7 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 | `InteractionStateType`    | `Idle`, `Starting`, `InProgress`, `Completing`, `Completed`, `Cancelled`              |
 | `DetectionMode`           | `Physics3D`, `Physics2D`, `SpatialHash`                                               |
 | `InteractionChannel`      | `None`, `Channel0`–`Channel15`, `All`                                                 |
-| `InteractionCancelReason` | `Manual`, `OutOfRange`, `Interrupted`, `Timeout`, `TargetDestroyed`, `SystemShutdown` |
+| `InteractionCancelReason` | `Manual`, `OutOfRange`, `Interrupted`, `Timeout`, `TargetDestroyed`, `SystemShutdown`, `Faulted`, `Rejected` |
 
 ---
 
