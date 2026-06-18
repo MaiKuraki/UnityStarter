@@ -1,0 +1,20 @@
+{
+    "name": "CycloneGames.RPGFoundation.Interaction.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Editor",
+    "references": [
+        "UniTask",
+        "CycloneGames.RPGFoundation.Interaction.Core",
+        "CycloneGames.RPGFoundation.Interaction.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

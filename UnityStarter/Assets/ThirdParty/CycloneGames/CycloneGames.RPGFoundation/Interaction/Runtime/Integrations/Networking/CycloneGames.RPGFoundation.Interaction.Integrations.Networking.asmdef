@@ -1,8 +1,9 @@
 {
-    "name": "CycloneGames.GameplayFramework.Runtime.Integrations.Networking",
-    "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Integrations.Networking",
+    "name": "CycloneGames.RPGFoundation.Interaction.Integrations.Networking",
+    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Integrations.Networking",
     "references": [
-        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.RPGFoundation.Interaction.Core",
+        "CycloneGames.RPGFoundation.Interaction.Runtime",
         "CycloneGames.Networking.Core"
     ],
     "includePlatforms": [],
@@ -12,13 +13,13 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [
-        "CYCLONE_GAMEPLAYFRAMEWORK_HAS_NETWORKING"
+        "CYCLONE_RPGFOUNDATION_HAS_NETWORKING"
     ],
     "versionDefines": [
         {
             "name": "com.cyclone-games.networking",
             "expression": "",
-            "define": "CYCLONE_GAMEPLAYFRAMEWORK_HAS_NETWORKING"
+            "define": "CYCLONE_RPGFOUNDATION_HAS_NETWORKING"
         }
     ],
     "noEngineReferences": false

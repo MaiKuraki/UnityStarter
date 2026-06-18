@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation",
+    "rootNamespace": "CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation",
+    "references": [
+        "CycloneGames.RPGFoundation.Movement.Core",
+        "CycloneGames.RPGFoundation.Movement.Runtime",
+        "Unity.AI.Navigation"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.ai.navigation",
+            "expression": "",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION"
+        }
+    ],
+    "noEngineReferences": false
+}

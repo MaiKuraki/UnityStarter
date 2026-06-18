@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities",
+    "rootNamespace": "CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities",
+    "references": [
+        "CycloneGames.RPGFoundation.Movement.Core",
+        "CycloneGames.RPGFoundation.Movement.Runtime",
+        "CycloneGames.GameplayAbilities.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.gameplay-abilities",
+            "expression": "",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES"
+        }
+    ],
+    "noEngineReferences": false
+}

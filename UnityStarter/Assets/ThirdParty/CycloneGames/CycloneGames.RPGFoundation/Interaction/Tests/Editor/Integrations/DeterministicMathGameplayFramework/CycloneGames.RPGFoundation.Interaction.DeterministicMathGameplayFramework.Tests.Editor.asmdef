@@ -1,0 +1,40 @@
+{
+    "name": "CycloneGames.RPGFoundation.Interaction.DeterministicMathGameplayFramework.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Tests.Editor.Integrations.DeterministicMathGameplayFramework",
+    "references": [
+        "CycloneGames.RPGFoundation.Interaction.Core",
+        "CycloneGames.RPGFoundation.Interaction.Runtime",
+        "CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath",
+        "CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework",
+        "CycloneGames.DeterministicMath.Core",
+        "CycloneGames.GameplayFramework.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH",
+        "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.deterministic-math",
+            "expression": "",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH"
+        },
+        {
+            "name": "com.cyclone-games.gameplay-framework",
+            "expression": "",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
