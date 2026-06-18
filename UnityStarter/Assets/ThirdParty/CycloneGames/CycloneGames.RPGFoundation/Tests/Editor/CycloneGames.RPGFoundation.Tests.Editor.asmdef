@@ -3,6 +3,7 @@
     "rootNamespace": "CycloneGames.RPGFoundation.Tests.Editor",
     "references": [
         "CycloneGames.RPGFoundation.Runtime",
+        "CycloneGames.RPGFoundation.Editor",
         "CycloneGames.Factory.Runtime",
         "UniTask"
     ],

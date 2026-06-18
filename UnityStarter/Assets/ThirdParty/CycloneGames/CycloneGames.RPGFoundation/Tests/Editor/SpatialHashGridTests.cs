@@ -95,6 +95,18 @@ namespace CycloneGames.RPGFoundation.Tests.Editor
             Assert.Throws<ArgumentNullException>(() => _grid.QueryRadiusNonAlloc(Vector3.zero, 1f, null));
         }
 
+        [Test]
+        public void Dispose_IsIdempotentAndPreventsFurtherUse()
+        {
+            _grid = new SpatialHashGrid();
+
+            _grid.Dispose();
+            _grid.Dispose();
+
+            Assert.That(_grid.ItemCount, Is.Zero);
+            Assert.Throws<ObjectDisposedException>(() => _grid.Insert(new TestInteractable(Vector3.zero)));
+        }
+
         private sealed class TestInteractable : IInteractable
         {
             private Vector3 _position;

@@ -58,6 +58,7 @@ namespace CycloneGames.RPGFoundation.Editor.Interaction
                 "Binary state helper for doors, switches, platforms, show/hide objects, and other toggle-style interactions.",
                 MessageType.None);
 
+            InteractionComponentRules.DrawIssuesFor(targets);
             DrawStateControl();
             DrawRuntimeControl();
             InteractionInspectorUiUtility.DrawDerivedProperties(

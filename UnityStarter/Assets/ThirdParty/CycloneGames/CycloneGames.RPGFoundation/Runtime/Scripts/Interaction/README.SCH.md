@@ -13,6 +13,7 @@
 - [RPG 交互模块](#rpg-交互模块)
   - [目录](#目录)
   - [特性概览](#特性概览)
+  - [生产级大规模架构](#生产级大规模架构)
   - [架构总览](#架构总览)
   - [依赖项](#依赖项)
   - [快速上手](#快速上手)
@@ -65,8 +66,8 @@
     - [跨平台](#跨平台)
   - [编辑器工具](#编辑器工具)
   - [文件清单](#文件清单)
-    - [运行时（23 个文件）](#运行时23-个文件)
-    - [编辑器（7 个文件）](#编辑器7-个文件)
+    - [运行时（54 个文件）](#运行时54-个文件)
+    - [编辑器（8 个文件）](#编辑器8-个文件)
   - [API 参考](#api-参考)
     - [接口](#接口)
     - [类](#类)
@@ -82,7 +83,7 @@
 | -------------------- | ------------------------------------------------------------------------------------------------------------- |
 | **多模式检测**       | Physics3D、Physics2D、SpatialHash — 适配任意游戏类型。                                                        |
 | **响应式架构**       | R3 `ReactiveProperty` 驱动的事件化 UI 绑定。                                                                  |
-| **VitalRouter 集成** | 解耦的命令路由，支持本地与网络交互。                                                                          |
+| **VitalRouter 集成** | 带 World 作用域的命令路由，用于本地交互和网络 adapter 边界。                                                  |
 | **LOD 检测**         | 自适应频率：近距高频、远距低频、无目标休眠。                                                                  |
 | **通道过滤**         | 16 个语义无关的 Flag 通道槽位，游戏层通过常量别名自定义含义，实现选择性检测。                                 |
 | **条件系统**         | 可插拔的 `IInteractionRequirement` 前置条件（钥匙、等级、任务状态等）。                                       |
@@ -91,6 +92,7 @@
 | **交互进度**         | 连续 0–1 进度值用于定时/长按交互（进度条显示）。                                                              |
 | **多动作提示**       | 单个可交互对象暴露多个动作（"E: 拾取 / F: 检查"）。                                                           |
 | **发起者系统**       | `InstigatorHandle` 抽象类 — 支持 OOP（`GameObjectInstigator`）、ECS、无实体游戏及网络游戏，编译期零装箱保证。 |
+| **稳定身份**         | 可选 `IInteractionStableIdentity` 与稳定请求/结果 ID，面向服务端权威多人、回放、存档和统计。                  |
 | **长按交互**         | 内置 `holdDuration` 及自动进度上报。                                                                          |
 | **距离自动取消**     | 发起者超出 `maxInteractionRange` 时自动取消交互。                                                             |
 | **取消原因**         | 类型化的 `InteractionCancelReason` 枚举，用于玩法反馈。                                                       |
@@ -102,6 +104,62 @@
 | **本地化就绪**       | `InteractionPromptData` 支持多语言提示文本。                                                                  |
 | **编辑器工具**       | 自定义 Inspector、场景调试器、场景总览、验证窗口、Gizmos。                                                    |
 | **跨平台**           | Windows、macOS、Linux、Android、iOS、WebGL、主机。无 `unsafe` 代码。                                          |
+
+---
+
+## 生产级大规模架构
+
+本模块定位为商业项目中的本地交互内核。面向超大规模多人时，它应配合服务端权威 adapter 使用，而不是单独充当完整网络栈。
+
+**模块核心已提供的职责：**
+
+- 本地检测、评分、聚焦、提示数据、长按进度、取消和目标交互状态。
+- 通过 `IInteractionStableIdentity.StableId` 和确定性的 `StableIdHash` 表达稳定目标身份。
+- 通过 `InstigatorHandle.StableId` 表达稳定发起者身份；`GameObjectInstigator` 默认仍是本地身份，除非显式传入稳定 ID。
+- 通过 `InteractionSystem.WorldId` 做 World 作用域路由，避免多交互世界加载时重复消费 `Router.Default` 命令。
+- 带容量限制和重复请求拒绝的 `InteractionQueue`，供服务端权威 reservation/queue adapter 使用。
+- 共享的 `InteractionRequestHistory` 重放防护，带容量上限，并同时供 float authority 和 deterministic authority 使用。
+- 不依赖 Unity 的 `InteractionAuthorityService`，用于服务端请求校验：World 作用域、稳定 ID、tick 漂移、重复请求、重放历史压力、按发起者限流、action 可用性、目标可用性、距离检查和队列压力。
+- `InteractionTargetSnapshot` 与 `InteractionVector3`，供不应依赖 `UnityEngine` 的 headless/server adapter 使用。
+- `IInteractionPositionProvider` 用于可插拔位置来源，让 Networking、GameplayFramework、ECS 或后端 simulation 不必共享同一种具体向量类型，也能喂给权威校验。
+- 面向 `CycloneGames.Networking.Core`、`CycloneGames.GameplayFramework.Runtime` 与 `CycloneGames.DeterministicMath.Core` 的可选 integration assembly，让 Mirror、Mirage、lockstep/rollback 或后端传输选择留在 Interaction 核心之外。
+- `InteractionMetrics` / `InteractionMetricsSnapshot`，用于 accepted、rejected、queued、dropped、completed、failed 和 faulted 等生产可观测计数。
+- 通过 `blockWhenLosBudgetExceeded` 提供 LOS 预算耗尽时的 fail-closed 行为。
+
+**必须由游戏层或网络 adapter 承担的职责：**
+
+- 将 `StableIdHash` 映射到权威网络实体、分片、场景或后端记录。
+- 客户端预测、回滚、重对齐、延迟补偿和反作弊验证。
+- 使用权威复制状态进行服务端 LOS、权限、冷却、背包、任务、战斗、反作弊和所有权验证。
+- Mirror、Mirage、NGO、FishNet、自研 UDP 或后端服务的传输层序列化。
+- 当场景对象重命名、复制或移动时，对稳定 ID 做持久化和迁移。
+
+生产级多人推荐流程：
+
+1. 客户端 detector 选择本地候选目标，发送带 `WorldId`、`TargetStableId`、`InstigatorStableId`、`ActionId` 和 `Tick` 的 `InteractionRequest`。
+2. 服务端将稳定 ID 解析为权威实体，并更新 `InteractionTargetSnapshot` 记录。
+3. 服务端使用权威发起者位置和 server tick 调用 `InteractionAuthorityService.ValidateRequest()` 或 `TryQueueRequest()`。
+4. 游戏专属服务端代码验证 LOS、权限、冷却、所有权、背包和反作弊规则。
+5. 服务端执行权威交互并广播 `InteractionResult`。
+6. 客户端根据服务端结果对本地聚焦、进度和 UI 做重对齐。
+
+内置 `INetworkInteractionSystem` 是 adapter 契约，`InteractionAuthorityService` 是校验/预约核心。二者都不是完整 transport、prediction、rollback 或 replication 实现。
+
+**集成边界：** `InteractionVector3` 是最低公共值对象，不是 `CycloneGames.Networking.NetworkVector3`、`CycloneGames.DeterministicMath.FPVector3` 或 `UnityEngine.Vector3` 的替代品。需要跨网络包时，使用 `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.Networking` 在 `InteractionVector3` 与 `NetworkVector3` 之间转换，并使用 `InteractionNetworkProtocol`、`InteractionNetworkRequest`、`InteractionNetworkCancelRequest` 与 `InteractionNetworkResult` 作为更适合传输的 DTO/协议构件。需要接入 GameplayFramework 时，使用 `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.GameplayFramework` 将 `Actor` 的位置与稳定 ID 适配为 `InteractionTargetSnapshot` 或 `GameObjectInstigator`。如果需要 lockstep、rollback、replay 或 bit-identical server simulation，应使用 `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.DeterministicMath` 与 `InteractionDeterministicAuthorityService`；它使用 `FPVector3` / `FPInt64` 做范围校验，而不是把权威判定转换回 float。
+
+**确定性权威位置策略：** 当 Networking、GameplayFramework 与 DeterministicMath 同时启用时，权威交互位置必须来自驱动移动的同一份 fixed-point simulation state。`InteractionVector3`、`NetworkVector3`、`UnityEngine.Vector3` 和 `Actor.GetActorLocation()` 适合展示、本地预测、Editor 工具和非确定性 server adapter；它们不是 lockstep、rollback、replay 或反作弊判定的 canonical source。
+
+| 场景 | 应使用 | 不应作为权威源 |
+| --- | --- | --- |
+| 本地单机或非确定性服务端 | `InteractionVector3`、`InteractionAuthorityService` | - |
+| 普通网络传输 DTO | 带 `NetworkVector3` 的 `InteractionNetworkRequest` | 除非 transport 支持 raw fixed payload，否则不要混入 `FPVector3` |
+| 确定性多人、rollback、replay 或权威 simulation | `InteractionDeterministicRequestPayload`、`InteractionDeterministicVector3Payload`、`InteractionDeterministicAuthorityService`、`FPVector3` | `NetworkVector3`、`InteractionVector3`、`Actor.GetActorLocation()` |
+| 确定性 GameplayFramework Actor | 显式 `IInteractionDeterministicPositionProvider` + `GameplayFrameworkDeterministicInteractionExtensions` | 从 `Actor.transform.position` 隐式转换 |
+| UI、调试、统计或结果展示 | `FPVector3.ToInteractionVector3()` 作为展示转换 | 把转换后的 float 再喂回权威判定 |
+
+`InteractionDeterministicMathExtensions.ToFPVector3(InteractionVector3)` 与 `ToDeterministicTargetSnapshot(InteractionTargetSnapshot)` 仅保留给迁移、Editor、诊断或非权威桥接，并已标记为 obsolete，以避免开发者把 float 数据误当成确定性信任源。
+
+本仓库里的 CycloneGames 集成通过显式 asmdef reference 表达。由于当前 checkout 中这些模块位于 `Assets/ThirdParty/CycloneGames/`，Interaction integration assembly 不应依赖 package-manager `versionDefines` 生成的 `DETERMINISTIC_MATH_PRESENT`、`NETWORKING_PRESENT` 或 `GAMEPLAY_FRAMEWORK_PRESENT` 作为本地可用性开关。那些符号只适合真正通过 UPM package 接入的 adapter；在本仓库内应以真实被引用的 assembly/API 作为事实来源。
 
 ---
 
@@ -154,6 +212,9 @@ sequenceDiagram
 | **VitalRouter**                  | 命令路由与拦截器管线                                     | 是       |
 | **UniTask**                      | Unity 主线程上的零分配 async/await                       | 是       |
 | **CycloneGames.Factory.Runtime** | 对象池（`ObjectPool`、`IPoolable`、`MonoPrefabFactory`） | 是       |
+| **CycloneGames.Networking.Core** | 可选 `NetworkVector3` 与 DTO 桥，用于 transport adapter  | 可选     |
+| **CycloneGames.GameplayFramework.Runtime** | 可选 `Actor` / World adapter 桥                | 可选     |
+| **CycloneGames.DeterministicMath.Core** | 可选 `FPVector3` / `FPInt64` 权威校验桥，用于 lockstep、rollback 和 replay | 可选     |
 
 ---
 
@@ -165,6 +226,7 @@ sequenceDiagram
 
 | Inspector 字段 | 类型    | 默认值  | 说明                                                              |
 | -------------- | ------- | ------- | ----------------------------------------------------------------- |
+| **World Id**   | `int`   | `0`     | 本地交互世界作用域。分屏、additive scene、预测世界或服务端模拟应使用唯一值。 |
 | **Is 2D Mode** | `bool`  | `false` | 2D 游戏设为 `true`（X/Y 哈希），3D 游戏设为 `false`（X/Z 哈希）。 |
 | **Cell Size**  | `float` | `10`    | 空间哈希单元格大小。越大 = 单元格越少，越小 = 查询越精细。        |
 
@@ -174,6 +236,7 @@ sequenceDiagram
 
 | Inspector 字段            | 类型                 | 默认值       | 说明                                              |
 | ------------------------- | -------------------- | ------------ | ------------------------------------------------- |
+| **Stable Id**             | `string`             | `""`         | 面向多人、存档、回放和统计的稳定 authoring ID。   |
 | **Interaction Prompt**    | `string`             | `"Interact"` | 显示给玩家的 UI 提示文本。                        |
 | **Is Interactable**       | `bool`               | `true`       | 该对象是否接受交互。                              |
 | **Auto Interact**         | `bool`               | `false`      | 检测到时自动触发交互（无需输入）。                |
@@ -186,6 +249,8 @@ sequenceDiagram
 | **Max Interaction Range** | `float`              | `0`          | 交互过程中的自动取消距离，0 = 不限制。            |
 
 **前提条件：** 在同一 GameObject（或子物体）上添加 `Collider`（3D）或 `Collider2D`（2D），并设为 **Is Trigger = true**。将图层设置为与检测器的 **Interactable Layer** 掩码匹配。
+
+**组件职责：** 每个目标 GameObject 只保留一个 `IInteractable` 实现。不要把 `Interactable` 和 `PickableItem` 或其他 `Interactable` 子类同时挂在一起。`InteractionSystem` 应放在场景/world 根对象，`InteractionDetector` 应放在玩家、摄像机、AI 控制器或传感器等发起者侧对象，`PooledEffect` 应放在特效 prefab 或特效实例上。
 
 ### 第 3 步 — 添加 InteractionDetector
 
@@ -471,6 +536,7 @@ public sealed class GameObjectInstigator : InstigatorHandle
 {
     public GameObject GameObject { get; }
     public override int Id => GameObject.GetInstanceID();
+    public override ulong StableId { get; }
     public override bool TryGetPosition(out Vector3 position) { ... }
     public T GetComponent<T>() => GameObject.GetComponent<T>();
 }
@@ -490,6 +556,7 @@ public sealed class GameObjectInstigator : InstigatorHandle
 
 | 字段       | 类型    | 默认值  | 说明                            |
 | ---------- | ------- | ------- | ------------------------------- |
+| World Id   | `int`   | `0`     | 本地交互世界作用域。            |
 | Is 2D Mode | `bool`  | `false` | 2D（X/Y）或 3D（X/Z）空间哈希。 |
 | Cell Size  | `float` | `10`    | 空间哈希单元格大小。            |
 
@@ -498,6 +565,7 @@ public sealed class GameObjectInstigator : InstigatorHandle
 ```csharp
 // 单例
 static InteractionSystem Instance { get; }
+static bool TryGetWorld(int worldId, out InteractionSystem system);
 
 // 生命周期
 void Initialize();
@@ -509,6 +577,7 @@ void Unregister(IInteractable interactable);
 void UpdatePosition(IInteractable interactable);
 SpatialHashGrid SpatialGrid { get; }
 bool Is2DMode { get; }
+int WorldId { get; }
 
 // 直接交互（绕过 VitalRouter）
 UniTask ProcessInteractionAsync(IInteractable target);
@@ -526,6 +595,7 @@ event Action<IInteractable, InstigatorHandle, bool> OnAnyInteractionCompleted;
 **关键行为：**
 
 - 在 `OnEnable` 时自动注册到 `InteractionSystem` 空间网格，`OnDisable` 时注销。
+- 暴露可选稳定身份，用于生产级多人、存档、回放和统计。
 - 每帧缓存 `Position`，避免重复访问 `Transform`。
 - 使用 `Interlocked.CompareExchange` 实现原子级并发交互防护。
 - 通过 `CanInteract(InstigatorHandle instigator)` 评估 `IInteractionRequirement` 条件。
@@ -535,7 +605,8 @@ event Action<IInteractable, InstigatorHandle, bool> OnAnyInteractionCompleted;
 - 内置 `HoldTimerAsync` 实现长按交互。
 - 在活跃交互期间通过 `maxInteractionRange` 实现距离自动取消。
 - 触发 `OnStateChanged`、`OnProgressChanged`、`OnInteractionCancelled` 事件。
-- `CancellationTokenSource` 在所有代码路径中正确释放（提前返回、成功、异常）。
+- `CancellationTokenSource` 在所有代码路径中正确释放（提前返回、成功、取消和 fault）。
+- 用户代码异常会被记录为日志，上报为 `InteractionCancelReason.Faulted`，并把状态机恢复到 `Idle`。
 - `RegisterWithSystem()` / `UnregisterFromSystem()` 为 `protected virtual`，可在子类中重写。
 - `SetInteractionSystem(IInteractionSystem system, bool registerImmediately = true)` 支持 DI 和自定义 composition root, 不必依赖场景单例查找。
 
@@ -558,6 +629,7 @@ event Action<IInteractable, InstigatorHandle, bool> OnAnyInteractionCompleted;
 | Angle Weight          | `float`              | `2`           | 角度评分权重。               |
 | Priority Weight       | `float`              | `100`         | 优先级评分权重。             |
 | Max Nearby Candidates | `int`                | `16`          | 附近列表上限。               |
+| Auto Interact Min Interval | `float`         | `250`         | 同一目标自动交互尝试之间的最小毫秒间隔。 |
 
 **LOD Inspector 字段：**
 
@@ -571,6 +643,8 @@ event Action<IInteractable, InstigatorHandle, bool> OnAnyInteractionCompleted;
 | Very Far Interval Ms | `float` | `300`  | 极远距时的更新间隔（≈3Hz）。 |
 | Sleep Interval Ms    | `float` | `500`  | 休眠模式的更新间隔（≈2Hz）。 |
 | Sleep Enter Ms       | `float` | `1000` | 无目标多久后进入休眠。       |
+| Max LOS Checks Per Frame | `int` | `0` | 每个检测周期最多执行多少次 LOS 射线。`0` 表示不限制。 |
+| Block When LOS Budget Exhausted | `bool` | `true` | LOS 预算耗尽时把目标视为被遮挡，而不是放行。 |
 
 **公共 API：**
 
@@ -594,8 +668,6 @@ void TryInteractAll(string actionId);
 void CycleTarget(int direction);   // +1 = 下一个, -1 = 上一个
 void SetDetectionEnabled(bool enabled);
 
-// 性能
-static void ClearComponentCache();  // 切换场景时调用
 ```
 
 ---
@@ -833,12 +905,12 @@ interactable.OnProgressChanged += (_, progress) =>
 
 **内部工作原理：**
 
-1. 交互开始时调用 `StartDistanceMonitor()`。
-2. 检查 `InstigatorHandle.TryGetPosition(out Vector3)` — 如果返回 `false`（无实体发起者），则跳过监控。
-3. 以 fire-and-forget 的 `UniTaskVoid` 运行 `MonitorDistanceAsync()`。
-4. 每帧空值检查 `_currentInstigator`，防止使用已销毁对象。
+1. `Interactable.TryInteractAsync()` 通过 `InteractionSystem.RegisterDistanceMonitor()` 注册活动目标。
+2. `InteractionSystem.LateUpdate()` 在一个批处理循环中检查所有活动距离监控项。
+3. `InstigatorHandle.TryGetPosition(out Vector3)` 对无实体发起者返回 `false`; 这些条目会被跳过且不报错。
+4. 每帧空值检查目标和发起者引用，防止使用已销毁对象。
 5. 使用平方距离比较（无 `sqrt` 开销）提升性能。
-6. 交互结束时 `StopDistanceMonitor()` 释放内部 `CancellationTokenSource`。
+6. 目标在 `finally` 中注销距离监控，覆盖成功、取消和 fault 路径。
 
 ### 取消原因
 
@@ -850,7 +922,8 @@ public enum InteractionCancelReason : byte
     Interrupted,     // 外部玩法事件（受伤、眩晕）
     Timeout,         // 交互超时
     TargetDestroyed, // 可交互对象被销毁
-    SystemShutdown   // 场景卸载 / InteractionSystem 被释放
+    SystemShutdown,  // 场景卸载 / InteractionSystem 被释放
+    Faulted          // 用户代码或 adapter 抛出异常
 }
 ```
 
@@ -1141,7 +1214,7 @@ detector.CurrentInteractable.Subscribe(target =>
 **预热分配**（一次性，非每帧）：
 
 - `EffectPoolSystem` 在首次生成时为每个唯一特效预制体创建一个池。使用 `Prewarm()` 可将对象创建移动到加载阶段。
-- `InteractionDetector` 组件缓存在发现新碰撞体时创建一份 `Dictionary` 快照。
+- `InteractionDetector` 在 `Awake()` 中为组件缓存、LOS 缓存和自动交互节流缓存分配 per-detector `Dictionary`。
 - 可取消的交互执行会在活动交互生命周期内创建并释放一个 `CancellationTokenSource`。
 
 ### 空间哈希网格（DOD）
@@ -1171,13 +1244,13 @@ detector.CurrentInteractable.Subscribe(target =>
 
 ### 线程安全
 
-| 组件                                   | 机制                                     |
-| -------------------------------------- | ---------------------------------------- |
-| `Interactable._isInteractingFlag`      | `Interlocked.CompareExchange` — 原子无锁 |
-| `SpatialHashGrid`                      | `ReaderWriterLockSlim` — 读并行、写独占  |
-| `InteractionDetector.s_componentCache` | 写时复制模式 — 读取方看到一致快照        |
-| `EffectPoolSystem.s_pools`             | 主线程 `Dictionary`; Unity 对象池不是 worker thread safe |
-| `InteractionSystem.Instance`           | 仅主线程访问（Unity 主线程）             |
+| 组件                              | 机制                                     |
+| --------------------------------- | ---------------------------------------- |
+| `Interactable._isInteractingFlag` | `Interlocked.CompareExchange` — 原子无锁 |
+| `SpatialHashGrid`                 | `ReaderWriterLockSlim` — 读并行、写独占  |
+| `InteractionDetector` 缓存        | Per-detector `Dictionary`; 仅主线程访问  |
+| `EffectPoolSystem.s_pools`        | 主线程 `Dictionary`; Unity 对象池不是 worker thread safe |
+| `InteractionSystem.WorldId`       | 主线程 world registry 和命令过滤         |
 
 > **注意：** 交互系统为 Unity 的单线程主循环设计。线程安全机制主要防护 async/协程交错和潜在的 Job System 读取，而非真正的多线程并发。
 
@@ -1185,11 +1258,11 @@ detector.CurrentInteractable.Subscribe(target =>
 
 | 关注点         | 保护措施                                                                                                                                                                                                  |
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 使用已销毁对象 | `GameObjectInstigator.TryGetPosition` 在访问 `.transform` 前空值检查 `GameObject`。`MonitorDistanceAsync` 每帧空值检查 `_currentInstigator`。`IsValidInteractable` 检查 `UnityEngine.Object` 的销毁状态。 |
-| CTS 释放       | `_interactionCts` 在所有路径中释放：`TrySetState` 提前返回、`finally` 块（成功 + 异常）及 `CancelInteraction()`。`_distanceCheckCts` 在 `StopDistanceMonitor()` 中释放。                                  |
+| 使用已销毁对象 | `GameObjectInstigator.TryGetPosition` 在访问 `.transform` 前空值检查 `GameObject`。集中式距离监控每帧空值检查目标和发起者。`IsValidInteractable` 检查 `UnityEngine.Object` 的销毁状态。 |
+| CTS 释放       | `_interactionCts` 在所有路径中释放：`TrySetState` 提前返回、成功、取消和 faulted exception。                                                                                                  |
 | 重复交互       | `Interlocked.CompareExchange` 在 `_isInteractingFlag` 上防止并发交互。                                                                                                                                    |
-| 事件清理       | `OnProgressChanged` 和 `OnInteractionCancelled` 在 `OnDestroy()` 中置空。                                                                                                                                 |
-| 组件缓存       | 定期清理移除引用已销毁 `UnityEngine.Object` 的条目。                                                                                                                                                      |
+| 事件清理       | Runtime 事件在 `OnDestroy()` 中置空，并捕获事件回调异常，避免订阅者永久破坏交互状态机。                                                                                                                   |
+| 组件缓存       | Per-detector 缓存在 lookup 时移除已销毁的 `UnityEngine.Object` 引用。                                                                                                                                      |
 
 ### 跨平台
 
@@ -1211,7 +1284,7 @@ detector.CurrentInteractable.Subscribe(target =>
 | **InteractionDetector Inspector** | 选中任意 Detector                                                     | 实时评分分解、候选列表、LOD 层级、组件缓存统计。                                                 |
 | **InteractionSystem Inspector**   | 选中系统对象                                                          | 网格统计、注册数量、模式显示。                                                                   |
 | **TwoStateInteraction Inspector** | 选中双态对象                                                          | 切换按钮、状态预览。                                                                             |
-| **Interaction Validator**         | `Tools → CycloneGames → Interaction → Interaction Validator`          | 扫描场景中所有可交互对象，检查常见配置问题（缺失碰撞体、错误图层、未启用触发器）。               |
+| **Interaction Validator**         | `Tools → CycloneGames → Interaction → Interaction Validator`          | 扫描交互 authoring 问题，包括组件职责冲突、重复目标组件、缺失碰撞体、错误图层和未启用触发器。     |
 | **Scene Overview**                | `Tools → CycloneGames → Interaction → Scene Overview`                 | 列出所有可交互对象及其通道、状态、优先级。                                                       |
 | **Scene Debugger**                | `Tools → CycloneGames → Interaction → Toggle Scene Interaction Debug` | 实时检测可视化、候选项高亮、评分叠加。                                                           |
 | **Gizmos**                        | 场景视图（选中对象）                                                  | 黄色线框球体表示 `interactionDistance`，绿色球体表示检测器 `detectionRadius`，线条连接当前目标。 |
@@ -1220,7 +1293,7 @@ detector.CurrentInteractable.Subscribe(target =>
 
 ## 文件清单
 
-### 运行时（23 个文件）
+### 运行时（54 个文件）
 
 | 文件                              | 用途                                           |
 | --------------------------------- | ---------------------------------------------- |
@@ -1228,6 +1301,32 @@ detector.CurrentInteractable.Subscribe(target =>
 | `Interactable.cs`                 | 基础 MonoBehaviour 实现                        |
 | `IInteractionSystem.cs`           | 系统管理接口                                   |
 | `InteractionSystem.cs`            | 中央枢纽：VitalRouter 路由 + 空间网格          |
+| `Core/InteractionAuthorityOptions.cs` | 权威校验配置                            |
+| `Core/InteractionAuthorityService.cs` | 不依赖 Unity 的请求校验、目标注册和队列路由  |
+| `Core/IInteractionPositionProvider.cs` | 权威校验使用的可插拔位置来源契约        |
+| `Core/InteractionMetrics.cs`      | 面向生产可观测性的线程安全计数器和快照   |
+| `Core/InteractionRateLimiter.cs`  | 按发起者统计的 tick 窗口限流器                           |
+| `Core/InteractionRequestHistory.cs` | authority service 共享的有界重放/重复请求历史 |
+| `Core/InteractionRequestHistoryResult.cs` | 重放历史 accepted/rejected 结果枚举 |
+| `Core/InteractionTargetSnapshot.cs` | 面向 server/headless adapter 的无 Unity 目标状态             |
+| `Core/InteractionValidationFailure.cs` | 类型化权威拒绝原因枚举                        |
+| `Core/InteractionValidationResult.cs` | accepted/rejected 校验结果                            |
+| `Core/InteractionVector3.cs`      | 权威校验使用的无 Unity 向量值                      |
+| `Integrations/DeterministicMath/IInteractionDeterministicPositionProvider.cs` | fixed-point 位置来源契约 |
+| `Integrations/DeterministicMath/InteractionDeterministicAuthorityService.cs` | 使用 `FPVector3` / `FPInt64` 的确定性权威校验 |
+| `Integrations/DeterministicMath/InteractionDeterministicMathExtensions.cs` | `InteractionVector3` 与 `FPVector3` 转换辅助 |
+| `Integrations/DeterministicMath/InteractionDeterministicVector3Payload.cs` | 面向网络、replay、存档和后端协议的 raw fixed-point 向量 payload |
+| `Integrations/DeterministicMath/InteractionDeterministicRequest.cs` | 带 fixed-point 发起者位置的 lockstep 友好请求 |
+| `Integrations/DeterministicMath/InteractionDeterministicRequestPayload.cs` | 带 raw fixed-point 发起者位置、适合传输的确定性请求 |
+| `Integrations/DeterministicMath/InteractionDeterministicTargetSnapshot.cs` | 面向确定性 simulation 的 fixed-point 目标状态 |
+| `Integrations/DeterministicMath/GameplayFramework/GameplayFrameworkDeterministicInteractionExtensions.cs` | 需要显式 deterministic position provider 的 GameplayFramework 桥 |
+| `Integrations/Networking/InteractionNetworkAuthorityBridge.cs` | 将网络 DTO 接入 `InteractionAuthorityService` |
+| `Integrations/Networking/InteractionNetworkCancelRequest.cs` | 传输友好的取消请求 DTO |
+| `Integrations/Networking/InteractionNetworkProtocol.cs` | 稳定 message ID、channel、协议版本和 payload 上限 |
+| `Integrations/Networking/InteractionNetworkRequest.cs` | 使用 `NetworkVector3` 的传输友好请求 DTO |
+| `Integrations/Networking/InteractionNetworkResult.cs` | 传输友好的交互结果 DTO |
+| `Integrations/Networking/InteractionNetworkVectorExtensions.cs` | `InteractionVector3` 与 `NetworkVector3` 转换 |
+| `Integrations/GameplayFramework/GameplayFrameworkInteractionExtensions.cs` | `Actor` 到 Interaction 位置、发起者和快照的辅助方法 |
 | `IInteractionDetector.cs`         | 检测与目标追踪接口                             |
 | `InteractionDetector.cs`          | 完整检测实现（3D、2D、SpatialHash、LOD、评分） |
 | `InstigatorHandle.cs`             | 抽象发起者身份基类                             |
@@ -1248,10 +1347,11 @@ detector.CurrentInteractable.Subscribe(target =>
 | `SpatialHashGrid.cs`              | DOD 空间哈希网格（SoA 布局）                   |
 | `Implementations/PickableItem.cs` | 内置可拾取物品                                 |
 
-### 编辑器（7 个文件）
+### 编辑器（8 个文件）
 
 | 文件                            | 用途                                     |
 | ------------------------------- | ---------------------------------------- |
+| `InteractionComponentRules.cs`  | Inspector 与 Validator 共享的职责冲突检查 |
 | `InteractableEditor.cs`         | Interactable 自定义 Inspector            |
 | `InteractionDetectorEditor.cs`  | InteractionDetector 自定义 Inspector     |
 | `InteractionSystemEditor.cs`    | InteractionSystem 自定义 Inspector       |
@@ -1272,6 +1372,9 @@ detector.CurrentInteractable.Subscribe(target =>
 | `IInteractionSystem`      | `SpatialGrid`, `Register()`, `Unregister()`, `ProcessInteractionAsync()`, `OnAnyInteractionStarted`, `OnAnyInteractionCompleted`                                                                                                                                                                 |
 | `IInteractionDetector`    | `CurrentInteractable`, `NearbyInteractables`, `DetectionMode`, `ChannelMask`, `TryInteract()`, `TryInteractAll()`, `CycleTarget()`, `SetDetectionEnabled()`                                                                                                                                      |
 | `IInteractionRequirement` | `IsMet(IInteractable, InstigatorHandle)`, `FailureReason`                                                                                                                                                                                                                                        |
+| `IInteractionStableIdentity` | `StableId`, `StableIdHash`, `HasStableId`                                                                                                                                                                                                                                                     |
+| `IInteractionPositionProvider` | `TryGetInteractionPosition(out InteractionVector3)`                                                                                                                                                                                                                                      |
+| `IInteractionDeterministicPositionProvider` | `TryGetDeterministicInteractionPosition(out FPVector3)`                                                                                                                                                                                                                         |
 | `ITwoStateInteraction`    | `IsActivated`, `ActivateState()`, `DeactivateState()`, `ToggleState()`                                                                                                                                                                                                                           |
 | `IEffectPoolSystem`       | `Initialize()`, `Prewarm()`, `Spawn()`                                                                                                                                                                                                                                                           |
 
@@ -1283,7 +1386,11 @@ detector.CurrentInteractable.Subscribe(target =>
 | `GameObjectInstigator`    | 内置实现：封装 `GameObject`，提供 `GetComponent<T>()`。                        |
 | `Interactable`            | 实现 `IInteractable` 的基础 MonoBehaviour，完整生命周期管理。                  |
 | `InteractionDetector`     | 实现 `IInteractionDetector` 的 MonoBehaviour：检测、评分、LOD。                |
-| `InteractionSystem`       | 实现 `IInteractionSystem` 的 MonoBehaviour：VitalRouter 路由。                 |
+| `InteractionSystem`       | 实现 `IInteractionSystem` 的 MonoBehaviour：VitalRouter 路由、authority snapshot 和 metrics。                 |
+| `InteractionAuthorityService` | 不依赖 Unity 的稳定 ID 请求服务端校验/预约核心。                         |
+| `InteractionDeterministicAuthorityService` | 面向 lockstep 和 rollback 的 deterministic fixed-point 校验/预约核心。 |
+| `InteractionNetworkAuthorityBridge` | 可选 Networking 集成桥，将 `InteractionNetworkRequest` 接入 `InteractionAuthorityService`。 |
+| `InteractionMetrics`      | 面向校验和执行可观测性的线程安全计数器。                                 |
 | `TwoStateInteractionBase` | 实现 `ITwoStateInteraction` 的 MonoBehaviour。                                 |
 | `PickableItem`            | 内置可拾取物品的 `Interactable` 子类。                                         |
 | `PooledEffect`            | 可池化 VFX 的 MonoBehaviour，支持自动回收。                                    |
@@ -1294,7 +1401,21 @@ detector.CurrentInteractable.Subscribe(target =>
 
 | 结构体                  | 字段                                                                                                                        |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `InteractionCommand`    | `IInteractable Target`, `string ActionId`, `InstigatorHandle Instigator`                                                    |
+| `InteractionCommand`    | `IInteractable Target`, `string ActionId`, `InstigatorHandle Instigator`, `WorldId`, `TargetStableId`, `InstigatorStableId` |
+| `InteractionRequest`    | `RequestId`, `InstigatorId`, `TargetInstanceId`, `InstigatorStableId`, `TargetStableId`, `ActionId`, `Tick`, `WorldId`      |
+| `InteractionResult`     | `RequestId`, `InstigatorId`, `TargetInstanceId`, `InstigatorStableId`, `TargetStableId`, `Success`, `CancelReason`, `QueuePosition`, `WorldId` |
+| `InteractionTargetSnapshot` | `WorldId`, `TargetStableId`, `Position`, `InteractionRange`, `IsAvailable`, `AllowDefaultAction`, `EnabledActionIds`, `Version` |
+| `InteractionDeterministicTargetSnapshot` | `WorldId`, `TargetStableId`, `FPVector3 Position`, `FPInt64 InteractionRange`, 可用性和 action 字段 |
+| `InteractionValidationResult` | `Request`, `Target`, `Failure`, `QueuePosition`, `IsAccepted`, `IsQueued`                                               |
+| `InteractionMetricsSnapshot` | `TotalRequests`, `AcceptedRequests`, `RejectedRequests`, `QueuedRequests`, 执行计数器, `LastRejection`         |
+| `InteractionVector3`    | `X`, `Y`, `Z`                                                                                                             |
+| `InteractionDeterministicRequest` | `RequestId`, `InstigatorStableId`, `TargetStableId`, `ActionId`, `Tick`, `WorldId`, `FPVector3 InstigatorPosition` |
+| `InteractionDeterministicRequestPayload` | `RequestId`、稳定 ID、`ActionId`、`Tick`、`WorldId`、raw fixed-point `InstigatorPosition` payload |
+| `InteractionDeterministicVector3Payload` | `XRaw`、`YRaw`、`ZRaw` Q32.32 fixed-point 原始值 |
+| `InteractionNetworkRequest` | `RequestId`, `InstigatorStableId`, `TargetStableId`, `ActionId`, `Tick`, `WorldId`, `InstigatorPosition`              |
+| `InteractionNetworkCancelRequest` | `RequestId`, `InstigatorStableId`, `TargetStableId`, `CancelReason`, `Tick`, `WorldId`                           |
+| `InteractionNetworkResult` | `RequestId`, `InstigatorStableId`, `TargetStableId`, `Success`, `CancelReason`, `ValidationFailure`, `QueuePosition`, `WorldId` |
+| `InteractionNetworkProtocol` | `PROTOCOL_VERSION`, `REQUEST_MESSAGE_ID`, `RESULT_MESSAGE_ID`, `CANCEL_REQUEST_MESSAGE_ID`, channel 和 payload 常量 |
 | `InteractionAction`     | `string ActionId`, `string DisplayText`, `string InputHint`, `string LocalizationKey`, `int DisplayOrder`, `bool IsEnabled` |
 | `InteractionCandidate`  | `IInteractable Interactable`, `float Score`, `float DistanceSqr`                                                            |
 | `InteractionPromptData` | `string LocalizationTableName`, `string LocalizationKey`, `string FallbackText`                                             |
@@ -1307,7 +1428,7 @@ detector.CurrentInteractable.Subscribe(target =>
 | `InteractionStateType`    | `Idle`, `Starting`, `InProgress`, `Completing`, `Completed`, `Cancelled`              |
 | `DetectionMode`           | `Physics3D`, `Physics2D`, `SpatialHash`                                               |
 | `InteractionChannel`      | `None`, `Channel0`–`Channel15`, `All`                                                 |
-| `InteractionCancelReason` | `Manual`, `OutOfRange`, `Interrupted`, `Timeout`, `TargetDestroyed`, `SystemShutdown` |
+| `InteractionCancelReason` | `Manual`, `OutOfRange`, `Interrupted`, `Timeout`, `TargetDestroyed`, `SystemShutdown`, `Faulted`, `Rejected` |
 
 ---
 
