@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.Cheat.Tests.Editor",
+    "rootNamespace": "CycloneGames.Cheat.Tests.Editor",
+    "references": [
+        "CycloneGames.Cheat.Core",
+        "CycloneGames.Cheat.Runtime",
+        "UniTask",
+        "VitalRouter",
+        "VitalRouter.Unity"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

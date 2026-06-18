@@ -1,8 +1,8 @@
 {
   "name": "com.cyclone-games.cheat",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "displayName": "CycloneGames.Cheat",
-  "description": "A lightweight cheat command system for Unity using VitalRouter for decoupled message handling, supporting type-safe arguments and async execution with cancellation.",
+  "description": "A VitalRouter-based internal cheat command module for Unity with Core/Runtime layers, explicit ownership, build-gated enablement, scoped routing, cancellation, metrics, and optional VContainer integration.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {

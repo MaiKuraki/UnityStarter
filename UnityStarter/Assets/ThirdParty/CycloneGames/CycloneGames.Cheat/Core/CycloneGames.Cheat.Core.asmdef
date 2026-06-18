@@ -1,11 +1,8 @@
 {
-    "name": "CycloneGames.Cheat.Runtime",
-    "rootNamespace": "",
+    "name": "CycloneGames.Cheat.Core",
+    "rootNamespace": "CycloneGames.Cheat.Core",
     "references": [
-        "UniTask",
-        "VitalRouter",
-        "VitalRouter.Unity",
-        "CycloneGames.Cheat.Core"
+        "VitalRouter"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -15,5 +12,5 @@
     "autoReferenced": true,
     "defineConstraints": [],
     "versionDefines": [],
-    "noEngineReferences": false
+    "noEngineReferences": true
 }

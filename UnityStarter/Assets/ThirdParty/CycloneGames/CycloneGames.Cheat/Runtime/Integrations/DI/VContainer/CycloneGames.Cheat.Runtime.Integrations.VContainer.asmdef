@@ -1,10 +1,8 @@
 {
-    "name": "CycloneGames.Cheat.Sample",
+    "name": "CycloneGames.Cheat.Runtime.Integrations.VContainer",
     "rootNamespace": "",
     "references": [
-        "UniTask",
-        "VitalRouter",
-        "VitalRouter.Unity",
+        "VContainer",
         "CycloneGames.Cheat.Runtime",
         "CycloneGames.Cheat.Core"
     ],
@@ -14,7 +12,15 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "defineConstraints": [
+        "VCONTAINER_PRESENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vcontainer",
+            "expression": "",
+            "define": "VCONTAINER_PRESENT"
+        }
+    ],
     "noEngineReferences": false
 }
