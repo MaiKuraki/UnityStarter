@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using CycloneGames.GameplayTags.Core;
 using NUnit.Framework;
 
@@ -160,6 +162,37 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         }
 
         [Test]
+        public void Query_InvalidateCompiledCache_RecompilesMutatedExpression()
+        {
+            RegisterTestTags();
+            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
+            GameplayTag statusStun = GameplayTagManager.RequestTag("Test.Status.Stun");
+
+            GameplayTagContainer subject = new();
+            subject.AddTag(damageFire);
+
+            GameplayTagContainer required = new();
+            required.AddTag(damageFire);
+
+            GameplayTagQuery query = new()
+            {
+                RootExpression = new GameplayTagQueryExpression
+                {
+                    Operator = EGameplayTagQueryExprOperator.All,
+                    Tags = required
+                }
+            };
+
+            Assert.That(query.Matches(subject), Is.True);
+
+            required.AddTag(statusStun);
+            Assert.That(query.Matches(subject), Is.True);
+
+            query.InvalidateCompiledCache();
+            Assert.That(query.Matches(subject), Is.False);
+        }
+
+        [Test]
         public void Requirements_MatchAcrossStaticAndDynamicContainers()
         {
             RegisterTestTags();
@@ -205,6 +238,31 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         }
 
         [Test]
+        public void Containers_RejectNoneAndInvalidTags()
+        {
+            GameplayTagContainer container = new();
+            GameplayTagCountContainer countContainer = new();
+
+            Assert.Throws<ArgumentException>(() => container.AddTag(GameplayTag.None));
+            Assert.Throws<ArgumentException>(() => countContainer.AddTag(GameplayTag.None));
+        }
+
+        [Test]
+        public void Mask_IgnoresOutOfRangeBitAccess()
+        {
+            GameplayTagMask mask = default;
+
+            mask.SetBit(-1);
+            mask.SetBit(GameplayTagMask.MaxTags);
+            mask.ClearBit(-1);
+            mask.ClearBit(GameplayTagMask.MaxTags);
+
+            Assert.That(mask.IsEmpty, Is.True);
+            Assert.That(mask.GetWord(-1), Is.EqualTo(0UL));
+            Assert.That(mask.GetWord(4), Is.EqualTo(0UL));
+        }
+
+        [Test]
         public void NetSerializer_RoundTripsFullAndDeltaPackets()
         {
             RegisterTestTags();
@@ -235,12 +293,133 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.That(fullTarget.HasTagExact(statusStun), Is.False);
         }
 
+        [Test]
+        public void NetSerializer_RejectsTruncatedPackets()
+        {
+            RegisterTestTags();
+
+            GameplayTagContainer target = new();
+
+            Assert.Throws<ArgumentException>(() => GameplayTagNetSerializer.DeserializeFull(target, new byte[] { GameplayTagNetSerializer.CurrentProtocolVersion, 0xFE }));
+        }
+
+        [Test]
+        public void NetSerializer_RejectsUnsupportedProtocolVersion()
+        {
+            RegisterTestTags();
+
+            GameplayTagContainer source = new();
+            byte[] packet = GameplayTagNetSerializer.SerializeFull(source);
+            packet[0] = unchecked((byte)(GameplayTagNetSerializer.CurrentProtocolVersion + 1));
+
+            GameplayTagContainer target = new();
+            Assert.That(GameplayTagNetSerializer.IsSupportedProtocolVersion(GameplayTagNetSerializer.CurrentProtocolVersion), Is.True);
+            Assert.That(GameplayTagNetSerializer.IsSupportedProtocolVersion(packet[0]), Is.False);
+            Assert.Throws<NotSupportedException>(() => GameplayTagNetSerializer.DeserializeFull(target, packet));
+        }
+
+        [Test]
+        public void NetSerializer_RejectsInvalidTagsBeforeSerialization()
+        {
+            List<GameplayTag> added = new() { GameplayTag.None };
+
+            Assert.Throws<ArgumentException>(() => GameplayTagNetSerializer.SerializeDelta(added, null));
+        }
+
+        [Test]
+        public void NetSerializer_RejectsManifestMismatch()
+        {
+            RegisterTestTags();
+            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
+
+            GameplayTagContainer source = new();
+            source.AddTag(damageFire);
+            byte[] packet = GameplayTagNetSerializer.SerializeFull(source);
+
+            GameplayTagManager.RegisterDynamicTag("Test.Network.NewTag", "Added after packet serialization.");
+
+            GameplayTagContainer target = new();
+            Assert.Throws<InvalidOperationException>(() => GameplayTagNetSerializer.DeserializeFull(target, packet));
+        }
+
+        [Test]
+        public void DynamicRegistration_BatchesSnapshotRebuildsAfterInitialization()
+        {
+            RegisterTestTags();
+
+            int treeChangedCount = 0;
+            GameplayTagManager.OnGameplayTagTreeChanged += () => treeChangedCount++;
+
+            GameplayTagManager.RegisterDynamicTags(new[]
+            {
+                "HotUpdate.Ability.Fire",
+                "HotUpdate.Ability.Ice"
+            });
+
+            Assert.That(treeChangedCount, Is.EqualTo(1));
+            Assert.That(GameplayTagManager.RequestTag("HotUpdate.Ability.Fire").IsValid, Is.True);
+            Assert.That(GameplayTagManager.RequestTag("HotUpdate.Ability.Ice").IsValid, Is.True);
+            Assert.That(GameplayTagManager.RequestTag("HotUpdate.Ability").IsValid, Is.True);
+        }
+
+        [Test]
+        public void BuildGameplayTagSource_RegistersValidBinaryData()
+        {
+            byte[] data = CreateBuildTagData("Build.Ability.Fire", "Build.Status.Stun");
+            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+
+            GameplayTagRegistrationContext context = new();
+            new BuildGameplayTagSource().RegisterTags(context);
+            List<GameplayTagDefinition> definitions = context.GenerateDefinitions(true);
+
+            Assert.That(definitions.Exists(static definition => definition.TagName == "Build.Ability.Fire"), Is.True);
+            Assert.That(definitions.Exists(static definition => definition.TagName == "Build.Status.Stun"), Is.True);
+        }
+
+        [Test]
+        public void BuildGameplayTagSource_RejectsCorruptedBinaryData()
+        {
+            byte[] data = CreateBuildTagData("Build.Ability.Fire");
+            data[^1] ^= 0xFF;
+            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+
+            GameplayTagRegistrationContext context = new();
+            new BuildGameplayTagSource().RegisterTags(context);
+            List<GameplayTagDefinition> definitions = context.GenerateDefinitions(true);
+
+            Assert.That(definitions.Exists(static definition => definition.TagName == "Build.Ability.Fire"), Is.False);
+        }
+
         private static void RegisterTestTags()
         {
             GameplayTagManager.RegisterDynamicTag("Test.Ability.Damage.Fire", "Fire damage");
             GameplayTagManager.RegisterDynamicTag("Test.Ability.Damage.Ice", "Ice damage");
             GameplayTagManager.RegisterDynamicTag("Test.Status.Stun", "Stun status");
             GameplayTagManager.InitializeIfNeeded();
+        }
+
+        private static byte[] CreateBuildTagData(params string[] tagNames)
+        {
+            using MemoryStream memoryStream = new();
+            using BinaryWriter writer = new(memoryStream);
+
+            writer.Write(BuildTagBinaryFormat.CurrentFormatVersion);
+            writer.Write(tagNames.Length);
+
+            long dataStart = memoryStream.Position;
+            for (int i = 0; i < tagNames.Length; i++)
+            {
+                writer.Write(tagNames[i]);
+            }
+
+            long dataEnd = memoryStream.Position;
+            writer.Flush();
+
+            byte[] dataWithoutHash = memoryStream.ToArray();
+            ulong payloadHash = BuildTagBinaryFormat.ComputePayloadHash64(dataWithoutHash, (int)dataStart, (int)(dataEnd - dataStart));
+            writer.Write(payloadHash);
+
+            return memoryStream.ToArray();
         }
     }
 }

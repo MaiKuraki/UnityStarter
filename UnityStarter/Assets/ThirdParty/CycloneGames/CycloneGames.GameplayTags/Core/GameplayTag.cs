@@ -19,7 +19,7 @@ namespace CycloneGames.GameplayTags.Core
       public readonly bool IsValid
       {
          [MethodImpl(MethodImplOptions.AggressiveInlining)]
-         get => GetResolvedRuntimeIndex() >= 0;
+         get => GetResolvedRuntimeIndex() > 0;
       }
 
       public readonly bool IsLeaf
@@ -32,6 +32,12 @@ namespace CycloneGames.GameplayTags.Core
       {
          [MethodImpl(MethodImplOptions.AggressiveInlining)]
          get => GetResolvedRuntimeIndex();
+      }
+
+      public readonly ulong StableId
+      {
+         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+         get => GameplayTagManager.GetStableIdFromRuntimeIndex(GetResolvedRuntimeIndex());
       }
 
       public readonly GameplayTagDefinition Definition
@@ -90,6 +96,12 @@ namespace CycloneGames.GameplayTags.Core
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       private int m_RuntimeIndex;
 
+      internal readonly int CachedRuntimeIndex
+      {
+         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+         get => m_RuntimeIndex;
+      }
+
       internal GameplayTag(GameplayTagDefinition definition)
       {
          definition ??= GameplayTagDefinition.NoneTagDefinition;
@@ -124,12 +136,10 @@ namespace CycloneGames.GameplayTags.Core
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public readonly bool Equals(GameplayTag other)
       {
-         int runtimeIndex = GetResolvedRuntimeIndex();
-         int otherRuntimeIndex = other.GetResolvedRuntimeIndex();
-         if (runtimeIndex != otherRuntimeIndex)
-            return false;
+         if (!string.IsNullOrEmpty(m_Name) || !string.IsNullOrEmpty(other.m_Name))
+            return string.Equals(m_Name, other.m_Name, StringComparison.Ordinal);
 
-         return runtimeIndex >= 0 || string.Equals(m_Name, other.m_Name, StringComparison.Ordinal);
+         return GetResolvedRuntimeIndex() == other.GetResolvedRuntimeIndex();
       }
 
       public override readonly bool Equals(object obj)
@@ -139,13 +149,17 @@ namespace CycloneGames.GameplayTags.Core
 
       public override readonly int GetHashCode()
       {
-         int runtimeIndex = GetResolvedRuntimeIndex();
-         return runtimeIndex >= 0 ? runtimeIndex : HashCode.Combine(runtimeIndex, m_Name);
+         return !string.IsNullOrEmpty(m_Name)
+            ? StringComparer.Ordinal.GetHashCode(m_Name)
+            : GetResolvedRuntimeIndex();
       }
 
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public readonly int CompareTo(GameplayTag other)
       {
+         if (!string.IsNullOrEmpty(m_Name) || !string.IsNullOrEmpty(other.m_Name))
+            return string.Compare(m_Name, other.m_Name, StringComparison.Ordinal);
+
          return GetResolvedRuntimeIndex().CompareTo(other.GetResolvedRuntimeIndex());
       }
 
@@ -158,25 +172,25 @@ namespace CycloneGames.GameplayTags.Core
       }
 
       /// <summary>
-      /// Resolves the runtime index from m_Name if m_RuntimeIndex is unset.
-      /// Uses Unsafe.AsRef to cache the resolved index back into the struct field,
-      /// which works when this struct lives in an array/field (not a stack copy).
+      /// Resolves the current runtime index from the stable tag name.
+      /// Runtime indices are snapshot-local, so cached indices are validated before use.
       /// </summary>
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       private readonly int GetResolvedRuntimeIndex()
       {
-         int idx = m_RuntimeIndex;
-         if (idx != 0) return idx;
-
          if (string.IsNullOrEmpty(m_Name))
             return 0;
 
          TagDataSnapshot snap = GameplayTagManager.Snapshot;
-         if (snap != null && snap.TryGetRuntimeIndex(m_Name, out int resolved))
+         int idx = m_RuntimeIndex;
+         if (idx > 0 && (uint)idx < (uint)snap.TagNames.Length &&
+             string.Equals(snap.TagNames[idx], m_Name, StringComparison.Ordinal))
          {
-            // Write back to cache — works when this struct is in an array/field,
-            // harmless no-op on stack copies. No 'unsafe' keyword required.
-            Unsafe.AsRef(in m_RuntimeIndex) = resolved;
+            return idx;
+         }
+
+         if (snap.TryGetRuntimeIndex(m_Name, out int resolved))
+         {
             return resolved;
          }
 

@@ -1,9 +1,33 @@
 using System;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.GameplayTags.Core
 {
    public static class GameplayTagUtility
    {
+      internal const ulong FnvOffsetBasis64 = Fnv1a64.OffsetBasis;
+
+      public static ulong ComputeStableId(string tagName)
+      {
+         ValidateName(tagName);
+         return ComputeStableIdUnchecked(tagName);
+      }
+
+      internal static ulong ComputeStableIdUnchecked(string tagName)
+      {
+         return StableHash64.ComputeUtf16Ordinal(tagName);
+      }
+
+      internal static ulong CombineStableHash(ulong hash, ulong value)
+      {
+         return StableHash64.CombineUInt64LittleEndian(hash, value);
+      }
+
+      internal static ulong ComputeStableHash64(ReadOnlySpan<byte> data)
+      {
+         return StableHash64.ComputeBytes(data);
+      }
+
       internal static void WarnNotExplicitlyAddedTagRemoval(GameplayTag gameplayTag)
       {
          GameplayTagLogger.LogWarning($"Attempted to remove tag {gameplayTag} from tag count container, but it is not explicitly added to the container.");

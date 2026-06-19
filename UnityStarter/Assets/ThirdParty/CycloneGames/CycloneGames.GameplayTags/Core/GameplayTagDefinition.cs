@@ -45,6 +45,8 @@ namespace CycloneGames.GameplayTags.Core
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
       public string TagName { get; }
 
+      public ulong StableId { get; }
+
       /// <summary>
       /// The description of the tag. This is to provide more information about the tag during development.
       /// </summary>
@@ -91,15 +93,32 @@ namespace CycloneGames.GameplayTags.Core
          m_ChildTags = Array.Empty<GameplayTag>();
          m_HierarchyTags = Array.Empty<GameplayTag>();
          m_Children = Array.Empty<GameplayTagDefinition>();
-         m_NameHash = TagName.GetHashCode();
+         m_NameHash = StringComparer.Ordinal.GetHashCode(TagName);
+         StableId = 0;
+      }
+
+      private GameplayTagDefinition(string name, string description, int runtimeIndex)
+      {
+         TagName = name ?? string.Empty;
+         Description = description;
+         Flags = GameplayTagFlags.None;
+         StableId = string.IsNullOrEmpty(TagName) ? 0 : GameplayTagUtility.ComputeStableIdUnchecked(TagName);
+         Label = TagName;
+         HierarchyLevel = 0;
+         RuntimeIndex = runtimeIndex;
+         ParentTagDefinition = null;
+         m_NameHash = StringComparer.Ordinal.GetHashCode(TagName);
       }
 
       public GameplayTagDefinition(string name, string description, GameplayTagFlags flags = GameplayTagFlags.None)
       {
+         GameplayTagUtility.ValidateName(name);
+
          TagName = name;
          Description = description;
          Flags = flags;
-         m_NameHash = name.GetHashCode();
+         m_NameHash = StringComparer.Ordinal.GetHashCode(name);
+         StableId = GameplayTagUtility.ComputeStableIdUnchecked(name);
 
          Label = GameplayTagUtility.GetLabel(name);
          HierarchyLevel = GameplayTagUtility.GetHierarchyLevelFromName(name);
@@ -107,9 +126,7 @@ namespace CycloneGames.GameplayTags.Core
 
       public static GameplayTagDefinition CreateInvalidDefinition(string name)
       {
-         GameplayTagDefinition invalidDefinition = new(name, "Invalid Tag");
-         invalidDefinition.SetRuntimeIndex(-1);
-         return invalidDefinition;
+         return new GameplayTagDefinition(name, "Invalid Tag", -1);
       }
 
       /// <summary>

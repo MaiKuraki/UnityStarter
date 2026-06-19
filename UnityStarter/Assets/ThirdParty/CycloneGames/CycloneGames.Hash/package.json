@@ -1,0 +1,22 @@
+{
+  "name": "com.cyclone-games.hash",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Hash",
+  "description": "Pure C# deterministic hashing primitives for manifests, network protocols, hot-update validation, and data consistency checks.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {},
+  "keywords": [
+    "CycloneGames",
+    "Hash",
+    "Deterministic",
+    "Networking",
+    "Manifest"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

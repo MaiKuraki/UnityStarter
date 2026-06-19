@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using CycloneGames.Hash.Core;
 using UnityEngine;
 
 namespace CycloneGames.Utility.Runtime
@@ -8,8 +9,6 @@ namespace CycloneGames.Utility.Runtime
     public sealed class TransformKeyRegistry : MonoBehaviour
     {
         private const int LINEAR_SEARCH_THRESHOLD = 16;
-        private const ulong FNV_OFFSET_BASIS = 14695981039346656037UL;
-        private const ulong FNV_PRIME = 1099511628211UL;
 
         [SerializeField] private TransformKeyEntry[] Entries = Array.Empty<TransformKeyEntry>();
         [SerializeField] private bool AutoBuildOnAwake = true;
@@ -154,13 +153,7 @@ namespace CycloneGames.Utility.Runtime
                 return 0UL;
             }
 
-            ulong hash = FNV_OFFSET_BASIS;
-            for (int i = 0; i < key.Length; i++)
-            {
-                hash ^= key[i];
-                hash *= FNV_PRIME;
-            }
-
+            ulong hash = Fnv1a64.ComputeUtf16Ordinal(key);
             return hash == 0UL ? 1UL : hash;
         }
 

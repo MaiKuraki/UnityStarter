@@ -4,6 +4,7 @@ using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
@@ -15,6 +16,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
       public void OnPreprocessBuild(BuildReport report)
       {
+         GameplayTagUnityPlatformBootstrap.Configure();
+
          string resourcesPath = Path.Combine(Directory.GetCurrentDirectory(), "Assets", "Resources");
          if (!Directory.Exists(resourcesPath))
          {
@@ -37,8 +40,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          {
             using (BinaryWriter writer = new(file))
             {
-               // v1 format: [byte version] [int tagCount] [string × tagCount] [uint crc32]
-               writer.Write(BuildTagBinaryFormat.CurrentVersion);
+               // Build format: [byte formatVersion] [int tagCount] [string tagName x tagCount] [ulong payloadHash64]
+               writer.Write(BuildTagBinaryFormat.CurrentFormatVersion);
                writer.Write(leafTags.Count);
 
                long dataStart = file.Position;
@@ -48,15 +51,15 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                }
                long dataEnd = file.Position;
 
-               // Compute CRC32 over the tag data region
+               // Compute payload hash over the tag data region.
                writer.Flush();
                file.Position = dataStart;
                byte[] tagData = new byte[dataEnd - dataStart];
                file.Read(tagData, 0, tagData.Length);
-               uint crc = BuildTagBinaryFormat.ComputeCrc32(tagData, 0, tagData.Length);
+               ulong payloadHash = BuildTagBinaryFormat.ComputePayloadHash64(tagData, 0, tagData.Length);
 
                file.Position = dataEnd;
-               writer.Write(crc);
+               writer.Write(payloadHash);
             }
          }
 

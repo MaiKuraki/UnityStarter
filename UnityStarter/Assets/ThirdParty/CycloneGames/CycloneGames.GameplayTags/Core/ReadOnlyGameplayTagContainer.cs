@@ -7,11 +7,11 @@ namespace CycloneGames.GameplayTags.Core
    /// <summary>
    /// An immutable, thread-safe snapshot of a GameplayTagContainer's state.
    /// Safe to pass to worker threads, parallel jobs, or cache across frames.
-   /// Zero allocation after creation — all data captured at construction time.
+   /// Zero allocation after creation; all data captured at construction time.
    ///
    /// Usage:
    ///   var snapshot = container.CreateSnapshot();
-   ///   // Pass snapshot to any thread — it's fully immutable.
+   ///   // Pass snapshot to any thread; it is fully immutable.
    ///   bool has = snapshot.HasTag(someTag);
    /// </summary>
    public sealed class ReadOnlyGameplayTagContainer
@@ -178,19 +178,7 @@ namespace CycloneGames.GameplayTags.Core
       /// </summary>
       public byte[] Serialize()
       {
-         byte[] buffer = new byte[4 + _explicitIndices.Length * 2];
-         int offset = 0;
-         buffer[offset++] = 1; // version
-         buffer[offset++] = 0xFE; // full marker
-         buffer[offset++] = (byte)(_explicitIndices.Length & 0xFF);
-         buffer[offset++] = (byte)(_explicitIndices.Length >> 8);
-         for (int i = 0; i < _explicitIndices.Length; i++)
-         {
-            ushort idx = (ushort)_explicitIndices[i];
-            buffer[offset++] = (byte)(idx & 0xFF);
-            buffer[offset++] = (byte)(idx >> 8);
-         }
-         return buffer;
+         return GameplayTagNetSerializer.SerializeFull(this);
       }
    }
 

@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.GameplayTags.Core;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
+using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
@@ -41,7 +41,11 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             else
                 s_TempContent.text = tag.Name;
 
-            s_TempContent.tooltip = isValid ? tag.Description : null;
+            s_TempContent.tooltip = isValid
+                ? tag.Description
+                : hasValue
+                    ? "This tag is not registered. Open the GameplayTag Validation Window or clear the field."
+                    : null;
 
             // Draw clear button when a tag is selected
             Rect clearRect = default;

@@ -6,7 +6,14 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 {
    public class GameObjectGameplayTagContainer : MonoBehaviour
    {
-      public GameplayTagCountContainer GameplayTagContainer => m_GameplayTagContainer;
+      public GameplayTagCountContainer GameplayTagContainer
+      {
+         get
+         {
+            EnsureRuntimeContainerInitialized();
+            return m_GameplayTagContainer;
+         }
+      }
 
       [SerializeField]
       private GameplayTagContainer m_PersistentTags;
@@ -15,12 +22,30 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 
       private void Awake()
       {
+         EnsureRuntimeContainerInitialized();
+      }
+
+      private void EnsureRuntimeContainerInitialized()
+      {
+         if (m_GameplayTagContainer != null)
+         {
+            return;
+         }
+
          m_GameplayTagContainer = new GameplayTagCountContainer();
-         m_GameplayTagContainer.AddTags(m_PersistentTags);
+         if (m_PersistentTags != null && !m_PersistentTags.IsEmpty)
+         {
+            m_GameplayTagContainer.AddTags(m_PersistentTags);
+         }
       }
 
       public static implicit operator GameplayTagCountContainer(GameObjectGameplayTagContainer container)
       {
+         if (container == null)
+         {
+            throw new System.ArgumentNullException(nameof(container));
+         }
+
          return container.GameplayTagContainer;
       }
    }

@@ -2,6 +2,7 @@
     "name": "CycloneGames.Utility.Editor",
     "rootNamespace": "",
     "references": [
+        "CycloneGames.Hash.Core",
         "CycloneGames.Utility.Runtime"
     ],
     "includePlatforms": [
