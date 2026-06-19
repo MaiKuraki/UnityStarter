@@ -24,19 +24,34 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 
         public GameplayTagContainerBinds(GameplayTagCountContainer container)
         {
-            m_Container = container;
+            m_Container = container ?? throw new ArgumentNullException(nameof(container));
         }
 
 #if UNITY_5_3_OR_NEWER
         public GameplayTagContainerBinds(GameObject gameObject)
         {
+            if (gameObject == null)
+            {
+                throw new ArgumentNullException(nameof(gameObject));
+            }
+
             GameObjectGameplayTagContainer component = gameObject.GetComponent<GameObjectGameplayTagContainer>();
+            if (component == null)
+            {
+                throw new InvalidOperationException($"GameObject '{gameObject.name}' does not have a {nameof(GameObjectGameplayTagContainer)} component.");
+            }
+
             m_Container = component.GameplayTagContainer;
         }
 #endif
 
         public void Bind(GameplayTag tag, Action<bool> onTagAddedOrRemoved)
         {
+            if (onTagAddedOrRemoved == null)
+            {
+                throw new ArgumentNullException(nameof(onTagAddedOrRemoved));
+            }
+
             m_Binds ??= new List<BindData>();
 
             if (!actionMap.TryGetValue(onTagAddedOrRemoved, out OnTagCountChangedDelegate mappedAction))

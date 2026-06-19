@@ -71,7 +71,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
             {
                 SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
-                if (string.Equals(element.stringValue, tag.Name, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(element.stringValue, tag.Name, StringComparison.Ordinal))
                     return;
             }
 
@@ -89,7 +89,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
             {
                 SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
-                if (string.Equals(element.stringValue, tag.Name, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(element.stringValue, tag.Name, StringComparison.Ordinal))
                 {
                     m_ExplicitTagsProperty.DeleteArrayElementAtIndex(i);
                     break;
@@ -106,7 +106,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
             {
                 SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
-                if (string.Equals(element.stringValue, tag.Name, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(element.stringValue, tag.Name, StringComparison.Ordinal))
                 {
                     m_ExplicitTagsProperty.DeleteArrayElementAtIndex(i);
                     break;
@@ -131,7 +131,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
             {
                 SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
-                GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue);
+                GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue, false);
                 if (!tag.IsValid)
                     continue;
 
@@ -159,7 +159,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
             {
                 SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
-                GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue);
+                GameplayTag tag = GameplayTagManager.RequestTag(element.stringValue, false);
                 if (!tag.IsValid)
                     continue;
 

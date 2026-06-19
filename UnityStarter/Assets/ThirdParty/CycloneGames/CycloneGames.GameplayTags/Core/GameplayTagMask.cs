@@ -105,7 +105,7 @@ namespace CycloneGames.GameplayTags.Core
          return false;
       }
 
-      /// <summary>Check if all tags from another mask are present. O(1) — 4 AND operations.</summary>
+      /// <summary>Check if all tags from another mask are present. O(1), 4 AND operations.</summary>
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public readonly bool HasAll(in GameplayTagMask other)
       {
@@ -115,7 +115,7 @@ namespace CycloneGames.GameplayTags.Core
                 (other._w3 & ~_w3) == 0;
       }
 
-      /// <summary>Check if any tag from another mask is present. O(1) — 4 AND operations.</summary>
+      /// <summary>Check if any tag from another mask is present. O(1), 4 AND operations.</summary>
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public readonly bool HasAny(in GameplayTagMask other)
       {
@@ -129,7 +129,7 @@ namespace CycloneGames.GameplayTags.Core
          return !HasAny(other);
       }
 
-      /// <summary>Bitwise OR — union of two masks. O(1).</summary>
+      /// <summary>Bitwise OR union of two masks. O(1).</summary>
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public static GameplayTagMask Union(in GameplayTagMask a, in GameplayTagMask b)
       {
@@ -141,7 +141,7 @@ namespace CycloneGames.GameplayTags.Core
          return result;
       }
 
-      /// <summary>Bitwise AND — intersection of two masks. O(1).</summary>
+      /// <summary>Bitwise AND intersection of two masks. O(1).</summary>
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public static GameplayTagMask Intersection(in GameplayTagMask a, in GameplayTagMask b)
       {
@@ -153,7 +153,7 @@ namespace CycloneGames.GameplayTags.Core
          return result;
       }
 
-      /// <summary>Bitwise AND-NOT — tags in a that are not in b. O(1).</summary>
+      /// <summary>Bitwise AND-NOT difference of two masks. O(1).</summary>
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public static GameplayTagMask Difference(in GameplayTagMask a, in GameplayTagMask b)
       {
@@ -272,25 +272,63 @@ namespace CycloneGames.GameplayTags.Core
          return $"GameplayTagMask({count} tags)";
       }
 
-      // --- Bit-level helpers (unsafe pointer arithmetic, zero branch overhead) ---
+      // --- Bit-level helpers ---
 
-      /// <summary>Set a bit at the given index. No bounds check.</summary>
+      /// <summary>Set a bit at the given index.</summary>
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
-      public unsafe void SetBit(int index)
+      public void SetBit(int index)
       {
-         fixed (ulong* ptr = &_w0)
+         if ((uint)index >= MaxTags) return;
+         SetBitUnchecked(index);
+      }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      private void SetBitUnchecked(int index)
+      {
+         ulong bit = 1UL << (index & 63);
+         switch (index >> 6)
          {
-            ptr[index >> 6] |= 1UL << (index & 63);
+            case 0:
+               _w0 |= bit;
+               break;
+            case 1:
+               _w1 |= bit;
+               break;
+            case 2:
+               _w2 |= bit;
+               break;
+            case 3:
+               _w3 |= bit;
+               break;
          }
       }
 
-      /// <summary>Clear a bit at the given index. No bounds check.</summary>
+      /// <summary>Clear a bit at the given index.</summary>
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
-      public unsafe void ClearBit(int index)
+      public void ClearBit(int index)
       {
-         fixed (ulong* ptr = &_w0)
+         if ((uint)index >= MaxTags) return;
+         ClearBitUnchecked(index);
+      }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      private void ClearBitUnchecked(int index)
+      {
+         ulong bit = ~(1UL << (index & 63));
+         switch (index >> 6)
          {
-            ptr[index >> 6] &= ~(1UL << (index & 63));
+            case 0:
+               _w0 &= bit;
+               break;
+            case 1:
+               _w1 &= bit;
+               break;
+            case 2:
+               _w2 &= bit;
+               break;
+            case 3:
+               _w3 &= bit;
+               break;
          }
       }
 
@@ -302,13 +340,22 @@ namespace CycloneGames.GameplayTags.Core
          return (GetWord(index >> 6) & (1UL << (index & 63))) != 0;
       }
 
-      /// <summary>Get the raw ulong word at the given word index (0-3). No bounds check.</summary>
+      /// <summary>Get the raw ulong word at the given word index (0-3).</summary>
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
-      public unsafe readonly ulong GetWord(int wordIndex)
+      public readonly ulong GetWord(int wordIndex)
       {
-         fixed (ulong* ptr = &_w0)
+         switch (wordIndex)
          {
-            return ptr[wordIndex];
+            case 0:
+               return _w0;
+            case 1:
+               return _w1;
+            case 2:
+               return _w2;
+            case 3:
+               return _w3;
+            default:
+               return 0UL;
          }
       }
 

@@ -197,17 +197,15 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                return;
             }
 
-            if (!Directory.Exists(Path.GetDirectoryName(filePath)))
-            {
-               m_ValidationError = "The specified directory does not exist.";
-               return;
-            }
-
-            if (!filePath.StartsWith(FileGameplayTagSource.DirectoryPath, StringComparison.OrdinalIgnoreCase))
+            if (!IsPathInsideDirectory(filePath, FileGameplayTagSource.DirectoryPath))
             {
                m_ValidationError = $"Source file must be created inside the '{FileGameplayTagSource.DirectoryPath}' directory.";
                return;
             }
+
+            string directory = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+               Directory.CreateDirectory(directory);
          }
          else
          {
@@ -224,6 +222,21 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                return;
             }
          }
+      }
+
+      private static bool IsPathInsideDirectory(string filePath, string directoryPath)
+      {
+         string fullFilePath = Path.GetFullPath(filePath);
+         string fullDirectoryPath = Path.GetFullPath(directoryPath);
+         if (!fullDirectoryPath.EndsWith(Path.DirectorySeparatorChar.ToString()) &&
+             !fullDirectoryPath.EndsWith(Path.AltDirectorySeparatorChar.ToString()))
+         {
+            fullDirectoryPath += Path.DirectorySeparatorChar;
+         }
+
+         StringComparison comparison =
+            Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+         return fullFilePath.StartsWith(fullDirectoryPath, comparison);
       }
    }
 }

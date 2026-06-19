@@ -5,8 +5,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using Unio;
-using Unity.Collections;
 using CycloneGames.GameplayTags.Core;
 
 using System.Runtime.CompilerServices;
@@ -22,7 +20,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
          public string Comment;
       }
 
-      public static readonly string DirectoryPath = Path.GetFullPath(
+      public static string DirectoryPath => Path.GetFullPath(
          GameplayTagRuntimePlatform.GetProjectTagSettingsDirectory());
 
       public string Name { get; private set; }
@@ -113,16 +111,18 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 
       private JObject LoadRoot()
       {
-         string fileContent = NativeFile.ReadAllText(FilePath);
+         string fileContent = File.ReadAllText(FilePath, Encoding.UTF8);
          return JObject.Parse(fileContent);
       }
 
       private void SaveFile()
       {
+         string directory = Path.GetDirectoryName(FilePath);
+         if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+
          string fileContent = m_Root.ToString();
-         byte[] bytes = Encoding.UTF8.GetBytes(fileContent);
-         using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-         NativeFile.WriteAllBytes(FilePath, nativeBytes);
+         File.WriteAllText(FilePath, fileContent, new UTF8Encoding(false));
       }
 
       public void DeleteTag(string tagName)

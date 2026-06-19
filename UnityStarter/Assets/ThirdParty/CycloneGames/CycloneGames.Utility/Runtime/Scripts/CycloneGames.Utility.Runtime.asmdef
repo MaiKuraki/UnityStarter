@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "Unity.Burst",
+        "CycloneGames.Hash.Core",
         "CycloneGames.Logger",
         "Unity.Mathematics"
     ],

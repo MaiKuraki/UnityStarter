@@ -10,13 +10,13 @@
 
 ## Overview
 
-This module provides two static utility classes:
+This module provides two static utility classes and integrates the shared hashing primitives from `CycloneGames.Hash.Core`:
 
-| Class             | Purpose                                                                                |
+| Entry             | Purpose                                                                                |
 | ----------------- | -------------------------------------------------------------------------------------- |
-| `FileUtility`     | Hash computation, file/stream comparison, and smart file copy with zero-GC design      |
-| `XxHash64`        | Pure C# struct-based xxHash64 implementation — zero heap allocation, non-cryptographic |
-| `FilePathUtility` | Platform-correct URI generation for `UnityWebRequest`                                  |
+| `FileUtility`     | Hash computation, file/stream comparison, and smart file copy with zero-GC design         |
+| `FilePathUtility` | Platform-correct URI generation for `UnityWebRequest`                                     |
+| `XxHash64`        | Shared non-cryptographic hash primitive provided by `CycloneGames.Hash.Core`              |
 
 ---
 
@@ -38,7 +38,7 @@ This module provides two static utility classes:
     - [Memory Strategy](#memory-strategy)
     - [Platform Behavior](#platform-behavior)
     - [Performance Benchmarks](#performance-benchmarks)
-  - [XxHash64 Struct](#xxhash64-struct)
+  - [XxHash64 Integration](#xxhash64-integration)
     - [Why xxHash64](#why-xxhash64)
     - [API Reference](#api-reference)
     - [Cryptographic vs Non-Cryptographic](#cryptographic-vs-non-cryptographic)
@@ -335,9 +335,9 @@ Measured in Unity Editor (Windows, single-threaded, files cached in OS page cach
 
 ---
 
-## XxHash64 Struct
+## XxHash64 Integration
 
-A pure C# implementation of the [xxHash64](https://github.com/Cyan4973/xxHash) non-cryptographic hash algorithm, designed as a value-type `struct` for zero heap allocation.
+`FileUtility` uses the shared `CycloneGames.Hash.Core.XxHash64` implementation for the `HashAlgorithmType.XxHash64` path. The algorithm lives in `CycloneGames.Hash`; this Utility module only owns file and stream orchestration around it.
 
 ### Why xxHash64
 
@@ -349,11 +349,13 @@ A pure C# implementation of the [xxHash64](https://github.com/Cyan4973/xxHash) n
 | Cryptographic            | No                   | Broken             | Yes                |
 | Use case                 | Change detection     | Legacy compat      | Security           |
 
-xxHash64 is ~30× faster than MD5 in native code. In this pure C# implementation (no SIMD), XxHash64 delivers ~160–190 MB/s — roughly on par with native MD5 (~244 MB/s via Windows CNG) and ~10× faster than SHA256 (~17 MB/s) for sync workloads. More importantly, the `struct` design eliminates all managed allocation overhead, making it the clear choice for in-memory and sync operations.
+xxHash64 is ~30× faster than MD5 in native code. In the current pure C# `CycloneGames.Hash.Core` implementation (no SIMD), XxHash64 delivers ~160–190 MB/s — roughly on par with native MD5 (~244 MB/s via Windows CNG) and ~10× faster than SHA256 (~17 MB/s) for sync workloads. More importantly, the `struct` design eliminates all managed allocation overhead, making it the clear choice for in-memory and sync operations.
 
 ### API Reference
 
 ```csharp
+using CycloneGames.Hash.Core;
+
 // One-shot (most common usage)
 ulong hash = XxHash64.HashToUInt64(dataSpan);                   // returns u64
 ulong hash = XxHash64.HashToUInt64(dataSpan, seed: 42);         // with custom seed
@@ -507,6 +509,8 @@ bool changed = !await FileUtility.AreFilesEqualAsync(
 ### Direct XxHash64 Usage
 
 ```csharp
+using CycloneGames.Hash.Core;
+
 // One-shot hash of in-memory data (zero allocation)
 ulong hash = XxHash64.HashToUInt64(dataSpan);
 
@@ -562,11 +566,10 @@ The solution: **every async loop in FileUtility performs a `Task.Yield()` every 
 
 | Dependency                       | Usage                                                                                       |
 | -------------------------------- | ------------------------------------------------------------------------------------------- |
+| `CycloneGames.Hash.Core`         | Shared `XxHash64`, `Fnv1a64`, and stable hash primitives                                    |
 | `CycloneGames.Logger`            | `CLogger.LogDebug/LogInfo/LogWarning/LogError` for all diagnostic output                    |
 | `UnityEngine`                    | `Application.platform`, `Application.persistentDataPath`, `Application.streamingAssetsPath` |
 | `System.Buffers`                 | `ArrayPool<byte>.Shared`                                                                    |
-| `System.Buffers.Binary`          | `BinaryPrimitives` (used by `XxHash64` for endian-safe reads/writes)                        |
-| `System.Runtime.InteropServices` | `MemoryMarshal` (used by `XxHash64` for inline buffer access)                               |
 | `System.Security.Cryptography`   | `IncrementalHash`, `HashAlgorithmName` (MD5/SHA256 only)                                    |
 
-No third-party packages required. Pure C# implementation, fully cross-platform including WebGL.
+No external third-party packages are required. `CycloneGames.Hash.Core` is a local CycloneGames package and is fully cross-platform including WebGL.

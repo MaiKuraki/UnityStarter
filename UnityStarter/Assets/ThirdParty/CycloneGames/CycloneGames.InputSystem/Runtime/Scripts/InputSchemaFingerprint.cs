@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
-using CycloneGames.Utility.Runtime;
+using CycloneGames.Hash.Core;
 using VYaml.Annotations;
 
 namespace CycloneGames.InputSystem.Runtime
@@ -10,7 +10,7 @@ namespace CycloneGames.InputSystem.Runtime
     /// <summary>
     /// Computes a deterministic fingerprint of the InputConfiguration schema using reflection.
     /// The fingerprint changes automatically when any [YamlMember] property, type, or enum value changes.
-    /// Uses XxHash64 from CycloneGames.Utility.Runtime for cross-platform determinism.
+    /// Uses XxHash64 from CycloneGames.Hash.Core for cross-platform determinism.
     /// </summary>
     public static class InputSchemaFingerprint
     {

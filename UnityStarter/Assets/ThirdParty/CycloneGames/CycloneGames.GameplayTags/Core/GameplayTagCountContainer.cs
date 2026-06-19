@@ -204,7 +204,7 @@ namespace CycloneGames.GameplayTags.Core
       /// <inheritdoc />
       public void AddTag(GameplayTag tag)
       {
-         if (!tag.IsValid)
+         if (tag.IsNone || !tag.IsValid)
             throw new ArgumentException("Cannot add an invalid gameplay tag.", nameof(tag));
 
          using (Pools.ListPool<PendingTagChange>.Get(out List<PendingTagChange> pendingChanges))
@@ -301,7 +301,7 @@ namespace CycloneGames.GameplayTags.Core
       /// <inheritdoc />
       public void RemoveTag(GameplayTag tag)
       {
-         if (!tag.IsValid)
+         if (tag.IsNone || !tag.IsValid)
             throw new ArgumentException("Cannot remove an invalid gameplay tag.", nameof(tag));
 
          using (Pools.ListPool<PendingTagChange>.Get(out List<PendingTagChange> pendingChanges))

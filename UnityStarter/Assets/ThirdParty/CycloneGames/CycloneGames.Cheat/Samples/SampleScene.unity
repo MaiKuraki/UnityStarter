@@ -335,7 +335,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 540, y: -480}
+  m_AnchoredPosition: {x: 680, y: -480}
   m_SizeDelta: {x: 900, y: 820}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!114 &219694130
@@ -373,7 +373,7 @@ MonoBehaviour:
     m_LineSpacing: 1
   m_Text: '<size=24><b><color=#FFA500>CycloneGames.Cheat - Sample Controls</color></b></size>
 
-    
+
 
     <b>---
     Global Router (Router.Default) ---</b>
@@ -393,7 +393,7 @@ MonoBehaviour:
 
     <b>F10:</b> Publish a command with struct data (GameData).
 
-    
+
 
     <b>---
     UI Router (Private) ---</b>
@@ -405,7 +405,7 @@ MonoBehaviour:
 
     <b>F6:</b> Publish a "Hide Popup" command.
 
-    
+
 
     <b>---
     Gameplay Router (Private) ---</b>
@@ -418,14 +418,13 @@ MonoBehaviour:
     <b>F8:</b> Publish an "Enemy
     Spawn" command with data.
 
-    
+
 
     <b>--- UI Button ---</b>
 
-    <b>Run
-    Benchmark:</b> Executes a performance test (100,000 iterations) to measure command
-    dispatch speed and memory allocation. Results are shown on-screen and in the
-    console.
+    <b>Run Benchmark:</b>
+    Executes a performance test (100,000 iterations) to measure command dispatch
+    speed and memory allocation. Results are shown on-screen and in the console.
 
 '
 --- !u!222 &219694131
@@ -892,6 +891,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c1eea56730aa47e4ca53c435d7227997, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  WarmupIterations: 1000
+  BenchmarkIterations: 100000
+  LogResultToConsole: 1
 --- !u!4 &1553459449
 Transform:
   m_ObjectHideFlags: 0

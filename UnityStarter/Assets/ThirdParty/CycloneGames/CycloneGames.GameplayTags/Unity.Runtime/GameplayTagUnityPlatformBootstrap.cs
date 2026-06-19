@@ -12,6 +12,11 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void Initialize()
         {
+            Configure();
+        }
+
+        internal static void Configure()
+        {
             GameplayTagRuntimePlatform.LogWarning = message => Debug.LogWarning(message);
             GameplayTagRuntimePlatform.LogError = message => Debug.LogError(message);
             GameplayTagRuntimePlatform.IsRuntimePlaying = () => Application.isPlaying;

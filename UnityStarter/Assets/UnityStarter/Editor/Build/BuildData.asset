@@ -18,4 +18,5 @@ MonoBehaviour:
   useBuildalon: 0
   useHybridCLR: 0
   useObfuz: 0
+  cheatBuildMode: 0
   assetManagementType: 0

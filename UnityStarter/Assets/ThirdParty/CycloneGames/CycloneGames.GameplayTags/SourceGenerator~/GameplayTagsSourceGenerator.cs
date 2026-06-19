@@ -175,9 +175,6 @@ namespace CycloneGames.GameplayTags.SourceGenerator
         {
             string indent = new string(' ', indentLevel * 4);
 
-            if (node.Name == "AllGameplayTags")
-                sourceBuilder.AppendLine($"{indent}[System.Obsolete(\"This class is auto-generated. Use its members to access tags safely.\")]");
-
             sourceBuilder.AppendLine($"{indent}public static partial class {node.Name}");
             sourceBuilder.AppendLine($"{indent}{{");
 
@@ -185,8 +182,9 @@ namespace CycloneGames.GameplayTags.SourceGenerator
             {
                 string tagPath = string.Join(".", GetTagPath(node));
                 sourceBuilder.AppendLine($"{indent}    private static readonly GameplayTag s_Tag = GameplayTagManager.RequestTag(\"{tagPath}\");");
+                sourceBuilder.AppendLine($"{indent}    public static GameplayTag Value => s_Tag;");
                 sourceBuilder.AppendLine($"{indent}    public static GameplayTag Get() => s_Tag;");
-                sourceBuilder.AppendLine($"{indent}    public static implicit operator GameplayTag(in {node.Name} tag) => s_Tag;");
+                sourceBuilder.AppendLine($"{indent}    public static bool IsValid => s_Tag.IsValid;");
             }
 
             foreach (TagNode childNode in node.Children.Values.OrderBy(n => n.Name))
