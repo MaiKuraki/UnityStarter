@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.GameplayTags.Networking.Core",
+    "rootNamespace": "CycloneGames.GameplayTags.Networking",
+    "references": [
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.Networking.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

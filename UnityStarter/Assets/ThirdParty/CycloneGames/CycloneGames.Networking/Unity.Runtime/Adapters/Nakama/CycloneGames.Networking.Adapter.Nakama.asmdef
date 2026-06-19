@@ -12,13 +12,13 @@
     "precompiledReferences": [],
     "autoReferenced": false,
     "defineConstraints": [
-        "NAKAMA"
+        "CYCLONE_NETWORKING_HAS_NAKAMA"
     ],
     "versionDefines": [
         {
             "name": "com.heroiclabs.nakama-unity",
             "expression": "",
-            "define": "NAKAMA"
+            "define": "CYCLONE_NETWORKING_HAS_NAKAMA"
         }
     ],
     "noEngineReferences": false

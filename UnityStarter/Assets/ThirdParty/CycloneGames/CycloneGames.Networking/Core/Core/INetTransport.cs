@@ -94,6 +94,171 @@ namespace CycloneGames.Networking
         NetworkBackendFeatures Features { get; }
     }
 
+    [Flags]
+    public enum NetworkChannelFlags : byte
+    {
+        None = 0,
+        Reliable = 1 << 0,
+        Unreliable = 1 << 1,
+        ReliableUnordered = 1 << 2,
+        UnreliableSequenced = 1 << 3,
+        All = Reliable | Unreliable | ReliableUnordered | UnreliableSequenced
+    }
+
+    [Flags]
+    public enum NetworkTransportFeatureFlags : uint
+    {
+        None = 0,
+        Client = 1u << 0,
+        Server = 1u << 1,
+        Host = 1u << 2,
+        Reliable = 1u << 3,
+        Unreliable = 1u << 4,
+        Sequenced = 1u << 5,
+        Fragmentation = 1u << 6,
+        Encryption = 1u << 7,
+        Compression = 1u << 8,
+        Backpressure = 1u << 9,
+        MainThreadOnly = 1u << 10,
+        WebGLCompatible = 1u << 11,
+        DedicatedServerCompatible = 1u << 12
+    }
+
+    public enum NetworkSendStatus : byte
+    {
+        Accepted,
+        Queued,
+        Dropped,
+        NotRunning,
+        NotConnected,
+        InvalidPayload,
+        PayloadTooLarge,
+        ChannelUnavailable,
+        Backpressure,
+        Unsupported,
+        TransportUnavailable
+    }
+
+    public readonly struct NetworkSendResult
+    {
+        public readonly NetworkSendStatus Status;
+        public readonly int BytesAccepted;
+        public readonly int RecipientsAccepted;
+        public readonly int ChannelId;
+        public readonly int ConnectionId;
+        public readonly string Reason;
+
+        public NetworkSendResult(
+            NetworkSendStatus status,
+            int bytesAccepted = 0,
+            int recipientsAccepted = 0,
+            int channelId = -1,
+            int connectionId = 0,
+            string reason = null)
+        {
+            Status = status;
+            BytesAccepted = bytesAccepted;
+            RecipientsAccepted = recipientsAccepted;
+            ChannelId = channelId;
+            ConnectionId = connectionId;
+            Reason = reason ?? string.Empty;
+        }
+
+        public bool Succeeded => Status == NetworkSendStatus.Accepted || Status == NetworkSendStatus.Queued;
+        public bool Failed => !Succeeded;
+
+        public static NetworkSendResult Accepted(int bytesAccepted, int channelId, INetConnection connection = null)
+        {
+            return new NetworkSendResult(
+                NetworkSendStatus.Accepted,
+                bytesAccepted,
+                bytesAccepted > 0 ? 1 : 0,
+                channelId,
+                connection?.ConnectionId ?? 0);
+        }
+
+        public static NetworkSendResult Queued(int bytesAccepted, int channelId, INetConnection connection = null)
+        {
+            return new NetworkSendResult(
+                NetworkSendStatus.Queued,
+                bytesAccepted,
+                bytesAccepted > 0 ? 1 : 0,
+                channelId,
+                connection?.ConnectionId ?? 0);
+        }
+
+        public static NetworkSendResult Broadcast(NetworkSendStatus status, int bytesAccepted, int recipientsAccepted, int channelId, string reason = null)
+        {
+            return new NetworkSendResult(status, bytesAccepted, recipientsAccepted, channelId, 0, reason);
+        }
+
+        public static NetworkSendResult Fail(NetworkSendStatus status, int channelId = -1, INetConnection connection = null, string reason = null)
+        {
+            return new NetworkSendResult(status, 0, 0, channelId, connection?.ConnectionId ?? 0, reason);
+        }
+    }
+
+    public readonly struct NetworkTransportCapabilities
+    {
+        public readonly string RuntimeName;
+        public readonly NetworkTransportFeatureFlags Features;
+        public readonly NetworkChannelFlags SupportedChannels;
+        public readonly int MaxConnections;
+        public readonly int MaxPacketSize;
+        public readonly int MaxReliablePacketSize;
+        public readonly int MaxUnreliablePacketSize;
+        public readonly int MaxQueuedPackets;
+        public readonly bool IsDeterministicLoopback;
+
+        public NetworkTransportCapabilities(
+            string runtimeName,
+            NetworkTransportFeatureFlags features,
+            NetworkChannelFlags supportedChannels,
+            int maxConnections,
+            int maxPacketSize,
+            int maxReliablePacketSize,
+            int maxUnreliablePacketSize,
+            int maxQueuedPackets = 0,
+            bool isDeterministicLoopback = false)
+        {
+            RuntimeName = runtimeName ?? string.Empty;
+            Features = features;
+            SupportedChannels = supportedChannels;
+            MaxConnections = maxConnections;
+            MaxPacketSize = maxPacketSize;
+            MaxReliablePacketSize = maxReliablePacketSize;
+            MaxUnreliablePacketSize = maxUnreliablePacketSize;
+            MaxQueuedPackets = maxQueuedPackets;
+            IsDeterministicLoopback = isDeterministicLoopback;
+        }
+
+        public bool SupportsChannel(NetworkChannel channel)
+        {
+            return (SupportedChannels & ToFlag(channel)) != 0;
+        }
+
+        public static NetworkChannelFlags ToFlag(NetworkChannel channel)
+        {
+            return channel switch
+            {
+                NetworkChannel.Reliable => NetworkChannelFlags.Reliable,
+                NetworkChannel.Unreliable => NetworkChannelFlags.Unreliable,
+                NetworkChannel.ReliableUnordered => NetworkChannelFlags.ReliableUnordered,
+                NetworkChannel.UnreliableSequenced => NetworkChannelFlags.UnreliableSequenced,
+                _ => NetworkChannelFlags.None
+            };
+        }
+
+        public static NetworkTransportCapabilities None => new NetworkTransportCapabilities(
+            "none",
+            NetworkTransportFeatureFlags.None,
+            NetworkChannelFlags.None,
+            0,
+            0,
+            0,
+            0);
+    }
+
     public static class NetworkLifecycle
     {
         public static NetworkLifecycleSnapshot GetSnapshot(INetTransport transport)
@@ -511,6 +676,8 @@ namespace CycloneGames.Networking
         /// </summary>
         bool Available { get; }
 
+        NetworkTransportCapabilities Capabilities { get; }
+
         // --- Channels ---
 
         /// <summary>
@@ -580,12 +747,12 @@ namespace CycloneGames.Networking
         /// Send a raw payload to a connection using given channel.
         /// Must be zero-allocation in hot paths.
         /// </summary>
-        void Send(INetConnection connection, in ArraySegment<byte> payload, int channelId);
+        NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId);
 
         /// <summary>
         /// Broadcast to many connections using given channel.
         /// Implementations should batch for efficiency.
         /// </summary>
-        void Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId);
+        NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId);
     }
 }

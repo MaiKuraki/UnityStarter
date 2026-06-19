@@ -11,9 +11,11 @@
 - **清晰抽象层**：传输无关接口（`INetTransport`、`INetworkManager`、`INetConnection`）
 - **客户端预测**：完整的预测 → 授权 → 回滚纠正流水线
 - **确定性模拟**：Q32.32 定点数学、确定性随机数、可插拔不同步检测（`IStateHasher`）
-- **兴趣管理**：空间网格 AOI、手动分组、团队可见性、组合策略
-- **GAS 集成**：GameplayAbilities 网络化一等支持（技能、效果、属性）
-- **会话管理**：大厅/匹配/主机迁移抽象接口，以及带状态追赶的重连管理
+- **复制基础设施**：基于 policy 的 interest evaluation、spatial AOI index、per-connection state cache、snapshot packet writer、adaptive send budget 与确定性 load simulation
+- **可选玩法集成**：GameplayAbilities、GameplayTags、GameplayFramework 和 RPGFoundation 的网络桥接位于独立包
+- **会话韧性**：backend-neutral 房间目录、匹配计划、重连保留、主机迁移与 authority transfer plan
+- **项目级扩展**：Runtime profile、node capability descriptor 和 protocol manifest 让项目特定数字留在项目代码中，不需要修改 Cyclone core
+- **生产硬化**：基于 scenario 的 readiness matrix，用于校验容量、协议、节点能力和故障注入覆盖
 - **安全**：令牌桶限流、消息校验
 - **诊断工具**：网络性能分析器、网络条件模拟器（LAN/4G/卫星预设）
 - **线程安全**：Mirror 适配器内置跨线程发送队列（`ArrayPool`）；其他适配器默认主线程发送
@@ -41,7 +43,7 @@
     - [6. 客户端预测 (Prediction)](#6-客户端预测-prediction)
       - [快照插值](#快照插值)
       - [滞后补偿](#滞后补偿)
-    - [7. 兴趣管理 (Interest Management)](#7-兴趣管理-interest-management)
+    - [7. 复制基础设施 (Replication Infrastructure)](#7-复制基础设施-replication-infrastructure)
     - [8. 状态同步变量 (StateSync)](#8-状态同步变量-statesync)
     - [9. 远程过程调用 (RPC)](#9-远程过程调用-rpc)
     - [10. 帧同步与确定性模拟 (Lockstep)](#10-帧同步与确定性模拟-lockstep)
@@ -60,17 +62,22 @@
     - [19. 身份验证 (Authentication)](#19-身份验证-authentication)
     - [20. 平台配置 (Platform)](#20-平台配置-platform)
     - [21. 传输适配器 (Adapters)](#21-传输适配器-adapters)
+    - [22. 项目级扩展 (Project Extensibility)](#22-项目级扩展-project-extensibility)
+    - [23. 生产硬化矩阵 (Production Hardening Matrix)](#23-生产硬化矩阵-production-hardening-matrix)
   - [游戏类型适配指南](#游戏类型适配指南)
   - [进阶教程](#进阶教程)
     - [教程 1：从零搭建 FPS 网络同步](#教程-1从零搭建-fps-网络同步)
     - [教程 2：实现 RTS 帧同步](#教程-2实现-rts-帧同步)
-    - [教程 3：实现团队可见性管理](#教程-3实现团队可见性管理)
+    - [教程 3：使用 Replication Infrastructure 实现团队可见性](#教程-3使用-replication-infrastructure-实现团队可见性)
   - [API 速查表](#api-速查表)
     - [核心](#核心)
     - [序列化](#序列化)
     - [同步](#同步)
     - [帧同步](#帧同步)
-    - [兴趣管理](#兴趣管理)
+    - [复制基础设施](#复制基础设施)
+    - [会话韧性](#会话韧性)
+    - [项目级扩展](#项目级扩展)
+    - [生产硬化](#生产硬化)
     - [GAS 集成（`CycloneGames.GameplayAbilities.Networking`）](#gas-集成cyclonegamesgameplayabilitiesnetworking)
   - [当前适配器与协议说明](#当前适配器与协议说明)
   - [目录结构](#目录结构)
@@ -97,7 +104,7 @@ flowchart TB
         Prediction["ClientPrediction</br>客户端预测"]
         Lockstep["LockstepManager</br>帧同步"]
         Rollback["RollbackNetcode</br>回滚网络"]
-        Interest["InterestManager</br>兴趣管理"]
+        Replication["ReplicationCore</br>AOI / State Cache / Snapshots"]
         Spawn["SpawnManager</br>生成管理"]
         Scene["SceneManager</br>场景管理"]
     end
@@ -170,7 +177,7 @@ flowchart TB
 | **确定性支持** | Q32.32 定点数学、帧同步、回滚，适用于竞技游戏                                                       |
 | **可插拔哈希** | `IStateHasher` struct 泛型约束，零成本哈希算法注入                                                  |
 | **线程安全**   | Mirror 适配器提供跨线程发送队列（`ConcurrentQueue`）与 `Interlocked` 统计；其他适配器默认主线程发送 |
-| **条件编译**   | `#if MIRROR`、`#if MIRAGE`、`#if MESSAGEPACK` 等按需启用功能                                        |
+| **条件编译**   | Adapter 程序集使用由包驱动的私有符号，例如 `CYCLONE_NETWORKING_HAS_MIRROR`                          |
 
 ---
 
@@ -571,57 +578,187 @@ if (lagComp.HitTest(clientTick, shootRay, maxDist, out float hitDist))
 
 ---
 
-### 7. 兴趣管理 (Interest Management)
+### 7. 复制基础设施 (Replication Infrastructure)
 
-**路径**: `Runtime/Scripts/Interest/`
+**路径**: `Core/Replication/`
 
-控制哪些实体对哪些连接可见，**大幅降低带宽消耗**。
+从纯 C# 快照构建每个连接的复制工作。玩法系统提供 observer/object 数据，核心层负责 interest 与 send budget，发送层再写出确定性的 snapshot packet。这里是 MMO AOI、MOBA 团队可见性、射击游戏 owner prediction、沙盒 chunk replication、replay capture 和 dedicated server simulation 的通用基础。
+
+复制层刻意保持 backend-neutral。它不依赖 Mirror、Mirage、Nakama、Unity `GameObject`、`MonoBehaviour`、`ScriptableObject`、PlayerSettings 宏，也不绑定任何 DI 容器。项目可以直接构造这些服务，也可以注册到自己的 DI 容器，或在服务器 composition root 中包一层游戏专用 facade。
 
 ```mermaid
 flowchart TB
-    subgraph Managers["兴趣管理器"]
-        Grid["GridInterestManager</br>空间网格 AOI</br>开放世界"]
-        Group["GroupInterestManager</br>手动分组</br>副本/房间"]
-        TeamVis["TeamVisibilityInterestManager</br>队伍可见性</br>团队竞技"]
-        Composite["CompositeInterestManager</br>组合策略</br>取并集"]
+    subgraph Inputs["Gameplay Layer Snapshots"]
+        Observer["NetworkReplicationObserver</br>connection, team, view radius, layers"]
+        Object["NetworkReplicatedObject</br>owner, team, position, policy, dirty state"]
+        Payloads["INetworkSnapshotPayloadSource</br>full-state and delta bytes"]
     end
 
-    subgraph Entity["INetworkEntity"]
-        Props["• NetworkId</br>• Position</br>• OwnerConnectionId</br>• AlwaysRelevant</br>• RelevanceGroup"]
+    subgraph Replication["Cyclone Replication Core"]
+        Spatial["NetworkSpatialHashIndex</br>optional spatial AOI prefilter"]
+        State["NetworkReplicationStateCache</br>last sent / acked / full-state state"]
+        Evaluator["INetworkInterestEvaluator</br>owner / team / area / manual"]
+        Planner["NetworkReplicationPlanner</br>priority ordering + budget fit"]
+        Scheduler["AdaptiveNetworkSendScheduler</br>quality-aware budget"]
+        Budget["NetworkSendBudget</br>bytes + message count"]
+        Packet["NetworkSnapshotPacketBuilder</br>stable snapshot packet"]
     end
 
-    Composite --> Grid
-    Composite --> Group
-    Composite --> TeamVis
-    Grid --> Entity
-    Group --> Entity
-    TeamVis --> Entity
+    subgraph Output["Send Layer"]
+        Selection["NetworkReplicationSelection[]</br>object id, source index, channel, reason"]
+        Snapshot["Snapshot packet</br>protocol version, tick, entries, payloads"]
+    end
+
+    Object --> Spatial
+    Spatial --> Evaluator
+    Observer --> Evaluator
+    Object --> Evaluator
+    Evaluator --> Planner
+    State --> Planner
+    Scheduler --> Budget
+    Budget --> Planner
+    Planner --> Selection
+    Selection --> Packet
+    Payloads --> Packet
+    Packet --> Snapshot
 ```
+
+#### 规划与 Interest
+
+`NetworkReplicationPlanner` 是确定性的选择器。它接收一个 observer、一段 `NetworkReplicatedObject` 快照、server tick、可变 `NetworkSendBudget` 和调用方持有的输出 span。它会通过 `INetworkInterestEvaluator` 过滤对象，按 score 排序，并只写入能放进 byte/message budget 的条目。
 
 ```csharp
-// 空间网格 AOI（适用于开放世界 MMO）
-var grid = new GridInterestManager(cellSize: 50f, visibilityRange: 150f);
-grid.SetObserverPosition(connectionId, playerPosition);
+using CycloneGames.Networking.Replication;
 
-// 手动分组（适用于副本、房间）
-var group = new GroupInterestManager();
-group.AddEntityToGroup("dungeon_1", entity);
-group.AddConnectionToGroup("dungeon_1", connectionId);
+var observer = new NetworkReplicationObserver(
+    connectionId: 10,
+    playerId: 1001,
+    teamId: 2,
+    position: playerPosition,
+    viewRadius: 80f);
 
-// 团队可见性管理（适用于 MOBA/RTS）
-var visibility = new TeamVisibilityInterestManager(defaultDetectionRange: 30f);
-visibility.SetConnectionTeam(connectionId, teamId: 1);
-visibility.SetEntityTeam(entity, teamId: 1);
-visibility.SetEntityDetectionRange(entity, 25f);
-visibility.SetHidden(entity, true); // 隐身
-visibility.AddRevealZone(position, radius); // 揭示区域
+var objects = new[]
+{
+    new NetworkReplicatedObject(
+        objectId: 5001,
+        policy: NetworkReplicationPolicy.OwnerOrArea(80f),
+        position: actorPosition,
+        ownerConnectionId: 10,
+        isDirty: true,
+        estimatedPayloadBytes: 96)
+};
 
-// 组合多种策略
-var composite = new CompositeInterestManager();
-composite.Add(grid);
-composite.Add(visibility);
-// 结果取并集：任一策略判定可见则可见
+var planner = new NetworkReplicationPlanner();
+var budget = new NetworkSendBudget(maxBytes: 4096, maxMessages: 64);
+var selections = new NetworkReplicationSelection[128];
+
+int count = planner.BuildPlan(observer, objects, serverTick, ref budget, selections);
+for (int i = 0; i < count; i++)
+{
+    NetworkReplicationSelection selection = selections[i];
+    // 使用 selection.SourceIndex 取回源对象并写入 payload。
+}
 ```
+
+常见可见性规则通过 `NetworkReplicationPolicy` 表达：
+
+| Policy | 适用场景 |
+| --- | --- |
+| `OwnerOnly` | 玩家私有背包、本地预测状态、只发给 owner 的授权纠正 |
+| `OwnerOrArea(radius)` | 射击游戏角色、投射物、载具、可交互物 |
+| `Team(radius)` | MOBA 或团队射击中的队友、共享小队信息 |
+| `Area(radius)` | MMO actor、沙盒 chunk、公共世界物体 |
+| `Manual` | 任务阶段、隐身/揭示系统、streaming volume、自定义 shard 规则 |
+
+大型世界应在规划前使用 `NetworkSpatialHashIndex` 做预过滤。它支持 XZ、XY、XYZ cell 模式、layer mask、按 object id 更新/移除，以及调用方持有的查询缓冲区。索引已经建立后，Query 本身不产生堆分配。
+
+```csharp
+var index = new NetworkSpatialHashIndex(cellSize: 32f);
+for (int i = 0; i < objects.Length; i++)
+{
+    NetworkReplicatedObject obj = objects[i];
+    index.Upsert(obj.ObjectId, i, obj.Position, obj.InterestLayerMask);
+}
+
+Span<NetworkSpatialQueryResult> nearby = stackalloc NetworkSpatialQueryResult[256];
+int nearbyCount = index.Query(
+    observer.Position,
+    observer.ViewRadius,
+    observer.InterestLayerMask,
+    nearby);
+```
+
+#### 状态缓存与快照包
+
+`NetworkReplicationStateCache` 存储每个 connection/object 的复制状态：last sent tick、last full-state tick、last acked tick、last payload hash、payload size、sequence，以及是否必须发送 full state。这样复制层可以区分重连玩家、新进入视野对象，以及只需要 delta 的稳定对象。
+
+```csharp
+var stateCache = new NetworkReplicationStateCache(capacity: 65536);
+NetworkReplicatedObject source = objects[sourceIndex];
+NetworkReplicatedObject perConnectionObject = stateCache.ApplyState(
+    observer.ConnectionId,
+    source);
+
+stateCache.MarkSent(
+    observer.ConnectionId,
+    source.ObjectId,
+    serverTick,
+    fullState: perConnectionObject.RequiresFullState,
+    payloadBytes: 96,
+    payloadHash: payloadHash,
+    sequence: sequence);
+```
+
+`NetworkSnapshotPacketBuilder` 写出稳定的 snapshot packet 格式。Builder 不知道玩法如何序列化，而是通过 `INetworkSnapshotPayloadSource` 获取 full-state 或 delta payload 的 size、hash 和 bytes。GameplayAbilities、GameplayTags、GameplayFramework、RPGFoundation 或第三方玩法包因此可以独立于传输层与写包器。
+
+```csharp
+var packetBuilder = new NetworkSnapshotPacketBuilder();
+NetworkSnapshotWriteResult result = packetBuilder.WriteSnapshot(
+    selections.AsSpan(0, count),
+    serverTick,
+    payloadSource,
+    writer);
+```
+
+Snapshot packet 以 protocol version byte、server tick 和 entry count 开头，随后每个对象条目包含 object id、full/delta flags、channel、payload length 和 payload bytes。返回值会报告对象数量、full/delta 数量、写入字节数和 aggregate payload hash，便于诊断与 replay validation。
+
+#### 自适应调度与负载模拟
+
+`AdaptiveNetworkSendScheduler` 实现 `IAdaptiveSendRate`，会把 connection quality 和 transport statistics 转成 target send interval 与 `NetworkSendBudget`。差链路会获得更小预算和更长间隔。断线连接得到 zero byte/message budget，上层复制逻辑不会继续为无效连接排包。
+
+```csharp
+var scheduler = new AdaptiveNetworkSendScheduler();
+scheduler.Update(connectionId, transportStats, quality, deltaTime);
+
+NetworkSendBudget budget = scheduler.CreateSendBudget(connectionId);
+int count = planner.BuildPlan(observer, objects, serverTick, ref budget, selections);
+```
+
+`NetworkReplicationLoadSimulator` 是确定性的设计期压测工具。它不能替代真实服务器 soak test，但适合检查 object count、connection count、view radius、dirty ratio 和 world size 变化时 planner budget 的行为。
+
+```csharp
+var simulator = new NetworkReplicationLoadSimulator();
+var result = simulator.Run(new NetworkReplicationLoadSimulationOptions(
+    connectionCount: 1000,
+    objectCount: 20000,
+    tickCount: 120,
+    worldSize: 4000f,
+    viewRadius: 120f,
+    dirtyRatio: 0.35f,
+    budgetBytes: 4096,
+    budgetMessages: 64,
+    resultCapacity: 256,
+    seed: 42u));
+```
+
+#### 性能与平台说明
+
+- Runtime 热路径通过调用方持有的数组/span 完成 planning、spatial query result 和 snapshot writing。请按 worker、room、shard 或 replication lane 预分配这些缓冲区。
+- `NetworkSpatialHashIndex` 在创建新 cell 时会分配。应把它作为服务器世界索引的一部分维护，不要在每个 connection planning 调用中临时创建。
+- `NetworkReplicationStateCache` 使用 managed dictionary，适用于 Unity、headless .NET server 和测试。大型 MMO shard 应按 replication world、zone 或 shard 拥有独立 cache，并在 disconnect/despawn 时主动清理 connection/object 状态。
+- `NetworkSnapshotPacketBuilder` 与具体 serializer 解耦。Payload source 应复用现有 serializer 或玩法包 serializer，并避免在高频 snapshot 路径创建临时数组。
+- 核心层使用 `NetworkVector3`、确定性 id 与 primitive data，所选 transport/backend 支持目标平台时，可用于 Windows、Linux、macOS、iOS、Android、WebGL 和主机平台。
+- 本模块不写文件，不保存 PlayerSettings 宏，也不会创建隐藏全局偏好。Load simulation 是纯内存验证工具。
 
 ---
 
@@ -861,31 +998,106 @@ if (result != ValidationResult.Valid)
 
 ---
 
-### 12. 会话与重连 (Session)
+### 12. 会话韧性 (Session Resilience)
 
-**路径**: `Runtime/Scripts/Session/`
+**路径**: `Core/Session/`
+
+提供 backend-neutral 的房间发现、匹配计划、重连保留和主机迁移协调。Steam Lobby、LAN discovery、Nakama match、自建 master server、relay room 和 dedicated server fleet 都应把结果转换成同一套核心 descriptor，而不是把后端 SDK 类型泄漏到玩法代码里。
 
 ```mermaid
-flowchart LR
-    subgraph Session["会话管理"]
-        Lobby["ILobbyManager</br>大厅管理"]
-        Match["IMatchmaker</br>匹配系统"]
-        Host["IHostMigration</br>主机迁移"]
+flowchart TB
+    subgraph Sources["Discovery Sources"]
+        Steam["Steam Lobby Adapter"]
+        Lan["LAN Discovery Adapter"]
+        Backend["Master Server / Nakama"]
+        Fleet["Dedicated Server Fleet"]
     end
 
-    subgraph Reconnect["重连管理"]
-        Detect["断线检测"]
-        Reserve["保留座位</br>默认 5 分钟"]
-        CatchUp["状态追赶</br>IStateCatchUp"]
-        Rejoin["重新加入"]
+    subgraph CoreSession["Cyclone Session Core"]
+        Directory["NetworkSessionDirectory</br>filter, rank, stale removal"]
+        MatchPlan["NetworkMatchmakingCoordinator</br>join / create / queue plan"]
+        Reconnect["ReconnectionManager</br>slot reservation + catch-up"]
+        Migration["HostMigrationCoordinator</br>candidate policy + authority plan"]
     end
 
-    Lobby --> Match
-    Detect --> Reserve --> CatchUp --> Rejoin
+    subgraph Game["Game / Composition Root"]
+        Execute["Execute backend action</br>Join, create, queue, migrate"]
+        Continue["SessionContinuity</br>avoid gameplay stalls"]
+    end
+
+    Steam --> Directory
+    Lan --> Directory
+    Backend --> Directory
+    Fleet --> Directory
+    Directory --> MatchPlan
+    MatchPlan --> Execute
+    Reconnect --> Continue
+    Migration --> Continue
 ```
 
+#### 房间搜索与匹配
+
+`NetworkSessionDirectory` 存储 backend-neutral 的 `NetworkSessionDescriptor`。来自 Steam、LAN、relay、backend matchmaking 或 dedicated server fleet 的房间，都可以使用同一套过滤规则进行筛选与排序：game mode、map、region、build id、容量、ping、私密状态、连接方式、是否支持 host migration、是否支持 reconnection、skill band，以及 mod hash、ruleset hash 等自定义属性。
+
 ```csharp
-// 重连管理器
+var directory = new NetworkSessionDirectory();
+directory.Upsert(new NetworkSessionDescriptor(
+    sessionId: "steam-lobby-123",
+    name: "Night Run",
+    gameMode: "roguelike",
+    currentPlayers: 3,
+    maxPlayers: 8,
+    map: "graveyard",
+    region: "asia",
+    buildId: "live-2026-06",
+    pingMs: 42,
+    supportsHostMigration: true,
+    supportsReconnection: true,
+    connectivity: NetworkSessionConnectivity.PlatformLobby | NetworkSessionConnectivity.Relay,
+    source: NetworkSessionDiscoverySource.Platform));
+
+var criteria = new NetworkSessionSearchCriteria
+{
+    GameMode = "roguelike",
+    Region = "asia",
+    BuildId = "live-2026-06",
+    MinOpenSlots = 1,
+    RequireHostMigration = true,
+    RequireReconnection = true
+};
+
+var results = new List<NetworkSessionDescriptor>(32);
+int count = directory.Search(criteria, results);
+```
+
+`NetworkMatchmakingCoordinator` 不直接调用任何后端。它只返回计划：加入最合适的房间、创建新房间、进入匹配队列，或不做操作。Steam、LAN、Nakama 或自建服务都可以在自己的 adapter 中执行这个计划。
+
+```csharp
+var matchmaking = new NetworkMatchmakingCoordinator();
+NetworkMatchmakingPlan plan = matchmaking.BuildPlan(
+    directory,
+    criteria,
+    NetworkMatchmakingOptions.Default);
+
+switch (plan.Action)
+{
+    case NetworkMatchmakingPlanAction.JoinSession:
+        // Adapter joins plan.SelectedSession.
+        break;
+    case NetworkMatchmakingPlanAction.CreateSession:
+        // Adapter creates a room using the same criteria.
+        break;
+    case NetworkMatchmakingPlanAction.EnterQueue:
+        // Adapter enters backend matchmaking.
+        break;
+}
+```
+
+#### 重连与主机迁移
+
+`ReconnectionManager` 会在有限时间内为掉线玩家保留席位，校验 reconnect token，并可通过 `IStateCatchUp` 在玩家回到玩法前追赶状态。普通客户端掉线因此不会冻结整个 session。
+
+```csharp
 var reconnect = new ReconnectionManager(myStateCatchUpImpl);
 reconnect.ReconnectWindow = 300f; // 5 分钟内可重连
 
@@ -895,6 +1107,41 @@ reconnect.OnClientReconnected += (originalConnectionId, newConnection) =>
 reconnect.OnReconnectWindowExpired += originalConnectionId =>
     Debug.Log($"连接 {originalConnectionId} 的重连窗口过期");
 ```
+
+`HostMigrationCoordinator` 是 listen-server、P2P、relay-coordinated 或 server-node authority transfer 的通用主机容错层。它追踪候选者并输出 `NetworkAuthorityTransferPlan`，而不直接执行某个后端的 SDK 操作。
+
+```csharp
+var migration = new HostMigrationCoordinator("room-123");
+migration.UpsertParticipant(new NetworkHostParticipant(
+    connectionId: 1,
+    playerId: 1001,
+    isConnected: false,
+    canHost: true,
+    authorityRank: 100));
+migration.UpsertParticipant(new NetworkHostParticipant(
+    connectionId: 2,
+    playerId: 1002,
+    isConnected: true,
+    canHost: true,
+    authorityRank: 50,
+    kind: NetworkHostCandidateKind.PlayerListenServer,
+    pingMs: 24,
+    lastConfirmedTick: new NetworkTickId(1200)));
+
+migration.SetCurrentHost(1, 1001);
+if (migration.TryBeginMigration(
+        HostMigrationReason.HostDisconnected,
+        new NetworkTickId(1201),
+        out NetworkAuthorityTransferPlan transfer))
+{
+    // Transfer session owner, simulation authority, spawn authority,
+    // object authority, scene authority, match state, and RNG authority.
+}
+```
+
+默认候选策略刻意保持通用：先比较 authority rank，再比较 host kind、last confirmed tick、capacity/hardware score、packet loss、ping、join time 和 connection id。小型 Steam 合作游戏可以使用玩家 listen-server 候选；100 人房间可以优先 relay 或 server 候选；同区域 10000 人世界应使用 dedicated server 或 shard candidate，而不是 client-host migration。
+
+接口与核心服务：`ILobbyManager`、`IMatchmaker`、`IHostMigration`、`IReconnectionManager`、`NetworkSessionDirectory`、`NetworkMatchmakingCoordinator`、`HostMigrationCoordinator`、`IHostCandidatePolicy`。
 
 ---
 
@@ -1047,19 +1294,19 @@ simulator.Enabled = true;
 flowchart TB
     subgraph Client["客户端"]
         PredictLocal["本地预测执行"]
-        RequestAbility["请求激活技能</br>MsgId: 200"]
+        RequestAbility["请求激活技能</br>MsgId: 10000"]
     end
 
     subgraph Server["服务器"]
         Validate["验证请求"]
         Execute["执行技能"]
-        ApplyEffect["应用效果</br>MsgId: 210"]
-        SyncAttr["同步属性</br>MsgId: 220"]
+        ApplyEffect["应用效果</br>MsgId: 10010"]
+        SyncAttr["同步属性</br>MsgId: 10020"]
     end
 
     subgraph Clients["所有客户端"]
-        Confirm["确认激活</br>MsgId: 201"]
-        Reject["拒绝激活</br>MsgId: 202"]
+        Confirm["确认激活</br>MsgId: 10001"]
+        Reject["拒绝激活</br>MsgId: 10002"]
         EffectSync["效果同步"]
         AttrUpdate["属性更新"]
     end
@@ -1161,14 +1408,14 @@ bridge.FullStateRequestAuthorizer = (sender, targetId) =>
 
 | 范围    | 用途                   |
 | ------- | ---------------------- |
-| 200     | 技能激活请求           |
-| 201     | 技能激活确认           |
-| 202     | 技能激活拒绝           |
-| 203     | 技能结束               |
-| 204     | 技能取消               |
-| 210-212 | 效果应用/移除/堆叠变更 |
-| 220     | 属性更新               |
-| 240-241 | 完整状态快照           |
+| 10000       | 技能激活请求              |
+| 10001       | 技能激活确认              |
+| 10002       | 技能激活拒绝              |
+| 10003       | 技能结束                  |
+| 10004       | 技能取消                  |
+| 10010-10013 | 效果应用/移除/堆叠变更/更新 |
+| 10020       | 属性更新                  |
+| 10040-10041 | 完整状态快照              |
 
 ---
 
@@ -1239,12 +1486,16 @@ flowchart LR
         INetworkManager2["INetworkManager"]
     end
 
-    subgraph MirrorAdapter["Mirror 适配器</br>#if MIRROR"]
+    subgraph MirrorAdapter["Mirror 适配器</br>#if CYCLONE_NETWORKING_HAS_MIRROR"]
         MirrorNet["MirrorNetAdapter</br>MonoBehaviour"]
     end
 
-    subgraph MirageAdapter["Mirage 适配器</br>#if MIRAGE"]
+    subgraph MirageAdapter["Mirage 适配器</br>#if CYCLONE_NETWORKING_HAS_MIRAGE"]
         MirageNet["MirageNetAdapter</br>MonoBehaviour"]
+    end
+
+    subgraph NakamaAdapter["Nakama 适配器</br>#if CYCLONE_NETWORKING_HAS_NAKAMA"]
+        NakamaNet["NakamaNetAdapter</br>MonoBehaviour"]
     end
 
     subgraph NoopAdapter["空实现"]
@@ -1253,18 +1504,181 @@ flowchart LR
 
     INetTransport2 --> MirrorNet
     INetTransport2 --> MirageNet
+    INetTransport2 --> NakamaNet
     INetTransport2 --> Noop
     INetworkManager2 --> MirrorNet
     INetworkManager2 --> MirageNet
+    INetworkManager2 --> NakamaNet
 ```
 
-| 适配器             | 编译符号     | 说明                         |
-| ------------------ | ------------ | ---------------------------- |
-| `MirrorNetAdapter` | `#if MIRROR` | Mirror 传输层 + 管理器适配器 |
-| `MirageNetAdapter` | `#if MIRAGE` | Mirage 传输层 + 管理器适配器 |
-| `NoopNetTransport` | _（始终）_   | 空实现，用于测试             |
+| 适配器             | 编译符号                              | 包资源                       | 说明                                      |
+| ------------------ | ------------------------------------- | ---------------------------- | ----------------------------------------- |
+| `MirrorNetAdapter` | `CYCLONE_NETWORKING_HAS_MIRROR`       | `com.mirror-networking.mirror` | Mirror 传输层 + 管理器适配器             |
+| `MirageNetAdapter` | `CYCLONE_NETWORKING_HAS_MIRAGE`       | `com.miragenet.mirage`       | Mirage 传输层 + 管理器适配器              |
+| `NakamaNetAdapter` | `CYCLONE_NETWORKING_HAS_NAKAMA`       | `com.heroiclabs.nakama-unity` | Nakama 会话、匹配和 socket 适配器          |
+| `NoopNetTransport` | _（始终）_                            | _（无）_                     | 空实现，用于测试                          |
 
-两个适配器均同时实现 `INetTransport` 和 `INetworkManager`，并在 `Awake` 时自动向 `NetServices` 注册。
+Unity `versionDefines` 只会根据 Unity Package Manager 已解析的包启用符号。仅把 package 文件夹放在仓库根目录旁边不会启用这些符号；需要通过 `UnityStarter/Packages/manifest.json` 引用、放入 `UnityStarter/Packages/` 作为 embedded package，或以其他 Unity package 方式导入。
+
+Mirror 和 Mirage 适配器均同时实现 `INetTransport` 和 `INetworkManager`，并在 `Awake` 时自动向 `NetServices` 注册。Nakama 适配器为 Nakama 支持的客户端会话和 match state 暴露相同的 CycloneGames runtime contract。
+
+---
+
+### 22. 项目级扩展 (Project Extensibility)
+
+**路径**: `Core/Profile/`
+
+该模块是项目侧扩展网络底层的主要入口，用于避免把项目特定数字和协议所有权硬编码进 Cyclone core。内置常量和枚举仍然适合作为默认值、稳定状态码和便利预设；真正的产品规模、后端能力和项目消息范围应放在项目自己的 profile、capability descriptor 和 manifest 中。
+
+`NetworkRuntimeProfile` 集中表达产品调优值，例如连接数、tick/send rate、payload size、buffer size、房间搜索数量、重连窗口和主机迁移窗口。它也支持项目自定义的 int、float 和 string setting，用于承载 Cyclone 无法预判的业务参数。
+
+```csharp
+NetworkRuntimeProfile profile = NetworkRuntimeProfiles.CreateDefaultBuilder()
+    .SetInt("project.max_zone_players", 10000)
+    .SetFloat("project.snapshot_jitter_buffer_seconds", 0.15f)
+    .SetString("project.deployment", "regional-shard")
+    .Build();
+
+runtimeContextBuilder.AddRuntimeProfile(profile);
+```
+
+`NetworkNodeCapabilities` 描述 client host、relay、shard、gateway 或 dedicated server node 实际具备的能力。Capability id 是 string-backed，因此项目可以增加 Steam、LAN、主机平台网络、云服务器、分片、持久化、反作弊或 modding 相关能力，而不需要修改 Cyclone enum。
+
+```csharp
+NetworkCapabilityId zoneLease = new NetworkCapabilityId("project.zone_lease");
+
+NetworkNodeCapabilities node = new NetworkNodeCapabilitiesBuilder
+{
+    NodeId = "us-east-zone-17",
+    Region = "us-east",
+    Platform = "linux-headless",
+    MaxConnections = 10000,
+    MaxPayloadBytes = 1200,
+    CpuScore = 92,
+    MemoryScore = 88,
+}
+.Add(NetworkCapabilityIds.DedicatedServer, level: 2, score: 40d)
+.Add(NetworkCapabilityIds.Sharding, level: 3, score: 50d)
+.Add(zoneLease, level: 1, score: 20d)
+.Build();
+
+NetworkCapabilityQuery query = new NetworkCapabilityQuery
+{
+    Region = "us-east",
+    MinimumConnections = 5000,
+}
+.Require(NetworkCapabilityIds.DedicatedServer)
+.Prefer(zoneLease);
+
+bool canHost = NetworkNodeCapabilityMatcher.Matches(node, query);
+```
+
+`NetworkProtocolManifest` 让 package 或游戏项目在一个地方声明 message range、protocol version、message descriptor、schema metadata 和 catalog registration。Cyclone-owned module 应注册 module range；项目玩法协议应使用 user range，并放在项目自己的 assembly 中。
+
+```csharp
+NetworkProtocolManifest manifest = new NetworkProtocolManifestBuilder(
+        owner: "Project.Gameplay",
+        minMessageId: 30000,
+        maxMessageId: 30999,
+        kind: NetworkMessageKind.User)
+    .AddMessage<PlayerInputMessage>(30000, NetworkChannel.UnreliableSequenced, maxPayloadSize: 96)
+    .AddMessage<InventoryCommandMessage>(30001, NetworkChannel.Reliable, maxPayloadSize: 512)
+    .SetMetadata("schema", "project-gameplay-v3")
+    .Build();
+
+catalog.RegisterProtocolManifest(manifest);
+```
+
+设计准则：
+
+- 将 enum 视为稳定状态码、结果码或便利预设。开放式项目分类应使用 `NetworkCapabilityId`、label、profile setting 和 protocol manifest。
+- 将 `NetworkConstants` 中的数字视为框架默认值，而不是产品上限。产品级规模限制应放入项目 profile 和部署 descriptor。
+- 项目协议保留在项目自己的 manifest 中。Cyclone package manifest 只描述 Cyclone-owned message。
+- 对于超大型游戏，应在 node、shard、zone、fleet 和 gateway 层级建模容量，而不是单纯提高一个全局 `MaxConnections`。
+
+持久化行为：这些 core model 本身不写文件或资产。项目可以通过自己的 `ScriptableObject`、JSON、YAML、remote config 或部署流水线 adapter 序列化 profile、capability 和 manifest，并在 composition 阶段构建这些纯 C# 对象。
+
+---
+
+### 23. 生产硬化矩阵 (Production Hardening Matrix)
+
+**路径**: `Core/Hardening/`
+
+生产硬化矩阵把“商业项目上线前必须证明什么”变成显式、可扩展、可测试的契约。它不替代真实压测、长时间 soak test、平台认证、安全审计或后端部署验证；它的作用是让每个项目用同一套入口声明要验证的目标，并在 runtime profile、node capability、protocol manifest 或 fault injection plan 不完整时提前失败。
+
+评估器消费四类通用输入：
+
+- `NetworkRuntimeProfile`：产品规模、tick/send rate、payload 和 session 时序目标。
+- `NetworkNodeCapabilities`：client host、relay、shard、gateway 或 dedicated server 的真实能力。
+- `NetworkProtocolManifest`：协议所有权、message range、版本和 payload budget。
+- `NetworkFailureInjectionPlan`：latency、packet loss、断线、reconnect storm、backend outage、mobile suspend、WebGL throttling、protocol mismatch，以及项目自定义故障的计划覆盖。
+
+```csharp
+NetworkProductionReadinessScenario scenario = NetworkProductionReadinessScenarios
+    .CreateMassiveShardBuilder()
+    .Build();
+
+NetworkFailureInjectionPlan faults = new NetworkFailureInjectionPlanBuilder
+{
+    PlanId = "massive-zone-faults"
+}
+    .AddFault(NetworkFaultIds.BandwidthCap, durationSeconds: 30d)
+    .AddFault(NetworkFaultIds.ReconnectStorm, durationSeconds: 30d)
+    .AddFault(NetworkFaultIds.BackendUnavailable, durationSeconds: 30d)
+    .Build();
+
+var input = new NetworkProductionReadinessInput
+{
+    RuntimeProfile = profile,
+    NodeCapabilities = nodeCapabilities
+}
+    .AddProtocolManifest(projectGameplayManifest)
+    .AddFailurePlan(faults);
+
+NetworkProductionReadinessReport report = NetworkProductionReadinessEvaluator.Evaluate(scenario, input);
+if (!report.Passed)
+{
+    // Print issues in CI, editor diagnostics, or deployment validation tooling.
+}
+```
+
+内置 scenario builder 是通用模板，不是游戏品类锁定：
+
+| Builder | 用途 |
+| --- | --- |
+| `CreateSmallSessionBuilder()` | LAN、platform lobby、relay、listen-server 或小规模 peer session 验证 |
+| `CreateAuthoritativeArenaBuilder()` | 带 prediction、rollback、reconnect 和 protocol check 的服务器权威 action session |
+| `CreateLargeAreaBuilder()` | 面向 AOI、send budget、reconnect storm 和 backend limit 的大区域验证 |
+| `CreateMassiveShardBuilder()` | 面向超大世界的 shard、zone、fleet 和 gateway 验证 |
+| `CreateWebMobileBuilder()` | WebGL/mobile suspend、throttling、reconnect 和 relay 相关验证 |
+
+项目可以新增自己的 scenario id、requirement id、capability id 和 fault id，不需要修改 Cyclone：
+
+```csharp
+var cloudSaveFleet = new NetworkCapabilityId("project.cloud.save_fleet");
+var regionFailover = new NetworkFaultId("project.region_failover");
+
+NetworkProductionReadinessScenario customScenario = new NetworkProductionReadinessScenarioBuilder
+{
+    ScenarioId = new NetworkHardeningScenarioId("project.live_ops"),
+    MinimumProfileConnections = 5000,
+    MinimumNodeConnections = 5000,
+    RequireProtocolManifest = true,
+    MinimumProtocolManifestCount = 1
+}
+    .RequireCapability(cloudSaveFleet, minimumLevel: 2)
+    .RequireFault(regionFailover, minimumDurationSeconds: 60d)
+    .Build();
+```
+
+持久化行为：hardening scenario、report 和 fault plan 都是纯 C# runtime object，本身不写文件。项目可以通过自己的资产、JSON/YAML 文件、CI metadata、live-service deployment descriptor 或外部测试报告 importer 持久化它们。
+
+最小验证建议：
+
+- 对每个项目级 networking profile，在 EditMode test 或 CI 中运行 hardening evaluator。
+- 将真实压测和平台测试覆盖回填到 `NetworkFailureInjectionPlan` metadata，不要把内置 plan 本身当作已经完成证明。
+- 对 `Required` 或 `Critical` issue 失败构建；`Warning` issue 只有在项目明确签字后才允许放行。
+- 如果产品同时支持小房间、服务器权威、大区域、超大分片和 Web/mobile 等多种网络模式，应维护多个独立 scenario。
 
 ---
 
@@ -1275,38 +1689,48 @@ flowchart LR
 ```mermaid
 flowchart TB
     Start["选择你的游戏类型"] --> FPS
+    Start --> BattleRoyale
     Start --> MOBA
     Start --> RTS
     Start --> MMO
+    Start --> Sandbox
     Start --> Fighting
     Start --> TurnBased
 
     FPS["FPS / TPS</br>射击游戏"]
+    BattleRoyale["Battle Royale</br>PUBG 类"]
     MOBA["MOBA</br>LoL / Dota2"]
     RTS["RTS</br>即时战略"]
     MMO["MMO</br>大型多人"]
+    Sandbox["沙盒 / 建造</br>Chunk 与 Ownership"]
     Fighting["格斗游戏</br>FGC"]
     TurnBased["回合制"]
 
-    FPS --> FPS_Modules["• ClientPrediction ✅</br>• LagCompensation ✅</br>• SnapshotInterpolation ✅</br>• GridInterestManager ✅</br>• NetworkVariable ✅</br>• RPC ✅"]
+    FPS --> FPS_Modules["• ClientPrediction</br>• LagCompensation</br>• NetworkReplicationPlanner</br>• NetworkReplicationStateCache</br>• NetworkVariable</br>• RPC"]
 
-    MOBA --> MOBA_Modules["• NetworkTickSystem ✅</br>• TeamVisibilityInterestManager ✅</br>• ReconnectionManager ✅</br>• ReplaySystem ✅</br>• GAS 集成 (独立包) ✅</br>• NetworkVariable ✅"]
+    BattleRoyale --> BR_Modules["• NetworkSpatialHashIndex</br>• NetworkReplicationPlanner</br>• AdaptiveNetworkSendScheduler</br>• ReconnectionManager</br>• ReplaySystem"]
 
-    RTS --> RTS_Modules["• LockstepManager ✅</br>• DeterministicMath ✅</br>• DesyncDetector&lt;THasher&gt; ✅</br>• TeamVisibilityInterestManager ✅</br>• ReplaySystem ✅"]
+    MOBA --> MOBA_Modules["• NetworkReplicationPlanner</br>• 自定义 INetworkInterestEvaluator</br>• NetworkReplicationStateCache</br>• ReconnectionManager</br>• ReplaySystem</br>• GameplayAbilities.Networking"]
 
-    MMO --> MMO_Modules["• GridInterestManager ✅</br>• GroupInterestManager ✅</br>• NetworkSceneManager ✅</br>• NetworkSpawnManager ✅</br>• SessionManagement ✅</br>• NetworkVariable ✅"]
+    RTS --> RTS_Modules["• LockstepManager</br>• DeterministicMath</br>• DesyncDetector&lt;THasher&gt;</br>• ReplaySystem"]
 
-    Fighting --> Fighting_Modules["• RollbackNetcode ✅</br>• DeterministicMath ✅</br>• PredictionBuffer ✅</br>• DesyncDetector&lt;THasher&gt; ✅"]
+    MMO --> MMO_Modules["• NetworkSpatialHashIndex</br>• NetworkReplicationPlanner</br>• NetworkReplicationStateCache</br>• AdaptiveNetworkSendScheduler</br>• NetworkSceneManager</br>• SessionManagement</br>• NetworkReplicationLoadSimulator"]
 
-    TurnBased --> Turn_Modules["• RPC ✅</br>• SessionManagement ✅</br>• ReconnectionManager ✅</br>• NetworkVariable ✅"]
+    Sandbox --> Sandbox_Modules["• NetworkSpatialHashIndex</br>• NetworkSnapshotPacketBuilder</br>• Chunk / ownership evaluator</br>• NetworkSpawnManager</br>• ReconnectionManager"]
+
+    Fighting --> Fighting_Modules["• RollbackNetcode</br>• DeterministicMath</br>• PredictionBuffer</br>• DesyncDetector&lt;THasher&gt;"]
+
+    TurnBased --> Turn_Modules["• RPC</br>• SessionManagement</br>• ReconnectionManager</br>• NetworkVariable"]
 ```
 
 | 游戏类型              | 同步模式 | 核心模块                                                        | 延迟策略                |
 | --------------------- | -------- | --------------------------------------------------------------- | ----------------------- |
-| FPS/TPS               | 状态同步 | ClientPrediction + LagCompensation                              | 客户端预测 + 服务器回退 |
-| MOBA (LoL)            | 状态同步 | TeamVisibility + GAS + Reconnect + Replay                       | 服务器权威 + 兴趣管理   |
-| RTS (Red Alert)       | 帧同步   | Lockstep + FPInt64 + DesyncDetector\<THasher\> + TeamVisibility | 确定性模拟              |
-| MMO                   | 状态同步 | Grid/Group Interest + Scene + Spawn                             | AOI 裁剪                |
+| FPS/TPS               | 状态同步 | ClientPrediction + LagCompensation + Planner + StateCache       | 客户端预测 + 服务器回退 |
+| Battle Royale         | 状态同步 | SpatialHashIndex + Planner + AdaptiveScheduler + Replay         | AOI 裁剪 + 突发预算控制 |
+| MOBA (LoL)            | 状态同步 | Planner + 自定义 evaluator + StateCache + GameplayAbilities bridge | 服务器权威 + 团队/视野规则 |
+| RTS (Red Alert)       | 帧同步   | Lockstep + FPInt64 + DesyncDetector\<THasher\>                  | 确定性模拟              |
+| MMO                   | 状态同步 | SpatialHashIndex + Planner + StateCache + AdaptiveScheduler + Scene | AOI 裁剪、发送预算、分片 |
+| 沙盒 / 建造           | 状态同步 | SpatialHashIndex + SnapshotPacketBuilder + chunk evaluator + Spawn | Chunk 级 delta + ownership |
 | 格斗 (Street Fighter) | 回滚     | RollbackNetcode + FPInt64                                       | GGPO 回滚重放           |
 | 回合制                | 请求响应 | RPC + Session                                                   | 无需实时同步            |
 
@@ -1494,47 +1918,29 @@ public class RtsNetworkController : MonoBehaviour
 }
 ```
 
-### 教程 3：实现团队可见性管理
+### 教程 3：使用 Replication Infrastructure 实现团队可见性
 
-**目标**: 团队可见性控制，隐藏/揭示机制。
+**目标**: 用纯 C# replication snapshot 构建每个连接的可见对象列表。
 
 ```csharp
-using CycloneGames.Networking.Interest;
+using CycloneGames.Networking.Replication;
 
 public class TeamVisionController : MonoBehaviour
 {
-    private TeamVisibilityInterestManager _visibility;
+    private readonly NetworkReplicationPlanner _planner = new NetworkReplicationPlanner();
+    private readonly NetworkReplicationSelection[] _results = new NetworkReplicationSelection[256];
 
-    void Start()
+    int BuildPlanForConnection(PlayerConnection player, NetworkReplicatedObject[] objects, int serverTick)
     {
-        _visibility = new TeamVisibilityInterestManager(defaultDetectionRange: 30f);
+        var observer = new NetworkReplicationObserver(
+            player.ConnectionId,
+            player.PlayerId,
+            player.TeamId,
+            player.Position,
+            viewRadius: 60f);
+        var budget = new NetworkSendBudget(maxBytes: 4096, maxMessages: 64);
 
-        // 设置团队
-        _visibility.SetConnectionTeam(bluePlayer.ConnectionId, teamId: 1);
-        _visibility.SetConnectionTeam(redPlayer.ConnectionId, teamId: 2);
-
-        // 设置实体检测范围
-        _visibility.SetEntityTeam(blueHero, teamId: 1);
-        _visibility.SetEntityDetectionRange(blueHero, 25f);
-
-        // 隐藏实体
-        _visibility.SetHidden(stealthUnit, true);
-
-        // 放置揭示区域（深度揭示）
-        _visibility.AddRevealZone(wardPosition, radius: 15f, teamId: 1, isDeepReveal: true);
-    }
-
-    void OnHiddenAbilityUsed(INetworkEntity entity)
-    {
-        _visibility.SetHidden(entity, true);
-        // 该实体在敌方客户端上将不可见
-        // 除非敌方有深度揭示区域在范围内
-    }
-
-    void OnSensorPlaced(Vector3 pos)
-    {
-        _visibility.AddRevealZone(pos, 15f, teamId: 1, isDeepReveal: true);
-        // 揭示该区域及其中的隐藏单位
+        return _planner.BuildPlan(observer, objects, serverTick, ref budget, _results);
     }
 }
 ```
@@ -1582,16 +1988,60 @@ public class TeamVisionController : MonoBehaviour
 | `IStateHasher`            | 哈希算法接口             | `Reset`, `HashInt`, `HashLong`, `GetDigest`   |
 | `Fnv1aHasher`             | FNV-1a 64-bit（默认）    | 内置，零分配                                  |
 
-### 兴趣管理
+### 复制基础设施
 
-| 类                                   | 适用场景                      |
-| ------------------------------------ | ----------------------------- |
-| `GridInterestManager`                | 开放世界 MMO                  |
-| `GroupInterestManager`               | 副本、房间                    |
-| `TeamVisibilityInterestManager`      | MOBA、RTS                     |
-| `CompositeInterestManager`           | 组合多种策略                  |
-| `BurstGridInterestManager`           | 开放世界 MMO（5k+ 实体，DOD） |
-| `BurstTeamVisibilityInterestManager` | MOBA、RTS（5k+ 实体，DOD）    |
+| 类/接口                           | 适用场景                                      |
+| --------------------------------- | --------------------------------------------- |
+| `NetworkReplicationPolicy`        | 声明 owner/team/area/manual 可见性             |
+| `NetworkReplicationObserver`      | 每个连接的可见性和预算输入                    |
+| `NetworkReplicatedObject`         | 每个对象的 replication snapshot               |
+| `INetworkInterestEvaluator`       | 自定义 AOI、房间、队伍、隐身、揭示规则        |
+| `DefaultNetworkInterestEvaluator` | owner/team/area/layer/auth 基线规则            |
+| `NetworkSendBudget`               | 每连接 byte 和 message 限制                   |
+| `NetworkReplicationPlanner`       | 按优先级选择复制对象                          |
+| `NetworkReplicationStateCache`    | 每连接 last sent/acked/full-state 状态         |
+| `NetworkSpatialHashIndex`         | 建好索引后的无分配 spatial AOI 查询            |
+| `NetworkSnapshotPacketBuilder`    | 稳定 full-state 与 delta snapshot packet writer |
+| `INetworkSnapshotPayloadSource`   | 玩法侧 payload size/hash/write 契约            |
+| `AdaptiveNetworkSendScheduler`    | 根据链路质量控制 send interval 和 budget       |
+| `NetworkReplicationLoadSimulator` | 确定性的 planner 负载模拟                      |
+
+### 会话韧性
+
+| 类/接口                           | 适用场景                                      |
+| --------------------------------- | --------------------------------------------- |
+| `NetworkSessionDirectory`         | backend-neutral 房间搜索、过滤、排序           |
+| `NetworkSessionDescriptor`        | Steam/LAN/backend/dedicated room metadata      |
+| `NetworkSessionSearchCriteria`    | game mode、map、region、build、容量、ping、能力过滤 |
+| `NetworkMatchmakingCoordinator`   | 生成 join/create/queue 计划                    |
+| `ReconnectionManager`             | 席位保留、reconnect token 校验、状态追赶       |
+| `HostMigrationCoordinator`        | host failover、候选选择、迁移状态              |
+| `IHostCandidatePolicy`            | 自定义 authority、hardware、shard、relay 或平台 host 选择 |
+| `NetworkAuthorityTransferPlan`    | session/simulation/spawn/object/scene/match/RNG authority 转移 |
+
+### 项目级扩展
+
+| 类/接口                                    | 适用场景                                      |
+| ----------------------------------------- | --------------------------------------------- |
+| `NetworkRuntimeProfile`                   | 项目拥有的 runtime 和调优 profile              |
+| `NetworkRuntimeProfileRegistry`           | 不依赖全局项目设置的 profile lookup            |
+| `NetworkNodeCapabilities`                 | backend、client host、shard、relay 或 dedicated node descriptor |
+| `NetworkCapabilityId`                     | 项目自定义的可扩展 capability id               |
+| `NetworkCapabilityQuery`                  | required/preferred capability matching         |
+| `NetworkProtocolManifest`                 | 带版本的 protocol、range 和 message manifest   |
+| `NetworkProtocolManifestCatalogExtensions` | 将 manifest 注册到 `INetworkMessageCatalog`   |
+
+### 生产硬化
+
+| 类/接口                                  | 适用场景                                      |
+| ---------------------------------------- | --------------------------------------------- |
+| `NetworkProductionReadinessScenario`     | scenario 拥有的生产 readiness contract        |
+| `NetworkProductionReadinessScenarios`    | small-session、arena、large-area、massive-shard 和 web/mobile 通用模板 |
+| `NetworkProductionReadinessInput`        | profile、node、manifest 和 fault plan 的评估输入 |
+| `NetworkProductionReadinessEvaluator`    | 确定性的 readiness assessment                 |
+| `NetworkProductionReadinessReport`       | blocking/warning issue report                 |
+| `NetworkFailureInjectionPlan`            | 面向 CI、Editor diagnostics 或外部压测的 fault coverage plan |
+| `NetworkFaultId`                         | 项目自定义的可扩展 fault id                   |
 
 ### GAS 集成（`CycloneGames.GameplayAbilities.Networking`）
 
@@ -1667,47 +2117,32 @@ Best HTTP 适合 HTTP、REST、RPC 和 download；除非游戏明确采用 reque
 ## 目录结构
 
 ```text
-Runtime/Scripts/
-├── Core/                 # 核心接口与类型
+Core/
+├── Core/                 # 核心接口与 runtime context
+├── Profile/              # Runtime profile、node capability、protocol manifest
+├── Hardening/            # 生产 readiness scenario、fault plan、evaluator
 ├── Buffers/              # 缓冲区与对象池
-├── Services/             # 服务注册
 ├── Serialization/        # 序列化接口与工厂
-├── Serializers/          # 各序列化器适配实现
-├── Simulation/           # Tick 系统与时间同步
-├── Prediction/           # 客户端预测、插值、滞后补偿
-├── Interest/             # 兴趣管理（Grid/Group/TeamVisibility/Composite）
+├── Replication/          # Interest、spatial AOI、state cache、snapshot packets、send budgets、load simulation
 ├── StateSync/            # NetworkVariable 状态同步
 ├── Rpc/                  # RPC 属性与处理器
-├── Lockstep/             # 帧同步、定点数学、回滚、IStateHasher
+├── Routing/              # 分布式部署 actor route table
+├── Lockstep/             # 帧同步、回滚、IStateHasher
 ├── Security/             # 限流器、消息校验
-├── Session/              # 大厅、匹配、重连
+├── Session/              # 房间目录、匹配计划、重连、主机迁移
 ├── Replay/               # 录像与回放
 ├── Spawning/             # 网络对象生成
 ├── Scene/                # 网络场景管理
-├── Compression/          # Vector3/Quaternion 压缩
-├── Diagnostics/          # 性能分析、网络模拟
 ├── Authentication/       # 身份验证
 ├── Platform/             # 平台特定配置
 ├── Adapters/             # Mirror/Mirage/Nakama 适配器
 └── Stubs/                # 空实现（测试用）
 
-DOD/Runtime/                      # 面向数据设计变体（Burst/Jobs 加速）
-├── BurstGridInterestManager.cs   # 排序式空间哈希，NativeList + IntroSort
-└── BurstTeamVisibilityInterestManager.cs  # 扁平 NativeList 检测源
-
-📦 CycloneGames.GameplayAbilities.Networking/    # GAS 集成（独立包）
-└── Runtime/Scripts/
-    ├── IAbilityNetAdapter.cs
-    ├── NoopAbilityNetAdapter.cs
-    ├── NetworkedAbilityBridge.cs
-    └── AttributeSyncManager.cs
-
-📦 CycloneGames.GameplayAbilities.Networking.Unity.Runtime/
-└── Runtime/Scripts/
-    ├── GameplayAbilitiesNetworkedASCAdapter.cs
-    ├── GasBridgeGameplayAbilitiesExtensions.cs
-    ├── DefaultGasNetIdRegistry.cs
-    └── GasBridgeSecurityExtensions.cs
+可选集成包:
+├── CycloneGames.GameplayAbilities.Networking/
+├── CycloneGames.GameplayFramework.Networking/
+├── CycloneGames.GameplayTags.Networking/
+└── CycloneGames.RPGFoundation.Interaction.Networking/
 ```
 
 ---

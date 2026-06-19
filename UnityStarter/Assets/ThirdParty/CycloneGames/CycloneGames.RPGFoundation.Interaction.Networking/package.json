@@ -1,0 +1,24 @@
+{
+  "name": "com.cyclone-games.rpg-foundation-interaction-networking",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.RPGFoundation.Interaction.Networking",
+  "description": "Optional CycloneGames.Networking integration for CycloneGames.RPGFoundation Interaction. Provides transport-friendly interaction DTOs, vector conversion, authority validation bridge, and RPGFoundation message catalog registration.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.rpg-foundation": "1.0.0",
+    "com.cyclone-games.networking": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "RPGFoundation",
+    "Interaction",
+    "Networking"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

@@ -38,7 +38,7 @@ CycloneGames.GameplayTags/
     GameplayTagsSourceGenerator.cs
 ```
 
-可选集成以独立集成包形式分发。`CycloneGames.GameplayTags.DataTable` 在项目明确同时包含 `CycloneGames.GameplayTags` 和 `CycloneGames.DataTable` 时提供 DataTable/Luban 桥接。
+可选集成以独立集成包形式分发。`CycloneGames.GameplayTags.DataTable` 在项目明确同时包含 `CycloneGames.GameplayTags` 和 `CycloneGames.DataTable` 时提供 DataTable/Luban 桥接。`CycloneGames.GameplayTags.Networking` 在项目明确同时包含 `CycloneGames.GameplayTags` 和 `CycloneGames.Networking` 时提供 Cyclone Networking 协议桥接。
 
 ```mermaid
 flowchart TD
@@ -49,13 +49,15 @@ flowchart TD
     DataTablePackage["GameplayTags.DataTable\n可选集成包"]
     DataTable["DataTable / Luban\nExcel 生成的标签目录与引用"]
     Framework["GameplayFramework\n集成层"]
-    Networking["Networking\n传输无关 byte payload"]
+    NetworkingPackage["GameplayTags.Networking\n可选集成包"]
+    Networking["Networking\nTransport adapter"]
     Assets["AssetManagement\n不需要直接依赖"]
 
     Core --> UnityRuntime
     Core --> GAS
     Core --> Framework
-    Core --> Networking
+    NetworkingPackage --> Core
+    NetworkingPackage --> Networking
     DataTablePackage --> Core
     DataTablePackage --> DataTable
     UnityRuntime --> Editor
@@ -76,6 +78,7 @@ flowchart TD
 Core assembly 是 GameplayAbilities 和服务器/headless 逻辑消费的主要契约。Unity 相关逻辑被限制在 adapter 中，以便 GameplayTags 保持稳定底层模块定位。
 
 DataTable/Luban 桥接位于独立的 `CycloneGames.GameplayTags.DataTable` 集成包中，因此基础包永远不会引用 `CycloneGames.DataTable.Core`。
+Cyclone Networking 桥接位于独立的 `CycloneGames.GameplayTags.Networking` 集成包中，因此基础包永远不会引用 `CycloneGames.Networking.Core`。
 
 ## 依赖
 
@@ -320,6 +323,8 @@ Mask:
 
 Serializer 会校验 buffer 长度、负 count、count 乘法溢出、包 marker、protocol version 和 manifest hash。Manifest 匹配但 stable ID 不存在时，会被视为协议数据损坏。Runtime index 永远不作为网络契约。
 
+当外层 transport layer 只需要路由或校验包类型，而不希望先反序列化到 container 时，可以使用 `TryGetPacketKind()`、`IsFullPacket()` 和 `IsDeltaPacket()`。
+
 ```csharp
 byte[] fullPacket = GameplayTagNetSerializer.SerializeFull(container);
 GameplayTagNetSerializer.DeserializeFull(remoteContainer, fullPacket);
@@ -333,6 +338,8 @@ int written = GameplayTagNetSerializer.SerializeFull(container, buffer, 0);
 byte[] deltaBuffer = new byte[GameplayTagNetSerializer.GetDeltaSerializedSize(addCount, removeCount)];
 int deltaWritten = GameplayTagNetSerializer.SerializeDelta(currentContainer, previousContainer, deltaBuffer, 0);
 ```
+
+希望 tag message 参与 `INetworkMessageCatalog` 和 protocol fingerprint 的 Cyclone 项目，应安装可选 `CycloneGames.GameplayTags.Networking` 包。不包含 `CycloneGames.Networking` 的项目可以单独使用这个基础包。
 
 大型 MMORPG 部署中，应把 tag manifest 纳入 client/server compatibility handshake。`GameplayTagManager.CurrentManifestHash` 不一致的 client 和 server 不应交换 gameplay tag 状态，直到 reload 或 patch 流程完成 manifest 对齐。如果未来 serializer 版本需要向后兼容，应保持 `MinimumSupportedProtocolVersion`、`CurrentProtocolVersion` 和按版本分支的 decode path 显式可见，并用跨版本测试覆盖。
 

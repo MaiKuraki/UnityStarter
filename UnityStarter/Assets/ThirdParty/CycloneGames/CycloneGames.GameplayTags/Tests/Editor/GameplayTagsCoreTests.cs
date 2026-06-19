@@ -344,6 +344,27 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         }
 
         [Test]
+        public void NetSerializer_DetectsPacketKindsWithoutDeserializing()
+        {
+            RegisterTestTags();
+
+            GameplayTagContainer source = new();
+            byte[] fullPacket = GameplayTagNetSerializer.SerializeFull(source);
+            byte[] deltaPacket = GameplayTagNetSerializer.SerializeDelta(source, source);
+
+            Assert.That(GameplayTagNetSerializer.TryGetPacketKind(fullPacket, 0, out GameplayTagNetPacketKind fullKind), Is.True);
+            Assert.That(fullKind, Is.EqualTo(GameplayTagNetPacketKind.Full));
+            Assert.That(GameplayTagNetSerializer.IsFullPacket(fullPacket), Is.True);
+
+            Assert.That(GameplayTagNetSerializer.TryGetPacketKind(deltaPacket, 0, out GameplayTagNetPacketKind deltaKind), Is.True);
+            Assert.That(deltaKind, Is.EqualTo(GameplayTagNetPacketKind.Delta));
+            Assert.That(GameplayTagNetSerializer.IsDeltaPacket(deltaPacket), Is.True);
+
+            fullPacket[1] = 0;
+            Assert.That(GameplayTagNetSerializer.TryGetPacketKind(fullPacket, 0, out _), Is.False);
+        }
+
+        [Test]
         public void NetSerializer_RejectsTruncatedPackets()
         {
             RegisterTestTags();

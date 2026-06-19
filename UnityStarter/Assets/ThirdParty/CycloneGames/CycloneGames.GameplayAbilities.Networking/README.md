@@ -151,23 +151,23 @@ Default message ids:
 
 | Message | Id |
 | --- | ---: |
-| `MsgAbilityActivateRequest` | 200 |
-| `MsgAbilityActivateConfirm` | 201 |
-| `MsgAbilityActivateReject` | 202 |
-| `MsgAbilityEnd` | 203 |
-| `MsgAbilityCancel` | 204 |
-| `MsgEffectApplied` | 210 |
-| `MsgEffectRemoved` | 211 |
-| `MsgEffectStackChanged` | 212 |
-| `MsgEffectUpdated` | 213 |
-| `MsgAttributeUpdate` | 220 |
-| `MsgTagUpdate` | 225 |
-| `MsgAbilityMulticast` | 230 |
-| `MsgFullState` | 240 |
-| `MsgFullStateRequest` | 241 |
-| `MsgStateSyncMetadata` | 242 |
+| `MsgAbilityActivateRequest` | 10000 |
+| `MsgAbilityActivateConfirm` | 10001 |
+| `MsgAbilityActivateReject` | 10002 |
+| `MsgAbilityEnd` | 10003 |
+| `MsgAbilityCancel` | 10004 |
+| `MsgEffectApplied` | 10010 |
+| `MsgEffectRemoved` | 10011 |
+| `MsgEffectStackChanged` | 10012 |
+| `MsgEffectUpdated` | 10013 |
+| `MsgAttributeUpdate` | 10020 |
+| `MsgTagUpdate` | 10025 |
+| `MsgAbilityMulticast` | 10030 |
+| `MsgFullState` | 10040 |
+| `MsgFullStateRequest` | 10041 |
+| `MsgStateSyncMetadata` | 10042 |
 
-Projects should keep their own message id allocation table and avoid collisions with gameplay messages.
+These ids live in the `NetworkedAbilityBridge.MessageRange` package-owned sub-range (`10000-10999`) inside the generic `NetworkMessageRanges.Module` space. The range and descriptors are registered into `INetworkMessageCatalog` when a runtime context exposes one. Projects should keep their own message id allocation table and avoid collisions with registered module ranges.
 
 ### `INetworkedASC`
 
