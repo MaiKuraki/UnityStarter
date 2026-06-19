@@ -50,6 +50,14 @@ The package intentionally does not expose a global static facade. Long-lived pro
 
 The VContainer installer lives in an optional integration assembly constrained by `VCONTAINER_PRESENT`. Projects without VContainer can remove or ignore that folder without affecting the core runtime.
 
+## Diagnostics
+
+`ICheatLogger` is the minimal error/exception logging contract used by the enabled runtime path.
+
+When `ENABLE_CHEAT` is absent, `CheatCommandRuntime` is a disabled no-op runtime. Publish calls complete without dispatching a VitalRouter command, without incrementing runtime metrics, and without logging from the hot path. Samples and tool UIs should show their own startup diagnostics when they need to explain that a disabled runtime will not produce `Received` logs.
+
+If a sample or tool logs `Publishing` but no matching `Received` log appears, check the compile symbol, target `Router`, command payload type, listener lifetime, and VitalRouter source generation errors.
+
 ## Commands
 
 Core command types implement `ICheatCommand` and `VitalRouter.ICommand`:

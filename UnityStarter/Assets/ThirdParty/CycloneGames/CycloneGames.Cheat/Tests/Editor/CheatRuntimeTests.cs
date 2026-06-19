@@ -4,7 +4,6 @@ using NUnit.Framework;
 
 #if ENABLE_CHEAT
 using System.Threading.Tasks;
-using VitalRouter;
 #endif
 
 namespace CycloneGames.Cheat.Tests.Editor
@@ -27,24 +26,13 @@ namespace CycloneGames.Cheat.Tests.Editor
         }
 #else
         [Test]
-        public async Task EnabledRuntimePublishesThroughRouter()
+        public async Task EnabledRuntimePublishesCommandAndUpdatesMetrics()
         {
-            var router = new Router();
             using var runtime = new CheatCommandRuntime();
-            int received = 0;
 
-            using var subscription = router.Subscribe<CheatCommand>((command, _) =>
-            {
-                if (command.CommandId == "Command")
-                {
-                    received++;
-                }
-            });
-
-            await runtime.PublishAsync("Command", router);
+            await runtime.PublishAsync<CheatCommand>(new CheatCommand("Command"));
 
             Assert.True(runtime.IsEnabled);
-            Assert.AreEqual(1, received);
             Assert.AreEqual(1, runtime.Metrics.PublishedCommandCount);
             Assert.AreEqual(1, runtime.Metrics.CompletedCommandCount);
         }

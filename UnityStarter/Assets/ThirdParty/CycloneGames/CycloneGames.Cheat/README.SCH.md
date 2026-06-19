@@ -50,6 +50,14 @@ runtime.Dispose();
 
 VContainer installer 位于受 `VCONTAINER_PRESENT` 约束的可选 integration assembly 中。没有安装 VContainer 的项目可以移除或忽略该目录，不会影响核心 runtime。
 
+## 诊断日志
+
+`ICheatLogger` 是 enabled runtime 路径使用的最小错误和异常日志契约。
+
+当没有定义 `ENABLE_CHEAT` 时，`CheatCommandRuntime` 是 disabled no-op runtime。Publish 调用会正常完成，但不会派发 VitalRouter 命令，不会增加 runtime metrics，也不会在热路径写日志。Sample 和工具 UI 如果需要解释 disabled runtime 不会产生 `Received` 日志，应在自身启动诊断中提示。
+
+如果 sample 或工具中已经出现 `Publishing` 日志，但没有对应的 `Received` 日志，优先检查 compile symbol、目标 `Router`、命令 payload 类型、listener 生命周期，以及 VitalRouter source generation 错误。
+
 ## 命令类型
 
 Core 命令类型同时实现 `ICheatCommand` 和 `VitalRouter.ICommand`：

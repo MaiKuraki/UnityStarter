@@ -1,14 +1,14 @@
 {
     "name": "CycloneGames.Cheat.Core",
     "rootNamespace": "CycloneGames.Cheat.Core",
-    "references": [
-        "VitalRouter"
-    ],
+    "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
-    "overrideReferences": false,
-    "precompiledReferences": [],
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "VitalRouter.dll"
+    ],
     "autoReferenced": true,
     "defineConstraints": [],
     "versionDefines": [],

@@ -75,6 +75,12 @@ namespace CycloneGames.Cheat.Sample
     [Routes]
     public partial class MultiRouterSampleRunner : MonoBehaviour
     {
+#if ENABLE_CHEAT
+        private const bool IS_ENABLE_CHEAT_DEFINED = true;
+#else
+        private const bool IS_ENABLE_CHEAT_DEFINED = false;
+#endif
+
         [SerializeField] private CheatSampleBenchmark benchmarker;
         [SerializeField] private Button Btn_Benchmark;
         
@@ -111,6 +117,7 @@ namespace CycloneGames.Cheat.Sample
 
             // Map to global router for default command handling
             MapTo(Router.Default);
+            LogCheatRuntimeState();
         }
 
         void OnDestroy()
@@ -190,6 +197,20 @@ namespace CycloneGames.Cheat.Sample
                 var data = new GameData(Vector3.one, Vector3.forward);
                 cheatRuntime.PublishAsync(CMD_GLOBAL_GAMEDATA, data).Forget();
             }
+        }
+
+        private void LogCheatRuntimeState()
+        {
+            if (cheatRuntime.IsEnabled)
+            {
+                Debug.Log("<color=lime><b>[MultiRouterSampleRunner]</b> ENABLE_CHEAT is defined. Cheat sample publishing is active.</color>");
+                Debug.Log("<b>[MultiRouterSampleRunner]</b> If a Publishing log appears without a matching Received log, check the target router, command payload type, listener lifetime, and VitalRouter source generation errors.");
+                return;
+            }
+
+            string symbolState = IS_ENABLE_CHEAT_DEFINED ? "defined" : "not defined";
+            Debug.LogWarning(
+                $"<b>[MultiRouterSampleRunner]</b> Cheat runtime is disabled. ENABLE_CHEAT is {symbolState}; Publishing logs call the no-op runtime, so no Received logs will appear.");
         }
 
         [Route]

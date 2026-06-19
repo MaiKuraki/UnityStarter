@@ -4,17 +4,17 @@
     "references": [
         "CycloneGames.Cheat.Core",
         "CycloneGames.Cheat.Runtime",
-        "UniTask",
-        "VitalRouter",
-        "VitalRouter.Unity"
+        "UniTask"
     ],
     "includePlatforms": [
         "Editor"
     ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
-    "overrideReferences": false,
-    "precompiledReferences": [],
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "VitalRouter.dll"
+    ],
     "autoReferenced": false,
     "defineConstraints": [],
     "versionDefines": [],
