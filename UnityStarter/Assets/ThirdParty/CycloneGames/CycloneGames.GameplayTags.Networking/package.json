@@ -1,0 +1,24 @@
+{
+  "name": "com.cyclone-games.gameplay-tags-networking",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.GameplayTags.Networking",
+  "description": "CycloneGames.Networking protocol integration for CycloneGames.GameplayTags. Provides message catalog descriptors, manifest handshake messages, and full/delta tag payload wrappers.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.gameplay-tags": "1.0.0",
+    "com.cyclone-games.networking": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "GameplayTags",
+    "Networking",
+    "Replication"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

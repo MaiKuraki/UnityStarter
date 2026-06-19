@@ -28,25 +28,25 @@ namespace CycloneGames.Networking
         /// Sends a message to the server.
         /// </summary>
         /// <param name="channel">QoS channel to use (default Reliable).</param>
-        void SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct;
+        NetworkSendResult SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct;
 
         /// <summary>
         /// Sends a message to a specific client connection.
         /// </summary>
         /// <param name="channel">QoS channel to use (default Reliable).</param>
-        void SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct;
+        NetworkSendResult SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct;
 
         /// <summary>
         /// Broadcasts a message to all connected clients.
         /// </summary>
         /// <param name="channel">QoS channel to use (default Reliable).</param>
-        void BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct;
+        NetworkSendResult BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct;
 
         /// <summary>
         /// Broadcasts a message to a list of connections.
         /// </summary>
         /// <param name="channel">QoS channel to use (default Reliable).</param>
-        void Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct;
+        NetworkSendResult Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct;
 
         /// <summary>
         /// Disconnects a client.
@@ -57,6 +57,488 @@ namespace CycloneGames.Networking
     public interface INetworkSerializerConfigurable
     {
         void SetSerializer(INetSerializer serializer);
+    }
+
+    [Flags]
+    public enum NetworkMessageKind : ushort
+    {
+        None = 0,
+        System = 1 << 0,
+        Rpc = 1 << 1,
+        Snapshot = 1 << 2,
+        StateSync = 1 << 3,
+        Module = 1 << 4,
+        Backend = 1 << 5,
+        User = 1 << 6
+    }
+
+    public readonly struct NetworkMessageIdRange
+    {
+        public readonly string Name;
+        public readonly ushort Min;
+        public readonly ushort Max;
+        public readonly NetworkMessageKind Kind;
+
+        public NetworkMessageIdRange(string name, ushort min, ushort max, NetworkMessageKind kind)
+        {
+            if (min > max)
+                throw new ArgumentOutOfRangeException(nameof(min));
+
+            Name = name ?? string.Empty;
+            Min = min;
+            Max = max;
+            Kind = kind;
+        }
+
+        public bool Contains(ushort messageId)
+        {
+            return messageId >= Min && messageId <= Max;
+        }
+
+        public override string ToString()
+        {
+            return string.IsNullOrEmpty(Name)
+                ? $"{Min}-{Max}"
+                : $"{Name}:{Min}-{Max}";
+        }
+    }
+
+    public static class NetworkMessageRanges
+    {
+        public static readonly NetworkMessageIdRange System = new NetworkMessageIdRange(
+            "System",
+            NetworkConstants.SystemMsgIdMin,
+            NetworkConstants.SystemMsgIdMax,
+            NetworkMessageKind.System);
+
+        public static readonly NetworkMessageIdRange Rpc = new NetworkMessageIdRange(
+            "RPC",
+            NetworkConstants.RpcMsgIdMin,
+            NetworkConstants.RpcMsgIdMax,
+            NetworkMessageKind.Rpc);
+
+        public static readonly NetworkMessageIdRange Module = new NetworkMessageIdRange(
+            "Module",
+            NetworkConstants.ModuleMsgIdMin,
+            NetworkConstants.ModuleMsgIdMax,
+            NetworkMessageKind.Module);
+
+        public static readonly NetworkMessageIdRange User = new NetworkMessageIdRange(
+            "User",
+            NetworkConstants.UserMsgIdMin,
+            NetworkConstants.MaxMessageId,
+            NetworkMessageKind.User);
+
+        public static bool TryGetKnownRange(ushort messageId, out NetworkMessageIdRange range)
+        {
+            if (System.Contains(messageId))
+            {
+                range = System;
+                return true;
+            }
+
+            if (Rpc.Contains(messageId))
+            {
+                range = Rpc;
+                return true;
+            }
+
+            if (Module.Contains(messageId))
+            {
+                range = Module;
+                return true;
+            }
+
+            if (User.Contains(messageId))
+            {
+                range = User;
+                return true;
+            }
+
+            range = default;
+            return false;
+        }
+    }
+
+    public readonly struct NetworkMessageDescriptor
+    {
+        public readonly ushort MessageId;
+        public readonly string Name;
+        public readonly string Owner;
+        public readonly ulong SchemaHash;
+        public readonly NetworkMessageKind Kind;
+        public readonly NetworkChannel DefaultChannel;
+        public readonly int MaxPayloadSize;
+
+        public NetworkMessageDescriptor(
+            ushort messageId,
+            string name,
+            string owner,
+            ulong schemaHash,
+            NetworkMessageKind kind,
+            NetworkChannel defaultChannel = NetworkChannel.Reliable,
+            int maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize)
+        {
+            MessageId = messageId;
+            Name = name ?? string.Empty;
+            Owner = owner ?? string.Empty;
+            SchemaHash = schemaHash;
+            Kind = kind;
+            DefaultChannel = defaultChannel;
+            MaxPayloadSize = maxPayloadSize;
+        }
+
+        public bool IsValid => MessageId <= NetworkConstants.MaxMessageId
+                               && !string.IsNullOrEmpty(Name)
+                               && !string.IsNullOrEmpty(Owner)
+                               && SchemaHash != 0UL
+                               && MaxPayloadSize >= 0;
+
+        public static NetworkMessageDescriptor Create<T>(
+            ushort messageId,
+            string owner,
+            NetworkMessageKind kind,
+            NetworkChannel defaultChannel = NetworkChannel.Reliable,
+            int maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize) where T : struct
+        {
+            string typeName = typeof(T).FullName ?? typeof(T).Name;
+            return new NetworkMessageDescriptor(
+                messageId,
+                typeName,
+                owner,
+                NetworkMessageCatalog.ComputeStableHash(typeName),
+                kind,
+                defaultChannel,
+                maxPayloadSize);
+        }
+    }
+
+    public interface INetworkMessageCatalog
+    {
+        int Count { get; }
+        int ModuleRangeCount { get; }
+        ulong ProtocolFingerprint { get; }
+        void RegisterModuleRange(in NetworkMessageIdRange range);
+        bool TryRegisterModuleRange(in NetworkMessageIdRange range);
+        bool TryGetRegisteredModuleRange(ushort messageId, out NetworkMessageIdRange range);
+        void Register(in NetworkMessageDescriptor descriptor);
+        bool TryRegister(in NetworkMessageDescriptor descriptor);
+        bool TryGet(ushort messageId, out NetworkMessageDescriptor descriptor);
+        void Clear();
+    }
+
+    public sealed class NetworkMessageCatalog : INetworkMessageCatalog
+    {
+        private const ulong FnvOffsetBasis = 14695981039346656037UL;
+        private const ulong FnvPrime = 1099511628211UL;
+
+        private readonly object _syncRoot = new object();
+        private readonly Dictionary<ushort, NetworkMessageDescriptor> _messages;
+        private readonly List<ushort> _messageIds;
+        private readonly List<NetworkMessageIdRange> _moduleRanges;
+        private bool _fingerprintDirty = true;
+        private ulong _protocolFingerprint = FnvOffsetBasis;
+
+        public NetworkMessageCatalog(int capacity = 128, int moduleRangeCapacity = 16)
+        {
+            if (capacity < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(capacity));
+            }
+
+            if (moduleRangeCapacity < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(moduleRangeCapacity));
+            }
+
+            _messages = new Dictionary<ushort, NetworkMessageDescriptor>(capacity);
+            _messageIds = new List<ushort>(capacity);
+            _moduleRanges = new List<NetworkMessageIdRange>(moduleRangeCapacity);
+        }
+
+        public int Count
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _messages.Count;
+                }
+            }
+        }
+
+        public ulong ProtocolFingerprint
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    if (_fingerprintDirty)
+                    {
+                        RebuildProtocolFingerprintLocked();
+                    }
+
+                    return _protocolFingerprint;
+                }
+            }
+        }
+
+        public int ModuleRangeCount
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _moduleRanges.Count;
+                }
+            }
+        }
+
+        public void RegisterModuleRange(in NetworkMessageIdRange range)
+        {
+            if (!TryRegisterModuleRange(range))
+            {
+                throw new InvalidOperationException($"Module message range {range} conflicts with an existing module range.");
+            }
+        }
+
+        public bool TryRegisterModuleRange(in NetworkMessageIdRange range)
+        {
+            if (!IsValidModuleRange(range))
+            {
+                throw new ArgumentException("Module message range is invalid.", nameof(range));
+            }
+
+            lock (_syncRoot)
+            {
+                for (int i = 0; i < _moduleRanges.Count; i++)
+                {
+                    NetworkMessageIdRange existing = _moduleRanges[i];
+                    if (IsSameRange(existing, range))
+                    {
+                        return true;
+                    }
+
+                    if (RangesOverlap(existing, range))
+                    {
+                        return false;
+                    }
+                }
+
+                _moduleRanges.Add(range);
+                _moduleRanges.Sort(CompareRangesByMin);
+                _fingerprintDirty = true;
+                return true;
+            }
+        }
+
+        public bool TryGetRegisteredModuleRange(ushort messageId, out NetworkMessageIdRange range)
+        {
+            lock (_syncRoot)
+            {
+                for (int i = 0; i < _moduleRanges.Count; i++)
+                {
+                    NetworkMessageIdRange candidate = _moduleRanges[i];
+                    if (candidate.Contains(messageId))
+                    {
+                        range = candidate;
+                        return true;
+                    }
+                }
+            }
+
+            range = default;
+            return false;
+        }
+
+        public void Register(in NetworkMessageDescriptor descriptor)
+        {
+            if (!TryRegister(descriptor))
+            {
+                throw new InvalidOperationException($"Message id {descriptor.MessageId} is already registered.");
+            }
+        }
+
+        public bool TryRegister(in NetworkMessageDescriptor descriptor)
+        {
+            if (!descriptor.IsValid)
+            {
+                throw new ArgumentException("Message descriptor is invalid.", nameof(descriptor));
+            }
+
+            lock (_syncRoot)
+            {
+                ValidateDescriptorRangeLocked(descriptor);
+
+                if (_messages.ContainsKey(descriptor.MessageId))
+                {
+                    return false;
+                }
+
+                _messages.Add(descriptor.MessageId, descriptor);
+                _messageIds.Add(descriptor.MessageId);
+                _fingerprintDirty = true;
+                return true;
+            }
+        }
+
+        public bool TryGet(ushort messageId, out NetworkMessageDescriptor descriptor)
+        {
+            lock (_syncRoot)
+            {
+                return _messages.TryGetValue(messageId, out descriptor);
+            }
+        }
+
+        public void Clear()
+        {
+            lock (_syncRoot)
+            {
+                _messages.Clear();
+                _messageIds.Clear();
+                _moduleRanges.Clear();
+                _protocolFingerprint = FnvOffsetBasis;
+                _fingerprintDirty = false;
+            }
+        }
+
+        public static ulong ComputeStableHash(string text)
+        {
+            if (text == null)
+            {
+                throw new ArgumentNullException(nameof(text));
+            }
+
+            ulong hash = FnvOffsetBasis;
+            for (int i = 0; i < text.Length; i++)
+            {
+                hash ^= text[i];
+                hash *= FnvPrime;
+            }
+
+            return hash == 0UL ? FnvOffsetBasis : hash;
+        }
+
+        private void RebuildProtocolFingerprintLocked()
+        {
+            _messageIds.Sort();
+            ulong hash = FnvOffsetBasis;
+
+            for (int i = 0; i < _messageIds.Count; i++)
+            {
+                NetworkMessageDescriptor descriptor = _messages[_messageIds[i]];
+                hash = Combine(hash, descriptor.MessageId);
+                hash = Combine(hash, (ushort)descriptor.Kind);
+                hash = Combine(hash, (ushort)descriptor.DefaultChannel);
+                hash = Combine(hash, descriptor.SchemaHash);
+                hash = Combine(hash, descriptor.MaxPayloadSize);
+                hash = Combine(hash, ComputeStableHash(descriptor.Owner));
+                hash = Combine(hash, ComputeStableHash(descriptor.Name));
+            }
+
+            for (int i = 0; i < _moduleRanges.Count; i++)
+            {
+                NetworkMessageIdRange range = _moduleRanges[i];
+                hash = Combine(hash, range.Min);
+                hash = Combine(hash, range.Max);
+                hash = Combine(hash, (ushort)range.Kind);
+                hash = Combine(hash, ComputeStableHash(range.Name));
+            }
+
+            _protocolFingerprint = hash == 0UL ? FnvOffsetBasis : hash;
+            _fingerprintDirty = false;
+        }
+
+        private static bool IsValidModuleRange(in NetworkMessageIdRange range)
+        {
+            return range.Kind == NetworkMessageKind.Module
+                   && !string.IsNullOrEmpty(range.Name)
+                   && NetworkMessageRanges.Module.Contains(range.Min)
+                   && NetworkMessageRanges.Module.Contains(range.Max);
+        }
+
+        private static bool RangesOverlap(in NetworkMessageIdRange left, in NetworkMessageIdRange right)
+        {
+            return left.Min <= right.Max && right.Min <= left.Max;
+        }
+
+        private static bool IsSameRange(in NetworkMessageIdRange left, in NetworkMessageIdRange right)
+        {
+            return left.Min == right.Min
+                   && left.Max == right.Max
+                   && left.Kind == right.Kind
+                   && string.Equals(left.Name, right.Name, StringComparison.Ordinal);
+        }
+
+        private void ValidateDescriptorRangeLocked(in NetworkMessageDescriptor descriptor)
+        {
+            bool isModuleDescriptor = (descriptor.Kind & NetworkMessageKind.Module) != 0;
+            if (!isModuleDescriptor)
+            {
+                return;
+            }
+
+            if (!NetworkMessageRanges.Module.Contains(descriptor.MessageId))
+            {
+                throw new ArgumentException(
+                    "Module message descriptors must use the module message id range.",
+                    nameof(descriptor));
+            }
+
+            for (int i = 0; i < _moduleRanges.Count; i++)
+            {
+                NetworkMessageIdRange range = _moduleRanges[i];
+                if (!range.Contains(descriptor.MessageId))
+                {
+                    continue;
+                }
+
+                if (!string.Equals(range.Name, descriptor.Owner, StringComparison.Ordinal))
+                {
+                    throw new ArgumentException(
+                        $"Module message id {descriptor.MessageId} belongs to {range.Name}, not {descriptor.Owner}.",
+                        nameof(descriptor));
+                }
+
+                return;
+            }
+
+            throw new ArgumentException(
+                $"Module message id {descriptor.MessageId} has no registered module range.",
+                nameof(descriptor));
+        }
+
+        private static int CompareRangesByMin(NetworkMessageIdRange left, NetworkMessageIdRange right)
+        {
+            int result = left.Min.CompareTo(right.Min);
+            return result != 0 ? result : string.CompareOrdinal(left.Name, right.Name);
+        }
+
+        private static ulong Combine(ulong hash, int value)
+        {
+            unchecked
+            {
+                hash ^= (uint)value;
+                hash *= FnvPrime;
+                hash ^= (uint)(value >> 16);
+                hash *= FnvPrime;
+                return hash;
+            }
+        }
+
+        private static ulong Combine(ulong hash, ulong value)
+        {
+            unchecked
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    hash ^= (byte)(value >> (i * 8));
+                    hash *= FnvPrime;
+                }
+
+                return hash;
+            }
+        }
     }
 
     public interface INetworkRuntimeContextProvider
@@ -313,6 +795,7 @@ namespace CycloneGames.Networking
             Transport = networkManager.Transport;
             _features = features;
             AddService<INetworkManager>(networkManager);
+            AddService<INetworkMessageCatalog>(new NetworkMessageCatalog());
             if (Transport != null)
                 AddService<INetTransport>(Transport);
         }

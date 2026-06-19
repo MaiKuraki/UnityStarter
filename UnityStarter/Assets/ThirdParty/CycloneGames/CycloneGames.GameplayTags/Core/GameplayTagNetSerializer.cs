@@ -4,6 +4,12 @@ using System.Runtime.CompilerServices;
 
 namespace CycloneGames.GameplayTags.Core
 {
+   public enum GameplayTagNetPacketKind : byte
+   {
+      Delta = 0xFD,
+      Full = 0xFE
+   }
+
    /// <summary>
    /// Framework-agnostic binary serialization for gameplay tag replication.
    /// Current packets use stable 64-bit tag ids plus a tag manifest hash so
@@ -11,12 +17,6 @@ namespace CycloneGames.GameplayTags.Core
    /// </summary>
    public static class GameplayTagNetSerializer
    {
-      private enum PacketKind : byte
-      {
-         Delta = 0xFD,
-         Full = 0xFE
-      }
-
       /// <summary>
       /// Latest gameplay tag serializer wire-format version emitted by this module.
       /// This is scoped to GameplayTagNetSerializer payloads, not the whole game network protocol.
@@ -52,7 +52,7 @@ namespace CycloneGames.GameplayTags.Core
          int count = snapshot?.ExplicitTagCount ?? 0;
          byte[] buffer = new byte[GetFullSerializedSizeFromCount(count)];
          int offset = 0;
-         WriteHeader(buffer, ref offset, PacketKind.Full, count);
+         WriteHeader(buffer, ref offset, GameplayTagNetPacketKind.Full, count);
 
          if (snapshot == null)
             return buffer;
@@ -71,7 +71,7 @@ namespace CycloneGames.GameplayTags.Core
          EnsureWriteCapacity(buffer, startOffset, requiredSize);
 
          int offset = startOffset;
-         WriteHeader(buffer, ref offset, PacketKind.Full, count);
+         WriteHeader(buffer, ref offset, GameplayTagNetPacketKind.Full, count);
 
          if (container is null)
             return offset - startOffset;
@@ -100,7 +100,7 @@ namespace CycloneGames.GameplayTags.Core
             throw new ArgumentNullException(nameof(container));
 
          int readOffset = offset;
-         int count = ReadHeader(data, ref readOffset, PacketKind.Full);
+         int count = ReadHeader(data, ref readOffset, GameplayTagNetPacketKind.Full);
          EnsureReadCapacity(data, readOffset, GetStableIdPayloadSize(count));
 
          container.Clear();
@@ -166,7 +166,7 @@ namespace CycloneGames.GameplayTags.Core
          EnsureWriteCapacity(buffer, startOffset, requiredSize);
 
          int offset = startOffset;
-         WriteHeader(buffer, ref offset, PacketKind.Delta, addCount);
+         WriteHeader(buffer, ref offset, GameplayTagNetPacketKind.Delta, addCount);
          for (int i = 0; i < addCount; i++)
          {
             if (!added[i].IsValid)
@@ -204,7 +204,7 @@ namespace CycloneGames.GameplayTags.Core
             throw new ArgumentNullException(nameof(container));
 
          int readOffset = offset;
-         int addCount = ReadHeader(data, ref readOffset, PacketKind.Delta);
+         int addCount = ReadHeader(data, ref readOffset, GameplayTagNetPacketKind.Delta);
          EnsureReadCapacity(data, readOffset, GetPacketSize(4, addCount));
 
          for (int i = 0; i < addCount; i++)
@@ -240,11 +240,44 @@ namespace CycloneGames.GameplayTags.Core
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       public static bool IsDeltaPacket(byte[] data, int offset = 0)
       {
-         return data != null &&
-                offset >= 0 &&
-                data.Length > offset + 1 &&
-                IsSupportedProtocolVersion(data[offset]) &&
-                data[offset + 1] == (byte)PacketKind.Delta;
+         return TryGetPacketKind(data, offset, out GameplayTagNetPacketKind kind) &&
+                kind == GameplayTagNetPacketKind.Delta;
+      }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      public static bool IsFullPacket(byte[] data, int offset = 0)
+      {
+         return TryGetPacketKind(data, offset, out GameplayTagNetPacketKind kind) &&
+                kind == GameplayTagNetPacketKind.Full;
+      }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      public static bool TryGetPacketKind(byte[] data, int offset, out GameplayTagNetPacketKind kind)
+      {
+         kind = default;
+
+         if (data == null ||
+             offset < 0 ||
+             data.Length <= offset + 1 ||
+             !IsSupportedProtocolVersion(data[offset]))
+         {
+            return false;
+         }
+
+         byte marker = data[offset + 1];
+         if (marker == (byte)GameplayTagNetPacketKind.Full)
+         {
+            kind = GameplayTagNetPacketKind.Full;
+            return true;
+         }
+
+         if (marker == (byte)GameplayTagNetPacketKind.Delta)
+         {
+            kind = GameplayTagNetPacketKind.Delta;
+            return true;
+         }
+
+         return false;
       }
 
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -299,7 +332,7 @@ namespace CycloneGames.GameplayTags.Core
          }
       }
 
-      private static void WriteHeader(byte[] buffer, ref int offset, PacketKind kind, int count)
+      private static void WriteHeader(byte[] buffer, ref int offset, GameplayTagNetPacketKind kind, int count)
       {
          if (count < 0)
             throw new ArgumentOutOfRangeException(nameof(count));
@@ -310,7 +343,7 @@ namespace CycloneGames.GameplayTags.Core
          WriteInt32(buffer, ref offset, count);
       }
 
-      private static int ReadHeader(byte[] data, ref int offset, PacketKind expectedKind)
+      private static int ReadHeader(byte[] data, ref int offset, GameplayTagNetPacketKind expectedKind)
       {
          EnsureReadCapacity(data, offset, HeaderSize);
 

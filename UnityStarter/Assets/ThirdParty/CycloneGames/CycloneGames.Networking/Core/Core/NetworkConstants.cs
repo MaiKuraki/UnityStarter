@@ -12,17 +12,22 @@ namespace CycloneGames.Networking
         public const int DefaultMaxPayloadSize = 1200;
         public const int MaxMessageId = 65535;
 
-        // Reserved message ID ranges
+        // Reserved message ID ranges. Optional packages claim sub-ranges inside the module-owned range.
         public const ushort SystemMsgIdMin = 0;
-        public const ushort SystemMsgIdMax = 99;
-        public const ushort RpcMsgIdMin = 100;
-        public const ushort RpcMsgIdMax = 999;
-        public const ushort UserMsgIdMin = 1000;
+        public const ushort SystemMsgIdMax = 999;
+        public const ushort RpcMsgIdMin = 1000;
+        public const ushort RpcMsgIdMax = 9999;
+        public const ushort ModuleMsgIdMin = 10000;
+        public const ushort ModuleMsgIdMax = 29999;
+        public const ushort UserMsgIdMin = 30000;
 
         // Timing
         public const float DefaultTimeoutSeconds = 30f;
         public const float DefaultHeartbeatInterval = 5f;
         public const float DefaultDisconnectTimeout = 10f;
+        public const double DefaultReconnectWindowSeconds = 300d;
+        public const double DefaultHostMigrationTimeoutSeconds = 8d;
+        public const int DefaultSessionSearchMaxResults = 50;
 
         // Buffer sizes
         public const int DefaultBufferSize = 1500;

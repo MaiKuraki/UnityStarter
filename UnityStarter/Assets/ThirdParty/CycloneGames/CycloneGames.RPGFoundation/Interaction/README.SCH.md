@@ -122,7 +122,7 @@
 - 不依赖 Unity 的 `InteractionAuthorityService`，用于服务端请求校验：World 作用域、稳定 ID、tick 漂移、重复请求、重放历史压力、按发起者限流、action 可用性、目标可用性、距离检查和队列压力。
 - `InteractionTargetSnapshot` 与 `InteractionVector3`，供不应依赖 `UnityEngine` 的 headless/server adapter 使用。
 - `IInteractionPositionProvider` 用于可插拔位置来源，让 Networking、GameplayFramework、ECS 或后端 simulation 不必共享同一种具体向量类型，也能喂给权威校验。
-- 面向 `CycloneGames.Networking.Core`、`CycloneGames.GameplayFramework.Runtime` 与 `CycloneGames.DeterministicMath.Core` 的可选 integration assembly，让 Mirror、Mirage、lockstep/rollback 或后端传输选择留在 Interaction 核心之外。
+- 面向 `CycloneGames.GameplayFramework.Runtime` 与 `CycloneGames.DeterministicMath.Core` 的可选桥接，以及面向 `CycloneGames.Networking.Core` 的独立 `CycloneGames.RPGFoundation.Interaction.Networking` 包，让 Mirror、Mirage、lockstep/rollback 或后端传输选择留在 Interaction 核心之外。
 - `InteractionMetrics` / `InteractionMetricsSnapshot`，用于 accepted、rejected、queued、dropped、completed、failed 和 faulted 等生产可观测计数。
 - 通过 `blockWhenLosBudgetExceeded` 提供 LOS 预算耗尽时的 fail-closed 行为。
 
@@ -145,7 +145,7 @@
 
 内置 `INetworkInteractionSystem` 是 adapter 契约，`InteractionAuthorityService` 是校验/预约核心。二者都不是完整 transport、prediction、rollback 或 replication 实现。
 
-**集成边界：** `InteractionVector3` 是最低公共值对象，不是 `CycloneGames.Networking.NetworkVector3`、`CycloneGames.DeterministicMath.FPVector3` 或 `UnityEngine.Vector3` 的替代品。需要跨网络包时，使用 `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.Networking` 在 `InteractionVector3` 与 `NetworkVector3` 之间转换，并使用 `InteractionNetworkProtocol`、`InteractionNetworkRequest`、`InteractionNetworkCancelRequest` 与 `InteractionNetworkResult` 作为更适合传输的 DTO/协议构件。需要接入 GameplayFramework 时，使用 `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.GameplayFramework` 将 `Actor` 的位置与稳定 ID 适配为 `InteractionTargetSnapshot` 或 `GameObjectInstigator`。如果需要 lockstep、rollback、replay 或 bit-identical server simulation，应使用 `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.DeterministicMath` 与 `InteractionDeterministicAuthorityService`；它使用 `FPVector3` / `FPInt64` 做范围校验，而不是把权威判定转换回 float。
+**集成边界：** `InteractionVector3` 是最低公共值对象，不是 `CycloneGames.Networking.NetworkVector3`、`CycloneGames.DeterministicMath.FPVector3` 或 `UnityEngine.Vector3` 的替代品。需要跨网络包时，添加独立的 `CycloneGames.RPGFoundation.Interaction.Networking` 包，在 `InteractionVector3` 与 `NetworkVector3` 之间转换，并使用 `InteractionNetworkProtocol`、`InteractionNetworkRequest`、`InteractionNetworkCancelRequest` 与 `InteractionNetworkResult` 作为更适合传输的 DTO/协议构件。需要接入 GameplayFramework 时，使用 `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.GameplayFramework` 将 `Actor` 的位置与稳定 ID 适配为 `InteractionTargetSnapshot` 或 `GameObjectInstigator`。如果需要 lockstep、rollback、replay 或 bit-identical server simulation，应使用 `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.DeterministicMath` 与 `InteractionDeterministicAuthorityService`；它使用 `FPVector3` / `FPInt64` 做范围校验，而不是把权威判定转换回 float。
 
 **确定性权威位置策略：** 当 Networking、GameplayFramework 与 DeterministicMath 同时启用时，权威交互位置必须来自驱动移动的同一份 fixed-point simulation state。`InteractionVector3`、`NetworkVector3`、`UnityEngine.Vector3` 和 `Actor.GetActorLocation()` 适合展示、本地预测、Editor 工具和非确定性 server adapter；它们不是 lockstep、rollback、replay 或反作弊判定的 canonical source。
 
@@ -159,7 +159,7 @@
 
 `InteractionDeterministicMathExtensions.ToFPVector3(InteractionVector3)` 与 `ToDeterministicTargetSnapshot(InteractionTargetSnapshot)` 仅保留给迁移、Editor、诊断或非权威桥接，并已标记为 obsolete，以避免开发者把 float 数据误当成确定性信任源。
 
-CycloneGames integration 通过独立 asmdef 隔离。对于 UPM 或 local Package Manager 安装，integration 可用性由各自 asmdef 的 `versionDefines` 和 `defineConstraints` 控制。对于直接复制到 `Assets/` 的布局，基础 Interaction assembly 仍保持可用；可选强类型 integration 会保持禁用，直到依赖通过 Package Manager 暴露给 Unity。项目级全局 scripting define symbol 不是常规 integration 开关。
+CycloneGames integration 通过独立 asmdef 或独立可选包隔离。Interaction 的 Cyclone networking 桥接位于 `CycloneGames.RPGFoundation.Interaction.Networking`，不需要 PlayerSettings scripting define symbols。包内其余 integration 使用自己的 assembly reference，不应通过项目级全局 scripting define symbol 启用。
 
 ---
 
@@ -212,7 +212,7 @@ sequenceDiagram
 | **VitalRouter**                  | 命令路由与拦截器管线                                     | 是       |
 | **UniTask**                      | Unity 主线程上的零分配 async/await                       | 是       |
 | **CycloneGames.Factory.Runtime** | 对象池（`ObjectPool`、`IPoolable`、`MonoPrefabFactory`） | 是       |
-| **CycloneGames.Networking.Core** | 可选 `NetworkVector3` 与 DTO 桥，用于 transport adapter  | 可选     |
+| **CycloneGames.RPGFoundation.Interaction.Networking** | 可选 `NetworkVector3` 与 DTO 桥，用于 transport adapter  | 可选     |
 | **CycloneGames.GameplayFramework.Runtime** | 可选 `Actor` / World adapter 桥                | 可选     |
 | **CycloneGames.DeterministicMath.Core** | 可选 `FPVector3` / `FPInt64` 权威校验桥，用于 lockstep、rollback 和 replay | 可选     |
 
@@ -1320,12 +1320,7 @@ detector.CurrentInteractable.Subscribe(target =>
 | `Runtime/Integrations/DeterministicMath/InteractionDeterministicRequestPayload.cs` | 带 raw fixed-point 发起者位置、适合传输的确定性请求 |
 | `Runtime/Integrations/DeterministicMath/InteractionDeterministicTargetSnapshot.cs` | 面向确定性 simulation 的 fixed-point 目标状态 |
 | `Runtime/Integrations/DeterministicMath/GameplayFramework/GameplayFrameworkDeterministicInteractionExtensions.cs` | 需要显式 deterministic position provider 的 GameplayFramework 桥 |
-| `Runtime/Integrations/Networking/InteractionNetworkAuthorityBridge.cs` | 将网络 DTO 接入 `InteractionAuthorityService` |
-| `Runtime/Integrations/Networking/InteractionNetworkCancelRequest.cs` | 传输友好的取消请求 DTO |
-| `Runtime/Integrations/Networking/InteractionNetworkProtocol.cs` | 稳定 message ID、channel、协议版本和 payload 上限 |
-| `Runtime/Integrations/Networking/InteractionNetworkRequest.cs` | 使用 `NetworkVector3` 的传输友好请求 DTO |
-| `Runtime/Integrations/Networking/InteractionNetworkResult.cs` | 传输友好的交互结果 DTO |
-| `Runtime/Integrations/Networking/InteractionNetworkVectorExtensions.cs` | `InteractionVector3` 与 `NetworkVector3` 转换 |
+| `CycloneGames.RPGFoundation.Interaction.Networking/Core/*.cs` | 独立可选包，提供传输友好 DTO、message catalog registration 和 `NetworkVector3` 转换 |
 | `Runtime/Integrations/GameplayFramework/GameplayFrameworkInteractionExtensions.cs` | `Actor` 到 Interaction 位置、发起者和快照的辅助方法 |
 | `Runtime/IInteractionDetector.cs`         | 检测与目标追踪接口                             |
 | `Runtime/InteractionDetector.cs`          | 完整检测实现（3D、2D、SpatialHash、LOD、评分） |
@@ -1389,7 +1384,7 @@ detector.CurrentInteractable.Subscribe(target =>
 | `InteractionSystem`       | 实现 `IInteractionSystem` 的 MonoBehaviour：VitalRouter 路由、authority snapshot 和 metrics。                 |
 | `InteractionAuthorityService` | 不依赖 Unity 的稳定 ID 请求服务端校验/预约核心。                         |
 | `InteractionDeterministicAuthorityService` | 面向 lockstep 和 rollback 的 deterministic fixed-point 校验/预约核心。 |
-| `InteractionNetworkAuthorityBridge` | 可选 Networking 集成桥，将 `InteractionNetworkRequest` 接入 `InteractionAuthorityService`。 |
+| `InteractionNetworkAuthorityBridge` | `CycloneGames.RPGFoundation.Interaction.Networking` 中的可选桥接，将 `InteractionNetworkRequest` 接入 `InteractionAuthorityService`。 |
 | `InteractionMetrics`      | 面向校验和执行可观测性的线程安全计数器。                                 |
 | `TwoStateInteractionBase` | 实现 `ITwoStateInteraction` 的 MonoBehaviour。                                 |
 | `PickableItem`            | 内置可拾取物品的 `Interactable` 子类。                                         |

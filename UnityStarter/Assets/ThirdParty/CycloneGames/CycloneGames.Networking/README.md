@@ -11,9 +11,11 @@ A **production-grade networking abstraction layer** for Unity supporting state s
 - **Clean Abstractions**: Transport-agnostic interfaces (`INetTransport`, `INetworkManager`, `INetConnection`)
 - **Client Prediction**: Full predict → authorize → reconcile pipeline with rollback
 - **Deterministic Simulation**: Q32.32 fixed-point math, deterministic RNG, pluggable desync detection (`IStateHasher`)
-- **Interest Management**: Grid AOI, manual groups, team visibility, composite strategies
-- **GAS Integration**: First-class GameplayAbilities networking (abilities, effects, attributes)
-- **Session Management**: Lobby/matchmaking/host migration abstractions plus reconnection with state catch-up hooks
+- **Replication Infrastructure**: Policy-based interest evaluation, spatial AOI indexing, per-connection state cache, snapshot packet writing, adaptive send budgets, and deterministic load simulation
+- **Optional Gameplay Integrations**: GameplayAbilities, GameplayTags, GameplayFramework, and RPGFoundation networking live in separate packages
+- **Session Resilience**: Backend-neutral room directory, matchmaking plans, reconnect reservations, host migration, and authority transfer plans
+- **Project Extensibility**: Runtime profiles, node capability descriptors, and protocol manifests keep project-specific numbers out of Cyclone core code
+- **Production Hardening**: Scenario-driven readiness matrix for capacity, protocol, capability, and failure-injection coverage
 - **Security**: Token-bucket rate limiting, message validation
 - **Diagnostics**: Network profiler, condition simulator (LAN/4G/Satellite presets)
 - **Thread Safety**: Mirror adapter includes cross-thread send queue with `ArrayPool`; other adapters should send on main thread unless extended similarly
@@ -38,7 +40,7 @@ A **production-grade networking abstraction layer** for Unity supporting state s
     - [6. Client Prediction](#6-client-prediction)
       - [Snapshot Interpolation](#snapshot-interpolation)
       - [Lag Compensation](#lag-compensation)
-    - [7. Interest Management](#7-interest-management)
+    - [7. Replication Infrastructure](#7-replication-infrastructure)
     - [8. State Synchronization](#8-state-synchronization)
     - [9. Remote Procedure Calls](#9-remote-procedure-calls)
     - [10. Lockstep \& Deterministic Simulation](#10-lockstep--deterministic-simulation)
@@ -56,16 +58,21 @@ A **production-grade networking abstraction layer** for Unity supporting state s
     - [19. Authentication](#19-authentication)
     - [20. Platform Configuration](#20-platform-configuration)
     - [21. Transport Adapters](#21-transport-adapters)
+    - [22. Profiles, Capabilities, and Protocol Manifests](#22-profiles-capabilities-and-protocol-manifests)
+    - [23. Production Hardening Matrix](#23-production-hardening-matrix)
   - [Game Type Guide](#game-type-guide)
   - [Tutorials](#tutorials)
     - [Tutorial 1: FPS Network Sync from Scratch](#tutorial-1-fps-network-sync-from-scratch)
     - [Tutorial 2: RTS Lockstep](#tutorial-2-rts-lockstep)
-    - [Tutorial 3: Team Visibility](#tutorial-3-team-visibility)
+    - [Tutorial 3: Team Visibility With Replication Infrastructure](#tutorial-3-team-visibility-with-replication-infrastructure)
   - [API Quick Reference](#api-quick-reference)
     - [Core](#core)
     - [Synchronization](#synchronization)
     - [Deterministic](#deterministic)
-    - [Interest Management](#interest-management)
+    - [Replication Infrastructure](#replication-infrastructure)
+    - [Session Resilience](#session-resilience)
+    - [Project Extensibility](#project-extensibility)
+    - [Production Hardening](#production-hardening)
     - [GAS Integration (`CycloneGames.GameplayAbilities.Networking`)](#gas-integration-cyclonegamesgameplayabilitiesnetworking)
   - [Current Adapter and Protocol Notes](#current-adapter-and-protocol-notes)
   - [Directory Structure](#directory-structure)
@@ -92,7 +99,7 @@ flowchart TB
         Prediction["ClientPrediction</br>Predict + Reconcile"]
         Lockstep["LockstepManager</br>Deterministic Lockstep"]
         Rollback["RollbackNetcode</br>GGPO-style Rollback"]
-        Interest["InterestManager</br>AOI / Visibility"]
+        Replication["ReplicationCore</br>AOI / State Cache / Snapshots"]
         Spawn["SpawnManager</br>Object Spawning"]
         Scene["SceneManager</br>Scene Loading"]
     end
@@ -165,7 +172,7 @@ flowchart TB
 | **Deterministic**           | Q32.32 fixed-point math, lockstep, rollback for competitive games                                   |
 | **Pluggable Hashing**       | `IStateHasher` struct-generic for zero-cost hash algorithm injection                                |
 | **Thread-Safe**             | Mirror adapter provides cross-thread send queue (`ConcurrentQueue`) and `Interlocked` accounting    |
-| **Conditional Compilation** | `#if MIRROR`, `#if MIRAGE`, `#if MESSAGEPACK`, etc.                                                 |
+| **Conditional Compilation** | Adapter assemblies use package-driven private symbols such as `CYCLONE_NETWORKING_HAS_MIRROR`.      |
 
 ---
 
@@ -538,55 +545,187 @@ if (lagComp.HitTest(clientTick, shootRay, maxDist, out float hitDist))
 
 ---
 
-### 7. Interest Management
+### 7. Replication Infrastructure
 
-**Path**: `Runtime/Scripts/Interest/`
+**Path**: `Core/Replication/`
 
-Controls which entities are visible to which connections — **critical for bandwidth**.
+Builds per-connection replication work from pure C# snapshots. Gameplay systems provide observer/object data, the core evaluates interest and send budgets, and the send layer writes deterministic snapshot packets. This is the common foundation for MMO AOI, MOBA team visibility, shooter owner prediction, sandbox chunk replication, replay capture, and dedicated server simulation.
+
+The replication layer is intentionally backend-neutral. It does not depend on Mirror, Mirage, Nakama, Unity `GameObject`, `MonoBehaviour`, `ScriptableObject`, PlayerSettings symbols, or a DI container. A project can construct the services directly, register them in its own DI container, or wrap them behind a game-specific server composition root.
 
 ```mermaid
 flowchart TB
-    subgraph Managers["Interest Managers"]
-        Grid["GridInterestManager</br>Spatial Grid AOI</br>Open Worlds"]
-        Group["GroupInterestManager</br>Manual Groups</br>Dungeons / Rooms"]
-        TeamVis["TeamVisibilityInterestManager</br>Team Detection</br>MOBA / RTS"]
-        Composite["CompositeInterestManager</br>Combine Strategies</br>Union of results"]
+    subgraph Inputs["Gameplay Layer Snapshots"]
+        Observer["NetworkReplicationObserver</br>connection, team, view radius, layers"]
+        Object["NetworkReplicatedObject</br>owner, team, position, policy, dirty state"]
+        Payloads["INetworkSnapshotPayloadSource</br>full-state and delta bytes"]
     end
 
-    subgraph Entity["INetworkEntity"]
-        Props["• NetworkId</br>• Position</br>• OwnerConnectionId</br>• AlwaysRelevant</br>• RelevanceGroup"]
+    subgraph Replication["Cyclone Replication Core"]
+        Spatial["NetworkSpatialHashIndex</br>optional spatial AOI prefilter"]
+        State["NetworkReplicationStateCache</br>last sent / acked / full-state state"]
+        Evaluator["INetworkInterestEvaluator</br>owner / team / area / manual"]
+        Planner["NetworkReplicationPlanner</br>priority ordering + budget fit"]
+        Scheduler["AdaptiveNetworkSendScheduler</br>quality-aware budget"]
+        Budget["NetworkSendBudget</br>bytes + message count"]
+        Packet["NetworkSnapshotPacketBuilder</br>stable snapshot packet"]
     end
 
-    Composite --> Grid
-    Composite --> Group
-    Composite --> TeamVis
-    Grid --> Entity
-    Group --> Entity
-    TeamVis --> Entity
+    subgraph Output["Send Layer"]
+        Selection["NetworkReplicationSelection[]</br>object id, source index, channel, reason"]
+        Snapshot["Snapshot packet</br>protocol version, tick, entries, payloads"]
+    end
+
+    Object --> Spatial
+    Spatial --> Evaluator
+    Observer --> Evaluator
+    Object --> Evaluator
+    Evaluator --> Planner
+    State --> Planner
+    Scheduler --> Budget
+    Budget --> Planner
+    Planner --> Selection
+    Selection --> Packet
+    Payloads --> Packet
+    Packet --> Snapshot
 ```
+
+#### Planning and Interest
+
+`NetworkReplicationPlanner` is the deterministic selector. It receives a single observer, a span of `NetworkReplicatedObject` snapshots, a server tick, a mutable `NetworkSendBudget`, and a caller-owned output span. It filters objects through `INetworkInterestEvaluator`, orders them by score, and writes only the entries that fit the byte and message budget.
 
 ```csharp
-// Grid AOI (open world MMO)
-var grid = new GridInterestManager(cellSize: 50f, visibilityRange: 150f);
-grid.SetObserverPosition(connectionId, playerPosition);
+using CycloneGames.Networking.Replication;
 
-// Manual groups (dungeons, rooms)
-var group = new GroupInterestManager();
-group.AddEntityToGroup("dungeon_1", entity);
-group.AddConnectionToGroup("dungeon_1", connectionId);
+var observer = new NetworkReplicationObserver(
+    connectionId: 10,
+    playerId: 1001,
+    teamId: 2,
+    position: playerPosition,
+    viewRadius: 80f);
 
-// Team Visibility (MOBA/RTS)
-var visibility = new TeamVisibilityInterestManager(defaultDetectionRange: 30f);
-visibility.SetConnectionTeam(connectionId, teamId: 1);
-visibility.SetEntityDetectionRange(entity, 25f);
-visibility.SetHidden(entity, true);           // hidden
-visibility.AddRevealZone(position, radius);   // reveal zone
+var objects = new[]
+{
+    new NetworkReplicatedObject(
+        objectId: 5001,
+        policy: NetworkReplicationPolicy.OwnerOrArea(80f),
+        position: actorPosition,
+        ownerConnectionId: 10,
+        isDirty: true,
+        estimatedPayloadBytes: 96)
+};
 
-// Combine strategies (union of visibility)
-var composite = new CompositeInterestManager();
-composite.Add(grid);
-composite.Add(visibility);
+var planner = new NetworkReplicationPlanner();
+var budget = new NetworkSendBudget(maxBytes: 4096, maxMessages: 64);
+var selections = new NetworkReplicationSelection[128];
+
+int count = planner.BuildPlan(observer, objects, serverTick, ref budget, selections);
+for (int i = 0; i < count; i++)
+{
+    NetworkReplicationSelection selection = selections[i];
+    // Use selection.SourceIndex to fetch the source object and write the payload.
+}
 ```
+
+Use `NetworkReplicationPolicy` for common visibility rules:
+
+| Policy | Best For |
+| --- | --- |
+| `OwnerOnly` | Player-owned inventory, private prediction state, local-only authoritative corrections |
+| `OwnerOrArea(radius)` | Shooter characters, projectiles, vehicles, interactable props |
+| `Team(radius)` | MOBA and team shooter allies, shared squad information |
+| `Area(radius)` | MMO actors, sandbox chunks, public world props |
+| `Manual` | Quest phases, stealth/reveal systems, streaming volumes, custom shard rules |
+
+For large worlds, use `NetworkSpatialHashIndex` as a prefilter before planning. The index supports XZ, XY, and XYZ cell modes, layer masks, update/removal by object id, and caller-owned query buffers. Query does not allocate when the index has already been built.
+
+```csharp
+var index = new NetworkSpatialHashIndex(cellSize: 32f);
+for (int i = 0; i < objects.Length; i++)
+{
+    NetworkReplicatedObject obj = objects[i];
+    index.Upsert(obj.ObjectId, i, obj.Position, obj.InterestLayerMask);
+}
+
+Span<NetworkSpatialQueryResult> nearby = stackalloc NetworkSpatialQueryResult[256];
+int nearbyCount = index.Query(
+    observer.Position,
+    observer.ViewRadius,
+    observer.InterestLayerMask,
+    nearby);
+```
+
+#### State Cache and Snapshot Packets
+
+`NetworkReplicationStateCache` stores per-connection object state: last sent tick, last full-state tick, last acked tick, last payload hash, payload size, sequence, and whether a full state is required. It lets the replication layer make different decisions for a reconnecting player, a newly observed object, and a stable object that only needs deltas.
+
+```csharp
+var stateCache = new NetworkReplicationStateCache(capacity: 65536);
+NetworkReplicatedObject source = objects[sourceIndex];
+NetworkReplicatedObject perConnectionObject = stateCache.ApplyState(
+    observer.ConnectionId,
+    source);
+
+stateCache.MarkSent(
+    observer.ConnectionId,
+    source.ObjectId,
+    serverTick,
+    fullState: perConnectionObject.RequiresFullState,
+    payloadBytes: 96,
+    payloadHash: payloadHash,
+    sequence: sequence);
+```
+
+`NetworkSnapshotPacketBuilder` writes a stable packet format for the selected objects. The builder does not know gameplay serialization. Instead, `INetworkSnapshotPayloadSource` supplies full-state or delta payload size, hash, and bytes. This keeps GameplayAbilities, GameplayTags, GameplayFramework, RPGFoundation, or third-party gameplay packages independent from the transport and packet writer.
+
+```csharp
+var packetBuilder = new NetworkSnapshotPacketBuilder();
+NetworkSnapshotWriteResult result = packetBuilder.WriteSnapshot(
+    selections.AsSpan(0, count),
+    serverTick,
+    payloadSource,
+    writer);
+```
+
+Snapshot packets start with a protocol version byte, server tick, entry count, and then per-object entries containing object id, full/delta flags, channel, payload length, and payload bytes. The result reports object counts, full/delta split, bytes written, and an aggregate payload hash for diagnostics and replay validation.
+
+#### Adaptive Scheduling and Load Simulation
+
+`AdaptiveNetworkSendScheduler` implements `IAdaptiveSendRate` and converts connection quality plus transport statistics into target send interval and `NetworkSendBudget`. Poor links receive smaller budgets and longer intervals. Disconnected links receive a zero byte/message budget so upper layers stop scheduling work for them.
+
+```csharp
+var scheduler = new AdaptiveNetworkSendScheduler();
+scheduler.Update(connectionId, transportStats, quality, deltaTime);
+
+NetworkSendBudget budget = scheduler.CreateSendBudget(connectionId);
+int count = planner.BuildPlan(observer, objects, serverTick, ref budget, selections);
+```
+
+`NetworkReplicationLoadSimulator` is a deterministic design-time stress harness. It does not replace soak tests on real servers, but it is useful for checking how planner budgets behave when object count, connection count, view radius, dirty ratio, and world size change.
+
+```csharp
+var simulator = new NetworkReplicationLoadSimulator();
+var result = simulator.Run(new NetworkReplicationLoadSimulationOptions(
+    connectionCount: 1000,
+    objectCount: 20000,
+    tickCount: 120,
+    worldSize: 4000f,
+    viewRadius: 120f,
+    dirtyRatio: 0.35f,
+    budgetBytes: 4096,
+    budgetMessages: 64,
+    resultCapacity: 256,
+    seed: 42u));
+```
+
+#### Performance and Platform Notes
+
+- Runtime hot paths use caller-owned arrays/spans for planning, spatial query results, and snapshot writing. Preallocate these buffers per worker, room, shard, or replication lane.
+- `NetworkSpatialHashIndex` allocates when new cells are created. Build and update it as part of server world indexing, not inside every per-connection planning call.
+- `NetworkReplicationStateCache` uses managed dictionaries and is suitable for Unity, headless .NET servers, and tests. Large MMO shards should own one cache per replication world, zone, or shard and remove connection/object state aggressively on disconnect/despawn.
+- `NetworkSnapshotPacketBuilder` is serializer-agnostic. Payload sources should use existing serializers or gameplay package serializers and should avoid temporary arrays in high-frequency snapshot paths.
+- The core stores positions in `NetworkVector3` and uses deterministic ids and primitive data. It is portable across Windows, Linux, macOS, iOS, Android, WebGL, and console builds when the selected transport/backend supports that platform.
+- The module writes no files, stores no PlayerSettings symbols, and creates no hidden global preferences. Load simulation is an in-memory validation utility.
 
 ---
 
@@ -756,33 +895,106 @@ if (result != ValidationResult.Valid)
 
 ---
 
-### 12. Session & Reconnection
+### 12. Session Resilience
 
-**Path**: `Runtime/Scripts/Session/`
+**Path**: `Core/Session/`
 
-Provides interfaces for lobby/matchmaking/host migration, plus a concrete reconnection manager with state catch-up hooks.
+Provides backend-neutral room discovery, matchmaking planning, reconnection reservations, and host migration coordination. Steam lobbies, LAN discovery, Nakama matches, custom master servers, relay rooms, and dedicated server fleets should all feed the same core descriptors instead of leaking backend-specific types into gameplay code.
 
 ```mermaid
-flowchart LR
-    subgraph Session["Session Management"]
-        Lobby["ILobbyManager</br>Lobby"]
-        Match["IMatchmaker</br>Matchmaking"]
-        Host["IHostMigration</br>Host migration"]
+flowchart TB
+    subgraph Sources["Discovery Sources"]
+        Steam["Steam Lobby Adapter"]
+        Lan["LAN Discovery Adapter"]
+        Backend["Master Server / Nakama"]
+        Fleet["Dedicated Server Fleet"]
     end
 
-    subgraph Reconnect["Reconnection"]
-        Detect["Disconnect detection"]
-        Reserve["Reserve slot</br>Default 5 minutes"]
-        CatchUp["State catch-up</br>IStateCatchUp"]
-        Rejoin["Rejoin"]
+    subgraph CoreSession["Cyclone Session Core"]
+        Directory["NetworkSessionDirectory</br>filter, rank, stale removal"]
+        MatchPlan["NetworkMatchmakingCoordinator</br>join / create / queue plan"]
+        Reconnect["ReconnectionManager</br>slot reservation + catch-up"]
+        Migration["HostMigrationCoordinator</br>candidate policy + authority plan"]
     end
 
-    Lobby --> Match
-    Detect --> Reserve --> CatchUp --> Rejoin
+    subgraph Game["Game / Composition Root"]
+        Execute["Execute backend action</br>Join, create, queue, migrate"]
+        Continue["SessionContinuity</br>avoid gameplay stalls"]
+    end
+
+    Steam --> Directory
+    Lan --> Directory
+    Backend --> Directory
+    Fleet --> Directory
+    Directory --> MatchPlan
+    MatchPlan --> Execute
+    Reconnect --> Continue
+    Migration --> Continue
 ```
 
+#### Room Search and Matchmaking
+
+`NetworkSessionDirectory` stores backend-neutral `NetworkSessionDescriptor` entries. It can rank rooms from Steam, LAN, relay, backend matchmaking, or dedicated server fleets with the same filter rules: game mode, map, region, build id, capacity, ping, privacy, connectivity, host-migration support, reconnection support, skill band, and custom properties such as mod hash or ruleset hash.
+
 ```csharp
-// Reconnection manager
+var directory = new NetworkSessionDirectory();
+directory.Upsert(new NetworkSessionDescriptor(
+    sessionId: "steam-lobby-123",
+    name: "Night Run",
+    gameMode: "roguelike",
+    currentPlayers: 3,
+    maxPlayers: 8,
+    map: "graveyard",
+    region: "asia",
+    buildId: "live-2026-06",
+    pingMs: 42,
+    supportsHostMigration: true,
+    supportsReconnection: true,
+    connectivity: NetworkSessionConnectivity.PlatformLobby | NetworkSessionConnectivity.Relay,
+    source: NetworkSessionDiscoverySource.Platform));
+
+var criteria = new NetworkSessionSearchCriteria
+{
+    GameMode = "roguelike",
+    Region = "asia",
+    BuildId = "live-2026-06",
+    MinOpenSlots = 1,
+    RequireHostMigration = true,
+    RequireReconnection = true
+};
+
+var results = new List<NetworkSessionDescriptor>(32);
+int count = directory.Search(criteria, results);
+```
+
+`NetworkMatchmakingCoordinator` does not call any backend directly. It returns a plan: join the best compatible room, create a new room, enter a queue, or do nothing. Steam, LAN, Nakama, or a custom service can execute that plan in their own adapter.
+
+```csharp
+var matchmaking = new NetworkMatchmakingCoordinator();
+NetworkMatchmakingPlan plan = matchmaking.BuildPlan(
+    directory,
+    criteria,
+    NetworkMatchmakingOptions.Default);
+
+switch (plan.Action)
+{
+    case NetworkMatchmakingPlanAction.JoinSession:
+        // Adapter joins plan.SelectedSession.
+        break;
+    case NetworkMatchmakingPlanAction.CreateSession:
+        // Adapter creates a room using the same criteria.
+        break;
+    case NetworkMatchmakingPlanAction.EnterQueue:
+        // Adapter enters backend matchmaking.
+        break;
+}
+```
+
+#### Reconnection and Host Migration
+
+`ReconnectionManager` reserves a disconnected player's slot for a bounded window, validates reconnect tokens, and optionally runs `IStateCatchUp` before the player returns to gameplay. This prevents ordinary client disconnects from freezing the session.
+
+```csharp
 var reconnect = new ReconnectionManager(myStateCatchUpImpl);
 reconnect.ReconnectWindow = 300f; // 5-minute window
 
@@ -793,7 +1005,40 @@ reconnect.OnReconnectWindowExpired += originalConnectionId =>
     Debug.Log($"Reservation expired for {originalConnectionId}");
 ```
 
-Interfaces: `ILobbyManager`, `IMatchmaker`, `IHostMigration`, `IReconnectionManager`.
+`HostMigrationCoordinator` is the generic host-failover layer for listen-server, P2P, relay-coordinated, or server-node authority transfer. It tracks candidates and emits a `NetworkAuthorityTransferPlan` instead of performing backend-specific operations itself.
+
+```csharp
+var migration = new HostMigrationCoordinator("room-123");
+migration.UpsertParticipant(new NetworkHostParticipant(
+    connectionId: 1,
+    playerId: 1001,
+    isConnected: false,
+    canHost: true,
+    authorityRank: 100));
+migration.UpsertParticipant(new NetworkHostParticipant(
+    connectionId: 2,
+    playerId: 1002,
+    isConnected: true,
+    canHost: true,
+    authorityRank: 50,
+    kind: NetworkHostCandidateKind.PlayerListenServer,
+    pingMs: 24,
+    lastConfirmedTick: new NetworkTickId(1200)));
+
+migration.SetCurrentHost(1, 1001);
+if (migration.TryBeginMigration(
+        HostMigrationReason.HostDisconnected,
+        new NetworkTickId(1201),
+        out NetworkAuthorityTransferPlan transfer))
+{
+    // Transfer session owner, simulation authority, spawn authority,
+    // object authority, scene authority, match state, and RNG authority.
+}
+```
+
+The default candidate policy is intentionally generic: authority rank first, then host kind, last confirmed tick, capacity/hardware score, packet loss, ping, join time, and connection id. A small Steam co-op game can use player listen-server candidates; a 100-player room can prefer relay or server candidates; a 10,000-player regional world should use dedicated server or shard candidates rather than client-host migration.
+
+Interfaces and core services: `ILobbyManager`, `IMatchmaker`, `IHostMigration`, `IReconnectionManager`, `NetworkSessionDirectory`, `NetworkMatchmakingCoordinator`, `HostMigrationCoordinator`, `IHostCandidatePolicy`.
 
 ---
 
@@ -920,19 +1165,19 @@ Deep integration with `CycloneGames.GameplayAbilities` for networked abilities, 
 flowchart TB
     subgraph Client["Client"]
         PredictLocal["Local prediction"]
-        Request["Request activate ability</br>MsgId: 200"]
+        Request["Request activate ability</br>MsgId: 10000"]
     end
 
     subgraph Server["Server"]
         Validate["Validate request"]
         Execute["Execute ability"]
-        ApplyEffect["Apply effect</br>MsgId: 210"]
-        SyncAttr["Sync attributes</br>MsgId: 220"]
+        ApplyEffect["Apply effect</br>MsgId: 10010"]
+        SyncAttr["Sync attributes</br>MsgId: 10020"]
     end
 
     subgraph Clients["All Clients"]
-        Confirm["Confirm activation</br>MsgId: 201"]
-        Reject["Reject activation</br>MsgId: 202"]
+        Confirm["Confirm activation</br>MsgId: 10001"]
+        Reject["Reject activation</br>MsgId: 10002"]
         EffectSync["Effect sync"]
         AttrUpdate["Attribute update"]
     end
@@ -1028,10 +1273,10 @@ bridge.FullStateRequestAuthorizer = (sender, targetId) =>
 
 | Message ID Range | Purpose                                            |
 | ---------------- | -------------------------------------------------- |
-| 200-204          | Ability activate / confirm / reject / end / cancel |
-| 210-212          | Effect applied / removed / stack changed           |
-| 220              | Attribute update                                   |
-| 240-241          | Full state snapshot                                |
+| 10000-10004      | Ability activate / confirm / reject / end / cancel |
+| 10010-10013      | Effect applied / removed / stack changed / update  |
+| 10020            | Attribute update                                   |
+| 10040-10041      | Full state snapshot                                |
 
 ---
 
@@ -1093,12 +1338,16 @@ flowchart LR
         INetworkManager2["INetworkManager"]
     end
 
-    subgraph MirrorAdapter["Mirror Adapter</br>#if MIRROR"]
+    subgraph MirrorAdapter["Mirror Adapter</br>#if CYCLONE_NETWORKING_HAS_MIRROR"]
         MirrorNet["MirrorNetAdapter</br>MonoBehaviour"]
     end
 
-    subgraph MirageAdapter["Mirage Adapter</br>#if MIRAGE"]
+    subgraph MirageAdapter["Mirage Adapter</br>#if CYCLONE_NETWORKING_HAS_MIRAGE"]
         MirageNet["MirageNetAdapter</br>MonoBehaviour"]
+    end
+
+    subgraph NakamaAdapter["Nakama Adapter</br>#if CYCLONE_NETWORKING_HAS_NAKAMA"]
+        NakamaNet["NakamaNetAdapter</br>MonoBehaviour"]
     end
 
     subgraph NoopAdapter["No-op Fallback"]
@@ -1107,18 +1356,181 @@ flowchart LR
 
     INetTransport2 --> MirrorNet
     INetTransport2 --> MirageNet
+    INetTransport2 --> NakamaNet
     INetTransport2 --> Noop
     INetworkManager2 --> MirrorNet
     INetworkManager2 --> MirageNet
+    INetworkManager2 --> NakamaNet
 ```
 
-| Adapter            | Define Symbol | Description                        |
-| ------------------ | ------------- | ---------------------------------- |
-| `MirrorNetAdapter` | `#if MIRROR`  | Mirror transport + manager adapter |
-| `MirageNetAdapter` | `#if MIRAGE`  | Mirage transport + manager adapter |
-| `NoopNetTransport` | _(always)_    | No-op fallback for testing         |
+| Adapter            | Define Symbol                         | Package Resource             | Description                              |
+| ------------------ | ------------------------------------- | ---------------------------- | ---------------------------------------- |
+| `MirrorNetAdapter` | `CYCLONE_NETWORKING_HAS_MIRROR`       | `com.mirror-networking.mirror` | Mirror transport + manager adapter     |
+| `MirageNetAdapter` | `CYCLONE_NETWORKING_HAS_MIRAGE`       | `com.miragenet.mirage`       | Mirage transport + manager adapter       |
+| `NakamaNetAdapter` | `CYCLONE_NETWORKING_HAS_NAKAMA`       | `com.heroiclabs.nakama-unity` | Nakama session, match, and socket adapter |
+| `NoopNetTransport` | _(always)_                            | _(none)_                     | No-op fallback for testing               |
 
-Both adapters implement `INetTransport` and `INetworkManager` simultaneously and register themselves with `NetServices` on `Awake`.
+Unity `versionDefines` are driven by packages resolved through Unity Package Manager. A package folder copied beside the repository does not enable these symbols unless it is referenced from `UnityStarter/Packages/manifest.json`, embedded under `UnityStarter/Packages/`, or otherwise imported as a Unity package.
+
+Mirror and Mirage adapters implement `INetTransport` and `INetworkManager` simultaneously and register themselves with `NetServices` on `Awake`. The Nakama adapter exposes the same CycloneGames runtime contracts for Nakama-backed client sessions and match state.
+
+---
+
+### 22. Profiles, Capabilities, and Protocol Manifests
+
+**Path**: `Core/Profile/`
+
+This module is the project-side extension point for avoiding hard-coded Cyclone core changes. Built-in constants and enums remain useful defaults and stable status codes, but production projects should place scale targets, backend capabilities, and project message ownership in profiles, capability descriptors, and manifests owned by the project.
+
+`NetworkRuntimeProfile` centralizes product tuning values such as connection limits, tick/send rates, payload sizes, buffer sizes, session search limits, reconnect windows, and host migration windows. It also supports project-defined integer, float, and string settings for values Cyclone cannot predict.
+
+```csharp
+NetworkRuntimeProfile profile = NetworkRuntimeProfiles.CreateDefaultBuilder()
+    .SetInt("project.max_zone_players", 10000)
+    .SetFloat("project.snapshot_jitter_buffer_seconds", 0.15f)
+    .SetString("project.deployment", "regional-shard")
+    .Build();
+
+runtimeContextBuilder.AddRuntimeProfile(profile);
+```
+
+`NetworkNodeCapabilities` describes what a client host, relay, shard, gateway, or dedicated server node can actually do. Capability ids are string-backed, so a project can add Steam, LAN, console network, cloud, shard, persistence, anti-cheat, or modding capabilities without changing Cyclone enums.
+
+```csharp
+NetworkCapabilityId zoneLease = new NetworkCapabilityId("project.zone_lease");
+
+NetworkNodeCapabilities node = new NetworkNodeCapabilitiesBuilder
+{
+    NodeId = "us-east-zone-17",
+    Region = "us-east",
+    Platform = "linux-headless",
+    MaxConnections = 10000,
+    MaxPayloadBytes = 1200,
+    CpuScore = 92,
+    MemoryScore = 88,
+}
+.Add(NetworkCapabilityIds.DedicatedServer, level: 2, score: 40d)
+.Add(NetworkCapabilityIds.Sharding, level: 3, score: 50d)
+.Add(zoneLease, level: 1, score: 20d)
+.Build();
+
+NetworkCapabilityQuery query = new NetworkCapabilityQuery
+{
+    Region = "us-east",
+    MinimumConnections = 5000,
+}
+.Require(NetworkCapabilityIds.DedicatedServer)
+.Prefer(zoneLease);
+
+bool canHost = NetworkNodeCapabilityMatcher.Matches(node, query);
+```
+
+`NetworkProtocolManifest` lets a package or game project declare message ranges, protocol versions, message descriptors, schema metadata, and catalog registration in one place. Cyclone-owned modules should register module ranges; project gameplay protocols should use user ranges and live in project assemblies.
+
+```csharp
+NetworkProtocolManifest manifest = new NetworkProtocolManifestBuilder(
+        owner: "Project.Gameplay",
+        minMessageId: 30000,
+        maxMessageId: 30999,
+        kind: NetworkMessageKind.User)
+    .AddMessage<PlayerInputMessage>(30000, NetworkChannel.UnreliableSequenced, maxPayloadSize: 96)
+    .AddMessage<InventoryCommandMessage>(30001, NetworkChannel.Reliable, maxPayloadSize: 512)
+    .SetMetadata("schema", "project-gameplay-v3")
+    .Build();
+
+catalog.RegisterProtocolManifest(manifest);
+```
+
+Guidelines:
+
+- Treat enums as stable status/result codes or convenience presets. Use `NetworkCapabilityId`, labels, profile settings, and protocol manifests for open-ended project categories.
+- Treat numeric values in `NetworkConstants` as framework defaults, not product ceilings. Product-scale limits belong in project profiles and deployment descriptors.
+- Keep project protocols in project-owned manifests. Cyclone package manifests should only describe Cyclone-owned messages.
+- For very large games, model capacity at node, shard, zone, fleet, and gateway levels instead of increasing a single `MaxConnections` value.
+
+Persistence behavior: these core models do not write files or assets. Projects can serialize profiles, capabilities, and manifests through their own `ScriptableObject`, JSON, YAML, remote config, or deployment pipeline adapters, then build these pure C# objects during composition.
+
+---
+
+### 23. Production Hardening Matrix
+
+**Path**: `Core/Hardening/`
+
+The hardening matrix turns production-readiness expectations into explicit, project-extensible contracts. It does not replace real load tests, soak tests, platform certification, security reviews, or backend deployment validation. Instead, it gives every project a common way to declare what must be proven and to fail fast when a profile, node, protocol manifest, or failure-injection plan is incomplete.
+
+The evaluator consumes four generic inputs:
+
+- `NetworkRuntimeProfile`: product scale and timing targets.
+- `NetworkNodeCapabilities`: host, relay, shard, gateway, or dedicated server capabilities.
+- `NetworkProtocolManifest`: protocol ownership, message ranges, versions, and payload budgets.
+- `NetworkFailureInjectionPlan`: planned coverage for latency, packet loss, disconnects, reconnect storms, backend outage, mobile suspend, WebGL throttling, protocol mismatch, and project-defined faults.
+
+```csharp
+NetworkProductionReadinessScenario scenario = NetworkProductionReadinessScenarios
+    .CreateMassiveShardBuilder()
+    .Build();
+
+NetworkFailureInjectionPlan faults = new NetworkFailureInjectionPlanBuilder
+{
+    PlanId = "massive-zone-faults"
+}
+    .AddFault(NetworkFaultIds.BandwidthCap, durationSeconds: 30d)
+    .AddFault(NetworkFaultIds.ReconnectStorm, durationSeconds: 30d)
+    .AddFault(NetworkFaultIds.BackendUnavailable, durationSeconds: 30d)
+    .Build();
+
+var input = new NetworkProductionReadinessInput
+{
+    RuntimeProfile = profile,
+    NodeCapabilities = nodeCapabilities
+}
+    .AddProtocolManifest(projectGameplayManifest)
+    .AddFailurePlan(faults);
+
+NetworkProductionReadinessReport report = NetworkProductionReadinessEvaluator.Evaluate(scenario, input);
+if (!report.Passed)
+{
+    // Print issues in CI, editor diagnostics, or deployment validation tooling.
+}
+```
+
+Built-in scenario builders are generic templates, not game-genre locks:
+
+| Builder | Purpose |
+| --- | --- |
+| `CreateSmallSessionBuilder()` | LAN, platform lobby, relay, listen-server, or small peer session validation |
+| `CreateAuthoritativeArenaBuilder()` | Server-authoritative action session with prediction, rollback, reconnect, and protocol checks |
+| `CreateLargeAreaBuilder()` | Large single-area validation for AOI, send budgets, reconnect storms, and backend limits |
+| `CreateMassiveShardBuilder()` | Shard/zone/fleet/gateway validation for very large worlds |
+| `CreateWebMobileBuilder()` | WebGL/mobile suspend, throttling, reconnect, and relay-oriented validation |
+
+Projects can add their own scenario ids, requirement ids, capability ids, and fault ids without modifying Cyclone:
+
+```csharp
+var cloudSaveFleet = new NetworkCapabilityId("project.cloud.save_fleet");
+var regionFailover = new NetworkFaultId("project.region_failover");
+
+NetworkProductionReadinessScenario customScenario = new NetworkProductionReadinessScenarioBuilder
+{
+    ScenarioId = new NetworkHardeningScenarioId("project.live_ops"),
+    MinimumProfileConnections = 5000,
+    MinimumNodeConnections = 5000,
+    RequireProtocolManifest = true,
+    MinimumProtocolManifestCount = 1
+}
+    .RequireCapability(cloudSaveFleet, minimumLevel: 2)
+    .RequireFault(regionFailover, minimumDurationSeconds: 60d)
+    .Build();
+```
+
+Persistence behavior: hardening scenarios, reports, and fault plans are pure C# runtime objects and write no files. Projects can persist them through project-owned assets, JSON/YAML files, CI metadata, live-service deployment descriptors, or external test-report importers.
+
+Minimum validation guidance:
+
+- Run the hardening evaluator in EditMode tests or CI for every project-owned networking profile.
+- Feed real load-test and platform-test coverage back into `NetworkFailureInjectionPlan` metadata instead of treating the built-in plan as proof by itself.
+- Fail builds on `Required` or `Critical` issues; allow `Warning` issues only with explicit project sign-off.
+- Maintain separate scenarios for small session, authoritative session, large area, massive shard, and web/mobile targets when a product ships multiple network modes.
 
 ---
 
@@ -1129,38 +1541,48 @@ Choose the right modules for your game:
 ```mermaid
 flowchart TB
     Start["Choose Your Game Type"] --> FPS
+    Start --> BattleRoyale
     Start --> MOBA
     Start --> RTS
     Start --> MMO
+    Start --> Sandbox
     Start --> Fighting
     Start --> TurnBased
 
     FPS["FPS / TPS</br>Shooters"]
+    BattleRoyale["Battle Royale</br>PUBG-style"]
     MOBA["MOBA</br>LoL / Dota2"]
     RTS["RTS</br>Real-Time Strategy"]
     MMO["MMO</br>Massive Multiplayer"]
+    Sandbox["Sandbox / Building</br>Chunks and Ownership"]
     Fighting["Fighting</br>FGC"]
     TurnBased["Turn-Based"]
 
-    FPS --> FPS_Modules["• ClientPrediction ✅</br>• LagCompensation ✅</br>• SnapshotInterpolation ✅</br>• GridInterestManager ✅</br>• NetworkVariable ✅</br>• RPC ✅"]
+    FPS --> FPS_Modules["• ClientPrediction</br>• LagCompensation</br>• NetworkReplicationPlanner</br>• NetworkReplicationStateCache</br>• NetworkVariable</br>• RPC"]
 
-    MOBA --> MOBA_Modules["• NetworkTickSystem ✅</br>• TeamVisibilityInterestManager ✅</br>• ReconnectionManager ✅</br>• ReplaySystem ✅</br>• GAS Integration (separate pkg) ✅</br>• NetworkVariable ✅"]
+    BattleRoyale --> BR_Modules["• NetworkSpatialHashIndex</br>• NetworkReplicationPlanner</br>• AdaptiveNetworkSendScheduler</br>• ReconnectionManager</br>• ReplaySystem"]
 
-    RTS --> RTS_Modules["• LockstepManager ✅</br>• DeterministicMath ✅</br>• DesyncDetector&lt;THasher&gt; ✅</br>• TeamVisibilityInterestManager ✅</br>• ReplaySystem ✅"]
+    MOBA --> MOBA_Modules["• NetworkReplicationPlanner</br>• Custom INetworkInterestEvaluator</br>• NetworkReplicationStateCache</br>• ReconnectionManager</br>• ReplaySystem</br>• GameplayAbilities.Networking"]
 
-    MMO --> MMO_Modules["• GridInterestManager ✅</br>• GroupInterestManager ✅</br>• NetworkSceneManager ✅</br>• NetworkSpawnManager ✅</br>• SessionManagement ✅</br>• NetworkVariable ✅"]
+    RTS --> RTS_Modules["• LockstepManager</br>• DeterministicMath</br>• DesyncDetector&lt;THasher&gt;</br>• ReplaySystem"]
 
-    Fighting --> Fighting_Modules["• RollbackNetcode ✅</br>• DeterministicMath ✅</br>• PredictionBuffer ✅</br>• DesyncDetector&lt;THasher&gt; ✅"]
+    MMO --> MMO_Modules["• NetworkSpatialHashIndex</br>• NetworkReplicationPlanner</br>• NetworkReplicationStateCache</br>• AdaptiveNetworkSendScheduler</br>• NetworkSceneManager</br>• SessionManagement</br>• NetworkReplicationLoadSimulator"]
 
-    TurnBased --> Turn_Modules["• RPC ✅</br>• SessionManagement ✅</br>• ReconnectionManager ✅</br>• NetworkVariable ✅"]
+    Sandbox --> Sandbox_Modules["• NetworkSpatialHashIndex</br>• NetworkSnapshotPacketBuilder</br>• Chunk / ownership evaluator</br>• NetworkSpawnManager</br>• ReconnectionManager"]
+
+    Fighting --> Fighting_Modules["• RollbackNetcode</br>• DeterministicMath</br>• PredictionBuffer</br>• DesyncDetector&lt;THasher&gt;"]
+
+    TurnBased --> Turn_Modules["• RPC</br>• SessionManagement</br>• ReconnectionManager</br>• NetworkVariable"]
 ```
 
 | Game Type                 | Sync Model       | Core Modules                                                           | Latency Strategy                       |
 | ------------------------- | ---------------- | ---------------------------------------------------------------------- | -------------------------------------- |
-| FPS/TPS                   | State sync       | ClientPrediction + LagCompensation + SnapshotInterpolation             | Client prediction + server rewind      |
-| MOBA (LoL/Dota2)          | State sync       | TeamVisibility + GAS + Reconnect + Replay                              | Server authority + interest management |
-| RTS (C&C/StarCraft)       | Lockstep         | LockstepManager + FPInt64 + DesyncDetector\<THasher\> + TeamVisibility | Deterministic simulation               |
-| MMO                       | State sync       | Grid/Group Interest + Scene + Spawn                                    | AOI culling                            |
+| FPS/TPS                   | State sync       | ClientPrediction + LagCompensation + Planner + StateCache              | Client prediction + server rewind      |
+| Battle Royale             | State sync       | SpatialHashIndex + Planner + AdaptiveScheduler + Replay                | AOI culling + burst-tolerant budgets   |
+| MOBA (LoL/Dota2)          | State sync       | Planner + custom evaluator + StateCache + GameplayAbilities bridge     | Server authority + team/vision rules   |
+| RTS (C&C/StarCraft)       | Lockstep         | LockstepManager + FPInt64 + DesyncDetector\<THasher\>                  | Deterministic simulation               |
+| MMO                       | State sync       | SpatialHashIndex + Planner + StateCache + AdaptiveScheduler + Scene    | AOI culling, send budgeting, sharding  |
+| Sandbox / Building        | State sync       | SpatialHashIndex + SnapshotPacketBuilder + chunk evaluator + Spawn     | Chunk-level deltas + ownership rules   |
 | Fighting (Street Fighter) | Rollback         | RollbackNetcode + FPInt64                                              | GGPO rollback + replay                 |
 | Turn-based                | Request/Response | RPC + Session                                                          | No real-time sync needed               |
 
@@ -1283,33 +1705,27 @@ public class RtsNetworkController : MonoBehaviour
 }
 ```
 
-### Tutorial 3: Team Visibility
+### Tutorial 3: Team Visibility With Replication Infrastructure
 
 ```csharp
-using CycloneGames.Networking.Interest;
+using CycloneGames.Networking.Replication;
 
 public class TeamVisionController : MonoBehaviour
 {
-    TeamVisibilityInterestManager _visibility;
+    private readonly NetworkReplicationPlanner _planner = new NetworkReplicationPlanner();
+    private readonly NetworkReplicationSelection[] _results = new NetworkReplicationSelection[256];
 
-    void Start()
+    int BuildPlanForConnection(PlayerConnection player, NetworkReplicatedObject[] objects, int serverTick)
     {
-        _visibility = new TeamVisibilityInterestManager(defaultDetectionRange: 30f);
+        var observer = new NetworkReplicationObserver(
+            player.ConnectionId,
+            player.PlayerId,
+            player.TeamId,
+            player.Position,
+            viewRadius: 60f);
+        var budget = new NetworkSendBudget(maxBytes: 4096, maxMessages: 64);
 
-        // Set teams
-        _visibility.SetConnectionTeam(bluePlayer.ConnectionId, teamId: 1);
-        _visibility.SetConnectionTeam(redPlayer.ConnectionId, teamId: 2);
-
-        // Set entity detection range
-        _visibility.SetEntityTeam(blueHero, teamId: 1);
-        _visibility.SetEntityDetectionRange(blueHero, 25f);
-
-        // Hidden unit
-        _visibility.SetHidden(stealthUnit, true);
-        // Invisible to enemies unless deep-reveal zone is nearby
-
-        // Place reveal zone (deep-reveal)
-        _visibility.AddRevealZone(wardPosition, radius: 15f, teamId: 1, isDeepReveal: true);
+        return _planner.BuildPlan(observer, objects, serverTick, ref budget, _results);
     }
 }
 ```
@@ -1348,16 +1764,60 @@ public class TeamVisionController : MonoBehaviour
 | `IStateHasher`            | Hash algorithm interface          | `Reset`, `HashInt`, `HashLong`, `GetDigest`   |
 | `Fnv1aHasher`             | FNV-1a 64-bit (default)           | Built-in, zero-alloc                          |
 
-### Interest Management
+### Replication Infrastructure
 
-| Class                                | Best For                           |
-| ------------------------------------ | ---------------------------------- |
-| `GridInterestManager`                | Open world MMO                     |
-| `GroupInterestManager`               | Dungeons, rooms                    |
-| `TeamVisibilityInterestManager`      | MOBA, RTS                          |
-| `CompositeInterestManager`           | Combine strategies                 |
-| `BurstGridInterestManager`           | Open world MMO (5k+ entities, DOD) |
-| `BurstTeamVisibilityInterestManager` | MOBA, RTS (5k+ entities, DOD)      |
+| Class/Interface                   | Best For                                      |
+| --------------------------------- | --------------------------------------------- |
+| `NetworkReplicationPolicy`        | Declaring owner/team/area/manual visibility   |
+| `NetworkReplicationObserver`      | Per-connection visibility and budget input    |
+| `NetworkReplicatedObject`         | Per-object replication snapshot               |
+| `INetworkInterestEvaluator`       | Custom AOI, room, guild, stealth, reveal rules |
+| `DefaultNetworkInterestEvaluator` | Owner/team/area/layer/auth baseline           |
+| `NetworkSendBudget`               | Per-connection byte and message limits        |
+| `NetworkReplicationPlanner`       | Priority-ordered replication selection        |
+| `NetworkReplicationStateCache`    | Per-connection last sent/acked/full-state state |
+| `NetworkSpatialHashIndex`         | Allocation-free spatial AOI queries after indexing |
+| `NetworkSnapshotPacketBuilder`    | Stable full-state and delta snapshot packet writer |
+| `INetworkSnapshotPayloadSource`   | Gameplay-owned payload size/hash/write contract |
+| `AdaptiveNetworkSendScheduler`    | Quality-aware send interval and budget control |
+| `NetworkReplicationLoadSimulator` | Deterministic planner load simulation         |
+
+### Session Resilience
+
+| Class/Interface                   | Best For                                      |
+| --------------------------------- | --------------------------------------------- |
+| `NetworkSessionDirectory`         | Backend-neutral room search, filtering, ranking |
+| `NetworkSessionDescriptor`        | Steam/LAN/backend/dedicated room metadata     |
+| `NetworkSessionSearchCriteria`    | Game mode, map, region, build, capacity, ping, feature filters |
+| `NetworkMatchmakingCoordinator`   | Join/create/queue plan generation             |
+| `ReconnectionManager`             | Slot reservation, reconnect token validation, state catch-up |
+| `HostMigrationCoordinator`        | Host failover, candidate selection, migration state |
+| `IHostCandidatePolicy`            | Custom authority, hardware, shard, relay, or platform host selection |
+| `NetworkAuthorityTransferPlan`    | Session/simulation/spawn/object/scene/match/RNG authority transfer |
+
+### Project Extensibility
+
+| Class/Interface                            | Best For                                      |
+| ------------------------------------------ | --------------------------------------------- |
+| `NetworkRuntimeProfile`                    | Project-owned runtime and tuning profile      |
+| `NetworkRuntimeProfileRegistry`            | Profile lookup without global project settings |
+| `NetworkNodeCapabilities`                  | Backend, client host, shard, relay, or dedicated node descriptors |
+| `NetworkCapabilityId`                      | Project-defined extensible capability ids     |
+| `NetworkCapabilityQuery`                   | Required/preferred capability matching        |
+| `NetworkProtocolManifest`                  | Versioned protocol, range, and message manifest |
+| `NetworkProtocolManifestCatalogExtensions` | Registering manifests into `INetworkMessageCatalog` |
+
+### Production Hardening
+
+| Class/Interface                         | Best For                                      |
+| --------------------------------------- | --------------------------------------------- |
+| `NetworkProductionReadinessScenario`    | Scenario-owned production-readiness contract  |
+| `NetworkProductionReadinessScenarios`   | Generic small-session, arena, large-area, massive-shard, and web/mobile templates |
+| `NetworkProductionReadinessInput`       | Evaluation input for profiles, nodes, manifests, and fault plans |
+| `NetworkProductionReadinessEvaluator`   | Deterministic readiness assessment            |
+| `NetworkProductionReadinessReport`      | Blocking/warning issue report                 |
+| `NetworkFailureInjectionPlan`           | Planned fault coverage for CI, editor diagnostics, or external load tests |
+| `NetworkFaultId`                        | Project-defined extensible fault id           |
 
 ### GAS Integration (`CycloneGames.GameplayAbilities.Networking`)
 
@@ -1433,47 +1893,30 @@ Create a preset from `Create > CycloneGames > Networking > Bootstrap Preset` and
 ## Directory Structure
 
 ```text
-Runtime/Scripts/
-├── Core/                 # Core interfaces and types
+Core/
+├── Core/                 # Core interfaces and runtime context
+├── Profile/              # Runtime profiles, node capabilities, protocol manifests
+├── Hardening/            # Production readiness scenarios, fault plans, evaluators
 ├── Buffers/              # Buffer system and pool
-├── Services/             # Service locator
 ├── Serialization/        # Serialization interfaces and factory
-├── Serializers/          # Serializer adapter implementations
-├── Simulation/           # Tick system and time sync
-├── Prediction/           # Client prediction, interpolation, lag compensation
-├── Interest/             # Interest management (Grid/Group/TeamVisibility/Composite)
+├── Replication/          # Interest, spatial AOI, state cache, snapshot packets, send budgets, load simulation
 ├── StateSync/            # NetworkVariable state synchronization
 ├── Rpc/                  # RPC attributes and processor
-├── Lockstep/             # Lockstep, fixed-point math, rollback, IStateHasher
+├── Routing/              # Actor route table for distributed deployments
+├── Lockstep/             # Lockstep, rollback, IStateHasher
 ├── Security/             # Rate limiter, message validator
-├── Session/              # Lobby, matchmaking, reconnection
+├── Session/              # Room directory, matchmaking plans, reconnection, host migration
 ├── Replay/               # Recording and playback
 ├── Spawning/             # Network object spawning
 ├── Scene/                # Network scene management
-├── Compression/          # Vector3/Quaternion compression
-├── Diagnostics/          # Profiler, network condition simulator
 ├── Authentication/       # Authentication interface
-├── Platform/             # Platform-specific configuration
-├── Adapters/             # Mirror/Mirage/Nakama adapters
 └── Stubs/                # No-op implementations (testing)
 
-DOD/Runtime/                      # Data-Oriented Design variants (Burst/Jobs)
-├── BurstGridInterestManager.cs   # Sort-based spatial hash, NativeList + IntroSort
-└── BurstTeamVisibilityInterestManager.cs  # Flat NativeList detection sources
-
-📦 CycloneGames.GameplayAbilities.Networking/    # GAS Integration (separate package)
-└── Runtime/Scripts/
-    ├── IAbilityNetAdapter.cs
-    ├── NoopAbilityNetAdapter.cs
-    ├── NetworkedAbilityBridge.cs
-    └── AttributeSyncManager.cs
-
-📦 CycloneGames.GameplayAbilities.Networking.Unity.Runtime/
-└── Runtime/Scripts/
-    ├── GameplayAbilitiesNetworkedASCAdapter.cs
-    ├── GasBridgeGameplayAbilitiesExtensions.cs
-    ├── DefaultGasNetIdRegistry.cs
-    └── GasBridgeSecurityExtensions.cs
+Optional package integrations:
+├── CycloneGames.GameplayAbilities.Networking/
+├── CycloneGames.GameplayFramework.Networking/
+├── CycloneGames.GameplayTags.Networking/
+└── CycloneGames.RPGFoundation.Interaction.Networking/
 ```
 
 ---

@@ -10,7 +10,7 @@ namespace CycloneGames.Networking
     /// <para>
     /// Implementations should use <see cref="IBandwidthMeter"/> telemetry to
     /// dynamically adjust per-connection send frequency, snapshot compression,
-    /// and AOI radius. The controller is a game-level concern—the interface
+    /// and AOI radius. The controller is a game-level concern; the interface
     /// defines the minimum contract the networking layer expects.
     /// </para>
     /// <para>

@@ -28,7 +28,7 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
 
 | 模块 | 用途 |
 | --- | --- |
-| `Interaction/` | 交互契约、本地运行时组件、权威校验、确定性/网络桥接、Inspector 和测试 |
+| `Interaction/` | 交互契约、本地运行时组件、权威校验、确定性桥接、Inspector 和测试 |
 | `Movement/` | 移动核心契约、2D/3D Unity 移动组件、寻路 adapter、动画 adapter 和 Inspector |
 
 ## 程序集布局
@@ -49,11 +49,10 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
 
 ## 可选集成
 
-可选集成被隔离到独立 assembly 中，这样基础包在未安装可选包时也能正常编译。
+可选集成被隔离到独立 assembly 中，这样基础包在未安装可选包时也能正常编译。Interaction 的 Cyclone networking 桥接由独立的 `CycloneGames.RPGFoundation.Interaction.Networking` 包提供，不属于基础 RPGFoundation 包。
 
 | Integration Assembly | 依赖 |
 | --- | --- |
-| `CycloneGames.RPGFoundation.Interaction.Integrations.Networking` | `CycloneGames.Networking.Core` |
 | `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath` | `CycloneGames.DeterministicMath.Core` |
 | `CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework` | `CycloneGames.GameplayFramework.Runtime` |
 | `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework` | DeterministicMath + GameplayFramework |
@@ -73,7 +72,6 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
 
 | Symbol | 启用内容 |
 | --- | --- |
-| `CYCLONE_RPGFOUNDATION_HAS_NETWORKING` | Interaction Networking 集成 |
 | `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` | Interaction DeterministicMath 集成 |
 | `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK` | Interaction GameplayFramework 集成 |
 | `CYCLONE_RPGFOUNDATION_HAS_ANIMANCER` | Movement Animancer 集成 |

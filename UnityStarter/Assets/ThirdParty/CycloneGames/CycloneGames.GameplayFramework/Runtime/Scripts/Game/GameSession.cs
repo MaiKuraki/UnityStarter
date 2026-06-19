@@ -8,7 +8,7 @@ namespace CycloneGames.GameplayFramework.Runtime
     ///
     /// Integration patterns:
     /// 1. Mirror: Create MirrorGameSession implementing IGameSession, wrapping NetworkManager.
-    /// 2. CycloneGames.Networking: Create a session adapter bridging INetworkManager to IGameSession.
+    /// 2. Optional networking package: create a session adapter bridging the transport layer to IGameSession.
     /// 3. Custom: Implement IGameSession with any networking stack (Photon, Netcode, etc.)
     /// 4. Standalone: Use the default GameSession class for local/offline play.
     ///

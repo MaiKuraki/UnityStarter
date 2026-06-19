@@ -19,22 +19,31 @@ namespace CycloneGames.GameplayAbilities.Networking
     /// </summary>
     public sealed class NetworkedAbilityBridge : IDisposable
     {
-        // Message IDs in the reserved RPC range (100-999)
-        public const ushort MsgAbilityActivateRequest = 200;
-        public const ushort MsgAbilityActivateConfirm = 201;
-        public const ushort MsgAbilityActivateReject = 202;
-        public const ushort MsgAbilityEnd = 203;
-        public const ushort MsgAbilityCancel = 204;
-        public const ushort MsgEffectApplied = 210;
-        public const ushort MsgEffectRemoved = 211;
-        public const ushort MsgEffectStackChanged = 212;
-        public const ushort MsgEffectUpdated = 213;
-        public const ushort MsgAttributeUpdate = 220;
-        public const ushort MsgTagUpdate = 225;
-        public const ushort MsgAbilityMulticast = 230;
-        public const ushort MsgFullState = 240;
-        public const ushort MsgFullStateRequest = 241;
-        public const ushort MsgStateSyncMetadata = 242;
+        public const string MessageOwner = "CycloneGames.GameplayAbilities.Networking";
+
+        public const ushort MESSAGE_ID_BASE = 10000;
+        public const ushort MESSAGE_ID_MAX = 10999;
+        public const ushort MsgAbilityActivateRequest = MESSAGE_ID_BASE + 0;
+        public const ushort MsgAbilityActivateConfirm = MESSAGE_ID_BASE + 1;
+        public const ushort MsgAbilityActivateReject = MESSAGE_ID_BASE + 2;
+        public const ushort MsgAbilityEnd = MESSAGE_ID_BASE + 3;
+        public const ushort MsgAbilityCancel = MESSAGE_ID_BASE + 4;
+        public const ushort MsgEffectApplied = MESSAGE_ID_BASE + 10;
+        public const ushort MsgEffectRemoved = MESSAGE_ID_BASE + 11;
+        public const ushort MsgEffectStackChanged = MESSAGE_ID_BASE + 12;
+        public const ushort MsgEffectUpdated = MESSAGE_ID_BASE + 13;
+        public const ushort MsgAttributeUpdate = MESSAGE_ID_BASE + 20;
+        public const ushort MsgTagUpdate = MESSAGE_ID_BASE + 25;
+        public const ushort MsgAbilityMulticast = MESSAGE_ID_BASE + 30;
+        public const ushort MsgFullState = MESSAGE_ID_BASE + 40;
+        public const ushort MsgFullStateRequest = MESSAGE_ID_BASE + 41;
+        public const ushort MsgStateSyncMetadata = MESSAGE_ID_BASE + 42;
+
+        public static readonly NetworkMessageIdRange MessageRange = new NetworkMessageIdRange(
+            MessageOwner,
+            MESSAGE_ID_BASE,
+            MESSAGE_ID_MAX,
+            NetworkMessageKind.Module);
 
         private readonly INetworkManager _networkManager;
         private readonly GASNetworkSerializerOptions _serializerOptions;
@@ -78,6 +87,8 @@ namespace CycloneGames.GameplayAbilities.Networking
 
             if (installSerializer)
                 TryInstallSerializer(networkManager, _serializerOptions);
+
+            TryRegisterMessageCatalog(networkManager);
         }
 
         public static bool TryInstallSerializer(
@@ -92,6 +103,71 @@ namespace CycloneGames.GameplayAbilities.Networking
 
             configurable.SetSerializer(GASNetworkSerializer.Wrap(networkManager.Serializer, serializerOptions));
             return true;
+        }
+
+        public static bool TryRegisterMessageCatalog(INetworkManager networkManager)
+        {
+            if (networkManager is not INetworkRuntimeContextProvider provider || provider.RuntimeContext == null)
+                return false;
+
+            if (!provider.RuntimeContext.TryGetService(out INetworkMessageCatalog catalog))
+                return false;
+
+            RegisterMessageCatalog(catalog);
+            return true;
+        }
+
+        public static void RegisterMessageCatalog(INetworkMessageCatalog catalog)
+        {
+            if (catalog == null)
+                throw new ArgumentNullException(nameof(catalog));
+
+            catalog.RegisterModuleRange(MessageRange);
+
+            RegisterMessage<AbilityActivateRequest>(catalog, MsgAbilityActivateRequest, NetworkChannel.Reliable);
+            RegisterMessage<AbilityActivateConfirm>(catalog, MsgAbilityActivateConfirm, NetworkChannel.Reliable);
+            RegisterMessage<AbilityActivateReject>(catalog, MsgAbilityActivateReject, NetworkChannel.Reliable);
+            RegisterMessage<AbilityEndMessage>(catalog, MsgAbilityEnd, NetworkChannel.Reliable);
+            RegisterMessage<AbilityCancelMessage>(catalog, MsgAbilityCancel, NetworkChannel.Reliable);
+            RegisterMessage<EffectReplicationData>(catalog, MsgEffectApplied, NetworkChannel.Reliable);
+            RegisterMessage<EffectRemoveData>(catalog, MsgEffectRemoved, NetworkChannel.Reliable);
+            RegisterMessage<EffectStackChangeData>(catalog, MsgEffectStackChanged, NetworkChannel.Reliable);
+            RegisterMessage<EffectUpdateData>(catalog, MsgEffectUpdated, NetworkChannel.Reliable);
+            RegisterMessage<AttributeUpdateData>(catalog, MsgAttributeUpdate, NetworkChannel.UnreliableSequenced);
+            RegisterMessage<TagUpdateData>(catalog, MsgTagUpdate, NetworkChannel.Reliable);
+            RegisterMessage<AbilityMulticastData>(catalog, MsgAbilityMulticast, NetworkChannel.Reliable);
+            RegisterMessage<GASFullStateData>(catalog, MsgFullState, NetworkChannel.Reliable);
+            RegisterMessage<FullStateRequest>(catalog, MsgFullStateRequest, NetworkChannel.Reliable);
+            RegisterMessage<GASStateSyncMetadata>(catalog, MsgStateSyncMetadata, NetworkChannel.Reliable);
+        }
+
+        private static void RegisterMessage<T>(INetworkMessageCatalog catalog, ushort messageId, NetworkChannel channel) where T : struct
+        {
+            if (!MessageRange.Contains(messageId))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(messageId),
+                    messageId,
+                    $"GameplayAbilities message ids must be inside {MessageRange}.");
+            }
+
+            NetworkMessageDescriptor descriptor = NetworkMessageDescriptor.Create<T>(
+                messageId,
+                MessageOwner,
+                NetworkMessageKind.Module,
+                channel);
+
+            if (catalog.TryRegister(descriptor))
+                return;
+
+            if (catalog.TryGet(messageId, out NetworkMessageDescriptor existing)
+                && existing.SchemaHash == descriptor.SchemaHash
+                && string.Equals(existing.Owner, descriptor.Owner, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException($"Message id {messageId} is already registered by {existing.Owner}:{existing.Name}.");
         }
 
         /// <summary>

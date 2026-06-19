@@ -61,6 +61,7 @@ namespace CycloneGames.Networking.Diagnostics
         public bool IsRunning => _inner.IsRunning;
         public bool IsEncrypted => _inner.IsEncrypted;
         public bool Available => _inner.Available;
+        public NetworkTransportCapabilities Capabilities => _inner.Capabilities;
 
         public int GetChannelId(NetworkChannel channel) => _inner.GetChannelId(channel);
         public int GetMaxPacketSize(int channelId) => _inner.GetMaxPacketSize(channelId);
@@ -102,31 +103,35 @@ namespace CycloneGames.Networking.Diagnostics
         public void Stop() => _inner.Stop();
         public void Disconnect(INetConnection connection) => _inner.Disconnect(connection);
 
-        public void Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
         {
             if (!Enabled)
             {
-                _inner.Send(connection, payload, channelId);
-                return;
+                return _inner.Send(connection, payload, channelId);
             }
 
             // Packet loss
             if (PacketLossPercent > 0 && _rng.NextDouble() * 100 < PacketLossPercent)
-                return;
+                return NetworkSendResult.Fail(NetworkSendStatus.Dropped, channelId, connection, "Packet dropped by network condition simulator.");
 
             float delay = LatencyMs + (float)(_rng.NextDouble() * 2 - 1) * JitterMs;
             if (delay <= 0)
             {
-                _inner.Send(connection, payload, channelId);
+                NetworkSendResult result = _inner.Send(connection, payload, channelId);
+                if (DuplicatePercent > 0 && _rng.NextDouble() * 100 < DuplicatePercent)
+                    _inner.Send(connection, payload, channelId);
+                return result;
             }
             else
             {
                 // Cap delayed packets to prevent unbounded memory growth
                 if (_delayedPackets.Count >= MaxDelayedPackets)
                 {
-                    _inner.Send(connection, payload, channelId);
-                    return;
+                    return NetworkSendResult.Fail(NetworkSendStatus.Backpressure, channelId, connection, "Network condition simulator delay queue is full.");
                 }
+
+                if (payload.Array == null || payload.Offset < 0 || payload.Count < 0 || payload.Offset > payload.Array.Length - payload.Count)
+                    return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, connection, "Invalid payload segment.");
 
                 byte[] copy = new byte[payload.Count];
                 Buffer.BlockCopy(payload.Array!, payload.Offset, copy, 0, payload.Count);
@@ -139,17 +144,40 @@ namespace CycloneGames.Networking.Diagnostics
                     Length = payload.Count,
                     ChannelId = channelId
                 });
-            }
 
-            // Duplicate
-            if (DuplicatePercent > 0 && _rng.NextDouble() * 100 < DuplicatePercent)
-                _inner.Send(connection, payload, channelId);
+                return NetworkSendResult.Queued(payload.Count, channelId, connection);
+            }
         }
 
-        public void Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
         {
+            if (connections == null)
+                throw new ArgumentNullException(nameof(connections));
+
+            int acceptedBytes = 0;
+            int acceptedRecipients = 0;
+            NetworkSendResult lastFailure = default;
+
             for (int i = 0; i < connections.Count; i++)
-                Send(connections[i], payload, channelId);
+            {
+                NetworkSendResult result = Send(connections[i], payload, channelId);
+                if (result.Succeeded)
+                {
+                    acceptedBytes += result.BytesAccepted;
+                    acceptedRecipients++;
+                }
+                else
+                {
+                    lastFailure = result;
+                }
+            }
+
+            if (acceptedRecipients > 0)
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, acceptedBytes, acceptedRecipients, channelId);
+
+            return connections.Count == 0
+                ? NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, channelId)
+                : lastFailure;
         }
 
         /// <summary>

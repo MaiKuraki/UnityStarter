@@ -1,4 +1,4 @@
-#if MIRAGE
+#if CYCLONE_NETWORKING_HAS_MIRAGE
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -51,6 +51,20 @@ namespace CycloneGames.Networking.Adapter.Mirage
         public bool Available => true;
         public bool IsEncrypted => false;
         public NetworkBackendFeatures Features => NetworkBackendFeatures.RealtimeTransport | NetworkBackendFeatures.Relay;
+        public NetworkTransportCapabilities Capabilities => new NetworkTransportCapabilities(
+            "Mirage",
+            NetworkTransportFeatureFlags.Client
+            | NetworkTransportFeatureFlags.Server
+            | NetworkTransportFeatureFlags.Host
+            | NetworkTransportFeatureFlags.Reliable
+            | NetworkTransportFeatureFlags.Unreliable
+            | NetworkTransportFeatureFlags.MainThreadOnly
+            | NetworkTransportFeatureFlags.DedicatedServerCompatible,
+            NetworkChannelFlags.Reliable | NetworkChannelFlags.Unreliable,
+            NetworkConstants.DefaultMaxConnections,
+            GetMaxPacketSize(GetChannelId(NetworkChannel.Reliable)),
+            GetMaxPacketSize(GetChannelId(NetworkChannel.Reliable)),
+            GetMaxPacketSize(GetChannelId(NetworkChannel.Unreliable)));
 
         public int GetChannelId(NetworkChannel channel)
         {
@@ -406,25 +420,62 @@ namespace CycloneGames.Networking.Adapter.Mirage
                 mc.Player.Disconnect();
         }
 
-        public void Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
         {
+            if (!IsRunning)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotRunning, channelId, connection);
+
+            if (connection is not MirageNetConnection mc || mc.Player == null)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
+
             byte[] buffer = GetThreadBuffer();
             NetworkChannel channel = GetNetworkChannel(channelId);
-            int frameLength = BuildFrame(NetworkConstants.SystemMsgIdMin, channel, payload, buffer);
+            int frameLength;
+            try
+            {
+                frameLength = BuildFrame(NetworkConstants.SystemMsgIdMin, channel, payload, buffer);
+            }
+            catch (Exception e)
+            {
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, connection, e.Message);
+            }
 
             Interlocked.Add(ref _bytesSent, frameLength);
             Interlocked.Increment(ref _packetsSent);
 
-            if (connection is MirageNetConnection mc && mc.Player != null)
-            {
-                mc.Player.Send(new ArraySegment<byte>(buffer, 0, frameLength), (Channel)channelId);
-            }
+            mc.Player.Send(new ArraySegment<byte>(buffer, 0, frameLength), (Channel)channelId);
+            return NetworkSendResult.Accepted(frameLength, channelId, connection);
         }
 
-        public void Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
         {
+            if (connections == null)
+                throw new ArgumentNullException(nameof(connections));
+
+            int acceptedBytes = 0;
+            int acceptedRecipients = 0;
+            NetworkSendResult lastFailure = default;
+
             for (int i = 0; i < connections.Count; i++)
-                Send(connections[i], payload, channelId);
+            {
+                NetworkSendResult result = Send(connections[i], payload, channelId);
+                if (result.Succeeded)
+                {
+                    acceptedBytes += result.BytesAccepted;
+                    acceptedRecipients++;
+                }
+                else
+                {
+                    lastFailure = result;
+                }
+            }
+
+            if (acceptedRecipients > 0)
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, acceptedBytes, acceptedRecipients, channelId);
+
+            return connections.Count == 0
+                ? NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, channelId)
+                : lastFailure;
         }
 
         // INetworkManager
@@ -455,9 +506,11 @@ namespace CycloneGames.Networking.Adapter.Mirage
 
         public void DisconnectClient(INetConnection connection) => Disconnect(connection);
 
-        public void SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
-            if (_client == null || !_client.Active) return;
+            int channelId = GetChannelId(channel);
+            if (_client == null || !_client.Active)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId);
 
             byte[] buffer = GetThreadBuffer();
             try
@@ -468,17 +521,21 @@ namespace CycloneGames.Networking.Adapter.Mirage
                 Interlocked.Increment(ref _packetsSent);
 
                 var wireFrame = new CycloneWireFrameMessage { Frame = new ArraySegment<byte>(buffer, 0, frameLength) };
-                _client.Send(wireFrame, (Channel)GetChannelId(channel));
+                _client.Send(wireFrame, (Channel)channelId);
+                return NetworkSendResult.Accepted(frameLength, channelId);
             }
             catch (Exception e)
             {
                 CLogger.LogError($"Failed to send message {msgId}: {e}", LogCategory.Network);
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
             }
         }
 
-        public void SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
-            if (connection is not MirageNetConnection mc || mc.Player == null) return;
+            int channelId = GetChannelId(channel);
+            if (connection is not MirageNetConnection mc || mc.Player == null)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
 
             byte[] buffer = GetThreadBuffer();
             try
@@ -489,17 +546,21 @@ namespace CycloneGames.Networking.Adapter.Mirage
                 Interlocked.Increment(ref _packetsSent);
 
                 var wireFrame = new CycloneWireFrameMessage { Frame = new ArraySegment<byte>(buffer, 0, frameLength) };
-                mc.Player.Send(wireFrame, (Channel)GetChannelId(channel));
+                mc.Player.Send(wireFrame, (Channel)channelId);
+                return NetworkSendResult.Accepted(frameLength, channelId, connection);
             }
             catch (Exception e)
             {
                 CLogger.LogError($"Failed to send to client: {e}", LogCategory.Network);
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, connection, e.Message);
             }
         }
 
-        public void BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
-            if (_server == null || !_server.Active) return;
+            int channelId = GetChannelId(channel);
+            if (_server == null || !_server.Active)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotRunning, channelId);
 
             byte[] buffer = GetThreadBuffer();
             try
@@ -510,18 +571,46 @@ namespace CycloneGames.Networking.Adapter.Mirage
                 Interlocked.Increment(ref _packetsSent);
 
                 var wireFrame = new CycloneWireFrameMessage { Frame = new ArraySegment<byte>(buffer, 0, frameLength) };
-                _server.SendToAll(wireFrame, false, (Channel)GetChannelId(channel));
+                _server.SendToAll(wireFrame, false, (Channel)channelId);
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, frameLength, 0, channelId);
             }
             catch (Exception e)
             {
                 CLogger.LogError($"Failed to broadcast: {e}", LogCategory.Network);
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
             }
         }
 
-        public void Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
+            if (connections == null)
+                throw new ArgumentNullException(nameof(connections));
+
+            int acceptedBytes = 0;
+            int acceptedRecipients = 0;
+            NetworkSendResult lastFailure = default;
+
             for (int i = 0; i < connections.Count; i++)
-                SendToClient(connections[i], msgId, message, channel);
+            {
+                NetworkSendResult result = SendToClient(connections[i], msgId, message, channel);
+                if (result.Succeeded)
+                {
+                    acceptedBytes += result.BytesAccepted;
+                    acceptedRecipients++;
+                }
+                else
+                {
+                    lastFailure = result;
+                }
+            }
+
+            int channelId = GetChannelId(channel);
+            if (acceptedRecipients > 0)
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, acceptedBytes, acceptedRecipients, channelId);
+
+            return connections.Count == 0
+                ? NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, channelId)
+                : lastFailure;
         }
 
         // Data Handlers

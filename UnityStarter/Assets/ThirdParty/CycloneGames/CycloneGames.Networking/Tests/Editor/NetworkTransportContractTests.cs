@@ -124,9 +124,12 @@ namespace CycloneGames.Networking.Tests.Editor
             };
 
             int channelId = pair.Client.Transport.GetChannelId(NetworkChannel.Reliable);
-            pair.Client.Transport.Send(pair.ServerConnection, new ArraySegment<byte>(payload), channelId);
+            NetworkSendResult result = pair.Client.Transport.Send(pair.ServerConnection, new ArraySegment<byte>(payload), channelId);
             PollPair(pair);
 
+            Assert.IsTrue(result.Succeeded);
+            Assert.AreEqual(NetworkSendStatus.Accepted, result.Status);
+            Assert.AreEqual(payload.Length, result.BytesAccepted);
             Assert.AreEqual(1, receivedCount);
             CollectionAssert.AreEqual(payload, received);
             Assert.AreEqual(pair.Server.Transport.GetChannelId(NetworkChannel.Reliable), receivedChannel);
@@ -154,9 +157,11 @@ namespace CycloneGames.Networking.Tests.Editor
             };
 
             int channelId = pair.Server.Transport.GetChannelId(NetworkChannel.Unreliable);
-            pair.Server.Transport.Send(pair.ClientConnection, new ArraySegment<byte>(payload), channelId);
+            NetworkSendResult result = pair.Server.Transport.Send(pair.ClientConnection, new ArraySegment<byte>(payload), channelId);
             PollPair(pair);
 
+            Assert.IsTrue(result.Succeeded);
+            Assert.AreEqual(payload.Length, result.BytesAccepted);
             Assert.AreEqual(1, receivedCount);
             CollectionAssert.AreEqual(payload, received);
         }
@@ -191,11 +196,12 @@ namespace CycloneGames.Networking.Tests.Editor
 
             client.Transport.StartClient(ConnectAddress);
             byte[] payload = { 5 };
-            client.Transport.Send(null, new ArraySegment<byte>(payload), client.Transport.GetChannelId(NetworkChannel.Reliable));
+            NetworkSendResult result = client.Transport.Send(null, new ArraySegment<byte>(payload), client.Transport.GetChannelId(NetworkChannel.Reliable));
             Poll(client.Transport);
 
             Assert.AreEqual(1, errorCount);
             Assert.AreEqual(TransportError.InvalidSend, lastError);
+            Assert.AreEqual(NetworkSendStatus.NotConnected, result.Status);
         }
 
         [Test]
@@ -234,11 +240,12 @@ namespace CycloneGames.Networking.Tests.Editor
 
             int channelId = pair.Client.Transport.GetChannelId(NetworkChannel.Reliable);
             byte[] payload = new byte[pair.Client.Transport.GetMaxPacketSize(channelId) + 1];
-            pair.Client.Transport.Send(pair.ServerConnection, new ArraySegment<byte>(payload), channelId);
+            NetworkSendResult result = pair.Client.Transport.Send(pair.ServerConnection, new ArraySegment<byte>(payload), channelId);
             PollPair(pair);
 
             Assert.AreEqual(1, errorCount);
             Assert.AreEqual(0, receivedCount);
+            Assert.AreEqual(NetworkSendStatus.PayloadTooLarge, result.Status);
         }
 
         [Test]
@@ -256,9 +263,11 @@ namespace CycloneGames.Networking.Tests.Editor
             };
 
             var connections = new INetConnection[] { pair.ClientConnection };
-            pair.Server.Transport.Broadcast(connections, new ArraySegment<byte>(payload), pair.Server.Transport.GetChannelId(NetworkChannel.Reliable));
+            NetworkSendResult result = pair.Server.Transport.Broadcast(connections, new ArraySegment<byte>(payload), pair.Server.Transport.GetChannelId(NetworkChannel.Reliable));
             PollPair(pair);
 
+            Assert.IsTrue(result.Succeeded);
+            Assert.AreEqual(payload.Length, result.BytesAccepted);
             Assert.AreEqual(1, receivedCount);
             CollectionAssert.AreEqual(payload, received);
         }
