@@ -1,28 +1,33 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace CycloneGames.GameplayTags.Core
 {
    /// <summary>
    /// Build tag binary format:
-   ///   [byte version=1] [int tagCount] [string tagName × tagCount] [uint crc32]
-   /// CRC32 is used for corruption detection (disk I/O errors, truncation).
-   /// Not intended for tamper-proof verification — use SHA256/xxHash64 for hot-update integrity.
+   ///   [byte formatVersion] [int tagCount] [string tagName x tagCount] [ulong payloadHash64]
+   /// PayloadHash64 is used for corruption detection (disk I/O errors, truncation).
+   /// It is not intended for tamper-proof verification; use a signed manifest or SHA256 for hot-update content integrity.
    /// </summary>
    public static class BuildTagBinaryFormat
    {
-      public const byte CurrentVersion = 1;
+      public const byte CurrentFormatVersion = 1;
+      public const int PayloadHashSize = 8;
 
-      public static uint ComputeCrc32(byte[] data, int offset, int length)
+      public static ulong ComputePayloadHash64(byte[] data, int offset, int length)
       {
-         uint crc = 0xFFFFFFFF;
-         for (int i = offset; i < offset + length; i++)
+         if (data == null)
          {
-            crc ^= data[i];
-            for (int j = 0; j < 8; j++)
-               crc = (crc >> 1) ^ (0xEDB88320 & ~((crc & 1) - 1));
+            throw new ArgumentNullException(nameof(data));
          }
-         return crc ^ 0xFFFFFFFF;
+
+         if (offset < 0 || length < 0 || data.Length - offset < length)
+         {
+            throw new ArgumentOutOfRangeException(nameof(length), "Invalid payload hash range.");
+         }
+
+         return GameplayTagUtility.ComputeStableHash64(new ReadOnlySpan<byte>(data, offset, length));
       }
    }
 
@@ -47,32 +52,53 @@ namespace CycloneGames.GameplayTags.Core
             using BinaryReader reader = new(memoryStream);
 
             byte version = reader.ReadByte();
-            if (version != BuildTagBinaryFormat.CurrentVersion)
+            if (version != BuildTagBinaryFormat.CurrentFormatVersion)
             {
-               GameplayTagLogger.LogError($"[BuildGameplayTagSource] Unsupported binary format version: {version}. Expected: {BuildTagBinaryFormat.CurrentVersion}.");
+               GameplayTagLogger.LogError($"[BuildGameplayTagSource] Unsupported binary format version: {version}. Expected: {BuildTagBinaryFormat.CurrentFormatVersion}.");
                return;
             }
 
             int tagCount = reader.ReadInt32();
+            if (tagCount < 0)
+            {
+               GameplayTagLogger.LogError("[BuildGameplayTagSource] Invalid negative tag count. Build tag data will not be registered.");
+               return;
+            }
+
             long dataStart = memoryStream.Position;
 
+            List<string> tagNames = new(tagCount);
             for (int i = 0; i < tagCount; i++)
             {
                string tagName = reader.ReadString();
-               context.RegisterTag(tagName, string.Empty, GameplayTagFlags.None, this);
+               tagNames.Add(tagName);
             }
 
             long dataEnd = memoryStream.Position;
 
-            // Verify CRC32 checksum
-            if (memoryStream.Position + 4 <= memoryStream.Length)
+            if (memoryStream.Position + BuildTagBinaryFormat.PayloadHashSize > memoryStream.Length)
             {
-               uint storedCrc = reader.ReadUInt32();
-               uint computedCrc = BuildTagBinaryFormat.ComputeCrc32(data, (int)dataStart, (int)(dataEnd - dataStart));
-               if (storedCrc != computedCrc)
-               {
-                  GameplayTagLogger.LogWarning("[BuildGameplayTagSource] CRC32 checksum mismatch — build tag data may be corrupted.");
-               }
+               GameplayTagLogger.LogError("[BuildGameplayTagSource] Missing payload hash. Build tag data will not be registered.");
+               return;
+            }
+
+            ulong storedPayloadHash = reader.ReadUInt64();
+            ulong computedPayloadHash = BuildTagBinaryFormat.ComputePayloadHash64(data, (int)dataStart, (int)(dataEnd - dataStart));
+            if (storedPayloadHash != computedPayloadHash)
+            {
+               GameplayTagLogger.LogError("[BuildGameplayTagSource] Payload hash mismatch. Build tag data will not be registered.");
+               return;
+            }
+
+            if (memoryStream.Position != memoryStream.Length)
+            {
+               GameplayTagLogger.LogError("[BuildGameplayTagSource] Unexpected trailing bytes. Build tag data will not be registered.");
+               return;
+            }
+
+            for (int i = 0; i < tagNames.Count; i++)
+            {
+               context.RegisterTag(tagNames[i], string.Empty, GameplayTagFlags.None, this);
             }
          }
          catch (Exception e)

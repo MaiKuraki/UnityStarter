@@ -5,8 +5,8 @@
         "UniTask",
         "VYaml.Core",
         "Unio",
+        "CycloneGames.Hash.Core",
         "CycloneGames.Logger",
-        "CycloneGames.Utility.Runtime",
         "Unity.RenderPipelines.Universal.Runtime",
         "TND.Upscaling.Framework.Runtime.Core"
     ],

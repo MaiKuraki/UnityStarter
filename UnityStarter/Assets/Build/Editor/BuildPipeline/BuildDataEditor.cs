@@ -17,6 +17,7 @@ namespace Build.Pipeline.Editor
         private SerializedProperty useBuildalon;
         private SerializedProperty useHybridCLR;
         private SerializedProperty useObfuz;
+        private SerializedProperty cheatBuildMode;
         private SerializedProperty assetManagementType;
 
         private bool hasValidationErrors = false;
@@ -36,6 +37,7 @@ namespace Build.Pipeline.Editor
             useBuildalon = serializedObject.FindProperty("useBuildalon");
             useHybridCLR = serializedObject.FindProperty("useHybridCLR");
             useObfuz = serializedObject.FindProperty("useObfuz");
+            cheatBuildMode = serializedObject.FindProperty("cheatBuildMode");
             assetManagementType = serializedObject.FindProperty("assetManagementType");
 
             // Clear validation cache when editor is enabled
@@ -101,6 +103,10 @@ namespace Build.Pipeline.Editor
                     "Note: This works for both HybridCLR and non-HybridCLR projects. For HybridCLR projects, if this is enabled, HybridCLRBuildConfig.enableObfuz is automatically considered enabled.",
                     MessageType.Info);
             }
+
+            EditorGUILayout.Space(5);
+            EditorGUILayout.PropertyField(cheatBuildMode);
+            DrawCheatBuildModeInfo();
             EditorGUILayout.Space(10);
 
             // Asset Management System
@@ -159,6 +165,29 @@ namespace Build.Pipeline.Editor
             }
 
             serializedObject.ApplyModifiedProperties();
+        }
+
+        private void DrawCheatBuildModeInfo()
+        {
+            CheatBuildMode mode = (CheatBuildMode)cheatBuildMode.enumValueIndex;
+            switch (mode)
+            {
+                case CheatBuildMode.Disabled:
+                    DrawHelpBox(
+                        "Cheat is disabled for player builds. ENABLE_CHEAT will be removed during BuildScript builds.",
+                        MessageType.Info);
+                    break;
+                case CheatBuildMode.DevelopmentBuilds:
+                    DrawHelpBox(
+                        "Cheat is enabled only for BuildScript debug/development builds. Release builds remove ENABLE_CHEAT.",
+                        MessageType.Info);
+                    break;
+                case CheatBuildMode.Enabled:
+                    DrawHelpBox(
+                        "Cheat is enabled for all BuildScript builds. Use only for internal, protected, or dedicated debug distributions.",
+                        MessageType.Warning);
+                    break;
+            }
         }
 
         private void DrawValidationSummary()

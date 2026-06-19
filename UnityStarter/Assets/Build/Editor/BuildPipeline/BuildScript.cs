@@ -156,6 +156,14 @@ namespace Build.Pipeline.Editor
             }
             sb.AppendLine($"  Effective Obfuz State\t\t{(effectiveObfuzEnabled ? "[Y] Enabled" : "[N] Disabled")}");
 
+            sb.AppendLine();
+            sb.AppendLine("[Cheat Configuration]");
+            sb.AppendLine(Separator);
+            sb.AppendLine($"  Cheat Build Mode\t\t{buildData.CheatBuildMode}");
+            sb.AppendLine($"  Cheat Runtime\t\t{(CheatBuildDefineUtility.IsCheatModuleInstalled() ? "[Y] Available" : "[N] Unavailable")}");
+            NamedBuildTarget currentNamedTargetForCheat = GetNamedBuildTargetFromBuildTarget(EditorUserBuildSettings.activeBuildTarget);
+            sb.AppendLine($"  Current ENABLE_CHEAT\t\t{(CheatBuildDefineUtility.HasCheatDefine(currentNamedTargetForCheat) ? "[Y] Defined" : "[N] Not Defined")}");
+
             // Asset Management Configuration
             AssetManagementType assetManagementType = buildData.AssetManagementType;
             sb.AppendLine();
@@ -696,7 +704,7 @@ namespace Build.Pipeline.Editor
 
         /// <summary>
         /// Entry point for CI/CD. Parses command line arguments to configure the build.
-        /// Usage: -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget <Target> -output <Path> [-clean] [-fast] [-debug] [-buildHybridCLR] [-buildYooAsset] [-buildAddressables] [-version <Version>] [-outputBasePath <Path>]
+        /// Usage: -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI -buildTarget <Target> -output <Path> [-clean] [-fast] [-debug] [-buildHybridCLR] [-buildYooAsset] [-buildAddressables] [-enableCheat|-disableCheat] [-version <Version>] [-outputBasePath <Path>]
         /// Logger overrides are handled by CycloneGames.Logger's build processor, e.g. [-loggerMode Off|Unity|File|UnityAndFile] [-loggerLevel Warning] [-loggerFileName Player.log].
         /// </summary>
         public static void PerformBuild_CI()
@@ -723,6 +731,9 @@ namespace Build.Pipeline.Editor
             bool forceHybridCLR = false;
             bool forceYooAsset = false;
             bool forceAddressables = false;
+            bool? cheatOverride = null;
+            bool cheatEnableRequested = false;
+            bool cheatDisableRequested = false;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -770,6 +781,16 @@ namespace Build.Pipeline.Editor
                 {
                     forceAddressables = true;
                 }
+                else if (args[i] == "-enableCheat")
+                {
+                    cheatEnableRequested = true;
+                    cheatOverride = true;
+                }
+                else if (args[i] == "-disableCheat")
+                {
+                    cheatDisableRequested = true;
+                    cheatOverride = false;
+                }
             }
 
             if (buildTarget == BuildTarget.NoTarget)
@@ -782,6 +803,12 @@ namespace Build.Pipeline.Editor
             if (forceYooAsset && forceAddressables)
             {
                 Debug.LogError($"{DEBUG_FLAG} CI Error: Both -buildYooAsset and -buildAddressables are specified. Only one asset management system can be used at a time.");
+                return;
+            }
+
+            if (cheatEnableRequested && cheatDisableRequested)
+            {
+                Debug.LogError($"{DEBUG_FLAG} CI Error: Both -enableCheat and -disableCheat are specified. Choose only one cheat exposure override.");
                 return;
             }
 
@@ -802,6 +829,11 @@ namespace Build.Pipeline.Editor
             {
                 BuildUtils.SetField(buildData, "useHybridCLR", true);
                 Debug.Log($"{DEBUG_FLAG} CI Override: HybridCLR enabled.");
+            }
+
+            if (cheatOverride.HasValue)
+            {
+                Debug.Log($"{DEBUG_FLAG} CI Override: Cheat {(cheatOverride.Value ? "enabled" : "disabled")} for this build.");
             }
 
             // Apply asset management system override (only one can be active)
@@ -889,7 +921,8 @@ namespace Build.Pipeline.Editor
                 bDeleteDebugFiles: !isDebugBuild,
                 bOutputIsFolderTarget: isFolder,
                 bIsDebugBuild: isDebugBuild,
-                bIsFastBuild: fast);
+                bIsFastBuild: fast,
+                cheatBuildOverride: cheatOverride);
         }
 
         #endregion
@@ -1083,7 +1116,8 @@ namespace Build.Pipeline.Editor
             bool bDeleteDebugFiles = true,
             bool bOutputIsFolderTarget = true,
             bool bIsDebugBuild = false,
-            bool bIsFastBuild = false)
+            bool bIsFastBuild = false,
+            bool? cheatBuildOverride = null)
         {
             //  cache curernt scene
             var sceneSetup = EditorSceneManager.GetSceneManagerSetup();
@@ -1102,6 +1136,8 @@ namespace Build.Pipeline.Editor
             // Uses absolute path to avoid CWD dependency.
             string resourcesAbsolutePath = Path.GetFullPath(Path.Combine(Application.dataPath, "Resources"));
             bool resourcesDirectoryExistedBeforeBuild = Directory.Exists(resourcesAbsolutePath);
+            CheatBuildDefineScope cheatDefineScope = default;
+            bool hasCheatDefineScope = false;
 
             try
             {
@@ -1141,6 +1177,18 @@ namespace Build.Pipeline.Editor
                 {
                     Debug.Log($"{DEBUG_FLAG} Active build target already {TargetPlatform}, skipping switch.");
                 }
+
+                bool cheatRequestedForBuild = CheatBuildDefineUtility.ShouldRequestCheat(buildData, bIsDebugBuild, cheatBuildOverride);
+                bool cheatModuleInstalled = CheatBuildDefineUtility.IsCheatModuleInstalled();
+                bool cheatEnabledForBuild = cheatRequestedForBuild && cheatModuleInstalled;
+                if (cheatRequestedForBuild && !cheatModuleInstalled)
+                {
+                    Debug.LogWarning($"{DEBUG_FLAG} Cheat was requested for this build, but CycloneGames.Cheat.Runtime is not available in the player compilation domain. {CheatBuildDefineUtility.DefineSymbol} will not be applied.");
+                }
+
+                cheatDefineScope = CheatBuildDefineUtility.Apply(BuildTargetName, cheatEnabledForBuild);
+                hasCheatDefineScope = true;
+                AssetDatabase.SaveAssets();
 
                 // Buildalon SyncSolution should be called AFTER platform switch to ensure project files reflect the correct platform configuration
                 AssetDatabase.SaveAssets();
@@ -1344,6 +1392,12 @@ namespace Build.Pipeline.Editor
                 if (buildData != null && buildData.UseAddressables)
                 {
                     AddressablesBuilder.CleanupAutoCreatedVersionFiles();
+                }
+
+                if (hasCheatDefineScope)
+                {
+                    cheatDefineScope.Dispose();
+                    AssetDatabase.SaveAssets();
                 }
 
                 Debug.Log($"{DEBUG_FLAG} Restoring original scene setup.");

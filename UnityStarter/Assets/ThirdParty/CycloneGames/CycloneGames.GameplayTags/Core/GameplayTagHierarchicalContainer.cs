@@ -121,8 +121,14 @@ namespace CycloneGames.GameplayTags.Core
 
       public void RemoveTag(GameplayTag gameplayTag)
       {
-         m_ParentContainer?.RemoveTag(gameplayTag);
+         if (m_UnderlyingContainer.GetExplicitTagCount(gameplayTag) <= 0)
+         {
+            m_UnderlyingContainer.RemoveTag(gameplayTag);
+            return;
+         }
+
          m_UnderlyingContainer.RemoveTag(gameplayTag);
+         m_ParentContainer?.RemoveTag(gameplayTag);
       }
 
       public void RemoveTagEventCallback(GameplayTag tag, GameplayTagEventType eventType, OnTagCountChangedDelegate callback)
@@ -132,17 +138,13 @@ namespace CycloneGames.GameplayTags.Core
 
       public void RemoveTags<T>(in T other) where T : IGameplayTagContainer
       {
-         // foreach (GameplayTag tag in GetExplicitTags())
-         // {
-         //    m_ParentContainer?.RemoveTag(tag);
-         // }
+         if (other == null || other.IsEmpty)
+            return;
 
-         // m_UnderlyingContainer.RemoveTags(other);
-
-         // MODIFIED: maybe should revert to above?
-         // Propagate the 'other' container to the parent for removal.
-         m_ParentContainer?.RemoveTags(other);
-         m_UnderlyingContainer.RemoveTags(other);
+         foreach (GameplayTag tag in other.GetExplicitTags())
+         {
+            RemoveTag(tag);
+         }
       }
 
       IEnumerator IEnumerable.GetEnumerator()

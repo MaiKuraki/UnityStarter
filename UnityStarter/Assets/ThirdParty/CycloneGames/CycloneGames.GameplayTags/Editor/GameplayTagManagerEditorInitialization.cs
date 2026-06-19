@@ -1,4 +1,5 @@
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 using UnityEditor;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
@@ -13,6 +14,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
     {
         static GameplayTagManagerEditorInitialization()
         {
+            GameplayTagUnityPlatformBootstrap.Configure();
             // By calling this here, we guarantee that the tag manager is fully populated
             // before any assets that use GameplayTags (like ScriptableObjects) are deserialized.
             GameplayTagManager.InitializeIfNeeded();

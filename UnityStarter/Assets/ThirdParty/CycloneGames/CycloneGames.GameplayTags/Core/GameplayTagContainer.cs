@@ -358,7 +358,7 @@ namespace CycloneGames.GameplayTags.Core
 
       public void AddTag(GameplayTag tag)
       {
-         if (!tag.IsValid)
+         if (tag.IsNone || !tag.IsValid)
             throw new ArgumentException("Cannot add an invalid gameplay tag.", nameof(tag));
 
          EnsureRuntimeStateInitialized();
@@ -405,7 +405,7 @@ namespace CycloneGames.GameplayTags.Core
 
       public void RemoveTag(GameplayTag tag)
       {
-         if (!tag.IsValid)
+         if (tag.IsNone || !tag.IsValid)
             throw new ArgumentException("Cannot remove an invalid gameplay tag.", nameof(tag));
 
          EnsureRuntimeStateInitialized();
@@ -623,13 +623,17 @@ namespace CycloneGames.GameplayTags.Core
       private void SyncSerializedExplicitTagsWithRuntime()
       {
          m_SerializedDirty = true;
+         if (m_SerializedExplicitTags != null)
+         {
+            FlushSerializedState();
+         }
       }
 
       /// <summary>
       /// Called by serialization (OnBeforeSerialize) or when explicit serialized state is needed.
-      /// Only rebuilds the serialized list if dirty, avoiding per-operation GC allocation.
+      /// Only rebuilds the serialized list if dirty.
       /// </summary>
-      internal void FlushSerializedState()
+      public void FlushSerializedState()
       {
          if (!m_SerializedDirty)
             return;

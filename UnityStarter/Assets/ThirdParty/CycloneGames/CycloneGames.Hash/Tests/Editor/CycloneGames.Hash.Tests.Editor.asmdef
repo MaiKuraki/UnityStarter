@@ -1,0 +1,21 @@
+{
+    "name": "CycloneGames.Hash.Tests.Editor",
+    "rootNamespace": "CycloneGames.Hash.Tests.Editor",
+    "references": [
+        "CycloneGames.Hash.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": true
+}

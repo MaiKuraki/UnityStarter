@@ -27,12 +27,14 @@ namespace CycloneGames.GameplayTags.Core
 
       /// <summary>Total number of tag definitions including the None tag at index 0.</summary>
       internal readonly int TotalTagCount;
+      internal readonly ulong ManifestHash;
 
       // Core flat arrays - all indexed by runtimeIndex (0 = None)
       internal readonly GameplayTag[] Tags;
       internal readonly string[] TagNames;
       internal readonly string[] TagDescriptions;
       internal readonly string[] TagLabels;
+      internal readonly ulong[] TagStableIds;
       internal readonly GameplayTagFlags[] TagFlags;
       internal readonly int[] TagHierarchyLevels;
       internal readonly int[] TagParentRuntimeIndices;
@@ -45,13 +47,14 @@ namespace CycloneGames.GameplayTags.Core
       internal readonly int[] FlatChildRuntimeIndices;
       internal readonly int[] FlatHierarchyRuntimeIndices;
 
-      // Range indexes — locate hierarchy slices for a given runtimeIndex
+      // Range indexes locate hierarchy slices for a given runtimeIndex.
       internal readonly TagRange[] ParentTagRanges;
       internal readonly TagRange[] ChildTagRanges;
       internal readonly TagRange[] HierarchyTagRanges;
 
       // Lookup structures
       internal readonly Dictionary<string, int> NameToRuntimeIndex;
+      internal readonly Dictionary<ulong, int> StableIdToRuntimeIndex;
       internal readonly GameplayTagDefinition[] Definitions;
 
       internal TagDataSnapshot(List<GameplayTagDefinition> definitions, Dictionary<string, GameplayTagDefinition> definitionsByName)
@@ -61,12 +64,25 @@ namespace CycloneGames.GameplayTags.Core
 
          // Build name->index lookup
          NameToRuntimeIndex = new Dictionary<string, int>(TotalTagCount, StringComparer.Ordinal);
+         StableIdToRuntimeIndex = new Dictionary<ulong, int>(TotalTagCount);
+         ulong manifestHash = GameplayTagUtility.FnvOffsetBasis64;
          for (int i = 0; i < TotalTagCount; i++)
          {
             GameplayTagDefinition def = definitions[i];
             if (!def.IsNone())
+            {
                NameToRuntimeIndex[def.TagName] = def.RuntimeIndex;
+               if (StableIdToRuntimeIndex.TryGetValue(def.StableId, out int existingRuntimeIndex))
+               {
+                  string existingName = definitions[existingRuntimeIndex].TagName;
+                  throw new InvalidOperationException($"GameplayTag stable ID collision between '{existingName}' and '{def.TagName}'.");
+               }
+
+               StableIdToRuntimeIndex.Add(def.StableId, def.RuntimeIndex);
+               manifestHash = GameplayTagUtility.CombineStableHash(manifestHash, def.StableId);
+            }
          }
+         ManifestHash = manifestHash;
 
          // Build Tags array (excludes None at index 0)
          Tags = new GameplayTag[tagCount];
@@ -77,6 +93,7 @@ namespace CycloneGames.GameplayTags.Core
          TagNames = new string[TotalTagCount];
          TagDescriptions = new string[TotalTagCount];
          TagLabels = new string[TotalTagCount];
+         TagStableIds = new ulong[TotalTagCount];
          TagFlags = new GameplayTagFlags[TotalTagCount];
          TagHierarchyLevels = new int[TotalTagCount];
          TagParentRuntimeIndices = new int[TotalTagCount];
@@ -113,6 +130,7 @@ namespace CycloneGames.GameplayTags.Core
             TagNames[i] = def.TagName;
             TagDescriptions[i] = def.Description;
             TagLabels[i] = def.Label;
+            TagStableIds[i] = def.StableId;
             TagFlags[i] = def.Flags;
             TagHierarchyLevels[i] = def.HierarchyLevel;
             TagParentRuntimeIndices[i] = def.ParentTagDefinition?.RuntimeIndex ?? 0;
@@ -145,6 +163,12 @@ namespace CycloneGames.GameplayTags.Core
       internal bool TryGetRuntimeIndex(string name, out int runtimeIndex)
       {
          return NameToRuntimeIndex.TryGetValue(name, out runtimeIndex);
+      }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      internal bool TryGetRuntimeIndex(ulong stableId, out int runtimeIndex)
+      {
+         return StableIdToRuntimeIndex.TryGetValue(stableId, out runtimeIndex);
       }
 
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -210,7 +234,7 @@ namespace CycloneGames.GameplayTags.Core
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       internal bool IsChildOf(int runtimeIndex, int parentRuntimeIndex)
       {
-         if (runtimeIndex <= parentRuntimeIndex || runtimeIndex <= 0 || parentRuntimeIndex <= 0)
+         if (runtimeIndex <= 0 || parentRuntimeIndex <= 0 || runtimeIndex == parentRuntimeIndex)
             return false;
 
          ReadOnlySpan<int> parentIndices = GetParentRuntimeIndicesSpan(runtimeIndex);
@@ -220,7 +244,7 @@ namespace CycloneGames.GameplayTags.Core
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       internal bool IsParentOf(int runtimeIndex, int childRuntimeIndex)
       {
-         if (runtimeIndex <= 0 || childRuntimeIndex <= runtimeIndex)
+         if (runtimeIndex <= 0 || childRuntimeIndex <= 0 || runtimeIndex == childRuntimeIndex)
             return false;
 
          ReadOnlySpan<int> childIndices = GetChildRuntimeIndicesSpan(runtimeIndex);
@@ -259,7 +283,7 @@ namespace CycloneGames.GameplayTags.Core
       private static void CopyRuntimeIndices(ReadOnlySpan<GameplayTag> tags, int[] destination, int startIndex)
       {
          for (int i = 0; i < tags.Length; i++)
-            destination[startIndex + i] = tags[i].RuntimeIndex;
+            destination[startIndex + i] = tags[i].CachedRuntimeIndex;
       }
    }
 }

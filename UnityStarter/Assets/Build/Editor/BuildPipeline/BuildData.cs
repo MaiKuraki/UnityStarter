@@ -13,6 +13,13 @@ namespace Build.Pipeline.Editor
         Addressables
     }
 
+    public enum CheatBuildMode
+    {
+        Disabled,
+        DevelopmentBuilds,
+        Enabled
+    }
+
     [CreateAssetMenu(menuName = "CycloneGames/Build/BuildData")]
     public class BuildData : ScriptableObject
     {
@@ -34,6 +41,9 @@ namespace Build.Pipeline.Editor
 
         [Tooltip("If enabled and Obfuz packages are present, perform code obfuscation during build.")]
         [SerializeField] private bool useObfuz = false;
+
+        [Tooltip("Controls whether ENABLE_CHEAT is applied during player builds.")]
+        [SerializeField] private CheatBuildMode cheatBuildMode = CheatBuildMode.Disabled;
 
         [Tooltip("Select the asset management system to use for resource hot-update.")]
         [SerializeField] private AssetManagementType assetManagementType = AssetManagementType.None;
@@ -57,6 +67,7 @@ namespace Build.Pipeline.Editor
         public bool UseBuildalon => useBuildalon;
         public bool UseHybridCLR => useHybridCLR;
         public bool UseObfuz => useObfuz;
+        public CheatBuildMode CheatBuildMode => cheatBuildMode;
         public AssetManagementType AssetManagementType => assetManagementType;
 
         public bool UseYooAsset => assetManagementType == AssetManagementType.YooAsset;
