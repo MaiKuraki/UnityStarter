@@ -38,12 +38,16 @@ CycloneGames.GameplayTags/
     GameplayTagsSourceGenerator.cs
 ```
 
+Optional integrations are distributed as separate integration packages. `CycloneGames.GameplayTags.DataTable` provides the DataTable/Luban bridge when a project intentionally includes both `CycloneGames.GameplayTags` and `CycloneGames.DataTable`.
+
 ```mermaid
 flowchart TD
     Core["Core\nPure C# runtime"]
     UnityRuntime["Unity.Runtime\nUnity bridge, JSON, build asset, NativeBitArray"]
     Editor["Editor\nAuthoring, validation, build preprocessing"]
     GAS["GameplayAbilities\nGAS tag requirements and state"]
+    DataTablePackage["GameplayTags.DataTable\nOptional integration package"]
+    DataTable["DataTable / Luban\nExcel-generated tag catalogs and references"]
     Framework["GameplayFramework\nIntegration layer"]
     Networking["Networking\nTransport-agnostic byte payloads"]
     Assets["AssetManagement\nNo direct dependency required"]
@@ -52,6 +56,8 @@ flowchart TD
     Core --> GAS
     Core --> Framework
     Core --> Networking
+    DataTablePackage --> Core
+    DataTablePackage --> DataTable
     UnityRuntime --> Editor
     UnityRuntime --> Framework
     Assets -. loads assets that may contain serialized tags .-> Core
@@ -69,6 +75,8 @@ flowchart TD
 
 The Core assembly is the contract consumed by GameplayAbilities and server/headless logic. Unity-facing code is kept in adapters so the tag system can remain a stable foundation module.
 
+The DataTable/Luban bridge lives in the separate `CycloneGames.GameplayTags.DataTable` integration package, so the base package never references `CycloneGames.DataTable.Core`.
+
 ## Dependencies
 
 The package declares these Unity package dependencies because the current Runtime assembly uses them directly:
@@ -81,6 +89,13 @@ The package declares these Unity package dependencies because the current Runtim
 | `com.unity.nuget.newtonsoft-json` | JSON tag source files in `ProjectSettings/GameplayTags/` |
 
 `com.unity.entities` is intentionally not a hard dependency. `GameplayTagMaskComponent.cs` is guarded by `CYCLONE_HAS_ENTITIES`; projects that need Entities should place the Entities bridge in an optional integration assembly with a `versionDefines` entry and an explicit package dependency.
+
+DataTable support is intentionally not wired through ProjectSettings scripting define symbols. Use the `CycloneGames.GameplayTags.DataTable` integration package when the project includes `CycloneGames.DataTable`:
+
+- In UPM distribution, install `com.cyclone-games.gameplay-tags.data-table`; its `package.json` declares both `com.cyclone-games.gameplay-tags` and `com.cyclone-games.data-table`.
+- In Assets-direct distribution, include the `CycloneGames.GameplayTags.DataTable/` folder only in projects that also include `CycloneGames.GameplayTags/` and `CycloneGames.DataTable/`.
+
+This keeps the base package clean, avoids missing-asmdef failures when DataTable is absent, and works the same way for direct `Assets/` packages and UPM packages.
 
 ## Core Concepts
 
@@ -170,6 +185,68 @@ Example:
 
 The Editor file watcher reloads tags when these files change. Build preprocessing bakes leaf tags into `Assets/Resources/GameplayTags.bytes` and removes the generated asset after the build.
 
+### DataTable And Luban
+
+Use `CycloneGames.GameplayTags.DataTable` when a project sources gameplay tag data from Excel/Luban rows through `CycloneGames.DataTable`. The integration package lets developers register generated tag catalogs and generated gameplay-data references before the GameplayTags snapshot is initialized.
+
+Prerequisites:
+
+1. Include `CycloneGames.GameplayTags`.
+2. Include `CycloneGames.DataTable`.
+3. Include `CycloneGames.GameplayTags.DataTable`.
+4. Add an explicit asmdef reference to `CycloneGames.GameplayTags.DataTable` from the startup/composition assembly that loads generated rows.
+
+Use `GameplayTagDataTableSource<TRow>` when one generated row is one gameplay tag definition:
+
+```csharp
+DataTable<TagRow> tagTable = DataTableRegistry.Get<DataTable<TagRow>>();
+
+GameplayTagRuntimePlatform.RegisterProjectTagSource(new GameplayTagDataTableSource<TagRow>(
+    "Design.GameplayTags",
+    tagTable,
+    static row => row.Name,
+    static row => row.Comment,
+    static row => row.Flags,
+    static row => row.Enabled));
+
+GameplayTagManager.InitializeIfNeeded();
+```
+
+Recommended Excel columns:
+
+| Column | Purpose |
+| --- | --- |
+| `Id` | DataTable primary key only. It is not the network stable ID. |
+| `Name` | Full gameplay tag name, for example `Ability.Fireball`. |
+| `Comment` | Authoring description displayed by validation and editor tools. |
+| `Flags` | Optional `GameplayTagFlags` value. |
+| `Enabled` | Optional switch for staged/deprecated rows. |
+| `Owner` | Optional team/system owner for review workflows. |
+| `Deprecated` / `RedirectTo` | Optional migration metadata handled by project-specific validation. |
+
+If `GameplayAbility` or `GameplayEffect` definitions are also generated by Luban, store tag references as strings or generated string lists. `GameplayTagDataTableReferenceSource<TRow>` can collect referenced tags from those rows before GAS definitions are built:
+
+```csharp
+DataTable<AbilityRow> abilityTable = DataTableRegistry.Get<DataTable<AbilityRow>>();
+
+GameplayTagRuntimePlatform.RegisterProjectTagSource(new GameplayTagDataTableReferenceSource<AbilityRow>(
+    "Design.Abilities",
+    abilityTable,
+    static row => row.AbilityTags,
+    static row => row.ActivationRequiredTags,
+    static row => row.ActivationBlockedTags,
+    static row => row.ActivationOwnedTags));
+```
+
+Recommended startup order:
+
+1. Load Luban bytes and register generated tables into `DataTableRegistry`.
+2. Register DataTable-backed gameplay tag sources.
+3. Call `GameplayTagManager.InitializeIfNeeded()`.
+4. Build GameplayAbilities / GameplayEffects from generated rows and convert tag-name fields into containers.
+
+For production builds, static tag catalogs can also be baked into `GameplayTags.bytes` during Editor/CI build steps. Runtime-only projects can then avoid loading the tag catalog table after the manifest has been baked, while generated Ability/Effect rows still keep their tag references as names.
+
 ### Dynamic Registration
 
 ```csharp
@@ -208,6 +285,19 @@ For GAS-style requirements:
 GameplayTagRequirements requirements = new(forbiddenTags, requiredTags);
 bool allowed = requirements.Matches(sourceTags, targetTags);
 ```
+
+For generated DataTable or Luban rows, convert names into containers at definition construction time:
+
+```csharp
+GameplayTagContainer abilityTags = GameplayTagContainerNameExtensions.FromTagNames(row.AbilityTags);
+GameplayTagRequirements activationRequirements = GameplayTagContainerNameExtensions.CreateRequirementsFromTagNames(
+    row.ActivationBlockedTags,
+    row.ActivationRequiredTags);
+
+GameplayTagContainer cues = GameplayTagContainerNameExtensions.FromDelimitedTagNames(row.GameplayCueTags, '|');
+```
+
+The default conversion mode is strict: an unknown or empty tag name throws. Use `ignoreMissing: true` only for migration tooling, optional legacy data, or staged content that is validated elsewhere.
 
 ## Networking
 
@@ -299,6 +389,10 @@ The module does not use `EditorPrefs`, `PlayerPrefs`, registry, plist, or hidden
 
 GameplayAbilities should depend on `CycloneGames.GameplayTags.Core`. Use containers, requirements, and count containers for ability activation, owned tags, blocked tags, effect-granted tags, and stack-sensitive state. Do not serialize runtime indices in ability specs; use tag names, stable IDs, or the module serializer.
 
+GameplayAbilities does not need GameplayEffect or GameplayAbility definitions to be ScriptableObjects. A generated row adapter can load Luban rows, create `GameplayTagContainer` values with `GameplayTagContainerNameExtensions`, and pass those containers into pure runtime `GameplayAbility.Initialize(...)` or `GameplayEffect` constructors. Initialize GameplayTags before building these definitions so invalid design data fails at startup instead of during combat.
+
+When a project uses the `CycloneGames.GameplayTags.DataTable` integration package and wants Ability/Effect tables to be the source of truth for referenced tags, register a `GameplayTagDataTableReferenceSource<TRow>` during startup. For stricter live-service production workflows, keep a dedicated `GameplayTag` catalog table as the authoritative source and use Ability/Effect table references only as validation inputs.
+
 ### GameplayFramework
 
 GameplayFramework integrations may depend on `Core` and `Unity.Runtime`. Scene-facing components should bridge to pure C# containers at initialization and avoid direct Unity object references inside tag logic.
@@ -338,12 +432,15 @@ dotnet build CycloneGames.GameplayTags.Unity.Editor.csproj -v:minimal
 
 After Unity regenerates project files, `CycloneGames.GameplayTags.Tests.Performance.csproj` can also be built from CLI. Until then, run the performance assembly through the Unity Test Runner.
 
+When the `CycloneGames.GameplayTags.DataTable` integration package is imported, validate its runtime and test assemblies through that package's README.
+
 Recommended Unity Editor validation:
 
 1. Open the Unity project from `<repo-root>/UnityStarter`.
 2. Run EditMode tests in `CycloneGames.GameplayTags.Tests.Editor`.
-3. Run performance tests in `CycloneGames.GameplayTags.Tests.Performance` and compare the Time and `Time.GC()` sample groups before and after hot-path changes.
-4. Open `Tools/CycloneGames/GameplayTags/Gameplay Tag Manager` and create a test tag in `ProjectSettings/GameplayTags/`.
-5. Add a `GameplayTagContainer` field to a test asset or component and verify the selector, clear action, and invalid tag display.
-6. Open `Tools/CycloneGames/GameplayTags/Tag Validation Window`, scan project assets and open scenes, and verify Undo works for a fix operation.
-7. Make a development build and verify `Assets/Resources/GameplayTags.bytes` is generated during preprocessing and removed after postprocessing.
+3. If the DataTable integration package is imported, run EditMode tests in `CycloneGames.GameplayTags.DataTable.Tests.Editor`.
+4. Run performance tests in `CycloneGames.GameplayTags.Tests.Performance` and compare the Time and `Time.GC()` sample groups before and after hot-path changes.
+5. Open `Tools/CycloneGames/GameplayTags/Gameplay Tag Manager` and create a test tag in `ProjectSettings/GameplayTags/`.
+6. Add a `GameplayTagContainer` field to a test asset or component and verify the selector, clear action, and invalid tag display.
+7. Open `Tools/CycloneGames/GameplayTags/Tag Validation Window`, scan project assets and open scenes, and verify Undo works for a fix operation.
+8. Make a development build and verify `Assets/Resources/GameplayTags.bytes` is generated during preprocessing and removed after postprocessing.
