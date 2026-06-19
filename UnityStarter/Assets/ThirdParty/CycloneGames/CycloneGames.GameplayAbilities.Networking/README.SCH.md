@@ -151,23 +151,23 @@ bridge.ServerSyncTags(observers, targetNetworkId, tagData);
 
 | Message | Id |
 | --- | ---: |
-| `MsgAbilityActivateRequest` | 200 |
-| `MsgAbilityActivateConfirm` | 201 |
-| `MsgAbilityActivateReject` | 202 |
-| `MsgAbilityEnd` | 203 |
-| `MsgAbilityCancel` | 204 |
-| `MsgEffectApplied` | 210 |
-| `MsgEffectRemoved` | 211 |
-| `MsgEffectStackChanged` | 212 |
-| `MsgEffectUpdated` | 213 |
-| `MsgAttributeUpdate` | 220 |
-| `MsgTagUpdate` | 225 |
-| `MsgAbilityMulticast` | 230 |
-| `MsgFullState` | 240 |
-| `MsgFullStateRequest` | 241 |
-| `MsgStateSyncMetadata` | 242 |
+| `MsgAbilityActivateRequest` | 10000 |
+| `MsgAbilityActivateConfirm` | 10001 |
+| `MsgAbilityActivateReject` | 10002 |
+| `MsgAbilityEnd` | 10003 |
+| `MsgAbilityCancel` | 10004 |
+| `MsgEffectApplied` | 10010 |
+| `MsgEffectRemoved` | 10011 |
+| `MsgEffectStackChanged` | 10012 |
+| `MsgEffectUpdated` | 10013 |
+| `MsgAttributeUpdate` | 10020 |
+| `MsgTagUpdate` | 10025 |
+| `MsgAbilityMulticast` | 10030 |
+| `MsgFullState` | 10040 |
+| `MsgFullStateRequest` | 10041 |
+| `MsgStateSyncMetadata` | 10042 |
 
-项目应维护自己的 message id 分配表，避免与 Gameplay 消息冲突。
+这些 id 位于通用 `NetworkMessageRanges.Module` 空间中的 `NetworkedAbilityBridge.MessageRange` package-owned 子区间（`10000-10999`）；当 runtime context 暴露 `INetworkMessageCatalog` 时，区间和 descriptor 会自动注册进去。项目应维护自己的 message id 分配表，避免与已注册的 module range 冲突。
 
 ### `INetworkedASC`
 

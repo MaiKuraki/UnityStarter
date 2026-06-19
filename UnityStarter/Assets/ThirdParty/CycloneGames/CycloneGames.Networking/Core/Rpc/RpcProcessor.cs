@@ -20,11 +20,9 @@ namespace CycloneGames.Networking.Rpc
         private readonly ConcurrentDictionary<ushort, RpcHandler> _handlers = new();
         private readonly ConcurrentQueue<ushort> _recycledIds = new();
         private readonly INetworkManager _networkManager;
-        private int _nextAutoId = NetworkConstants.RpcMsgIdMin;
+        private int _nextAutoId = NetworkConstants.RpcMsgIdMin - 1;
 
-        private static readonly ushort MaxAutoId = NetworkConstants.UserMsgIdMin > NetworkConstants.RpcMsgIdMin
-            ? (ushort)(NetworkConstants.UserMsgIdMin - 1)
-            : ushort.MaxValue;
+        private const ushort MaxAutoId = NetworkConstants.RpcMsgIdMax;
 
         private struct RpcHandler
         {
@@ -43,9 +41,7 @@ namespace CycloneGames.Networking.Rpc
         /// Automatically recycles IDs from previously unregistered handlers.
         /// </summary>
         /// <exception cref="OverflowException">
-        /// Thrown if all 65435+ auto-assignable RPC IDs are in use simultaneously.
-        /// This requires &gt;65K concurrently registered RPC types and should never
-        /// occur in normal game code.
+        /// Thrown when the configured auto-assignable RPC ID range is exhausted.
         /// </exception>
         public ushort Register<T>(Action<INetConnection, T> handler, RpcTarget target = RpcTarget.Server,
             NetworkChannel channel = NetworkChannel.Reliable) where T : unmanaged
@@ -112,27 +108,27 @@ namespace CycloneGames.Networking.Rpc
         /// Send an RPC. Automatically routes based on registered target.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void Send<T>(ushort rpcId, in T data, INetConnection target = null) where T : unmanaged
+        public NetworkSendResult Send<T>(ushort rpcId, in T data, INetConnection target = null) where T : unmanaged
         {
             // ConcurrentDictionary.TryGetValue is lock-free for reads.
             // The handler Invoke closure is an object reference that remains valid
             // even if the handler is concurrently unregistered.
-            if (!_handlers.TryGetValue(rpcId, out RpcHandler handler)) return;
+            if (!_handlers.TryGetValue(rpcId, out RpcHandler handler))
+                return NetworkSendResult.Fail(NetworkSendStatus.Unsupported, reason: "RPC handler is not registered.");
 
             var payload = RpcPayload.FromBlittable(rpcId, data);
 
             switch (handler.Target)
             {
                 case RpcTarget.Server:
-                    _networkManager.SendToServer(rpcId, payload, handler.Channel);
-                    break;
+                    return _networkManager.SendToServer(rpcId, payload, handler.Channel);
                 case RpcTarget.Owner when target != null:
-                    _networkManager.SendToClient(target, rpcId, payload, handler.Channel);
-                    break;
+                    return _networkManager.SendToClient(target, rpcId, payload, handler.Channel);
                 case RpcTarget.AllClients:
-                    _networkManager.BroadcastToClients(rpcId, payload, handler.Channel);
-                    break;
+                    return _networkManager.BroadcastToClients(rpcId, payload, handler.Channel);
             }
+
+            return NetworkSendResult.Fail(NetworkSendStatus.Unsupported, reason: "RPC target requires a connection or is not implemented.");
         }
 
         public void Unregister(ushort rpcId)

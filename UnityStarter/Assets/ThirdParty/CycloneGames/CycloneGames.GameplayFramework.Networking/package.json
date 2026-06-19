@@ -1,0 +1,24 @@
+{
+  "name": "com.cyclone-games.gameplay-framework-networking",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.GameplayFramework.Networking",
+  "description": "Optional CycloneGames.Networking integration for CycloneGames.GameplayFramework. Provides session bridging, actor migration serialization, GameplayFramework message catalog registration, authority roles, and observer resolution.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.gameplay-framework": "1.0.0",
+    "com.cyclone-games.networking": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "GameplayFramework",
+    "Networking",
+    "Replication"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

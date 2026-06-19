@@ -1,4 +1,4 @@
-#if MIRROR
+#if CYCLONE_NETWORKING_HAS_MIRROR
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -60,6 +60,21 @@ namespace CycloneGames.Networking.Adapter.Mirror
         public bool IsRunning => IsServer || IsClient;
         public bool Available => global::Mirror.Transport.active != null && global::Mirror.Transport.active.Available();
         public NetworkBackendFeatures Features => NetworkBackendFeatures.RealtimeTransport | NetworkBackendFeatures.Relay;
+        public NetworkTransportCapabilities Capabilities => new NetworkTransportCapabilities(
+            "Mirror",
+            NetworkTransportFeatureFlags.Client
+            | NetworkTransportFeatureFlags.Server
+            | NetworkTransportFeatureFlags.Host
+            | NetworkTransportFeatureFlags.Reliable
+            | NetworkTransportFeatureFlags.Unreliable
+            | NetworkTransportFeatureFlags.Backpressure
+            | NetworkTransportFeatureFlags.DedicatedServerCompatible,
+            NetworkChannelFlags.Reliable | NetworkChannelFlags.Unreliable,
+            NetworkConstants.DefaultMaxConnections,
+            GetMaxPacketSize(GetChannelId(NetworkChannel.Reliable)),
+            GetMaxPacketSize(GetChannelId(NetworkChannel.Reliable)),
+            GetMaxPacketSize(GetChannelId(NetworkChannel.Unreliable)),
+            _maxQueuedPackets);
 
         public bool IsEncrypted
         {
@@ -491,13 +506,13 @@ namespace CycloneGames.Networking.Adapter.Mirror
             OnClientDisconnected?.Invoke(new MirrorNetConnection(conn, default));
         }
 
-        private void EnqueuePacket(byte[] sourceBuffer, int length, int channelId, bool toServer, bool broadcast, int targetConnId)
+        private bool EnqueuePacket(byte[] sourceBuffer, int length, int channelId, bool toServer, bool broadcast, int targetConnId)
         {
             if (sourceBuffer == null || length < 0 || length > sourceBuffer.Length)
-                return;
+                return false;
 
             if (!TryReserveQueueSlot())
-                return;
+                return false;
 
             try
             {
@@ -514,6 +529,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
                     TargetConnectionId = targetConnId,
                     IsDisconnect = false
                 });
+                return true;
             }
             catch
             {
@@ -610,42 +626,87 @@ namespace CycloneGames.Networking.Adapter.Mirror
             }
         }
 
-        public void Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
         {
+            if (!IsRunning)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotRunning, channelId, connection);
+
+            if (connection is not MirrorNetConnection mirrorConn)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
+
             byte[] buffer = GetThreadBuffer();
             NetworkChannel channel = GetNetworkChannel(channelId);
-            int frameLength = BuildFrame(NetworkConstants.SystemMsgIdMin, channel, payload, buffer);
-
-            Interlocked.Add(ref _bytesSent, frameLength);
-            Interlocked.Increment(ref _packetsSent);
+            int frameLength;
+            try
+            {
+                frameLength = BuildFrame(NetworkConstants.SystemMsgIdMin, channel, payload, buffer);
+            }
+            catch (Exception e)
+            {
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, connection, e.Message);
+            }
 
             if (IsMainThread)
             {
                 var frame = new ArraySegment<byte>(buffer, 0, frameLength);
-                if (connection is MirrorNetConnection mirrorConn)
+                if (NetworkServer.active && NetworkServer.connections.TryGetValue(mirrorConn.ConnectionId, out var conn))
                 {
-                    if (NetworkServer.active && NetworkServer.connections.TryGetValue(mirrorConn.ConnectionId, out var conn))
-                    {
-                        SendFrameToConnection(conn, frame, channelId);
-                    }
-                    else if (NetworkClient.active)
-                    {
-                        SendFrameToServer(frame, channelId);
-                    }
+                    Interlocked.Add(ref _bytesSent, frameLength);
+                    Interlocked.Increment(ref _packetsSent);
+                    SendFrameToConnection(conn, frame, channelId);
+                    return NetworkSendResult.Accepted(frameLength, channelId, connection);
                 }
+
+                if (NetworkClient.active)
+                {
+                    Interlocked.Add(ref _bytesSent, frameLength);
+                    Interlocked.Increment(ref _packetsSent);
+                    SendFrameToServer(frame, channelId);
+                    return NetworkSendResult.Accepted(frameLength, channelId, connection);
+                }
+
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
             }
-            else if (connection is MirrorNetConnection mirrorConn)
+
+            if (EnqueuePacket(buffer, frameLength, channelId, false, false, mirrorConn.ConnectionId))
             {
-                EnqueuePacket(buffer, frameLength, channelId, false, false, mirrorConn.ConnectionId);
+                Interlocked.Add(ref _bytesSent, frameLength);
+                Interlocked.Increment(ref _packetsSent);
+                return NetworkSendResult.Queued(frameLength, channelId, connection);
             }
+
+            return NetworkSendResult.Fail(NetworkSendStatus.Backpressure, channelId, connection, "Mirror send queue limit reached.");
         }
 
-        public void Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
         {
+            if (connections == null)
+                throw new ArgumentNullException(nameof(connections));
+
+            int acceptedBytes = 0;
+            int acceptedRecipients = 0;
+            NetworkSendResult lastFailure = default;
+
             for (int i = 0; i < connections.Count; i++)
             {
-                Send(connections[i], payload, channelId);
+                NetworkSendResult result = Send(connections[i], payload, channelId);
+                if (result.Succeeded)
+                {
+                    acceptedBytes += result.BytesAccepted;
+                    acceptedRecipients++;
+                }
+                else
+                {
+                    lastFailure = result;
+                }
             }
+
+            if (acceptedRecipients > 0)
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, acceptedBytes, acceptedRecipients, channelId);
+
+            return connections.Count == 0
+                ? NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, channelId)
+                : lastFailure;
         }
 
         private void SendFrameToServer(ArraySegment<byte> frame, int channelId)
@@ -705,7 +766,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
             Disconnect(connection);
         }
 
-        public void SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
             int channelId = GetChannelId(channel);
             byte[] buffer = GetThreadBuffer();
@@ -720,19 +781,23 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 if (IsMainThread)
                 {
                     SendFrameToServer(new ArraySegment<byte>(buffer, 0, frameLength), channelId);
+                    return NetworkSendResult.Accepted(frameLength, channelId);
                 }
                 else
                 {
-                    EnqueuePacket(buffer, frameLength, channelId, true, false, -1);
+                    return EnqueuePacket(buffer, frameLength, channelId, true, false, -1)
+                        ? NetworkSendResult.Queued(frameLength, channelId)
+                        : NetworkSendResult.Fail(NetworkSendStatus.Backpressure, channelId, reason: "Mirror send queue limit reached.");
                 }
             }
             catch (Exception e)
             {
                 CLogger.LogError($"Failed to send message {msgId}: {e}", LogCategory.Network);
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
             }
         }
 
-        public void SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
             int channelId = GetChannelId(channel);
             byte[] buffer = GetThreadBuffer();
@@ -749,20 +814,27 @@ namespace CycloneGames.Networking.Adapter.Mirror
                     if (connection is MirrorNetConnection mc && NetworkServer.connections.TryGetValue(mc.ConnectionId, out var conn))
                     {
                         SendFrameToConnection(conn, new ArraySegment<byte>(buffer, 0, frameLength), channelId);
+                        return NetworkSendResult.Accepted(frameLength, channelId, connection);
                     }
+                    return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
                 }
                 else if (connection is MirrorNetConnection mc)
                 {
-                    EnqueuePacket(buffer, frameLength, channelId, false, false, mc.ConnectionId);
+                    return EnqueuePacket(buffer, frameLength, channelId, false, false, mc.ConnectionId)
+                        ? NetworkSendResult.Queued(frameLength, channelId, connection)
+                        : NetworkSendResult.Fail(NetworkSendStatus.Backpressure, channelId, connection, "Mirror send queue limit reached.");
                 }
+
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
             }
             catch (Exception e)
             {
                 CLogger.LogError($"Failed to send to client: {e}", LogCategory.Network);
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, connection, e.Message);
             }
         }
 
-        public void BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
             int channelId = GetChannelId(channel);
             byte[] buffer = GetThreadBuffer();
@@ -777,24 +849,53 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 if (IsMainThread)
                 {
                     SendFrameBroadcast(new ArraySegment<byte>(buffer, 0, frameLength), channelId);
+                    int recipients = NetworkServer.active ? NetworkServer.connections.Count : 0;
+                    return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, frameLength * recipients, recipients, channelId);
                 }
                 else
                 {
-                    EnqueuePacket(buffer, frameLength, channelId, false, true, 0);
+                    return EnqueuePacket(buffer, frameLength, channelId, false, true, 0)
+                        ? NetworkSendResult.Queued(frameLength, channelId)
+                        : NetworkSendResult.Fail(NetworkSendStatus.Backpressure, channelId, reason: "Mirror send queue limit reached.");
                 }
             }
             catch (Exception e)
             {
                 CLogger.LogError($"Failed to broadcast: {e}", LogCategory.Network);
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
             }
         }
 
-        public void Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
+            if (connections == null)
+                throw new ArgumentNullException(nameof(connections));
+
+            int acceptedBytes = 0;
+            int acceptedRecipients = 0;
+            NetworkSendResult lastFailure = default;
+
             foreach (var conn in connections)
             {
-                SendToClient(conn, msgId, message, channel);
+                NetworkSendResult result = SendToClient(conn, msgId, message, channel);
+                if (result.Succeeded)
+                {
+                    acceptedBytes += result.BytesAccepted;
+                    acceptedRecipients++;
+                }
+                else
+                {
+                    lastFailure = result;
+                }
             }
+
+            int channelId = GetChannelId(channel);
+            if (acceptedRecipients > 0)
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, acceptedBytes, acceptedRecipients, channelId);
+
+            return connections.Count == 0
+                ? NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, channelId)
+                : lastFailure;
         }
 
         // Internal Handlers

@@ -14,6 +14,7 @@ namespace CycloneGames.Networking.Stubs
         public bool IsEncrypted => false;
         public bool Available => true;
         public NetworkBackendFeatures Features => NetworkBackendFeatures.None;
+        public NetworkTransportCapabilities Capabilities => NetworkTransportCapabilities.None;
 
         public int GetChannelId(NetworkChannel channel) => 0;
         public int GetMaxPacketSize(int channelId) => 65535;
@@ -44,8 +45,15 @@ namespace CycloneGames.Networking.Stubs
         public void Stop() { }
         public void Disconnect(INetConnection connection) { }
 
-        public void Send(INetConnection connection, in ArraySegment<byte> payload, int channelId) { }
-        public void Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId) { }
+        public NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
+        {
+            return NetworkSendResult.Fail(NetworkSendStatus.Unsupported, channelId, connection, "No-op transport does not send data.");
+        }
+
+        public NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
+        {
+            return NetworkSendResult.Fail(NetworkSendStatus.Unsupported, channelId, reason: "No-op transport does not send data.");
+        }
 
         // Suppress unused event warnings for the no-op stub
         private void SuppressUnusedWarnings()

@@ -237,8 +237,9 @@ namespace CycloneGames.Networking.Buffers
 
             int newCapacity = Math.Min(Math.Max(required, _buffer.Length * 2), MaxCapacity);
             byte[] newBuffer = ArrayPool<byte>.Shared.Rent(newCapacity);
-            Buffer.BlockCopy(_buffer, 0, newBuffer, 0, _position);
-            ArrayPool<byte>.Shared.Return(_buffer);
+            int bytesToCopy = _length > _position ? _length : _position;
+            Buffer.BlockCopy(_buffer, 0, newBuffer, 0, bytesToCopy);
+            ArrayPool<byte>.Shared.Return(_buffer, NetworkBufferPool.ClearBuffersOnReturn);
             _buffer = newBuffer;
         }
 

@@ -13,13 +13,13 @@
     "precompiledReferences": [],
     "autoReferenced": false,
     "defineConstraints": [
-        "MIRROR"
+        "CYCLONE_NETWORKING_HAS_MIRROR"
     ],
     "versionDefines": [
         {
             "name": "com.mirror-networking.mirror",
             "expression": "",
-            "define": "MIRROR"
+            "define": "CYCLONE_NETWORKING_HAS_MIRROR"
         }
     ],
     "noEngineReferences": false
