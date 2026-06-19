@@ -6,6 +6,7 @@ using System.Threading;
 
 #if UNITY_INCLUDE_TESTS
 [assembly: InternalsVisibleTo("CycloneGames.GameplayTags.Tests.Editor")]
+[assembly: InternalsVisibleTo("CycloneGames.GameplayTags.Tests.Performance")]
 #endif
 
 namespace CycloneGames.GameplayTags.Core
@@ -54,12 +55,12 @@ namespace CycloneGames.GameplayTags.Core
             }
         }
 
-        // Mutable state — only accessed under s_InitLock
+        // Mutable state only accessed under s_InitLock.
         private static Dictionary<string, GameplayTagDefinition> s_TagDefinitionsByName = new(StringComparer.Ordinal);
         private static List<GameplayTagDefinition> s_TagsDefinitionsList = new();
         private static List<PendingRegistration> s_PendingDynamicRegistrations = new();
 
-        // Immutable snapshot — published via Volatile.Write, read via Volatile.Read
+        // Immutable snapshot published via Volatile.Write and read via Volatile.Read.
         private static TagDataSnapshot s_Snapshot;
         private static volatile bool s_IsInitialized;
         private static bool s_HasBeenReloaded;
@@ -100,6 +101,33 @@ namespace CycloneGames.GameplayTags.Core
         internal static int GetRegisteredTagCount()
         {
             return Snapshot.TotalTagCount;
+        }
+
+        public static ulong CurrentManifestHash
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => Snapshot.ManifestHash;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static ulong GetStableIdFromRuntimeIndex(int runtimeIndex)
+        {
+            TagDataSnapshot snap = Snapshot;
+            return (uint)runtimeIndex < (uint)snap.TagStableIds.Length ? snap.TagStableIds[runtimeIndex] : 0UL;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool TryGetTagFromStableId(ulong stableId, out GameplayTag tag)
+        {
+            TagDataSnapshot snap = Snapshot;
+            if (stableId != 0UL && snap.TryGetRuntimeIndex(stableId, out int runtimeIndex))
+            {
+                tag = GetTagFromRuntimeIndex(runtimeIndex);
+                return true;
+            }
+
+            tag = GameplayTag.None;
+            return false;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -349,16 +377,32 @@ namespace CycloneGames.GameplayTags.Core
         public static void RegisterDynamicTags(IEnumerable<string> tags)
         {
             if (tags == null) return;
+
+            List<PendingRegistration> registrations = null;
             foreach (string tag in tags)
             {
                 if (!string.IsNullOrEmpty(tag))
-                    RegisterDynamicTag(tag, string.Empty, GameplayTagFlags.None);
+                {
+                    registrations ??= new List<PendingRegistration>();
+                    registrations.Add(new PendingRegistration(tag, string.Empty, GameplayTagFlags.None));
+                }
             }
+
+            RegisterDynamicRegistrations(registrations);
         }
 
         public static void RegisterDynamicTagsFromType(Type targetType)
         {
             if (targetType == null) return;
+
+            List<PendingRegistration> registrations = new();
+            CollectDynamicRegistrationsFromType(targetType, registrations);
+            RegisterDynamicRegistrations(registrations);
+        }
+
+        private static void CollectDynamicRegistrationsFromType(Type targetType, List<PendingRegistration> registrations)
+        {
+            if (targetType == null || registrations == null) return;
 
             FieldInfo[] fields = targetType.GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy);
             for (int i = 0; i < fields.Length; i++)
@@ -369,7 +413,7 @@ namespace CycloneGames.GameplayTags.Core
 
                 string tagName = (string)field.GetValue(null);
                 if (!string.IsNullOrEmpty(tagName))
-                    RegisterDynamicTag(tagName, field.Name, GameplayTagFlags.None);
+                    registrations.Add(new PendingRegistration(tagName, field.Name, GameplayTagFlags.None));
             }
         }
 
@@ -377,11 +421,14 @@ namespace CycloneGames.GameplayTags.Core
         {
             if (assembly == null) return;
 
+            List<PendingRegistration> registrations = new();
             foreach (GameplayTagAttribute attribute in assembly.GetCustomAttributes<GameplayTagAttribute>())
-                RegisterDynamicTag(attribute.TagName, attribute.Description, attribute.Flags);
+                registrations.Add(new PendingRegistration(attribute.TagName, attribute.Description, attribute.Flags));
 
             foreach (RegisterGameplayTagsFromAttribute fromAttribute in assembly.GetCustomAttributes<RegisterGameplayTagsFromAttribute>())
-                RegisterDynamicTagsFromType(fromAttribute.TargetType);
+                CollectDynamicRegistrationsFromType(fromAttribute.TargetType, registrations);
+
+            RegisterDynamicRegistrations(registrations);
         }
 
         public static void RegisterDynamicTag(string name, string description = null, GameplayTagFlags flags = GameplayTagFlags.None)
@@ -391,30 +438,72 @@ namespace CycloneGames.GameplayTags.Core
             {
                 if (s_IsInitialized)
                 {
-                    AppendDynamicTagLocked(name, description, flags);
+                    if (TryAppendDynamicTagLocked(name, description, flags))
+                        RebuildHierarchyAndPublishSnapshotLocked();
+
                     return;
                 }
 
-                for (int i = 0; i < s_PendingDynamicRegistrations.Count; i++)
-                {
-                    if (string.Equals(s_PendingDynamicRegistrations[i].Name, name, StringComparison.Ordinal))
-                        return;
-                }
+                if (HasPendingDynamicRegistrationLocked(name))
+                    return;
 
                 s_PendingDynamicRegistrations.Add(new PendingRegistration(name, description, flags));
             }
         }
 
-        private static void AppendDynamicTagLocked(string name, string description, GameplayTagFlags flags)
+        private static void RegisterDynamicRegistrations(List<PendingRegistration> registrations)
+        {
+            if (registrations == null || registrations.Count == 0) return;
+
+            lock (s_InitLock)
+            {
+                if (s_IsInitialized)
+                {
+                    bool changed = false;
+                    for (int i = 0; i < registrations.Count; i++)
+                    {
+                        PendingRegistration registration = registrations[i];
+                        changed |= TryAppendDynamicTagLocked(registration.Name, registration.Description, registration.Flags);
+                    }
+
+                    if (changed)
+                        RebuildHierarchyAndPublishSnapshotLocked();
+
+                    return;
+                }
+
+                for (int i = 0; i < registrations.Count; i++)
+                {
+                    PendingRegistration registration = registrations[i];
+                    if (string.IsNullOrEmpty(registration.Name) || HasPendingDynamicRegistrationLocked(registration.Name))
+                        continue;
+
+                    s_PendingDynamicRegistrations.Add(registration);
+                }
+            }
+        }
+
+        private static bool HasPendingDynamicRegistrationLocked(string name)
+        {
+            for (int i = 0; i < s_PendingDynamicRegistrations.Count; i++)
+            {
+                if (string.Equals(s_PendingDynamicRegistrations[i].Name, name, StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryAppendDynamicTagLocked(string name, string description, GameplayTagFlags flags)
         {
             if (!GameplayTagUtility.IsNameValid(name, out string errorMessage))
             {
                 GameplayTagLogger.LogError($"Failed to register gameplay tag \"{name}\": {errorMessage}");
-                return;
+                return false;
             }
 
             if (s_TagDefinitionsByName.ContainsKey(name))
-                return;
+                return false;
 
             AppendMissingParentsLocked(name, flags);
 
@@ -423,25 +512,39 @@ namespace CycloneGames.GameplayTags.Core
             s_TagsDefinitionsList.Add(definition);
             s_TagDefinitionsByName.Add(definition.TagName, definition);
 
-            RebuildHierarchyAndPublishSnapshotLocked();
+            return true;
         }
 
         private static void AppendMissingParentsLocked(string tagName, GameplayTagFlags flags)
         {
+            List<string> missingParents = null;
             string parentName = GameplayTagUtility.GetParentNameUnchecked(tagName);
             while (!string.IsNullOrEmpty(parentName))
             {
-                if (s_TagDefinitionsByName.ContainsKey(parentName))
-                {
+               if (s_TagDefinitionsByName.ContainsKey(parentName))
+               {
                     parentName = GameplayTagUtility.GetParentNameUnchecked(parentName);
                     continue;
                 }
 
-                GameplayTagDefinition parentDefinition = new(parentName, string.Empty, flags);
+               missingParents ??= new List<string>();
+               missingParents.Add(parentName);
+               parentName = GameplayTagUtility.GetParentNameUnchecked(parentName);
+            }
+
+            if (missingParents == null)
+                return;
+
+            for (int i = missingParents.Count - 1; i >= 0; i--)
+            {
+                string missingParentName = missingParents[i];
+                if (s_TagDefinitionsByName.ContainsKey(missingParentName))
+                    continue;
+
+                GameplayTagDefinition parentDefinition = new(missingParentName, string.Empty, flags);
                 parentDefinition.SetRuntimeIndex(s_TagsDefinitionsList.Count);
                 s_TagsDefinitionsList.Add(parentDefinition);
-                s_TagDefinitionsByName.Add(parentName, parentDefinition);
-                parentName = GameplayTagUtility.GetParentNameUnchecked(parentName);
+                s_TagDefinitionsByName.Add(missingParentName, parentDefinition);
             }
         }
 
@@ -509,7 +612,7 @@ namespace CycloneGames.GameplayTags.Core
                 s_TagDefinitionsByName.Clear();
                 s_TagsDefinitionsList.Clear();
 
-                // Do NOT null out s_Snapshot yet — readers may still be using it.
+                // Do not null out s_Snapshot yet; readers may still be using it.
                 // They hold a reference to the old snapshot which remains valid.
 
                 // Re-initialize completely (builds new snapshot inside lock)
@@ -571,8 +674,7 @@ namespace CycloneGames.GameplayTags.Core
             if (GameplayTagRuntimePlatform.IsRuntimePlaying())
             {
                 GameplayTagLogger.LogWarning("Gameplay tags have been reloaded at runtime." +
-                               " Existing data structures using gameplay tags may not work as expected." +
-                               " A domain reload is required.");
+                               " Existing replicated containers and cached read-only snapshots should be resynchronized.");
             }
 
             BroadcastTreeChanged();

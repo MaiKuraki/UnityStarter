@@ -153,25 +153,28 @@ namespace CycloneGames.GameplayTags.Unity
       /// Copy from a managed GameplayTagMask (256-bit) into this native mask.
       /// Call on main thread before scheduling jobs.
       /// </summary>
-      public unsafe void CopyFrom(in GameplayTagMask mask)
+      public void CopyFrom(in GameplayTagMask mask)
       {
          ClearAll();
-         fixed (GameplayTagMask* maskPtr = &mask)
+         for (int w = 0; w < 4; w++)
          {
-            ulong* words = (ulong*)maskPtr;
-            for (int w = 0; w < 4; w++)
+            ulong word = mask.GetWord(w);
+            if (word == 0)
             {
-               ulong word = words[w];
-               if (word == 0) continue;
-               int baseIdx = w * 64;
-               while (word != 0)
+               continue;
+            }
+
+            int baseIdx = w * 64;
+            while (word != 0)
+            {
+               int bit = BitScanForward(word);
+               int idx = baseIdx + bit;
+               if (idx < _bits.Length)
                {
-                  int bit = BitScanForward(word);
-                  int idx = baseIdx + bit;
-                  if (idx < _bits.Length)
-                     _bits.Set(idx, true);
-                  word &= word - 1; // clear lowest set bit
+                  _bits.Set(idx, true);
                }
+
+               word &= word - 1; // clear lowest set bit
             }
          }
       }
@@ -209,18 +212,16 @@ namespace CycloneGames.GameplayTags.Unity
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       private static int BitScanForward(ulong value)
       {
-         // De Bruijn bit scan
-         const ulong debruijn = 0x03F79D71B4CB0A89UL;
-         return DeBruijnTable[((value & (ulong)(-(long)value)) * debruijn) >> 58];
+         if (value == 0) return 64;
+         int n = 0;
+         if ((value & 0xFFFFFFFFUL) == 0) { n += 32; value >>= 32; }
+         if ((value & 0xFFFFUL) == 0) { n += 16; value >>= 16; }
+         if ((value & 0xFFUL) == 0) { n += 8; value >>= 8; }
+         if ((value & 0xFUL) == 0) { n += 4; value >>= 4; }
+         if ((value & 0x3UL) == 0) { n += 2; value >>= 2; }
+         if ((value & 0x1UL) == 0) { n += 1; }
+         return n;
       }
-
-      private static readonly int[] DeBruijnTable = new int[64]
-      {
-          0,  1,  2,  7,  3, 13,  8, 19,  4, 25, 14, 28,  9, 34, 20, 40,
-          5, 17, 26, 38, 15, 46, 29, 48, 10, 31, 35, 54, 21, 50, 41, 57,
-         63,  6, 12, 18, 24, 27, 33, 39, 16, 37, 45, 47, 30, 53, 49, 56,
-         62, 11, 23, 32, 36, 44, 52, 55, 61, 22, 43, 51, 60, 42, 59, 58
-      };
 
       public void Dispose()
       {

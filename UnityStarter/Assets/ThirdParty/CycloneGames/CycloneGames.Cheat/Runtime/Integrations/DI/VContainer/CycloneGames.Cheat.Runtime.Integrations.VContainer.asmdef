@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.Cheat.Runtime.Integrations.VContainer",
+    "rootNamespace": "",
+    "references": [
+        "VContainer",
+        "CycloneGames.Cheat.Runtime",
+        "CycloneGames.Cheat.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "VCONTAINER_PRESENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vcontainer",
+            "expression": "",
+            "define": "VCONTAINER_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}

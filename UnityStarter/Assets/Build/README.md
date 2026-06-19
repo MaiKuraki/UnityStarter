@@ -196,7 +196,7 @@ Once BuildData is configured, you can build using:
 - **Launch Scene**: Entry point scene for builds
 - **Application Version**: Version prefix for automatic versioning
 - **Output Base Path**: Base directory for build outputs
-- **Feature Flags**: Enable/disable optional features (HybridCLR, Obfuz, Buildalon)
+- **Feature Flags**: Enable/disable optional features (HybridCLR, Obfuz, Buildalon, Cheat exposure)
 - **Asset Management Selection**: Choose between YooAsset, Addressables, or None
 
 **Key Points:**
@@ -225,6 +225,7 @@ The main build script for full application builds. Handles:
 - Automatic versioning
 - Optional HybridCLR code generation
 - Optional asset bundle building (YooAsset/Addressables)
+- Build-time `ENABLE_CHEAT` define control for internal debug builds
 - Clean build options (Full Build) and Fast Build options (No Clean)
 - Debug build options with Development mode and Profiler support
 - Debug file management
@@ -270,7 +271,10 @@ If a package is not installed, related features are automatically disabled witho
 | Use Buildalon         | bool       | Enable Buildalon helpers                              | ❌ No    |
 | Use HybridCLR         | bool       | Enable HybridCLR code hot-updates                     | ❌ No    |
 | Use Obfuz             | bool       | Enable Obfuz code obfuscation                         | ❌ No    |
+| Cheat Build Mode      | enum       | Disabled / DevelopmentBuilds / Enabled for `ENABLE_CHEAT` | ❌ No |
 | Asset Management Type | enum       | None / YooAsset / Addressables                        | ❌ No    |
+
+`Cheat Build Mode` affects `BuildScript` player builds only. The build pipeline applies or removes `ENABLE_CHEAT` for the selected `NamedBuildTarget` during the build, then restores the original define list afterward. CI can override the asset value for a single run with `-enableCheat` or `-disableCheat`. The Build module does not reference CycloneGames.Cheat assemblies; it detects the optional `CycloneGames.Cheat.Runtime` assembly through reflection and Unity compilation metadata. If that runtime assembly is not available in the player compilation domain, the define is not applied and normal builds continue.
 
 **Validation:**
 
@@ -721,7 +725,8 @@ The Build system provides command-line interfaces for CI/CD integration.
   -output Build/Android/MyGame.apk \
   -clean \
   -buildHybridCLR \
-  -buildYooAsset
+  -buildYooAsset \
+  -enableCheat
 
 # With version override
 -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI \
@@ -741,7 +746,12 @@ The Build system provides command-line interfaces for CI/CD integration.
 | `-buildHybridCLR`    | flag        | Run HybridCLR generation                                                                     | ❌ No    |
 | `-buildYooAsset`     | flag        | Build YooAsset bundles                                                                       | ❌ No    |
 | `-buildAddressables` | flag        | Build Addressables content                                                                   | ❌ No    |
+| `-enableCheat`       | flag        | Force `ENABLE_CHEAT` on for this CI build                                                    | ❌ No    |
+| `-disableCheat`      | flag        | Force `ENABLE_CHEAT` off for this CI build                                                   | ❌ No    |
 | `-version`           | string      | Override version (default: from Git)                                                         | ❌ No    |
+
+`-enableCheat` and `-disableCheat` are mutually exclusive. Passing both arguments fails the CI build before any player build starts.
+If the `CycloneGames.Cheat.Runtime` assembly is not available, `-enableCheat` logs a warning and the build proceeds without `ENABLE_CHEAT`.
 
 **Hot Update Build:**
 
@@ -951,6 +961,7 @@ pipeline {
 - ✅ Use command-line methods for CI/CD
 - ✅ Set up proper build targets and output paths
 - ✅ Test builds locally before setting up CI/CD
+- ✅ Choose an explicit Cheat policy through `Cheat Build Mode`, `-enableCheat`, or `-disableCheat`
 - ✅ Use version overrides only when necessary
 
 ### 5. Hot Update Workflow

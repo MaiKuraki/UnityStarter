@@ -1,10 +1,12 @@
 {
     "name": "CycloneGames.GameplayTags.Core",
     "rootNamespace": "",
-    "references": [],
+    "references": [
+        "CycloneGames.Hash.Core"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
-    "allowUnsafeCode": true,
+    "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,

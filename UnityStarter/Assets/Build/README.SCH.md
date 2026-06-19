@@ -196,7 +196,7 @@ Build 系统支持以下可选包。仅安装您需要的包：
 - **Launch Scene**: 构建的入口点场景
 - **Application Version**: 自动版本控制的版本前缀
 - **Output Base Path**: 构建输出的基础目录
-- **功能标志**: 启用/禁用可选功能（HybridCLR、Obfuz、Buildalon）
+- **功能标志**: 启用/禁用可选功能（HybridCLR、Obfuz、Buildalon、Cheat 暴露）
 - **资源管理选择**: 在 YooAsset、Addressables 或 None 之间选择
 
 **关键点:**
@@ -225,6 +225,7 @@ Build 系统支持以下可选包。仅安装您需要的包：
 - 自动版本控制
 - 可选的 HybridCLR 代码生成
 - 可选的资源包构建（YooAsset/Addressables）
+- 面向内部调试构建的 `ENABLE_CHEAT` 构建期 define 控制
 - 清理构建选项（完整构建）和快速构建选项（不清理）
 - Debug 构建选项（支持开发模式和 Profiler）
 - 调试文件管理
@@ -270,7 +271,10 @@ Build 系统使用反射来检测和集成可选包：
 | Use Buildalon         | bool       | 启用 Buildalon 辅助工具            | ❌ 否 |
 | Use HybridCLR         | bool       | 启用 HybridCLR 代码热更新          | ❌ 否 |
 | Use Obfuz             | bool       | 启用 Obfuz 代码混淆                | ❌ 否 |
+| Cheat Build Mode      | enum       | Disabled / DevelopmentBuilds / Enabled，用于控制 `ENABLE_CHEAT` | ❌ 否 |
 | Asset Management Type | enum       | None / YooAsset / Addressables     | ❌ 否 |
+
+`Cheat Build Mode` 只影响 `BuildScript` 执行的 Player 构建。构建管线会在构建期间为选定的 `NamedBuildTarget` 添加或移除 `ENABLE_CHEAT`，构建结束后恢复原始 define 列表。CI 可以通过 `-enableCheat` 或 `-disableCheat` 覆盖单次构建。Build 模块不引用 CycloneGames.Cheat assembly；它通过反射和 Unity 编译元数据检测可选的 `CycloneGames.Cheat.Runtime` assembly。如果 player 编译域中不存在该 runtime assembly，则不会应用该 define，普通构建继续执行。
 
 **验证:**
 
@@ -721,7 +725,8 @@ Build 系统为 CI/CD 集成提供命令行接口。
   -output Build/Android/MyGame.apk \
   -clean \
   -buildHybridCLR \
-  -buildYooAsset
+  -buildYooAsset \
+  -enableCheat
 
 # 带版本覆盖
 -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI \
@@ -741,7 +746,12 @@ Build 系统为 CI/CD 集成提供命令行接口。
 | `-buildHybridCLR`    | flag        | 运行 HybridCLR 生成                                                                    | ❌ 否 |
 | `-buildYooAsset`     | flag        | 构建 YooAsset 包                                                                       | ❌ 否 |
 | `-buildAddressables` | flag        | 构建 Addressables 内容                                                                 | ❌ 否 |
+| `-enableCheat`       | flag        | 强制本次 CI 构建启用 `ENABLE_CHEAT`                                                    | ❌ 否 |
+| `-disableCheat`      | flag        | 强制本次 CI 构建关闭 `ENABLE_CHEAT`                                                    | ❌ 否 |
 | `-version`           | string      | 覆盖版本（默认：来自 Git）                                                             | ❌ 否 |
+
+`-enableCheat` 和 `-disableCheat` 互斥。若两个参数同时传入，CI 构建会在 Player 构建开始前失败。
+如果 `CycloneGames.Cheat.Runtime` assembly 不可用，`-enableCheat` 会记录 warning，并在不定义 `ENABLE_CHEAT` 的情况下继续构建。
 
 **热更新构建:**
 
@@ -951,6 +961,7 @@ pipeline {
 - ✅ 使用命令行方法进行 CI/CD
 - ✅ 设置适当的构建目标和输出路径
 - ✅ 在设置 CI/CD 之前本地测试构建
+- ✅ 通过 `Cheat Build Mode`、`-enableCheat` 或 `-disableCheat` 明确选择 Cheat 策略
 - ✅ 仅在必要时使用版本覆盖
 
 ### 5. 热更新工作流

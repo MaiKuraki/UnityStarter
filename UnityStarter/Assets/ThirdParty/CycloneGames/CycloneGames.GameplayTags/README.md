@@ -1,679 +1,349 @@
 # CycloneGames.GameplayTags
 
-<div align="left">English | <a href="./README.SCH.md">简体中文</a></div>
+English | [Simplified Chinese](./README.SCH.md)
 
-Upstream: `https://github.com/BandoWare/GameplayTags`
+`CycloneGames.GameplayTags` is a production-oriented gameplay tag module for Unity foundation projects. It provides a pure C# core for tag registration, lookup, containers, queries, masks, redirects, and network serialization, plus Unity Runtime and Editor bridges for authoring, build-time tag baking, JSON files, and inspector tooling.
 
-A production-grade **Gameplay Tags** system for Unity, inspired by Unreal Engine. Built on a pure C# engine-agnostic core with zero Unity dependencies, plus optional Unity integration layers for ECS, Burst/Jobs, and editor tooling.
+The module is designed to be a reusable dependency for `CycloneGames.GameplayAbilities`, `CycloneGames.GameplayFramework`, `CycloneGames.Networking`, `CycloneGames.AssetManagement`, headless simulations, CLI tests, and future non-Unity adapters. Core contracts do not expose Unity types.
 
-## Differences vs Upstream (BandoWare/GameplayTags)
+## Package Layout
 
-| Area | Upstream | CycloneGames |
-|------|----------|-------------|
-| **Thread Safety** | None | COW Snapshot + Volatile.Read/Write, lock-free reads |
-| **Registration** | Assembly attributes only | 4 methods: attributes, static class, runtime dynamic, JSON files |
-| **Performance** | Standard containers | 256-bit `GameplayTagMask`, `GameplayTagMaskLarge`, bitset-accelerated containers |
-| **Networking** | None | `GameplayTagNetSerializer` (Full + Delta + Mask) |
-| **ECS** | None | `GameplayTagMaskComponent`, `NativeGameplayTagMask`, Burst-compatible |
-| **Hot-Update** | Not supported | `RegisterDynamicTag`, `RegisterDynamicTagsFromAssembly`, HybridCLR aware |
-| **Tag Migration** | None | `GameplayTagRedirector` with chain flattening |
-| **Build Pipeline** | None | v1 binary format with CRC32 checksum |
-| **Editor** | Basic | Search, context menu, validation tool, Source Generator |
-| **Object Pool** | None | `GameplayTagContainerPool`, `Pools.ListPool<T>`, `Pools.DictionaryPool<K,V>` |
-
-## Features
-
-### 🏗️ Architecture
-
-| Feature | Description |
-|---------|-------------|
-| **Engine-Agnostic Core** | `CycloneGames.GameplayTags.Core` has `noEngineReferences: true` — pure C#, portable to any .NET runtime |
-| **Copy-on-Write Snapshots** | `TagDataSnapshot` published via `Volatile.Write`, lock-free reads from any thread |
-| **Three-Assembly Design** | Core (pure C#) → Unity (Burst/Jobs/ECS) → Editor (IMGUI tooling), clean dependency graph |
-| **Conditional Compilation** | Unity.Collections, Burst, Entities support via `#if CYCLONE_HAS_*` — zero overhead when packages are absent |
-| **Source Generator** | Compile-time constant tag references — no magic strings, no runtime typos |
-
-### ⚡ Performance
-
-| Feature | Description |
-|---------|-------------|
-| **256-bit Bitmask** | `GameplayTagMask` — blittable 32-byte struct, O(1) HasTag/HasAll/HasAny via 4 bitwise AND operations |
-| **Dynamic Large Mask** | `GameplayTagMaskLarge` — auto-growing `ulong[]` for 256+ tags, still O(1) per-tag |
-| **Bitset-Accelerated Containers** | `GameplayTagContainer` activates `int[]` bitset at ≥64 tags for O(1) lookups |
-| **Zero-GC Enumeration** | Custom `GameplayTagEnumerator` struct, pool-backed `List<T>` for batch operations |
-| **Object Pool** | `GameplayTagContainerPool` with `Pools.ListPool<T>` / `Pools.DictionaryPool<K,V>` eliminates allocation spikes |
-| **Binary Build Format** | v1 versioned binary with CRC32 checksum — near-instant tag loading in builds |
-
-### 🌐 Networking
-
-| Feature | Description |
-|---------|-------------|
-| **Compact Binary Protocol** | `GameplayTagNetSerializer` — Full snapshot: `4 + 2N` bytes; Delta: `6 + 2(A+R)` bytes |
-| **Delta Serialization** | Only changed tags are sent — automatic diff via `GetDiffExplicitTags()` |
-| **Auto-Detect Packets** | `Deserialize()` auto-detects Full vs Delta by marker byte |
-| **Mask Serialization** | 256-bit `GameplayTagMask` serialized as exactly 32 bytes via `unsafe memcpy` |
-| **Framework-Agnostic** | Works with Netcode for GameObjects, Mirror, FishNet, or custom transport |
-
-### 🧵 Thread Safety
-
-| Feature | Description |
-|---------|-------------|
-| **Immutable Snapshot** | `TagDataSnapshot` — once published, never mutated; readers capture a reference and use freely |
-| **ReadOnlyGameplayTagContainer** | Immutable thread-safe snapshot of container state — safe for worker threads and Jobs |
-| **Lock-Free Reads** | All tag queries use `Volatile.Read` on the snapshot — no contention |
-| **Tag Redirector** | `GameplayTagRedirector` uses `lock` for writes, lock-free `Dictionary.TryGetValue` for reads |
-
-### 🎮 ECS / DOD (Conditional)
-
-| Feature | Description |
-|---------|-------------|
-| **NativeGameplayTagMask** | `NativeBitArray`-based mask, Burst/Jobs compatible (`#if CYCLONE_HAS_COLLECTIONS`) |
-| **GameplayTagMaskComponent** | `IComponentData` wrapper for the 256-bit `GameplayTagMask` (`#if CYCLONE_HAS_ENTITIES`) |
-| **Change Detection** | `GameplayTagMaskPrevious` + `GameplayTagsDirty` (IEnableableComponent) for delta replication |
-| **Main-Thread Bridge** | `CopyFrom(GameplayTagMask)`, `CopyFrom(IGameplayTagContainer)`, `CopyFrom(ReadOnlyGameplayTagContainer)` |
-
-### 🛠️ Editor Tooling
-
-| Feature | Description |
-|---------|-------------|
-| **Gameplay Tag Manager Window** | Searchable tree view with add/delete/create-child-tag context menu |
-| **Inspector Tag Selector** | Popup with search bar, filtered tree, clear button — for `GameplayTag` and `GameplayTagContainer` fields |
-| **Tag Validation Tool** | Scans all Prefabs, ScriptableObjects, and open scenes for invalid tag references with one-click fix |
-| **Live JSON File Watching** | Automatically reloads tags when `.json` files change in `ProjectSettings/GameplayTags/` |
-| **Source Generator** | Emits a static class of `GameplayTag` constants at compile time — zero-cost references in code |
-
----
-
-## Assembly Structure
-
-```
-CycloneGames.GameplayTags.Core        ← Pure C# (no Unity references, allowUnsafeCode)
-    ↑
-CycloneGames.GameplayTags.Unity       ← Unity integration (Burst/Jobs/ECS, conditional)
-    ↑
-CycloneGames.GameplayTags.Unity.Editor      ← IMGUI editor windows & inspectors
-    ↑
-CycloneGames.GameplayTags.SourceGenerator  ← Roslyn Source Generator (compile-time)
+```text
+CycloneGames.GameplayTags/
+  Core/
+    CycloneGames.GameplayTags.Core.asmdef
+    GameplayTag.cs
+    GameplayTagManager.cs
+    GameplayTagContainer.cs
+    GameplayTagCountContainer.cs
+    GameplayTagQuery.cs
+    GameplayTagMask.cs
+    GameplayTagNetSerializer.cs
+  Unity.Runtime/
+    CycloneGames.GameplayTags.Unity.Runtime.asmdef
+    FileGameplayTagSource.cs
+    GameObjectGameplayTagContainer.cs
+    NativeGameplayTagMask.cs
+  Editor/
+    CycloneGames.GameplayTags.Unity.Editor.asmdef
+    GameplayTagEditorWindow.cs
+    GameplayTagContainerPropertyDrawer.cs
+    GameplayTagValidationReporter.cs
+    BuildTags.cs
+  Tests/Editor/
+    GameplayTagsCoreTests.cs
+  Tests/Performance/
+    GameplayTagsPerformanceTests.cs
+  SourceGenerator~/
+    GameplayTagsSourceGenerator.cs
 ```
 
-## Installation
+```mermaid
+flowchart TD
+    Core["Core\nPure C# runtime"]
+    UnityRuntime["Unity.Runtime\nUnity bridge, JSON, build asset, NativeBitArray"]
+    Editor["Editor\nAuthoring, validation, build preprocessing"]
+    GAS["GameplayAbilities\nGAS tag requirements and state"]
+    Framework["GameplayFramework\nIntegration layer"]
+    Networking["Networking\nTransport-agnostic byte payloads"]
+    Assets["AssetManagement\nNo direct dependency required"]
 
-### Requirements
+    Core --> UnityRuntime
+    Core --> GAS
+    Core --> Framework
+    Core --> Networking
+    UnityRuntime --> Editor
+    UnityRuntime --> Framework
+    Assets -. loads assets that may contain serialized tags .-> Core
+```
 
-- Unity 2022.3+
-- .NET Standard 2.1
+## Assembly Boundary
 
-### Optional Packages (auto-detected)
+| Assembly | Responsibility | Unity dependency | Unsafe code |
+| --- | --- | --- | --- |
+| `CycloneGames.GameplayTags.Core` | Tags, containers, queries, masks, redirects, build binary reader, network serializer | No | No |
+| `CycloneGames.GameplayTags.Unity.Runtime` | Unity bootstrap, JSON project sources, `GameObjectGameplayTagContainer`, `NativeGameplayTagMask` | Yes | No |
+| `CycloneGames.GameplayTags.Unity.Editor` | Manager window, inspectors, validation, build-time baking, file watcher | Editor only | No |
+| `CycloneGames.GameplayTags.Tests.Editor` | Core regression coverage | Editor test runner | No |
+| `CycloneGames.GameplayTags.Tests.Performance` | Container, query, mask, and network serializer benchmarks | Editor performance test runner | No |
 
-| Package | Define | Unlocks |
-|---------|--------|---------|
-| `com.unity.collections` ≥ 1.0.0 | `CYCLONE_HAS_COLLECTIONS` | `NativeGameplayTagMask` |
-| `com.unity.burst` ≥ 1.0.0 | `CYCLONE_HAS_BURST` | `[BurstCompile]` on mask operations |
-| `com.unity.entities` ≥ 1.0.0 | `CYCLONE_HAS_ENTITIES` | `GameplayTagMaskComponent` (IComponentData) |
+The Core assembly is the contract consumed by GameplayAbilities and server/headless logic. Unity-facing code is kept in adapters so the tag system can remain a stable foundation module.
 
----
+## Dependencies
 
-## Tag Registration
+The package declares these Unity package dependencies because the current Runtime assembly uses them directly:
 
-Four methods are supported. All tags become available via `GameplayTagManager` after initialization.
+| Package | Used by |
+| --- | --- |
+| `com.cyclone-games.hash` | Stable tag IDs, manifest hashes, and build payload checks |
+| `com.unity.collections` | `NativeGameplayTagMask` and `NativeBitArray` bridge |
+| `com.unity.burst` | Optional `[BurstCompile]` annotation paths |
+| `com.unity.nuget.newtonsoft-json` | JSON tag source files in `ProjectSettings/GameplayTags/` |
 
-### 1. Assembly Attributes
+`com.unity.entities` is intentionally not a hard dependency. `GameplayTagMaskComponent.cs` is guarded by `CYCLONE_HAS_ENTITIES`; projects that need Entities should place the Entities bridge in an optional integration assembly with a `versionDefines` entry and an explicit package dependency.
+
+## Core Concepts
+
+### `GameplayTag`
+
+`GameplayTag` is a lightweight value that stores a stable tag name and a snapshot-local runtime index. Runtime indices are fast but not a persistence or network contract. If the tag table is reloaded or extended, a tag validates its cached index against the current snapshot and resolves by name when needed.
+
+Use `GameplayTag.None` only as an empty value. Containers reject `None` and invalid tags.
+
+### `TagDataSnapshot`
+
+`GameplayTagManager` publishes immutable `TagDataSnapshot` instances with `Volatile.Write`. Readers capture one snapshot and query arrays without locks. Mutations such as dynamic registration rebuild a new snapshot under a lock and publish it atomically.
+
+Every registered tag has:
+
+- Name, label, description, hierarchy level, flags.
+- Runtime index for local lookup.
+- Stable 64-bit ID for network and manifest validation.
+- Parent, child, and hierarchy spans stored in flat arrays.
+
+### Containers
+
+| Type | Use case |
+| --- | --- |
+| `GameplayTagContainer` | Explicit and implicit hierarchy-aware tag set. Good default for gameplay state and authoring fields. |
+| `GameplayTagCountContainer` | Reference-counted tags with add/remove events. Useful for GAS effects, buffs, and stacked state. |
+| `GameplayTagHierarchicalContainer` | Child container that propagates explicit changes to a parent count container. Useful for composed owners. |
+| `ReadOnlyGameplayTagContainer` | Immutable snapshot for worker threads, networking, and stable comparisons. |
+
+`GameplayTagContainer` keeps serialized tag names for Unity authoring and runtime indices for hot-path lookup. Runtime-only containers do not allocate the serialized string list unless one already exists or `FlushSerializedState()` is explicitly called.
+
+### Queries
+
+`GameplayTagQuery` compiles nested expressions into a token stream and caches it. Compiled queries treat the expression graph as immutable for hot-path evaluation. If `RootExpression`, nested expressions, or nested tag containers are mutated in place, call `InvalidateCompiledCache()` before the next match. Assigning a different `RootExpression` reference recompiles automatically.
+
+### Masks
+
+`GameplayTagMask` is a 32-byte, 256-bit value type for hot paths where tag count fits under 256 runtime indices. It uses safe word access, not unsafe pointer reinterpretation. `GameplayTagMaskLarge` is available for projects with more tags.
+
+Use masks for dense repeated checks. Use containers when the exact explicit tag set, hierarchy expansion, serialization, or dynamic tag count matters.
+
+## Tag Authoring
+
+### Assembly Attributes
 
 ```csharp
-[assembly: GameplayTag("Damage.Fatal")]
-[assembly: GameplayTag("Damage.Miss")]
-[assembly: GameplayTag("CrowdControl.Stunned")]
-[assembly: GameplayTag("CrowdControl.Slow")]
+using CycloneGames.GameplayTags.Core;
+
+[assembly: GameplayTag("Ability.Damage.Fire")]
+[assembly: GameplayTag("State.CrowdControl.Stunned")]
 ```
 
-### 2. Static Class Registration (Recommended for Hot-Update)
+### Static Class Registration
 
 ```csharp
-using CycloneGames.GameplayTags.Runtime;
+using CycloneGames.GameplayTags.Core;
 
 [assembly: RegisterGameplayTagsFrom(typeof(ProjectGameplayTags))]
 
 public static class ProjectGameplayTags
 {
-    public const string Damage_Fatal       = "Damage.Fatal";
-    public const string Damage_Miss        = "Damage.Miss";
-    public const string CrowdControl_Stun  = "CrowdControl.Stunned";
+    public const string AbilityDamageFire = "Ability.Damage.Fire";
+    public const string StateStunned = "State.CrowdControl.Stunned";
 }
 ```
 
-The manager scans `public const string` fields and registers them at initialization. Ideal for HybridCLR hot-update workflows — tags can be consolidated in generated classes without asset edits.
+### JSON Files
 
-### 3. Runtime Dynamic Registration
+Unity projects can author tags in JSON files under:
 
-For server-driven or runtime-generated tags:
-
-```csharp
-// Single tag
-GameplayTagManager.RegisterDynamicTag("Runtime.ServerBuff.SpeedBoost");
-
-// Batch registration
-GameplayTagManager.RegisterDynamicTags(new[] { "Event.Seasonal.Summer", "Event.Seasonal.Winter" });
-
-// From a hot-loaded assembly (HybridCLR)
-GameplayTagManager.RegisterDynamicTagsFromAssembly(hotLoadedAssembly);
+```text
+<unity-project-root>/ProjectSettings/GameplayTags/*.json
 ```
 
-### 4. JSON Files (Designer-Friendly)
-
-Create `.json` files in `ProjectSettings/GameplayTags/`:
+Example:
 
 ```json
 {
-  "Damage.Physical.Slash": {
-    "Comment": "Damage from a slashing weapon."
+  "Ability.Damage.Fire": {
+    "Comment": "Fire damage ability tag."
   },
-  "Damage.Magical.Fire": {
-    "Comment": "Damage from a fire spell."
-  },
-  "Status.Burning": {
-    "Comment": "Applied when taking fire damage over time."
+  "State.CrowdControl.Stunned": {
+    "Comment": "The actor cannot move or cast normal abilities."
   }
 }
 ```
 
-The editor watches for file changes and reloads automatically.
+The Editor file watcher reloads tags when these files change. Build preprocessing bakes leaf tags into `Assets/Resources/GameplayTags.bytes` and removes the generated asset after the build.
 
----
-
-## Core API
-
-### GameplayTag
-
-The fundamental unit — a lightweight struct identified by name and resolved to a `RuntimeIndex` for O(1) operations.
+### Dynamic Registration
 
 ```csharp
-using CycloneGames.GameplayTags.Runtime;
+GameplayTagManager.RegisterDynamicTag("Hotfix.Event.DoubleDrop", "Hotfix event tag.");
+GameplayTagManager.RegisterDynamicTagsFromAssembly(hotUpdateAssembly);
+GameplayTagManager.RegisterDynamicTags(serverProvidedTags);
+```
 
-// Request a tag (returns GameplayTag.None if not found)
-GameplayTag stunTag = GameplayTagManager.RequestTag("CrowdControl.Stunned");
+Dynamic registration is supported for hot-update and server-config workflows. Batch APIs such as `RegisterDynamicTags`, `RegisterDynamicTagsFromType`, and `RegisterDynamicTagsFromAssembly` append all new tags first, then rebuild and broadcast once. This is the preferred path for HybridCLR hot-update assembly loading. Dynamic registration changes the current manifest hash, so active network peers must resynchronize replicated tag containers after a tag table change.
 
-// Safe request
-if (GameplayTagManager.TryRequestTag("CrowdControl.Stunned", out GameplayTag tag))
+## Runtime Usage
+
+```csharp
+GameplayTag fire = GameplayTagManager.RequestTag("Ability.Damage.Fire");
+GameplayTag stunned = GameplayTagManager.RequestTag("State.CrowdControl.Stunned");
+
+GameplayTagContainer tags = new();
+tags.AddTag(fire);
+
+bool hasDamage = tags.HasTag(GameplayTagManager.RequestTag("Ability.Damage"));
+bool hasFireExact = tags.HasTagExact(fire);
+```
+
+Use `TryRequestTag` when user data, save data, or network data may contain unknown tags:
+
+```csharp
+if (GameplayTagManager.TryRequestTag(tagName, out GameplayTag tag))
 {
-    Debug.Log($"Tag: {tag.Name}, Index: {tag.RuntimeIndex}");
+    tags.AddTag(tag);
 }
-
-// Hierarchy queries
-bool isChild  = stunTag.IsChildOf(ccTag);        // "CrowdControl.Stunned".IsChildOf("CrowdControl") → true
-bool isParent = ccTag.IsParentOf(stunTag);        // "CrowdControl".IsParentOf("CrowdControl.Stunned") → true
-int  depth    = tagA.MatchesTagDepth(tagB);       // Number of matching hierarchy levels
-
-// Properties
-string name        = stunTag.Name;                // "CrowdControl.Stunned"
-string label       = stunTag.Label;               // "Stunned"
-int    level       = stunTag.HierarchyLevel;      // 2
-bool   isLeaf      = stunTag.IsLeaf;              // true (no children)
-bool   isValid     = stunTag.IsValid;             // true if registered
-GameplayTag parent = stunTag.ParentTag;           // "CrowdControl"
-
-// Span-based hierarchy access (zero allocation)
-ReadOnlySpan<GameplayTag> parents  = stunTag.ParentTags;     // ["CrowdControl"]
-ReadOnlySpan<GameplayTag> children = ccTag.ChildTags;        // ["CrowdControl.Stunned", "CrowdControl.Slow", ...]
-ReadOnlySpan<GameplayTag> hierarchy = stunTag.HierarchyTags; // ["CrowdControl", "CrowdControl.Stunned"]
 ```
 
-### GameplayTagContainer
-
-A serializable, hierarchy-aware collection of tags. Automatically maintains implicit parent tags.
+For GAS-style requirements:
 
 ```csharp
-// Create and populate
-var container = new GameplayTagContainer();
-container.AddTag(GameplayTagManager.RequestTag("Damage.Physical.Slash"));
-container.AddTag(GameplayTagManager.RequestTag("Status.Burning"));
-
-// Queries (hierarchy-aware: adding "Damage.Physical.Slash" implicitly adds "Damage" and "Damage.Physical")
-bool hasDamage  = container.HasTag(damageTag);         // true — parent match
-bool hasExact   = container.HasTagExact(slashTag);     // true — explicit only
-bool hasAll     = container.HasAll(requiredTags);       // all required present?
-bool hasAny     = container.HasAny(checkTags);          // any present?
-
-// Removal
-container.RemoveTag(slashTag);
-container.Clear();
-
-// Enumeration (zero-GC struct enumerator)
-foreach (GameplayTag tag in container.GetExplicitTags()) { /* ... */ }
-foreach (GameplayTag tag in container.GetTags())         { /* all including implicit parents */ }
-
-// Clone / Copy
-var clone = container.Clone();
-container.CopyFrom(otherContainer);
-
-// Delta computation (for networking)
-container.GetDiffExplicitTags(previousContainer, addedList, removedList);
+GameplayTagRequirements requirements = new(forbiddenTags, requiredTags);
+bool allowed = requirements.Matches(sourceTags, targetTags);
 ```
-
-### GameplayTagCountContainer
-
-Maintains per-tag reference counts with event callbacks — ideal for buff/debuff stacking in GAS (Gameplay Ability System).
-
-```csharp
-var countContainer = new GameplayTagCountContainer();
-
-// Register callbacks BEFORE adding tags
-countContainer.RegisterTagEventCallback(
-    stunTag,
-    GameplayTagEventType.NewOrRemoved,
-    (tag, count) => Debug.Log($"{tag.Name} {(count > 0 ? "APPLIED" : "REMOVED")}")
-);
-
-countContainer.RegisterTagEventCallback(
-    stunTag,
-    GameplayTagEventType.AnyCountChange,
-    (tag, count) => Debug.Log($"{tag.Name} stack count: {count}")
-);
-
-// Global events
-countContainer.OnAnyTagNewOrRemove += (tag, count) => { /* any tag added/removed */ };
-countContainer.OnAnyTagCountChange += (tag, count) => { /* any count change */ };
-
-// Add/remove (count-tracked)
-countContainer.AddTag(stunTag);      // count: 0→1, fires NewOrRemoved + AnyCountChange
-countContainer.AddTag(stunTag);      // count: 1→2, fires AnyCountChange only
-countContainer.RemoveTag(stunTag);   // count: 2→1, fires AnyCountChange only
-countContainer.RemoveTag(stunTag);   // count: 1→0, fires NewOrRemoved + AnyCountChange
-
-// Query counts
-int explicitCount = countContainer.GetExplicitTagCount(stunTag);
-int totalCount    = countContainer.GetTagCount(stunTag);  // includes hierarchy
-
-// Cleanup
-countContainer.RemoveAllTagEventCallbacks();
-```
-
-### GameplayTagQuery
-
-Complex tag matching with nested boolean logic:
-
-```csharp
-// Simple: has ALL of these tags?
-var queryAll = GameplayTagQuery.BuildQueryAll(requiredTags);
-bool matches = queryAll.Matches(container);
-
-// Simple: has ANY of these tags?
-var queryAny = GameplayTagQuery.BuildQueryAny(optionalTags);
-
-// Complex: (HasAll[Damage, Status.Burning]) AND (HasNone[Status.Immune])
-var query = new GameplayTagQuery
-{
-    RootExpression = new GameplayTagQueryExpression
-    {
-        Operator = EGameplayTagQueryExprOperator.All,
-        Expressions = new List<GameplayTagQueryExpression>
-        {
-            new() { Operator = EGameplayTagQueryExprOperator.All, Tags = damageTags },
-            new() { Operator = EGameplayTagQueryExprOperator.None, Tags = immuneTags },
-        }
-    }
-};
-
-bool result = query.Matches(container);
-```
-
-### GameplayTagRequirements
-
-A simple "Required + Forbidden" check pattern used in ability activation:
-
-```csharp
-var requirements = new GameplayTagRequirements
-{
-    m_RequiredTags  = requiredContainer,   // must have ALL of these
-    m_ForbiddenTags = forbiddenContainer,  // must have NONE of these
-};
-
-// Single container check
-bool canActivate = requirements.Matches(ownerTags);
-
-// Split static + dynamic containers (e.g., inherent tags + buff tags)
-bool canActivate2 = requirements.Matches(staticTags, dynamicTags);
-```
-
-### GameplayTagRedirector
-
-Transparent tag renaming and migration:
-
-```csharp
-// Register redirects (e.g., during version migration)
-GameplayTagRedirector.AddRedirect("OldTag.Damage.Fire", "Damage.Magical.Fire");
-
-// Chains are automatically flattened: A→B→C becomes A→C
-GameplayTagRedirector.AddRedirect("LegacyTag.Burn", "OldTag.Damage.Fire");
-// Now "LegacyTag.Burn" resolves directly to "Damage.Magical.Fire"
-
-// All RequestTag / TryRequestTag calls automatically apply redirects
-var tag = GameplayTagManager.RequestTag("OldTag.Damage.Fire"); // → resolves to "Damage.Magical.Fire"
-
-// Batch registration
-GameplayTagRedirector.AddRedirects(new Dictionary<string, string>
-{
-    { "Old.A", "New.A" },
-    { "Old.B", "New.B" },
-});
-
-// Query / manage
-bool hasRedirect = GameplayTagRedirector.HasRedirect("OldTag.Damage.Fire");
-IReadOnlyDictionary<string, string> all = GameplayTagRedirector.GetAllRedirects();
-GameplayTagRedirector.RemoveRedirect("OldTag.Damage.Fire");
-GameplayTagRedirector.ClearAll();
-```
-
----
-
-## Performance API
-
-### GameplayTagMask (256-bit Blittable Bitmask)
-
-A 32-byte value type for ultra-fast tag operations. Ideal for ECS, hot loops, and network serialization.
-
-```csharp
-// Create from tags
-var mask = GameplayTagMask.FromTag(stunTag);
-var mask2 = GameplayTagMask.FromTagWithHierarchy(stunTag); // includes all parent tags
-var mask3 = GameplayTagMask.FromContainer(container);
-
-// O(1) operations — single bitwise instruction
-mask.AddTag(burnTag);
-mask.RemoveTag(burnTag);
-bool has     = mask.HasTag(stunTag);
-bool hasHier = mask.HasTagHierarchical(stunTag); // checks children too
-
-// O(1) bulk operations — 4 AND/OR operations
-bool hasAll = mask.HasAll(requiredMask);
-bool hasAny = mask.HasAny(checkMask);
-bool hasNo  = mask.HasNone(immuneMask);
-
-// Set algebra — all O(1)
-var union = GameplayTagMask.Union(maskA, maskB);
-var inter = GameplayTagMask.Intersection(maskA, maskB);
-var diff  = GameplayTagMask.Difference(maskA, maskB);
-
-// Iterate set bits (yields GameplayTag via RuntimeIndex)
-foreach (GameplayTag tag in mask)
-{
-    Debug.Log(tag.Name);
-}
-
-// Low-level bit access (public)
-mask.SetBit(42);
-mask.ClearBit(42);
-bool isSet = mask.IsSet(42);
-ulong word = mask.GetWord(0); // word index 0–3
-```
-
-### GameplayTagMaskLarge (Dynamic Size)
-
-For projects with more than 256 tag types:
-
-```csharp
-var largeMask = new GameplayTagMaskLarge(capacity: 2048);
-largeMask.AddTag(someTag);
-largeMask.AddTagWithHierarchy(someTag);
-
-bool has    = largeMask.HasTag(someTag);
-bool hasAll = largeMask.HasAll(otherLargeMask);
-bool hasAny = largeMask.HasAny(otherLargeMask);
-```
-
-### ReadOnlyGameplayTagContainer (Thread-Safe Snapshot)
-
-Create an immutable snapshot for worker threads, Jobs, or cross-frame caching:
-
-```csharp
-// Create snapshot (main thread)
-ReadOnlyGameplayTagContainer snapshot = container.CreateSnapshot();
-
-// Use on any thread — fully immutable
-bool has    = snapshot.HasTag(stunTag);       // O(1) with bitset (≥64 tags), O(log n) otherwise
-bool exact  = snapshot.HasTagExact(stunTag);  // O(log n) binary search
-bool hasAll = snapshot.HasAll(otherContainer);
-bool hasAny = snapshot.HasAny(otherSnapshot);
-
-// Access raw indices (for custom processing)
-ReadOnlySpan<int> implicit_ = snapshot.GetImplicitIndices();
-ReadOnlySpan<int> explicit_ = snapshot.GetExplicitIndices();
-
-// Network-ready serialization
-byte[] packet = snapshot.Serialize();
-```
-
----
 
 ## Networking
 
-### GameplayTagNetSerializer
+`GameplayTagNetSerializer` is framework-agnostic. It can be used with `CycloneGames.Networking`, Mirror, Netcode for GameObjects, FishNet, or a custom transport.
 
-Framework-agnostic binary serialization for any networking layer:
+The current packet format uses stable tag IDs and a manifest hash:
+
+```text
+Full:
+[protocolVersion:byte=1][marker:byte=0xFE][manifestHash:uint64][count:int32][stableId:uint64 x count]
+
+Delta:
+[protocolVersion:byte=1][marker:byte=0xFD][manifestHash:uint64][addCount:int32][addStableId:uint64 x addCount][removeCount:int32][removeStableId:uint64 x removeCount]
+
+Mask:
+[word0:uint64][word1:uint64][word2:uint64][word3:uint64]
+```
+
+`CurrentProtocolVersion` is the GameplayTags serializer wire-format version. It is intentionally narrower than the whole game network protocol version. Large live-service games should still perform an outer compatibility handshake that exchanges the game build, content build, gameplay data version, supported gameplay protocol range, feature flags, and `GameplayTagManager.CurrentManifestHash`.
+
+The serializer validates buffer size, negative counts, count multiplication overflow, packet markers, protocol version, and manifest hash. Unknown stable IDs in a matching manifest are treated as corrupted protocol data. Runtime indices are never used as the network contract.
 
 ```csharp
-// --- Full Snapshot ---
 byte[] fullPacket = GameplayTagNetSerializer.SerializeFull(container);
-// Wire: [version:1][marker:0xFE][count:2][index:2 × N] = 4 + 2N bytes
-
-// Deserialize on remote
 GameplayTagNetSerializer.DeserializeFull(remoteContainer, fullPacket);
 
-// --- Delta (only changed tags) ---
 byte[] deltaPacket = GameplayTagNetSerializer.SerializeDelta(currentContainer, previousContainer);
-// Wire: [version:1][marker:0xFD][addCount:2][idx...][removeCount:2][idx...] = 6 + 2(A+R) bytes
-
-// Apply delta on remote
 GameplayTagNetSerializer.ApplyDelta(remoteContainer, deltaPacket);
 
-// --- Auto-Detect ---
-GameplayTagNetSerializer.Deserialize(remoteContainer, packet);
-// Automatically detects Full vs Delta by marker byte
+byte[] buffer = new byte[GameplayTagNetSerializer.GetFullSerializedSize(container)];
+int written = GameplayTagNetSerializer.SerializeFull(container, buffer, 0);
 
-// --- Pre-allocated buffer ---
-int size = GameplayTagNetSerializer.GetFullSerializedSize(container);
-byte[] buffer = new byte[size];
-int written = GameplayTagNetSerializer.SerializeFull(container, buffer, offset: 0);
-
-// --- 256-bit Mask (exactly 32 bytes, unsafe memcpy) ---
-byte[] maskBuffer = new byte[32];
-GameplayTagNetSerializer.SerializeMask(mask, maskBuffer, offset: 0);
-GameplayTagMask remoteMask = GameplayTagNetSerializer.DeserializeMask(maskBuffer, offset: 0);
+byte[] deltaBuffer = new byte[GameplayTagNetSerializer.GetDeltaSerializedSize(addCount, removeCount)];
+int deltaWritten = GameplayTagNetSerializer.SerializeDelta(currentContainer, previousContainer, deltaBuffer, 0);
 ```
 
-**Integration Example (Mirror)**:
+For large MMORPG deployments, make tag manifests part of the client/server compatibility handshake. A client and server with different `GameplayTagManager.CurrentManifestHash` values should not exchange gameplay tag state until a reload or patch flow has reconciled the manifests. If a future serializer version needs backward compatibility, keep `MinimumSupportedProtocolVersion`, `CurrentProtocolVersion`, and version-specific decode paths explicit and covered by cross-version tests.
+
+## Unity Runtime
+
+`GameObjectGameplayTagContainer` bridges serialized persistent tags into a runtime `GameplayTagCountContainer`. It lazily initializes so systems that bind before `Awake` still receive a valid container.
 
 ```csharp
-public class TagSyncBehaviour : NetworkBehaviour
-{
-    private GameplayTagContainer _serverTags = new();
-    private GameplayTagContainer _previousTags = new();
-
-    [Server]
-    void UpdateTags()
-    {
-        byte[] delta = GameplayTagNetSerializer.SerializeDelta(_serverTags, _previousTags);
-        _previousTags.CopyFrom(_serverTags);
-        RpcApplyTagDelta(delta);
-    }
-
-    [ClientRpc]
-    void RpcApplyTagDelta(byte[] data)
-    {
-        GameplayTagNetSerializer.Deserialize(_clientTags, data);
-    }
-}
+GameObjectGameplayTagContainer component = GetComponent<GameObjectGameplayTagContainer>();
+GameplayTagCountContainer runtimeTags = component.GameplayTagContainer;
 ```
 
----
+`GameplayTagContainerBinds` binds boolean callbacks to tag presence and supports deterministic `UnbindAll()` cleanup.
 
-## ECS / Burst / Jobs
+## Jobs And Data-Oriented Usage
 
-> Requires `com.unity.collections`, `com.unity.burst`, and/or `com.unity.entities`. Features are enabled automatically via `versionDefines`.
-
-### GameplayTagMaskComponent (ECS)
+`NativeGameplayTagMask` copies managed containers or masks into a `NativeBitArray` for Jobs/Burst-oriented workflows:
 
 ```csharp
-// Add to entity
-EntityManager.AddComponentData(entity, new GameplayTagMaskComponent
-{
-    Mask = GameplayTagMask.FromContainer(container)
-});
-
-// Query in a system
-foreach (var (tags, entity) in SystemAPI.Query<RefRW<GameplayTagMaskComponent>>().WithEntityAccess())
-{
-    if (tags.ValueRO.HasTag(stunTag))
-    {
-        // Skip movement for stunned entities
-    }
-
-    tags.ValueRW.SetTag(burnTag);    // Add a tag
-    tags.ValueRW.ClearTag(burnTag);  // Remove a tag
-
-    bool all = tags.ValueRO.HasAll(requiredMask);
-    bool any = tags.ValueRO.HasAny(checkMask);
-}
+using NativeGameplayTagMask nativeMask = new(Allocator.TempJob);
+nativeMask.CopyFrom(readOnlySnapshot);
 ```
 
-### Change Detection for Network Replication
+Create and populate native masks on the main thread after tags are initialized. Dispose masks according to the allocator lifetime.
 
-```csharp
-// Entities also have GameplayTagMaskPrevious and GameplayTagsDirty components
+## Editor Tooling
 
-foreach (var (current, previous, dirty, entity) in
-    SystemAPI.Query<RefRO<GameplayTagMaskComponent>, RefRW<GameplayTagMaskPrevious>,
-                    RefRW<GameplayTagsDirty>>()
-    .WithEntityAccess())
-{
-    if (current.ValueRO.Mask != previous.ValueRO.Mask)
-    {
-        // Mask changed — mark dirty for replication
-        SystemAPI.SetComponentEnabled<GameplayTagsDirty>(entity, true);
-        previous.ValueRW.Mask = current.ValueRO.Mask;
-    }
-}
+| Tool | Path |
+| --- | --- |
+| Gameplay Tag Manager | `Tools/CycloneGames/GameplayTags/Gameplay Tag Manager` |
+| Validation Window | `Tools/CycloneGames/GameplayTags/Tag Validation Window` |
+| Inspector drawer | `GameplayTag` and `GameplayTagContainer` serialized fields |
+| Build bake | `BuildTags` build preprocess/postprocess hooks |
+
+The Gameplay Tag Manager includes search, source display, add/delete actions, context-menu copy/create-child commands, and a details panel for the selected tag with stable ID, manifest hash, hierarchy, flags, and source information.
+
+Inspector drawers provide searchable pickers for `GameplayTag` and `GameplayTagContainer`. Container fields show a bounded summary with the total tag count, keep the full editable list in the tag picker popup, and expose a `View All` shortcut when only the first tags are shown so large tag sets do not stretch component inspectors indefinitely.
+
+Editor fix operations use `SerializedObject`, Undo, dirty marking, and scene dirty marking. The validation window scans prefabs, ScriptableObjects, and open scenes for invalid serialized `GameplayTag` and `GameplayTagContainer` names, then can ping, remove, or fix all invalid references.
+
+## Persistence And Generated Files
+
+| Data | Path | Format | Owner | Versioned | Cleanup |
+| --- | --- | --- | --- | --- | --- |
+| Authored tag files | `UnityStarter/ProjectSettings/GameplayTags/*.json` | JSON object | GameplayTags Editor tools and users | Yes, if the project chooses to track tags in Git | Delete unused JSON files manually after migration |
+| Build baked tags | `UnityStarter/Assets/Resources/GameplayTags.bytes` | Binary format + payloadHash64 | `BuildTags` preprocess hook | No; generated before build and deleted after build | `BuildTags.OnPostprocessBuild` deletes asset and `.meta` |
+| Runtime containers | Memory only unless serialized by host object | Tag names + runtime indices | Owning gameplay object/service | Host-dependent | Clear owner state or call container `Clear()` |
+
+The module does not use `EditorPrefs`, `PlayerPrefs`, registry, plist, or hidden global state for tag configuration.
+
+## Integration Notes
+
+### GameplayAbilities
+
+GameplayAbilities should depend on `CycloneGames.GameplayTags.Core`. Use containers, requirements, and count containers for ability activation, owned tags, blocked tags, effect-granted tags, and stack-sensitive state. Do not serialize runtime indices in ability specs; use tag names, stable IDs, or the module serializer.
+
+### GameplayFramework
+
+GameplayFramework integrations may depend on `Core` and `Unity.Runtime`. Scene-facing components should bridge to pure C# containers at initialization and avoid direct Unity object references inside tag logic.
+
+### Networking
+
+Networking layers should treat GameplayTags packets as payloads and perform manifest compatibility checks before applying replicated state. The transport does not need to understand tag hierarchy.
+
+### AssetManagement
+
+AssetManagement does not need a direct dependency on GameplayTags. Assets may contain serialized `GameplayTag` or `GameplayTagContainer` fields; make sure tags are initialized before consuming loaded assets that rely on tag lookups.
+
+## Performance And Platform Notes
+
+- Hot-path lookups use runtime indices and flat arrays.
+- Snapshot reads are lock-free after initialization.
+- Container enumeration uses custom struct enumerators.
+- `GameplayTagMask` is fixed-size and safe for AOT platforms.
+- Network serialization is little-endian and deterministic across supported platforms.
+- Full and delta network serializers provide preallocated-buffer overloads for low-GC replication loops.
+- Complex `GameplayTagQuery` instances are compiled once and should be invalidated explicitly after authoring-time or runtime mutation.
+- Tag names are compared with `StringComparison.Ordinal`; tag authoring is case-sensitive.
+- Runtime indices are local to a snapshot and must not be saved or sent as authoritative data.
+- For projects with more than 256 hot-path tags, use `GameplayTagMaskLarge` or containers instead of forcing `GameplayTagMask`.
+- Performance coverage lives in `CycloneGames.GameplayTags.Tests.Performance` and measures container bitset lookup, 256-bit masks, wide query matching, full serialization, and delta serialization with preallocated buffers.
+
+## Validation
+
+CLI checks used for this package:
+
+```bash
+dotnet build CycloneGames.GameplayTags.Core.csproj -v:minimal
+dotnet build CycloneGames.GameplayTags.Tests.Editor.csproj -v:minimal
+dotnet build CycloneGames.GameplayTags.Unity.Runtime.csproj -v:minimal
+dotnet build CycloneGames.GameplayTags.Unity.Editor.csproj -v:minimal
 ```
 
-### NativeGameplayTagMask (Burst/Jobs)
+After Unity regenerates project files, `CycloneGames.GameplayTags.Tests.Performance.csproj` can also be built from CLI. Until then, run the performance assembly through the Unity Test Runner.
 
-```csharp
-// Create on main thread
-var nativeMask = new NativeGameplayTagMask(Allocator.TempJob);
-nativeMask.Set(stunTag);
-nativeMask.Set(burnTag);
+Recommended Unity Editor validation:
 
-// Or copy from managed data
-nativeMask.CopyFrom(managedMask);        // from GameplayTagMask
-nativeMask.CopyFrom(container);           // from IGameplayTagContainer
-nativeMask.CopyFrom(readOnlySnapshot);    // from ReadOnlyGameplayTagContainer
-
-// Use in Jobs
-var job = new TagCheckJob { RequiredTags = nativeMask };
-job.Schedule(entityCount, 64).Complete();
-
-// Bitwise operations (Burst-compatible)
-NativeGameplayTagMask.And(in maskA, in maskB, Allocator.Temp, out var result);
-NativeGameplayTagMask.Or(in maskA, in maskB, Allocator.Temp, out var result2);
-
-bool containsAll = nativeMask.ContainsAll(otherMask);
-bool containsAny = nativeMask.ContainsAny(otherMask);
-
-// Cleanup
-nativeMask.Dispose();
-result.Dispose();
-```
-
----
-
-## Editor Tools
-
-### Gameplay Tag Manager Window
-
-**Menu**: `Tools > CycloneGames > Gameplay Tag Manager`
-
-- Full tree view of all registered tags
-- Search bar for quick filtering
-- Right-click context menu: **Add Tag**, **Delete Tag**, **Create Child Tag** (prefills parent path)
-- Refresh button to reload tags and trigger Source Generator
-
-### Inspector Integration
-
-`GameplayTag` and `GameplayTagContainer` fields have custom property drawers:
-
-- **GameplayTag**: Dropdown with searchable popup showing the full tag tree
-- **GameplayTagContainer**: "Edit Tags" button opens a popup with checkboxes, plus "Clear All" and per-tag remove buttons
-- Invalid tags are highlighted in red
-
-### Tag Validation Tool
-
-**Menu**: `Tools > CycloneGames > GameplayTags > Tag Validation Window`
-
-- Scans all Prefabs, ScriptableObjects, and open Scenes for invalid `GameplayTagContainer` references
-- Shows asset path, invalid tag name, and context object
-- **Fix** button to remove individual invalid tags
-- **Fix All** button for batch cleanup
-
-### Source Generator
-
-The `GameplayTagsSourceGenerator` automatically generates a static class with compile-time `GameplayTag` constants:
-
-```csharp
-// Generated code (example)
-public static class GTags
-{
-    public static readonly GameplayTag Damage_Physical_Slash = GameplayTagManager.RequestTag("Damage.Physical.Slash");
-    public static readonly GameplayTag CrowdControl_Stunned  = GameplayTagManager.RequestTag("CrowdControl.Stunned");
-    // ...
-}
-
-// Usage — zero magic strings, IDE auto-complete, compile-time error on typos
-if (container.HasTag(GTags.CrowdControl_Stunned)) { /* ... */ }
-```
-
----
-
-## Build Pipeline
-
-Tags are compiled to an efficient binary format during `IPreprocessBuildWithReport`:
-
-```
-[byte version=1] [int tagCount] [string tagName × tagCount] [uint crc32]
-```
-
-- **Version byte** ensures forward compatibility
-- **CRC32 checksum** detects data corruption (disk I/O errors, truncation)
-- At runtime, `BuildGameplayTagSource` reads this binary from `Resources` — no JSON parsing overhead
-
----
-
-## HybridCLR / Hot-Update Support
-
-The system is designed for hot-update workflows:
-
-```csharp
-// After loading a hot-update assembly:
-GameplayTagManager.RegisterDynamicTagsFromAssembly(hotLoadedAssembly);
-
-// Or register from a type in the hot-update assembly:
-GameplayTagManager.RegisterDynamicTagsFromType(typeof(HotUpdateTags));
-
-// Or from server config:
-GameplayTagManager.RegisterDynamicTags(serverTagList);
-```
-
-Dynamic registration automatically rebuilds the `TagDataSnapshot` and publishes it atomically.
-
----
-
-## Dependencies
-
-- **None** (Core assembly is pure C#)
-
-### Optional
-
-| Package | Purpose |
-|---------|---------|
-| `com.unity.collections` | `NativeGameplayTagMask` |
-| `com.unity.burst` | `[BurstCompile]` on native mask operations |
-| `com.unity.entities` | `GameplayTagMaskComponent` (IComponentData) |
-| Newtonsoft.Json | JSON tag file parsing (editor only) |
+1. Open the Unity project from `<repo-root>/UnityStarter`.
+2. Run EditMode tests in `CycloneGames.GameplayTags.Tests.Editor`.
+3. Run performance tests in `CycloneGames.GameplayTags.Tests.Performance` and compare the Time and `Time.GC()` sample groups before and after hot-path changes.
+4. Open `Tools/CycloneGames/GameplayTags/Gameplay Tag Manager` and create a test tag in `ProjectSettings/GameplayTags/`.
+5. Add a `GameplayTagContainer` field to a test asset or component and verify the selector, clear action, and invalid tag display.
+6. Open `Tools/CycloneGames/GameplayTags/Tag Validation Window`, scan project assets and open scenes, and verify Undo works for a fix operation.
+7. Make a development build and verify `Assets/Resources/GameplayTags.bytes` is generated during preprocessing and removed after postprocessing.

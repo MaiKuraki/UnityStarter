@@ -14,6 +14,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
       static GameplayTagsFileWatcher()
       {
+         GameplayTagUnityPlatformBootstrap.Configure();
+
          if (!Directory.Exists(FileGameplayTagSource.DirectoryPath))
             return;
 

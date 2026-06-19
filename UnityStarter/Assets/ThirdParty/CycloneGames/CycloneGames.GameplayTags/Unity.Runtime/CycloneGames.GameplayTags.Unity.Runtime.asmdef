@@ -3,14 +3,12 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.GameplayTags.Core",
-        "Unio",
         "Unity.Collections",
-        "Unity.Burst",
-        "Unity.Entities"
+        "Unity.Burst"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
-    "allowUnsafeCode": true,
+    "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
@@ -25,11 +23,6 @@
             "name": "com.unity.burst",
             "expression": "1.0.0",
             "define": "CYCLONE_HAS_BURST"
-        },
-        {
-            "name": "com.unity.entities",
-            "expression": "1.0.0",
-            "define": "CYCLONE_HAS_ENTITIES"
         }
     ],
     "noEngineReferences": false

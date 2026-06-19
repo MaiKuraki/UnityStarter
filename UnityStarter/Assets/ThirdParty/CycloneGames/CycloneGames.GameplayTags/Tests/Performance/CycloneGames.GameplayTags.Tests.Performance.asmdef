@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.GameplayTags.Tests.Performance",
+    "rootNamespace": "CycloneGames.GameplayTags.Tests.Performance",
+    "references": [
+        "CycloneGames.GameplayTags.Core",
+        "Unity.PerformanceTesting"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}

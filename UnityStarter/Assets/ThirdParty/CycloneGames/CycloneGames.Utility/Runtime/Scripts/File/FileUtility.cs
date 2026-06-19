@@ -6,6 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
+using CycloneGames.Hash.Core;
 using CycloneGames.Logger;
 using UnityEngine; // For Application.platform and platform-specific defines
 

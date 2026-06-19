@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 
 namespace CycloneGames.GameplayTags.Core
@@ -128,6 +129,17 @@ namespace CycloneGames.GameplayTags.Core
             m_CompiledRootExpression = RootExpression;
         }
 
+        /// <summary>
+        /// Clears the compiled token stream. Call this after mutating <see cref="RootExpression"/>
+        /// or any nested expression/tag container in place.
+        /// </summary>
+        public void InvalidateCompiledCache()
+        {
+            m_TokenStream = null;
+            m_CompiledTagIndices = null;
+            m_CompiledRootExpression = null;
+        }
+
         private static void CompileExpression(
             GameplayTagQueryExpression expression,
             List<int> tokenStream,
@@ -194,48 +206,62 @@ namespace CycloneGames.GameplayTags.Core
 
         private bool EvaluateNode<T>(in T container, int nodeIndex) where T : IGameplayTagContainer
         {
-            Span<bool> stack = m_TokenStream.Length <= 128 ? stackalloc bool[128] : new bool[m_TokenStream.Length];
-            int stackCount = 0;
+            bool[] rentedStack = null;
+            Span<bool> stack = m_TokenStream.Length <= 128
+                ? stackalloc bool[128]
+                : (rentedStack = ArrayPool<bool>.Shared.Rent(m_TokenStream.Length));
 
-            for (int i = 0; i < m_TokenStream.Length;)
+            try
             {
-                GameplayTagQueryOpcode opcode = (GameplayTagQueryOpcode)m_TokenStream[i++];
-                switch (opcode)
+                int stackCount = 0;
+
+                for (int i = 0; i < m_TokenStream.Length;)
                 {
-                    case GameplayTagQueryOpcode.PushTrue:
-                        stack[stackCount++] = true;
-                        break;
-
-                    case GameplayTagQueryOpcode.PushFalse:
-                        stack[stackCount++] = false;
-                        break;
-
-                    case GameplayTagQueryOpcode.EvalAllTags:
-                    case GameplayTagQueryOpcode.EvalAnyTags:
-                    case GameplayTagQueryOpcode.EvalNoTags:
+                    GameplayTagQueryOpcode opcode = (GameplayTagQueryOpcode)m_TokenStream[i++];
+                    switch (opcode)
                     {
-                        int tagStart = m_TokenStream[i++];
-                        int tagCount = m_TokenStream[i++];
-                        stack[stackCount++] = EvaluateTags(container, opcode, tagStart, tagCount);
-                        break;
-                    }
+                        case GameplayTagQueryOpcode.PushTrue:
+                            stack[stackCount++] = true;
+                            break;
 
-                    case GameplayTagQueryOpcode.EvalAllExpr:
-                    case GameplayTagQueryOpcode.EvalAnyExpr:
-                    case GameplayTagQueryOpcode.EvalNoExpr:
-                    {
-                        int childCount = m_TokenStream[i++];
-                        bool result = EvaluateExpression(opcode, stack, ref stackCount, childCount);
-                        stack[stackCount++] = result;
-                        break;
-                    }
+                        case GameplayTagQueryOpcode.PushFalse:
+                            stack[stackCount++] = false;
+                            break;
 
-                    default:
-                        return false;
+                        case GameplayTagQueryOpcode.EvalAllTags:
+                        case GameplayTagQueryOpcode.EvalAnyTags:
+                        case GameplayTagQueryOpcode.EvalNoTags:
+                        {
+                            int tagStart = m_TokenStream[i++];
+                            int tagCount = m_TokenStream[i++];
+                            stack[stackCount++] = EvaluateTags(container, opcode, tagStart, tagCount);
+                            break;
+                        }
+
+                        case GameplayTagQueryOpcode.EvalAllExpr:
+                        case GameplayTagQueryOpcode.EvalAnyExpr:
+                        case GameplayTagQueryOpcode.EvalNoExpr:
+                        {
+                            int childCount = m_TokenStream[i++];
+                            bool result = EvaluateExpression(opcode, stack, ref stackCount, childCount);
+                            stack[stackCount++] = result;
+                            break;
+                        }
+
+                        default:
+                            return false;
+                    }
+                }
+
+                return stackCount > 0 && stack[stackCount - 1];
+            }
+            finally
+            {
+                if (rentedStack != null)
+                {
+                    ArrayPool<bool>.Shared.Return(rentedStack);
                 }
             }
-
-            return stackCount > 0 && stack[stackCount - 1];
         }
 
         private bool EvaluateTags<T>(in T container, GameplayTagQueryOpcode opcode, int tagStart, int tagCount) where T : IGameplayTagContainer

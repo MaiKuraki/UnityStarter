@@ -10,7 +10,7 @@ namespace CycloneGames.GameplayTags.Core
    /// </summary>
    public static class GameplayTagRedirector
    {
-      private static readonly Dictionary<string, string> s_Redirects = new(StringComparer.Ordinal);
+      private static Dictionary<string, string> s_Redirects = new(StringComparer.Ordinal);
       private static readonly object s_Lock = new();
 
       /// <summary>
@@ -26,8 +26,10 @@ namespace CycloneGames.GameplayTags.Core
 
          lock (s_Lock)
          {
+            Dictionary<string, string> redirects = new(s_Redirects, StringComparer.Ordinal);
+
             // Flatten redirect chain: follow newName to its final destination
-            string finalTarget = ResolveChainLocked(newName);
+            string finalTarget = ResolveChain(newName, redirects);
 
             // Check for circular redirect
             if (string.Equals(finalTarget, oldName, StringComparison.Ordinal))
@@ -36,11 +38,11 @@ namespace CycloneGames.GameplayTags.Core
                return;
             }
 
-            s_Redirects[oldName] = finalTarget;
+            redirects[oldName] = finalTarget;
 
             // Re-flatten any existing redirects that pointed to oldName
             List<string> keysToUpdate = null;
-            foreach (var kvp in s_Redirects)
+            foreach (var kvp in redirects)
             {
                if (string.Equals(kvp.Value, oldName, StringComparison.Ordinal) &&
                    !string.Equals(kvp.Key, oldName, StringComparison.Ordinal))
@@ -53,8 +55,10 @@ namespace CycloneGames.GameplayTags.Core
             if (keysToUpdate != null)
             {
                for (int i = 0; i < keysToUpdate.Count; i++)
-                  s_Redirects[keysToUpdate[i]] = finalTarget;
+                  redirects[keysToUpdate[i]] = finalTarget;
             }
+
+            s_Redirects = redirects;
          }
       }
 
@@ -64,13 +68,10 @@ namespace CycloneGames.GameplayTags.Core
       public static void AddRedirects(IEnumerable<KeyValuePair<string, string>> redirects)
       {
          if (redirects == null) return;
-         lock (s_Lock)
+         foreach (var kvp in redirects)
          {
-            foreach (var kvp in redirects)
-            {
-               if (!string.IsNullOrEmpty(kvp.Key) && !string.IsNullOrEmpty(kvp.Value))
-                  AddRedirect(kvp.Key, kvp.Value);
-            }
+            if (!string.IsNullOrEmpty(kvp.Key) && !string.IsNullOrEmpty(kvp.Value))
+               AddRedirect(kvp.Key, kvp.Value);
          }
       }
 
@@ -84,11 +85,10 @@ namespace CycloneGames.GameplayTags.Core
          if (string.IsNullOrEmpty(tagName))
             return tagName;
 
-         // Lock-free read — safe because Dictionary reads are thread-safe
-         // when there are no concurrent writes, and we only write under lock.
-         // For full thread-safety during concurrent writes, we'd need a ConcurrentDictionary.
-         // The lock ensures writes are serialized; reads may see stale data briefly, which is acceptable.
-         return s_Redirects.TryGetValue(tagName, out string redirected) ? redirected : tagName;
+         // Copy-on-write table snapshot. Reads may see the previous table briefly,
+         // but never a Dictionary being mutated concurrently.
+         Dictionary<string, string> redirects = s_Redirects;
+         return redirects.TryGetValue(tagName, out string redirected) ? redirected : tagName;
       }
 
       /// <summary>
@@ -110,7 +110,13 @@ namespace CycloneGames.GameplayTags.Core
             return false;
          lock (s_Lock)
          {
-            return s_Redirects.Remove(oldName);
+            if (!s_Redirects.ContainsKey(oldName))
+               return false;
+
+            Dictionary<string, string> redirects = new(s_Redirects, StringComparer.Ordinal);
+            bool removed = redirects.Remove(oldName);
+            s_Redirects = redirects;
+            return removed;
          }
       }
 
@@ -121,7 +127,7 @@ namespace CycloneGames.GameplayTags.Core
       {
          lock (s_Lock)
          {
-            s_Redirects.Clear();
+            s_Redirects = new Dictionary<string, string>(StringComparer.Ordinal);
          }
       }
 
@@ -136,13 +142,13 @@ namespace CycloneGames.GameplayTags.Core
          }
       }
 
-      private static string ResolveChainLocked(string name)
+      private static string ResolveChain(string name, Dictionary<string, string> redirects)
       {
          const int maxHops = 16;
          string current = name;
          for (int i = 0; i < maxHops; i++)
          {
-            if (!s_Redirects.TryGetValue(current, out string next))
+            if (!redirects.TryGetValue(current, out string next))
                return current;
             current = next;
          }
