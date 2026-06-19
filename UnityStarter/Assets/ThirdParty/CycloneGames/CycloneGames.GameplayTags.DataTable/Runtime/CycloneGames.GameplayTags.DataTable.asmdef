@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.GameplayTags.DataTable",
+    "rootNamespace": "CycloneGames.GameplayTags.Integrations.DataTable",
+    "references": [
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.DataTable.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

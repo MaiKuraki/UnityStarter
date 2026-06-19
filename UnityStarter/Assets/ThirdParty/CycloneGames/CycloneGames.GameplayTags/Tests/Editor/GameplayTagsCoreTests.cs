@@ -18,6 +18,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             GameplayTagRuntimePlatform.IsRuntimePlaying = static () => false;
             GameplayTagRuntimePlatform.LoadBuildTagData = static () => null;
             GameplayTagRuntimePlatform.EnumerateProjectTagSources = static () => System.Array.Empty<IGameplayTagSource>();
+            GameplayTagRuntimePlatform.ClearRegisteredProjectTagSources();
         }
 
         [TearDown]
@@ -25,6 +26,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         {
             GameplayTagManager.ResetForTests();
             GameplayTagRedirector.ClearAll();
+            GameplayTagRuntimePlatform.ClearRegisteredProjectTagSources();
         }
 
         [Test]
@@ -248,6 +250,54 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         }
 
         [Test]
+        public void ContainerUtility_AddTagNames_ConvertsGeneratedStringLists()
+        {
+            RegisterTestTags();
+
+            string[] tagNames =
+            {
+                "Test.Ability.Damage.Fire",
+                "Test.Status.Stun"
+            };
+
+            GameplayTagContainer container = GameplayTagContainerNameExtensions.FromTagNames(tagNames);
+            GameplayTagRequirements requirements = GameplayTagContainerNameExtensions.CreateRequirementsFromTagNames(
+                Array.Empty<string>(),
+                tagNames);
+
+            Assert.That(container.HasTagExact(GameplayTagManager.RequestTag("Test.Ability.Damage.Fire")), Is.True);
+            Assert.That(container.HasTagExact(GameplayTagManager.RequestTag("Test.Status.Stun")), Is.True);
+            Assert.That(requirements.Matches(container), Is.True);
+        }
+
+        [Test]
+        public void ContainerUtility_AddDelimitedTagNames_ConvertsDesignerCells()
+        {
+            RegisterTestTags();
+
+            GameplayTagContainer container = GameplayTagContainerNameExtensions.FromDelimitedTagNames(
+                "Test.Ability.Damage.Fire|Test.Status.Stun",
+                '|');
+
+            Assert.That(container.HasTagExact(GameplayTagManager.RequestTag("Test.Ability.Damage.Fire")), Is.True);
+            Assert.That(container.HasTagExact(GameplayTagManager.RequestTag("Test.Status.Stun")), Is.True);
+        }
+
+        [Test]
+        public void RuntimePlatform_RegisteredProjectSource_ParticipatesInInitialization()
+        {
+            GameplayTagRuntimePlatform.RegisterProjectTagSource(new StaticGameplayTagSource(
+                "Test.DataTableSource",
+                "Table.Ability.Fireball",
+                "Table.Effect.Burn"));
+
+            GameplayTagManager.InitializeIfNeeded();
+
+            Assert.That(GameplayTagManager.RequestTag("Table.Ability.Fireball").IsValid, Is.True);
+            Assert.That(GameplayTagManager.RequestTag("Table.Effect.Burn").IsValid, Is.True);
+        }
+
+        [Test]
         public void Mask_IgnoresOutOfRangeBitAccess()
         {
             GameplayTagMask mask = default;
@@ -396,6 +446,27 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             GameplayTagManager.RegisterDynamicTag("Test.Ability.Damage.Ice", "Ice damage");
             GameplayTagManager.RegisterDynamicTag("Test.Status.Stun", "Stun status");
             GameplayTagManager.InitializeIfNeeded();
+        }
+
+        private sealed class StaticGameplayTagSource : IGameplayTagSource
+        {
+            private readonly string[] _tagNames;
+
+            public string Name { get; }
+
+            public StaticGameplayTagSource(string name, params string[] tagNames)
+            {
+                Name = name;
+                _tagNames = tagNames ?? Array.Empty<string>();
+            }
+
+            public void RegisterTags(GameplayTagRegistrationContext context)
+            {
+                for (int i = 0; i < _tagNames.Length; i++)
+                {
+                    context.RegisterTag(_tagNames[i], _tagNames[i], GameplayTagFlags.None, this);
+                }
+            }
         }
 
         private static byte[] CreateBuildTagData(params string[] tagNames)

@@ -6,6 +6,7 @@ using System.Threading;
 
 #if UNITY_INCLUDE_TESTS
 [assembly: InternalsVisibleTo("CycloneGames.GameplayTags.Tests.Editor")]
+[assembly: InternalsVisibleTo("CycloneGames.GameplayTags.DataTable.Tests.Editor")]
 [assembly: InternalsVisibleTo("CycloneGames.GameplayTags.Tests.Performance")]
 #endif
 
@@ -348,6 +349,8 @@ namespace CycloneGames.GameplayTags.Core
 #else
                 new BuildGameplayTagSource().RegisterTags(context);
 #endif
+                GameplayTagRuntimePlatform.RegisterAdditionalProjectTagSources(context);
+
                 for (int i = 0; i < s_PendingDynamicRegistrations.Count; i++)
                 {
                     PendingRegistration pending = s_PendingDynamicRegistrations[i];
@@ -649,6 +652,8 @@ namespace CycloneGames.GameplayTags.Core
 #else
                 new BuildGameplayTagSource().RegisterTags(context);
 #endif
+                GameplayTagRuntimePlatform.RegisterAdditionalProjectTagSources(context);
+
                 for (int i = 0; i < s_PendingDynamicRegistrations.Count; i++)
                 {
                     PendingRegistration pending = s_PendingDynamicRegistrations[i];
