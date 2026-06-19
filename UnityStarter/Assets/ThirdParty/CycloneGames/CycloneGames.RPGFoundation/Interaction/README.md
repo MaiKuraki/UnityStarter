@@ -122,7 +122,7 @@ This module is intended to be the local interaction kernel for a commercial proj
 - Unity-free `InteractionAuthorityService` for server-side request validation: world scope, stable IDs, tick drift, duplicate requests, replay-history pressure, per-instigator rate limits, action availability, target availability, range checks, and queue pressure.
 - `InteractionTargetSnapshot` and `InteractionVector3` for headless/server adapters that should not depend on `UnityEngine`.
 - `IInteractionPositionProvider` for pluggable position sources, so Networking, GameplayFramework, ECS, or a backend simulation can feed authority checks without sharing a concrete vector type.
-- Optional integration assemblies for `CycloneGames.Networking.Core`, `CycloneGames.GameplayFramework.Runtime`, and `CycloneGames.DeterministicMath.Core`, keeping Mirror/Mirage/backend choices outside the Interaction core.
+- Optional bridges for `CycloneGames.GameplayFramework.Runtime` and `CycloneGames.DeterministicMath.Core`, plus a separate `CycloneGames.RPGFoundation.Interaction.Networking` package for `CycloneGames.Networking.Core`, keeping Mirror/Mirage/backend choices outside the Interaction core.
 - `InteractionMetrics` / `InteractionMetricsSnapshot` for accepted, rejected, queued, dropped, completed, failed, and faulted interaction counters.
 - Fail-closed LOS budget behavior through `blockWhenLosBudgetExceeded`.
 
@@ -145,7 +145,7 @@ For production multiplayer, the recommended flow is:
 
 The built-in `INetworkInteractionSystem` is an adapter contract, and `InteractionAuthorityService` is a validation/reservation core. Neither is a full transport, prediction, rollback, or replication implementation.
 
-**Integration boundary:** `InteractionVector3` is intentionally a lowest-common-denominator value object, not a replacement for `CycloneGames.Networking.NetworkVector3`, `CycloneGames.DeterministicMath.FPVector3`, or `UnityEngine.Vector3`. Use `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.Networking` to convert between `InteractionVector3` and `NetworkVector3`, and use `InteractionNetworkProtocol`, `InteractionNetworkRequest`, `InteractionNetworkCancelRequest`, and `InteractionNetworkResult` as transport-friendly DTO/protocol building blocks. Use `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.GameplayFramework` to adapt `Actor` position and stable IDs into `InteractionTargetSnapshot` or `GameObjectInstigator`. For lockstep, rollback, replay, or bit-identical server simulation, use `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.DeterministicMath` and `InteractionDeterministicAuthorityService`; it validates range with `FPVector3` / `FPInt64` instead of converting the authoritative decision back to floats.
+**Integration boundary:** `InteractionVector3` is intentionally a lowest-common-denominator value object, not a replacement for `CycloneGames.Networking.NetworkVector3`, `CycloneGames.DeterministicMath.FPVector3`, or `UnityEngine.Vector3`. Add the separate `CycloneGames.RPGFoundation.Interaction.Networking` package to convert between `InteractionVector3` and `NetworkVector3`, and use `InteractionNetworkProtocol`, `InteractionNetworkRequest`, `InteractionNetworkCancelRequest`, and `InteractionNetworkResult` as transport-friendly DTO/protocol building blocks. Use `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.GameplayFramework` to adapt `Actor` position and stable IDs into `InteractionTargetSnapshot` or `GameObjectInstigator`. For lockstep, rollback, replay, or bit-identical server simulation, use `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.DeterministicMath` and `InteractionDeterministicAuthorityService`; it validates range with `FPVector3` / `FPInt64` instead of converting the authoritative decision back to floats.
 
 **Deterministic authority source policy:** when Networking, GameplayFramework, and DeterministicMath are all enabled, the authoritative interaction position must come from the same fixed-point simulation state that drives movement. `InteractionVector3`, `NetworkVector3`, `UnityEngine.Vector3`, and `Actor.GetActorLocation()` are valid for presentation, local prediction, editor tooling, and non-deterministic server adapters; they are not the canonical source for lockstep, rollback, replay, or anti-cheat decisions.
 
@@ -159,7 +159,7 @@ The built-in `INetworkInteractionSystem` is an adapter contract, and `Interactio
 
 `InteractionDeterministicMathExtensions.ToFPVector3(InteractionVector3)` and `ToDeterministicTargetSnapshot(InteractionTargetSnapshot)` are kept only as migration, editor, diagnostics, or non-authoritative bridges and are marked obsolete to discourage using float data as a deterministic trust source.
 
-CycloneGames integrations are isolated behind dedicated asmdef files. For UPM or local Package Manager installs, integration availability is controlled by each integration asmdef through `versionDefines` and `defineConstraints`. For direct `Assets/` copies, the base Interaction assemblies remain available and optional strong-typed integrations stay disabled unless their dependency is surfaced through Package Manager. Project-wide scripting define symbols are not the normal integration switch.
+CycloneGames integrations are isolated behind dedicated asmdef files or separate optional packages. The Interaction Cyclone networking bridge lives in `CycloneGames.RPGFoundation.Interaction.Networking` and does not require PlayerSettings scripting define symbols. Remaining in-package integrations use their own assembly references and should not be enabled through project-wide scripting define symbols.
 
 ---
 
@@ -212,7 +212,7 @@ sequenceDiagram
 | **VitalRouter**                  | Command routing and interceptor pipeline                        | Yes      |
 | **UniTask**                      | Async/await without allocation on Unity's main thread           | Yes      |
 | **CycloneGames.Factory.Runtime** | Object pooling (`ObjectPool`, `IPoolable`, `MonoPrefabFactory`) | Yes      |
-| **CycloneGames.Networking.Core** | Optional `NetworkVector3` and DTO bridge for transport adapters | Optional |
+| **CycloneGames.RPGFoundation.Interaction.Networking** | Optional `NetworkVector3` and DTO bridge for transport adapters | Optional |
 | **CycloneGames.GameplayFramework.Runtime** | Optional `Actor` / world adapter bridge                | Optional |
 | **CycloneGames.DeterministicMath.Core** | Optional `FPVector3` / `FPInt64` authority bridge for lockstep, rollback, and replay | Optional |
 
@@ -1320,12 +1320,7 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 | `Runtime/Integrations/DeterministicMath/InteractionDeterministicRequestPayload.cs` | Transport-friendly deterministic request with raw fixed-point instigator position |
 | `Runtime/Integrations/DeterministicMath/InteractionDeterministicTargetSnapshot.cs` | Fixed-point target state for deterministic simulation |
 | `Runtime/Integrations/DeterministicMath/GameplayFramework/GameplayFrameworkDeterministicInteractionExtensions.cs` | GameplayFramework bridge that requires an explicit deterministic position provider |
-| `Runtime/Integrations/Networking/InteractionNetworkAuthorityBridge.cs` | Bridge from network DTOs into `InteractionAuthorityService` |
-| `Runtime/Integrations/Networking/InteractionNetworkCancelRequest.cs` | Transport-friendly cancellation DTO |
-| `Runtime/Integrations/Networking/InteractionNetworkProtocol.cs` | Stable message IDs, channels, protocol version, and payload limits |
-| `Runtime/Integrations/Networking/InteractionNetworkRequest.cs` | Transport-friendly interaction request DTO using `NetworkVector3` |
-| `Runtime/Integrations/Networking/InteractionNetworkResult.cs` | Transport-friendly interaction result DTO |
-| `Runtime/Integrations/Networking/InteractionNetworkVectorExtensions.cs` | Conversion between `InteractionVector3` and `NetworkVector3` |
+| `CycloneGames.RPGFoundation.Interaction.Networking/Core/*.cs` | Optional separate package for transport-friendly DTOs, message catalog registration, and `NetworkVector3` conversion |
 | `Runtime/Integrations/GameplayFramework/GameplayFrameworkInteractionExtensions.cs` | `Actor` to Interaction position/instigator/snapshot helpers |
 | `Runtime/IInteractionDetector.cs`         | Detection and target tracking interface                           |
 | `Runtime/InteractionDetector.cs`          | Full detection implementation (3D, 2D, SpatialHash, LOD, scoring) |
@@ -1389,7 +1384,7 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 | `InteractionSystem`       | MonoBehaviour implementing `IInteractionSystem` with VitalRouter routing, authority snapshots, and metrics. |
 | `InteractionAuthorityService` | Unity-free server validation/reservation core for stable-id requests.                         |
 | `InteractionDeterministicAuthorityService` | Deterministic fixed-point validation/reservation core for lockstep and rollback.     |
-| `InteractionNetworkAuthorityBridge` | Optional Networking integration bridge from `InteractionNetworkRequest` to `InteractionAuthorityService`. |
+| `InteractionNetworkAuthorityBridge` | Optional bridge in `CycloneGames.RPGFoundation.Interaction.Networking` from `InteractionNetworkRequest` to `InteractionAuthorityService`. |
 | `InteractionMetrics`      | Thread-safe counters for validation and execution observability.                                 |
 | `TwoStateInteractionBase` | MonoBehaviour implementing `ITwoStateInteraction`.                                               |
 | `PickableItem`            | Built-in `Interactable` subclass for pickup mechanics.                                           |

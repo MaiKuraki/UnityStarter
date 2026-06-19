@@ -89,7 +89,7 @@ namespace CycloneGames.Networking.Routing
             if (_processIndex.TryGetValue(processId, out ConcurrentBag<int> bag))
             {
                 // ConcurrentBag does not support targeted removal; the bag is
-                // rebuilt on enumeration. For diagnostics use only—the index is
+                // rebuilt on enumeration. For diagnostics use only; the index is
                 // not on a hot path.
             }
         }

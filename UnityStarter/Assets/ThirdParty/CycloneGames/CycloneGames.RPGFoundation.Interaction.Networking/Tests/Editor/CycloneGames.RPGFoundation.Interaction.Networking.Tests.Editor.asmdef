@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor",
+    "references": [
+        "CycloneGames.RPGFoundation.Interaction.Core",
+        "CycloneGames.RPGFoundation.Interaction.Networking.Core",
+        "CycloneGames.Networking.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

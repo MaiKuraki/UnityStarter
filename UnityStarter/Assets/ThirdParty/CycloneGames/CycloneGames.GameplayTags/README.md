@@ -39,6 +39,7 @@ CycloneGames.GameplayTags/
 ```
 
 Optional integrations are distributed as separate integration packages. `CycloneGames.GameplayTags.DataTable` provides the DataTable/Luban bridge when a project intentionally includes both `CycloneGames.GameplayTags` and `CycloneGames.DataTable`.
+`CycloneGames.GameplayTags.Networking` provides the Cyclone Networking protocol bridge when a project intentionally includes both `CycloneGames.GameplayTags` and `CycloneGames.Networking`.
 
 ```mermaid
 flowchart TD
@@ -49,13 +50,15 @@ flowchart TD
     DataTablePackage["GameplayTags.DataTable\nOptional integration package"]
     DataTable["DataTable / Luban\nExcel-generated tag catalogs and references"]
     Framework["GameplayFramework\nIntegration layer"]
-    Networking["Networking\nTransport-agnostic byte payloads"]
+    NetworkingPackage["GameplayTags.Networking\nOptional integration package"]
+    Networking["Networking\nTransport adapters"]
     Assets["AssetManagement\nNo direct dependency required"]
 
     Core --> UnityRuntime
     Core --> GAS
     Core --> Framework
-    Core --> Networking
+    NetworkingPackage --> Core
+    NetworkingPackage --> Networking
     DataTablePackage --> Core
     DataTablePackage --> DataTable
     UnityRuntime --> Editor
@@ -76,6 +79,7 @@ flowchart TD
 The Core assembly is the contract consumed by GameplayAbilities and server/headless logic. Unity-facing code is kept in adapters so the tag system can remain a stable foundation module.
 
 The DataTable/Luban bridge lives in the separate `CycloneGames.GameplayTags.DataTable` integration package, so the base package never references `CycloneGames.DataTable.Core`.
+The Cyclone Networking bridge lives in the separate `CycloneGames.GameplayTags.Networking` integration package, so the base package never references `CycloneGames.Networking.Core`.
 
 ## Dependencies
 
@@ -320,6 +324,8 @@ Mask:
 
 The serializer validates buffer size, negative counts, count multiplication overflow, packet markers, protocol version, and manifest hash. Unknown stable IDs in a matching manifest are treated as corrupted protocol data. Runtime indices are never used as the network contract.
 
+Use `TryGetPacketKind()`, `IsFullPacket()`, and `IsDeltaPacket()` when an outer transport layer needs to route or validate packets without deserializing them into a container.
+
 ```csharp
 byte[] fullPacket = GameplayTagNetSerializer.SerializeFull(container);
 GameplayTagNetSerializer.DeserializeFull(remoteContainer, fullPacket);
@@ -333,6 +339,8 @@ int written = GameplayTagNetSerializer.SerializeFull(container, buffer, 0);
 byte[] deltaBuffer = new byte[GameplayTagNetSerializer.GetDeltaSerializedSize(addCount, removeCount)];
 int deltaWritten = GameplayTagNetSerializer.SerializeDelta(currentContainer, previousContainer, deltaBuffer, 0);
 ```
+
+Cyclone projects that want the tag messages to participate in `INetworkMessageCatalog` and protocol fingerprints should install the optional `CycloneGames.GameplayTags.Networking` package. Projects without `CycloneGames.Networking` can use this base package alone.
 
 For large MMORPG deployments, make tag manifests part of the client/server compatibility handshake. A client and server with different `GameplayTagManager.CurrentManifestHash` values should not exchange gameplay tag state until a reload or patch flow has reconciled the manifests. If a future serializer version needs backward compatibility, keep `MinimumSupportedProtocolVersion`, `CurrentProtocolVersion`, and version-specific decode paths explicit and covered by cross-version tests.
 

@@ -29,17 +29,18 @@ namespace CycloneGames.Networking.Transports
     {
         private readonly INetTransport _inner;
         private readonly RollingWindowBandwidthMeter _meter;
+        private bool _disposed;
 
         public BandwidthTrackingTransport(INetTransport inner)
         {
             _inner = inner ?? throw new ArgumentNullException(nameof(inner));
             _meter = new RollingWindowBandwidthMeter();
 
-            _inner.OnClientConnected += conn => OnClientConnected?.Invoke(conn);
-            _inner.OnClientDisconnected += conn => OnClientDisconnected?.Invoke(conn);
-            _inner.OnConnectedToServer += () => OnConnectedToServer?.Invoke();
-            _inner.OnDisconnectedFromServer += () => OnDisconnectedFromServer?.Invoke();
-            _inner.OnError += (conn, err, msg) => OnError?.Invoke(conn, err, msg);
+            _inner.OnClientConnected += HandleClientConnected;
+            _inner.OnClientDisconnected += HandleClientDisconnected;
+            _inner.OnConnectedToServer += HandleConnectedToServer;
+            _inner.OnDisconnectedFromServer += HandleDisconnectedFromServer;
+            _inner.OnError += HandleError;
             _inner.OnDataReceived += HandleDataReceived;
         }
 
@@ -57,6 +58,7 @@ namespace CycloneGames.Networking.Transports
         public bool IsRunning => _inner.IsRunning;
         public bool IsEncrypted => _inner.IsEncrypted;
         public bool Available => _inner.Available;
+        public NetworkTransportCapabilities Capabilities => _inner.Capabilities;
 
         public int GetChannelId(NetworkChannel channel) => _inner.GetChannelId(channel);
         public int GetMaxPacketSize(int channelId) => _inner.GetMaxPacketSize(channelId);
@@ -84,16 +86,45 @@ namespace CycloneGames.Networking.Transports
         public void Stop() => _inner.Stop();
         public void Disconnect(INetConnection connection) => _inner.Disconnect(connection);
 
-        public void Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
         {
-            _inner.Send(connection, payload, channelId);
-            _meter.RecordSend(payload.Count);
+            NetworkSendResult result = _inner.Send(connection, payload, channelId);
+            if (result.Succeeded)
+                _meter.RecordSend(result.BytesAccepted);
+            return result;
         }
 
-        public void Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
         {
-            _inner.Broadcast(connections, payload, channelId);
-            _meter.RecordSend(payload.Count * connections.Count);
+            NetworkSendResult result = _inner.Broadcast(connections, payload, channelId);
+            if (result.Succeeded)
+                _meter.RecordSend(result.BytesAccepted);
+            return result;
+        }
+
+        private void HandleClientConnected(INetConnection connection)
+        {
+            OnClientConnected?.Invoke(connection);
+        }
+
+        private void HandleClientDisconnected(INetConnection connection)
+        {
+            OnClientDisconnected?.Invoke(connection);
+        }
+
+        private void HandleConnectedToServer()
+        {
+            OnConnectedToServer?.Invoke();
+        }
+
+        private void HandleDisconnectedFromServer()
+        {
+            OnDisconnectedFromServer?.Invoke();
+        }
+
+        private void HandleError(INetConnection connection, TransportError error, string message)
+        {
+            OnError?.Invoke(connection, error, message);
         }
 
         private void HandleDataReceived(INetConnection connection, ArraySegment<byte> payload, int channelId)
@@ -121,9 +152,22 @@ namespace CycloneGames.Networking.Transports
 
         public void Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _inner.OnClientConnected -= HandleClientConnected;
+            _inner.OnClientDisconnected -= HandleClientDisconnected;
+            _inner.OnConnectedToServer -= HandleConnectedToServer;
+            _inner.OnDisconnectedFromServer -= HandleDisconnectedFromServer;
+            _inner.OnError -= HandleError;
             _inner.OnDataReceived -= HandleDataReceived;
             if (_inner is IDisposable d)
+            {
                 d.Dispose();
+            }
         }
 
         #endregion

@@ -290,6 +290,25 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             Assert.That(network.LastFullState.Attributes[0].AttributeId, Is.EqualTo(20));
         }
 
+        [Test]
+        public void NetworkedAbilityBridge_RegisterMessageCatalog_UsesDedicatedGameplayAbilityRange()
+        {
+            var catalog = new NetworkMessageCatalog();
+
+            NetworkedAbilityBridge.RegisterMessageCatalog(catalog);
+
+            Assert.That(catalog.Count, Is.EqualTo(15));
+            Assert.That(catalog.TryGet(NetworkedAbilityBridge.MsgAbilityActivateRequest, out NetworkMessageDescriptor descriptor), Is.True);
+            Assert.That(descriptor.Kind, Is.EqualTo(NetworkMessageKind.Module));
+            Assert.That(descriptor.Owner, Is.EqualTo(NetworkedAbilityBridge.MessageOwner));
+            Assert.That(NetworkedAbilityBridge.MessageRange.Contains(descriptor.MessageId), Is.True);
+            Assert.That(NetworkMessageRanges.Module.Contains(descriptor.MessageId), Is.True);
+            Assert.That(catalog.TryGetRegisteredModuleRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
+            Assert.That(range.Name, Is.EqualTo(NetworkedAbilityBridge.MessageOwner));
+            Assert.That(NetworkMessageRanges.Rpc.Contains(descriptor.MessageId), Is.False);
+            Assert.That(catalog.ProtocolFingerprint, Is.Not.EqualTo(0UL));
+        }
+
         private sealed class CapturingNetworkManager : INetworkManager
         {
             public AttributeUpdateData LastAttributeData;
@@ -298,18 +317,30 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
 
             public void RegisterHandler<T>(ushort msgId, Action<INetConnection, T> handler) where T : struct { }
             public void UnregisterHandler(ushort msgId) { }
-            public void SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public NetworkSendResult SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                return NetworkSendResult.Accepted(0, 0);
+            }
 
-            public void SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            public NetworkSendResult SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
             {
                 if (message is AttributeUpdateData data)
                 {
                     LastAttributeData = data;
                 }
+
+                return NetworkSendResult.Accepted(0, 0, connection);
             }
 
-            public void BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
-            public void Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public NetworkSendResult BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, 0);
+            }
+
+            public NetworkSendResult Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, connections?.Count ?? 0, 0);
+            }
             public void DisconnectClient(INetConnection connection) { }
         }
 
@@ -353,10 +384,25 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
 
             public void RegisterHandler<T>(ushort msgId, Action<INetConnection, T> handler) where T : struct { }
             public void UnregisterHandler(ushort msgId) { }
-            public void SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
-            public void SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
-            public void BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
-            public void Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public NetworkSendResult SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                return NetworkSendResult.Accepted(0, 0);
+            }
+
+            public NetworkSendResult SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                return NetworkSendResult.Accepted(0, 0, connection);
+            }
+
+            public NetworkSendResult BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, 0);
+            }
+
+            public NetworkSendResult Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, connections?.Count ?? 0, 0);
+            }
             public void DisconnectClient(INetConnection connection) { }
         }
 
@@ -375,16 +421,28 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             }
 
             public void UnregisterHandler(ushort msgId) { }
-            public void SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public NetworkSendResult SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                return NetworkSendResult.Accepted(0, 0);
+            }
 
-            public void SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            public NetworkSendResult SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
             {
                 if (msgId == NetworkedAbilityBridge.MsgFullState && message is GASFullStateData data)
                     LastFullState = data;
+
+                return NetworkSendResult.Accepted(0, 0, connection);
             }
 
-            public void BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
-            public void Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct { }
+            public NetworkSendResult BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, 0);
+            }
+
+            public NetworkSendResult Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+            {
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, connections?.Count ?? 0, 0);
+            }
             public void DisconnectClient(INetConnection connection) { }
 
             public void DeliverFullStateRequest(INetConnection sender, FullStateRequest request)

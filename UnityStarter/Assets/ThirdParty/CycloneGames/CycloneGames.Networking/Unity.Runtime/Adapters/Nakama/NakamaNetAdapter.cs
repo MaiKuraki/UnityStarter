@@ -1,4 +1,4 @@
-#if NAKAMA
+#if CYCLONE_NETWORKING_HAS_NAKAMA
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -98,6 +98,18 @@ namespace CycloneGames.Networking.Adapter.Nakama
                                                   | NetworkBackendFeatures.BackendRpc
                                                   | NetworkBackendFeatures.Presence
                                                   | NetworkBackendFeatures.Chat;
+        public NetworkTransportCapabilities Capabilities => new NetworkTransportCapabilities(
+            "Nakama",
+            NetworkTransportFeatureFlags.Client
+            | NetworkTransportFeatureFlags.Reliable
+            | NetworkTransportFeatureFlags.Unreliable
+            | NetworkTransportFeatureFlags.WebGLCompatible
+            | NetworkTransportFeatureFlags.MainThreadOnly,
+            NetworkChannelFlags.All,
+            NetworkConstants.DefaultMaxConnections,
+            _maxPayloadSize,
+            _maxPayloadSize,
+            _maxPayloadSize);
 
         public INetTransport Transport => this;
         public INetSerializer Serializer { get; private set; }
@@ -230,23 +242,30 @@ namespace CycloneGames.Networking.Adapter.Nakama
             Stop();
         }
 
-        public void Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
         {
             if (!ValidatePayload(payload))
-                return;
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, connection);
+
+            if (!IsInMatch)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection, MissingMatchError);
 
             NetworkChannel channel = (NetworkChannel)channelId;
             byte[] buffer = GetThreadBuffer();
             int frameLength = BuildFrame(NetworkConstants.SystemMsgIdMin, channel, payload, buffer);
             SendFrameToMatch(new ArraySegment<byte>(buffer, 0, frameLength), GetTargetPresences(connection));
+            return NetworkSendResult.Queued(frameLength, channelId, connection);
         }
 
-        public void Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
         {
             if (connections == null)
                 throw new ArgumentNullException(nameof(connections));
             if (!ValidatePayload(payload))
-                return;
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId);
+
+            if (!IsInMatch)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, reason: MissingMatchError);
 
             _presenceScratch.Clear();
             for (int i = 0; i < connections.Count; i++)
@@ -259,7 +278,9 @@ namespace CycloneGames.Networking.Adapter.Nakama
             byte[] buffer = GetThreadBuffer();
             int frameLength = BuildFrame(NetworkConstants.SystemMsgIdMin, channel, payload, buffer);
             SendFrameToMatch(new ArraySegment<byte>(buffer, 0, frameLength), _presenceScratch.Count > 0 ? _presenceScratch.ToArray() : null);
+            int recipients = _presenceScratch.Count;
             _presenceScratch.Clear();
+            return NetworkSendResult.Broadcast(NetworkSendStatus.Queued, frameLength * recipients, recipients, channelId);
         }
 
         public void RegisterHandler<T>(ushort msgId, Action<INetConnection, T> handler) where T : struct
@@ -287,22 +308,22 @@ namespace CycloneGames.Networking.Adapter.Nakama
             _handlers.Remove(msgId);
         }
 
-        public void SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
-            SendMessage(msgId, message, channel, null);
+            return SendMessage(msgId, message, channel, null);
         }
 
-        public void SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
-            SendMessage(msgId, message, channel, GetTargetPresences(connection));
+            return SendMessage(msgId, message, channel, GetTargetPresences(connection));
         }
 
-        public void BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
-            SendMessage(msgId, message, channel, null);
+            return SendMessage(msgId, message, channel, null);
         }
 
-        public void Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
         {
             if (connections == null)
                 throw new ArgumentNullException(nameof(connections));
@@ -314,8 +335,12 @@ namespace CycloneGames.Networking.Adapter.Nakama
                     _presenceScratch.Add(connection.Presence);
             }
 
-            SendMessage(msgId, message, channel, _presenceScratch.Count > 0 ? _presenceScratch.ToArray() : null);
+            int recipients = _presenceScratch.Count;
+            NetworkSendResult result = SendMessage(msgId, message, channel, _presenceScratch.Count > 0 ? _presenceScratch.ToArray() : null);
             _presenceScratch.Clear();
+            return result.Succeeded
+                ? NetworkSendResult.Broadcast(result.Status, result.BytesAccepted * recipients, recipients, result.ChannelId)
+                : result;
         }
 
         public void DisconnectClient(INetConnection connection)
@@ -669,18 +694,24 @@ namespace CycloneGames.Networking.Adapter.Nakama
             }
         }
 
-        private void SendMessage<T>(ushort msgId, T message, NetworkChannel channel, IEnumerable<IUserPresence> targetPresences) where T : struct
+        private NetworkSendResult SendMessage<T>(ushort msgId, T message, NetworkChannel channel, IEnumerable<IUserPresence> targetPresences) where T : struct
         {
+            int channelId = GetChannelId(channel);
+            if (!IsInMatch)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, reason: MissingMatchError);
+
             byte[] buffer = GetThreadBuffer();
             try
             {
                 Serializer.Serialize(message, buffer, NetworkWireProtocol.HeaderLength, out int written);
                 int frameLength = WriteFrameHeader(msgId, channel, buffer, written);
                 SendFrameToMatch(new ArraySegment<byte>(buffer, 0, frameLength), targetPresences);
+                return NetworkSendResult.Queued(frameLength, channelId);
             }
             catch (Exception e)
             {
                 RaiseError(null, TransportError.InvalidSend, e.Message);
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
             }
         }
 

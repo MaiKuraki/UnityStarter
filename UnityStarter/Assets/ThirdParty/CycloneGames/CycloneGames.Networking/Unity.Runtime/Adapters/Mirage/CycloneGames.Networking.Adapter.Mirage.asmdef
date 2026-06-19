@@ -13,13 +13,13 @@
     "precompiledReferences": [],
     "autoReferenced": false,
     "defineConstraints": [
-        "MIRAGE"
+        "CYCLONE_NETWORKING_HAS_MIRAGE"
     ],
     "versionDefines": [
         {
-            "name": "com.mirage.networking",
+            "name": "com.miragenet.mirage",
             "expression": "",
-            "define": "MIRAGE"
+            "define": "CYCLONE_NETWORKING_HAS_MIRAGE"
         }
     ],
     "noEngineReferences": false

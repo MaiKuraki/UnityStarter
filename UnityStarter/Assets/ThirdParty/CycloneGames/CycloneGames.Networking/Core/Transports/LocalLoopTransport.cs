@@ -56,6 +56,22 @@ namespace CycloneGames.Networking.Transports
         public bool IsEncrypted => false;
         public bool Available => true;
         public NetworkBackendFeatures Features => NetworkBackendFeatures.RealtimeTransport;
+        public NetworkTransportCapabilities Capabilities { get; } = new NetworkTransportCapabilities(
+            "LocalLoop",
+            NetworkTransportFeatureFlags.Client
+            | NetworkTransportFeatureFlags.Server
+            | NetworkTransportFeatureFlags.Host
+            | NetworkTransportFeatureFlags.Reliable
+            | NetworkTransportFeatureFlags.Unreliable
+            | NetworkTransportFeatureFlags.Sequenced
+            | NetworkTransportFeatureFlags.DedicatedServerCompatible,
+            NetworkChannelFlags.All,
+            maxConnections: 1,
+            maxPacketSize: NetworkConstants.DefaultMTU,
+            maxReliablePacketSize: NetworkConstants.DefaultMTU,
+            maxUnreliablePacketSize: NetworkConstants.DefaultMTU,
+            maxQueuedPackets: 0,
+            isDeterministicLoopback: true);
 
         #endregion
 
@@ -177,29 +193,36 @@ namespace CycloneGames.Networking.Transports
 
         #region Send
 
-        public void Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
         {
-            if (!_isRunning) return;
+            if (!_isRunning)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotRunning, channelId, connection);
 
             int length = payload.Count;
-            if (length == 0) return;
+            if (length == 0)
+                return NetworkSendResult.Accepted(0, channelId, connection);
 
             if (payload.Array == null || payload.Offset < 0 || payload.Offset + length > payload.Array.Length)
             {
                 RaiseError(connection, TransportError.InvalidSend, InvalidPayloadSegmentError);
-                return;
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, connection, InvalidPayloadSegmentError);
             }
 
             if (length > GetMaxPacketSize(channelId))
             {
                 RaiseError(connection, TransportError.InvalidSend, PayloadTooLargeError);
-                return;
+                return NetworkSendResult.Fail(NetworkSendStatus.PayloadTooLarge, channelId, connection, PayloadTooLargeError);
             }
 
             if (!_channel.IsReady)
             {
                 RaiseError(connection, TransportError.InvalidSend, ChannelNotReadyError);
-                return;
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection, ChannelNotReadyError);
+            }
+
+            if (connection == null)
+            {
+                connection = _localConnection;
             }
 
             byte[] buffer = ArrayPool<byte>.Shared.Rent(length);
@@ -208,17 +231,22 @@ namespace CycloneGames.Networking.Transports
             var msg = new LocalLoopMessage(buffer, length, channelId);
             _channel.Enqueue(_isServer, msg);
             _localConnection.RecordSend(length);
+            return NetworkSendResult.Accepted(length, channelId, connection);
         }
 
-        public void Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
+        public NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
         {
             if (connections == null)
                 throw new ArgumentNullException(nameof(connections));
 
-            if (!_isRunning || connections.Count == 0) return;
+            if (!_isRunning)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotRunning, channelId);
+
+            if (connections.Count == 0)
+                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, channelId);
 
             // In local loop, there is only ever one peer connection.
-            Send(connections[0], payload, channelId);
+            return Send(connections[0], payload, channelId);
         }
 
         #endregion
