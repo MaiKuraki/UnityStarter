@@ -1,0 +1,25 @@
+{
+  "name": "com.cyclone-games.gameplay-tags.data-table",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.GameplayTags.DataTable",
+  "description": "Optional DataTable and Luban integration package for CycloneGames.GameplayTags.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.gameplay-tags": "1.0.0",
+    "com.cyclone-games.data-table": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "GameplayTags",
+    "DataTable",
+    "Luban",
+    "Excel"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}
