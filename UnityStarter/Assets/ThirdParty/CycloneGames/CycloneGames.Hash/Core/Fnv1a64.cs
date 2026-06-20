@@ -67,5 +67,25 @@ namespace CycloneGames.Hash.Core
                 return hash;
             }
         }
+
+        /// <summary>
+        /// Folds the four bytes of a 32-bit <paramref name="value"/> into the 64-bit hash in little-endian
+        /// order (low byte first). Use to accumulate 32-bit fields into a 64-bit checksum without zero padding.
+        /// </summary>
+        public static ulong CombineUInt32LittleEndian(ulong hash, uint value)
+        {
+            unchecked
+            {
+                hash ^= value & 0xFFu;
+                hash *= Prime;
+                hash ^= (value >> 8) & 0xFFu;
+                hash *= Prime;
+                hash ^= (value >> 16) & 0xFFu;
+                hash *= Prime;
+                hash ^= (value >> 24) & 0xFFu;
+                hash *= Prime;
+                return hash;
+            }
+        }
     }
 }

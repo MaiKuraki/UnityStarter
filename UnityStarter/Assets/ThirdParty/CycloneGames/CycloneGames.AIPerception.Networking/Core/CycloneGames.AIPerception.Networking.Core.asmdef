@@ -2,7 +2,8 @@
     "name": "CycloneGames.AIPerception.Networking.Core",
     "rootNamespace": "CycloneGames.AIPerception.Networking",
     "references": [
-        "CycloneGames.Networking.Core"
+        "CycloneGames.Networking.Core",
+        "CycloneGames.Hash.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

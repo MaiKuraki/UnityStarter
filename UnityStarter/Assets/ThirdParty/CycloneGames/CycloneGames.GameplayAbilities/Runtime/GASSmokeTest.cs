@@ -29,8 +29,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GASSmokeTestFailureFlags FailureFlags;
         public GASRuntimeDiagnostics InitialDiagnostics;
         public GASRuntimeDiagnostics FinalDiagnostics;
-        public uint InitialChecksum;
-        public uint FinalChecksum;
+        public ulong InitialChecksum;
+        public ulong FinalChecksum;
         public float FinalHealth;
         public int ActiveEffectCount;
         public int StackCount;

@@ -1521,5 +1521,7 @@ Create a `HasDuration` effect with a `Period` and a negative `Add` modifier on H
 | `com.cysharp.unitask`               | Async operations            |
 | `com.cyclone-games.gameplay-tags`   | GameplayTag system          |
 | `com.cyclone-games.asset-management` | Asset loading               |
+| `com.cyclone-games.deterministic-math` | Fixed-point deterministic math |
+| `com.cyclone-games.hash`            | Deterministic state hashing and checksums |
 | `com.cyclone-games.logger`          | Debug logging               |
 | `com.cyclone-games.factory`         | Object creation and pooling |

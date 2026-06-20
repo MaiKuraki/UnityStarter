@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using CycloneGames.Factory.Runtime;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayAbilities.Core;
+using CycloneGames.Hash.Core;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -77,7 +78,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public ulong StateVersion;
         public ulong LastReplicatedStateVersion;
         public AbilitySystemStateChangeMask PendingStateChangeMask;
-        public uint ReplicatedStateChecksum;
+        public ulong ReplicatedStateChecksum;
         public int CoreAbilitySpecCount;
         public int CoreActiveEffectCount;
         public int CoreAttributeCount;
@@ -506,7 +507,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 StateVersion = stateVersion,
                 LastReplicatedStateVersion = lastReplicatedStateVersion,
                 PendingStateChangeMask = pendingMask,
-                ReplicatedStateChecksum = computeChecksum ? ComputeReplicatedStateChecksum() : 0u,
+                ReplicatedStateChecksum = computeChecksum ? ComputeReplicatedStateChecksum() : 0UL,
                 CoreAbilitySpecCount = coreState.AbilitySpecCount,
                 CoreActiveEffectCount = coreState.ActiveEffectCount,
                 CoreAttributeCount = coreState.AttributeCount,
@@ -1550,16 +1551,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Computes a deterministic, allocation-free checksum over replicated ASC gameplay state.
         /// Use this as a lightweight drift detector between server and client snapshots.
         /// </summary>
-        public uint ComputeReplicatedStateChecksum()
+        public ulong ComputeReplicatedStateChecksum()
         {
-            const uint offset = 2166136261u;
-            uint hash = offset;
+            const ulong offset = Fnv1a64.OffsetBasis;
+            ulong hash = offset;
 
             hash = HashInt(hash, activatableAbilities.Count);
             for (int i = 0; i < activatableAbilities.Count; i++)
             {
                 var spec = activatableAbilities[i];
-                uint entryHash = 2166136261u;
+                ulong entryHash = Fnv1a64.OffsetBasis;
                 entryHash = HashInt(entryHash, spec.Handle);
                 entryHash = HashInt(entryHash, spec.Level);
                 entryHash = HashInt(entryHash, spec.IsActive ? 1 : 0);
@@ -1575,7 +1576,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     continue;
                 }
 
-                uint entryHash = 2166136261u;
+                ulong entryHash = Fnv1a64.OffsetBasis;
                 entryHash = HashInt(entryHash, effect.NetworkId);
                 entryHash = HashInt(entryHash, effect.StackCount);
                 entryHash = HashLong(entryHash, effect.TimeRemainingRaw);
@@ -1589,7 +1590,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 foreach (var attribute in attributeSets[i].GetAttributes())
                 {
-                    uint entryHash = 2166136261u;
+                    ulong entryHash = Fnv1a64.OffsetBasis;
                     entryHash = HashString(entryHash, attribute.Name);
                     entryHash = HashLong(entryHash, attribute.BaseValueRaw);
                     entryHash = HashLong(entryHash, attribute.CurrentValueRaw);
@@ -1602,35 +1603,35 @@ namespace CycloneGames.GameplayAbilities.Runtime
             while (tags.MoveNext())
             {
                 var tag = tags.Current;
-                uint entryHash = HashString(2166136261u, tag.IsValid && !tag.IsNone ? tag.Name : string.Empty);
+                ulong entryHash = HashString(Fnv1a64.OffsetBasis, tag.IsValid && !tag.IsNone ? tag.Name : string.Empty);
                 hash = FoldUnordered(hash, entryHash);
             }
 
             return hash;
         }
 
-        private static uint HashInt(uint hash, int value)
+        private static ulong HashInt(ulong hash, int value)
         {
             unchecked
             {
-                hash = (hash ^ (uint)value) * 16777619u;
+                hash = (hash ^ (uint)value) * Fnv1a64.Prime;
                 return hash;
             }
         }
 
-        private static uint HashFloat(uint hash, float value)
+        private static ulong HashFloat(ulong hash, float value)
         {
             long raw = GASFixedValue.FromFloat(value).RawValue;
             return HashLong(hash, raw);
         }
 
-        private static uint HashLong(uint hash, long raw)
+        private static ulong HashLong(ulong hash, long raw)
         {
             hash = HashInt(hash, unchecked((int)raw));
             return HashInt(hash, unchecked((int)(raw >> 32)));
         }
 
-        private static uint HashString(uint hash, string value)
+        private static ulong HashString(ulong hash, string value)
         {
             if (string.IsNullOrEmpty(value))
             {
@@ -1641,18 +1642,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 for (int i = 0; i < value.Length; i++)
                 {
-                    hash = (hash ^ value[i]) * 16777619u;
+                    hash = (hash ^ value[i]) * Fnv1a64.Prime;
                 }
 
                 return HashInt(hash, value.Length);
             }
         }
 
-        private static uint FoldUnordered(uint hash, uint entryHash)
+        private static ulong FoldUnordered(ulong hash, ulong entryHash)
         {
             unchecked
             {
-                return hash + (entryHash * 16777619u) ^ ((entryHash << 16) | (entryHash >> 16));
+                return hash + (entryHash * Fnv1a64.Prime) ^ ((entryHash << 16) | (entryHash >> 48));
             }
         }
 

@@ -57,6 +57,7 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
 | `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath` | `CycloneGames.DeterministicMath.Core` |
 | `CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework` | `CycloneGames.GameplayFramework.Runtime` |
 | `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath.GameplayFramework` | DeterministicMath + GameplayFramework |
+| `CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath` | `CycloneGames.DeterministicMath.Core` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.Animancer` | `Kybernetik.Animancer` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation` | `Unity.AI.Navigation` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AStar` | `AstarPathfindingProject` |
@@ -80,7 +81,7 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
 
 | Symbol | 启用内容 |
 | --- | --- |
-| `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` | Interaction DeterministicMath 集成 |
+| `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` | Interaction 与 Movement DeterministicMath 集成 |
 | `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK` | Interaction GameplayFramework 集成 |
 | `CYCLONE_RPGFOUNDATION_HAS_ANIMANCER` | Movement Animancer 集成 |
 | `CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION` | Movement Unity AI Navigation 集成 |

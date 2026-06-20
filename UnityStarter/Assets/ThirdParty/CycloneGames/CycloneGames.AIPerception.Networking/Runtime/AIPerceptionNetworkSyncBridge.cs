@@ -59,7 +59,7 @@ namespace CycloneGames.AIPerception.Networking
                 return false;
             }
 
-            uint stateHash = AIPerceptionNetworkHash.Compute(entry);
+            ulong stateHash = AIPerceptionNetworkHash.Compute(entry);
             message = new AIPerceptionDetectionEventMessage(
                 observerNetworkId,
                 sequence,
@@ -116,7 +116,7 @@ namespace CycloneGames.AIPerception.Networking
             var payload = new AIPerceptionDetectionEntry[entries.Length];
             entries.CopyTo(payload);
 
-            uint stateHash = AIPerceptionNetworkHash.Compute(entries);
+            ulong stateHash = AIPerceptionNetworkHash.Compute(entries);
             return new AIPerceptionDetectionSnapshotMessage(
                 observerNetworkId,
                 sequence,
@@ -132,7 +132,7 @@ namespace CycloneGames.AIPerception.Networking
             AIPerceptionNetworkSensorKind sensorKind,
             int tick,
             ushort sequence,
-            uint lastKnownStateHash = 0u)
+            ulong lastKnownStateHash = 0UL)
         {
             if (observerNetworkId == 0u)
             {
@@ -157,7 +157,7 @@ namespace CycloneGames.AIPerception.Networking
             uint authorityGeneration,
             ushort snapshotSequence,
             int snapshotTick,
-            uint snapshotStateHash)
+            ulong snapshotStateHash)
         {
             if (observerNetworkId == 0u)
             {

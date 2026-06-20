@@ -16,7 +16,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
             _currentRepeatCount = 0;
             if (!RepeatForever && UseRandomRepeatCount)
             {
-                RepeatCount = UnityEngine.Random.Range(RandomRangeMin, RandomRangeMax + 1);
+                var randomProvider = blackboard.GetService<IRuntimeBTRandomProvider>();
+                RepeatCount = randomProvider != null
+                    ? (int)randomProvider.Range(RandomRangeMin, RandomRangeMax + 1)
+                    : UnityEngine.Random.Range(RandomRangeMin, RandomRangeMax + 1);
             }
         }
 

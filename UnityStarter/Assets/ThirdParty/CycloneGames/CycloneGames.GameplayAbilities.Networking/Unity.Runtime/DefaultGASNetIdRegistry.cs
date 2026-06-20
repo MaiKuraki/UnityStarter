@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.GameplayAbilities.Networking
 {
@@ -168,20 +169,7 @@ namespace CycloneGames.GameplayAbilities.Networking
 
         private static int HashStable(string value)
         {
-            unchecked
-            {
-                const uint offsetBasis = 2166136261u;
-                const uint prime = 16777619u;
-
-                uint hash = offsetBasis;
-                for (int i = 0; i < value.Length; i++)
-                {
-                    hash ^= value[i];
-                    hash *= prime;
-                }
-
-                return (int)hash;
-            }
+            return unchecked((int)Fnv1a32.ComputeUtf16Ordinal(value.AsSpan()));
         }
     }
 }

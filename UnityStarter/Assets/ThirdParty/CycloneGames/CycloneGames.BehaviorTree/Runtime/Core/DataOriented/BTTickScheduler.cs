@@ -3,6 +3,7 @@ using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
 using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.DOD
 {
@@ -252,11 +253,11 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
         /// <summary>
         /// FNV-1a hash of an agent's execution state for network desync detection.
         /// </summary>
-        public uint ComputeAgentStateHash(int agentId)
+        public ulong ComputeAgentStateHash(int agentId)
         {
-            const uint FNV_OFFSET = 2166136261u;
-            const uint FNV_PRIME = 16777619u;
-            uint hash = FNV_OFFSET;
+            const ulong FNV_OFFSET = Fnv1a64.OffsetBasis;
+            const ulong FNV_PRIME = Fnv1a64.Prime;
+            ulong hash = FNV_OFFSET;
 
             int nc = _tree.NodeCount;
             int nOff = agentId * nc;
