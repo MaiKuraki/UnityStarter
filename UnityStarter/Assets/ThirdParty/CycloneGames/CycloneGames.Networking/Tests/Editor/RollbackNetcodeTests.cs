@@ -1,5 +1,4 @@
 using System;
-using CycloneGames.DeterministicMath;
 using CycloneGames.Networking.Lockstep;
 using NUnit.Framework;
 
@@ -56,7 +55,7 @@ namespace CycloneGames.Networking.Tests.Editor
                 State = state;
             }
 
-            public void Simulate(ReadOnlySpan<TestInput> peerInputs, FPInt64 deltaTime)
+            public void Simulate(ReadOnlySpan<TestInput> peerInputs)
             {
                 for (int i = 0; i < peerInputs.Length; i++)
                     State.Value += peerInputs[i].Value;

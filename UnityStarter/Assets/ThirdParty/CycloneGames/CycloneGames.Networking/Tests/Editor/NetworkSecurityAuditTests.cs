@@ -10,7 +10,7 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void Audit_Flags_Unencrypted_Release_Server_As_Critical()
         {
-            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateHardenedServerOptions();
+            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateServerSecurityBaseline();
             var environment = new NetworkSecurityEnvironment(
                 transportEncrypted: false,
                 isReleaseBuild: true,
@@ -26,7 +26,7 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void Audit_Encrypted_Transport_Removes_Confidentiality_Critical()
         {
-            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateHardenedServerOptions();
+            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateServerSecurityBaseline();
             var environment = new NetworkSecurityEnvironment(
                 transportEncrypted: true,
                 isReleaseBuild: true,
@@ -39,12 +39,12 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
-        public void Audit_Hardened_Server_With_Signer_And_Encrypted_Transport_Has_No_Critical()
+        public void Audit_Server_Baseline_With_Signer_And_Encrypted_Transport_Has_No_Critical()
         {
             using var signer = new HmacSha256NetworkMessageSigner(SampleKey);
             var rateLimiter = new RateLimiter(maxMessagesPerSecond: 120, maxBytesPerSecond: 65536, burstLimit: 8);
             var sink = new RecordingNetworkAntiCheatSignalSink();
-            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateHardenedServerOptions(
+            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateServerSecurityBaseline(
                 messageSigner: signer,
                 antiCheatSink: sink,
                 rateLimiter: rateLimiter);
@@ -80,7 +80,7 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void Audit_Development_Build_Does_Not_Emit_Confidentiality_Critical()
         {
-            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateHardenedServerOptions();
+            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateServerSecurityBaseline();
             var environment = new NetworkSecurityEnvironment(
                 transportEncrypted: false,
                 isReleaseBuild: false,
@@ -95,7 +95,7 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void Audit_ThrowIfCritical_Throws_On_Critical_Report()
         {
-            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateHardenedServerOptions();
+            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateServerSecurityBaseline();
             var environment = new NetworkSecurityEnvironment(
                 transportEncrypted: false,
                 isReleaseBuild: true,
@@ -109,7 +109,7 @@ namespace CycloneGames.Networking.Tests.Editor
         [Test]
         public void Audit_Server_Without_Rate_Limiter_Warns()
         {
-            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateHardenedServerOptions();
+            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateServerSecurityBaseline();
             var environment = new NetworkSecurityEnvironment(
                 transportEncrypted: true,
                 isReleaseBuild: false,

@@ -10,7 +10,7 @@ namespace CycloneGames.GameplayTags.Networking
       Delta = 2
    }
 
-   public readonly struct GameplayTagManifestHandshakeMessage : INetworkProtocolHandshake
+   public readonly struct GameplayTagManifestHandshakeMessage : INetworkProtocolHandshakeMessage
    {
       public readonly ulong ProtocolFingerprint;
       public readonly ulong ManifestHash;
@@ -29,10 +29,10 @@ namespace CycloneGames.GameplayTags.Networking
          CurrentProtocolVersion = currentProtocolVersion;
       }
 
-      ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
-      byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
-      byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
-      ulong INetworkProtocolHandshake.DomainStateHash => ManifestHash;
+      ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
+      byte INetworkProtocolHandshakeMessage.CurrentProtocolVersion => CurrentProtocolVersion;
+      byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+      ulong INetworkProtocolHandshakeMessage.DomainStateHash => ManifestHash;
 
       public bool IsCompatibleWithLocalManifest()
       {
@@ -130,21 +130,11 @@ namespace CycloneGames.GameplayTags.Networking
       public const int DefaultMaxFullStatePayloadSize = NetworkConstants.DefaultMaxPayloadSize * 8;
       public const int DefaultMaxDeltaPayloadSize = NetworkConstants.DefaultMaxPayloadSize * 2;
 
-      public static readonly NetworkMessageIdRange MessageRange = new NetworkMessageIdRange(
-         MessageOwner,
-         MESSAGE_ID_BASE,
-         MESSAGE_ID_MAX,
-         NetworkMessageKind.Module);
+      public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
-      public static readonly NetworkProtocolManifest DefaultManifest = CreateProtocolManifest();
-
-      public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
-         DefaultManifest,
-         NetworkProtocolVersion.Create(
-            GameplayTagNetSerializer.CurrentProtocolVersion,
-            GameplayTagNetSerializer.MinimumSupportedProtocolVersion));
-
-      public static ulong ProtocolFingerprint => Module.Fingerprint;
+      public static readonly NetworkProtocolManifest DefaultManifest = Module.Manifest;
+      public static readonly NetworkMessageIdRange MessageRange = Module.MessageRange;
+      public static readonly ulong ProtocolFingerprint = Module.Fingerprint;
 
       public static bool IsGameplayTagsMessageId(ushort messageId)
       {

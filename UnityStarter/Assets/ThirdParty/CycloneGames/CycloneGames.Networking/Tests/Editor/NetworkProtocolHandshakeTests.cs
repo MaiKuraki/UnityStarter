@@ -4,7 +4,7 @@ namespace CycloneGames.Networking.Tests.Editor
 {
     public sealed class NetworkProtocolHandshakeTests
     {
-        private readonly struct TestHandshake : INetworkProtocolHandshake
+        private readonly struct TestHandshake : INetworkProtocolHandshakeMessage
         {
             public TestHandshake(ulong fingerprint, byte current, byte min, ulong domainHash)
             {
@@ -43,7 +43,7 @@ namespace CycloneGames.Networking.Tests.Editor
 
             builder.AddMessage<ProtocolTestMessage>(RangeMin);
 
-            return new NetworkModuleProtocol(builder.Build(), NetworkProtocolVersion.Create(current, min));
+            return new NetworkModuleProtocol(builder.Build());
         }
 
         [Test]

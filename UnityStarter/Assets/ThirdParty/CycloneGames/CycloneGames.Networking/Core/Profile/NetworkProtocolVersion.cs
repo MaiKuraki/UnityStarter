@@ -6,10 +6,12 @@ namespace CycloneGames.Networking
     /// Immutable protocol version window shared by every domain networking module.
     /// </summary>
     /// <remarks>
-    /// Replaces the per-module <c>PROTOCOL_VERSION</c> / <c>MIN_SUPPORTED_PROTOCOL_VERSION</c>
-    /// byte constants and the duplicated <c>IsSupportedProtocolVersion</c> checks that each
-    /// CycloneGames *.Networking package used to copy-paste. Keeping the window in one type
-    /// removes the drift risk of those independent reimplementations.
+    /// This typed window is the runtime-facing view of the protocol version: it centralizes the
+    /// <c>Supports</c> / <c>IsCompatibleWith</c> checks that each CycloneGames *.Networking package used to
+    /// copy-paste. A module no longer stores a second copy of the version — <see cref="NetworkModuleProtocol"/>
+    /// derives this window from the manifest's <c>CurrentVersion</c> / <c>MinimumSupportedVersion</c>, which the
+    /// per-module <c>PROTOCOL_VERSION</c> / <c>MIN_SUPPORTED_PROTOCOL_VERSION</c> authoring constants feed once.
+    /// Keeping the window in one derived type removes the drift risk of the old independent reimplementations.
     /// </remarks>
     public readonly struct NetworkProtocolVersion : IEquatable<NetworkProtocolVersion>
     {

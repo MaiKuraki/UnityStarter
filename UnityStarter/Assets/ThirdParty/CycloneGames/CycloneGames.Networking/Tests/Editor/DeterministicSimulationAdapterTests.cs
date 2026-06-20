@@ -1,5 +1,4 @@
 using System;
-using CycloneGames.DeterministicMath;
 using CycloneGames.Networking.Simulation;
 using NUnit.Framework;
 
@@ -79,11 +78,11 @@ namespace CycloneGames.Networking.Tests.Editor
         {
             var adapter = new DeterministicRollbackAdapter<CounterInput, CounterState>(new CounterSimulation(), new CounterState(0));
 
-            adapter.Simulate(new[] { new CounterInput(5) }, FPInt64.Zero);
+            adapter.Simulate(new[] { new CounterInput(5) });
             Assert.AreEqual(5, adapter.State.Value);
 
             CounterState snapshot = adapter.SaveState();
-            adapter.Simulate(new[] { new CounterInput(100) }, FPInt64.Zero);
+            adapter.Simulate(new[] { new CounterInput(100) });
             Assert.AreEqual(105, adapter.State.Value);
 
             adapter.LoadState(snapshot);
@@ -138,7 +137,7 @@ namespace CycloneGames.Networking.Tests.Editor
             {
                 var single = new[] { new CounterInput(sequence[frame]) };
                 lockstep.SimulateFrame(frame, single);
-                rollback.Simulate(single, FPInt64.Zero);
+                rollback.Simulate(single);
                 prediction.SimulateStep(new CounterInput(sequence[frame]), 0.016f);
             }
 
