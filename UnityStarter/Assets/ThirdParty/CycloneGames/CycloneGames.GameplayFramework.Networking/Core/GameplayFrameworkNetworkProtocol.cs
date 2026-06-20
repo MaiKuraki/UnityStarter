@@ -14,19 +14,11 @@ namespace CycloneGames.GameplayFramework.Networking
         public const ushort MsgDamageRequest = MESSAGE_ID_BASE + 1;
         public const ushort MsgDamageResult = MESSAGE_ID_BASE + 2;
 
-        public static readonly NetworkMessageIdRange MessageRange = new NetworkMessageIdRange(
-            MessageOwner,
-            MESSAGE_ID_BASE,
-            MESSAGE_ID_MAX,
-            NetworkMessageKind.Module);
+        public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
-        public static readonly NetworkProtocolManifest DefaultManifest = CreateProtocolManifest();
-
-        public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
-            DefaultManifest,
-            NetworkProtocolVersion.Create(PROTOCOL_VERSION));
-
-        public static ulong ProtocolFingerprint => Module.Fingerprint;
+        public static readonly NetworkProtocolManifest DefaultManifest = Module.Manifest;
+        public static readonly NetworkMessageIdRange MessageRange = Module.MessageRange;
+        public static readonly ulong ProtocolFingerprint = Module.Fingerprint;
 
         public static bool IsGameplayFrameworkMessageId(ushort messageId)
         {

@@ -2,7 +2,7 @@ using CycloneGames.Networking;
 
 namespace CycloneGames.RPGFoundation.Movement.Networking
 {
-    public struct MovementManifestHandshakeMessage : INetworkProtocolHandshake
+    public struct MovementManifestHandshakeMessage : INetworkProtocolHandshakeMessage
     {
         public byte ProtocolVersion;
         public byte MinimumSupportedProtocolVersion;
@@ -41,10 +41,10 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             }
         }
 
-        ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
-        byte INetworkProtocolHandshake.CurrentProtocolVersion => ProtocolVersion;
-        byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
-        ulong INetworkProtocolHandshake.DomainStateHash => 0UL;
+        ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
+        byte INetworkProtocolHandshakeMessage.CurrentProtocolVersion => ProtocolVersion;
+        byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+        ulong INetworkProtocolHandshakeMessage.DomainStateHash => 0UL;
 
         public bool IsCompatibleWithLocalProtocol()
         {

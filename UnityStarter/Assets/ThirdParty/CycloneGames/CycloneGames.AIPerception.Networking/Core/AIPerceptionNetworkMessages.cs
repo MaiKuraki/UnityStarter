@@ -31,7 +31,7 @@ namespace CycloneGames.AIPerception.Networking
         AuthoritySnapshot = 1 << 3
     }
 
-    public struct AIPerceptionManifestHandshakeMessage : INetworkProtocolHandshake
+    public struct AIPerceptionManifestHandshakeMessage : INetworkProtocolHandshakeMessage
     {
         public ulong ProtocolFingerprint;
         public byte MinimumSupportedProtocolVersion;
@@ -53,10 +53,10 @@ namespace CycloneGames.AIPerception.Networking
             PerceptionProfileHash = perceptionProfileHash;
         }
 
-        ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
-        byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
-        byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
-        ulong INetworkProtocolHandshake.DomainStateHash => PerceptionProfileHash;
+        ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
+        byte INetworkProtocolHandshakeMessage.CurrentProtocolVersion => CurrentProtocolVersion;
+        byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+        ulong INetworkProtocolHandshakeMessage.DomainStateHash => PerceptionProfileHash;
 
         public bool IsCompatibleWithLocalProtocol()
         {

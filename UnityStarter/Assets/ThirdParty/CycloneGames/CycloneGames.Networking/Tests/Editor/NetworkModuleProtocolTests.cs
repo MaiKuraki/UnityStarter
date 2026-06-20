@@ -77,7 +77,7 @@ namespace CycloneGames.Networking.Tests.Editor
 
             builder.AddMessage<ProtocolTestMessage>(PrimaryMessageId);
 
-            return new NetworkModuleProtocol(builder.Build(), NetworkProtocolVersion.Create(3, 2));
+            return new NetworkModuleProtocol(builder.Build());
         }
 
         [Test]

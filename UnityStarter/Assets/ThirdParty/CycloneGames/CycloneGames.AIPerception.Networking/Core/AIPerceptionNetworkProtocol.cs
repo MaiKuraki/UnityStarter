@@ -21,19 +21,11 @@ namespace CycloneGames.AIPerception.Networking
         public const int DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE = NetworkConstants.DefaultMaxPayloadSize * 4;
         public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = 128;
 
-        public static readonly NetworkMessageIdRange MessageRange = new NetworkMessageIdRange(
-            MessageOwner,
-            MESSAGE_ID_BASE,
-            MESSAGE_ID_MAX,
-            NetworkMessageKind.Module);
+        public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
-        public static readonly NetworkProtocolManifest DefaultManifest = CreateProtocolManifest();
-
-        public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
-            DefaultManifest,
-            NetworkProtocolVersion.Create(PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION));
-
-        public static ulong ProtocolFingerprint => Module.Fingerprint;
+        public static readonly NetworkProtocolManifest DefaultManifest = Module.Manifest;
+        public static readonly NetworkMessageIdRange MessageRange = Module.MessageRange;
+        public static readonly ulong ProtocolFingerprint = Module.Fingerprint;
 
         public static bool IsAIPerceptionMessageId(ushort messageId)
         {

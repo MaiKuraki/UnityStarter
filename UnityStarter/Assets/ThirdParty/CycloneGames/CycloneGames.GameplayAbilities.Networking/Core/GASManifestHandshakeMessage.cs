@@ -12,7 +12,7 @@ namespace CycloneGames.GameplayAbilities.Networking
     /// before any per-object traffic flows. Whether to require it during the connection flow is a
     /// composition-root decision; the per-object checksum path is unaffected either way.
     /// </remarks>
-    public struct GASManifestHandshakeMessage : INetworkProtocolHandshake
+    public struct GASManifestHandshakeMessage : INetworkProtocolHandshakeMessage
     {
         public ulong ProtocolFingerprint;
         public byte MinimumSupportedProtocolVersion;
@@ -28,10 +28,10 @@ namespace CycloneGames.GameplayAbilities.Networking
             CurrentProtocolVersion = currentProtocolVersion;
         }
 
-        ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
-        byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
-        byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
-        ulong INetworkProtocolHandshake.DomainStateHash => 0UL;
+        ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
+        byte INetworkProtocolHandshakeMessage.CurrentProtocolVersion => CurrentProtocolVersion;
+        byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+        ulong INetworkProtocolHandshakeMessage.DomainStateHash => 0UL;
 
         public NetworkHandshakeResult Negotiate()
         {
