@@ -2,69 +2,124 @@
 
 English | [Simplified Chinese](./README.SCH.md)
 
-`CycloneGames.GameplayAbilities.Networking` connects `CycloneGames.GameplayAbilities` to `CycloneGames.Networking`. It provides transport-neutral replication for ability activation, prediction confirmation/rejection, active gameplay effects, attributes, tags, state metadata, and full-state recovery.
+`CycloneGames.GameplayAbilities.Networking` connects `CycloneGames.GameplayAbilities` to `CycloneGames.Networking`. It provides transport-neutral replication for ability activation requests, prediction confirmation and rejection, replicated gameplay effects, attribute updates, gameplay tag updates, full-state recovery, and state synchronization metadata.
 
-The package does not bind gameplay abilities directly to Mirror, Mirage, Nakama, or any other SDK. It depends on Cyclone networking interfaces, so the same GAS networking layer can run on top of any backend that supplies `INetworkManager` and the required runtime services.
-
-## What This Package Provides
-
-- `NetworkedAbilityBridge` for ability RPC and replicated GAS messages.
-- `INetworkedASC` as the network-facing contract for Ability System Component state.
-- `GameplayAbilitiesNetworkedASCAdapter` for the Unity runtime `AbilitySystemComponent`.
-- Compact message structs for ability activation, effect replication, attribute updates, tag updates, multicast events, full state, and sync metadata.
-- `GASNetworkSerializer` and `GASNetworkSerializerOptions` for bounded deterministic serialization.
-- `GASNetFixed` for raw fixed-point network values.
-- Full-state authorization policies and rate limiting hooks.
-- State checksum helpers for drift detection and reconnect validation.
-- Editor diagnostics preset and diagnostics window.
+The package talks to `INetworkManager` and Cyclone runtime services. It does not bind ability code directly to Mirror, Mirage, Nakama, Steam, or another backend SDK.
 
 ## Package Layout
 
 ```text
 CycloneGames.GameplayAbilities.Networking/
-  Core/             Pure C# bridge, messages, serializer, security policies
-  Unity.Runtime/    Unity AbilitySystemComponent adapter
-  Editor/           Editor-only diagnostics and inspectors
-  Tests/Editor/     Bridge, serialization, policy, and adapter tests
+  Core/
+    AttributeSyncManager.cs
+    GASNetworkMessages.cs
+    GASNetworkSerializer.cs
+    GASNetworkStateChecksum.cs
+    NetworkedAbilityBridge.cs
+    INetworkedASC.cs
+    IGASFullStateAuthorizationPolicy.cs
+    OwnerOrObserverWithRateLimitPolicy.cs
+    InMemoryTokenBucketRateLimiter.cs
+    ...
+  Unity.Runtime/
+    DefaultGASNetIdRegistry.cs
+    GameplayAbilitiesNetworkedASCAdapter.cs
+    GASBridgeGameplayAbilitiesExtensions.cs
+    UnityGASNetLogger.cs
+    UnityGASNetTimeProvider.cs
+  Editor/
+    Diagnostics preset, diagnostics window, and inspectors
+  Tests/Editor/
+    Bridge, serializer, checksum, authorization, and adapter tests
 ```
 
-Important assemblies:
+## Assembly Boundary
 
-| Assembly | Purpose |
+| Assembly | Role |
 | --- | --- |
-| `CycloneGames.GameplayAbilities.Networking.Core` | Pure C# network bridge, message structs, serializer, checksums, security policies, and interfaces. |
-| `CycloneGames.GameplayAbilities.Networking.Unity.Runtime` | Unity runtime adapter for `AbilitySystemComponent`. |
-| `CycloneGames.GameplayAbilities.Networking.Unity.Editor` | Editor diagnostics window, preset, and inspector. |
-| `CycloneGames.GameplayAbilities.Networking.Tests.Editor` | Editor tests for serializer, bridge, security, and runtime adapter behavior. |
+| `CycloneGames.GameplayAbilities.Networking.Core` | Pure C# bridge, message DTOs, serializer, checksums, full-state authorization, rate limiting, and interfaces. |
+| `CycloneGames.GameplayAbilities.Networking.Unity.Runtime` | Adapter from Unity `AbilitySystemComponent` to `INetworkedASC`. |
+| `CycloneGames.GameplayAbilities.Networking.Unity.Editor` | Editor diagnostics and authoring support. |
+| `CycloneGames.GameplayAbilities.Networking.Tests.Editor` | EditMode tests for the bridge, serializer, security policies, and runtime adapter behavior. |
 
-## Requirements
+Core code depends on Cyclone Networking contracts and GameplayAbilities data contracts. Unity-specific behavior is isolated in `Unity.Runtime` and `Editor` assemblies.
 
-- `com.cyclone-games.networking`.
-- `com.cyclone-games.gameplay-abilities`.
-- `com.cyclone-games.gameplay-tags`.
-- A concrete networking backend registered through `CycloneGames.Networking`.
+## Core Concepts
 
-Optional SDKs such as Mirror or Nakama are detected by editor diagnostics, but this package should still connect through Cyclone interfaces.
+| Type | Purpose |
+| --- | --- |
+| `NetworkedAbilityBridge` | Main message bridge. Registers handlers, sends requests, routes replicated state, and owns ASC lookup by network id and connection id. |
+| `INetworkedASC` | Network-facing contract for an Ability System Component. |
+| `INetworkedASCConnectionScopedFullState` | Optional contract for per-connection full-state filtering. |
+| `GameplayAbilitiesNetworkedASCAdapter` | Unity runtime adapter that maps `AbilitySystemComponent` state to `INetworkedASC`. |
+| `GASNetworkSerializer` | Serializer wrapper for bounded GAS arrays and nested message data. |
+| `GASNetworkSerializerOptions` | Capacity limits for abilities, effects, attributes, tags, and set-by-caller entries. |
+| `AttributeSyncManager` | Server-side dirty attribute batching and owner/public observer filtering. |
+| `OwnerOrObserverWithRateLimitPolicy` | Full-state request authorization for owners and observers with optional rate limiting. |
+| `GASNetworkStateChecksum` | Checksum helper for full-state and drift validation. |
+
+## Runtime Flow
+
+```mermaid
+sequenceDiagram
+    participant ClientASC as Client INetworkedASC
+    participant Bridge as NetworkedAbilityBridge
+    participant Gameplay as Server gameplay code
+    participant ServerASC as Server INetworkedASC
+    participant ObserverASC as Observer INetworkedASC
+
+    ClientASC->>Bridge: ClientRequestActivateAbility
+    Bridge->>Gameplay: OnAbilityActivateRequested
+    Gameplay->>Bridge: ServerConfirmActivation or ServerRejectActivation
+    Bridge->>ClientASC: OnServerConfirmActivation or OnServerRejectActivation
+    ServerASC->>Bridge: Capture replicated state
+    Bridge->>ObserverASC: Effects, attributes, tags, full state, metadata
+```
+
+## Protocol
+
+`NetworkedAbilityBridge` owns message ids `10000-10999` in the Cyclone module range.
+
+| Message | ID | Payload |
+| --- | ---: | --- |
+| `MsgAbilityActivateRequest` | `10000` | `AbilityActivateRequest` |
+| `MsgAbilityActivateConfirm` | `10001` | `AbilityActivateConfirm` |
+| `MsgAbilityActivateReject` | `10002` | `AbilityActivateReject` |
+| `MsgAbilityEnd` | `10003` | `AbilityEndMessage` |
+| `MsgAbilityCancel` | `10004` | `AbilityCancelMessage` |
+| `MsgEffectApplied` | `10010` | `EffectReplicationData` |
+| `MsgEffectRemoved` | `10011` | `EffectRemoveData` |
+| `MsgEffectStackChanged` | `10012` | `EffectStackChangeData` |
+| `MsgEffectUpdated` | `10013` | `EffectUpdateData` |
+| `MsgAttributeUpdate` | `10020` | `AttributeUpdateData` |
+| `MsgTagUpdate` | `10025` | `TagUpdateData` |
+| `MsgAbilityMulticast` | `10030` | `AbilityMulticastData` |
+| `MsgFullState` | `10040` | `GASFullStateData` |
+| `MsgFullStateRequest` | `10041` | `FullStateRequest` |
+| `MsgStateSyncMetadata` | `10042` | `GASStateSyncMetadata` |
+
+The bridge registers the catalog when the supplied `INetworkManager` exposes an `INetworkRuntimeContextProvider` with an `INetworkMessageCatalog` service.
 
 ## Quick Start
 
-### 1. Create the bridge
-
-Create a `NetworkedAbilityBridge` during network bootstrap. Pass the active `INetworkManager` from Mirror, Mirage, Nakama, or your custom backend adapter.
+Create the bridge during networking bootstrap and register handlers once:
 
 ```csharp
+using System;
 using CycloneGames.GameplayAbilities.Networking;
 using CycloneGames.Networking;
 
-public sealed class GASNetworkBootstrap : System.IDisposable
+public sealed class AbilityNetworkBootstrap : IDisposable
 {
     private readonly NetworkedAbilityBridge _bridge;
 
-    public GASNetworkBootstrap(INetworkManager networkManager)
+    public AbilityNetworkBootstrap(INetworkManager networkManager)
     {
         _bridge = new NetworkedAbilityBridge(networkManager);
         _bridge.RegisterHandlers();
     }
+
+    public NetworkedAbilityBridge Bridge => _bridge;
 
     public void Dispose()
     {
@@ -73,28 +128,26 @@ public sealed class GASNetworkBootstrap : System.IDisposable
 }
 ```
 
-### 2. Register networked Ability System Components
-
-Each networked actor that owns an Ability System Component should expose one stable `networkId` and one owner connection id.
+Register each networked Ability System Component with a stable network id and owner connection id:
 
 ```csharp
+using System;
 using CycloneGames.GameplayAbilities.Networking;
 using CycloneGames.GameplayAbilities.Runtime;
 
-public sealed class NetworkedAbilityOwner : System.IDisposable
+public sealed class AbilityNetworkOwner : IDisposable
 {
     private readonly NetworkedAbilityBridge _bridge;
     private readonly GameplayAbilitiesNetworkedASCAdapter _adapter;
 
-    public NetworkedAbilityOwner(
+    public AbilityNetworkOwner(
         NetworkedAbilityBridge bridge,
         AbilitySystemComponent asc,
         uint networkId,
         int ownerConnectionId)
     {
         _bridge = bridge;
-        _adapter = new GameplayAbilitiesNetworkedASCAdapter(asc, networkId, ownerConnectionId);
-        _bridge.RegisterASC(networkId, ownerConnectionId, _adapter);
+        _adapter = bridge.RegisterGameplayAbilitiesASC(asc, networkId, ownerConnectionId);
     }
 
     public void Dispose()
@@ -105,228 +158,152 @@ public sealed class NetworkedAbilityOwner : System.IDisposable
 }
 ```
 
-### 3. Request ability activation from the owning client
+## Ability Activation Flow
+
+The owning client sends an activation request:
 
 ```csharp
+using CycloneGames.GameplayAbilities.Networking;
 using CycloneGames.Networking;
 
-public void ActivateAbility(
-    NetworkedAbilityBridge bridge,
-    int abilityIndex,
-    int predictionKey,
-    NetworkVector3 targetPosition,
-    NetworkVector3 direction,
-    uint targetNetworkId)
+public static class AbilityInputSender
 {
-    bridge.ClientRequestActivateAbility(
-        abilityIndex,
-        predictionKey,
-        targetPosition,
-        direction,
-        targetNetworkId);
+    public static void RequestActivation(
+        NetworkedAbilityBridge bridge,
+        int abilityIndex,
+        int predictionKey,
+        NetworkVector3 targetPosition,
+        NetworkVector3 direction,
+        uint targetNetworkId)
+    {
+        bridge.ClientRequestActivateAbility(
+            abilityIndex,
+            predictionKey,
+            targetPosition,
+            direction,
+            targetNetworkId);
+    }
 }
 ```
 
-The server validates the request in gameplay code, then calls `ServerConfirmActivation` or `ServerRejectActivation`. Clients use the confirmation or rejection to keep or roll back predicted local state.
+The server-side gameplay layer validates the request through ability rules, then calls `ServerConfirmActivation` or `ServerRejectActivation`. The bridge routes the response to the registered `INetworkedASC`.
 
-### 4. Replicate effects, attributes, and tags from the server
+## Replicating Effects, Attributes, and Tags
 
-The server sends replicated state to owner or observer connections through the bridge:
+The bridge exposes server send methods for replicated GAS state:
 
 ```csharp
-bridge.ServerReplicateEffectApplied(observers, targetNetworkId, effectData);
-bridge.ServerBroadcastAttributes(observers, targetNetworkId, attributeData);
-bridge.ServerSyncTags(observers, targetNetworkId, tagData);
+using System.Collections.Generic;
+using CycloneGames.GameplayAbilities.Networking;
+using CycloneGames.Networking;
+
+public static class AbilityReplicationSender
+{
+    public static void SendState(
+        NetworkedAbilityBridge bridge,
+        IReadOnlyList<INetConnection> observers,
+        uint targetNetworkId,
+        EffectReplicationData effect,
+        AttributeUpdateData attributes,
+        TagUpdateData tags)
+    {
+        bridge.ServerReplicateEffectApplied(observers, targetNetworkId, effect);
+        bridge.ServerBroadcastAttributes(observers, targetNetworkId, attributes);
+        bridge.ServerSyncTags(observers, targetNetworkId, tags);
+    }
+}
 ```
 
-Use the observer list produced by your game framework, interest system, or backend room/zone logic.
-
-## Main Runtime Types
-
-### `NetworkedAbilityBridge`
-
-`NetworkedAbilityBridge` is the central GAS network bridge. It owns message registration, typed RPC send/receive, ASC lookup by connection id or network id, full-state request handling, and event forwarding to gameplay code.
-
-Default message ids:
-
-| Message | Id |
-| --- | ---: |
-| `MsgAbilityActivateRequest` | 10000 |
-| `MsgAbilityActivateConfirm` | 10001 |
-| `MsgAbilityActivateReject` | 10002 |
-| `MsgAbilityEnd` | 10003 |
-| `MsgAbilityCancel` | 10004 |
-| `MsgEffectApplied` | 10010 |
-| `MsgEffectRemoved` | 10011 |
-| `MsgEffectStackChanged` | 10012 |
-| `MsgEffectUpdated` | 10013 |
-| `MsgAttributeUpdate` | 10020 |
-| `MsgTagUpdate` | 10025 |
-| `MsgAbilityMulticast` | 10030 |
-| `MsgFullState` | 10040 |
-| `MsgFullStateRequest` | 10041 |
-| `MsgStateSyncMetadata` | 10042 |
-
-These ids live in the `NetworkedAbilityBridge.MessageRange` package-owned sub-range (`10000-10999`) inside the generic `NetworkMessageRanges.Module` space. The range and descriptors are registered into `INetworkMessageCatalog` when a runtime context exposes one. Projects should keep their own message id allocation table and avoid collisions with registered module ranges.
-
-### `INetworkedASC`
-
-`INetworkedASC` is the network-facing contract for an Ability System Component. It receives server confirmations, rejections, replicated effects, attribute updates, tag updates, multicast events, full state, and state metadata.
-
-Implement this directly for server-side pure C# tests or custom ability runtimes. Use `GameplayAbilitiesNetworkedASCAdapter` for the Unity runtime `AbilitySystemComponent`.
-
-### `GameplayAbilitiesNetworkedASCAdapter`
-
-`GameplayAbilitiesNetworkedASCAdapter` bridges a Unity `AbilitySystemComponent` to `INetworkedASC`.
-
-It supports:
-
-- Registration with `IGASNetIdRegistry`.
-- Prediction key confirmation and rejection callbacks.
-- Replicated active effect apply, remove, stack change, and update.
-- Attribute id registration and observer filtering.
-- Tag replication.
-- Full-state capture and application.
-- State delta creation.
-- Strict checksum validation.
-- Optional runtime thread policy checks.
-
-The adapter is disposable. Dispose it when the owning actor or ability component is destroyed.
+`AttributeSyncManager` stores dirty attributes by network id and can send owner-only values separately from public observer values.
 
 ## Full-State Recovery
 
-Full-state messages are used when a client joins late, reconnects, detects drift, or needs a baseline reset.
+Full-state messages provide a baseline for late join, reconnect, and drift recovery. The bridge supports:
 
-Typical flow:
+- `ClientRequestFullState(uint targetNetworkId)`
+- `ServerSendFullState(INetConnection client, GASFullStateData data)`
+- `INetworkedASC.CaptureFullState()`
+- `INetworkedASCConnectionScopedFullState.CaptureFullStateForConnection(INetConnection client)`
 
-1. Client calls `ClientRequestFullState(targetNetworkId)`.
-2. Server checks `FullStateRequestAuthorizer`.
-3. Server captures `GASFullStateData`.
-4. Server sends `MsgFullState` to the requesting connection.
-5. Client applies the state through `INetworkedASC.OnFullState`.
-
-For per-connection visibility, implement `INetworkedASCConnectionScopedFullState`. This lets the server return a filtered state snapshot for a specific observer.
-
-## Authorization and Rate Limiting
-
-Full-state requests can expose sensitive gameplay state. Configure authorization on the bridge:
+Configure full-state authorization with an explicit policy:
 
 ```csharp
-bridge.ConfigureFullStateAuthorization(
-    new OwnerOrObserverWithRateLimitPolicy(new InMemoryTokenBucketRateLimiter(4f, 1f)),
-    getOwnerConnectionId,
-    getObservers);
+using System.Collections.Generic;
+using CycloneGames.GameplayAbilities.Networking;
+using CycloneGames.Networking;
+
+public static class AbilityFullStateSecurity
+{
+    public static void Configure(
+        NetworkedAbilityBridge bridge,
+        Func<uint, int> getOwnerConnectionId,
+        Func<uint, IReadOnlyList<INetConnection>> getObservers)
+    {
+        var limiter = new InMemoryTokenBucketRateLimiter(4f, 1f);
+        var policy = new OwnerOrObserverWithRateLimitPolicy(limiter);
+        bridge.ConfigureFullStateAuthorization(policy, getOwnerConnectionId, getObservers);
+    }
+}
 ```
-
-Recommended rules:
-
-- Owners may request their own full state.
-- Observers may request only state they are allowed to observe.
-- Repeated requests should be rate limited.
-- Unauthorized attempts should be sent to an `IGASSecurityAuditSink` when the project has one.
 
 ## Serializer Options
 
-`GASNetworkSerializerOptions` controls bounded array sizes and serializer behavior. Use profiles for common scales:
+`GASNetworkSerializerOptions` bounds dynamic arrays during serialization:
 
 ```csharp
-var options = GASNetworkSerializerOptions.CreateForProfile(GASNetworkCapacityProfile.Conservative);
-var bridge = new NetworkedAbilityBridge(networkManager, options);
+using CycloneGames.GameplayAbilities.Networking;
+using CycloneGames.Networking;
+
+public static class AbilitySerializerInstaller
+{
+    public static NetworkedAbilityBridge Create(INetworkManager manager)
+    {
+        GASNetworkSerializerOptions options =
+            GASNetworkSerializerOptions.CreateForProfile(GASNetworkCapacityProfile.Balanced);
+
+        return new NetworkedAbilityBridge(manager, options);
+    }
+}
 ```
 
-Available profiles include conservative and large-server-oriented capacities. Choose the smallest profile that fits the game mode, then load-test with at least twice the expected peak.
+The constructor installs `GASNetworkSerializer` when the manager implements `INetworkSerializerConfigurable`.
 
-The bridge can install `GASNetworkSerializer` into any `INetworkManager` that implements `INetworkSerializerConfigurable`.
+## Drift and Metadata
 
-## Prediction and Drift Handling
-
-The package supports the standard client-prediction flow:
-
-1. Client predicts ability activation locally.
-2. Client sends `AbilityActivateRequest` with a prediction key.
-3. Server validates authority, cooldown, cost, tags, range, target, and game rules.
-4. Server sends `AbilityActivateConfirm` or `AbilityActivateReject`.
-5. Client keeps or rolls back predicted state.
-
-`GASStateSyncMetadata` and checksum helpers help detect drift:
-
-- Out-of-order sequence.
-- Base version mismatch.
-- Checksum mismatch.
-- Target network id mismatch.
-- Invalid version range.
-
-When drift is detected, the client can request a full-state baseline.
-
-## Backend Compatibility
-
-This package talks to `CycloneGames.Networking`, not directly to a backend SDK.
-
-| Backend | Recommended integration |
-| --- | --- |
-| Mirror | Use `CycloneGames.Networking.Adapter.Mirror`, then create `NetworkedAbilityBridge` from the exposed `INetworkManager`. |
-| Mirage | Use `CycloneGames.Networking.Adapter.Mirage`, then keep GAS code on Cyclone interfaces. |
-| Nakama | Use Nakama for session, matchmaking, match state, RPC, or presence through Cyclone backend services. Realtime GAS replication should still pass through `INetworkManager`. |
-| Best HTTP | Use for backend HTTP/RPC/download flows. Keep realtime GAS replication behind Cyclone networking. |
-| Custom server | Implement `INetworkManager` and required Cyclone services, then reuse the GAS bridge unchanged. |
+`GASStateSyncMetadata` carries target id, sequence, base version, current version, checksum, and change mask. `GameplayAbilitiesNetworkedASCAdapter` uses checksum helpers to validate state transitions and classify drift with `GASStateDriftReason`.
 
 ## Editor Diagnostics
 
-Create a preset:
+Editor support is isolated in the editor assembly.
 
 ```text
 Create > CycloneGames > GameplayAbilities > Networking > Diagnostics Preset
-```
-
-Open diagnostics:
-
-```text
 Tools > CycloneGames > GameplayAbilities > Networking > Diagnostics
 Tools > CycloneGames > GameplayAbilities > Networking > Run Diagnostics Check
 ```
 
-The diagnostics check:
+Diagnostics inspect bridge support, Ability runtime support, Cyclone network runtime support, scene-driven `INetworkManager` presence, and optional SDK package visibility.
 
-- Required bridge type support.
-- Required Ability runtime support.
-- Required Cyclone network runtime support.
-- Missing scene-driven `INetworkManager`.
-- Optional SDK package detection for Mirror and Nakama.
+## Extension Points
 
-The preset is editor-only and does not add runtime dependency on optional SDK packages.
+- Implement `INetworkedASC` for pure C# ability runtimes or server simulations.
+- Implement `IGASNetIdRegistry` when definition ids, attributes, and tag hashes come from a project registry.
+- Implement `IGASFullStateAuthorizationPolicy` for custom visibility and moderation rules.
+- Implement `IConnectionRateLimiter` when rate limiting is owned by a backend or security service.
+- Use `NetworkedAbilityBridge.RegisterMessage` only for messages inside the package-owned range; project-owned GAS messages belong in a `NetworkMessageKind.User` manifest.
 
-## Testing
+## Persistence
 
-Recommended checks after changing this package:
+This package does not write runtime save data. Editor diagnostics presets are Unity assets created explicitly by the user through the editor menu. Runtime bridge state, adapter state, rate limiter buckets, and dirty attribute buffers are in-memory data owned by the creating code.
 
-```text
-dotnet build UnityStarter/CycloneGames.GameplayAbilities.Networking.Core.csproj -nologo
-dotnet build UnityStarter/CycloneGames.GameplayAbilities.Networking.Unity.Runtime.csproj -nologo
-dotnet build UnityStarter/CycloneGames.GameplayAbilities.Networking.Tests.Editor.csproj -nologo
-```
+## Validation
 
-In Unity Editor, run the package tests through:
+Run these checks after changing the package:
 
 ```text
-Window > General > Test Runner
+Unity Test Runner > EditMode > CycloneGames.GameplayAbilities.Networking.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.GameplayAbilities.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
 ```
 
-Focus on serializer bounds, full-state authorization, checksum drift detection, adapter dispose behavior, and bridge register/unregister lifecycle.
-
-## Best Practices
-
-- Keep ability validation server-authoritative.
-- Use prediction keys only for local predicted state, not as proof of authority.
-- Keep observer lists explicit and interest-aware.
-- Keep full-state snapshots filtered for the target connection.
-- Register handlers once during startup and unregister during teardown.
-- Dispose `GameplayAbilitiesNetworkedASCAdapter` when the owning actor is destroyed.
-- Pre-size serializer profiles for expected peak state.
-- Do not let GAS code call Mirror, Mirage, Nakama, or Best HTTP SDK types directly.
-- Keep message id allocations documented at the project level.
-
-## Related Packages
-
-- `CycloneGames.Networking` provides the transport-neutral network layer used by this package.
-- `CycloneGames.GameplayAbilities` provides the ability system runtime.
-- `CycloneGames.GameplayFramework` can provide owner, observer, team, and area-interest information for replicated ability state.
+For serializer or bridge changes, include tests that cover capacity bounds, full-state authorization, checksum drift detection, adapter dispose behavior, and register/unregister lifecycle.

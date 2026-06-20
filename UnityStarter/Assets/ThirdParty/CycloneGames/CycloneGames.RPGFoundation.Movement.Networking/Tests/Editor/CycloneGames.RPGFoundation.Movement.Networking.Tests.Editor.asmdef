@@ -1,0 +1,24 @@
+{
+    "name": "CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor",
+    "references": [
+        "CycloneGames.RPGFoundation.Movement.Core",
+        "CycloneGames.RPGFoundation.Movement.Networking.Core",
+        "CycloneGames.Networking.Core",
+        "Unity.Mathematics"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

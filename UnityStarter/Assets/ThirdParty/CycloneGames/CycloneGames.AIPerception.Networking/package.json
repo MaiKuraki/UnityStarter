@@ -1,0 +1,26 @@
+{
+  "name": "com.cyclone-games.ai-perception-networking",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.AIPerception.Networking",
+  "description": "Optional CycloneGames.Networking protocol integration for CycloneGames.AIPerception. Provides transport-neutral perception event, snapshot, memory, authority, and host-migration contracts.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.ai-perception": "1.0.0",
+    "com.cyclone-games.networking": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "AI",
+    "Perception",
+    "Networking",
+    "Replication"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}
+

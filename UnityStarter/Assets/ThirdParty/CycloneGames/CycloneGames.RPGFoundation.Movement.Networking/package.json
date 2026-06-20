@@ -1,0 +1,25 @@
+{
+  "name": "com.cyclone-games.rpg-foundation-movement-networking",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.RPGFoundation.Movement.Networking",
+  "description": "Optional CycloneGames.Networking integration for CycloneGames.RPGFoundation Movement. Provides transport-neutral movement input, snapshot, correction, teleport, and authority transfer protocol contracts.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.rpg-foundation": "1.0.0",
+    "com.cyclone-games.networking": "1.0.0",
+    "com.unity.mathematics": "1.3.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "RPGFoundation",
+    "Movement",
+    "Networking"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

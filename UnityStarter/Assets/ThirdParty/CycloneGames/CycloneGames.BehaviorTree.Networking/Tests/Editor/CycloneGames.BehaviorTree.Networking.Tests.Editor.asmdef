@@ -1,0 +1,24 @@
+{
+    "name": "CycloneGames.BehaviorTree.Networking.Tests.Editor",
+    "rootNamespace": "CycloneGames.BehaviorTree.Networking.Tests.Editor",
+    "references": [
+        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.BehaviorTree.Networking.Core",
+        "CycloneGames.BehaviorTree.Networking.Runtime",
+        "CycloneGames.Networking.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}

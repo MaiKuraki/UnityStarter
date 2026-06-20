@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.RPGFoundation.Movement.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Movement.Tests.Editor",
+    "references": [
+        "CycloneGames.RPGFoundation.Movement.Core",
+        "Unity.Mathematics"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}

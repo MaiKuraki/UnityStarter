@@ -1,0 +1,18 @@
+{
+    "name": "CycloneGames.BehaviorTree.Networking.Runtime",
+    "rootNamespace": "CycloneGames.BehaviorTree.Networking",
+    "references": [
+        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.BehaviorTree.Networking.Core",
+        "CycloneGames.Networking.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
