@@ -1,5 +1,4 @@
 using System;
-using CycloneGames.DeterministicMath;
 using CycloneGames.Networking.Lockstep;
 
 namespace CycloneGames.Networking.Simulation
@@ -11,9 +10,11 @@ namespace CycloneGames.Networking.Simulation
     /// <see cref="LoadState"/> restores it, giving GGPO-style rollback for free.
     /// </summary>
     /// <remarks>
-    /// The fixed timestep supplied by rollback is ignored: the unified contract is fixed-step and expects any
-    /// delta to be encoded inside <typeparamref name="TInput"/>. Remote-input prediction defaults to repeating
-    /// the last known input unless an <see cref="IRemoteInputPredictor{TInput}"/> is provided.
+    /// The simulation is fixed-step: rollback no longer hands a per-call delta to <see cref="Simulate"/>; any
+    /// delta a step needs must be encoded inside <typeparamref name="TInput"/> so the result stays deterministic
+    /// across platforms. The fixed step is still discoverable through <c>RollbackNetcode.FixedDeltaTime</c>.
+    /// Remote-input prediction defaults to repeating the last known input unless an
+    /// <see cref="IRemoteInputPredictor{TInput}"/> is provided.
     /// </remarks>
     public sealed class DeterministicRollbackAdapter<TInput, TState>
         : RollbackNetcode<TInput, TState>.IRollbackSimulation
@@ -53,7 +54,7 @@ namespace CycloneGames.Networking.Simulation
             _state = state;
         }
 
-        public void Simulate(ReadOnlySpan<TInput> peerInputs, FPInt64 deltaTime)
+        public void Simulate(ReadOnlySpan<TInput> peerInputs)
         {
             _state = _simulation.Simulate(_state, peerInputs);
         }

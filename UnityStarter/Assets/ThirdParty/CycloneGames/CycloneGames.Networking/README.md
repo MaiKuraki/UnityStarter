@@ -210,9 +210,11 @@ Register the manifest through `INetworkMessageCatalog.RegisterProtocolManifest`.
 
 ### Module Protocol & Handshake
 
-Every Cyclone domain module wraps its manifest and version window in a single
-`NetworkModuleProtocol`, so the version check, catalog resolution, and registration logic
-live in one place instead of being copied per module:
+Every Cyclone domain module wraps its manifest in a single `NetworkModuleProtocol`, so the
+version check, catalog resolution, and registration logic live in one place instead of being
+copied per module. The wire version window is **derived from the manifest** (its
+`CurrentVersion` / `MinimumSupportedVersion`, which also feed the fingerprint), so the manifest
+is the single source of truth and the module version can never drift from it:
 
 ```csharp
 public static class ProjectCombatProtocol
@@ -220,33 +222,38 @@ public static class ProjectCombatProtocol
     public const byte PROTOCOL_VERSION = 1;
     public const byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 
-    public static readonly NetworkProtocolManifest DefaultManifest = CreateManifest();
+    // Module is the single source of truth: built from the manifest (which the constants above stamp
+    // with CurrentVersion / MinimumSupportedVersion) and deriving its version window from it. The
+    // manifest / range / fingerprint are derived once into readonly fields: single source, no duplicate
+    // construction, and zero-cost field reads on any hot path.
+    public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateManifest());
 
-    public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
-        DefaultManifest,
-        NetworkProtocolVersion.Create(PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION));
+    public static readonly NetworkProtocolManifest DefaultManifest = Module.Manifest;
+    public static readonly NetworkMessageIdRange MessageRange = Module.MessageRange;
+    public static readonly ulong ProtocolFingerprint = Module.Fingerprint;
 
     public static bool TryRegister(INetworkManager net) => Module.TryRegister(net);
     public static bool IsSupportedProtocolVersion(byte v) => Module.IsSupportedProtocolVersion(v);
 }
 ```
 
-A connection-level handshake message implements `INetworkProtocolHandshake` so the
+A connection-level handshake message implements `INetworkProtocolHandshakeMessage` (a fields-only
+message contract — the negotiation logic lives in the `NetworkProtocolHandshake` helper) so the
 version/fingerprint negotiation is written once. Implement it with explicit interface
 members to keep the wire fields intact, and route compatibility checks through
 `NetworkProtocolHandshake.Negotiate` (zero-GC via a generic `in` constraint):
 
 ```csharp
-public struct CombatHandshake : INetworkProtocolHandshake
+public struct CombatHandshake : INetworkProtocolHandshakeMessage
 {
     public ulong ProtocolFingerprint;
     public byte MinimumSupportedProtocolVersion;
     public byte CurrentProtocolVersion;
 
-    ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
-    byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
-    byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
-    ulong INetworkProtocolHandshake.DomainStateHash => 0UL; // or a module-specific hash
+    ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
+    byte INetworkProtocolHandshakeMessage.CurrentProtocolVersion => CurrentProtocolVersion;
+    byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+    ulong INetworkProtocolHandshakeMessage.DomainStateHash => 0UL; // or a module-specific hash
 
     public NetworkHandshakeResult Negotiate()
         => NetworkProtocolHandshake.Negotiate(this, ProjectCombatProtocol.Module);

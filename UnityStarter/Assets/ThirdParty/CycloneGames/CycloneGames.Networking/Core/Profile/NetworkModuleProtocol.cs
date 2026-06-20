@@ -12,15 +12,31 @@ namespace CycloneGames.Networking
     /// Those copies had already drifted (for example one module registered the extra range via
     /// <see cref="INetworkMessageCatalog.RegisterRange"/> while another used
     /// <see cref="INetworkMessageCatalog.RegisterModuleRange"/>). This type centralizes the logic so
-    /// each domain protocol becomes a thin facade that only declares its owner, version window,
-    /// id range, and manifest, and forwards the rest here.
+    /// each domain protocol becomes a thin facade over a single <see cref="NetworkProtocolManifest"/>
+    /// (which carries the owner, version window, id range, and messages) and forwards the rest here.
     /// </remarks>
     public sealed class NetworkModuleProtocol
     {
-        public NetworkModuleProtocol(NetworkProtocolManifest manifest, NetworkProtocolVersion version)
+        /// <summary>
+        /// Wraps a domain protocol <paramref name="manifest"/>. The wire version window is derived from the
+        /// manifest's <see cref="NetworkProtocolManifest.CurrentVersion"/> /
+        /// <see cref="NetworkProtocolManifest.MinimumSupportedVersion"/> so there is a single source of truth:
+        /// the manifest (which also feeds the fingerprint) cannot drift from a separately supplied version.
+        /// </summary>
+        public NetworkModuleProtocol(NetworkProtocolManifest manifest)
         {
             Manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
-            Version = version;
+
+            if (manifest.CurrentVersion > byte.MaxValue || manifest.MinimumSupportedVersion > byte.MaxValue)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(manifest),
+                    "Protocol version window must fit in a byte to stay wire-compatible.");
+            }
+
+            Version = new NetworkProtocolVersion(
+                (byte)manifest.CurrentVersion,
+                (byte)manifest.MinimumSupportedVersion);
         }
 
         public NetworkProtocolManifest Manifest { get; }

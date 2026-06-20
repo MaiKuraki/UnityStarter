@@ -20,7 +20,7 @@ namespace CycloneGames.BehaviorTree.Networking
         ForceFullSnapshot = 1 << 3
     }
 
-    public struct BehaviorTreeManifestHandshakeMessage : INetworkProtocolHandshake
+    public struct BehaviorTreeManifestHandshakeMessage : INetworkProtocolHandshakeMessage
     {
         public ulong ProtocolFingerprint;
         public byte MinimumSupportedProtocolVersion;
@@ -42,10 +42,10 @@ namespace CycloneGames.BehaviorTree.Networking
             RequiredFeatures = requiredFeatures;
         }
 
-        ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
-        byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
-        byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
-        ulong INetworkProtocolHandshake.DomainStateHash => TreeTemplateHash;
+        ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
+        byte INetworkProtocolHandshakeMessage.CurrentProtocolVersion => CurrentProtocolVersion;
+        byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+        ulong INetworkProtocolHandshakeMessage.DomainStateHash => TreeTemplateHash;
 
         public bool IsCompatibleWithLocalProtocol()
         {

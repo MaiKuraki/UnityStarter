@@ -29,7 +29,7 @@ namespace CycloneGames.Networking
     /// AI perception profile hash, gameplay-tag manifest hash, ...); modules without such a
     /// requirement expose 0.
     /// </remarks>
-    public interface INetworkProtocolHandshake
+    public interface INetworkProtocolHandshakeMessage
     {
         ulong ProtocolFingerprint { get; }
         byte CurrentProtocolVersion { get; }
@@ -38,7 +38,7 @@ namespace CycloneGames.Networking
     }
 
     /// <summary>
-    /// Shared, allocation-free negotiation for <see cref="INetworkProtocolHandshake"/> payloads.
+    /// Shared, allocation-free negotiation for <see cref="INetworkProtocolHandshakeMessage"/> payloads.
     /// </summary>
     /// <remarks>
     /// The generic <c>in</c> constraint keeps value-type handshakes unboxed (zero-GC) while still
@@ -49,7 +49,7 @@ namespace CycloneGames.Networking
         /// <summary>
         /// True when the handshake fields form a valid version window with a non-zero fingerprint.
         /// </summary>
-        public static bool IsWellFormed<T>(in T handshake) where T : INetworkProtocolHandshake
+        public static bool IsWellFormed<T>(in T handshake) where T : INetworkProtocolHandshakeMessage
         {
             return handshake.ProtocolFingerprint != 0UL
                    && handshake.CurrentProtocolVersion > 0
@@ -60,14 +60,14 @@ namespace CycloneGames.Networking
         /// <summary>
         /// Negotiate a remote handshake against the local module protocol. When
         /// <paramref name="requireDomainStateMatch"/> is set, the remote
-        /// <see cref="INetworkProtocolHandshake.DomainStateHash"/> must also equal
+        /// <see cref="INetworkProtocolHandshakeMessage.DomainStateHash"/> must also equal
         /// <paramref name="localDomainStateHash"/>.
         /// </summary>
         public static NetworkHandshakeResult Negotiate<T>(
             in T remote,
             NetworkModuleProtocol local,
             ulong localDomainStateHash = 0UL,
-            bool requireDomainStateMatch = false) where T : INetworkProtocolHandshake
+            bool requireDomainStateMatch = false) where T : INetworkProtocolHandshakeMessage
         {
             if (local == null)
             {
@@ -106,7 +106,7 @@ namespace CycloneGames.Networking
             in T remote,
             NetworkModuleProtocol local,
             ulong localDomainStateHash = 0UL,
-            bool requireDomainStateMatch = false) where T : INetworkProtocolHandshake
+            bool requireDomainStateMatch = false) where T : INetworkProtocolHandshakeMessage
         {
             return Negotiate(in remote, local, localDomainStateHash, requireDomainStateMatch)
                    == NetworkHandshakeResult.Compatible;

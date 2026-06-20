@@ -43,19 +43,11 @@ namespace CycloneGames.GameplayAbilities.Networking
         public const byte PROTOCOL_VERSION = 1;
         public const byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 
-        public static readonly NetworkMessageIdRange MessageRange = new NetworkMessageIdRange(
-            MessageOwner,
-            MESSAGE_ID_BASE,
-            MESSAGE_ID_MAX,
-            NetworkMessageKind.Module);
+        public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
-        public static readonly NetworkProtocolManifest DefaultManifest = CreateProtocolManifest();
-
-        public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
-            DefaultManifest,
-            NetworkProtocolVersion.Create(PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION));
-
-        public static ulong ProtocolFingerprint => Module.Fingerprint;
+        public static readonly NetworkProtocolManifest DefaultManifest = Module.Manifest;
+        public static readonly NetworkMessageIdRange MessageRange = Module.MessageRange;
+        public static readonly ulong ProtocolFingerprint = Module.Fingerprint;
 
         public static bool IsSupportedProtocolVersion(byte protocolVersion)
         {
