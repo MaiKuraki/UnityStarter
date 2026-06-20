@@ -49,7 +49,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
                 }
                 else
                 {
-                    random = UnityEngine.Random.Range(0f, total);
+                    var randomProvider = blackboard.GetService<IRuntimeBTRandomProvider>();
+                    random = randomProvider != null
+                        ? randomProvider.Range(0f, total)
+                        : UnityEngine.Random.Range(0f, total);
                 }
 
                 float cumulative = 0f;

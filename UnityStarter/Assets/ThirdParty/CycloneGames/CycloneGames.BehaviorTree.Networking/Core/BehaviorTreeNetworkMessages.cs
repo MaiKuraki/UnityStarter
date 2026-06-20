@@ -20,7 +20,7 @@ namespace CycloneGames.BehaviorTree.Networking
         ForceFullSnapshot = 1 << 3
     }
 
-    public struct BehaviorTreeManifestHandshakeMessage
+    public struct BehaviorTreeManifestHandshakeMessage : INetworkProtocolHandshake
     {
         public ulong ProtocolFingerprint;
         public byte MinimumSupportedProtocolVersion;
@@ -42,12 +42,14 @@ namespace CycloneGames.BehaviorTree.Networking
             RequiredFeatures = requiredFeatures;
         }
 
+        ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
+        byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
+        byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+        ulong INetworkProtocolHandshake.DomainStateHash => TreeTemplateHash;
+
         public bool IsCompatibleWithLocalProtocol()
         {
-            return BehaviorTreeNetworkProtocol.IsSupportedProtocolVersion(CurrentProtocolVersion) &&
-                   MinimumSupportedProtocolVersion <= BehaviorTreeNetworkProtocol.PROTOCOL_VERSION &&
-                   CurrentProtocolVersion >= BehaviorTreeNetworkProtocol.MIN_SUPPORTED_PROTOCOL_VERSION &&
-                   ProtocolFingerprint == BehaviorTreeNetworkProtocol.ProtocolFingerprint;
+            return NetworkProtocolHandshake.IsCompatible(this, BehaviorTreeNetworkProtocol.Module);
         }
 
         public static BehaviorTreeManifestHandshakeMessage CreateLocal(
@@ -71,8 +73,8 @@ namespace CycloneGames.BehaviorTree.Networking
         public BehaviorTreeNetworkPayloadKind PayloadKind;
         public byte ProtocolVersion;
         public ulong TreeTemplateHash;
-        public uint BlackboardHash;
-        public uint TreeStateHash;
+        public ulong BlackboardHash;
+        public ulong TreeStateHash;
         public byte[] Payload;
 
         public BehaviorTreeStatePayloadMessage(
@@ -82,8 +84,8 @@ namespace CycloneGames.BehaviorTree.Networking
             BehaviorTreeNetworkPayloadKind payloadKind,
             byte protocolVersion,
             ulong treeTemplateHash,
-            uint blackboardHash,
-            uint treeStateHash,
+            ulong blackboardHash,
+            ulong treeStateHash,
             byte[] payload)
         {
             TargetNetworkId = targetNetworkId;
@@ -115,20 +117,20 @@ namespace CycloneGames.BehaviorTree.Networking
         public ushort Sequence;
         public int LocalTick;
         public int RemoteTick;
-        public uint LocalBlackboardHash;
-        public uint RemoteBlackboardHash;
-        public uint LocalTreeStateHash;
-        public uint RemoteTreeStateHash;
+        public ulong LocalBlackboardHash;
+        public ulong RemoteBlackboardHash;
+        public ulong LocalTreeStateHash;
+        public ulong RemoteTreeStateHash;
 
         public BehaviorTreeDesyncReportMessage(
             uint targetNetworkId,
             ushort sequence,
             int localTick,
             int remoteTick,
-            uint localBlackboardHash,
-            uint remoteBlackboardHash,
-            uint localTreeStateHash,
-            uint remoteTreeStateHash)
+            ulong localBlackboardHash,
+            ulong remoteBlackboardHash,
+            ulong localTreeStateHash,
+            ulong remoteTreeStateHash)
         {
             TargetNetworkId = targetNetworkId;
             Sequence = sequence;
@@ -184,7 +186,7 @@ namespace CycloneGames.BehaviorTree.Networking
         public uint AuthorityGeneration;
         public ushort SnapshotSequence;
         public int SnapshotTick;
-        public uint SnapshotTreeStateHash;
+        public ulong SnapshotTreeStateHash;
 
         public BehaviorTreeAuthorityTransferMessage(
             uint targetNetworkId,
@@ -195,7 +197,7 @@ namespace CycloneGames.BehaviorTree.Networking
             uint authorityGeneration,
             ushort snapshotSequence,
             int snapshotTick,
-            uint snapshotTreeStateHash)
+            ulong snapshotTreeStateHash)
         {
             TargetNetworkId = targetNetworkId;
             PreviousOwnerConnectionId = previousOwnerConnectionId;

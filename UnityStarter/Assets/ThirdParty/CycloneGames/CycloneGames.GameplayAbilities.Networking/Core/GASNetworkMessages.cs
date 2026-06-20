@@ -136,7 +136,7 @@ namespace CycloneGames.GameplayAbilities.Networking
     {
         public uint TargetNetworkId;
         public ulong StateVersion;
-        public uint StateChecksum;
+        public ulong StateChecksum;
 
         public int AbilityCount;
         public GrantedAbilityEntry[] Abilities;
@@ -169,7 +169,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         public uint Sequence;
         public ulong BaseVersion;
         public ulong CurrentVersion;
-        public uint StateChecksum;
+        public ulong StateChecksum;
         public uint ChangeMask;
     }
 
@@ -364,7 +364,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         {
             writer.WriteUInt(value.TargetNetworkId);
             WriteULong(writer, value.StateVersion);
-            writer.WriteUInt(value.StateChecksum);
+            WriteULong(writer, value.StateChecksum);
 
             int abilityCount = GetSafeCount(value.Abilities, value.AbilityCount, _options.MaxAbilities, nameof(value.Abilities));
             writer.WriteInt(abilityCount);
@@ -393,7 +393,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             {
                 TargetNetworkId = reader.ReadUInt(),
                 StateVersion = ReadULong(reader),
-                StateChecksum = reader.ReadUInt()
+                StateChecksum = ReadULong(reader)
             };
 
             value.AbilityCount = ReadCount(reader, _options.MaxAbilities, nameof(value.Abilities));

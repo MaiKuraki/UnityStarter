@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using CycloneGames.GameplayFramework.Runtime;
 using CycloneGames.Networking.Serialization;
 
@@ -22,6 +23,14 @@ namespace CycloneGames.GameplayFramework.Networking
     {
         private const int MaxUtf8StringBytes = ushort.MaxValue;
         private const int MaxTagCount = ushort.MaxValue;
+
+        /// <summary>
+        /// Default upper bound on the number of tags accepted from an inbound migration payload. The wire
+        /// format allows up to <see cref="ushort.MaxValue"/> tags, but a legitimate actor never carries that
+        /// many; bounding the count early limits allocation and downstream work from a compromised or buggy
+        /// peer. Override per game through the <c>maxRuntimeTagCount</c> parameter of <see cref="ReadMigrationState"/>.
+        /// </summary>
+        public const int DefaultMaxRuntimeTagCount = 128;
 
         public static void WriteMigrationState(this INetWriter writer, in ActorMigrationState state)
         {
@@ -63,28 +72,36 @@ namespace CycloneGames.GameplayFramework.Networking
             WriteString(writer, state.ActorName ?? string.Empty);
         }
 
-        public static ActorMigrationState ReadMigrationState(this INetReader reader)
+        public static ActorMigrationState ReadMigrationState(
+            this INetReader reader,
+            int maxRuntimeTagCount = DefaultMaxRuntimeTagCount)
         {
-            float px = reader.ReadFloat();
-            float py = reader.ReadFloat();
-            float pz = reader.ReadFloat();
+            int effectiveTagLimit = maxRuntimeTagCount > 0 ? maxRuntimeTagCount : DefaultMaxRuntimeTagCount;
+            float px = ReadFiniteFloat(reader, "Position.x");
+            float py = ReadFiniteFloat(reader, "Position.y");
+            float pz = ReadFiniteFloat(reader, "Position.z");
 
-            float rx = reader.ReadFloat();
-            float ry = reader.ReadFloat();
-            float rz = reader.ReadFloat();
-            float rw = reader.ReadFloat();
+            float rx = ReadFiniteFloat(reader, "Rotation.x");
+            float ry = ReadFiniteFloat(reader, "Rotation.y");
+            float rz = ReadFiniteFloat(reader, "Rotation.z");
+            float rw = ReadFiniteFloat(reader, "Rotation.w");
 
-            float sx = reader.ReadFloat();
-            float sy = reader.ReadFloat();
-            float sz = reader.ReadFloat();
+            float sx = ReadFiniteFloat(reader, "Scale.x");
+            float sy = ReadFiniteFloat(reader, "Scale.y");
+            float sz = ReadFiniteFloat(reader, "Scale.z");
 
             string prefabPath = ReadString(reader);
-            float lifeSpan = reader.ReadFloat();
+            float lifeSpan = ReadFiniteFloat(reader, "RemainingLifeSpan");
             bool canBeDamaged = reader.ReadByte() != 0;
             bool hidden = reader.ReadByte() != 0;
             bool hasBegunPlay = reader.ReadByte() != 0;
 
             int tagCount = reader.ReadUShort();
+            if (tagCount > effectiveTagLimit)
+            {
+                throw new System.InvalidOperationException("Actor migration tag count exceeds the runtime safety limit.");
+            }
+
             string[] tags = null;
             if (tagCount > 0)
             {
@@ -113,6 +130,27 @@ namespace CycloneGames.GameplayFramework.Networking
                 actorName,
                 hasBegunPlay
             );
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float ReadFiniteFloat(INetReader reader, string field)
+        {
+            float value = reader.ReadFloat();
+            // IsNaN/IsInfinity are JIT intrinsics with no allocation. On the normal (finite) path this
+            // method allocates nothing; the string concat and exception live in a cold throw helper so
+            // they neither inflate this method body nor block inlining of the validation check.
+            if (float.IsNaN(value) || float.IsInfinity(value))
+            {
+                ThrowNotFinite(field);
+            }
+
+            return value;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowNotFinite(string field)
+        {
+            throw new System.InvalidOperationException("Actor migration field '" + field + "' is not a finite number.");
         }
 
         private static void WriteString(INetWriter writer, string value)

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.GameplayAbilities.Core
 {
@@ -71,16 +72,7 @@ namespace CycloneGames.GameplayAbilities.Core
 
         private static uint ComputeStableHash(string stableName)
         {
-            unchecked
-            {
-                uint hash = 2166136261u;
-                for (int i = 0; i < stableName.Length; i++)
-                {
-                    hash = (hash ^ stableName[i]) * 16777619u;
-                }
-
-                return hash != 0 ? hash : 2166136261u;
-            }
+            return StableHash32.ComputeUtf16Ordinal(stableName.AsSpan());
         }
     }
 }

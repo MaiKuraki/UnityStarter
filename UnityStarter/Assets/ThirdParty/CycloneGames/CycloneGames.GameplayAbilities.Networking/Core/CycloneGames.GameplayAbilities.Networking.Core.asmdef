@@ -3,7 +3,8 @@
     "rootNamespace": "CycloneGames.GameplayAbilities.Networking",
     "references": [
         "CycloneGames.Networking.Core",
-        "CycloneGames.DeterministicMath.Core"
+        "CycloneGames.DeterministicMath.Core",
+        "CycloneGames.Hash.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

@@ -32,7 +32,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
                 }
             };
 
-            uint checksumA = GASNetworkStateChecksum.Compute(
+            ulong checksumA = GASNetworkStateChecksum.Compute(
                 null,
                 0,
                 null,
@@ -42,7 +42,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
                 null,
                 0);
 
-            uint checksumB = GASNetworkStateChecksum.Compute(
+            ulong checksumB = GASNetworkStateChecksum.Compute(
                 null,
                 0,
                 null,
@@ -89,11 +89,11 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
                 effectsA[0]
             };
 
-            uint checksumA = GASNetworkStateChecksum.Compute(null, 0, effectsA, effectsA.Length, null, 0, null, 0);
-            uint checksumB = GASNetworkStateChecksum.Compute(null, 0, effectsB, effectsB.Length, null, 0, null, 0);
+            ulong checksumA = GASNetworkStateChecksum.Compute(null, 0, effectsA, effectsA.Length, null, 0, null, 0);
+            ulong checksumB = GASNetworkStateChecksum.Compute(null, 0, effectsB, effectsB.Length, null, 0, null, 0);
 
             effectsB[0].TimeRemainingRaw = GASNetFixed.FromFloat(7.25f);
-            uint changedTimeChecksum = GASNetworkStateChecksum.Compute(null, 0, effectsB, effectsB.Length, null, 0, null, 0);
+            ulong changedTimeChecksum = GASNetworkStateChecksum.Compute(null, 0, effectsB, effectsB.Length, null, 0, null, 0);
 
             effectsB[0] = effectsA[0];
             effectsB[0].SetByCallerEntries = new[]
@@ -104,7 +104,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
                     ValueRaw = GASNetFixed.FromFloat(1.5f)
                 }
             };
-            uint changedSetByCallerChecksum = GASNetworkStateChecksum.Compute(null, 0, effectsB, effectsB.Length, null, 0, null, 0);
+            ulong changedSetByCallerChecksum = GASNetworkStateChecksum.Compute(null, 0, effectsB, effectsB.Length, null, 0, null, 0);
 
             Assert.That(checksumA, Is.EqualTo(checksumB));
             Assert.That(changedTimeChecksum, Is.Not.EqualTo(checksumA));
@@ -117,8 +117,8 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             int[] tagsA = { 30, 10, 20 };
             int[] tagsB = { 10, 20, 30 };
 
-            uint checksumA = GASNetworkStateChecksum.Compute(null, 0, null, 0, null, 0, tagsA, tagsA.Length);
-            uint checksumB = GASNetworkStateChecksum.Compute(null, 0, null, 0, null, 0, tagsB, tagsB.Length);
+            ulong checksumA = GASNetworkStateChecksum.Compute(null, 0, null, 0, null, 0, tagsA, tagsA.Length);
+            ulong checksumB = GASNetworkStateChecksum.Compute(null, 0, null, 0, null, 0, tagsB, tagsB.Length);
 
             Assert.That(checksumA, Is.EqualTo(checksumB));
         }
@@ -297,7 +297,8 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
 
             NetworkedAbilityBridge.RegisterMessageCatalog(catalog);
 
-            Assert.That(catalog.Count, Is.EqualTo(15));
+            // 15 domain messages + 1 connection-level manifest handshake.
+            Assert.That(catalog.Count, Is.EqualTo(16));
             Assert.That(catalog.TryGet(NetworkedAbilityBridge.MsgAbilityActivateRequest, out NetworkMessageDescriptor descriptor), Is.True);
             Assert.That(descriptor.Kind, Is.EqualTo(NetworkMessageKind.Module));
             Assert.That(descriptor.Owner, Is.EqualTo(NetworkedAbilityBridge.MessageOwner));

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.Networking.Security
 {
@@ -126,8 +127,8 @@ namespace CycloneGames.Networking.Security
         public const int PayloadLengthOffset = 14;
         public const int ChecksumOffset = 18;
         public const int HeaderLength = ChecksumOffset + UInt32Size;
-        public const uint ChecksumSeed = 2166136261u; // FNV-1a 32-bit offset basis.
-        public const uint ChecksumPrime = 16777619u; // FNV-1a 32-bit prime.
+        public const uint ChecksumSeed = Fnv1a32.OffsetBasis; // FNV-1a 32-bit offset basis.
+        public const uint ChecksumPrime = Fnv1a32.Prime; // FNV-1a 32-bit prime.
     }
 
     /// <summary>

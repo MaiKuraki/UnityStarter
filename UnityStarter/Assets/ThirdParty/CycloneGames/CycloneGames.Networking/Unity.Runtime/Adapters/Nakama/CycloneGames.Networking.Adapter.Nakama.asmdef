@@ -3,7 +3,8 @@
     "rootNamespace": "CycloneGames.Networking.Adapter.Nakama",
     "references": [
         "NakamaRuntime",
-        "CycloneGames.Networking.Core"
+        "CycloneGames.Networking.Core",
+        "CycloneGames.Hash.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

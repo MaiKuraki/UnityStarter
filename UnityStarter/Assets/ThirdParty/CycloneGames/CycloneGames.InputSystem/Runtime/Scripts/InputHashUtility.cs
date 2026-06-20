@@ -1,3 +1,5 @@
+using CycloneGames.Hash.Core;
+
 namespace CycloneGames.InputSystem.Runtime
 {
     /// <summary>
@@ -5,8 +7,8 @@ namespace CycloneGames.InputSystem.Runtime
     /// </summary>
     public static class InputHashUtility
     {
-        private const uint FnvOffsetBasis = 2166136261u;
-        private const uint FnvPrime = 16777619u;
+        private const uint FnvOffsetBasis = Fnv1a32.OffsetBasis;
+        private const uint FnvPrime = Fnv1a32.Prime;
 
         /// <summary>
         /// Computes a deterministic 32-bit FNV-1a hash for a string.

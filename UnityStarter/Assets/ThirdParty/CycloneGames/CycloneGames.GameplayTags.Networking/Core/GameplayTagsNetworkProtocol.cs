@@ -10,32 +10,43 @@ namespace CycloneGames.GameplayTags.Networking
       Delta = 2
    }
 
-   public readonly struct GameplayTagManifestHandshakeMessage
+   public readonly struct GameplayTagManifestHandshakeMessage : INetworkProtocolHandshake
    {
+      public readonly ulong ProtocolFingerprint;
       public readonly ulong ManifestHash;
       public readonly byte MinimumSupportedProtocolVersion;
       public readonly byte CurrentProtocolVersion;
 
       public GameplayTagManifestHandshakeMessage(
+         ulong protocolFingerprint,
          ulong manifestHash,
          byte minimumSupportedProtocolVersion,
          byte currentProtocolVersion)
       {
+         ProtocolFingerprint = protocolFingerprint;
          ManifestHash = manifestHash;
          MinimumSupportedProtocolVersion = minimumSupportedProtocolVersion;
          CurrentProtocolVersion = currentProtocolVersion;
       }
 
+      ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
+      byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
+      byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+      ulong INetworkProtocolHandshake.DomainStateHash => ManifestHash;
+
       public bool IsCompatibleWithLocalManifest()
       {
-         return ManifestHash == GameplayTagManager.CurrentManifestHash &&
-                MinimumSupportedProtocolVersion <= GameplayTagNetSerializer.CurrentProtocolVersion &&
-                CurrentProtocolVersion >= GameplayTagNetSerializer.MinimumSupportedProtocolVersion;
+         return NetworkProtocolHandshake.IsCompatible(
+            this,
+            GameplayTagsNetworkProtocol.Module,
+            GameplayTagManager.CurrentManifestHash,
+            requireDomainStateMatch: true);
       }
 
       public static GameplayTagManifestHandshakeMessage CreateLocal()
       {
          return new GameplayTagManifestHandshakeMessage(
+            GameplayTagsNetworkProtocol.ProtocolFingerprint,
             GameplayTagManager.CurrentManifestHash,
             GameplayTagNetSerializer.MinimumSupportedProtocolVersion,
             GameplayTagNetSerializer.CurrentProtocolVersion);
@@ -125,56 +136,57 @@ namespace CycloneGames.GameplayTags.Networking
          MESSAGE_ID_MAX,
          NetworkMessageKind.Module);
 
+      public static readonly NetworkProtocolManifest DefaultManifest = CreateProtocolManifest();
+
+      public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
+         DefaultManifest,
+         NetworkProtocolVersion.Create(
+            GameplayTagNetSerializer.CurrentProtocolVersion,
+            GameplayTagNetSerializer.MinimumSupportedProtocolVersion));
+
+      public static ulong ProtocolFingerprint => Module.Fingerprint;
+
       public static bool IsGameplayTagsMessageId(ushort messageId)
       {
-         return MessageRange.Contains(messageId);
+         return Module.ContainsMessageId(messageId);
+      }
+
+      public static bool IsSupportedProtocolVersion(byte protocolVersion)
+      {
+         return Module.IsSupportedProtocolVersion(protocolVersion);
       }
 
       public static bool TryRegisterMessageCatalog(INetworkManager networkManager)
       {
-         if (networkManager == null)
-            return false;
-
-         if (networkManager is not INetworkRuntimeContextProvider provider || provider.RuntimeContext == null)
-            return false;
-
-         if (!provider.RuntimeContext.TryGetService(out INetworkMessageCatalog catalog))
-            return false;
-
-         RegisterMessageCatalog(catalog);
-         return true;
+         return Module.TryRegister(networkManager);
       }
 
       public static void RegisterMessageCatalog(INetworkMessageCatalog catalog)
       {
-         if (catalog == null)
-            throw new ArgumentNullException(nameof(catalog));
+         Module.Register(catalog);
+      }
 
-         catalog.RegisterModuleRange(MessageRange);
+      public static NetworkProtocolManifest CreateProtocolManifest()
+      {
+         var builder = new NetworkProtocolManifestBuilder(
+            MessageOwner,
+            MESSAGE_ID_BASE,
+            MESSAGE_ID_MAX,
+            NetworkMessageKind.Module)
+         {
+            ProtocolId = "CycloneGames.GameplayTags.Networking",
+            CurrentVersion = GameplayTagNetSerializer.CurrentProtocolVersion,
+            MinimumSupportedVersion = GameplayTagNetSerializer.MinimumSupportedProtocolVersion
+         };
 
-         RegisterMessage<GameplayTagManifestHandshakeMessage>(
-            catalog,
-            MsgManifestHandshake,
-            NetworkChannel.Reliable,
-            32);
+         builder
+            .SetMetadata("module", "GameplayTags")
+            .AddMessage<GameplayTagManifestHandshakeMessage>(MsgManifestHandshake, NetworkChannel.Reliable, 32)
+            .AddMessage<GameplayTagPayloadMessage>(MsgFullState, NetworkChannel.Reliable, DefaultMaxFullStatePayloadSize)
+            .AddMessage<GameplayTagPayloadMessage>(MsgDelta, NetworkChannel.Reliable, DefaultMaxDeltaPayloadSize)
+            .AddMessage<GameplayTagFullStateRequestMessage>(MsgFullStateRequest, NetworkChannel.Reliable, 32);
 
-         RegisterMessage<GameplayTagPayloadMessage>(
-            catalog,
-            MsgFullState,
-            NetworkChannel.Reliable,
-            DefaultMaxFullStatePayloadSize);
-
-         RegisterMessage<GameplayTagPayloadMessage>(
-            catalog,
-            MsgDelta,
-            NetworkChannel.Reliable,
-            DefaultMaxDeltaPayloadSize);
-
-         RegisterMessage<GameplayTagFullStateRequestMessage>(
-            catalog,
-            MsgFullStateRequest,
-            NetworkChannel.Reliable,
-            32);
+         return builder.Build();
       }
 
       public static void RegisterMessage<T>(
@@ -183,39 +195,7 @@ namespace CycloneGames.GameplayTags.Networking
          NetworkChannel channel = NetworkChannel.Reliable,
          int maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize) where T : struct
       {
-         if (catalog == null)
-            throw new ArgumentNullException(nameof(catalog));
-
-         if (!IsGameplayTagsMessageId(messageId))
-         {
-            throw new ArgumentOutOfRangeException(
-               nameof(messageId),
-               messageId,
-               $"GameplayTags message ids must be inside {MessageRange}.");
-         }
-
-         NetworkMessageDescriptor descriptor = NetworkMessageDescriptor.Create<T>(
-            messageId,
-            MessageOwner,
-            NetworkMessageKind.Module,
-            channel,
-            maxPayloadSize);
-
-         if (catalog.TryRegister(descriptor))
-            return;
-
-         if (catalog.TryGet(messageId, out NetworkMessageDescriptor existing)
-             && existing.SchemaHash == descriptor.SchemaHash
-             && string.Equals(existing.Owner, descriptor.Owner, StringComparison.Ordinal)
-             && string.Equals(existing.Name, descriptor.Name, StringComparison.Ordinal)
-             && existing.Kind == descriptor.Kind
-             && existing.DefaultChannel == descriptor.DefaultChannel
-             && existing.MaxPayloadSize == descriptor.MaxPayloadSize)
-         {
-            return;
-         }
-
-         throw new InvalidOperationException($"Message id {messageId} is already registered by {existing.Owner}:{existing.Name}.");
+         Module.RegisterMessage<T>(catalog, messageId, channel, maxPayloadSize);
       }
 
       public static GameplayTagPayloadMessage CreateFullStateMessage(

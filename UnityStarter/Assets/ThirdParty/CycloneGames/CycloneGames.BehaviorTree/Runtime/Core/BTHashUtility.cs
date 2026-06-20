@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
@@ -16,8 +17,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
     /// </summary>
     public static class BTHash
     {
-        private const uint FNV_OFFSET_BASIS = 2166136261u;
-        private const uint FNV_PRIME = 16777619u;
+        private const uint FNV_OFFSET_BASIS = Fnv1a32.OffsetBasis;
+        private const uint FNV_PRIME = Fnv1a32.Prime;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int FNV1A(string value)

@@ -1,3 +1,5 @@
+using CycloneGames.Hash.Core;
+
 namespace CycloneGames.RPGFoundation.Interaction.Core
 {
     public static class InteractionStableId
@@ -15,8 +17,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
                 return None;
             }
 
-            const ulong offsetBasis = 14695981039346656037UL;
-            const ulong prime = 1099511628211UL;
+            const ulong offsetBasis = Fnv1a64.OffsetBasis;
+            const ulong prime = Fnv1a64.Prime;
 
             ulong hash = offsetBasis;
             for (int i = 0; i < value.Length; i++)

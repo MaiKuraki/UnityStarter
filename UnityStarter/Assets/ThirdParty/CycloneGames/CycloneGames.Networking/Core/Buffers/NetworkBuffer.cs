@@ -105,6 +105,25 @@ namespace CycloneGames.Networking.Buffers
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void WriteLong(long value)
+        {
+            WriteULong(unchecked((ulong)value));
+        }
+
+        public void WriteULong(ulong value)
+        {
+            EnsureCapacity(_position + 8);
+            _buffer[_position++] = (byte)value;
+            _buffer[_position++] = (byte)(value >> 8);
+            _buffer[_position++] = (byte)(value >> 16);
+            _buffer[_position++] = (byte)(value >> 24);
+            _buffer[_position++] = (byte)(value >> 32);
+            _buffer[_position++] = (byte)(value >> 40);
+            _buffer[_position++] = (byte)(value >> 48);
+            _buffer[_position++] = (byte)(value >> 56);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public unsafe void WriteFloat(float value)
         {
             WriteUInt(*(uint*)&value);
@@ -134,6 +153,17 @@ namespace CycloneGames.Networking.Buffers
         {
             _position = 0;
             _length = 0;
+        }
+
+        /// <summary>
+        /// Flips the buffer from write mode to read mode: the bytes written so far (indices 0..Position) become
+        /// the readable region and the read cursor returns to the start. Use this to read back content that was
+        /// just written into the same buffer, e.g. in-process / loopback messaging or serialization round-trips.
+        /// </summary>
+        public void FlipForRead()
+        {
+            _length = _position;
+            _position = 0;
         }
 
         // INetReader Implementation
@@ -183,6 +213,28 @@ namespace CycloneGames.Networking.Buffers
         public uint ReadUInt()
         {
             return (uint)ReadInt();
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public long ReadLong()
+        {
+            return unchecked((long)ReadULong());
+        }
+
+        public ulong ReadULong()
+        {
+            if (_position + 8 > _length)
+                throw new InvalidOperationException("Buffer underflow");
+            ulong value = (ulong)_buffer[_position]
+                | ((ulong)_buffer[_position + 1] << 8)
+                | ((ulong)_buffer[_position + 2] << 16)
+                | ((ulong)_buffer[_position + 3] << 24)
+                | ((ulong)_buffer[_position + 4] << 32)
+                | ((ulong)_buffer[_position + 5] << 40)
+                | ((ulong)_buffer[_position + 6] << 48)
+                | ((ulong)_buffer[_position + 7] << 56);
+            _position += 8;
+            return value;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

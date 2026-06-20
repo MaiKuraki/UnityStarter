@@ -115,6 +115,7 @@ flowchart LR
 
 - Unity 2022.3 LTS or later
 - .NET Standard 2.1 / .NET Framework 4.x
+- `com.cyclone-games.hash` (required) — deterministic blackboard and runtime state hashing
 
 ### Optional Dependencies
 
@@ -1011,7 +1012,7 @@ Client runs its own copy, server sends hash to verify. On mismatch → full resy
 
 ```csharp
 // Server sends its blackboard hash each tick
-uint serverHash = serverBlackboard.ComputeHash();
+ulong serverHash = serverBlackboard.ComputeHash();
 SendToClient(serverHash);
 
 // Client checks for desync
@@ -1051,6 +1052,8 @@ For network reproducibility, use `BTDeterministic.DeterministicRNG`:
 var rng = new BTDeterministic.DeterministicRNG(seed: 42);
 int index = rng.NextInt(0, 5); // same result on server and client with same seed
 ```
+
+Runtime nodes that consume random values (`RuntimeWaitNode`, `RuntimeWaitSuccessNode`, `RuntimeRepeatNode`, `RuntimeServiceNode`, and the weighted `RuntimeProbabilityBranch` fallback path) resolve an optional `IRuntimeBTRandomProvider` from the blackboard service registry. Register a deterministic provider for networked or replayed trees; when none is registered they fall back to `UnityEngine.Random` (non-deterministic, editor/standalone default).
 
 ---
 
@@ -1366,7 +1369,7 @@ public class RuntimeBlackboard : IDisposable
     // Serialization (network)
     void WriteTo(BinaryWriter writer);
     void ReadFrom(BinaryReader reader);
-    uint ComputeHash();
+    ulong ComputeHash();
 
     // Hierarchy
     RuntimeBlackboard Parent { get; set; }
