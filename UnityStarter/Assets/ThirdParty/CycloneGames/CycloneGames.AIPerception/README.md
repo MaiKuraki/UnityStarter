@@ -28,7 +28,8 @@ Production-grade AI perception system with Burst/Jobs optimization, 0GC design, 
 15. [Performance & Scaling](#performance--scaling)
 16. [Platform Support](#platform-support)
 17. [API Reference](#api-reference)
-18. [Troubleshooting](#troubleshooting)
+18. [Testing](#testing)
+19. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -48,6 +49,12 @@ Production-grade AI perception system with Burst/Jobs optimization, 0GC design, 
 | **Type System** | Extensible integer-based perceptible classification |
 | **Cross-Platform** | WebGL fallback, mobile-optimized, console-ready |
 | **Capacity Control** | Configurable registry capacity with auto-grow and warning thresholds |
+
+---
+
+## Optional Networking
+
+Network replication lives in the optional sibling package `CycloneGames.AIPerception.Networking`. The base perception package does not depend on `CycloneGames.Networking`; projects that need multiplayer perception can add the networking package to get stable message IDs, detection events, memory snapshots, authority helpers, and interest-filtered observer selection.
 
 ---
 
@@ -635,6 +642,19 @@ DetectionResult r = s.GetResult(index);
 // Debug
 perception.ShowDebugOverlay = true;
 ```
+
+---
+
+## Testing
+
+EditMode coverage is provided by `CycloneGames.AIPerception.Tests.Editor`.
+
+Run these tests after changing registry handle lifecycle, perceptible data export, spatial filtering, sensor-facing data contracts, or Burst job inputs:
+
+1. Open Unity and let the project reimport assemblies.
+2. Confirm the Console has no compile errors.
+3. Open Test Runner in EditMode.
+4. Run `CycloneGames.AIPerception.Tests.Editor`.
 
 ---
 

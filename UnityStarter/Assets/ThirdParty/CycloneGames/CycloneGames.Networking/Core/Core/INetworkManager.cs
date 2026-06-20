@@ -95,6 +95,11 @@ namespace CycloneGames.Networking
             return messageId >= Min && messageId <= Max;
         }
 
+        public bool Overlaps(in NetworkMessageIdRange other)
+        {
+            return Min <= other.Max && other.Min <= Max;
+        }
+
         public override string ToString()
         {
             return string.IsNullOrEmpty(Name)
@@ -158,6 +163,49 @@ namespace CycloneGames.Networking
             range = default;
             return false;
         }
+
+        public static bool TryGetKnownRange(NetworkMessageKind kind, out NetworkMessageIdRange range)
+        {
+            if ((kind & NetworkMessageKind.System) != 0)
+            {
+                range = System;
+                return true;
+            }
+
+            if ((kind & NetworkMessageKind.Rpc) != 0)
+            {
+                range = Rpc;
+                return true;
+            }
+
+            if ((kind & NetworkMessageKind.Module) != 0)
+            {
+                range = Module;
+                return true;
+            }
+
+            if ((kind & NetworkMessageKind.User) != 0)
+            {
+                range = User;
+                return true;
+            }
+
+            range = default;
+            return false;
+        }
+
+        public static bool ContainsRange(in NetworkMessageIdRange range)
+        {
+            return TryGetKnownRange(range.Kind, out NetworkMessageIdRange knownRange)
+                   && knownRange.Contains(range.Min)
+                   && knownRange.Contains(range.Max);
+        }
+
+        public static bool IsMessageIdCompatible(ushort messageId, NetworkMessageKind kind)
+        {
+            return TryGetKnownRange(kind, out NetworkMessageIdRange range)
+                   && range.Contains(messageId);
+        }
     }
 
     public readonly struct NetworkMessageDescriptor
@@ -216,8 +264,12 @@ namespace CycloneGames.Networking
     public interface INetworkMessageCatalog
     {
         int Count { get; }
+        int RangeCount { get; }
         int ModuleRangeCount { get; }
         ulong ProtocolFingerprint { get; }
+        void RegisterRange(in NetworkMessageIdRange range);
+        bool TryRegisterRange(in NetworkMessageIdRange range);
+        bool TryGetRegisteredRange(ushort messageId, out NetworkMessageIdRange range);
         void RegisterModuleRange(in NetworkMessageIdRange range);
         bool TryRegisterModuleRange(in NetworkMessageIdRange range);
         bool TryGetRegisteredModuleRange(ushort messageId, out NetworkMessageIdRange range);
@@ -235,25 +287,25 @@ namespace CycloneGames.Networking
         private readonly object _syncRoot = new object();
         private readonly Dictionary<ushort, NetworkMessageDescriptor> _messages;
         private readonly List<ushort> _messageIds;
-        private readonly List<NetworkMessageIdRange> _moduleRanges;
+        private readonly List<NetworkMessageIdRange> _ranges;
         private bool _fingerprintDirty = true;
         private ulong _protocolFingerprint = FnvOffsetBasis;
 
-        public NetworkMessageCatalog(int capacity = 128, int moduleRangeCapacity = 16)
+        public NetworkMessageCatalog(int capacity = 128, int rangeCapacity = 16)
         {
             if (capacity < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(capacity));
             }
 
-            if (moduleRangeCapacity < 0)
+            if (rangeCapacity < 0)
             {
-                throw new ArgumentOutOfRangeException(nameof(moduleRangeCapacity));
+                throw new ArgumentOutOfRangeException(nameof(rangeCapacity));
             }
 
             _messages = new Dictionary<ushort, NetworkMessageDescriptor>(capacity);
             _messageIds = new List<ushort>(capacity);
-            _moduleRanges = new List<NetworkMessageIdRange>(moduleRangeCapacity);
+            _ranges = new List<NetworkMessageIdRange>(rangeCapacity);
         }
 
         public int Count
@@ -283,15 +335,92 @@ namespace CycloneGames.Networking
             }
         }
 
+        public int RangeCount
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _ranges.Count;
+                }
+            }
+        }
+
         public int ModuleRangeCount
         {
             get
             {
                 lock (_syncRoot)
                 {
-                    return _moduleRanges.Count;
+                    int count = 0;
+                    for (int i = 0; i < _ranges.Count; i++)
+                    {
+                        if ((_ranges[i].Kind & NetworkMessageKind.Module) != 0)
+                        {
+                            count++;
+                        }
+                    }
+
+                    return count;
                 }
             }
+        }
+
+        public void RegisterRange(in NetworkMessageIdRange range)
+        {
+            if (!TryRegisterRange(range))
+            {
+                throw new InvalidOperationException($"Protocol message range {range} conflicts with an existing protocol range.");
+            }
+        }
+
+        public bool TryRegisterRange(in NetworkMessageIdRange range)
+        {
+            if (!IsValidProtocolRange(range))
+            {
+                throw new ArgumentException("Protocol message range is invalid.", nameof(range));
+            }
+
+            lock (_syncRoot)
+            {
+                for (int i = 0; i < _ranges.Count; i++)
+                {
+                    NetworkMessageIdRange existing = _ranges[i];
+                    if (IsSameRange(existing, range))
+                    {
+                        return true;
+                    }
+
+                    if (existing.Overlaps(range))
+                    {
+                        return false;
+                    }
+                }
+
+                _ranges.Add(range);
+                _ranges.Sort(CompareRangesByMin);
+                _fingerprintDirty = true;
+                return true;
+            }
+        }
+
+        public bool TryGetRegisteredRange(ushort messageId, out NetworkMessageIdRange range)
+        {
+            lock (_syncRoot)
+            {
+                for (int i = 0; i < _ranges.Count; i++)
+                {
+                    NetworkMessageIdRange candidate = _ranges[i];
+                    if (candidate.Contains(messageId))
+                    {
+                        range = candidate;
+                        return true;
+                    }
+                }
+            }
+
+            range = default;
+            return false;
         }
 
         public void RegisterModuleRange(in NetworkMessageIdRange range)
@@ -309,46 +438,17 @@ namespace CycloneGames.Networking
                 throw new ArgumentException("Module message range is invalid.", nameof(range));
             }
 
-            lock (_syncRoot)
-            {
-                for (int i = 0; i < _moduleRanges.Count; i++)
-                {
-                    NetworkMessageIdRange existing = _moduleRanges[i];
-                    if (IsSameRange(existing, range))
-                    {
-                        return true;
-                    }
-
-                    if (RangesOverlap(existing, range))
-                    {
-                        return false;
-                    }
-                }
-
-                _moduleRanges.Add(range);
-                _moduleRanges.Sort(CompareRangesByMin);
-                _fingerprintDirty = true;
-                return true;
-            }
+            return TryRegisterRange(range);
         }
 
         public bool TryGetRegisteredModuleRange(ushort messageId, out NetworkMessageIdRange range)
         {
-            lock (_syncRoot)
+            if (!TryGetRegisteredRange(messageId, out range))
             {
-                for (int i = 0; i < _moduleRanges.Count; i++)
-                {
-                    NetworkMessageIdRange candidate = _moduleRanges[i];
-                    if (candidate.Contains(messageId))
-                    {
-                        range = candidate;
-                        return true;
-                    }
-                }
+                return false;
             }
 
-            range = default;
-            return false;
+            return (range.Kind & NetworkMessageKind.Module) != 0;
         }
 
         public void Register(in NetworkMessageDescriptor descriptor)
@@ -396,7 +496,7 @@ namespace CycloneGames.Networking
             {
                 _messages.Clear();
                 _messageIds.Clear();
-                _moduleRanges.Clear();
+                _ranges.Clear();
                 _protocolFingerprint = FnvOffsetBasis;
                 _fingerprintDirty = false;
             }
@@ -436,9 +536,9 @@ namespace CycloneGames.Networking
                 hash = Combine(hash, ComputeStableHash(descriptor.Name));
             }
 
-            for (int i = 0; i < _moduleRanges.Count; i++)
+            for (int i = 0; i < _ranges.Count; i++)
             {
-                NetworkMessageIdRange range = _moduleRanges[i];
+                NetworkMessageIdRange range = _ranges[i];
                 hash = Combine(hash, range.Min);
                 hash = Combine(hash, range.Max);
                 hash = Combine(hash, (ushort)range.Kind);
@@ -452,14 +552,14 @@ namespace CycloneGames.Networking
         private static bool IsValidModuleRange(in NetworkMessageIdRange range)
         {
             return range.Kind == NetworkMessageKind.Module
-                   && !string.IsNullOrEmpty(range.Name)
-                   && NetworkMessageRanges.Module.Contains(range.Min)
-                   && NetworkMessageRanges.Module.Contains(range.Max);
+                   && IsValidProtocolRange(range);
         }
 
-        private static bool RangesOverlap(in NetworkMessageIdRange left, in NetworkMessageIdRange right)
+        private static bool IsValidProtocolRange(in NetworkMessageIdRange range)
         {
-            return left.Min <= right.Max && right.Min <= left.Max;
+            return !string.IsNullOrEmpty(range.Name)
+                   && range.Kind != NetworkMessageKind.None
+                   && NetworkMessageRanges.ContainsRange(range);
         }
 
         private static bool IsSameRange(in NetworkMessageIdRange left, in NetworkMessageIdRange right)
@@ -472,23 +572,27 @@ namespace CycloneGames.Networking
 
         private void ValidateDescriptorRangeLocked(in NetworkMessageDescriptor descriptor)
         {
-            bool isModuleDescriptor = (descriptor.Kind & NetworkMessageKind.Module) != 0;
-            if (!isModuleDescriptor)
+            if (!NetworkMessageRanges.IsMessageIdCompatible(descriptor.MessageId, descriptor.Kind))
+            {
+                throw new ArgumentException(
+                    $"Message id {descriptor.MessageId} is outside the reserved range for kind {descriptor.Kind}.",
+                    nameof(descriptor));
+            }
+
+            if (!RequiresRegisteredOwnerRange(descriptor.Kind))
             {
                 return;
             }
 
-            if (!NetworkMessageRanges.Module.Contains(descriptor.MessageId))
+            for (int i = 0; i < _ranges.Count; i++)
             {
-                throw new ArgumentException(
-                    "Module message descriptors must use the module message id range.",
-                    nameof(descriptor));
-            }
-
-            for (int i = 0; i < _moduleRanges.Count; i++)
-            {
-                NetworkMessageIdRange range = _moduleRanges[i];
+                NetworkMessageIdRange range = _ranges[i];
                 if (!range.Contains(descriptor.MessageId))
+                {
+                    continue;
+                }
+
+                if ((descriptor.Kind & range.Kind) == 0)
                 {
                     continue;
                 }
@@ -496,7 +600,7 @@ namespace CycloneGames.Networking
                 if (!string.Equals(range.Name, descriptor.Owner, StringComparison.Ordinal))
                 {
                     throw new ArgumentException(
-                        $"Module message id {descriptor.MessageId} belongs to {range.Name}, not {descriptor.Owner}.",
+                        $"Message id {descriptor.MessageId} belongs to {range.Name}, not {descriptor.Owner}.",
                         nameof(descriptor));
                 }
 
@@ -504,8 +608,14 @@ namespace CycloneGames.Networking
             }
 
             throw new ArgumentException(
-                $"Module message id {descriptor.MessageId} has no registered module range.",
+                $"Message id {descriptor.MessageId} has no registered owner range.",
                 nameof(descriptor));
+        }
+
+        private static bool RequiresRegisteredOwnerRange(NetworkMessageKind kind)
+        {
+            return (kind & NetworkMessageKind.Module) != 0
+                   || (kind & NetworkMessageKind.User) != 0;
         }
 
         private static int CompareRangesByMin(NetworkMessageIdRange left, NetworkMessageIdRange right)

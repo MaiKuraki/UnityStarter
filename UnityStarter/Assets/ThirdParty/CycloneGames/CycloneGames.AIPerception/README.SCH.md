@@ -28,7 +28,8 @@
 15. [性能与规模](#性能与规模)
 16. [平台支持](#平台支持)
 17. [API 参考](#api-参考)
-18. [故障排除](#故障排除)
+18. [测试](#测试)
+19. [故障排除](#故障排除)
 
 ---
 
@@ -48,6 +49,12 @@
 | **类型系统** | 基于整数的可扩展分类系统 |
 | **跨平台** | WebGL 降级、移动端优化、主机就绪 |
 | **容量控制** | 可配置注册表容量，自动扩容 + 阈值告警 |
+
+---
+
+## 可选网络支持
+
+网络复制位于可选的同级包 `CycloneGames.AIPerception.Networking`。基础感知包不依赖 `CycloneGames.Networking`；需要多人感知同步的项目可以添加网络包，以获得稳定 message id、detection event、memory snapshot、authority helper 和基于兴趣过滤的观察者筛选。
 
 ---
 
@@ -628,6 +635,19 @@ DetectionResult r = s.GetResult(index);
 // 调试
 perception.ShowDebugOverlay = true;
 ```
+
+---
+
+## 测试
+
+EditMode 覆盖由 `CycloneGames.AIPerception.Tests.Editor` 提供。
+
+修改 registry 句柄生命周期、perceptible data 导出、空间过滤、传感器数据契约或 Burst job 输入后，运行以下验证：
+
+1. 打开 Unity，等待项目重新导入 assemblies。
+2. 确认 Console 没有编译错误。
+3. 在 Test Runner 中切换到 EditMode。
+4. 运行 `CycloneGames.AIPerception.Tests.Editor`。
 
 ---
 

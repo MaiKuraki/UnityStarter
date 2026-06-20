@@ -2,7 +2,9 @@
 
 [English](./README.md) | 简体中文
 
-`CycloneGames.GameplayTags.Networking` 是 `CycloneGames.GameplayTags` 的可选 Cyclone Networking 桥接包。它让基础 GameplayTags 包在没有 `CycloneGames.Networking` 时仍可独立使用，同时为使用 Cyclone Networking 的项目提供稳定 message ID、protocol catalog descriptor、manifest handshake message，以及 full/delta tag payload wrapper。
+`CycloneGames.GameplayTags.Networking` 是 `CycloneGames.GameplayTags` 面向 `CycloneGames.Networking` 的网络桥接包。该包提供协议元数据和与传输无关的消息 DTO，用于通过 Cyclone Networking 同步 gameplay tag container。
+
+基础包 `CycloneGames.GameplayTags` 不依赖 `CycloneGames.Networking`。未引用网络包的项目直接使用 GameplayTags 基础能力，不需要安装本桥接包。
 
 ## 包结构
 
@@ -20,53 +22,123 @@ CycloneGames.GameplayTags.Networking/
 
 | Assembly | 职责 | Unity 依赖 |
 | --- | --- | --- |
-| `CycloneGames.GameplayTags.Networking.Core` | Message ID、message catalog 注册、manifest handshake、full/delta payload wrapper | 无 |
-| `CycloneGames.GameplayTags.Networking.Tests.Editor` | Integration regression coverage | 无 |
+| `CycloneGames.GameplayTags.Networking.Core` | 消息范围、catalog 注册、manifest handshake、full-state 消息、delta 消息、full-state request DTO。 | 无 |
+| `CycloneGames.GameplayTags.Networking.Tests.Editor` | 覆盖协议注册和 payload 行为的 EditMode 测试。 | 无 |
 
-Runtime assembly 直接引用 `CycloneGames.GameplayTags.Core` 和 `CycloneGames.Networking.Core`。它不使用 PlayerSettings scripting define symbols、service locator、Unity 生命周期钩子，或 package-driven `CYCLONE_*` 编译门控。不包含 `CycloneGames.Networking` 的项目应省略这个包，并直接使用 `CycloneGames.GameplayTags`。
+Core assembly 引用 `CycloneGames.GameplayTags.Core` 和 `CycloneGames.Networking.Core`。它不使用 PlayerSettings scripting define symbols、Unity 生命周期、后端 SDK 类型或特定 DI 容器。
+
+## 核心概念
+
+| 类型 | 作用 |
+| --- | --- |
+| `GameplayTagManifestHandshakeMessage` | 携带本地 GameplayTags manifest hash 和支持的 serializer version 范围。 |
+| `GameplayTagPayloadMessage` | 为 full 或 delta GameplayTags payload 增加 target id、sequence、protocol version 和 manifest hash。 |
+| `GameplayTagFullStateRequestMessage` | 请求某个 target network object 的完整 tag container 刷新。 |
+| `GameplayTagsNetworkProtocol` | 拥有 GameplayTags 消息范围，并向 `INetworkMessageCatalog` 注册 descriptor。 |
+
+## State Sync 流程
+
+```mermaid
+graph LR
+    Manifest["GameplayTagManifestHandshakeMessage"]
+    Container["GameplayTagContainer"]
+    Serializer["GameplayTagNetSerializer"]
+    Payload["GameplayTagPayloadMessage"]
+    Manager["INetworkManager"]
+    Receiver["远端 tag state consumer"]
+
+    Manifest --> Receiver
+    Container --> Serializer
+    Serializer --> Payload
+    Payload --> Manager
+    Manager --> Receiver
+```
 
 ## 协议
 
-`GameplayTagsNetworkProtocol` 在通用 `NetworkMessageRanges.Module` 空间内声明自己的 package-owned 子区间（`12000-12999`），并把该 ownership 注册到 `INetworkMessageCatalog`。
+`GameplayTagsNetworkProtocol` 在 Cyclone module range 中拥有 `12000-12999` 消息 ID。
 
-| Message | ID | 用途 |
-| --- | --- | --- |
-| `MsgManifestHandshake` | `12000` | 在应用 tag state 前交换 `GameplayTagManager.CurrentManifestHash` 和支持的 serializer version。 |
-| `MsgFullState` | `12001` | 为目标 network object 发送完整 `GameplayTagNetSerializer` payload。 |
-| `MsgDelta` | `12002` | 为目标 network object 发送 delta payload。 |
-| `MsgFullStateRequest` | `12003` | 在 join、reconnect、manifest reload 或 packet recovery 后请求完整刷新。 |
+| Message | ID | Channel | Payload |
+| --- | ---: | --- | --- |
+| `MsgManifestHandshake` | `12000` | Reliable | `GameplayTagManifestHandshakeMessage` |
+| `MsgFullState` | `12001` | Reliable | `GameplayTagPayloadMessage` |
+| `MsgDelta` | `12002` | Reliable | `GameplayTagPayloadMessage` |
+| `MsgFullStateRequest` | `12003` | Reliable | `GameplayTagFullStateRequestMessage` |
 
-## 使用方式
+当已存在的 descriptor 拥有相同 owner、类型名、schema hash、kind、channel 和 payload limit 时，catalog 注册是幂等的。
+
+## 快速接入
+
+在网络 composition 阶段注册消息 catalog：
 
 ```csharp
-using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayTags.Networking;
 using CycloneGames.Networking;
 
-public sealed class TagsNetworkComposition
+public static class GameplayTagNetworkInstaller
 {
-    public void Configure(INetworkMessageCatalog catalog)
+    public static void Configure(INetworkMessageCatalog catalog)
     {
         GameplayTagsNetworkProtocol.RegisterMessageCatalog(catalog);
-    }
-
-    public GameplayTagPayloadMessage CreateDelta(uint targetNetworkId, GameplayTagContainer current, GameplayTagContainer previous)
-    {
-        byte[] payload = GameplayTagNetSerializer.SerializeDelta(current, previous);
-        return GameplayTagsNetworkProtocol.CreateDeltaMessage(targetNetworkId, payload);
     }
 }
 ```
 
-当 manager 暴露 `INetworkRuntimeContextProvider` 时，非 DI bootstrap code 可以使用 `TryRegisterMessageCatalog(INetworkManager)`。DI composition root 可以直接向 `INetworkMessageCatalog` 注册。
+非 DI bootstrap 在 network manager 暴露 `INetworkRuntimeContextProvider`，且 runtime context 中包含 `INetworkMessageCatalog` 服务后调用 `TryRegisterMessageCatalog(INetworkManager)`：
 
-## 持久化行为
+```csharp
+using CycloneGames.GameplayTags.Networking;
+using CycloneGames.Networking;
 
-这个包不会写入文件、资产、偏好、缓存数据或运行时存档。它只定义运行时协议元数据和 message payload struct。
+public static class GameplayTagNetworkBootstrap
+{
+    public static bool TryConfigure(INetworkManager manager)
+    {
+        return GameplayTagsNetworkProtocol.TryRegisterMessageCatalog(manager);
+    }
+}
+```
+
+## Payload 流程
+
+先使用 `GameplayTagNetSerializer` 创建 payload bytes，再用协议 helper 包装：
+
+```csharp
+using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Networking;
+
+public static class GameplayTagPayloadFactory
+{
+    public static GameplayTagPayloadMessage CreateDelta(
+        uint targetNetworkId,
+        GameplayTagContainer current,
+        GameplayTagContainer previous,
+        ushort sequence)
+    {
+        byte[] payload = GameplayTagNetSerializer.SerializeDelta(current, previous);
+        return GameplayTagsNetworkProtocol.CreateDeltaMessage(targetNetworkId, payload, sequence);
+    }
+}
+```
+
+`CreateFullStateMessage` 和 `CreateDeltaMessage` 会在构造 wrapper 前验证 serialized payload kind 与 network message kind 是否一致。
+
+## 扩展点
+
+- 项目自有 GameplayTags 消息放在项目 assembly 中，并通过 `NetworkMessageKind.User` manifest 注册。
+- 具体后端传输代码保留在 adapter 层；本包只定义可发送和接收的 DTO。
+- 应用远端 tag state 前，使用 `GameplayTagManifestHandshakeMessage.IsCompatibleWithLocalManifest()` 做 manifest 兼容性检查。
+
+## 持久化
+
+本包不写入文件、资产、偏好设置、缓存或运行时存档。Unity `.meta` 文件是资产元数据，随包进入版本控制。
 
 ## 验证
 
-- 构建 `CycloneGames.GameplayTags.Tests.Editor`。
-- Unity 刷新生成工程文件后，构建 `CycloneGames.GameplayTags.Networking.Tests.Editor`。
-- 构建 `CycloneGames.Networking.Tests.Editor`。
-- 在 Unity Editor 中运行 `CycloneGames.GameplayTags.Networking.Tests.Editor` EditMode tests。
+修改本包后运行以下检查：
+
+```text
+Unity Test Runner > EditMode > CycloneGames.GameplayTags.Networking.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.GameplayTags.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
+```

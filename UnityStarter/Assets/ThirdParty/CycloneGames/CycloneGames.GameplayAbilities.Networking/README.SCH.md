@@ -2,69 +2,124 @@
 
 [English](./README.md) | 简体中文
 
-`CycloneGames.GameplayAbilities.Networking` 用于把 `CycloneGames.GameplayAbilities` 接入 `CycloneGames.Networking`。它提供与传输层无关的 Ability 激活、预测确认/拒绝、Active Gameplay Effect、Attribute、Tag、状态元数据和 Full-State Recovery 复制能力。
+`CycloneGames.GameplayAbilities.Networking` 将 `CycloneGames.GameplayAbilities` 接入 `CycloneGames.Networking`。它提供与传输无关的 ability activation request、prediction confirmation/rejection、replicated gameplay effects、attribute update、gameplay tag update、full-state recovery 和 state synchronization metadata。
 
-这个包不会把 GameplayAbilities 直接绑定到 Mirror、Mirage、Nakama 或其他 SDK。它依赖 Cyclone 网络接口，因此同一套 GAS 网络层可以运行在任何提供 `INetworkManager` 和必要后端服务的网络实现之上。
+本包通过 `INetworkManager` 和 Cyclone runtime service 工作。Ability 代码不直接绑定 Mirror、Mirage、Nakama、Steam 或其他后端 SDK。
 
-## 模块能力
-
-- `NetworkedAbilityBridge` 负责 Ability RPC 和 GAS 复制消息。
-- `INetworkedASC` 作为 Ability System Component 的网络侧契约。
-- `GameplayAbilitiesNetworkedASCAdapter` 连接 Unity Runtime 的 `AbilitySystemComponent`。
-- 提供 Ability 激活、Effect 复制、Attribute 更新、Tag 更新、Multicast、Full State、Sync Metadata 等紧凑消息结构。
-- 提供 `GASNetworkSerializer` 和 `GASNetworkSerializerOptions`，用于有边界的确定性序列化。
-- 提供 `GASNetFixed`，用于网络中的 fixed-point raw value。
-- 提供 Full-State 授权策略和连接限流接口。
-- 提供状态 checksum 工具，用于 drift detection 和 reconnect validation。
-- 提供 Editor 诊断 preset 和 diagnostics window。
-
-## 目录结构
+## 包结构
 
 ```text
 CycloneGames.GameplayAbilities.Networking/
-  Core/             纯 C# bridge、messages、serializer、安全策略
-  Unity.Runtime/    Unity AbilitySystemComponent adapter
-  Editor/           Editor-only diagnostics 和 inspectors
-  Tests/Editor/     Bridge、serializer、policy、adapter 测试
+  Core/
+    AttributeSyncManager.cs
+    GASNetworkMessages.cs
+    GASNetworkSerializer.cs
+    GASNetworkStateChecksum.cs
+    NetworkedAbilityBridge.cs
+    INetworkedASC.cs
+    IGASFullStateAuthorizationPolicy.cs
+    OwnerOrObserverWithRateLimitPolicy.cs
+    InMemoryTokenBucketRateLimiter.cs
+    ...
+  Unity.Runtime/
+    DefaultGASNetIdRegistry.cs
+    GameplayAbilitiesNetworkedASCAdapter.cs
+    GASBridgeGameplayAbilitiesExtensions.cs
+    UnityGASNetLogger.cs
+    UnityGASNetTimeProvider.cs
+  Editor/
+    Diagnostics preset, diagnostics window, and inspectors
+  Tests/Editor/
+    Bridge, serializer, checksum, authorization, and adapter tests
 ```
 
-关键程序集：
+## 程序集边界
 
-| 程序集 | 说明 |
+| Assembly | 职责 |
 | --- | --- |
-| `CycloneGames.GameplayAbilities.Networking.Core` | 纯 C# 网络 bridge、消息结构、序列化器、checksum、安全策略和接口。 |
-| `CycloneGames.GameplayAbilities.Networking.Unity.Runtime` | Unity Runtime `AbilitySystemComponent` adapter。 |
-| `CycloneGames.GameplayAbilities.Networking.Unity.Editor` | Editor diagnostics window、preset 和 inspector。 |
-| `CycloneGames.GameplayAbilities.Networking.Tests.Editor` | Serializer、bridge、安全策略和 runtime adapter 测试。 |
+| `CycloneGames.GameplayAbilities.Networking.Core` | 纯 C# bridge、message DTO、serializer、checksum、full-state authorization、rate limiting 和接口。 |
+| `CycloneGames.GameplayAbilities.Networking.Unity.Runtime` | 将 Unity `AbilitySystemComponent` 适配为 `INetworkedASC`。 |
+| `CycloneGames.GameplayAbilities.Networking.Unity.Editor` | Editor diagnostics 和 authoring 支持。 |
+| `CycloneGames.GameplayAbilities.Networking.Tests.Editor` | 覆盖 bridge、serializer、security policy 和 runtime adapter 行为的 EditMode 测试。 |
 
-## 环境要求
+Core 代码依赖 Cyclone Networking 契约和 GameplayAbilities 数据契约。Unity 相关行为隔离在 `Unity.Runtime` 和 `Editor` assembly 中。
 
-- `com.cyclone-games.networking`。
-- `com.cyclone-games.gameplay-abilities`。
-- `com.cyclone-games.gameplay-tags`。
-- 一个通过 `CycloneGames.Networking` 注册的具体网络后端。
+## 核心概念
 
-Mirror 或 Nakama 等可选 SDK 会被 Editor 诊断识别，但本包仍应通过 Cyclone 接口接入。
+| 类型 | 作用 |
+| --- | --- |
+| `NetworkedAbilityBridge` | 主消息桥。负责注册 handler、发送 request、路由 replicated state，并按 network id 和 connection id 查找 ASC。 |
+| `INetworkedASC` | Ability System Component 的网络侧契约。 |
+| `INetworkedASCConnectionScopedFullState` | 可选契约，用于按 connection 过滤 full-state。 |
+| `GameplayAbilitiesNetworkedASCAdapter` | Unity runtime adapter，将 `AbilitySystemComponent` state 映射到 `INetworkedASC`。 |
+| `GASNetworkSerializer` | Serializer wrapper，用于有界 GAS array 和嵌套消息数据。 |
+| `GASNetworkSerializerOptions` | Ability、effect、attribute、tag、set-by-caller entry 的容量限制。 |
+| `AttributeSyncManager` | Server-side dirty attribute batching，以及 owner/public observer filtering。 |
+| `OwnerOrObserverWithRateLimitPolicy` | Full-state request authorization，支持 owner、observer 和可选 rate limiting。 |
+| `GASNetworkStateChecksum` | Full-state 和 drift validation 使用的 checksum helper。 |
 
-## 快速开始
+## Runtime 流程
 
-### 1. 创建 bridge
+```mermaid
+sequenceDiagram
+    participant ClientASC as Client INetworkedASC
+    participant Bridge as NetworkedAbilityBridge
+    participant Gameplay as Server gameplay code
+    participant ServerASC as Server INetworkedASC
+    participant ObserverASC as Observer INetworkedASC
 
-在网络 bootstrap 中创建 `NetworkedAbilityBridge`。传入来自 Mirror、Mirage、Nakama 或自定义后端 adapter 的 `INetworkManager`。
+    ClientASC->>Bridge: ClientRequestActivateAbility
+    Bridge->>Gameplay: OnAbilityActivateRequested
+    Gameplay->>Bridge: ServerConfirmActivation or ServerRejectActivation
+    Bridge->>ClientASC: OnServerConfirmActivation or OnServerRejectActivation
+    ServerASC->>Bridge: Capture replicated state
+    Bridge->>ObserverASC: Effects, attributes, tags, full state, metadata
+```
+
+## 协议
+
+`NetworkedAbilityBridge` 在 Cyclone module range 中拥有 `10000-10999` 消息 ID。
+
+| Message | ID | Payload |
+| --- | ---: | --- |
+| `MsgAbilityActivateRequest` | `10000` | `AbilityActivateRequest` |
+| `MsgAbilityActivateConfirm` | `10001` | `AbilityActivateConfirm` |
+| `MsgAbilityActivateReject` | `10002` | `AbilityActivateReject` |
+| `MsgAbilityEnd` | `10003` | `AbilityEndMessage` |
+| `MsgAbilityCancel` | `10004` | `AbilityCancelMessage` |
+| `MsgEffectApplied` | `10010` | `EffectReplicationData` |
+| `MsgEffectRemoved` | `10011` | `EffectRemoveData` |
+| `MsgEffectStackChanged` | `10012` | `EffectStackChangeData` |
+| `MsgEffectUpdated` | `10013` | `EffectUpdateData` |
+| `MsgAttributeUpdate` | `10020` | `AttributeUpdateData` |
+| `MsgTagUpdate` | `10025` | `TagUpdateData` |
+| `MsgAbilityMulticast` | `10030` | `AbilityMulticastData` |
+| `MsgFullState` | `10040` | `GASFullStateData` |
+| `MsgFullStateRequest` | `10041` | `FullStateRequest` |
+| `MsgStateSyncMetadata` | `10042` | `GASStateSyncMetadata` |
+
+当传入的 `INetworkManager` 暴露 `INetworkRuntimeContextProvider`，且 runtime context 中存在 `INetworkMessageCatalog` 服务时，bridge 会注册 catalog。
+
+## 快速接入
+
+在 networking bootstrap 中创建 bridge，并注册 handler 一次：
 
 ```csharp
+using System;
 using CycloneGames.GameplayAbilities.Networking;
 using CycloneGames.Networking;
 
-public sealed class GASNetworkBootstrap : System.IDisposable
+public sealed class AbilityNetworkBootstrap : IDisposable
 {
     private readonly NetworkedAbilityBridge _bridge;
 
-    public GASNetworkBootstrap(INetworkManager networkManager)
+    public AbilityNetworkBootstrap(INetworkManager networkManager)
     {
         _bridge = new NetworkedAbilityBridge(networkManager);
         _bridge.RegisterHandlers();
     }
+
+    public NetworkedAbilityBridge Bridge => _bridge;
 
     public void Dispose()
     {
@@ -73,28 +128,26 @@ public sealed class GASNetworkBootstrap : System.IDisposable
 }
 ```
 
-### 2. 注册网络化 Ability System Component
-
-每个拥有 Ability System Component 的网络 Actor 应提供一个稳定的 `networkId` 和一个 owner connection id。
+为每个 networked Ability System Component 注册稳定 network id 和 owner connection id：
 
 ```csharp
+using System;
 using CycloneGames.GameplayAbilities.Networking;
 using CycloneGames.GameplayAbilities.Runtime;
 
-public sealed class NetworkedAbilityOwner : System.IDisposable
+public sealed class AbilityNetworkOwner : IDisposable
 {
     private readonly NetworkedAbilityBridge _bridge;
     private readonly GameplayAbilitiesNetworkedASCAdapter _adapter;
 
-    public NetworkedAbilityOwner(
+    public AbilityNetworkOwner(
         NetworkedAbilityBridge bridge,
         AbilitySystemComponent asc,
         uint networkId,
         int ownerConnectionId)
     {
         _bridge = bridge;
-        _adapter = new GameplayAbilitiesNetworkedASCAdapter(asc, networkId, ownerConnectionId);
-        _bridge.RegisterASC(networkId, ownerConnectionId, _adapter);
+        _adapter = bridge.RegisterGameplayAbilitiesASC(asc, networkId, ownerConnectionId);
     }
 
     public void Dispose()
@@ -105,228 +158,152 @@ public sealed class NetworkedAbilityOwner : System.IDisposable
 }
 ```
 
-### 3. 拥有者客户端请求 Ability 激活
+## Ability Activation 流程
+
+拥有者客户端发送 activation request：
 
 ```csharp
+using CycloneGames.GameplayAbilities.Networking;
 using CycloneGames.Networking;
 
-public void ActivateAbility(
-    NetworkedAbilityBridge bridge,
-    int abilityIndex,
-    int predictionKey,
-    NetworkVector3 targetPosition,
-    NetworkVector3 direction,
-    uint targetNetworkId)
+public static class AbilityInputSender
 {
-    bridge.ClientRequestActivateAbility(
-        abilityIndex,
-        predictionKey,
-        targetPosition,
-        direction,
-        targetNetworkId);
+    public static void RequestActivation(
+        NetworkedAbilityBridge bridge,
+        int abilityIndex,
+        int predictionKey,
+        NetworkVector3 targetPosition,
+        NetworkVector3 direction,
+        uint targetNetworkId)
+    {
+        bridge.ClientRequestActivateAbility(
+            abilityIndex,
+            predictionKey,
+            targetPosition,
+            direction,
+            targetNetworkId);
+    }
 }
 ```
 
-服务器在 Gameplay 代码中校验请求，然后调用 `ServerConfirmActivation` 或 `ServerRejectActivation`。客户端根据确认或拒绝保留或回滚本地预测状态。
+Server-side gameplay layer 根据 ability rules 验证请求，然后调用 `ServerConfirmActivation` 或 `ServerRejectActivation`。Bridge 会将结果路由给已注册的 `INetworkedASC`。
 
-### 4. 服务器复制 Effect、Attribute 和 Tag
+## Effect、Attribute 与 Tag 复制
 
-服务器通过 bridge 把复制状态发送给 owner 或 observer connections：
+Bridge 暴露 server send 方法用于 replicated GAS state：
 
 ```csharp
-bridge.ServerReplicateEffectApplied(observers, targetNetworkId, effectData);
-bridge.ServerBroadcastAttributes(observers, targetNetworkId, attributeData);
-bridge.ServerSyncTags(observers, targetNetworkId, tagData);
+using System.Collections.Generic;
+using CycloneGames.GameplayAbilities.Networking;
+using CycloneGames.Networking;
+
+public static class AbilityReplicationSender
+{
+    public static void SendState(
+        NetworkedAbilityBridge bridge,
+        IReadOnlyList<INetConnection> observers,
+        uint targetNetworkId,
+        EffectReplicationData effect,
+        AttributeUpdateData attributes,
+        TagUpdateData tags)
+    {
+        bridge.ServerReplicateEffectApplied(observers, targetNetworkId, effect);
+        bridge.ServerBroadcastAttributes(observers, targetNetworkId, attributes);
+        bridge.ServerSyncTags(observers, targetNetworkId, tags);
+    }
+}
 ```
 
-`observers` 可以来自 GameplayFramework、兴趣管理系统或项目自己的房间/区域逻辑。
-
-## 主要 Runtime 类型
-
-### `NetworkedAbilityBridge`
-
-`NetworkedAbilityBridge` 是 GAS 网络桥接中心。它负责消息注册、类型化 RPC 收发、按 connection id 或 network id 查找 ASC、处理 full-state 请求，并把事件转发给 Gameplay 代码。
-
-默认 message id：
-
-| Message | Id |
-| --- | ---: |
-| `MsgAbilityActivateRequest` | 10000 |
-| `MsgAbilityActivateConfirm` | 10001 |
-| `MsgAbilityActivateReject` | 10002 |
-| `MsgAbilityEnd` | 10003 |
-| `MsgAbilityCancel` | 10004 |
-| `MsgEffectApplied` | 10010 |
-| `MsgEffectRemoved` | 10011 |
-| `MsgEffectStackChanged` | 10012 |
-| `MsgEffectUpdated` | 10013 |
-| `MsgAttributeUpdate` | 10020 |
-| `MsgTagUpdate` | 10025 |
-| `MsgAbilityMulticast` | 10030 |
-| `MsgFullState` | 10040 |
-| `MsgFullStateRequest` | 10041 |
-| `MsgStateSyncMetadata` | 10042 |
-
-这些 id 位于通用 `NetworkMessageRanges.Module` 空间中的 `NetworkedAbilityBridge.MessageRange` package-owned 子区间（`10000-10999`）；当 runtime context 暴露 `INetworkMessageCatalog` 时，区间和 descriptor 会自动注册进去。项目应维护自己的 message id 分配表，避免与已注册的 module range 冲突。
-
-### `INetworkedASC`
-
-`INetworkedASC` 是 Ability System Component 的网络侧契约。它接收服务端确认、拒绝、复制 effect、attribute update、tag update、multicast、full state 和 state metadata。
-
-纯 C# 服务端测试或自定义 Ability Runtime 可以直接实现这个接口。Unity Runtime 的 `AbilitySystemComponent` 推荐使用 `GameplayAbilitiesNetworkedASCAdapter`。
-
-### `GameplayAbilitiesNetworkedASCAdapter`
-
-`GameplayAbilitiesNetworkedASCAdapter` 把 Unity `AbilitySystemComponent` 连接到 `INetworkedASC`。
-
-它支持：
-
-- 注册到 `IGASNetIdRegistry`。
-- Prediction key 确认和拒绝回调。
-- 复制 Active Effect 的 apply、remove、stack change、update。
-- Attribute id 注册和 observer filtering。
-- Tag 复制。
-- Full-State capture 和 apply。
-- State delta 创建。
-- 严格 checksum validation。
-- 可选 runtime thread policy 检查。
-
-Adapter 实现了 `IDisposable`。拥有它的 Actor 或 Ability Component 销毁时应显式释放。
+`AttributeSyncManager` 按 network id 保存 dirty attribute，并能区分 owner-only value 和 public observer value。
 
 ## Full-State Recovery
 
-Full-State 消息用于客户端 late join、reconnect、检测到 drift 或需要 baseline reset 的情况。
+Full-state message 为 late join、reconnect 和 drift recovery 提供 baseline。Bridge 支持：
 
-典型流程：
+- `ClientRequestFullState(uint targetNetworkId)`
+- `ServerSendFullState(INetConnection client, GASFullStateData data)`
+- `INetworkedASC.CaptureFullState()`
+- `INetworkedASCConnectionScopedFullState.CaptureFullStateForConnection(INetConnection client)`
 
-1. 客户端调用 `ClientRequestFullState(targetNetworkId)`。
-2. 服务器检查 `FullStateRequestAuthorizer`。
-3. 服务器捕获 `GASFullStateData`。
-4. 服务器发送 `MsgFullState` 给请求连接。
-5. 客户端通过 `INetworkedASC.OnFullState` 应用状态。
-
-如果需要针对不同连接过滤可见状态，实现 `INetworkedASCConnectionScopedFullState`。这样服务器可以为某个 observer 返回过滤后的 state snapshot。
-
-## 授权与限流
-
-Full-State 请求可能暴露敏感 Gameplay 状态。建议配置 bridge 授权：
+使用显式 policy 配置 full-state authorization：
 
 ```csharp
-bridge.ConfigureFullStateAuthorization(
-    new OwnerOrObserverWithRateLimitPolicy(new InMemoryTokenBucketRateLimiter(4f, 1f)),
-    getOwnerConnectionId,
-    getObservers);
+using System.Collections.Generic;
+using CycloneGames.GameplayAbilities.Networking;
+using CycloneGames.Networking;
+
+public static class AbilityFullStateSecurity
+{
+    public static void Configure(
+        NetworkedAbilityBridge bridge,
+        Func<uint, int> getOwnerConnectionId,
+        Func<uint, IReadOnlyList<INetConnection>> getObservers)
+    {
+        var limiter = new InMemoryTokenBucketRateLimiter(4f, 1f);
+        var policy = new OwnerOrObserverWithRateLimitPolicy(limiter);
+        bridge.ConfigureFullStateAuthorization(policy, getOwnerConnectionId, getObservers);
+    }
+}
 ```
 
-推荐规则：
+## Serializer Options
 
-- Owner 可以请求自己的 full state。
-- Observer 只能请求自己有权观察的 state。
-- 重复请求应限流。
-- 项目有 `IGASSecurityAuditSink` 时，应记录未授权请求。
-
-## 序列化选项
-
-`GASNetworkSerializerOptions` 控制数组上限和序列化行为。常见规模可以使用 profile：
+`GASNetworkSerializerOptions` 在 serialization 阶段限制动态数组：
 
 ```csharp
-var options = GASNetworkSerializerOptions.CreateForProfile(GASNetworkCapacityProfile.Conservative);
-var bridge = new NetworkedAbilityBridge(networkManager, options);
+using CycloneGames.GameplayAbilities.Networking;
+using CycloneGames.Networking;
+
+public static class AbilitySerializerInstaller
+{
+    public static NetworkedAbilityBridge Create(INetworkManager manager)
+    {
+        GASNetworkSerializerOptions options =
+            GASNetworkSerializerOptions.CreateForProfile(GASNetworkCapacityProfile.Balanced);
+
+        return new NetworkedAbilityBridge(manager, options);
+    }
+}
 ```
 
-可用 profile 包括 conservative 和 large-server-oriented 容量。建议选择满足游戏模式的最小 profile，并用至少两倍预期峰值做压力测试。
+当 manager 实现 `INetworkSerializerConfigurable` 时，constructor 会安装 `GASNetworkSerializer`。
 
-当 `INetworkManager` 实现 `INetworkSerializerConfigurable` 时，bridge 可以自动安装 `GASNetworkSerializer`。
+## Drift 与 Metadata
 
-## 预测与 Drift 处理
+`GASStateSyncMetadata` 携带 target id、sequence、base version、current version、checksum 和 change mask。`GameplayAbilitiesNetworkedASCAdapter` 使用 checksum helper 验证 state transition，并通过 `GASStateDriftReason` 归类 drift。
 
-本包支持标准客户端预测流程：
+## Editor Diagnostics
 
-1. 客户端本地预测 Ability 激活。
-2. 客户端携带 prediction key 发送 `AbilityActivateRequest`。
-3. 服务器校验 authority、cooldown、cost、tag、range、target 和游戏规则。
-4. 服务器发送 `AbilityActivateConfirm` 或 `AbilityActivateReject`。
-5. 客户端保留或回滚预测状态。
-
-`GASStateSyncMetadata` 和 checksum 工具用于发现 drift：
-
-- Out-of-order sequence。
-- Base version mismatch。
-- Checksum mismatch。
-- Target network id mismatch。
-- Invalid version range。
-
-检测到 drift 后，客户端可以请求 full-state baseline。
-
-## 后端兼容
-
-本包只对接 `CycloneGames.Networking`，不直接对接某个后端 SDK。
-
-| 后端 | 推荐接入方式 |
-| --- | --- |
-| Mirror | 使用 `CycloneGames.Networking.Adapter.Mirror`，再从暴露的 `INetworkManager` 创建 `NetworkedAbilityBridge`。 |
-| Mirage | 使用 `CycloneGames.Networking.Adapter.Mirage`，GAS 代码保持在 Cyclone 接口上。 |
-| Nakama | 通过 Cyclone 后端服务使用 session、matchmaking、match state、RPC 或 presence。实时 GAS 复制仍通过 `INetworkManager`。 |
-| Best HTTP | 用于后端 HTTP/RPC/download。实时 GAS 复制仍放在 Cyclone networking 后面。 |
-| Custom server | 实现 `INetworkManager` 和需要的 Cyclone 服务，GAS bridge 无需修改。 |
-
-## Editor 诊断
-
-创建 preset：
+Editor 支持隔离在 editor assembly 中。
 
 ```text
 Create > CycloneGames > GameplayAbilities > Networking > Diagnostics Preset
-```
-
-打开诊断：
-
-```text
 Tools > CycloneGames > GameplayAbilities > Networking > Diagnostics
 Tools > CycloneGames > GameplayAbilities > Networking > Run Diagnostics Check
 ```
 
-诊断会检查：
+Diagnostics 会检查 bridge support、Ability runtime support、Cyclone network runtime support、scene-driven `INetworkManager` 是否存在，以及可选 SDK package 的可见性。
 
-- 是否具备所需 bridge type 支持。
-- 是否具备 Ability runtime 支持。
-- 是否具备 Cyclone network runtime 支持。
-- 场景中是否缺少 `INetworkManager`。
-- 是否检测到 Mirror 和 Nakama 等可选 SDK。
+## 扩展点
 
-Preset 只用于 Editor，不会增加 Runtime 对可选 SDK 包的依赖。
+- 为纯 C# ability runtime 或 server simulation 实现 `INetworkedASC`。
+- 当 definition id、attribute 和 tag hash 来自项目 registry 时，实现 `IGASNetIdRegistry`。
+- 为自定义 visibility 和 moderation rule 实现 `IGASFullStateAuthorizationPolicy`。
+- 当 rate limiting 由 backend 或 security service 持有时，实现 `IConnectionRateLimiter`。
+- `NetworkedAbilityBridge.RegisterMessage` 只用于 package-owned range 内的消息；项目自有 GAS 消息放入 `NetworkMessageKind.User` manifest。
 
-## 测试
+## 持久化
 
-修改本包后推荐执行：
+本包不写入运行时存档。Editor diagnostics preset 是用户通过 editor menu 显式创建的 Unity asset。Runtime bridge state、adapter state、rate limiter bucket 和 dirty attribute buffer 都是由创建方持有的内存数据。
 
-```text
-dotnet build UnityStarter/CycloneGames.GameplayAbilities.Networking.Core.csproj -nologo
-dotnet build UnityStarter/CycloneGames.GameplayAbilities.Networking.Unity.Runtime.csproj -nologo
-dotnet build UnityStarter/CycloneGames.GameplayAbilities.Networking.Tests.Editor.csproj -nologo
-```
+## 验证
 
-在 Unity Editor 中打开：
+修改本包后运行以下检查：
 
 ```text
-Window > General > Test Runner
+Unity Test Runner > EditMode > CycloneGames.GameplayAbilities.Networking.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.GameplayAbilities.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
 ```
 
-重点运行 serializer bounds、full-state authorization、checksum drift detection、adapter dispose behavior 和 bridge register/unregister lifecycle 测试。
-
-## 实践建议
-
-- Ability 校验保持服务端权威。
-- Prediction key 只用于本地预测状态，不代表权限证明。
-- Observer list 应显式并具备 interest-aware 过滤。
-- Full-State snapshot 应按目标连接过滤。
-- 启动时注册 handlers，teardown 时注销。
-- 拥有 Actor 销毁时释放 `GameplayAbilitiesNetworkedASCAdapter`。
-- 根据预期峰值预设 serializer profile。
-- GAS 代码不要直接调用 Mirror、Mirage、Nakama 或 Best HTTP SDK 类型。
-- 项目级维护 message id 分配表。
-
-## 相关包
-
-- `CycloneGames.Networking` 提供本包使用的通用网络层。
-- `CycloneGames.GameplayAbilities` 提供 Ability System runtime。
-- `CycloneGames.GameplayFramework` 可以为 Ability 状态复制提供 owner、observer、team 和 area-interest 信息。
+修改 serializer 或 bridge 时，覆盖 capacity bounds、full-state authorization、checksum drift detection、adapter dispose behavior 和 register/unregister lifecycle。

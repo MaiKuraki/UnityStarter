@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.AIPerception.Networking.Tests.Editor",
+    "rootNamespace": "CycloneGames.AIPerception.Networking.Tests.Editor",
+    "references": [
+        "CycloneGames.AIPerception",
+        "CycloneGames.AIPerception.Networking.Core",
+        "CycloneGames.AIPerception.Networking.Runtime",
+        "CycloneGames.Networking.Core",
+        "Unity.Mathematics"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}
+

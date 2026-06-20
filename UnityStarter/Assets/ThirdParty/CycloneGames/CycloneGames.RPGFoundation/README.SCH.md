@@ -29,7 +29,7 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
 | 模块 | 用途 |
 | --- | --- |
 | `Interaction/` | 交互契约、本地运行时组件、权威校验、确定性桥接、Inspector 和测试 |
-| `Movement/` | 移动核心契约、2D/3D Unity 移动组件、寻路 adapter、动画 adapter 和 Inspector |
+| `Movement/` | 移动核心契约、2D/3D Unity 移动组件、寻路 adapter、动画 adapter、Inspector 和测试 |
 
 ## 程序集布局
 
@@ -44,12 +44,13 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
 | `CycloneGames.RPGFoundation.Movement.Core` | 不依赖 Unity 的移动契约、属性、状态标识、快照和 helper 类型 |
 | `CycloneGames.RPGFoundation.Movement.Runtime` | Unity-facing 2D/3D 移动组件、ScriptableObject 配置、动画抽象和寻路抽象 |
 | `CycloneGames.RPGFoundation.Movement.Editor` | 移动 Inspector 和 authoring 校验 |
+| `CycloneGames.RPGFoundation.Movement.Tests.Editor` | 移动 EditMode 测试 |
 
 旧程序集 `CycloneGames.RPGFoundation.Runtime`、`CycloneGames.RPGFoundation.Editor` 和 `CycloneGames.RPGFoundation.Tests.Editor` 会作为轻量兼容壳保留。新代码应直接引用模块程序集。
 
 ## 可选集成
 
-可选集成被隔离到独立 assembly 中，这样基础包在未安装可选包时也能正常编译。Interaction 的 Cyclone networking 桥接由独立的 `CycloneGames.RPGFoundation.Interaction.Networking` 包提供，不属于基础 RPGFoundation 包。
+可选集成被隔离到独立 assembly 中，这样基础包在未安装可选包时也能正常编译。Cyclone networking 桥接由独立可选包提供，不属于基础 RPGFoundation 包。
 
 | Integration Assembly | 依赖 |
 | --- | --- |
@@ -61,6 +62,13 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
 | `CycloneGames.RPGFoundation.Movement.Integrations.AStar` | `AstarPathfindingProject` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation` | ProjectDawn Agents Navigation |
 | `CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities` | `CycloneGames.GameplayAbilities.Runtime` |
+
+可选 networking 包：
+
+| Package | 依赖 | 用途 |
+| --- | --- | --- |
+| `CycloneGames.RPGFoundation.Interaction.Networking` | `CycloneGames.Networking.Core` | 与传输层无关的 interaction request、result、cancel 和 authority validation DTO |
+| `CycloneGames.RPGFoundation.Movement.Networking` | `CycloneGames.Networking.Core` | 与传输层无关的 movement input、authoritative snapshot、correction、teleport、full-state request 和 authority transfer DTO |
 
 当 RPGFoundation 和可选依赖都以 UPM package 安装时，integration assembly 会通过自身 asmdef 的 `versionDefines` 和 `defineConstraints` 自动启用。基础 Core、Runtime 和 Editor assembly 不需要项目级 scripting define symbol。
 
@@ -86,6 +94,7 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
 
 1. 打开 Unity，等待项目重新导入 assemblies。
 2. 确认 Console 没有编译错误。
-3. 运行 `CycloneGames.RPGFoundation.Interaction.Tests.Editor` 的 EditMode 测试。
-4. 如果可选包通过 Package Manager 安装，确认对应 integration assembly 能编译。
-5. 对 Animancer movement，在 movement component 旁添加 `AnimancerMovementAnimationBinder`，并分配 Animancer component。
+3. 运行 `CycloneGames.RPGFoundation.Interaction.Tests.Editor` 和 `CycloneGames.RPGFoundation.Movement.Tests.Editor` 的 EditMode 测试。
+4. 如果存在可选 networking 包，运行对应 EditMode 测试。
+5. 如果可选包通过 Package Manager 安装，确认对应 integration assembly 能编译。
+6. 对 Animancer movement，在 movement component 旁添加 `AnimancerMovementAnimationBinder`，并分配 Animancer component。

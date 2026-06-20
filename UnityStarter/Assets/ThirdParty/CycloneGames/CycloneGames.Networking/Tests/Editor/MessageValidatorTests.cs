@@ -27,66 +27,114 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
-        public void MessageSecurityPolicyRegistry_Allows_Default_Envelope()
+        public void NetworkSecurityPipeline_Allows_Default_Envelope()
         {
-            var registry = new MessageSecurityPolicyRegistry(new MessageSecurityPolicy(
-                NetworkMessageDirectionMask.Any,
-                16,
-                requireAuthenticatedConnection: false,
-                requireEncryptedTransport: false,
-                enableReplayProtection: false));
+            var pipeline = new NetworkSecurityPipeline(new NetworkSecurityPipelineOptions
+            {
+                MessagePolicies = new MessageSecurityPolicyRegistry(new MessageSecurityPolicy(
+                    NetworkMessageDirectionMask.Any,
+                    16,
+                    requireAuthenticatedConnection: false,
+                    requireEncryptedTransport: false,
+                    enableReplayProtection: false))
+            });
 
             var envelope = new NetworkMessageEnvelope(1000, NetworkMessageDirection.ClientToServer, NetworkChannel.Reliable, 8);
+            byte[] payload = new byte[8];
 
-            Assert.AreEqual(MessageSecurityResult.Valid, registry.Validate(envelope, null, transportEncrypted: false, replayGuard: null));
+            NetworkSecurityPipelineResult result = pipeline.ValidateInbound(
+                null,
+                envelope,
+                payload,
+                ReadOnlySpan<byte>.Empty,
+                transportEncrypted: false,
+                currentTime: 0f);
+
+            Assert.AreEqual(MessageSecurityResult.Valid, result.Result);
         }
 
         [Test]
-        public void MessageSecurityPolicyRegistry_Rejects_Disallowed_Direction()
+        public void NetworkSecurityPipeline_Rejects_Disallowed_Direction()
         {
-            var registry = new MessageSecurityPolicyRegistry(new MessageSecurityPolicy(
-                NetworkMessageDirectionMask.ServerToClient,
-                16,
-                requireAuthenticatedConnection: false,
-                requireEncryptedTransport: false,
-                enableReplayProtection: false));
+            var pipeline = new NetworkSecurityPipeline(new NetworkSecurityPipelineOptions
+            {
+                MessagePolicies = new MessageSecurityPolicyRegistry(new MessageSecurityPolicy(
+                    NetworkMessageDirectionMask.ServerToClient,
+                    16,
+                    requireAuthenticatedConnection: false,
+                    requireEncryptedTransport: false,
+                    enableReplayProtection: false))
+            });
 
             var envelope = new NetworkMessageEnvelope(1000, NetworkMessageDirection.ClientToServer, NetworkChannel.Reliable, 8);
+            byte[] payload = new byte[8];
 
-            Assert.AreEqual(MessageSecurityResult.DirectionRejected, registry.Validate(envelope, null, transportEncrypted: false, replayGuard: null));
+            NetworkSecurityPipelineResult result = pipeline.ValidateInbound(
+                null,
+                envelope,
+                payload,
+                ReadOnlySpan<byte>.Empty,
+                transportEncrypted: false,
+                currentTime: 0f);
+
+            Assert.AreEqual(MessageSecurityResult.DirectionRejected, result.Result);
         }
 
         [Test]
-        public void MessageSecurityPolicyRegistry_Rejects_Unauthenticated_Connection()
+        public void NetworkSecurityPipeline_Rejects_Unauthenticated_Connection()
         {
-            var registry = new MessageSecurityPolicyRegistry(new MessageSecurityPolicy(
-                NetworkMessageDirectionMask.Any,
-                16,
-                requireAuthenticatedConnection: true,
-                requireEncryptedTransport: false,
-                enableReplayProtection: false));
+            var pipeline = new NetworkSecurityPipeline(new NetworkSecurityPipelineOptions
+            {
+                MessagePolicies = new MessageSecurityPolicyRegistry(new MessageSecurityPolicy(
+                    NetworkMessageDirectionMask.Any,
+                    16,
+                    requireAuthenticatedConnection: true,
+                    requireEncryptedTransport: false,
+                    enableReplayProtection: false))
+            });
             var connection = new TestConnection(1, authenticated: false);
             var envelope = new NetworkMessageEnvelope(1000, NetworkMessageDirection.ClientToServer, NetworkChannel.Reliable, 8);
+            byte[] payload = new byte[8];
 
-            Assert.AreEqual(MessageSecurityResult.AuthenticationRequired, registry.Validate(envelope, connection, transportEncrypted: false, replayGuard: null));
+            NetworkSecurityPipelineResult result = pipeline.ValidateInbound(
+                connection,
+                envelope,
+                payload,
+                ReadOnlySpan<byte>.Empty,
+                transportEncrypted: false,
+                currentTime: 0f);
+
+            Assert.AreEqual(MessageSecurityResult.AuthenticationRequired, result.Result);
         }
 
         [Test]
-        public void MessageSecurityPolicyRegistry_Rejects_Unencrypted_Transport()
+        public void NetworkSecurityPipeline_Rejects_Unencrypted_Transport()
         {
-            var registry = new MessageSecurityPolicyRegistry(new MessageSecurityPolicy(
-                NetworkMessageDirectionMask.Any,
-                16,
-                requireAuthenticatedConnection: false,
-                requireEncryptedTransport: true,
-                enableReplayProtection: false));
+            var pipeline = new NetworkSecurityPipeline(new NetworkSecurityPipelineOptions
+            {
+                MessagePolicies = new MessageSecurityPolicyRegistry(new MessageSecurityPolicy(
+                    NetworkMessageDirectionMask.Any,
+                    16,
+                    requireAuthenticatedConnection: false,
+                    requireEncryptedTransport: true,
+                    enableReplayProtection: false))
+            });
             var envelope = new NetworkMessageEnvelope(1000, NetworkMessageDirection.ClientToServer, NetworkChannel.Reliable, 8);
+            byte[] payload = new byte[8];
 
-            Assert.AreEqual(MessageSecurityResult.EncryptionRequired, registry.Validate(envelope, null, transportEncrypted: false, replayGuard: null));
+            NetworkSecurityPipelineResult result = pipeline.ValidateInbound(
+                null,
+                envelope,
+                payload,
+                ReadOnlySpan<byte>.Empty,
+                transportEncrypted: false,
+                currentTime: 0f);
+
+            Assert.AreEqual(MessageSecurityResult.EncryptionRequired, result.Result);
         }
 
         [Test]
-        public void MessageSecurityPolicyRegistry_Uses_PerMessage_Override()
+        public void NetworkSecurityPipeline_Uses_PerMessage_Override()
         {
             var registry = new MessageSecurityPolicyRegistry(new MessageSecurityPolicy(
                 NetworkMessageDirectionMask.Any,
@@ -100,10 +148,23 @@ namespace CycloneGames.Networking.Tests.Editor
                 requireAuthenticatedConnection: false,
                 requireEncryptedTransport: false,
                 enableReplayProtection: false));
+            var pipeline = new NetworkSecurityPipeline(new NetworkSecurityPipelineOptions
+            {
+                MessagePolicies = registry
+            });
 
             var envelope = new NetworkMessageEnvelope(2000, NetworkMessageDirection.ClientToServer, NetworkChannel.Reliable, 8);
+            byte[] payload = new byte[8];
 
-            Assert.AreEqual(MessageSecurityResult.PayloadTooLarge, registry.Validate(envelope, null, transportEncrypted: false, replayGuard: null));
+            NetworkSecurityPipelineResult result = pipeline.ValidateInbound(
+                null,
+                envelope,
+                payload,
+                ReadOnlySpan<byte>.Empty,
+                transportEncrypted: false,
+                currentTime: 0f);
+
+            Assert.AreEqual(MessageSecurityResult.PayloadTooLarge, result.Result);
         }
 
         [Test]

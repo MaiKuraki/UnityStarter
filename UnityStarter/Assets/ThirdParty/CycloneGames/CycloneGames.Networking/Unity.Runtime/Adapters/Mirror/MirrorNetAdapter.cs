@@ -30,7 +30,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
     /// Implements both low-level Transport and high-level NetworkManager.
     /// </summary>
     [DisallowMultipleComponent]
-    public sealed class MirrorNetAdapter : MonoBehaviour, INetTransport, INetworkManager, INetworkSerializerConfigurable, INetworkMessageSecurityConfigurable, INetworkRuntimeContextProvider, INetworkLifecycleProvider, INetworkFeatureProvider
+    public sealed class MirrorNetAdapter : MonoBehaviour, INetTransport, INetworkManager, INetworkSerializerConfigurable, INetworkSecurityPolicyConfigurable, INetworkRuntimeContextProvider, INetworkLifecycleProvider, INetworkFeatureProvider
     {
         private const string MissingNetworkManagerError = "Mirror NetworkManager.singleton is not available.";
         private const string MissingTransportError = "Mirror Transport.active is not available.";
@@ -222,7 +222,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
         private MessageValidator _messageValidator;
         private RateLimiter _rateLimiter;
         private MessageSecurityPolicyRegistry _messagePolicies;
-        private NetworkReplayGuard _replayGuard;
+        private NetworkSecurityPipeline _securityPipeline;
         private NetworkLifecycleState _lifecycleState = NetworkLifecycleState.Stopped;
         private TransportError _lastError;
         private string _lastErrorMessage = string.Empty;
@@ -280,13 +280,14 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 Math.Max(1, _maxPayloadSize) * Math.Max(1, _maxMessagesPerSecond),
                 Math.Max(0, _burstMessages));
             _messagePolicies = new MessageSecurityPolicyRegistry(CreateDefaultSecurityPolicy());
-            _replayGuard = new NetworkReplayGuard();
+            _securityPipeline = CreateSecurityPipeline();
             RuntimeContext = new NetworkRuntimeContext(
                     NetworkRuntimeIds.Mirror,
                     "Mirror",
                     this,
                     Features)
-                .AddService<INetworkMessageSecurityConfigurable>(this)
+                .AddService<INetworkSecurityPolicyConfigurable>(this)
+                .AddSecurityPipeline(_securityPipeline)
                 .Build();
 
             // Mirror Events Hookup
@@ -500,8 +501,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
         {
             _playerIds.Remove(conn.connectionId);
             _connectionData.Remove(conn.connectionId);
-            _rateLimiter?.RemoveConnection(conn.connectionId);
-            _replayGuard?.RemoveConnection(conn.connectionId);
+            _securityPipeline?.RemoveConnection(conn.connectionId);
             _lifecycleState = NetworkLifecycle.GetTransportState(this);
             OnClientDisconnected?.Invoke(new MirrorNetConnection(conn, default));
         }
@@ -960,19 +960,16 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 return false;
 
             NetworkMessageEnvelope envelope = header.ToEnvelope(direction);
-            MessageSecurityResult securityResult = EnsureMessagePolicies().Validate(
-                envelope,
+            NetworkSecurityPipelineResult securityResult = EnsureSecurityPipeline().ValidateInbound(
                 connection,
+                envelope,
+                payloadSpan,
+                ReadOnlySpan<byte>.Empty,
                 IsEncrypted,
-                _replayGuard);
-            if (securityResult != MessageSecurityResult.Valid)
+                Time.unscaledTime,
+                frame.Count);
+            if (!securityResult.Accepted)
                 return false;
-
-            if (_enableRateLimiter && connection != null && _rateLimiter != null)
-            {
-                if (!_rateLimiter.TryConsume(connection.ConnectionId, frame.Count, Time.unscaledTime))
-                    return false;
-            }
 
             return true;
         }
@@ -1011,8 +1008,22 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 return _messagePolicies;
 
             _messagePolicies = new MessageSecurityPolicyRegistry(CreateDefaultSecurityPolicy());
-            _replayGuard ??= new NetworkReplayGuard();
             return _messagePolicies;
+        }
+
+        private NetworkSecurityPipeline CreateSecurityPipeline()
+        {
+            return new NetworkSecurityPipeline(new NetworkSecurityPipelineOptions
+            {
+                MessagePolicies = EnsureMessagePolicies(),
+                RateLimiter = _rateLimiter,
+                EnableRateLimiting = _enableRateLimiter
+            });
+        }
+
+        private NetworkSecurityPipeline EnsureSecurityPipeline()
+        {
+            return _securityPipeline ??= CreateSecurityPipeline();
         }
 
         private NetworkLifecycleState GetCurrentLifecycleState()

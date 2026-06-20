@@ -2,7 +2,9 @@
 
 [English](./README.md) | 简体中文
 
-`CycloneGames.GameplayFramework.Networking` 是 `CycloneGames.GameplayFramework` 的可选 Cyclone Networking 桥接包。它让基础 GameplayFramework 包在没有 `CycloneGames.Networking` 时仍可独立使用，同时为使用 Cyclone networking abstraction 的项目提供现成 session adapter、稳定的 GameplayFramework message ID、actor migration serialization、server-authoritative role helper，以及 owner/team/area replication 的 observer resolution。
+`CycloneGames.GameplayFramework.Networking` 将 `CycloneGames.GameplayFramework` 接入 `CycloneGames.Networking`。它提供 `GameSession` adapter、actor migration 序列化 helper、消息 catalog 注册、authority role 解析，以及 owner、team、area、always-relevant replication 所需的 observer 选择数据。
+
+基础包 `CycloneGames.GameplayFramework` 保持网络无关。只有当 GameplayFramework 对象需要进入 Cyclone Networking 流程时，才需要引用本桥接包。
 
 ## 包结构
 
@@ -24,76 +26,145 @@ CycloneGames.GameplayFramework.Networking/
 
 | Assembly | 职责 | Unity 依赖 |
 | --- | --- | --- |
-| `CycloneGames.GameplayFramework.Networking.Core` | `GameSession` networking bridge、GameplayFramework message catalog、actor migration wire serializer、authority 和 observer helper | 是 |
-| `CycloneGames.GameplayFramework.Networking.Tests.Editor` | Integration regression coverage | 是 |
+| `CycloneGames.GameplayFramework.Networking.Core` | Session bridge、协议注册、actor migration 序列化、authority helper、observer registry 和 observer resolver。 | 有 |
+| `CycloneGames.GameplayFramework.Networking.Tests.Editor` | 覆盖 replication 和 session bridge 行为的 EditMode 测试。 | 有 |
 
-Runtime assembly 直接引用 `CycloneGames.GameplayFramework.Runtime` 和 `CycloneGames.Networking.Core`。它不使用 PlayerSettings scripting define symbols、service locator、package-driven `CYCLONE_*` compile gate，也不绑定某个 DI 容器。不包含 `CycloneGames.Networking` 的项目应省略这个包，并直接使用 `CycloneGames.GameplayFramework`。
+Core assembly 引用 `CycloneGames.GameplayFramework.Runtime` 和 `CycloneGames.Networking.Core`。它不绑定 Mirror、Mirage、Nakama、Photon、Steam 或特定 DI 容器。
 
-## Session 桥接
+## 核心概念
 
-`NetworkGameSessionAdapter` 继承 `GameSession`，并把 session 规则桥接到 `INetworkManager`。它会绑定 `PlayerController` 与 `INetConnection`，在登录审批时校验连接和认证状态，把稳定的 connection player ID 投射到 `PlayerState`，并通过 `INetworkManager.DisconnectClient` 断开玩家。
+| 类型 | 作用 |
+| --- | --- |
+| `NetworkGameSessionAdapter` | 继承 `GameSession`，将 `PlayerController` 与 `INetConnection` 绑定。 |
+| `GameplayFrameworkNetworkProtocol` | 注册 GameplayFramework module message range 和 actor migration message descriptor。 |
+| `GameplayNetworkAuthorityRole` | 描述 actor 的 server authority、autonomous proxy、simulated proxy 或无 authority 状态。 |
+| `ServerAuthoritativeGameplayAuthorityResolver` | 根据本地 server/client 状态和 actor ownership 解析 authority role。 |
+| `NetworkedGameplayActor` | 将 `Actor` 映射为 network id、owner、team、layer、relevance 和 interest position 数据。 |
+| `GameplayReplicationPolicy` | 描述 visibility、channel、distance、tick interval、priority、layer mask、owner inclusion 和 authentication requirement。 |
+| `GameplayNetworkObserverRegistry` | 按 connection id 保存 `NetworkInterestObserver` 数据。 |
+| `GameplayNetworkObserverResolver` | 按 owner、team、area 和 always-relevant policy 过滤 candidate connections。 |
 
-```csharp
-using CycloneGames.GameplayFramework.Networking;
-using CycloneGames.GameplayFramework.Runtime;
-using CycloneGames.Networking;
+## Session 与 Observer 流程
 
-public sealed class MyNetworkSessionInstaller
-{
-    public void Configure(NetworkGameSessionAdapter session, INetworkManager networkManager)
-    {
-        session.SetNetworkManager(networkManager);
-    }
+```mermaid
+graph TD
+    Manager["INetworkManager"]
+    Session["NetworkGameSessionAdapter"]
+    Connection["INetConnection"]
+    Player["PlayerController"]
+    Actor["NetworkedGameplayActor"]
+    Registry["GameplayNetworkObserverRegistry"]
+    Policy["GameplayReplicationPolicy"]
+    Resolver["GameplayNetworkObserverResolver"]
+    Results["Observer connection list"]
 
-    public void BindPlayer(NetworkGameSessionAdapter session, PlayerController controller, INetConnection connection)
-    {
-        session.BindConnection(controller, connection);
-    }
-}
+    Manager --> Session
+    Connection --> Session
+    Session --> Player
+    Actor --> Resolver
+    Registry --> Resolver
+    Policy --> Resolver
+    Resolver --> Results
 ```
 
-## 权威与复制
+## 协议
 
-`GameplayNetworkAuthorityRole` 描述 actor 是 `ServerAuthority`、`AutonomousProxy`、`SimulatedProxy` 还是 `None`。`ServerAuthoritativeGameplayAuthorityResolver` 适合标准 dedicated-server 和 listen-server 项目。
+`GameplayFrameworkNetworkProtocol` 在 Cyclone module range 中拥有 `11000-11999` 消息 ID。
 
-`GameplayReplicationPolicy` 描述 visibility、channel、distance、tick interval、priority、layer mask、是否包含 owner，以及是否要求认证连接。常用 preset 包括 `OwnerReliable`、`TeamReliable`、`AlwaysRelevantReliable` 和 `AreaUnreliable(distance)`。
+| Message | ID | Channel | Payload |
+| --- | ---: | --- | --- |
+| `MsgActorMigrationState` | `11000` | Reliable | Actor migration state payload descriptor |
 
-`NetworkedGameplayActor` 是 `Actor` 的网络边界数据，包含 network id、owner connection、owner player id、team id、interest layer、relevance flag 和 interest position。`GameplayNetworkObserverRegistry` 与 `GameplayNetworkObserverResolver` 用于构建 area、team、owner-only 和 always-relevant replication 的 observer set。
-
-## 协议目录
-
-`GameplayFrameworkNetworkProtocol` 在通用 `NetworkMessageRanges.Module` 空间内声明自己的 package-owned 子区间（`11000-11999`），并把该 ownership 注册到 `INetworkMessageCatalog`。
-
-| Message | ID | 用途 |
-| --- | --- | --- |
-| `MsgActorMigrationState` | `11000` | 注册并校验 actor migration state payload。 |
-
-当 `NetworkGameSessionAdapter.SetNetworkManager()` 收到的 manager 暴露 `INetworkRuntimeContextProvider` 时，它会尝试注册 GameplayFramework catalog。DI composition root 可以直接向 `INetworkMessageCatalog` 注册。
+在 composition root 中注册协议：
 
 ```csharp
 using CycloneGames.GameplayFramework.Networking;
 using CycloneGames.Networking;
 
-public sealed class GameplayNetworkComposition
+public static class GameplayFrameworkNetworkInstaller
 {
-    public void Configure(INetworkMessageCatalog catalog)
+    public static void Configure(INetworkMessageCatalog catalog)
     {
         GameplayFrameworkNetworkProtocol.RegisterMessageCatalog(catalog);
     }
 }
 ```
 
-## Adapter 模型
+当 manager 暴露包含 `INetworkMessageCatalog` 的 `INetworkRuntimeContextProvider` 时，`NetworkGameSessionAdapter.SetNetworkManager()` 也会尝试注册 catalog。
 
-这个包只依赖 Cyclone networking abstraction。Mirror、Mirage、Nakama、Photon、自定义 transport、dedicated-server orchestration、sharding 或 backend session service 应放在更高一层 adapter 包中，再把 `INetworkManager`、`INetConnection` 和 observer 数据喂给这个桥接层。
+## Session Bridge 流程
 
-## 持久化行为
+1. 在 GameplayFramework session 的 owner 位置创建或放置 `NetworkGameSessionAdapter`。
+2. 将当前 `INetworkManager` 传入 `SetNetworkManager`。
+3. 将每个已生成的 `PlayerController` 绑定到对应 `INetConnection`。
+4. 通过 `ApproveLogin`、`RegisterPlayer`、`KickPlayer` 和 `BanPlayer` 应用 session 规则。
+5. 玩家移除或连接关闭时解绑。
 
-这个包不写入文件、资产、偏好、缓存数据或运行时存档。它只定义 runtime adapter behavior、protocol metadata 和 wire serialization helper。
+```csharp
+using CycloneGames.GameplayFramework.Networking;
+using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Networking;
+
+public sealed class SessionNetworkBinder
+{
+    private readonly NetworkGameSessionAdapter _session;
+
+    public SessionNetworkBinder(NetworkGameSessionAdapter session, INetworkManager manager)
+    {
+        _session = session;
+        _session.SetNetworkManager(manager);
+    }
+
+    public void Bind(PlayerController controller, INetConnection connection)
+    {
+        _session.BindConnection(controller, connection);
+    }
+}
+```
+
+## Observer Resolution 流程
+
+使用 `GameplayNetworkObserverRegistry` 发布 observer 位置，再使用 replication context 调用 `GameplayNetworkObserverResolver.ResolveObservers`：
+
+```csharp
+using System.Collections.Generic;
+using CycloneGames.GameplayFramework.Networking;
+using CycloneGames.Networking;
+
+public sealed class ActorReplicationSelector
+{
+    private readonly GameplayNetworkObserverRegistry _registry = new GameplayNetworkObserverRegistry();
+    private readonly GameplayNetworkObserverResolver _resolver = new GameplayNetworkObserverResolver();
+
+    public int Resolve(
+        NetworkedGameplayActor actor,
+        IReadOnlyList<INetConnection> candidates,
+        IList<INetConnection> results)
+    {
+        GameplayReplicationPolicy policy = GameplayReplicationPolicy.AreaUnreliable(40f);
+        var context = new GameplayReplicationContext(actor, policy);
+        return _resolver.ResolveObservers(context, candidates, _registry, results);
+    }
+}
+```
+
+## 扩展点
+
+- 实现 `IGameplayNetworkAuthorityResolver` 来接入自定义 authority 规则。
+- 当 observer 数据不存放在 `GameplayNetworkObserverRegistry` 中时，实现 `IGameplayNetworkObserverSource`。
+- 项目自有 GameplayFramework 消息通过项目拥有的 `NetworkMessageKind.User` manifest 添加。
+- 具体后端 SDK 代码放在 backend adapter 中，由 adapter 将 `INetworkManager`、`INetConnection` 和 observer 数据传入本包。
+
+## 持久化
+
+本包不写入文件、资产、偏好设置、缓存或运行时存档。Session adapter 和 observer registry 只在内存中保存运行时状态。
 
 ## 验证
 
-- 构建 `CycloneGames.GameplayFramework.Tests.Editor`。
-- Unity 刷新生成工程文件后，构建 `CycloneGames.GameplayFramework.Networking.Tests.Editor`。
-- 构建 `CycloneGames.Networking.Tests.Editor`。
-- 在 Unity Editor 中运行 `CycloneGames.GameplayFramework.Networking.Tests.Editor` EditMode tests。
+修改本包后运行以下检查：
+
+```text
+Unity Test Runner > EditMode > CycloneGames.GameplayFramework.Networking.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.GameplayFramework.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
+```

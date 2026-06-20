@@ -29,7 +29,7 @@ The current package uses this structure for:
 | Module | Purpose |
 | --- | --- |
 | `Interaction/` | Interaction contracts, local runtime components, authority validation, deterministic bridges, inspectors, and tests |
-| `Movement/` | Movement core contracts, 2D/3D Unity movement components, pathfinding adapters, animation adapters, and inspectors |
+| `Movement/` | Movement core contracts, 2D/3D Unity movement components, pathfinding adapters, animation adapters, inspectors, and tests |
 
 ## Assembly Layout
 
@@ -44,12 +44,13 @@ The package now exposes module assemblies instead of putting all source files in
 | `CycloneGames.RPGFoundation.Movement.Core` | Unity-free movement contracts, attributes, state identifiers, snapshots, and helper types |
 | `CycloneGames.RPGFoundation.Movement.Runtime` | Unity-facing 2D/3D movement components, ScriptableObject configs, animation abstraction, and pathfinding abstraction |
 | `CycloneGames.RPGFoundation.Movement.Editor` | Movement inspectors and authoring validation |
+| `CycloneGames.RPGFoundation.Movement.Tests.Editor` | Movement EditMode tests |
 
 The legacy assemblies `CycloneGames.RPGFoundation.Runtime`, `CycloneGames.RPGFoundation.Editor`, and `CycloneGames.RPGFoundation.Tests.Editor` are kept as lightweight compatibility shells. New code should reference the module assemblies directly.
 
 ## Optional Integrations
 
-Optional integrations are isolated in their own assemblies so the base package can compile without optional packages installed. The Cyclone networking bridge for Interaction is provided by the separate `CycloneGames.RPGFoundation.Interaction.Networking` package, not by the base RPGFoundation package.
+Optional integrations are isolated in their own assemblies so the base package can compile without optional packages installed. Cyclone networking bridges are provided by separate optional packages, not by the base RPGFoundation package.
 
 | Integration Assembly | Dependency |
 | --- | --- |
@@ -61,6 +62,13 @@ Optional integrations are isolated in their own assemblies so the base package c
 | `CycloneGames.RPGFoundation.Movement.Integrations.AStar` | `AstarPathfindingProject` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation` | ProjectDawn Agents Navigation |
 | `CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities` | `CycloneGames.GameplayAbilities.Runtime` |
+
+Optional networking packages:
+
+| Package | Dependency | Purpose |
+| --- | --- | --- |
+| `CycloneGames.RPGFoundation.Interaction.Networking` | `CycloneGames.Networking.Core` | Transport-neutral interaction request, result, cancel, and authority validation DTOs |
+| `CycloneGames.RPGFoundation.Movement.Networking` | `CycloneGames.Networking.Core` | Transport-neutral movement input, authoritative snapshot, correction, teleport, full-state request, and authority transfer DTOs |
 
 When RPGFoundation and its optional dependencies are installed as UPM packages, integration assemblies enable themselves through their own `versionDefines` and `defineConstraints`. The base Core, Runtime, and Editor assemblies do not require project-wide scripting define symbols.
 
@@ -86,6 +94,7 @@ After changing assemblies or moving files:
 
 1. Open Unity and let the project reimport assemblies.
 2. Confirm the Console has no compile errors.
-3. Run EditMode tests for `CycloneGames.RPGFoundation.Interaction.Tests.Editor`.
-4. If optional packages are installed through Package Manager, confirm the matching integration assembly compiles.
-5. For Animancer movement, add `AnimancerMovementAnimationBinder` beside the movement component and assign the Animancer component.
+3. Run EditMode tests for `CycloneGames.RPGFoundation.Interaction.Tests.Editor` and `CycloneGames.RPGFoundation.Movement.Tests.Editor`.
+4. If optional networking packages are present, run their EditMode tests.
+5. If optional packages are installed through Package Manager, confirm the matching integration assembly compiles.
+6. For Animancer movement, add `AnimancerMovementAnimationBinder` beside the movement component and assign the Animancer component.

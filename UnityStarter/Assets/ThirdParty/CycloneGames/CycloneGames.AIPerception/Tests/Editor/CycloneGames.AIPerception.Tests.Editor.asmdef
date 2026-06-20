@@ -1,0 +1,24 @@
+{
+    "name": "CycloneGames.AIPerception.Tests.Editor",
+    "rootNamespace": "CycloneGames.AIPerception.Tests.Editor",
+    "references": [
+        "CycloneGames.AIPerception",
+        "Unity.Collections",
+        "Unity.Mathematics"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}
+
