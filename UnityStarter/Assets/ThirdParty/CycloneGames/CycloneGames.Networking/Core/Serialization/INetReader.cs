@@ -47,6 +47,12 @@ namespace CycloneGames.Networking.Serialization
         /// <summary>Reads a 32-bit unsigned integer in little-endian format.</summary>
         uint ReadUInt();
 
+        /// <summary>Reads a 64-bit signed integer in little-endian format.</summary>
+        long ReadLong();
+
+        /// <summary>Reads a 64-bit unsigned integer in little-endian format.</summary>
+        ulong ReadULong();
+
         /// <summary>Reads a 32-bit floating-point number.</summary>
         float ReadFloat();
 

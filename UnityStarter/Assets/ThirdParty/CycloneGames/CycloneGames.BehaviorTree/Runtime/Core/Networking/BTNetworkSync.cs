@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 {
@@ -91,7 +92,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         /// Quick desync check: compare local tree hash with server hash.
         /// If mismatch, caller should request full snapshot resync.
         /// </summary>
-        public static bool CheckDesync(RuntimeBehaviorTree localTree, uint serverHash)
+        public static bool CheckDesync(RuntimeBehaviorTree localTree, ulong serverHash)
         {
             if (localTree?.Blackboard == null) return true;
             return localTree.Blackboard.ComputeHash() != serverHash;
@@ -137,8 +138,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             {
                 snapshot.IsValid = reader.ReadBoolean();
                 snapshot.Timestamp = reader.ReadDouble();
-                snapshot.TreeStateHash = reader.ReadUInt32();
-                snapshot.BlackboardHash = reader.ReadUInt32();
+                snapshot.TreeStateHash = reader.ReadUInt64();
+                snapshot.BlackboardHash = reader.ReadUInt64();
 
                 int nodeCount = reader.ReadInt32();
                 if (nodeCount > 0)
@@ -204,11 +205,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
         }
 
-        private static uint ComputeTreeStateHash(BTStateSnapshot snapshot)
+        private static ulong ComputeTreeStateHash(BTStateSnapshot snapshot)
         {
-            const uint FNV_OFFSET = 2166136261u;
-            const uint FNV_PRIME = 16777619u;
-            uint hash = FNV_OFFSET;
+            const ulong FNV_OFFSET = Fnv1a64.OffsetBasis;
+            const ulong FNV_PRIME = Fnv1a64.Prime;
+            ulong hash = FNV_OFFSET;
 
             if (snapshot.NodeStates != null)
             {
@@ -238,9 +239,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         public byte[] BlackboardData;
 
         /// <summary>FNV-1a hash of blackboard data for quick comparison.</summary>
-        public uint BlackboardHash;
+        public ulong BlackboardHash;
 
         /// <summary>Combined hash of entire tree state (nodes + blackboard).</summary>
-        public uint TreeStateHash;
+        public ulong TreeStateHash;
     }
 }

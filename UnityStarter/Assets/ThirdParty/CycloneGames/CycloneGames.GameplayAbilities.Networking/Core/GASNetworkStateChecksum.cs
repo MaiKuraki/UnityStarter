@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.GameplayAbilities.Networking
 {
@@ -7,7 +8,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         /// <summary>
         /// Computes a deterministic checksum from wire-format values. The tag buffer is sorted in place.
         /// </summary>
-        public static uint Compute(
+        public static ulong Compute(
             GrantedAbilityEntry[] abilities,
             int abilityCount,
             EffectReplicationData[] effects,
@@ -17,7 +18,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             int[] tagHashes,
             int tagCount)
         {
-            uint hash = 2166136261u;
+            ulong hash = Fnv1a64.OffsetBasis;
             hash = HashUInt(hash, 0x4741534Eu);
 
             int safeAbilityCount = abilities != null ? Math.Min(abilityCount, abilities.Length) : 0;
@@ -85,33 +86,25 @@ namespace CycloneGames.GameplayAbilities.Networking
             return hash;
         }
 
-        private static uint HashBool(uint hash, bool value)
+        private static ulong HashBool(ulong hash, bool value)
         {
             return HashUInt(hash, value ? 1u : 0u);
         }
 
-        private static uint HashInt(uint hash, int value)
+        private static ulong HashInt(ulong hash, int value)
         {
             return HashUInt(hash, unchecked((uint)value));
         }
 
-        private static uint HashLong(uint hash, long value)
+        private static ulong HashLong(ulong hash, long value)
         {
             hash = HashUInt(hash, unchecked((uint)value));
             return HashUInt(hash, unchecked((uint)(value >> 32)));
         }
 
-        private static uint HashUInt(uint hash, uint value)
+        private static ulong HashUInt(ulong hash, uint value)
         {
-            hash ^= value & 0xFFu;
-            hash *= 16777619u;
-            hash ^= (value >> 8) & 0xFFu;
-            hash *= 16777619u;
-            hash ^= (value >> 16) & 0xFFu;
-            hash *= 16777619u;
-            hash ^= (value >> 24) & 0xFFu;
-            hash *= 16777619u;
-            return hash;
+            return Fnv1a64.CombineUInt32LittleEndian(hash, value);
         }
     }
 }

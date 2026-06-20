@@ -2,7 +2,8 @@
     "name": "CycloneGames.BehaviorTree.Runtime",
     "rootNamespace": "",
     "references": [
-        "UniTask"
+        "UniTask",
+        "CycloneGames.Hash.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

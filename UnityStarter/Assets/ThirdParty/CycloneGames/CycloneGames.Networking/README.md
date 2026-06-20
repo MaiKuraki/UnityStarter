@@ -208,6 +208,57 @@ public readonly struct HitConfirmMessage
 
 Register the manifest through `INetworkMessageCatalog.RegisterProtocolManifest`. The catalog rejects overlapping ranges and duplicate ids.
 
+### Module Protocol & Handshake
+
+Every Cyclone domain module wraps its manifest and version window in a single
+`NetworkModuleProtocol`, so the version check, catalog resolution, and registration logic
+live in one place instead of being copied per module:
+
+```csharp
+public static class ProjectCombatProtocol
+{
+    public const byte PROTOCOL_VERSION = 1;
+    public const byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
+
+    public static readonly NetworkProtocolManifest DefaultManifest = CreateManifest();
+
+    public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
+        DefaultManifest,
+        NetworkProtocolVersion.Create(PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION));
+
+    public static bool TryRegister(INetworkManager net) => Module.TryRegister(net);
+    public static bool IsSupportedProtocolVersion(byte v) => Module.IsSupportedProtocolVersion(v);
+}
+```
+
+A connection-level handshake message implements `INetworkProtocolHandshake` so the
+version/fingerprint negotiation is written once. Implement it with explicit interface
+members to keep the wire fields intact, and route compatibility checks through
+`NetworkProtocolHandshake.Negotiate` (zero-GC via a generic `in` constraint):
+
+```csharp
+public struct CombatHandshake : INetworkProtocolHandshake
+{
+    public ulong ProtocolFingerprint;
+    public byte MinimumSupportedProtocolVersion;
+    public byte CurrentProtocolVersion;
+
+    ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
+    byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
+    byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+    ulong INetworkProtocolHandshake.DomainStateHash => 0UL; // or a module-specific hash
+
+    public NetworkHandshakeResult Negotiate()
+        => NetworkProtocolHandshake.Negotiate(this, ProjectCombatProtocol.Module);
+}
+```
+
+`Negotiate` returns a `NetworkHandshakeResult` (`Compatible`, `Malformed`,
+`FingerprintMismatch`, `VersionIncompatible`, `DomainStateMismatch`) so rejections are
+diagnosable. Set `DomainStateHash` together with `requireDomainStateMatch: true` when peers
+must also agree on a module-specific fingerprint (for example a shared gameplay-tag manifest
+or behavior-tree template).
+
 ## Runtime Context
 
 `NetworkRuntimeContext` stores services exposed by an adapter instance. The constructor registers the network manager, message catalog, and transport when present.

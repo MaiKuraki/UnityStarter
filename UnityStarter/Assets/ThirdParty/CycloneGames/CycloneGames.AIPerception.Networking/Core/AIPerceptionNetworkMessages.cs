@@ -31,7 +31,7 @@ namespace CycloneGames.AIPerception.Networking
         AuthoritySnapshot = 1 << 3
     }
 
-    public struct AIPerceptionManifestHandshakeMessage
+    public struct AIPerceptionManifestHandshakeMessage : INetworkProtocolHandshake
     {
         public ulong ProtocolFingerprint;
         public byte MinimumSupportedProtocolVersion;
@@ -53,12 +53,14 @@ namespace CycloneGames.AIPerception.Networking
             PerceptionProfileHash = perceptionProfileHash;
         }
 
+        ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
+        byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
+        byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+        ulong INetworkProtocolHandshake.DomainStateHash => PerceptionProfileHash;
+
         public bool IsCompatibleWithLocalProtocol()
         {
-            return AIPerceptionNetworkProtocol.IsSupportedProtocolVersion(CurrentProtocolVersion) &&
-                   MinimumSupportedProtocolVersion <= AIPerceptionNetworkProtocol.PROTOCOL_VERSION &&
-                   CurrentProtocolVersion >= AIPerceptionNetworkProtocol.MIN_SUPPORTED_PROTOCOL_VERSION &&
-                   ProtocolFingerprint == AIPerceptionNetworkProtocol.ProtocolFingerprint;
+            return NetworkProtocolHandshake.IsCompatible(this, AIPerceptionNetworkProtocol.Module);
         }
 
         public static AIPerceptionManifestHandshakeMessage CreateLocal(
@@ -118,7 +120,7 @@ namespace CycloneGames.AIPerception.Networking
         public int Tick;
         public AIPerceptionNetworkEventKind EventKind;
         public byte ProtocolVersion;
-        public uint StateHash;
+        public ulong StateHash;
         public AIPerceptionDetectionEntry Entry;
 
         public AIPerceptionDetectionEventMessage(
@@ -127,7 +129,7 @@ namespace CycloneGames.AIPerception.Networking
             int tick,
             AIPerceptionNetworkEventKind eventKind,
             byte protocolVersion,
-            uint stateHash,
+            ulong stateHash,
             in AIPerceptionDetectionEntry entry)
         {
             ObserverNetworkId = observerNetworkId;
@@ -158,7 +160,7 @@ namespace CycloneGames.AIPerception.Networking
         public int Tick;
         public AIPerceptionNetworkSensorKind SensorKind;
         public byte ProtocolVersion;
-        public uint StateHash;
+        public ulong StateHash;
         public AIPerceptionDetectionEntry[] Entries;
 
         public AIPerceptionDetectionSnapshotMessage(
@@ -167,7 +169,7 @@ namespace CycloneGames.AIPerception.Networking
             int tick,
             AIPerceptionNetworkSensorKind sensorKind,
             byte protocolVersion,
-            uint stateHash,
+            ulong stateHash,
             AIPerceptionDetectionEntry[] entries)
         {
             ObserverNetworkId = observerNetworkId;
@@ -202,7 +204,7 @@ namespace CycloneGames.AIPerception.Networking
         public uint AuthorityGeneration;
         public ushort SnapshotSequence;
         public int SnapshotTick;
-        public uint SnapshotStateHash;
+        public ulong SnapshotStateHash;
 
         public AIPerceptionAuthorityTransferMessage(
             uint observerNetworkId,
@@ -213,7 +215,7 @@ namespace CycloneGames.AIPerception.Networking
             uint authorityGeneration,
             ushort snapshotSequence,
             int snapshotTick,
-            uint snapshotStateHash)
+            ulong snapshotStateHash)
         {
             ObserverNetworkId = observerNetworkId;
             PreviousOwnerConnectionId = previousOwnerConnectionId;
@@ -236,7 +238,7 @@ namespace CycloneGames.AIPerception.Networking
         public int Tick;
         public AIPerceptionNetworkSensorKind SensorKind;
         public byte ProtocolVersion;
-        public uint LastKnownStateHash;
+        public ulong LastKnownStateHash;
 
         public AIPerceptionFullStateRequestMessage(
             uint observerNetworkId,
@@ -244,7 +246,7 @@ namespace CycloneGames.AIPerception.Networking
             int tick,
             AIPerceptionNetworkSensorKind sensorKind,
             byte protocolVersion,
-            uint lastKnownStateHash)
+            ulong lastKnownStateHash)
         {
             ObserverNetworkId = observerNetworkId;
             Sequence = sequence;

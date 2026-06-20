@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using CycloneGames.Hash.Core;
 using CycloneGames.Networking.Security;
 using CycloneGames.Networking.Serialization;
 using Nakama;
@@ -952,8 +953,8 @@ namespace CycloneGames.Networking.Adapter.Nakama
             if (string.IsNullOrEmpty(value))
                 return 1UL;
 
-            const ulong offset = 14695981039346656037UL;
-            const ulong prime = 1099511628211UL;
+            const ulong offset = Fnv1a64.OffsetBasis;
+            const ulong prime = Fnv1a64.Prime;
 
             ulong hash = offset;
             for (int i = 0; i < value.Length; i++)

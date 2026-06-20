@@ -73,7 +73,7 @@ namespace CycloneGames.BehaviorTree.Networking
             var payload = new byte[segment.Count];
             Buffer.BlockCopy(segment.Array, segment.Offset, payload, 0, segment.Count);
 
-            uint blackboardHash = blackboard.ComputeHash();
+            ulong blackboardHash = blackboard.ComputeHash();
             message = new BehaviorTreeStatePayloadMessage(
                 targetNetworkId,
                 sequence,
@@ -104,7 +104,7 @@ namespace CycloneGames.BehaviorTree.Networking
                 throw new ArgumentNullException(nameof(tree));
             }
 
-            uint blackboardHash = tree.Blackboard != null ? tree.Blackboard.ComputeHash() : 0u;
+            ulong blackboardHash = tree.Blackboard != null ? tree.Blackboard.ComputeHash() : 0UL;
             return new BehaviorTreeStatePayloadMessage(
                 targetNetworkId,
                 sequence,
@@ -177,7 +177,7 @@ namespace CycloneGames.BehaviorTree.Networking
                 throw new ArgumentNullException(nameof(localTree));
             }
 
-            uint localHash = localTree.Blackboard != null ? localTree.Blackboard.ComputeHash() : 0u;
+            ulong localHash = localTree.Blackboard != null ? localTree.Blackboard.ComputeHash() : 0UL;
             return new BehaviorTreeDesyncReportMessage(
                 targetNetworkId,
                 sequence,

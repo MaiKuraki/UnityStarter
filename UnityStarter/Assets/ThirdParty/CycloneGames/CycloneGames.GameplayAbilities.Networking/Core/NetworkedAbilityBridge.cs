@@ -38,12 +38,29 @@ namespace CycloneGames.GameplayAbilities.Networking
         public const ushort MsgFullState = MESSAGE_ID_BASE + 40;
         public const ushort MsgFullStateRequest = MESSAGE_ID_BASE + 41;
         public const ushort MsgStateSyncMetadata = MESSAGE_ID_BASE + 42;
+        public const ushort MsgManifestHandshake = MESSAGE_ID_BASE + 50;
+
+        public const byte PROTOCOL_VERSION = 1;
+        public const byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 
         public static readonly NetworkMessageIdRange MessageRange = new NetworkMessageIdRange(
             MessageOwner,
             MESSAGE_ID_BASE,
             MESSAGE_ID_MAX,
             NetworkMessageKind.Module);
+
+        public static readonly NetworkProtocolManifest DefaultManifest = CreateProtocolManifest();
+
+        public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
+            DefaultManifest,
+            NetworkProtocolVersion.Create(PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION));
+
+        public static ulong ProtocolFingerprint => Module.Fingerprint;
+
+        public static bool IsSupportedProtocolVersion(byte protocolVersion)
+        {
+            return Module.IsSupportedProtocolVersion(protocolVersion);
+        }
 
         private readonly INetworkManager _networkManager;
         private readonly GASNetworkSerializerOptions _serializerOptions;
@@ -107,67 +124,47 @@ namespace CycloneGames.GameplayAbilities.Networking
 
         public static bool TryRegisterMessageCatalog(INetworkManager networkManager)
         {
-            if (networkManager is not INetworkRuntimeContextProvider provider || provider.RuntimeContext == null)
-                return false;
-
-            if (!provider.RuntimeContext.TryGetService(out INetworkMessageCatalog catalog))
-                return false;
-
-            RegisterMessageCatalog(catalog);
-            return true;
+            return Module.TryRegister(networkManager);
         }
 
         public static void RegisterMessageCatalog(INetworkMessageCatalog catalog)
         {
-            if (catalog == null)
-                throw new ArgumentNullException(nameof(catalog));
-
-            catalog.RegisterModuleRange(MessageRange);
-
-            RegisterMessage<AbilityActivateRequest>(catalog, MsgAbilityActivateRequest, NetworkChannel.Reliable);
-            RegisterMessage<AbilityActivateConfirm>(catalog, MsgAbilityActivateConfirm, NetworkChannel.Reliable);
-            RegisterMessage<AbilityActivateReject>(catalog, MsgAbilityActivateReject, NetworkChannel.Reliable);
-            RegisterMessage<AbilityEndMessage>(catalog, MsgAbilityEnd, NetworkChannel.Reliable);
-            RegisterMessage<AbilityCancelMessage>(catalog, MsgAbilityCancel, NetworkChannel.Reliable);
-            RegisterMessage<EffectReplicationData>(catalog, MsgEffectApplied, NetworkChannel.Reliable);
-            RegisterMessage<EffectRemoveData>(catalog, MsgEffectRemoved, NetworkChannel.Reliable);
-            RegisterMessage<EffectStackChangeData>(catalog, MsgEffectStackChanged, NetworkChannel.Reliable);
-            RegisterMessage<EffectUpdateData>(catalog, MsgEffectUpdated, NetworkChannel.Reliable);
-            RegisterMessage<AttributeUpdateData>(catalog, MsgAttributeUpdate, NetworkChannel.UnreliableSequenced);
-            RegisterMessage<TagUpdateData>(catalog, MsgTagUpdate, NetworkChannel.Reliable);
-            RegisterMessage<AbilityMulticastData>(catalog, MsgAbilityMulticast, NetworkChannel.Reliable);
-            RegisterMessage<GASFullStateData>(catalog, MsgFullState, NetworkChannel.Reliable);
-            RegisterMessage<FullStateRequest>(catalog, MsgFullStateRequest, NetworkChannel.Reliable);
-            RegisterMessage<GASStateSyncMetadata>(catalog, MsgStateSyncMetadata, NetworkChannel.Reliable);
+            Module.Register(catalog);
         }
 
-        private static void RegisterMessage<T>(INetworkMessageCatalog catalog, ushort messageId, NetworkChannel channel) where T : struct
+        public static NetworkProtocolManifest CreateProtocolManifest()
         {
-            if (!MessageRange.Contains(messageId))
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(messageId),
-                    messageId,
-                    $"GameplayAbilities message ids must be inside {MessageRange}.");
-            }
-
-            NetworkMessageDescriptor descriptor = NetworkMessageDescriptor.Create<T>(
-                messageId,
+            var builder = new NetworkProtocolManifestBuilder(
                 MessageOwner,
-                NetworkMessageKind.Module,
-                channel);
-
-            if (catalog.TryRegister(descriptor))
-                return;
-
-            if (catalog.TryGet(messageId, out NetworkMessageDescriptor existing)
-                && existing.SchemaHash == descriptor.SchemaHash
-                && string.Equals(existing.Owner, descriptor.Owner, StringComparison.Ordinal))
+                MESSAGE_ID_BASE,
+                MESSAGE_ID_MAX,
+                NetworkMessageKind.Module)
             {
-                return;
-            }
+                ProtocolId = MessageOwner,
+                CurrentVersion = PROTOCOL_VERSION,
+                MinimumSupportedVersion = MIN_SUPPORTED_PROTOCOL_VERSION
+            };
 
-            throw new InvalidOperationException($"Message id {messageId} is already registered by {existing.Owner}:{existing.Name}.");
+            builder
+                .SetMetadata("module", "GameplayAbilities")
+                .AddMessage<GASManifestHandshakeMessage>(MsgManifestHandshake, NetworkChannel.Reliable, 32)
+                .AddMessage<AbilityActivateRequest>(MsgAbilityActivateRequest, NetworkChannel.Reliable)
+                .AddMessage<AbilityActivateConfirm>(MsgAbilityActivateConfirm, NetworkChannel.Reliable)
+                .AddMessage<AbilityActivateReject>(MsgAbilityActivateReject, NetworkChannel.Reliable)
+                .AddMessage<AbilityEndMessage>(MsgAbilityEnd, NetworkChannel.Reliable)
+                .AddMessage<AbilityCancelMessage>(MsgAbilityCancel, NetworkChannel.Reliable)
+                .AddMessage<EffectReplicationData>(MsgEffectApplied, NetworkChannel.Reliable)
+                .AddMessage<EffectRemoveData>(MsgEffectRemoved, NetworkChannel.Reliable)
+                .AddMessage<EffectStackChangeData>(MsgEffectStackChanged, NetworkChannel.Reliable)
+                .AddMessage<EffectUpdateData>(MsgEffectUpdated, NetworkChannel.Reliable)
+                .AddMessage<AttributeUpdateData>(MsgAttributeUpdate, NetworkChannel.UnreliableSequenced)
+                .AddMessage<TagUpdateData>(MsgTagUpdate, NetworkChannel.Reliable)
+                .AddMessage<AbilityMulticastData>(MsgAbilityMulticast, NetworkChannel.Reliable)
+                .AddMessage<GASFullStateData>(MsgFullState, NetworkChannel.Reliable)
+                .AddMessage<FullStateRequest>(MsgFullStateRequest, NetworkChannel.Reliable)
+                .AddMessage<GASStateSyncMetadata>(MsgStateSyncMetadata, NetworkChannel.Reliable);
+
+            return builder.Build();
         }
 
         /// <summary>

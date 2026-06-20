@@ -50,7 +50,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
             _lastServiceTime = GetTime();
-            _currentInterval = ComputeInterval();
+            _currentInterval = ComputeInterval(blackboard);
             // Run service immediately on start
             RunService(blackboard);
         }
@@ -64,7 +64,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             if (now - _lastServiceTime >= _currentInterval)
             {
                 _lastServiceTime = now;
-                _currentInterval = ComputeInterval();
+                _currentInterval = ComputeInterval(blackboard);
                 RunService(blackboard);
             }
 
@@ -88,10 +88,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             return RuntimeBTTime.GetUnityTime(UseUnscaledTime);
         }
 
-        private double ComputeInterval()
+        private double ComputeInterval(RuntimeBlackboard blackboard)
         {
             if (RandomDeviation <= 0f) return Interval;
-            float deviation = UnityEngine.Random.Range(-RandomDeviation, RandomDeviation);
+            var randomProvider = blackboard.GetService<IRuntimeBTRandomProvider>();
+            float deviation = randomProvider != null
+                ? randomProvider.Range(-RandomDeviation, RandomDeviation)
+                : UnityEngine.Random.Range(-RandomDeviation, RandomDeviation);
             float result = Interval + deviation;
             return result > 0f ? result : 0f;
         }
