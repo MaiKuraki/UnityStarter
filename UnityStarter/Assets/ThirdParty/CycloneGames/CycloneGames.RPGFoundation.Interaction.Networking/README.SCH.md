@@ -2,7 +2,9 @@
 
 [English](./README.md) | 简体中文
 
-`CycloneGames.RPGFoundation.Interaction.Networking` 是 RPGFoundation Interaction 的可选 Cyclone Networking 桥接包。它让基础 `CycloneGames.RPGFoundation` 包在没有 `CycloneGames.Networking` 时仍可独立使用，同时为网络项目提供适合传输的 interaction DTO、`NetworkVector3` 转换、authority validation helper、稳定 message ID，以及 message catalog registration。
+`CycloneGames.RPGFoundation.Interaction.Networking` 将 RPGFoundation Interaction 接入 `CycloneGames.Networking`。它定义与传输无关的 interaction request、cancel、result DTO，提供 network vector 转换 helper、authority validation helper 和消息 catalog 注册。
+
+基础 Interaction 模块不依赖 `CycloneGames.Networking`。只有当 interaction request 或 result 需要跨 Cyclone 网络边界传递时，才需要引用本桥接包。
 
 ## 包结构
 
@@ -25,69 +27,127 @@ CycloneGames.RPGFoundation.Interaction.Networking/
 
 | Assembly | 职责 | Unity 依赖 |
 | --- | --- | --- |
-| `CycloneGames.RPGFoundation.Interaction.Networking.Core` | Interaction DTO、vector conversion、authority bridge、Interaction module message range、message catalog registration | 否 |
-| `CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor` | Integration regression coverage | 否 |
+| `CycloneGames.RPGFoundation.Interaction.Networking.Core` | Interaction DTO、vector conversion、authority bridge、message range 和 catalog registration。 | 无 |
+| `CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor` | 覆盖 protocol 和 authority bridge 行为的 EditMode 测试。 | 无 |
 
-Runtime assembly 直接引用 `CycloneGames.RPGFoundation.Interaction.Core` 和 `CycloneGames.Networking.Core`。它不使用 PlayerSettings scripting define symbols、service locator、Unity lifecycle hook、package-driven `CYCLONE_*` compile gate，也不绑定某个 DI 容器。不包含 `CycloneGames.Networking` 的项目应省略这个包，并直接使用 `CycloneGames.RPGFoundation`。
+Core assembly 引用 `CycloneGames.RPGFoundation.Interaction.Core` 和 `CycloneGames.Networking.Core`。它不引用 UnityEngine、后端 SDK 类型、PlayerSettings scripting define symbols 或特定 DI 容器。
+
+## 核心概念
+
+| 类型 | 作用 |
+| --- | --- |
+| `InteractionNetworkRequest` | 携带 interaction request 数据，以及以 `NetworkVector3` 表示的 instigator position。 |
+| `InteractionNetworkCancelRequest` | 携带 request cancellation 数据。 |
+| `InteractionNetworkResult` | 携带 success、cancel reason、validation failure、queue position 和 world id。 |
+| `InteractionNetworkAuthorityBridge` | 使用 network DTO 调用 `InteractionAuthorityService`。 |
+| `InteractionNetworkVectorExtensions` | 在 Interaction vectors 和 `NetworkVector3` 之间转换。 |
+| `InteractionNetworkProtocol` | 拥有 Interaction 消息范围和 catalog descriptor。 |
+
+## Request 流程
+
+```mermaid
+graph LR
+    CoreRequest["InteractionRequest"]
+    Mapper["InteractionNetworkRequest.From"]
+    NetworkRequest["InteractionNetworkRequest"]
+    Manager["INetworkManager"]
+    Bridge["InteractionNetworkAuthorityBridge"]
+    Authority["InteractionAuthorityService"]
+    Result["InteractionNetworkResult"]
+
+    CoreRequest --> Mapper
+    Mapper --> NetworkRequest
+    NetworkRequest --> Manager
+    Manager --> Bridge
+    Bridge --> Authority
+    Authority --> Result
+```
 
 ## 协议
 
-`InteractionNetworkProtocol` 在通用 `NetworkMessageRanges.Module` 空间内声明自己的 Interaction package-owned 子区间（`13000-13999`），并把该 ownership 注册到 `INetworkMessageCatalog`。Interaction 当前占用前四个 ID。
+`InteractionNetworkProtocol` 在 Cyclone module range 中拥有 `13000-13999` 消息 ID。
 
-| Message | ID | Channel | 用途 |
-| --- | --- | --- | --- |
-| `REQUEST_MESSAGE_ID` | `13000` | Reliable | 客户端或 peer 请求一次交互。 |
-| `RESULT_MESSAGE_ID` | `13001` | Reliable | 权威端返回交互结果。 |
-| `CANCEL_REQUEST_MESSAGE_ID` | `13002` | Reliable | 客户端或权威端取消待处理交互。 |
-| `DETERMINISTIC_REQUEST_MESSAGE_ID` | `13003` | Reliable | 预留的确定性交互请求入口。 |
+| Message | ID | Channel | 作用 |
+| --- | ---: | --- | --- |
+| `REQUEST_MESSAGE_ID` | `13000` | Reliable | Interaction request。 |
+| `RESULT_MESSAGE_ID` | `13001` | Reliable | Authority result。 |
+| `CANCEL_REQUEST_MESSAGE_ID` | `13002` | Reliable | Pending interaction cancellation。 |
+| `DETERMINISTIC_REQUEST_MESSAGE_ID` | `13003` | Reliable | Deterministic request entry point。 |
 
-DI composition root 可以调用 `RegisterMessageCatalog(INetworkMessageCatalog)`；非 DI bootstrap code 可以在 network manager 暴露 `INetworkRuntimeContextProvider` 时调用 `TryRegisterMessageCatalog(INetworkManager)`。
+在 composition root 中注册协议：
 
 ```csharp
 using CycloneGames.Networking;
 using CycloneGames.RPGFoundation.Interaction.Networking;
 
-public sealed class InteractionNetworkComposition
+public static class InteractionNetworkInstaller
 {
-    public void Configure(INetworkMessageCatalog catalog)
+    public static void Configure(INetworkMessageCatalog catalog)
     {
         InteractionNetworkProtocol.RegisterMessageCatalog(catalog);
     }
 }
 ```
 
-## 使用方式
+## Request 映射
+
+在 adapter 边界将 Interaction core request 转换为 network request：
 
 ```csharp
 using CycloneGames.Networking;
 using CycloneGames.RPGFoundation.Interaction.Core;
 using CycloneGames.RPGFoundation.Interaction.Networking;
 
-public sealed class InteractionRequestMapper
+public static class InteractionNetworkMapper
 {
-    public InteractionNetworkRequest CreateNetworkRequest(InteractionRequest request, InteractionVector3 instigatorPosition)
+    public static InteractionNetworkRequest ToNetworkRequest(
+        InteractionRequest request,
+        InteractionVector3 instigatorPosition)
     {
-        return InteractionNetworkRequest.From(request, instigatorPosition.ToNetworkVector3());
-    }
-
-    public InteractionValidationResult Validate(InteractionAuthorityService authority, InteractionNetworkRequest request, int serverTick)
-    {
-        return authority.ValidateNetworkRequest(request, serverTick);
+        NetworkVector3 networkPosition = instigatorPosition.ToNetworkVector3();
+        return InteractionNetworkRequest.From(request, networkPosition);
     }
 }
 ```
 
-## Adapter 模型
+通过 `InteractionAuthorityService` 验证或入队请求：
 
-这个包只依赖 Cyclone networking abstraction。Mirror、Mirage、Nakama、Photon、sharding、backend identity、anti-cheat 或具体游戏的 ownership rule 应放在更高层 adapter 包中，再把 connection/session 数据映射到这些 DTO。
+```csharp
+using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.RPGFoundation.Interaction.Networking;
 
-## 持久化行为
+public sealed class InteractionAuthorityEndpoint
+{
+    private readonly InteractionNetworkAuthorityBridge _bridge;
 
-这个包不写入文件、资产、偏好、缓存数据或运行时存档。它只定义 runtime protocol metadata 和 value-type DTO helper。
+    public InteractionAuthorityEndpoint(InteractionAuthorityService authority)
+    {
+        _bridge = new InteractionNetworkAuthorityBridge(authority);
+    }
+
+    public InteractionValidationResult Validate(InteractionNetworkRequest request, int serverTick)
+    {
+        return _bridge.Validate(request, serverTick);
+    }
+}
+```
+
+## 扩展点
+
+- Connection ownership、authentication 和 backend identity mapping 放在接收网络请求的 adapter 中。
+- 项目自有 interaction 消息通过项目拥有的 `NetworkMessageKind.User` manifest 注册。
+- 在 Interaction 模块内配置自定义 `InteractionAuthorityService`，再通过 `InteractionNetworkAuthorityBridge` 暴露给网络层。
+
+## 持久化
+
+本包不写入文件、资产、偏好设置、缓存或运行时存档。它只定义 value-type DTO、protocol metadata 和 authority bridge helper。
 
 ## 验证
 
-- 构建 `CycloneGames.RPGFoundation.Interaction.Tests.Editor`。
-- Unity 刷新生成工程文件后，构建 `CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor`。
-- 构建 `CycloneGames.Networking.Tests.Editor`。
-- 在 Unity Editor 中运行 `CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor` EditMode tests。
+修改本包后运行以下检查：
+
+```text
+Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Interaction.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
+```

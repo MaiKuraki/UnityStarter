@@ -422,20 +422,23 @@ namespace CycloneGames.Networking.Security
             NetworkConstants.DefaultMaxPayloadSize,
             requireAuthenticatedConnection: false,
             requireEncryptedTransport: false,
-            enableReplayProtection: false);
+            enableReplayProtection: false,
+            requireSignature: false);
 
         public readonly NetworkMessageDirectionMask AllowedDirections;
         public readonly int MaxPayloadSize;
         public readonly bool RequireAuthenticatedConnection;
         public readonly bool RequireEncryptedTransport;
         public readonly bool EnableReplayProtection;
+        public readonly bool RequireSignature;
 
         public MessageSecurityPolicy(
             NetworkMessageDirectionMask allowedDirections,
             int maxPayloadSize,
             bool requireAuthenticatedConnection,
             bool requireEncryptedTransport,
-            bool enableReplayProtection)
+            bool enableReplayProtection,
+            bool requireSignature = false)
         {
             if (maxPayloadSize <= 0)
                 throw new ArgumentOutOfRangeException(nameof(maxPayloadSize));
@@ -445,6 +448,7 @@ namespace CycloneGames.Networking.Security
             RequireAuthenticatedConnection = requireAuthenticatedConnection;
             RequireEncryptedTransport = requireEncryptedTransport;
             EnableReplayProtection = enableReplayProtection;
+            RequireSignature = requireSignature;
         }
 
         public MessageSecurityPolicy WithMaxPayloadSize(int maxPayloadSize)
@@ -454,7 +458,8 @@ namespace CycloneGames.Networking.Security
                 maxPayloadSize,
                 RequireAuthenticatedConnection,
                 RequireEncryptedTransport,
-                EnableReplayProtection);
+                EnableReplayProtection,
+                RequireSignature);
         }
 
         public MessageSecurityPolicy WithAuthenticatedConnectionRequired(bool required)
@@ -464,7 +469,8 @@ namespace CycloneGames.Networking.Security
                 MaxPayloadSize,
                 required,
                 RequireEncryptedTransport,
-                EnableReplayProtection);
+                EnableReplayProtection,
+                RequireSignature);
         }
 
         public MessageSecurityPolicy WithEncryptedTransportRequired(bool required)
@@ -474,7 +480,8 @@ namespace CycloneGames.Networking.Security
                 MaxPayloadSize,
                 RequireAuthenticatedConnection,
                 required,
-                EnableReplayProtection);
+                EnableReplayProtection,
+                RequireSignature);
         }
 
         public MessageSecurityPolicy WithReplayProtection(bool enabled)
@@ -484,7 +491,19 @@ namespace CycloneGames.Networking.Security
                 MaxPayloadSize,
                 RequireAuthenticatedConnection,
                 RequireEncryptedTransport,
-                enabled);
+                enabled,
+                RequireSignature);
+        }
+
+        public MessageSecurityPolicy WithSignatureRequired(bool required)
+        {
+            return new MessageSecurityPolicy(
+                AllowedDirections,
+                MaxPayloadSize,
+                RequireAuthenticatedConnection,
+                RequireEncryptedTransport,
+                EnableReplayProtection,
+                required);
         }
 
         public MessageSecurityPolicy WithAllowedDirections(NetworkMessageDirectionMask allowedDirections)
@@ -494,7 +513,8 @@ namespace CycloneGames.Networking.Security
                 MaxPayloadSize,
                 RequireAuthenticatedConnection,
                 RequireEncryptedTransport,
-                EnableReplayProtection);
+                EnableReplayProtection,
+                RequireSignature);
         }
     }
 
@@ -507,10 +527,13 @@ namespace CycloneGames.Networking.Security
         PayloadTooLarge,
         AuthenticationRequired,
         EncryptionRequired,
-        ReplayRejected
+        ReplayRejected,
+        SignatureRequired,
+        SignatureRejected,
+        RateLimited
     }
 
-    public interface INetworkMessageSecurityConfigurable
+    public interface INetworkSecurityPolicyConfigurable
     {
         MessageSecurityPolicy DefaultMessageSecurityPolicy { get; }
         void SetDefaultMessageSecurityPolicy(MessageSecurityPolicy policy);
@@ -586,53 +609,6 @@ namespace CycloneGames.Networking.Security
         {
             lock (_syncRoot)
                 _frozen = true;
-        }
-
-        public MessageSecurityResult Validate(
-            in NetworkMessageEnvelope envelope,
-            INetConnection connection,
-            bool transportEncrypted,
-            NetworkReplayGuard replayGuard)
-        {
-            if (!envelope.IsValid)
-                return MessageSecurityResult.MalformedEnvelope;
-
-            if (envelope.Version > NetworkMessageEnvelope.CurrentVersion)
-                return MessageSecurityResult.UnsupportedVersion;
-
-            MessageSecurityPolicy policy = GetPolicy(envelope.MessageId);
-            if (!IsDirectionAllowed(policy.AllowedDirections, envelope.Direction))
-                return MessageSecurityResult.DirectionRejected;
-
-            if (envelope.PayloadLength > policy.MaxPayloadSize)
-                return MessageSecurityResult.PayloadTooLarge;
-
-            if (policy.RequireAuthenticatedConnection && (connection == null || !connection.IsAuthenticated))
-                return MessageSecurityResult.AuthenticationRequired;
-
-            if (policy.RequireEncryptedTransport && !transportEncrypted)
-                return MessageSecurityResult.EncryptionRequired;
-
-            if (policy.EnableReplayProtection)
-            {
-                if (replayGuard == null || connection == null || !replayGuard.TryAccept(connection.ConnectionId, envelope.MessageId, envelope.Sequence))
-                    return MessageSecurityResult.ReplayRejected;
-            }
-
-            return MessageSecurityResult.Valid;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool IsDirectionAllowed(NetworkMessageDirectionMask mask, NetworkMessageDirection direction)
-        {
-            return direction switch
-            {
-                NetworkMessageDirection.ClientToServer => (mask & NetworkMessageDirectionMask.ClientToServer) != 0,
-                NetworkMessageDirection.ServerToClient => (mask & NetworkMessageDirectionMask.ServerToClient) != 0,
-                NetworkMessageDirection.ServerBroadcast => (mask & NetworkMessageDirectionMask.ServerBroadcast) != 0,
-                NetworkMessageDirection.PeerToPeer => (mask & NetworkMessageDirectionMask.PeerToPeer) != 0,
-                _ => false
-            };
         }
 
         private void ThrowIfFrozen()

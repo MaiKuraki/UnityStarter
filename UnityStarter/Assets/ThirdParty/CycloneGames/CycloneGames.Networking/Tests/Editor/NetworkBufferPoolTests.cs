@@ -193,6 +193,11 @@ namespace CycloneGames.Networking.Tests.Editor
                 "test",
                 NetworkMessageKind.User,
                 NetworkChannel.Unreliable);
+            var userRange = new NetworkMessageIdRange(
+                "test",
+                NetworkConstants.UserMsgIdMin,
+                NetworkConstants.UserMsgIdMin + 9,
+                NetworkMessageKind.User);
             var moduleA = new NetworkMessageIdRange(
                 "test.a",
                 NetworkConstants.ModuleMsgIdMin,
@@ -209,10 +214,12 @@ namespace CycloneGames.Networking.Tests.Editor
 
             catalogA.RegisterModuleRange(moduleA);
             catalogA.RegisterModuleRange(moduleB);
+            catalogA.RegisterRange(userRange);
             catalogA.Register(first);
             catalogA.Register(second);
             catalogB.RegisterModuleRange(moduleB);
             catalogB.RegisterModuleRange(moduleA);
+            catalogB.RegisterRange(userRange);
             catalogB.Register(second);
             catalogB.Register(first);
 
@@ -252,6 +259,38 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
+        public void NetworkMessageCatalog_UserRangeRegistration_RejectsOverlaps()
+        {
+            var catalog = new NetworkMessageCatalog();
+            var first = new NetworkMessageIdRange(
+                "project.first",
+                NetworkConstants.UserMsgIdMin,
+                NetworkConstants.UserMsgIdMin + 99,
+                NetworkMessageKind.User);
+            var overlap = new NetworkMessageIdRange(
+                "project.second",
+                NetworkConstants.UserMsgIdMin + 50,
+                NetworkConstants.UserMsgIdMin + 150,
+                NetworkMessageKind.User);
+            var nonOverlapping = new NetworkMessageIdRange(
+                "project.second",
+                NetworkConstants.UserMsgIdMin + 100,
+                NetworkConstants.UserMsgIdMin + 199,
+                NetworkMessageKind.User);
+
+            Assert.IsTrue(catalog.TryRegisterRange(first));
+            Assert.IsTrue(catalog.TryRegisterRange(first));
+            Assert.AreEqual(1, catalog.RangeCount);
+            Assert.IsFalse(catalog.TryRegisterRange(overlap));
+            Assert.IsTrue(catalog.TryRegisterRange(nonOverlapping));
+            Assert.AreEqual(2, catalog.RangeCount);
+            Assert.IsTrue(catalog.TryGetRegisteredRange(
+                NetworkConstants.UserMsgIdMin + 1,
+                out NetworkMessageIdRange range));
+            Assert.AreEqual(first.Name, range.Name);
+        }
+
+        [Test]
         public void NetworkMessageCatalog_ModuleDescriptors_RequireRegisteredOwnerRange()
         {
             var catalog = new NetworkMessageCatalog();
@@ -283,14 +322,51 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
+        public void NetworkMessageCatalog_UserDescriptors_RequireRegisteredOwnerRange()
+        {
+            var catalog = new NetworkMessageCatalog();
+            var first = new NetworkMessageIdRange(
+                "project.first",
+                NetworkConstants.UserMsgIdMin,
+                NetworkConstants.UserMsgIdMin + 99,
+                NetworkMessageKind.User);
+            NetworkMessageDescriptor missingRangeDescriptor = NetworkMessageDescriptor.Create<SmallRpcData>(
+                NetworkConstants.UserMsgIdMin,
+                first.Name,
+                NetworkMessageKind.User);
+
+            Assert.Throws<ArgumentException>(() => catalog.TryRegister(missingRangeDescriptor));
+
+            catalog.RegisterRange(first);
+
+            NetworkMessageDescriptor descriptor = NetworkMessageDescriptor.Create<SmallRpcData>(
+                NetworkConstants.UserMsgIdMin,
+                first.Name,
+                NetworkMessageKind.User);
+            NetworkMessageDescriptor wrongOwner = NetworkMessageDescriptor.Create<LargeRpcData>(
+                NetworkConstants.UserMsgIdMin + 1,
+                "project.other",
+                NetworkMessageKind.User);
+
+            Assert.IsTrue(catalog.TryRegister(descriptor));
+            Assert.Throws<ArgumentException>(() => catalog.TryRegister(wrongOwner));
+        }
+
+        [Test]
         public void NetworkMessageCatalog_RejectsDuplicateMessageIds()
         {
             var catalog = new NetworkMessageCatalog();
+            var userRange = new NetworkMessageIdRange(
+                "test",
+                NetworkConstants.UserMsgIdMin,
+                NetworkConstants.UserMsgIdMin,
+                NetworkMessageKind.User);
             NetworkMessageDescriptor descriptor = NetworkMessageDescriptor.Create<SmallRpcData>(
                 NetworkConstants.UserMsgIdMin,
                 "test",
                 NetworkMessageKind.User);
 
+            catalog.RegisterRange(userRange);
             Assert.IsTrue(catalog.TryRegister(descriptor));
             Assert.IsFalse(catalog.TryRegister(descriptor));
         }

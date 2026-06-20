@@ -2,7 +2,9 @@
 
 English | [Simplified Chinese](./README.SCH.md)
 
-`CycloneGames.RPGFoundation.Interaction.Networking` is the optional Cyclone Networking bridge for RPGFoundation Interaction. It keeps the base `CycloneGames.RPGFoundation` package usable without `CycloneGames.Networking`, while giving networked projects transport-friendly interaction DTOs, `NetworkVector3` conversion, authority validation helpers, stable message IDs, and message catalog registration.
+`CycloneGames.RPGFoundation.Interaction.Networking` connects RPGFoundation Interaction to `CycloneGames.Networking`. It defines transport-neutral interaction request, cancel, and result DTOs, network vector conversion helpers, authority validation helpers, and message catalog registration.
+
+The base Interaction module remains usable without `CycloneGames.Networking`. This bridge is only required when interaction requests or results cross a Cyclone network boundary.
 
 ## Package Layout
 
@@ -23,71 +25,129 @@ CycloneGames.RPGFoundation.Interaction.Networking/
 
 ## Assembly Boundary
 
-| Assembly | Responsibility | Unity dependency |
+| Assembly | Role | Unity dependency |
 | --- | --- | --- |
-| `CycloneGames.RPGFoundation.Interaction.Networking.Core` | Interaction DTOs, vector conversion, authority bridge, Interaction module message range, message catalog registration | No |
-| `CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor` | Integration regression coverage | No |
+| `CycloneGames.RPGFoundation.Interaction.Networking.Core` | Interaction DTOs, vector conversion, authority bridge, message range, and catalog registration. | No |
+| `CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor` | EditMode coverage for protocol and authority bridge behavior. | No |
 
-The runtime assembly directly references `CycloneGames.RPGFoundation.Interaction.Core` and `CycloneGames.Networking.Core`. It does not use PlayerSettings scripting define symbols, service locators, Unity lifecycle hooks, package-driven `CYCLONE_*` compile gates, or a specific DI container. Projects that do not include `CycloneGames.Networking` should omit this package and use `CycloneGames.RPGFoundation` directly.
+The core assembly references `CycloneGames.RPGFoundation.Interaction.Core` and `CycloneGames.Networking.Core`. It does not reference UnityEngine, backend SDK types, PlayerSettings scripting define symbols, or a DI container.
+
+## Core Concepts
+
+| Type | Purpose |
+| --- | --- |
+| `InteractionNetworkRequest` | Carries interaction request data plus the instigator position as `NetworkVector3`. |
+| `InteractionNetworkCancelRequest` | Carries request cancellation data. |
+| `InteractionNetworkResult` | Carries success, cancel reason, validation failure, queue position, and world id. |
+| `InteractionNetworkAuthorityBridge` | Calls `InteractionAuthorityService` using network DTOs. |
+| `InteractionNetworkVectorExtensions` | Converts between Interaction vectors and `NetworkVector3`. |
+| `InteractionNetworkProtocol` | Owns the Interaction message range and catalog descriptors. |
+
+## Request Flow
+
+```mermaid
+graph LR
+    CoreRequest["InteractionRequest"]
+    Mapper["InteractionNetworkRequest.From"]
+    NetworkRequest["InteractionNetworkRequest"]
+    Manager["INetworkManager"]
+    Bridge["InteractionNetworkAuthorityBridge"]
+    Authority["InteractionAuthorityService"]
+    Result["InteractionNetworkResult"]
+
+    CoreRequest --> Mapper
+    Mapper --> NetworkRequest
+    NetworkRequest --> Manager
+    Manager --> Bridge
+    Bridge --> Authority
+    Authority --> Result
+```
 
 ## Protocol
 
-`InteractionNetworkProtocol` declares a package-owned Interaction sub-range inside the generic `NetworkMessageRanges.Module` space (`13000-13999`) and registers that ownership with `INetworkMessageCatalog`. Interaction currently owns the first four IDs.
+`InteractionNetworkProtocol` owns message ids `13000-13999` in the Cyclone module range.
 
 | Message | ID | Channel | Purpose |
-| --- | --- | --- | --- |
-| `REQUEST_MESSAGE_ID` | `13000` | Reliable | Client or peer requests an interaction. |
-| `RESULT_MESSAGE_ID` | `13001` | Reliable | Authority returns an interaction result. |
-| `CANCEL_REQUEST_MESSAGE_ID` | `13002` | Reliable | Client or authority cancels a pending interaction. |
-| `DETERMINISTIC_REQUEST_MESSAGE_ID` | `13003` | Reliable | Reserved deterministic interaction request entry point. |
+| --- | ---: | --- | --- |
+| `REQUEST_MESSAGE_ID` | `13000` | Reliable | Interaction request. |
+| `RESULT_MESSAGE_ID` | `13001` | Reliable | Authority result. |
+| `CANCEL_REQUEST_MESSAGE_ID` | `13002` | Reliable | Pending interaction cancellation. |
+| `DETERMINISTIC_REQUEST_MESSAGE_ID` | `13003` | Reliable | Deterministic request entry point. |
 
-Use `RegisterMessageCatalog(INetworkMessageCatalog)` from DI composition roots, or `TryRegisterMessageCatalog(INetworkManager)` from non-DI bootstrap code when the network manager exposes `INetworkRuntimeContextProvider`.
+Register the protocol in a composition root:
 
 ```csharp
 using CycloneGames.Networking;
 using CycloneGames.RPGFoundation.Interaction.Networking;
 
-public sealed class InteractionNetworkComposition
+public static class InteractionNetworkInstaller
 {
-    public void Configure(INetworkMessageCatalog catalog)
+    public static void Configure(INetworkMessageCatalog catalog)
     {
         InteractionNetworkProtocol.RegisterMessageCatalog(catalog);
     }
 }
 ```
 
-## Usage
+## Request Mapping
+
+Convert an Interaction core request into a network request at the adapter boundary:
 
 ```csharp
 using CycloneGames.Networking;
 using CycloneGames.RPGFoundation.Interaction.Core;
 using CycloneGames.RPGFoundation.Interaction.Networking;
 
-public sealed class InteractionRequestMapper
+public static class InteractionNetworkMapper
 {
-    public InteractionNetworkRequest CreateNetworkRequest(InteractionRequest request, InteractionVector3 instigatorPosition)
+    public static InteractionNetworkRequest ToNetworkRequest(
+        InteractionRequest request,
+        InteractionVector3 instigatorPosition)
     {
-        return InteractionNetworkRequest.From(request, instigatorPosition.ToNetworkVector3());
-    }
-
-    public InteractionValidationResult Validate(InteractionAuthorityService authority, InteractionNetworkRequest request, int serverTick)
-    {
-        return authority.ValidateNetworkRequest(request, serverTick);
+        NetworkVector3 networkPosition = instigatorPosition.ToNetworkVector3();
+        return InteractionNetworkRequest.From(request, networkPosition);
     }
 }
 ```
 
-## Adapter Model
+Validate or queue the request through `InteractionAuthorityService`:
 
-This package depends only on the Cyclone networking abstraction. Mirror, Mirage, Nakama, Photon, sharding, backend identity, anti-cheat, or game-specific ownership rules should live in higher-level adapter packages that map their connection/session data into these DTOs.
+```csharp
+using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.RPGFoundation.Interaction.Networking;
+
+public sealed class InteractionAuthorityEndpoint
+{
+    private readonly InteractionNetworkAuthorityBridge _bridge;
+
+    public InteractionAuthorityEndpoint(InteractionAuthorityService authority)
+    {
+        _bridge = new InteractionNetworkAuthorityBridge(authority);
+    }
+
+    public InteractionValidationResult Validate(InteractionNetworkRequest request, int serverTick)
+    {
+        return _bridge.Validate(request, serverTick);
+    }
+}
+```
+
+## Extension Points
+
+- Keep connection ownership, authentication, and backend identity mapping in the adapter that receives the network request.
+- Register project-specific interaction messages in a project-owned `NetworkMessageKind.User` manifest.
+- Use custom `InteractionAuthorityService` configuration in the Interaction module, then expose it through `InteractionNetworkAuthorityBridge`.
 
 ## Persistence
 
-This package does not write files, assets, preferences, cache data, or runtime save data. It only defines runtime protocol metadata and value-type DTO helpers.
+This package does not write files, assets, preferences, caches, or runtime save data. It only defines value-type DTOs, protocol metadata, and authority bridge helpers.
 
 ## Validation
 
-- Build `CycloneGames.RPGFoundation.Interaction.Tests.Editor`.
-- Build `CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor` after Unity refreshes generated project files.
-- Build `CycloneGames.Networking.Tests.Editor`.
-- In Unity Editor, run the `CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor` EditMode tests.
+Run these checks after changing the package:
+
+```text
+Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Interaction.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
+```

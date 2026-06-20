@@ -1,0 +1,20 @@
+{
+    "name": "CycloneGames.AIPerception.Networking.Runtime",
+    "rootNamespace": "CycloneGames.AIPerception.Networking",
+    "references": [
+        "CycloneGames.AIPerception",
+        "CycloneGames.AIPerception.Networking.Core",
+        "CycloneGames.Networking.Core",
+        "Unity.Mathematics"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
+

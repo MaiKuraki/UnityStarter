@@ -85,6 +85,11 @@ namespace CycloneGames.Networking
                 throw new ArgumentException("Protocol message range is invalid.");
             }
 
+            if (!NetworkMessageRanges.ContainsRange(MessageRange))
+            {
+                throw new ArgumentException($"Protocol message range {MessageRange} is outside the reserved global range for kind {MessageRange.Kind}.");
+            }
+
             for (int i = 0; i < _messages.Length; i++)
             {
                 NetworkMessageDescriptor descriptor = _messages[i];
@@ -281,8 +286,7 @@ namespace CycloneGames.Networking
                 }
             }
 
-            if (manifest.MessageRange.Kind == NetworkMessageKind.Module
-                && !catalog.TryRegisterModuleRange(manifest.MessageRange))
+            if (!catalog.TryRegisterRange(manifest.MessageRange))
             {
                 return false;
             }

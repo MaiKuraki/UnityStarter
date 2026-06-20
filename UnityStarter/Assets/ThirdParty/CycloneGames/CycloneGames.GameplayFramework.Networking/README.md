@@ -2,7 +2,9 @@
 
 English | [Simplified Chinese](./README.SCH.md)
 
-`CycloneGames.GameplayFramework.Networking` is the optional Cyclone Networking bridge for `CycloneGames.GameplayFramework`. It keeps the base GameplayFramework package usable without `CycloneGames.Networking`, while giving Cyclone-based projects a ready session adapter, stable GameplayFramework message IDs, actor migration serialization, server-authoritative role helpers, and observer resolution for owner/team/area replication.
+`CycloneGames.GameplayFramework.Networking` connects `CycloneGames.GameplayFramework` to `CycloneGames.Networking`. It provides a `GameSession` adapter, actor migration serialization helpers, message catalog registration, authority role resolution, and observer selection data for owner, team, area, and always-relevant replication.
+
+The base `CycloneGames.GameplayFramework` package remains network-agnostic. This bridge is only needed when GameplayFramework objects participate in Cyclone Networking flows.
 
 ## Package Layout
 
@@ -22,78 +24,147 @@ CycloneGames.GameplayFramework.Networking/
 
 ## Assembly Boundary
 
-| Assembly | Responsibility | Unity dependency |
+| Assembly | Role | Unity dependency |
 | --- | --- | --- |
-| `CycloneGames.GameplayFramework.Networking.Core` | `GameSession` networking bridge, GameplayFramework message catalog, actor migration wire serializer, authority and observer helpers | Yes |
-| `CycloneGames.GameplayFramework.Networking.Tests.Editor` | Integration regression coverage | Yes |
+| `CycloneGames.GameplayFramework.Networking.Core` | Session bridge, protocol registration, actor migration serialization, authority helpers, observer registry, and observer resolver. | Yes |
+| `CycloneGames.GameplayFramework.Networking.Tests.Editor` | EditMode coverage for replication and session bridge behavior. | Yes |
 
-The runtime assembly directly references `CycloneGames.GameplayFramework.Runtime` and `CycloneGames.Networking.Core`. It does not use PlayerSettings scripting define symbols, service locators, package-driven `CYCLONE_*` compile gates, or a specific DI container. Projects that do not include `CycloneGames.Networking` should omit this package and use `CycloneGames.GameplayFramework` directly.
+The core assembly references `CycloneGames.GameplayFramework.Runtime` and `CycloneGames.Networking.Core`. It does not bind to Mirror, Mirage, Nakama, Photon, Steam, or a DI container.
 
-## Session Bridge
+## Core Concepts
 
-`NetworkGameSessionAdapter` extends `GameSession` and bridges session rules to `INetworkManager`. It binds `PlayerController` instances to `INetConnection`, validates connected and authenticated connections during login approval, projects stable connection player IDs into `PlayerState`, and disconnects players through `INetworkManager.DisconnectClient`.
+| Type | Purpose |
+| --- | --- |
+| `NetworkGameSessionAdapter` | Extends `GameSession` and binds `PlayerController` instances to `INetConnection`. |
+| `GameplayFrameworkNetworkProtocol` | Registers the GameplayFramework module message range and actor migration message descriptor. |
+| `GameplayNetworkAuthorityRole` | Describes server authority, autonomous proxy, simulated proxy, or no authority for an actor. |
+| `ServerAuthoritativeGameplayAuthorityResolver` | Resolves authority roles from local server/client state and actor ownership. |
+| `NetworkedGameplayActor` | Projects an `Actor` into network id, owner, team, layer, relevance, and interest position data. |
+| `GameplayReplicationPolicy` | Describes visibility, channel, distance, tick interval, priority, layer mask, owner inclusion, and authentication requirement. |
+| `GameplayNetworkObserverRegistry` | Stores `NetworkInterestObserver` data by connection id. |
+| `GameplayNetworkObserverResolver` | Filters candidate connections by owner, team, area, and always-relevant policy. |
 
-```csharp
-using CycloneGames.GameplayFramework.Networking;
-using CycloneGames.GameplayFramework.Runtime;
-using CycloneGames.Networking;
+## Session And Observer Flow
 
-public sealed class MyNetworkSessionInstaller
-{
-    public void Configure(NetworkGameSessionAdapter session, INetworkManager networkManager)
-    {
-        session.SetNetworkManager(networkManager);
-    }
+```mermaid
+graph TD
+    Manager["INetworkManager"]
+    Session["NetworkGameSessionAdapter"]
+    Connection["INetConnection"]
+    Player["PlayerController"]
+    Actor["NetworkedGameplayActor"]
+    Registry["GameplayNetworkObserverRegistry"]
+    Policy["GameplayReplicationPolicy"]
+    Resolver["GameplayNetworkObserverResolver"]
+    Results["Observer connection list"]
 
-    public void BindPlayer(NetworkGameSessionAdapter session, PlayerController controller, INetConnection connection)
-    {
-        session.BindConnection(controller, connection);
-    }
-}
+    Manager --> Session
+    Connection --> Session
+    Session --> Player
+    Actor --> Resolver
+    Registry --> Resolver
+    Policy --> Resolver
+    Resolver --> Results
 ```
 
-## Authority and Replication
+## Protocol
 
-`GameplayNetworkAuthorityRole` describes whether an actor is `ServerAuthority`, `AutonomousProxy`, `SimulatedProxy`, or `None`. `ServerAuthoritativeGameplayAuthorityResolver` covers standard dedicated-server and listen-server projects.
+`GameplayFrameworkNetworkProtocol` owns message ids `11000-11999` in the Cyclone module range.
 
-`GameplayReplicationPolicy` describes visibility, channel, distance, tick interval, priority, layer mask, owner inclusion, and authentication requirements. Common presets include `OwnerReliable`, `TeamReliable`, `AlwaysRelevantReliable`, and `AreaUnreliable(distance)`.
+| Message | ID | Channel | Payload |
+| --- | ---: | --- | --- |
+| `MsgActorMigrationState` | `11000` | Reliable | Actor migration state payload descriptor |
 
-`NetworkedGameplayActor` is the boundary data for an `Actor`: network id, owner connection, owner player id, team id, interest layer, relevance flag, and interest position. `GameplayNetworkObserverRegistry` and `GameplayNetworkObserverResolver` build observer sets for area, team, owner-only, and always-relevant replication.
-
-## Protocol Catalog
-
-`GameplayFrameworkNetworkProtocol` declares a package-owned sub-range inside the generic `NetworkMessageRanges.Module` space (`11000-11999`) and registers that ownership with `INetworkMessageCatalog`.
-
-| Message | ID | Purpose |
-| --- | --- | --- |
-| `MsgActorMigrationState` | `11000` | Register and validate actor migration state payloads. |
-
-`NetworkGameSessionAdapter.SetNetworkManager()` tries to register the GameplayFramework catalog when the manager exposes `INetworkRuntimeContextProvider`. DI composition roots can register directly against `INetworkMessageCatalog`.
+Register the protocol in a composition root:
 
 ```csharp
 using CycloneGames.GameplayFramework.Networking;
 using CycloneGames.Networking;
 
-public sealed class GameplayNetworkComposition
+public static class GameplayFrameworkNetworkInstaller
 {
-    public void Configure(INetworkMessageCatalog catalog)
+    public static void Configure(INetworkMessageCatalog catalog)
     {
         GameplayFrameworkNetworkProtocol.RegisterMessageCatalog(catalog);
     }
 }
 ```
 
-## Adapter Model
+`NetworkGameSessionAdapter.SetNetworkManager()` also attempts catalog registration when the manager exposes an `INetworkRuntimeContextProvider` containing an `INetworkMessageCatalog`.
 
-This package depends only on the Cyclone networking abstraction. Mirror, Mirage, Nakama, Photon, custom transport, dedicated-server orchestration, sharding, or backend session services should live in a higher adapter package that feeds `INetworkManager`, `INetConnection`, and observer data into this bridge.
+## Session Bridge Workflow
+
+1. Create or place a `NetworkGameSessionAdapter` where the GameplayFramework session is owned.
+2. Pass the active `INetworkManager` to `SetNetworkManager`.
+3. Bind each spawned `PlayerController` to its `INetConnection`.
+4. Let `ApproveLogin`, `RegisterPlayer`, `KickPlayer`, and `BanPlayer` apply the session rules.
+5. Unbind on player removal or connection teardown.
+
+```csharp
+using CycloneGames.GameplayFramework.Networking;
+using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Networking;
+
+public sealed class SessionNetworkBinder
+{
+    private readonly NetworkGameSessionAdapter _session;
+
+    public SessionNetworkBinder(NetworkGameSessionAdapter session, INetworkManager manager)
+    {
+        _session = session;
+        _session.SetNetworkManager(manager);
+    }
+
+    public void Bind(PlayerController controller, INetConnection connection)
+    {
+        _session.BindConnection(controller, connection);
+    }
+}
+```
+
+## Observer Resolution Workflow
+
+Use `GameplayNetworkObserverRegistry` to publish observer positions, then call `GameplayNetworkObserverResolver.ResolveObservers` with a replication context:
+
+```csharp
+using System.Collections.Generic;
+using CycloneGames.GameplayFramework.Networking;
+using CycloneGames.Networking;
+
+public sealed class ActorReplicationSelector
+{
+    private readonly GameplayNetworkObserverRegistry _registry = new GameplayNetworkObserverRegistry();
+    private readonly GameplayNetworkObserverResolver _resolver = new GameplayNetworkObserverResolver();
+
+    public int Resolve(
+        NetworkedGameplayActor actor,
+        IReadOnlyList<INetConnection> candidates,
+        IList<INetConnection> results)
+    {
+        GameplayReplicationPolicy policy = GameplayReplicationPolicy.AreaUnreliable(40f);
+        var context = new GameplayReplicationContext(actor, policy);
+        return _resolver.ResolveObservers(context, candidates, _registry, results);
+    }
+}
+```
+
+## Extension Points
+
+- Implement `IGameplayNetworkAuthorityResolver` for custom authority rules.
+- Implement `IGameplayNetworkObserverSource` when observer data lives outside `GameplayNetworkObserverRegistry`.
+- Add project-specific GameplayFramework messages through a project-owned `NetworkMessageKind.User` manifest.
+- Keep concrete backend SDK code in a backend adapter that feeds `INetworkManager`, `INetConnection`, and observer data into this package.
 
 ## Persistence
 
-This package does not write files, assets, preferences, cache data, or runtime save data. It only defines runtime adapter behavior, protocol metadata, and wire serialization helpers.
+This package does not write files, assets, preferences, caches, or runtime save data. Runtime state is held in memory by the session adapter and observer registry.
 
 ## Validation
 
-- Build `CycloneGames.GameplayFramework.Tests.Editor`.
-- Build `CycloneGames.GameplayFramework.Networking.Tests.Editor` after Unity refreshes generated project files.
-- Build `CycloneGames.Networking.Tests.Editor`.
-- In Unity Editor, run the `CycloneGames.GameplayFramework.Networking.Tests.Editor` EditMode tests.
+Run these checks after changing the package:
+
+```text
+Unity Test Runner > EditMode > CycloneGames.GameplayFramework.Networking.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.GameplayFramework.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
+```
