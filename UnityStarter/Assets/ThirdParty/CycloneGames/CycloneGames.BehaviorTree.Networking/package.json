@@ -1,0 +1,25 @@
+{
+  "name": "com.cyclone-games.behavior-tree-networking",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.BehaviorTree.Networking",
+  "description": "Optional CycloneGames.Networking protocol integration for CycloneGames.BehaviorTree. Provides behavior tree replication profiles, message catalog descriptors, authority helpers, snapshot and blackboard delta message wrappers.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.behavior-tree": "1.0.0",
+    "com.cyclone-games.networking": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "BehaviorTree",
+    "Networking",
+    "Replication",
+    "AI"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

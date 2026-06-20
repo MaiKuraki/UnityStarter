@@ -23,6 +23,7 @@ namespace CycloneGames.AIPerception.Runtime
 
         private IPerceptible[] _perceptibles;
         private int[] _generations;
+        private int[] _freeNext;
         private int _count;
         private int _freeListHead = -1;
         private int _maxCapacity;
@@ -45,8 +46,11 @@ namespace CycloneGames.AIPerception.Runtime
             _maxCapacity = DEFAULT_MAX_CAPACITY;
             _perceptibles = new IPerceptible[INITIAL_CAPACITY];
             _generations = new int[INITIAL_CAPACITY];
+            _freeNext = new int[INITIAL_CAPACITY];
             _managedData = new PerceptibleData[INITIAL_CAPACITY];
             _spatialGrid = new SpatialGrid(DEFAULT_CELL_SIZE);
+
+            FillFreeNext(_freeNext, 0, _freeNext.Length);
         }
 
         /// <summary>
@@ -68,8 +72,8 @@ namespace CycloneGames.AIPerception.Runtime
             if (_freeListHead >= 0)
             {
                 index = _freeListHead;
-                _freeListHead = _generations[index] < 0 ? -_generations[index] - 1 : -1;
-                _generations[index] = Math.Abs(_generations[index]);
+                _freeListHead = _freeNext[index];
+                _freeNext[index] = -1;
             }
             else
             {
@@ -83,10 +87,10 @@ namespace CycloneGames.AIPerception.Runtime
                     Grow();
                 }
                 index = _count;
+                _generations[index]++;
             }
 
             _perceptibles[index] = perceptible;
-            _generations[index]++;
             _count++;
             _isDirty = true;
 
@@ -101,7 +105,8 @@ namespace CycloneGames.AIPerception.Runtime
             if (_generations[handle.Id] != handle.Generation) return;
 
             _perceptibles[handle.Id] = null;
-            _generations[handle.Id] = -(_freeListHead + 1);
+            _generations[handle.Id]++;
+            _freeNext[handle.Id] = _freeListHead;
             _freeListHead = handle.Id;
             _count--;
             _isDirty = true;
@@ -226,6 +231,17 @@ namespace CycloneGames.AIPerception.Runtime
 
             Array.Resize(ref _perceptibles, newCapacity);
             Array.Resize(ref _generations, newCapacity);
+            int oldFreeNextLength = _freeNext.Length;
+            Array.Resize(ref _freeNext, newCapacity);
+            FillFreeNext(_freeNext, oldFreeNextLength, newCapacity - oldFreeNextLength);
+        }
+
+        private static void FillFreeNext(int[] values, int startIndex, int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                values[startIndex + i] = -1;
+            }
         }
 
         public void Dispose()
@@ -235,6 +251,7 @@ namespace CycloneGames.AIPerception.Runtime
 
             _perceptibles = null;
             _generations = null;
+            _freeNext = null;
             _managedData = null;
             _spatialGrid.Clear();
 
