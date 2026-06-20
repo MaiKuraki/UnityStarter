@@ -24,7 +24,13 @@ namespace CycloneGames.Networking.Lockstep
             TInput PredictInput(int peerId, TInput lastKnownInput);
             TState SaveState();
             void LoadState(in TState state);
-            void Simulate(ReadOnlySpan<TInput> peerInputs, FPInt64 deltaTime);
+
+            /// <summary>
+            /// Advances the simulation by exactly one fixed step using this frame's per-peer inputs. The step is
+            /// fixed-size by contract (see <see cref="FixedDeltaTime"/>); any delta a step needs must be encoded
+            /// inside <typeparamref name="TInput"/>, because a variable delta would break cross-platform determinism.
+            /// </summary>
+            void Simulate(ReadOnlySpan<TInput> peerInputs);
             void OnRollback(int framesToRollback);
         }
 
@@ -57,6 +63,12 @@ namespace CycloneGames.Networking.Lockstep
         public int RollbackCount => _rollbackCount;
         public int MaxRollbackDepth => _maxRollbackDepth;
         public int FrameAdvantage => _currentFrame - _lastConfirmedFrame;
+
+        /// <summary>
+        /// Fixed simulation step derived from the configured tick rate. Callers can use it to drive a fixed-step
+        /// time accumulator; the simulation itself is fixed-step and never receives a per-call delta.
+        /// </summary>
+        public FPInt64 FixedDeltaTime => _deltaTime;
 
         public event Action<int, int> OnRollbackOccurred;   // (fromFrame, toFrame)
         public event Action<int> OnFrameAdvanced;
@@ -141,7 +153,7 @@ namespace CycloneGames.Networking.Lockstep
             }
 
             // Simulate
-            _simulation.Simulate(frameInputs, _deltaTime);
+            _simulation.Simulate(frameInputs);
             _currentFrame++;
 
             OnFrameAdvanced?.Invoke(_currentFrame);
@@ -258,7 +270,7 @@ namespace CycloneGames.Networking.Lockstep
                     }
                 }
 
-                _simulation.Simulate(inputs, _deltaTime);
+                _simulation.Simulate(inputs);
             }
 
             OnRollbackOccurred?.Invoke(fromFrame, toFrame);

@@ -3,20 +3,28 @@ using System;
 namespace CycloneGames.Networking.Security
 {
     /// <summary>
-    /// Factory helpers that assemble hardened <see cref="NetworkSecurityPipelineOptions"/> baselines.
-    /// Presets pick safe defaults (replay protection, authenticated connections, rejection reporting)
-    /// while leaving deployment-specific dependencies (signer keys, crypto, rate budgets, telemetry)
-    /// to the caller. Run <see cref="NetworkSecurityAudit.Evaluate"/> afterwards to confirm the final
-    /// configuration matches the target environment.
+    /// Factory helpers that assemble <see cref="NetworkSecurityPipelineOptions"/> security baselines.
     /// </summary>
+    /// <remarks>
+    /// These presets harden the <b>policy</b> only (replay protection, authenticated connections, rejection
+    /// reporting). They are deliberately <b>not</b> production-complete: when no signer or crypto provider is
+    /// supplied they fall back to the <c>Noop*</c> implementations, so a baseline returned with default arguments
+    /// performs no message signing or encryption. A secure deployment must either supply a real
+    /// <see cref="INetworkMessageSigner"/> / <see cref="INetworkCryptoProvider"/>, or terminate on an
+    /// authenticated, encrypted transport (TLS/DTLS) where application-layer crypto is intentionally a no-op.
+    /// Always run <see cref="NetworkSecurityAudit.Evaluate"/> on the final options to confirm the configuration
+    /// matches the target environment before shipping.
+    /// </remarks>
     public static class NetworkSecurityPresets
     {
         /// <summary>
-        /// Hardened server baseline: replay protection and authenticated connections are required on the
-        /// default policy, rejected messages are reported, and rate limiting is enabled when a limiter is
-        /// supplied. Pass an enabled signer and/or crypto provider to satisfy the production audit.
+        /// Server security baseline: the default policy requires replay protection and authenticated connections,
+        /// rejected messages are reported, and rate limiting is enabled when a limiter is supplied. Signing and
+        /// crypto default to <c>Noop</c>; supply a real signer and/or crypto provider (or rely on an authenticated,
+        /// encrypted transport) and run <see cref="NetworkSecurityAudit.Evaluate"/> before treating the result as
+        /// production-ready.
         /// </summary>
-        public static NetworkSecurityPipelineOptions CreateHardenedServerOptions(
+        public static NetworkSecurityPipelineOptions CreateServerSecurityBaseline(
             INetworkMessageSigner messageSigner = null,
             INetworkCryptoProvider cryptoProvider = null,
             INetworkAntiCheatSignalSink antiCheatSink = null,
@@ -40,10 +48,13 @@ namespace CycloneGames.Networking.Security
         }
 
         /// <summary>
-        /// Hardened client baseline: replay protection on, rejection reporting on. Clients usually do not
-        /// rate-limit their own single server connection, so rate limiting is left disabled by default.
+        /// Client security baseline: replay protection on, rejection reporting on. Clients usually do not
+        /// rate-limit their own single server connection, so rate limiting is left disabled by default. Signing
+        /// and crypto default to <c>Noop</c>; supply real implementations (or rely on an authenticated, encrypted
+        /// transport) and run <see cref="NetworkSecurityAudit.Evaluate"/> before treating the result as
+        /// production-ready.
         /// </summary>
-        public static NetworkSecurityPipelineOptions CreateHardenedClientOptions(
+        public static NetworkSecurityPipelineOptions CreateClientSecurityBaseline(
             INetworkMessageSigner messageSigner = null,
             INetworkCryptoProvider cryptoProvider = null,
             INetworkAntiCheatSignalSink antiCheatSink = null)

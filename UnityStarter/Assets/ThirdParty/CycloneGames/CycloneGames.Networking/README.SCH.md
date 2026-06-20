@@ -210,8 +210,10 @@ public readonly struct HitConfirmMessage
 
 ### 模块协议与握手
 
-每个 Cyclone 域模块都用一个 `NetworkModuleProtocol` 封装自己的 manifest 与版本窗口，
-因此版本校验、catalog 解析和注册逻辑只存在一处，而不是在每个模块里复制：
+每个 Cyclone 域模块都用一个 `NetworkModuleProtocol` 封装自己的 manifest，因此版本校验、
+catalog 解析和注册逻辑只存在一处，而不是在每个模块里复制。wire 版本窗口**从 manifest 派生**
+（取 manifest 的 `CurrentVersion` / `MinimumSupportedVersion`，它们同时参与 fingerprint），
+因此 manifest 是唯一真相源，模块版本永远不会与之 drift：
 
 ```csharp
 public static class ProjectCombatProtocol
@@ -219,32 +221,35 @@ public static class ProjectCombatProtocol
     public const byte PROTOCOL_VERSION = 1;
     public const byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 
-    public static readonly NetworkProtocolManifest DefaultManifest = CreateManifest();
+    // Module 是唯一真相源：由 manifest（上面常量写入 CurrentVersion / MinimumSupportedVersion）构造，
+    // 并从中派生版本窗口。manifest / range / fingerprint 从 Module 派生一次存入只读字段：
+    // 单一源、无重复构造、热路径上零成本字段读取。
+    public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateManifest());
 
-    public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
-        DefaultManifest,
-        NetworkProtocolVersion.Create(PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION));
+    public static readonly NetworkProtocolManifest DefaultManifest = Module.Manifest;
+    public static readonly NetworkMessageIdRange MessageRange = Module.MessageRange;
+    public static readonly ulong ProtocolFingerprint = Module.Fingerprint;
 
     public static bool TryRegister(INetworkManager net) => Module.TryRegister(net);
     public static bool IsSupportedProtocolVersion(byte v) => Module.IsSupportedProtocolVersion(v);
 }
 ```
 
-连接级握手消息实现 `INetworkProtocolHandshake`，让版本/指纹协商只写一次。用显式接口成员
-实现以保留 wire 字段，并通过 `NetworkProtocolHandshake.Negotiate` 执行兼容性校验（泛型
-`in` 约束，zero-GC）：
+连接级握手消息实现 `INetworkProtocolHandshakeMessage`（一个只含字段的消息契约 — 协商逻辑在
+`NetworkProtocolHandshake` 辅助类里），让版本/指纹协商只写一次。用显式接口成员实现以保留
+wire 字段，并通过 `NetworkProtocolHandshake.Negotiate` 执行兼容性校验（泛型 `in` 约束，zero-GC）：
 
 ```csharp
-public struct CombatHandshake : INetworkProtocolHandshake
+public struct CombatHandshake : INetworkProtocolHandshakeMessage
 {
     public ulong ProtocolFingerprint;
     public byte MinimumSupportedProtocolVersion;
     public byte CurrentProtocolVersion;
 
-    ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
-    byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
-    byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
-    ulong INetworkProtocolHandshake.DomainStateHash => 0UL; // or a module-specific hash
+    ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
+    byte INetworkProtocolHandshakeMessage.CurrentProtocolVersion => CurrentProtocolVersion;
+    byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+    ulong INetworkProtocolHandshakeMessage.DomainStateHash => 0UL; // or a module-specific hash
 
     public NetworkHandshakeResult Negotiate()
         => NetworkProtocolHandshake.Negotiate(this, ProjectCombatProtocol.Module);

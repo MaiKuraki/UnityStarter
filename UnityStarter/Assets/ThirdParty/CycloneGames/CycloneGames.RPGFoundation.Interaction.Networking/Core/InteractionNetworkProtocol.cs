@@ -20,19 +20,11 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking
         public const NetworkChannel CANCEL_REQUEST_CHANNEL = NetworkChannel.Reliable;
         public const NetworkChannel DETERMINISTIC_REQUEST_CHANNEL = NetworkChannel.Reliable;
 
-        public static readonly NetworkMessageIdRange MessageRange = new NetworkMessageIdRange(
-            MessageOwner,
-            MESSAGE_ID_BASE,
-            MESSAGE_ID_MAX,
-            NetworkMessageKind.Module);
+        public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
-        public static readonly NetworkProtocolManifest DefaultManifest = CreateProtocolManifest();
-
-        public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
-            DefaultManifest,
-            NetworkProtocolVersion.Create(PROTOCOL_VERSION));
-
-        public static ulong ProtocolFingerprint => Module.Fingerprint;
+        public static readonly NetworkProtocolManifest DefaultManifest = Module.Manifest;
+        public static readonly NetworkMessageIdRange MessageRange = Module.MessageRange;
+        public static readonly ulong ProtocolFingerprint = Module.Fingerprint;
 
         public static bool IsInteractionMessage(ushort messageId)
         {
