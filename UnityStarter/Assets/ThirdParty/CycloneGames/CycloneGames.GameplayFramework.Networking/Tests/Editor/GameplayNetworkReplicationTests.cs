@@ -131,7 +131,8 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             GameplayFrameworkNetworkProtocol.RegisterMessageCatalog(catalog);
             GameplayFrameworkNetworkProtocol.RegisterMessageCatalog(catalog);
 
-            Assert.AreEqual(1, catalog.Count);
+            // ActorMigrationState + DamageRequest + DamageResult are registered; re-registering is idempotent.
+            Assert.AreEqual(3, catalog.Count);
         }
 
         [Test]

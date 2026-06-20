@@ -3,6 +3,7 @@
     "rootNamespace": "CycloneGames.BehaviorTree.Runtime.DOD",
     "references": [
         "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.Hash.Core",
         "Unity.Burst",
         "Unity.Collections",
         "Unity.Mathematics",

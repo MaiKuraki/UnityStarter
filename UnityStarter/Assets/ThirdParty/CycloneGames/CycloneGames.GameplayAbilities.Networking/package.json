@@ -6,6 +6,8 @@
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
+    "com.cyclone-games.deterministic-math": "1.0.0",
+    "com.cyclone-games.hash": "1.0.0",
     "com.cyclone-games.networking": "1.0.0",
     "com.cyclone-games.gameplay-abilities": "1.0.0",
     "com.cyclone-games.gameplay-tags": "1.0.0"

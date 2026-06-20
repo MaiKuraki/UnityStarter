@@ -83,7 +83,7 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
             Assert.That(message.Entry.PerceptibleTypeId, Is.EqualTo(42));
             Assert.That(message.Entry.SensorKind, Is.EqualTo(AIPerceptionNetworkSensorKind.Sight));
             Assert.That((message.Entry.Flags & AIPerceptionDetectionFlags.FromMemory) != 0, Is.True);
-            Assert.That(message.StateHash, Is.Not.EqualTo(0u));
+            Assert.That(message.StateHash, Is.Not.EqualTo(0UL));
         }
 
         [Test]

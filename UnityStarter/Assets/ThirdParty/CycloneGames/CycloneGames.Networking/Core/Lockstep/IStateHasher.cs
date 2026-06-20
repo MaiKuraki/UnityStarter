@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.Networking.Lockstep
 {
@@ -41,8 +42,8 @@ namespace CycloneGames.Networking.Lockstep
     /// </summary>
     public struct Fnv1aHasher : IStateHasher
     {
-        private const ulong FnvOffsetBasis = 14695981039346656037UL;
-        private const ulong FnvPrime = 1099511628211UL;
+        private const ulong FnvOffsetBasis = Fnv1a64.OffsetBasis;
+        private const ulong FnvPrime = Fnv1a64.Prime;
 
         private ulong _hash;
 

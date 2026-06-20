@@ -14,7 +14,7 @@ namespace CycloneGames.GameplayAbilities.Core
     public sealed class GASAbilitySystemStateDeltaBuffer
     {
         public uint Sequence;
-        public uint StateChecksum;
+        public ulong StateChecksum;
         public ulong BaseVersion;
         public ulong CurrentVersion;
         public AbilitySystemStateChangeMask ChangeMask;

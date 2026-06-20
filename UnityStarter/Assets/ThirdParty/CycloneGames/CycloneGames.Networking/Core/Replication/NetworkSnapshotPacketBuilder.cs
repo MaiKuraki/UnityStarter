@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.Hash.Core;
 using CycloneGames.Networking.Serialization;
 
 namespace CycloneGames.Networking.Replication
@@ -44,8 +45,8 @@ namespace CycloneGames.Networking.Replication
     public sealed class NetworkSnapshotPacketBuilder
     {
         public const byte PROTOCOL_VERSION = 1;
-        private const ulong FnvOffsetBasis = 14695981039346656037UL;
-        private const ulong FnvPrime = 1099511628211UL;
+        private const ulong FnvOffsetBasis = Fnv1a64.OffsetBasis;
+        private const ulong FnvPrime = Fnv1a64.Prime;
 
         public NetworkSnapshotWriteResult WriteSnapshot(
             ReadOnlySpan<NetworkReplicationSelection> selections,

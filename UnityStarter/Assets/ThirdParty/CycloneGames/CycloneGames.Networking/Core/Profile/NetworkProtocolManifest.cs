@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.Networking
 {
     public sealed class NetworkProtocolManifest
     {
-        private const ulong FNV_PRIME = 1099511628211UL;
+        private const ulong FNV_PRIME = Fnv1a64.Prime;
         private const int FINGERPRINT_BYTE_COUNT = 8;
 
         private readonly NetworkMessageDescriptor[] _messages;

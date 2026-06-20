@@ -1,6 +1,7 @@
 using Unity.Collections;
 using Unity.Mathematics;
 using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.DOD
 {
@@ -95,11 +96,11 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
         /// <summary>
         /// FNV-1a hash of execution state for fast network desync detection.
         /// </summary>
-        public uint ComputeStateHash()
+        public ulong ComputeStateHash()
         {
-            const uint FNV_OFFSET = 2166136261u;
-            const uint FNV_PRIME = 16777619u;
-            uint hash = FNV_OFFSET;
+            const ulong FNV_OFFSET = Fnv1a64.OffsetBasis;
+            const ulong FNV_PRIME = Fnv1a64.Prime;
+            ulong hash = FNV_OFFSET;
 
             for (int i = 0; i < NodeCount; i++)
             {

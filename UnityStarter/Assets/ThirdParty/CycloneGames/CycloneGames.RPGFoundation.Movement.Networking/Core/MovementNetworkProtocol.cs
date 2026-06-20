@@ -1,4 +1,3 @@
-using System;
 using CycloneGames.Networking;
 
 namespace CycloneGames.RPGFoundation.Movement.Networking
@@ -34,7 +33,11 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
 
         public static readonly NetworkProtocolManifest DefaultManifest = CreateProtocolManifest();
 
-        public static ulong ProtocolFingerprint => DefaultManifest.Fingerprint;
+        public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
+            DefaultManifest,
+            NetworkProtocolVersion.Create(PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION));
+
+        public static ulong ProtocolFingerprint => Module.Fingerprint;
 
         public static bool IsMovementMessageId(ushort messageId)
         {
@@ -48,38 +51,17 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
 
         public static bool IsSupportedProtocolVersion(byte protocolVersion)
         {
-            return protocolVersion >= MIN_SUPPORTED_PROTOCOL_VERSION && protocolVersion <= PROTOCOL_VERSION;
+            return Module.IsSupportedProtocolVersion(protocolVersion);
         }
 
         public static bool TryRegisterMessageCatalog(INetworkManager networkManager)
         {
-            if (networkManager == null)
-            {
-                return false;
-            }
-
-            if (networkManager is not INetworkRuntimeContextProvider provider || provider.RuntimeContext == null)
-            {
-                return false;
-            }
-
-            if (!provider.RuntimeContext.TryGetService(out INetworkMessageCatalog catalog))
-            {
-                return false;
-            }
-
-            RegisterMessageCatalog(catalog);
-            return true;
+            return Module.TryRegister(networkManager);
         }
 
         public static void RegisterMessageCatalog(INetworkMessageCatalog catalog)
         {
-            if (catalog == null)
-            {
-                throw new ArgumentNullException(nameof(catalog));
-            }
-
-            catalog.RegisterProtocolManifest(DefaultManifest);
+            Module.Register(catalog);
         }
 
         public static NetworkProtocolManifest CreateProtocolManifest()
@@ -137,45 +119,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             NetworkChannel channel = NetworkChannel.Reliable,
             int maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize) where T : struct
         {
-            if (catalog == null)
-            {
-                throw new ArgumentNullException(nameof(catalog));
-            }
-
-            if (!IsMovementMessageId(messageId))
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(messageId),
-                    messageId,
-                    $"RPGFoundation Movement message ids must be inside {MessageRange}.");
-            }
-
-            catalog.RegisterRange(MessageRange);
-
-            NetworkMessageDescriptor descriptor = NetworkMessageDescriptor.Create<T>(
-                messageId,
-                MessageOwner,
-                NetworkMessageKind.Module,
-                channel,
-                maxPayloadSize);
-
-            if (catalog.TryRegister(descriptor))
-            {
-                return;
-            }
-
-            if (catalog.TryGet(messageId, out NetworkMessageDescriptor existing)
-                && existing.SchemaHash == descriptor.SchemaHash
-                && string.Equals(existing.Owner, descriptor.Owner, StringComparison.Ordinal)
-                && string.Equals(existing.Name, descriptor.Name, StringComparison.Ordinal)
-                && existing.Kind == descriptor.Kind
-                && existing.DefaultChannel == descriptor.DefaultChannel
-                && existing.MaxPayloadSize == descriptor.MaxPayloadSize)
-            {
-                return;
-            }
-
-            throw new InvalidOperationException($"Message id {messageId} is already registered by {existing.Owner}:{existing.Name}.");
+            Module.RegisterMessage<T>(catalog, messageId, channel, maxPayloadSize);
         }
     }
 }

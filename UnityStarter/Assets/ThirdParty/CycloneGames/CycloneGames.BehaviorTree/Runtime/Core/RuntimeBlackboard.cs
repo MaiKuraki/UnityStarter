@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading;
 using UnityEngine;
+using CycloneGames.Hash.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
@@ -463,14 +464,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         /// FNV-1a hash of all primitive blackboard data for fast desync detection.
         /// Compare hashes between server and client — if mismatch, do full sync.
         /// </summary>
-        public uint ComputeHash()
+        public ulong ComputeHash()
         {
             if (_lock != null) _lock.EnterReadLock();
             try
             {
-                const uint FNV_OFFSET = 2166136261u;
-                const uint FNV_PRIME = 16777619u;
-                uint hash = FNV_OFFSET;
+                const ulong FNV_OFFSET = Fnv1a64.OffsetBasis;
+                const ulong FNV_PRIME = Fnv1a64.Prime;
+                ulong hash = FNV_OFFSET;
 
                 FillSortedKeys(_intData);
                 for (int i = 0; i < _sortedKeyScratch.Count; i++)

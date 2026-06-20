@@ -208,6 +208,54 @@ public readonly struct HitConfirmMessage
 
 通过 `INetworkMessageCatalog.RegisterProtocolManifest` 注册 manifest。Catalog 会拒绝重叠 range 和重复 id。
 
+### 模块协议与握手
+
+每个 Cyclone 域模块都用一个 `NetworkModuleProtocol` 封装自己的 manifest 与版本窗口，
+因此版本校验、catalog 解析和注册逻辑只存在一处，而不是在每个模块里复制：
+
+```csharp
+public static class ProjectCombatProtocol
+{
+    public const byte PROTOCOL_VERSION = 1;
+    public const byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
+
+    public static readonly NetworkProtocolManifest DefaultManifest = CreateManifest();
+
+    public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(
+        DefaultManifest,
+        NetworkProtocolVersion.Create(PROTOCOL_VERSION, MIN_SUPPORTED_PROTOCOL_VERSION));
+
+    public static bool TryRegister(INetworkManager net) => Module.TryRegister(net);
+    public static bool IsSupportedProtocolVersion(byte v) => Module.IsSupportedProtocolVersion(v);
+}
+```
+
+连接级握手消息实现 `INetworkProtocolHandshake`，让版本/指纹协商只写一次。用显式接口成员
+实现以保留 wire 字段，并通过 `NetworkProtocolHandshake.Negotiate` 执行兼容性校验（泛型
+`in` 约束，zero-GC）：
+
+```csharp
+public struct CombatHandshake : INetworkProtocolHandshake
+{
+    public ulong ProtocolFingerprint;
+    public byte MinimumSupportedProtocolVersion;
+    public byte CurrentProtocolVersion;
+
+    ulong INetworkProtocolHandshake.ProtocolFingerprint => ProtocolFingerprint;
+    byte INetworkProtocolHandshake.CurrentProtocolVersion => CurrentProtocolVersion;
+    byte INetworkProtocolHandshake.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
+    ulong INetworkProtocolHandshake.DomainStateHash => 0UL; // or a module-specific hash
+
+    public NetworkHandshakeResult Negotiate()
+        => NetworkProtocolHandshake.Negotiate(this, ProjectCombatProtocol.Module);
+}
+```
+
+`Negotiate` 返回 `NetworkHandshakeResult`（`Compatible`、`Malformed`、`FingerprintMismatch`、
+`VersionIncompatible`、`DomainStateMismatch`），便于诊断拒绝原因。当对端还必须就模块特定
+指纹达成一致时（例如共享的 gameplay-tag manifest 或 behavior-tree template），设置
+`DomainStateHash` 并传 `requireDomainStateMatch: true`。
+
 ## Runtime Context
 
 `NetworkRuntimeContext` 保存 adapter instance 暴露的服务。Constructor 会注册 network manager、message catalog，以及存在的 transport。

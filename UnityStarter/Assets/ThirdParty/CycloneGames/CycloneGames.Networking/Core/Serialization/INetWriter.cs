@@ -41,6 +41,12 @@ namespace CycloneGames.Networking.Serialization
         /// <summary>Writes a 32-bit unsigned integer in little-endian format.</summary>
         void WriteUInt(uint value);
 
+        /// <summary>Writes a 64-bit signed integer in little-endian format.</summary>
+        void WriteLong(long value);
+
+        /// <summary>Writes a 64-bit unsigned integer in little-endian format.</summary>
+        void WriteULong(ulong value);
+
         /// <summary>Writes a 32-bit floating-point number.</summary>
         void WriteFloat(float value);
 

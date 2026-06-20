@@ -1,7 +1,9 @@
 {
     "name": "CycloneGames.RPGFoundation.Interaction.Core",
     "rootNamespace": "CycloneGames.RPGFoundation.Interaction.Core",
-    "references": [],
+    "references": [
+        "CycloneGames.Hash.Core"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CycloneGames.Hash.Core;
 using CycloneGames.Networking.Serialization;
 
 namespace CycloneGames.Networking
@@ -281,8 +282,8 @@ namespace CycloneGames.Networking
 
     public sealed class NetworkMessageCatalog : INetworkMessageCatalog
     {
-        private const ulong FnvOffsetBasis = 14695981039346656037UL;
-        private const ulong FnvPrime = 1099511628211UL;
+        private const ulong FnvOffsetBasis = Fnv1a64.OffsetBasis;
+        private const ulong FnvPrime = Fnv1a64.Prime;
 
         private readonly object _syncRoot = new object();
         private readonly Dictionary<ushort, NetworkMessageDescriptor> _messages;

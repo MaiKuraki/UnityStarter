@@ -181,7 +181,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         private uint _lastStateSyncSequence;
         private uint _lastRejectedStateSyncSequence;
         private ulong _lastServerStateVersion;
-        private uint _lastServerStateChecksum;
+        private ulong _lastServerStateChecksum;
         private int _runtimeThreadId;
         private long _runtimeThreadViolationCount;
 
@@ -202,7 +202,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         public uint LastAcceptedStateSyncSequence => _lastStateSyncSequence;
         public uint LastRejectedStateSyncSequence => _lastRejectedStateSyncSequence;
         public ulong LastServerStateVersion => _lastServerStateVersion;
-        public uint LastServerStateChecksum => _lastServerStateChecksum;
+        public ulong LastServerStateChecksum => _lastServerStateChecksum;
         public int RuntimeThreadId => _runtimeThreadId;
         public long RuntimeThreadViolationCount => _runtimeThreadViolationCount;
 
@@ -673,7 +673,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             }
             else if (EnableStrictChecksumValidation && metadata.StateChecksum != 0)
             {
-                uint localChecksum = ComputeCurrentNetworkStateChecksum();
+                ulong localChecksum = ComputeCurrentNetworkStateChecksum();
                 if (localChecksum != metadata.StateChecksum)
                 {
                     reason = GASStateDriftReason.ChecksumMismatch;
@@ -1840,7 +1840,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             };
         }
 
-        private uint ComputeCurrentNetworkStateChecksum()
+        private ulong ComputeCurrentNetworkStateChecksum()
         {
             int abilityCount = FillGrantedAbilitiesFromAsc(ref _checksumGrantedAbilitiesBuffer);
             int effectCount = FillActiveEffects(_asc.ActiveEffects, ref _checksumEffectsBuffer);
@@ -1858,7 +1858,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 tagCount);
         }
 
-        private static uint ComputeNetworkStateChecksum(
+        private static ulong ComputeNetworkStateChecksum(
             GrantedAbilityEntry[] abilities,
             int abilityCount,
             EffectReplicationData[] effects,
