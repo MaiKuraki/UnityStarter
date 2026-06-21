@@ -3,7 +3,9 @@
     "rootNamespace": "CycloneGames.Networking.Editor",
     "references": [
         "CycloneGames.Networking.Core",
-        "CycloneGames.Networking.Unity.Runtime"
+        "CycloneGames.Networking.Unity.Runtime",
+        "CycloneGames.Networking.Platform.Permissions",
+        "UniTask"
     ],
     "includePlatforms": [
         "Editor"
