@@ -4,8 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
-using Unio;
-using Unity.Collections;
+using CycloneGames.IO.Runtime;
 
 namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
 {
@@ -309,9 +308,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                     Directory.CreateDirectory(directory);
                 }
                 
-                byte[] bytes = Encoding.UTF8.GetBytes(report);
-                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-                NativeFile.WriteAllBytes(filePath, nativeBytes);
+                FileUtility.WriteAllText(filePath, report);
             }
             catch (Exception ex)
             {
@@ -326,9 +323,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                 var filePath = GetMarkdownReportFilePath(customName);
                 var directory = Path.GetDirectoryName(filePath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                byte[] bytes = Encoding.UTF8.GetBytes(report);
-                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-                NativeFile.WriteAllBytes(filePath, nativeBytes);
+                FileUtility.WriteAllText(filePath, report);
             }
             catch (Exception ex)
             {
@@ -343,9 +338,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                 var filePath = GetMarkdownSchReportFilePath(customName);
                 var directory = Path.GetDirectoryName(filePath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                byte[] bytes = Encoding.UTF8.GetBytes(report);
-                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-                NativeFile.WriteAllBytes(filePath, nativeBytes);
+                FileUtility.WriteAllText(filePath, report);
             }
             catch (Exception ex)
             {

@@ -43,7 +43,6 @@
     "com.unity.ugui": "1.0.0",
     "com.wooshii.hierarchydecorator": "https://github.com/WooshiiDev/HierarchyDecorator.git",
     "com.yasirkula.ingamedebugconsole": "https://github.com/yasirkula/UnityIngameDebugConsole.git",
-    "jp.hadashikick.unio": "https://github.com/hadashiA/Unio.git?path=/Assets/Unio",
     "jp.hadashikick.vitalrouter.unity": "https://github.com/hadashiA/VitalRouter.git?path=/src/VitalRouter.Unity/Assets/VitalRouter",
     "jp.hadashikick.vyaml": "https://github.com/hadashiA/VYaml.git?path=VYaml.Unity/Assets/VYaml",
     "com.unity.modules.androidjni": "1.0.0",

@@ -1,12 +1,11 @@
 {
-    "name": "CycloneGames.Utility.Editor",
-    "rootNamespace": "",
+    "name": "CycloneGames.IO.Runtime",
+    "rootNamespace": "CycloneGames.IO.Runtime",
     "references": [
-        "CycloneGames.Utility.Runtime"
+        "CycloneGames.Hash.Core",
+        "CycloneGames.Logger"
     ],
-    "includePlatforms": [
-        "Editor"
-    ],
+    "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,

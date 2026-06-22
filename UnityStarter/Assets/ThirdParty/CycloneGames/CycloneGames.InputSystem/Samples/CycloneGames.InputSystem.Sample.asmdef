@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.InputSystem.Sample",
     "references": [
         "CycloneGames.InputSystem.Runtime",
-        "CycloneGames.Utility.Runtime",
+        "CycloneGames.IO.Runtime",
         "UniTask",
         "Unity.InputSystem"
     ],

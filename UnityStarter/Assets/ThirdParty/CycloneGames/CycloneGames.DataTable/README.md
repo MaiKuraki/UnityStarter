@@ -623,7 +623,7 @@ Your adapter only needs to produce rows implementing `IDataRow` and call `DataTa
 
 If your project uses `CycloneGames.AssetManagement`, use `AssetManagementDataTableBytesLoader` to load table `.bytes` as `TextAsset`, or `AssetManagementDataTableRawFileBytesLoader` for providers that support raw binary files. Both expose loaded data through `IDataTableBytesProvider`. `DataTableAssetLoadContext` carries the AssetManagement bucket/tag/owner metadata, and `DataTableManifest` can validate table names, byte length, and SHA-256 before any backend consumes the bytes.
 
-Runtime manifest validation intentionally keeps a tiny SHA-256 helper inside `CycloneGames.DataTable.Core` instead of depending on `CycloneGames.Utility.Runtime`, because the current Utility runtime assembly carries Unity, Burst, Logger, and Mathematics dependencies. Build and editor tooling can still use `CycloneGames.Utility.Runtime.FileUtility` or `XxHash64` to generate or compare manifest values before they are passed into DataTable.
+Runtime manifest validation intentionally keeps a tiny SHA-256 helper inside `CycloneGames.DataTable.Core` instead of depending on Unity-facing IO assemblies. Build and editor tooling can use `CycloneGames.IO.Runtime.FileUtility` or `XxHash64` to generate or compare manifest values before they are passed into DataTable.
 
 ```csharp
 using CycloneGames.DataTable;

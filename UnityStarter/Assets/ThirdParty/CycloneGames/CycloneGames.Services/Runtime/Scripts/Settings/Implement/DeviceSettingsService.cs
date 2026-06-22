@@ -1,13 +1,12 @@
 using System;
 using System.Buffers;
 using System.IO;
-using Unity.Collections;
 using UnityEngine;
-using Unio;
 using VYaml.Emitter;
 using VYaml.Parser;
 using VYaml.Serialization;
 using CycloneGames.Hash.Core;
+using CycloneGames.IO.Runtime;
 using CycloneGames.Logger;
 
 namespace CycloneGames.Service.Runtime
@@ -125,8 +124,7 @@ namespace CycloneGames.Service.Runtime
 
             try
             {
-                using var nativeBytes = NativeFile.ReadAllBytes(_filePath);
-                byte[] fileBytes = NormalizeLineEndings(nativeBytes.ToArray());
+                byte[] fileBytes = NormalizeLineEndings(FileUtility.ReadAllBytes(_filePath));
 
                 LastLoadIntegrity = VerifyChecksum(fileBytes);
                 if (LastLoadIntegrity == SettingsIntegrity.Modified)
@@ -181,8 +179,7 @@ namespace CycloneGames.Service.Runtime
 
                 byte[] yamlBytes = NormalizeLineEndings(bufferWriter.WrittenSpan.ToArray());
 
-                using var nativeArray = new NativeArray<byte>(yamlBytes, Allocator.Temp);
-                NativeFile.WriteAllBytes(_tempFilePath, nativeArray);
+                FileUtility.WriteAllBytes(_tempFilePath, yamlBytes);
 
                 // Atomic replace: Copy+Delete because Move lacks overwrite in older .NET
                 File.Copy(_tempFilePath, _filePath, overwrite: true);
