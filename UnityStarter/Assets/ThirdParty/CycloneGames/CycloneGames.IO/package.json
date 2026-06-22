@@ -1,21 +1,20 @@
 {
-  "name": "com.cyclone-games.service",
+  "name": "com.cyclone-games.io",
   "version": "1.0.0",
-  "displayName": "CycloneGames.Service",
-  "description": "CycloneGames Service Package",
+  "displayName": "CycloneGames.IO",
+  "description": "Managed, Unity-aware file and path utilities for CycloneGames foundation modules.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
-    "com.unity.render-pipelines.universal": "14.0.0",
-    "jp.hadashikick.vyaml": "1.2.0",
-    "com.cysharp.unitask": "2.0.0",
     "com.cyclone-games.hash": "1.0.0",
-    "com.cyclone-games.io": "1.0.0",
     "com.cyclone-games.logger": "1.0.0"
   },
   "keywords": [
     "CycloneGames",
-    "Service"
+    "IO",
+    "File",
+    "Hash",
+    "UnityWebRequest"
   ],
   "author": {
     "name": "CycloneGames",

@@ -36,7 +36,7 @@ These constants enable type-safe, allocation-free input access at runtime.
 Load the configuration at game startup:
 
 ```csharp
-using CycloneGames.Utility.Runtime;
+using CycloneGames.IO.Runtime;
 using CycloneGames.InputSystem.Runtime;
 using Cysharp.Threading.Tasks;
 

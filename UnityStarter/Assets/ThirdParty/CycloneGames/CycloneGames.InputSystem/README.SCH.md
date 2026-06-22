@@ -32,7 +32,7 @@
 在游戏启动时（例如在 `MonoBehaviour.Start()` 或初始化脚本中）加载配置：
 
 ```csharp
-using CycloneGames.Utility.Runtime;
+using CycloneGames.IO.Runtime;
 using CycloneGames.InputSystem.Runtime;
 using Cysharp.Threading.Tasks;
 
@@ -789,7 +789,7 @@ await InputManager.Instance.SaveUserConfigurationAsync();
 ### 重置为默认配置
 
 ```csharp
-using CycloneGames.Utility.Runtime;
+using CycloneGames.IO.Runtime;
 using CycloneGames.InputSystem.Runtime;
 
 var defaultUri = FilePathUtility.GetUnityWebRequestUri("input_config.yaml", UnityPathSource.StreamingAssets);

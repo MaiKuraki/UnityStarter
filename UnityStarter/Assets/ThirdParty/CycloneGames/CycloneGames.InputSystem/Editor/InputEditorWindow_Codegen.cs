@@ -7,10 +7,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Buffers;
-using CycloneGames.Utility.Runtime;
+using CycloneGames.IO.Runtime;
 using CycloneGames.InputSystem.Runtime;
-using Unio;
-using Unity.Collections;
 
 namespace CycloneGames.InputSystem.Editor
 {
@@ -159,9 +157,7 @@ namespace CycloneGames.InputSystem.Editor
                 }
 
                 string filePath = Path.Combine(_codegenPath, "InputActions.cs");
-                byte[] bytes = Encoding.UTF8.GetBytes(sb.ToString());
-                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-                NativeFile.WriteAllBytes(filePath, nativeBytes);
+                FileUtility.WriteAllText(filePath, sb.ToString());
 
                 SetStatus("Successfully saved and generated constants file.", MessageType.Info);
                 EditorUtility.DisplayDialog("Save & Generate Successful", "User input configuration has been saved and InputActions.cs has been generated.", "OK");

@@ -7,10 +7,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Buffers;
-using CycloneGames.Utility.Runtime;
+using CycloneGames.IO.Runtime;
 using CycloneGames.InputSystem.Runtime;
-using Unio;
-using Unity.Collections;
 
 namespace CycloneGames.InputSystem.Editor
 {
@@ -923,7 +921,7 @@ namespace CycloneGames.InputSystem.Editor
         {
             try
             {
-                string yamlContent = NativeFile.ReadAllText(path);
+                string yamlContent = FileUtility.ReadAllText(path);
                 var configModel = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(yamlContent));
 
                 // Schema fingerprint mismatch detection: warn developer if loaded config is outdated
@@ -988,7 +986,6 @@ namespace CycloneGames.InputSystem.Editor
                 InputConfiguration configModel = _configSO.ToData();
                 configModel.SchemaFingerprint = InputSchemaFingerprint.Current;
                 byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(configModel);
-                string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
 
                 string localPath = new System.Uri(_userConfigPath).LocalPath;
                 string directory = Path.GetDirectoryName(localPath);
@@ -997,9 +994,7 @@ namespace CycloneGames.InputSystem.Editor
                     Directory.CreateDirectory(directory);
                 }
 
-                byte[] bytes = Encoding.UTF8.GetBytes(yamlContent);
-                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-                NativeFile.WriteAllBytes(localPath, nativeBytes);
+                FileUtility.WriteAllBytes(localPath, yamlBytes);
                 SetStatus($"Successfully saved user configuration to: {localPath}", MessageType.Info);
 
                 if (generateConstants)
@@ -1047,7 +1042,6 @@ namespace CycloneGames.InputSystem.Editor
             try
             {
                 byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(defaultConfig);
-                string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
 
                 string directory = Path.GetDirectoryName(localPath);
                 if (directory != null && !Directory.Exists(directory))
@@ -1055,9 +1049,7 @@ namespace CycloneGames.InputSystem.Editor
                     Directory.CreateDirectory(directory);
                 }
 
-                byte[] bytes = Encoding.UTF8.GetBytes(yamlContent);
-                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-                NativeFile.WriteAllBytes(localPath, nativeBytes);
+                FileUtility.WriteAllBytes(localPath, yamlBytes);
                 SetStatus($"Generated new default config at: {localPath}", MessageType.Info);
                 AssetDatabase.Refresh();
 
@@ -1094,7 +1086,6 @@ namespace CycloneGames.InputSystem.Editor
                 InputConfiguration configModel = _configSO.ToData();
                 configModel.SchemaFingerprint = InputSchemaFingerprint.Current;
                 byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(configModel);
-                string yamlContent = System.Text.Encoding.UTF8.GetString(yamlBytes);
 
                 string directory = Path.GetDirectoryName(localPath);
                 if (directory != null && !Directory.Exists(directory))
@@ -1102,9 +1093,7 @@ namespace CycloneGames.InputSystem.Editor
                     Directory.CreateDirectory(directory);
                 }
 
-                byte[] bytes = Encoding.UTF8.GetBytes(yamlContent);
-                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-                NativeFile.WriteAllBytes(localPath, nativeBytes);
+                FileUtility.WriteAllBytes(localPath, yamlBytes);
                 SetStatus($"Successfully overridden default config at: {localPath}", MessageType.Info);
                 AssetDatabase.Refresh();
 

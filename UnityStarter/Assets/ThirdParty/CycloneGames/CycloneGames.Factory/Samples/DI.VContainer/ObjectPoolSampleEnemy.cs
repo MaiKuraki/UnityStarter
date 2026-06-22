@@ -12,12 +12,12 @@ namespace CycloneGames.Factory.Samples.VContainer
         public Vector3 SpawnPosition;
     }
 
-    public class ObjectPoolSampleEnemy : MonoBehaviour, IPoolable<ObjectPoolSampleEnemyData, IMemoryPool>, ITickable
+    public class ObjectPoolSampleEnemy : MonoBehaviour, IPoolable<ObjectPoolSampleEnemyData, ObjectPoolSampleEnemy>, ITickable
     {
         [Inject] private readonly ObjectPoolSampleScoreService _scoreService;
-        private IMemoryPool _pool;
+        private IDespawnableMemoryPool<ObjectPoolSampleEnemy> _pool;
 
-        public void OnSpawned(ObjectPoolSampleEnemyData data, IMemoryPool pool)
+        public void OnSpawned(ObjectPoolSampleEnemyData data, IDespawnableMemoryPool<ObjectPoolSampleEnemy> pool)
         {
             _pool = pool;
             transform.position = data.SpawnPosition;

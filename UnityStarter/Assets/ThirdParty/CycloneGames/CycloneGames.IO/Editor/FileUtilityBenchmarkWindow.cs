@@ -8,12 +8,12 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using CycloneGames.Hash.Core;
-using CycloneGames.Utility.Runtime;
+using CycloneGames.IO.Runtime;
 using UnityEditor;
 using UnityEngine;
 using Unity.Profiling;
 
-namespace CycloneGames.Utility.Editor
+namespace CycloneGames.IO.Editor
 {
     /// <summary>
     /// Editor benchmark window for FileUtility.
@@ -253,6 +253,11 @@ namespace CycloneGames.Utility.Editor
             // --- ToHexString ---
             TestToHexString();
 
+            // --- Text decoding ---
+            _progressLabel = "Correctness: Text decoding...";
+            Repaint();
+            TestTextDecoding();
+
             // --- Sync Hash ---
             _progressLabel = "Correctness: Sync hash...";
             Repaint();
@@ -334,6 +339,39 @@ namespace CycloneGames.Utility.Editor
             bool allF = ffHex == "ffffffffffffffffffffffffffffffff";
             AddResult(allF ? ResultType.Pass : ResultType.Fail,
                 category, "16x 0xFF → 32 'f' chars", $"Got: \"{ffHex}\"");
+        }
+
+        private void TestTextDecoding()
+        {
+            const string category = "Text Decoding";
+            const string sample = "Hello \u4F60\u597D";
+
+            byte[] utf8BomBytes = CombineBytes(new byte[] { 0xEF, 0xBB, 0xBF }, FileUtility.Utf8NoBom.GetBytes(sample));
+            string utf8BomResult = FileUtility.DecodeText(utf8BomBytes);
+            AddResult(utf8BomResult == sample ? ResultType.Pass : ResultType.Fail,
+                category, "UTF-8 BOM is stripped", $"Got: \"{utf8BomResult}\"");
+
+            byte[] utf16BomBytes = CombineBytes(new byte[] { 0xFF, 0xFE }, Encoding.Unicode.GetBytes(sample));
+            string utf16BomResult = FileUtility.DecodeText(utf16BomBytes);
+            AddResult(utf16BomResult == sample ? ResultType.Pass : ResultType.Fail,
+                category, "UTF-16 LE BOM is detected", $"Got: \"{utf16BomResult}\"");
+
+            byte[] utf16NoBomBytes = Encoding.Unicode.GetBytes("Hello");
+            string smartResult = FileUtility.DecodeTextSmart(utf16NoBomBytes);
+            AddResult(smartResult == "Hello" ? ResultType.Pass : ResultType.Fail,
+                category, "Smart detects UTF-16 LE without BOM", $"Got: \"{smartResult}\"");
+
+            bool invalidUtf8Rejected = !FileUtility.TryDecodeText(new byte[] { 0xC3, 0x28 }, out _);
+            AddResult(invalidUtf8Rejected ? ResultType.Pass : ResultType.Fail,
+                category, "Invalid UTF-8 is rejected", $"Got: {invalidUtf8Rejected}");
+        }
+
+        private static byte[] CombineBytes(byte[] prefix, byte[] payload)
+        {
+            byte[] result = new byte[prefix.Length + payload.Length];
+            Buffer.BlockCopy(prefix, 0, result, 0, prefix.Length);
+            Buffer.BlockCopy(payload, 0, result, prefix.Length, payload.Length);
+            return result;
         }
 
         private void TestSyncHash(Dictionary<int, string> testFiles)
@@ -1017,7 +1055,7 @@ namespace CycloneGames.Utility.Editor
                 rec.Dispose();
 
                 bool ok = gcBytes >= 10000; // expect ~27,900 (100 × ~279)
-                AddResult(ok ? ResultType.Pass : ResultType.Fail, category,
+                AddResult(ResultType.Info, category,
                     "Diagnostic: 100×IncrementalHash",
                     FormatGCResult(gcBytes, allocCount, iterations, overflow)
                         + (ok ? " (recorder OK)" : " (recorder unreliable)"));
